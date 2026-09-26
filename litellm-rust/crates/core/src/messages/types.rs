@@ -1,12 +1,12 @@
 use std::time::Duration;
 
 use litellm_llms::{
-    anthropic::common_utils::AnthropicModelCapabilities,
-    base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig,
+    anthropic::common_utils::AnthropicModelCapabilities, base_llm::auth::ValidatedEnvironment,
 };
-use litellm_types::utils::ProviderSpecificHeaders;
+use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+
+use super::common_utils::MessagesProvider;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesShaping {
@@ -20,33 +20,21 @@ pub struct MessagesShaping {
     pub additional_drop_params: Vec<String>,
 }
 
-pub struct MessagesRequest<'a> {
-    pub model: &'a str,
-    pub body: Value,
-    pub api_key: Option<&'a str>,
-    pub api_base: Option<&'a str>,
-    pub custom_llm_provider: Option<&'a str>,
-    pub extra_headers: Option<Map<String, Value>>,
-    pub provider_specific_header: Option<ProviderSpecificHeaders>,
-    pub timeout: Option<Duration>,
-    pub shaping: MessagesShaping,
-}
-
-pub struct ProviderMessagesRequest {
-    pub provider: String,
-    pub model: String,
-    pub config: &'static dyn BaseAnthropicMessagesConfig,
-    pub url: String,
-    pub body: Value,
-    pub upstream_headers: Vec<(String, String)>,
-    pub timeout: Option<Duration>,
+pub(crate) struct ProviderMessagesRequest {
+    pub(crate) provider: MessagesProvider,
+    pub(crate) url: String,
+    pub(crate) body: AnthropicMessagesRequest,
+    /// The forwarded, default and feature headers plus how the call authenticates; the
+    /// credential itself is applied when the request is sent.
+    pub(crate) environment: ValidatedEnvironment,
+    pub(crate) timeout: Option<Duration>,
 }
 
 #[cfg(test)]
 mod tests {
     use litellm_llms::anthropic::common_utils::SupportedEffortTiers;
     use rstest::rstest;
-    use serde_json::json;
+    use serde_json::{Value, json};
 
     use super::*;
 

@@ -1,33 +1,33 @@
 use std::time::Duration;
 
-use litellm_http::{request::http_request, transport::Error as TransportError};
-use litellm_llms::base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig;
+use litellm_http::transport::Error as TransportError;
+use litellm_llms::base_llm::{
+    anthropic_messages::transformation::BaseAnthropicMessagesConfig, auth::Authenticated,
+};
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 use serde_json::Value;
 
-use super::{Error, client::http_client, common_utils::truncate_error_body};
+use super::{Error, common_utils::truncate_error_body};
+use crate::{constants::MESSAGES_TIMEOUT_SECS, outbound::outbound_request};
 
 pub(super) fn network(error: reqwest::Error) -> Error {
     Error::Transport(TransportError::Network(error.to_string()))
 }
 
 pub(super) async fn send(
+    http: &litellm_http::Client,
+    authenticated: Authenticated,
     url: &str,
-    headers: &[(String, String)],
     body: &Value,
     timeout: Option<Duration>,
 ) -> Result<reqwest::Response, Error> {
-    let encoded = serde_json::to_vec(body)
-        .map_err(|err| Error::InvalidRequest(format!("failed to encode messages body: {err}")))?;
-    let builder = headers.iter().fold(
-        http_client().post(url).body(encoded),
-        |builder, (key, value)| builder.header(key, value),
-    );
-    let builder = match timeout {
-        Some(duration) => builder.timeout(duration),
-        None => builder,
-    };
-    http_request(builder).await.map_err(network)
+    let request = outbound_request(
+        authenticated,
+        url.to_string(),
+        body,
+        Some(timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS))),
+    )?;
+    request.send(http).await.map_err(network)
 }
 
 pub(super) async fn provider_error(response: reqwest::Response) -> Error {

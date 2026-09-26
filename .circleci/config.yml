@@ -323,6 +323,7 @@ jobs:
             CHOCOLATEY_CONFIRM_ALL: "true"
       - run:
           name: Install Dependencies
+          no_output_timeout: 30m
           environment:
             UV_HTTP_TIMEOUT: "300"
           command: |
@@ -381,6 +382,7 @@ jobs:
             uv run --no-sync python -m pytest tests/windows_tests/ -v
       - run:
           name: Guard against MAX_PATH-busting packaged wheel paths
+          no_output_timeout: 30m
           environment:
             UV_HTTP_TIMEOUT: "300"
           command: |
@@ -3327,22 +3329,12 @@ workflows:
           matrix:
             parameters:
               suite: [management, accounting, database, providers, extensions, mcp, sdk, cost, browser]
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
       - integration_contracts:
           name: integration-<< matrix.suite >>-replica
           matrix:
             parameters:
               suite: [management, database]
               mode: [replica]
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
   build_and_test:
     unless:
       or:
@@ -3350,101 +3342,60 @@ workflows:
         - not:
             equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
-      - using_litellm_on_windows:
-          filters: &main_branches
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - unit:
-          filters: *main_branches
+      - using_litellm_on_windows
+      - unit
       - provider_replay_harness
-      - base_sdk_install:
-          filters: *main_branches
-      - local_testing_part1:
-          filters: *main_branches
-      - local_testing_part2:
-          filters: *main_branches
-      - langfuse_logging_unit_tests:
-          filters: *main_branches
-      - litellm_assistants_api_testing:
-          filters: *main_branches
-      - litellm_router_testing:
-          filters: *main_branches
-      - litellm_router_unit_testing:
-          filters: *main_branches
-      - auth_ui_unit_tests:
-          filters: *main_branches
-      - build_docker_database_image:
-          filters: *main_branches
-      - e2e_ui_testing:
-          filters: *main_branches
-      - e2e_ui_testing_server_root_path:
-          filters: *main_branches
+      - base_sdk_install
+      - local_testing_part1
+      - local_testing_part2
+      - langfuse_logging_unit_tests
+      - litellm_assistants_api_testing
+      - litellm_router_testing
+      - litellm_router_unit_testing
+      - auth_ui_unit_tests
+      - build_docker_database_image
+      - e2e_ui_testing
+      - e2e_ui_testing_server_root_path
       - build_and_test:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - e2e_openai_endpoints:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - proxy_logging_guardrails_model_info_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - proxy_spend_accuracy_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - proxy_multi_instance_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - proxy_store_model_in_db_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
-      - proxy_build_from_pip_tests:
-          filters: *main_branches
+      - proxy_build_from_pip_tests
       - proxy_pass_through_endpoint_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - proxy_e2e_anthropic_messages_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
-      - llm_translation_testing:
-          filters: *main_branches
-      - realtime_translation_testing:
-          filters: *main_branches
-      - agent_testing:
-          filters: *main_branches
-      - guardrails_testing:
-          filters: *main_branches
-      - google_generate_content_endpoint_testing:
-          filters: *main_branches
-      - llm_responses_api_testing:
-          filters: *main_branches
-      - ocr_testing:
-          filters: *main_branches
-      - search_testing:
-          filters: *main_branches
-      - batches_testing:
-          filters: *main_branches
-      - litellm_utils_testing:
-          filters: *main_branches
-      - pass_through_unit_testing:
-          filters: *main_branches
-      - image_gen_testing:
-          filters: *main_branches
-      - logging_testing:
-          filters: *main_branches
-      - audio_testing:
-          filters: *main_branches
-      - redis_caching_unit_tests:
-          filters: *main_branches
+      - llm_translation_testing
+      - realtime_translation_testing
+      - agent_testing
+      - guardrails_testing
+      - google_generate_content_endpoint_testing
+      - llm_responses_api_testing
+      - ocr_testing
+      - search_testing
+      - batches_testing
+      - litellm_utils_testing
+      - pass_through_unit_testing
+      - image_gen_testing
+      - logging_testing
+      - audio_testing
+      - redis_caching_unit_tests
       - upload-coverage:
           requires:
             - realtime_translation_testing
@@ -3469,18 +3420,12 @@ workflows:
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
-          filters: *main_branches
-      - installing_litellm_on_python:
-          filters: *main_branches
-      - installing_litellm_on_python_3_13:
-          filters: *main_branches
-      - installing_litellm_on_python_v2_migration_resolver:
-          filters: *main_branches
+      - installing_litellm_on_python
+      - installing_litellm_on_python_3_13
+      - installing_litellm_on_python_v2_migration_resolver
       - helm_chart_testing:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - test_bad_database_url:
           requires:
             - build_docker_database_image
-          filters: *main_branches

@@ -1,7 +1,6 @@
-use crate::capabilities::{
-    AudioFormat, InputModality, Mode, OutputModality, ReasoningEffort, VertexAiAudioApi,
-};
+use crate::capabilities::{AudioFormat, InputModality, Mode, OutputModality, VertexAiAudioApi};
 use crate::pricing::{OffPeakPricing, SearchContextCostPerQuery, TieredRate, WebSearchBillingUnit};
+use litellm_types::llms::openai::ReasoningEffort;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::BTreeMap;
@@ -42,6 +41,9 @@ pub struct ModelInfo {
     pub cache_creation_input_token_cost_above_200k_tokens: Option<f64>,
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_creation_input_token_cost_above_200k_tokens_batches: Option<f64>,
+    /// Rate applied once the prompt exceeds the token threshold in the field name.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_creation_input_token_cost_above_256k_tokens: Option<f64>,
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -78,6 +80,9 @@ pub struct ModelInfo {
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_input_token_cost_above_200k_tokens: Option<f64>,
+    /// Rate applied once the prompt exceeds the token threshold in the field name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cache_read_input_token_cost_above_200k_tokens_batches: Option<f64>,
     /// Priority service-tier rate for the same-named base field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cache_read_input_token_cost_above_200k_tokens_priority: Option<f64>,
@@ -116,12 +121,20 @@ pub struct ModelInfo {
     pub code_interpreter_cost_per_session: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub comment: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub computer_use_input_cost_per_1k_tokens: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub computer_use_output_cost_per_1k_tokens: Option<f64>,
     /// Reasoning effort the provider applies when the request omits reasoning_effort. Gates whether a non-default temperature or the top_p/logprobs sampling params are accepted, which hold only when the effort resolves to 'none'.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub default_reasoning_effort: Option<ReasoningEffort>,
     /// Date the provider deprecates the model, YYYY-MM-DD.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deprecation_date: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_search_cost_per_1k_calls: Option<f64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub file_search_cost_per_gb_per_day: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub gemini_audio_only_live: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -177,6 +190,9 @@ pub struct ModelInfo {
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_cost_per_token_above_200k_tokens: Option<f64>,
+    /// Rate applied once the prompt exceeds the token threshold in the field name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub input_cost_per_token_above_200k_tokens_batches: Option<f64>,
     /// Priority service-tier rate for the same-named base field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub input_cost_per_token_above_200k_tokens_priority: Option<f64>,
@@ -271,6 +287,26 @@ pub struct ModelInfo {
     pub output_cost_per_image_1536: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_image_512: Option<f64>,
+    #[serde(
+        rename = "output_cost_per_image_0.5K",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_cost_per_image_0_5k: Option<f64>,
+    #[serde(
+        rename = "output_cost_per_image_1K",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_cost_per_image_1k: Option<f64>,
+    #[serde(
+        rename = "output_cost_per_image_2K",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_cost_per_image_2k: Option<f64>,
+    #[serde(
+        rename = "output_cost_per_image_4K",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub output_cost_per_image_4k: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_image_token: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -303,6 +339,9 @@ pub struct ModelInfo {
     /// Rate applied once the prompt exceeds the token threshold in the field name.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_token_above_200k_tokens: Option<f64>,
+    /// Rate applied once the prompt exceeds the token threshold in the field name.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub output_cost_per_token_above_200k_tokens_batches: Option<f64>,
     /// Priority service-tier rate for the same-named base field.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_cost_per_token_above_200k_tokens_priority: Option<f64>,
@@ -366,6 +405,8 @@ pub struct ModelInfo {
     /// Provider default requests-per-minute limit.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub rpm: Option<u64>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rules: Option<Vec<Value>>,
     /// USD cost per web search query, keyed by search context size.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub search_context_cost_per_query: Option<SearchContextCostPerQuery>,
@@ -483,6 +524,8 @@ pub struct ModelInfo {
     pub use_openai_responses_path: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub uses_embed_content: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub vector_store_cost_per_gb_per_day: Option<f64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub vertex_ai_audio_api: Option<VertexAiAudioApi>,
     /// Whether web search is billed per query or per prompt.
