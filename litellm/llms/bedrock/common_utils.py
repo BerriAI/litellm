@@ -898,7 +898,6 @@ BEDROCK_CONVERSE_ONLY_REQUEST_KEYS: Final = frozenset(
         "outputConfig",
         "thinking",
         "additionalModelRequestFields",
-        "top_k",
     )
 )
 
@@ -919,8 +918,8 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     """Whether a request on a runtime-Chat-Completions model must still be served by Converse.
 
     Converse-shaped body keys (``BEDROCK_CONVERSE_ONLY_REQUEST_KEYS``, the Anthropic-style ``thinking``
-    block and the ``additionalModelRequestFields`` / ``top_k`` extension params included, which only Converse
-    forwards as ``additionalModelRequestFields`` and ``inferenceConfig``) have no field on
+    block and ``additionalModelRequestFields`` included, which only Converse
+    forwards as ``additionalModelRequestFields``) have no field on
     AWS's native OpenAI surface, operator-owned request metadata is only written onto the Converse body,
     function tools (``tools`` or legacy ``functions``) on a model without
     ``supports_bedrock_runtime_chat_completions_tools_with_reasoning`` are rejected there unless
