@@ -1,5 +1,6 @@
 import React, { useEffect, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
+import { MarkdownImage } from "@/components/chat_ui/MarkdownImage";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -68,40 +69,37 @@ const ToolCallDisplay: React.FC<{ step: ToolCallStep }> = ({ step }) => {
   );
 };
 
+const markdownComponents: Components = {
+  p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
+  strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+  ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-0.5">{children}</ul>,
+  ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-0.5">{children}</ol>,
+  li: ({ children }) => <li>{children}</li>,
+  h1: ({ children }) => <h4 className="font-semibold text-sm mt-2 mb-1">{children}</h4>,
+  h2: ({ children }) => <h4 className="font-semibold text-sm mt-2 mb-1">{children}</h4>,
+  h3: ({ children }) => <h4 className="font-semibold text-sm mt-2 mb-1">{children}</h4>,
+  code: ({ children, className }) => {
+    const isBlock = className?.includes("language-");
+    return isBlock ? (
+      <pre className="bg-muted rounded-sm p-2 my-1 overflow-x-auto text-xs">
+        <code>{children}</code>
+      </pre>
+    ) : (
+      <code className="px-1 py-0.5 rounded-sm bg-muted text-xs font-mono">{children}</code>
+    );
+  },
+  table: ({ children }) => (
+    <div className="overflow-x-auto my-2">
+      <table className="text-xs border-collapse w-full">{children}</table>
+    </div>
+  ),
+  th: ({ children }) => <th className="border border-border px-2 py-1 bg-muted font-medium text-left">{children}</th>,
+  td: ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
+  img: MarkdownImage,
+};
+
 const MarkdownContent: React.FC<{ content: string }> = ({ content }) => (
-  <ReactMarkdown
-    components={{
-      p: ({ children }) => <p className="mb-2 last:mb-0">{children}</p>,
-      strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
-      ul: ({ children }) => <ul className="list-disc pl-4 mb-2 space-y-0.5">{children}</ul>,
-      ol: ({ children }) => <ol className="list-decimal pl-4 mb-2 space-y-0.5">{children}</ol>,
-      li: ({ children }) => <li>{children}</li>,
-      h1: ({ children }) => <h4 className="font-semibold text-sm mt-2 mb-1">{children}</h4>,
-      h2: ({ children }) => <h4 className="font-semibold text-sm mt-2 mb-1">{children}</h4>,
-      h3: ({ children }) => <h4 className="font-semibold text-sm mt-2 mb-1">{children}</h4>,
-      code: ({ children, className }) => {
-        const isBlock = className?.includes("language-");
-        return isBlock ? (
-          <pre className="bg-muted rounded-sm p-2 my-1 overflow-x-auto text-xs">
-            <code>{children}</code>
-          </pre>
-        ) : (
-          <code className="px-1 py-0.5 rounded-sm bg-muted text-xs font-mono">{children}</code>
-        );
-      },
-      table: ({ children }) => (
-        <div className="overflow-x-auto my-2">
-          <table className="text-xs border-collapse w-full">{children}</table>
-        </div>
-      ),
-      th: ({ children }) => (
-        <th className="border border-border px-2 py-1 bg-muted font-medium text-left">{children}</th>
-      ),
-      td: ({ children }) => <td className="border border-border px-2 py-1">{children}</td>,
-    }}
-  >
-    {content}
-  </ReactMarkdown>
+  <ReactMarkdown components={markdownComponents}>{content}</ReactMarkdown>
 );
 
 const UsageAIChatPanel: React.FC<UsageAIChatPanelProps> = ({ open, onClose, accessToken }) => {

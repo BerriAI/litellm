@@ -14,6 +14,7 @@ import { EndpointType } from "@/components/chat_ui/mode_endpoint_mapping";
 import MCPEventsDisplay from "@/components/chat_ui/MCPEventsDisplay";
 import type { MCPEvent } from "@/components/mcp_tools/types";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
+import { MarkdownImage } from "@/components/chat_ui/MarkdownImage";
 import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
 import ResponsesImageRenderer from "./ResponsesImageRenderer";
 import { SearchResultsDisplay } from "./SearchResultsDisplay";
@@ -165,6 +166,7 @@ function ChatMessageBubble({
                     );
                   },
                   pre: ({ node, ...props }) => <pre style={{ overflowX: "auto", maxWidth: "100%" }} {...props} />,
+                  img: MarkdownImage,
                 }}
               >
                 {typeof message.content === "string" ? message.content : ""}
