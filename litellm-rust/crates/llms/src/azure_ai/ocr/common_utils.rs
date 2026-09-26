@@ -1,5 +1,3 @@
-use std::sync::OnceLock;
-
 use litellm_auth::{InputSource, Sourced};
 use litellm_auth_azure::{AzureAuthInputs, AzureAuthService};
 
@@ -20,12 +18,11 @@ pub(crate) fn azure_auth_inputs(request: &PreparedOcrRequest) -> Result<AzureAut
 }
 
 pub(super) async fn resolve_entra(
+    service: &AzureAuthService,
     config: &AzureAuthInputs,
     env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
 ) -> Result<Option<Sourced<String>>, Error> {
-    static SERVICE: OnceLock<AzureAuthService> = OnceLock::new();
-    SERVICE
-        .get_or_init(AzureAuthService::default)
+    service
         .get_azure_ad_token(config, env_lookup)
         .await
         .or_else(|error| match error {

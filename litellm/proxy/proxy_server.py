@@ -545,6 +545,7 @@ from litellm.proxy.health_endpoints._health_endpoints import router as health_ro
 from litellm.proxy.hooks.model_max_budget_limiter import (
     _PROXY_VirtualKeyModelMaxBudgetLimiter,
 )
+from litellm.proxy.hooks.parallel_request_limiter_v3 import fail_closed_rate_limit_enforcement_enabled
 from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
@@ -1470,6 +1471,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     ProxyStartupEvent._warn_budget_without_db(
         max_budget=litellm.max_budget,
         prisma_client=prisma_client,
+    )
+    ProxyStartupEvent._warn_fail_closed_rate_limits_without_redis(
+        fail_closed_rate_limit_enforcement=fail_closed_rate_limit_enforcement_enabled(general_settings),
+        redis_usage_cache=redis_usage_cache,
     )
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
@@ -9825,6 +9830,20 @@ class ProxyStartupEvent:
             "general_settings.database_url and restart. Redis and fail_closed_budget_enforcement do not "
             "cover the proxy-wide budget because there is no global spend counter; Redis alone is not a substitute.",
             max_budget,
+        )
+
+    @staticmethod
+    def _warn_fail_closed_rate_limits_without_redis(
+        fail_closed_rate_limit_enforcement: bool, redis_usage_cache: RedisCache | None
+    ) -> None:
+        if redis_usage_cache is not None or not fail_closed_rate_limit_enforcement:
+            return
+
+        verbose_proxy_logger.warning(
+            "general_settings.fail_closed_rate_limit_enforcement is enabled but no Redis is configured, so rate "
+            "limits are enforced per pod from memory and the setting rejects nothing. Configure "
+            "general_settings.coordination_redis (or REDIS_HOST/REDIS_PORT/REDIS_PASSWORD) to share the counters "
+            "across pods and make the setting effective."
         )
 
     @classmethod

@@ -110,7 +110,10 @@ mod tests {
     }
 
     fn client() -> OcrClient {
-        OcrClient::for_test(reqwest::Client::new(), reqwest::Client::new())
+        OcrClient::for_test(
+            litellm_http::Client::plain_for_test(),
+            litellm_http::Client::no_redirect_for_test(),
+        )
     }
 
     fn request(model: &str, base: &str, document: Value, options: Value) -> LiteLLMOcrRequest {

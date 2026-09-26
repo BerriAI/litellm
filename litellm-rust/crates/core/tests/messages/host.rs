@@ -78,7 +78,7 @@ impl Host<Messages> for RecordingHost {
 }
 
 async fn run_through(host: &RecordingHost) -> Result<MessagesOutput, Error> {
-    litellm_host::run::run(messages_machine(Arc::new(RecordingSecrets::empty())), host).await
+    litellm_host::run::run(machine(Arc::new(RecordingSecrets::empty())), host).await
 }
 
 fn authenticated(call: MessagesCall, api_base: String) -> MessagesCall {
@@ -161,10 +161,10 @@ async fn no_raw_response_is_emitted_for_a_stream_or_a_failure(
     #[case] response: ResponseTemplate,
 ) {
     let upstream = upstream([response]).await;
-    let mut body = call.body.clone();
-    body.insert("stream".into(), json!(true));
-    let host =
-        RecordingHost::passthrough(authenticated(MessagesCall { body, ..call }, upstream.uri()));
+    let host = RecordingHost::passthrough(authenticated(
+        with_fields(call, json!({"stream": true})),
+        upstream.uri(),
+    ));
 
     let _ = run_through(&host).await;
 
@@ -180,15 +180,8 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     call: MessagesCall,
 ) {
     let upstream = upstream([message_response()]).await;
-    let body: Map<String, Value> = call
-        .body
-        .clone()
-        .into_iter()
-        .chain([("temperature".to_string(), json!(0.2))])
-        .collect();
     let host = RecordingHost::passthrough(authenticated(
         MessagesCall {
-            body,
             shaping: MessagesShaping {
                 capabilities: AnthropicModelCapabilities {
                     supports_sampling_params: false,
@@ -197,7 +190,7 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
                 drop_params: true,
                 ..MessagesShaping::default()
             },
-            ..call
+            ..with_fields(call, json!({"temperature": 0.2}))
         },
         upstream.uri(),
     ));

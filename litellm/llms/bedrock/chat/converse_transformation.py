@@ -1831,7 +1831,7 @@ class AmazonConverseConfig(BaseConfig):
         anthropic_beta_list: list,
     ) -> None:
         """Keep only compact_20260112 edits for Bedrock; add beta header or drop field."""
-        from litellm.llms.anthropic.experimental_pass_through.context_management.constants import (
+        from litellm.llms.anthropic.pass_through.context_management.constants import (
             COMPACT_EDIT_TYPE,
         )
         from litellm.types.llms.anthropic import ANTHROPIC_BETA_HEADER_VALUES

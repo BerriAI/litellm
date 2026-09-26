@@ -17,17 +17,13 @@ from litellm.utils import claude_json_str
 from tests.unit.litellm_core_utils.test_decode_special_tokens import TOKENIZER_JSON
 
 
-OFFLINE_ENCODINGS: Final = ("cl100k_base", "o200k_base", "p50k_base", "p50k_edit", "o200k_harmony")
+ENCODINGS: Final = ("cl100k_base", "o200k_base", "p50k_base", "p50k_edit", "o200k_harmony")
 UNICODE_TEXTS: Final = ("hello world", "café 漢字 🙂", "", "a\ud800b", "\ud83d\ude42", "🙂\ud83d\ude42\udfff", " " * 64)
 
 
-@pytest.mark.parametrize("name", OFFLINE_ENCODINGS)
+@pytest.mark.parametrize("name", ENCODINGS)
 @pytest.mark.parametrize("text", UNICODE_TEXTS)
 def test_openai_encoding_matches_python_unicode_and_batches(name: str, text: str) -> None:
-    assert_openai_encoding_matches_python(name, text)
-
-
-def assert_openai_encoding_matches_python(name: str, text: str) -> None:
     reference: Final = tiktoken.get_encoding(name)
     encoding: Final = OpenAIEncoding.from_tiktoken(name)
     expected: Final = reference.encode(text)
@@ -309,10 +305,6 @@ def test_huggingface_batch_sequence_containers_match_python(is_pretokenized: boo
 
 @pytest.mark.parametrize("name", ("cl100k_base", "o200k_base", "p50k_edit"))
 def test_openai_encoding_exposes_the_tiktoken_vocabulary_surface(name: str) -> None:
-    assert_openai_encoding_exposes_the_tiktoken_vocabulary_surface(name)
-
-
-def assert_openai_encoding_exposes_the_tiktoken_vocabulary_surface(name: str) -> None:
     reference: Final = tiktoken.get_encoding(name)
     encoding: Final = OpenAIEncoding.from_tiktoken(name)
     text: Final = "hello fanta"
