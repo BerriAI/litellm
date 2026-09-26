@@ -514,6 +514,53 @@ class TestFanOut:
         for child in ("auth /v1/chat/completions", "chat gpt-4"):
             assert by_name[child].parent.span_id == root.context.span_id
 
+    def test_excluded_services_drop_only_the_datastore_spans_at_the_tenant(self):
+        """The exclusion is per ``db.system.*`` value: a span naming an excluded
+        datastore never reaches the tenant, while every span of the request's
+        own work (root, auth, guardrail, model) still does, and the operator's
+        own exporter keeps the full tree."""
+        dest_exporter, operator_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(operator_exporter))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter),
+                excluded_db_systems=frozenset({"redis", "postgresql"}),
+            )
+        )
+        tracer = get_tracer(provider, "litellm")
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                with tracer.start_as_current_span("auth /v1/chat/completions"):
+                    pass
+                with tracer.start_as_current_span("execute_guardrail pii"):
+                    pass
+                with tracer.start_as_current_span("redis async_get_cache") as redis_span:
+                    redis_span.set_attribute("db.system.name", "redis")
+                with tracer.start_as_current_span("batch_write_to_db _PROXY_track_cost_callback") as spend_span:
+                    spend_span.set_attribute("db.system", "postgresql")
+                with tracer.start_as_current_span("chat gpt-4"):
+                    pass
+
+        in_fresh_context(run)
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == {
+            "POST /v1/chat/completions",
+            "auth /v1/chat/completions",
+            "execute_guardrail pii",
+            "chat gpt-4",
+        }
+        assert {s.name for s in operator_exporter.get_finished_spans()} == {
+            "POST /v1/chat/completions",
+            "auth /v1/chat/completions",
+            "execute_guardrail pii",
+            "redis async_get_cache",
+            "batch_write_to_db _PROXY_track_cost_callback",
+            "chat gpt-4",
+        }
+
     def test_a_team_naming_two_backends_gets_the_trace_at_both(self):
         """The fan-out rides one provider, so it cannot skip a destination on the
         grounds that some other backend owns it: nothing else would deliver it."""
@@ -1021,6 +1068,81 @@ class TestProviderWiring:
 
         assert kinds(published).count("TenantFanOutSpanProcessor") == 1
         assert "TenantFanOutSpanProcessor" not in kinds(other)
+
+    def test_excluded_services_come_from_the_otel_callback_config_only(self):
+        """A preset builds its config env-only, so unioning ``excluded_services``
+        across loggers reintroduces the env value ``callback_settings.otel``
+        overrode. The fan-out must take the set from the ``otel`` config alone."""
+        otel = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")], excluded_services=["postgres"]),
+            callback_name="otel",
+        )
+        preset = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")], excluded_services=["redis"]),
+            callback_name="langfuse_otel",
+        )
+
+        publish_global_otel_v2_provider([preset], lambda _p: None, registered=otel)
+
+        fan_out = next(
+            processor
+            for processor in otel._tracer_provider._active_span_processor._span_processors
+            if isinstance(processor, TenantFanOutSpanProcessor)
+        )
+        assert fan_out._excluded_db_systems == frozenset({"postgresql"})
+
+    def test_excluded_services_fall_back_to_the_published_logger_without_an_otel_callback(self):
+        preset = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")], excluded_services=["redis"]),
+            callback_name="langfuse_otel",
+        )
+
+        publish_global_otel_v2_provider([], lambda _p: None, registered=preset)
+
+        fan_out = next(
+            processor
+            for processor in preset._tracer_provider._active_span_processor._span_processors
+            if isinstance(processor, TenantFanOutSpanProcessor)
+        )
+        assert fan_out._excluded_db_systems == frozenset({"redis"})
+
+    def test_otel_callback_builds_its_own_logger_after_a_preset(self, monkeypatch):
+        """With ``callbacks: [langfuse_otel, otel]`` the otel branch reused any
+        V2 logger, so ``callback_settings.otel`` (excluded_services) was dropped
+        onto the preset's env-only config."""
+        from litellm.integrations.otel.logger import _excluded_db_systems
+        from litellm.litellm_core_utils import litellm_logging as logging_module
+
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+        monkeypatch.delenv("LITELLM_OTEL_EXCLUDED_SERVICES", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        monkeypatch.setattr(litellm, "callback_settings", {"otel": {"excluded_services": ["postgres"]}}, raising=False)
+        try:
+
+            def init(name: str) -> CustomLogger | None:
+                return logging_module._init_custom_logger_compatible_class(
+                    logging_integration=name,  # pyright: ignore[reportArgumentType]  # test passes a literal callback name
+                    internal_usage_cache=None,
+                    llm_router=None,
+                    custom_logger_init_args={},
+                )
+
+            preset = init("langfuse_otel")
+            otel_cb = init("otel")
+
+            assert otel_cb is not None and otel_cb is not preset
+            v2_names = {
+                cb.callback_name for cb in logging_module._in_memory_loggers if isinstance(cb, OpenTelemetryV2)
+            }
+            assert {"langfuse_otel", "otel"} <= v2_names, v2_names
+            resolved = _excluded_db_systems(logging_module._in_memory_loggers, otel_cb)
+            assert resolved == frozenset({"postgresql"}), resolved
+        finally:
+            logging_module._in_memory_loggers.clear()
+            is_otel_v2_enabled.cache_clear()
 
     @pytest.mark.parametrize("canonical", ["langfuse_otel", "arize"])
     def test_publishing_tells_the_fan_out_about_every_v2_loggers_account(self, monkeypatch, canonical):

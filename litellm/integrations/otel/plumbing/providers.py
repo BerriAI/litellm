@@ -418,6 +418,13 @@ def _is_database_span(attributes: Mapping[str, AttributeValue]) -> bool:
     return any(key in attributes for key in _DB_SYSTEM_KEYS)
 
 
+def _is_excluded_database_span(attributes: Mapping[str, AttributeValue], excluded: frozenset[str]) -> bool:
+    if not excluded:
+        return False
+    system: Final = attributes.get(DB.SYSTEM_NAME) or attributes.get(DB.SYSTEM_LEGACY)
+    return isinstance(system, str) and system in excluded
+
+
 def _is_tenant_owned_span(attributes: Mapping[str, AttributeValue]) -> bool:
     return any(key in attributes for key in _TENANT_OWNED_KEYS)
 
@@ -549,10 +556,12 @@ class TenantFanOutSpanProcessor(SpanProcessor):
         processor_factory: 'Callable[["OtelDestination"], SpanProcessor | None] | None' = None,
         shutdown_drain_seconds: float = _SHUTDOWN_DRAIN_SECONDS,
         operator_sinks: 'Mapping[_SinkKey, "OtelSpanScope"]' = MappingProxyType({}),
+        excluded_db_systems: frozenset[str] = frozenset(),
         pending_drains: int = _MAX_PENDING_DRAINS,
         drain_pool: _DrainPool | None = None,
     ) -> None:
         self._operator_sinks: Final = operator_sinks
+        self._excluded_db_systems: Final = excluded_db_systems
         self._drain_seconds: Final = shutdown_drain_seconds
         self._lock: Final = threading.Condition()
         self._closed = False  # guarded by ``_lock``: an unlocked read races the teardown it gates
@@ -567,9 +576,12 @@ class TenantFanOutSpanProcessor(SpanProcessor):
 
     def on_end(self, span: ReadableSpan) -> None:
         suppressed: Final = suppressed_backends()
+        attributes: Final = span.attributes or _NO_ATTRIBUTES
         for destination in request_destinations():
-            if self._operator_already_writes(span, destination, suppressed) or not _in_scope(
-                span, destination.span_scope
+            if (
+                self._operator_already_writes(span, destination, suppressed)
+                or not _in_scope(span, destination.span_scope)
+                or _is_excluded_database_span(attributes, self._excluded_db_systems)
             ):
                 continue
             processor = self._acquire(destination)
@@ -1155,7 +1167,9 @@ def build_tracer_provider(
 _FAN_OUT_ATTACH_LOCK: Final = threading.Lock()
 
 
-def attach_tenant_fan_out(provider: TracerProvider, *configs: OpenTelemetryV2Config) -> None:
+def attach_tenant_fan_out(
+    provider: TracerProvider, *configs: OpenTelemetryV2Config, excluded_db_systems: frozenset[str] = frozenset()
+) -> None:
     """Give ``provider`` the fan-out that delivers spans to key/team destinations.
 
     Called on the one provider published as the OTel global, and idempotent so a
@@ -1164,12 +1178,19 @@ def attach_tenant_fan_out(provider: TracerProvider, *configs: OpenTelemetryV2Con
     so exactly one fan-out lands. ``configs`` name the operator's own exporters, one
     config per v2 logger since each keeps its own provider and still writes its
     account, so an additive destination pointing at any of them is delivered once
-    rather than twice.
+    rather than twice. ``excluded_db_systems`` comes from the ``otel`` callback's
+    config alone (see ``_excluded_db_systems``); unioning it across every logger's
+    config would reintroduce the env value that ``callback_settings.otel`` overrode.
     """
     with _FAN_OUT_ATTACH_LOCK:
         if any(isinstance(processor, TenantFanOutSpanProcessor) for processor in _attached_processors(provider)):
             return
-        provider.add_span_processor(TenantFanOutSpanProcessor(operator_sinks=operator_sink_scopes(*configs)))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                operator_sinks=operator_sink_scopes(*configs),
+                excluded_db_systems=excluded_db_systems,
+            )
+        )
 
 
 def deliverable_destinations(

@@ -205,6 +205,14 @@ nothing here imports outside it:
   `config.yaml` — the latter reach the config through the logger's constructor
   kwargs. `baggage_team_metadata_keys` is empty by default, so none of a team's
   free-form metadata is promoted until each sub-key is explicitly allowlisted.
+  `excluded_services` withholds datastore spans from key/team `callback_vars`
+  destinations while the operator's own exporters keep them: set
+  `LITELLM_OTEL_EXCLUDED_SERVICES` (comma-separated) or `excluded_services`
+  (a YAML list) under `callback_settings.otel`, naming the datastore services
+  to withhold (`redis`, `postgres`, `batch_write_to_db`, `redis_*`, or their
+  `db.system.name` spellings `redis` / `postgresql`). A span is withheld when
+  its `db.system.name` / `db.system` attribute is in the set, so request root,
+  auth, guardrail and model spans can never be excluded.
 - [`baggage.py`](./model/baggage.py) — the single definition of which request-identity
   values are promoted into Baggage (so child spans inherit them) and under which
   attribute keys.
