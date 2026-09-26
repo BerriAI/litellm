@@ -28,6 +28,27 @@ class GeminiCountTokensPayload:
 
 
 @dataclass(frozen=True, slots=True)
+class NativeCountTokensBody:
+    contents: list[dict[str, object]]  # mutable-ok: TokenCountRequest takes list fields
+    tools: list[dict[str, object]] | None  # mutable-ok: TokenCountRequest takes list fields
+    system_instruction: object | None
+
+
+_JSON_OBJECT_LIST: Final = TypeAdapter(list[dict[str, object]])
+
+
+def parse_native_count_tokens_body(body: Mapping[str, object]) -> NativeCountTokensBody:
+    wrapped_body: Final = body.get("generateContentRequest")
+    wrapped: Final[Mapping[str, object]] = wrapped_body if isinstance(wrapped_body, Mapping) else {}
+    tools: Final = body.get("tools") or wrapped.get("tools")
+    return NativeCountTokensBody(
+        contents=_JSON_OBJECT_LIST.validate_python(body.get("contents") or wrapped.get("contents") or []),
+        tools=None if tools is None else _JSON_OBJECT_LIST.validate_python(tools),
+        system_instruction=body.get("systemInstruction") or wrapped.get("systemInstruction"),
+    )
+
+
+@dataclass(frozen=True, slots=True)
 class InvalidCountTokensRequest:
     message: str
 
