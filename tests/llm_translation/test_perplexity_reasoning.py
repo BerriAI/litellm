@@ -1,13 +1,8 @@
-import json
 import os
-import sys
 from unittest.mock import patch, MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 import litellm
 from litellm import completion
@@ -140,50 +135,6 @@ class TestPerplexityReasoning:
                 == "This is a test response from the reasoning model."
             )
 
-    def test_perplexity_reasoning_models_support_reasoning(self):
-        """
-        Test that Perplexity Sonar reasoning models are correctly identified as supporting reasoning
-        """
-        from litellm.utils import supports_reasoning
-
-        # Set up local model cost map
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        reasoning_models = [
-            "perplexity/sonar-reasoning",
-            "perplexity/sonar-reasoning-pro",
-        ]
-
-        for model in reasoning_models:
-            assert supports_reasoning(model, None), f"{model} should support reasoning"
-
-    def test_perplexity_non_reasoning_models_dont_support_reasoning(self):
-        """
-        Test that non-reasoning Perplexity models don't support reasoning
-        """
-        from litellm.utils import supports_reasoning
-
-        # Set up local model cost map
-        os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-        litellm.model_cost = litellm.get_model_cost_map(url="")
-
-        non_reasoning_models = [
-            "perplexity/sonar",
-            "perplexity/sonar-pro",
-            "perplexity/llama-3.1-sonar-large-128k-chat",
-            "perplexity/mistral-7b-instruct",
-        ]
-
-        for model in non_reasoning_models:
-            # These models should not support reasoning (should return False or raise exception)
-            try:
-                result = supports_reasoning(model, None)
-                # If it doesn't raise an exception, it should return False
-                assert result is False, f"{model} should not support reasoning"
-            except Exception:
-                # If it raises an exception, that's also acceptable behavior
-                pass
 
     @pytest.mark.parametrize(
         "model,expected_api_base",

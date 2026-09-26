@@ -1,6 +1,3 @@
-import sys
-from types import ModuleType, SimpleNamespace
-
 import litellm
 from litellm.integrations.langfuse.langfuse import resolve_langfuse_credentials
 from litellm.integrations.langfuse.langfuse_handler import LangFuseHandler
@@ -51,37 +48,29 @@ def test_resolve_langfuse_credentials_keeps_env_for_global_config(monkeypatch):
     assert host == "https://admin-configured.example"
 
 
-def test_upstream_langfuse_debug_env_is_passed(monkeypatch):
+def test_upstream_langfuse_env_only_warns_and_opens_no_second_channel(monkeypatch, caplog):
+    """UPSTREAM_LANGFUSE_* configured a second v2 ingestion client. v4 has one export channel per
+    credential set, so the values are ignored with a startup warning and never build anything."""
+    from litellm.integrations.langfuse import langfuse_sdk
     from litellm.integrations.langfuse.langfuse import LangFuseLogger
 
-    class FakeLangfuse:
-        instances = []
-
-        def __init__(self, **kwargs):
-            self.kwargs = kwargs
-            FakeLangfuse.instances.append(self)
-
-    fake_langfuse_module = ModuleType("langfuse")
-    fake_langfuse_module.Langfuse = FakeLangfuse
-    fake_langfuse_module.version = SimpleNamespace(__version__="2.6.0")
-
-    monkeypatch.setitem(sys.modules, "langfuse", fake_langfuse_module)
     monkeypatch.setattr(litellm, "initialized_langfuse_clients", 0)
+    monkeypatch.setattr(langfuse_sdk, "_TRACING", {})
     monkeypatch.setenv("LANGFUSE_MOCK", "true")
     monkeypatch.setenv("UPSTREAM_LANGFUSE_SECRET_KEY", "upstream-secret")
     monkeypatch.setenv("UPSTREAM_LANGFUSE_PUBLIC_KEY", "upstream-public")
     monkeypatch.setenv("UPSTREAM_LANGFUSE_HOST", "https://upstream.example")
-    monkeypatch.setenv("UPSTREAM_LANGFUSE_RELEASE", "release")
-    monkeypatch.setenv("UPSTREAM_LANGFUSE_DEBUG", "true")
 
-    logger = LangFuseLogger(
-        langfuse_public_key="public",
-        langfuse_secret="secret",
-        langfuse_host="https://langfuse.example",
-    )
+    with caplog.at_level("WARNING", logger="LiteLLM"):
+        logger = LangFuseLogger(
+            langfuse_public_key="public",
+            langfuse_secret="secret",
+            langfuse_host="https://langfuse.example",
+        )
 
-    assert logger.upstream_langfuse_debug == "true"
-    assert FakeLangfuse.instances[-1].kwargs["debug"] is True
+    assert any("UPSTREAM_LANGFUSE_* is no longer supported" in record.getMessage() for record in caplog.records)
+    assert [lease.tracing for lease in langfuse_sdk._TRACING.values()] == [logger.tracing]
+    assert all(key.public_key == "public" for key in langfuse_sdk._TRACING)
 
 
 def test_langfuse_handler_accepts_secret_key_alias(monkeypatch):
@@ -94,11 +83,13 @@ def test_langfuse_handler_accepts_secret_key_alias(monkeypatch):
             langfuse_public_key=None,
             langfuse_secret=None,
             langfuse_host=None,
+            langfuse_environment=None,
             allow_env_credentials=True,
         ):
             captured["langfuse_public_key"] = langfuse_public_key
             captured["langfuse_secret"] = langfuse_secret
             captured["langfuse_host"] = langfuse_host
+            captured["langfuse_environment"] = langfuse_environment
             captured["allow_env_credentials"] = allow_env_credentials
 
     class FakeDynamicLoggingCache:
@@ -117,6 +108,7 @@ def test_langfuse_handler_accepts_secret_key_alias(monkeypatch):
             "langfuse_public_key": "dynamic-public",
             "langfuse_secret_key": "dynamic-secret",
             "langfuse_host": "https://langfuse.example",
+            "langfuse_environment": "dynamic-environment",
         },
         in_memory_dynamic_logger_cache=FakeDynamicLoggingCache(),
     )
@@ -124,6 +116,7 @@ def test_langfuse_handler_accepts_secret_key_alias(monkeypatch):
     assert captured["langfuse_public_key"] == "dynamic-public"
     assert captured["langfuse_secret"] == "dynamic-secret"
     assert captured["langfuse_host"] == "https://langfuse.example"
+    assert captured["langfuse_environment"] == "dynamic-environment"
     assert captured["allow_env_credentials"] is False
     assert captured["cached_service_name"] == "langfuse"
     assert captured["cached_logging_obj"] is logger

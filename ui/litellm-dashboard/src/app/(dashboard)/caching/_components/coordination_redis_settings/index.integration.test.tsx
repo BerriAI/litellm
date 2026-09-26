@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import userEvent from "@testing-library/user-event";
 import CoordinationRedisSettings from "./index";
@@ -53,7 +53,7 @@ describe("CoordinationRedisSettings value retention across redis types", () => {
     await screen.findByLabelText("Host");
 
     await pickRedisType(user, /sentinel/i);
-    await user.type(await screen.findByLabelText("Service Name"), "mymaster");
+    fireEvent.change(await screen.findByLabelText("Service Name"), { target: { value: "mymaster" } });
 
     await pickRedisType(user, /node/i);
     await waitFor(() => expect(screen.queryByLabelText("Service Name")).not.toBeInTheDocument());
@@ -69,7 +69,7 @@ describe("CoordinationRedisSettings value retention across redis types", () => {
     await screen.findByLabelText("Host");
 
     await pickRedisType(user, /sentinel/i);
-    await user.type(await screen.findByLabelText("Service Name"), "mymaster");
+    fireEvent.change(await screen.findByLabelText("Service Name"), { target: { value: "mymaster" } });
 
     await pickRedisType(user, /node/i);
     await waitFor(() => expect(screen.queryByLabelText("Service Name")).not.toBeInTheDocument());

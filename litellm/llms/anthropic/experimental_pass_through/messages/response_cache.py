@@ -46,6 +46,10 @@ class AnthropicMessagesStreamCacheWriter:
             stream._hidden_params if isinstance(stream, AnthropicMessagesStreamingResponse) else _EMPTY_MAPPING
         )
 
+    @property
+    def has_buffered_provider_output(self) -> bool:
+        return getattr(self.stream, "has_buffered_provider_output", False) is True
+
     def __aiter__(self) -> "AnthropicMessagesStreamCacheWriter":
         return self
 
@@ -84,9 +88,7 @@ class AnthropicMessagesStreamCacheWriter:
 
         try:
             events: Final = _split_sse_events(collected_stream.decode("utf-8"))
-            cached_payload: Final = {
-                CACHED_STREAM_EVENTS_KEY: events
-            }  # mutable-ok: cache backends serialize plain dicts
+            cached_payload: Final = {CACHED_STREAM_EVENTS_KEY: events}
             await litellm.cache.async_add_cache(
                 cached_payload,
                 dynamic_cache_object=self.caching_handler.dual_cache,

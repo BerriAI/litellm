@@ -1,9 +1,6 @@
-from unittest.mock import AsyncMock, patch
+from unittest.mock import patch
 
 import pytest
-
-from litellm.proxy._types import LiteLLM_TeamTable, LiteLLM_UserTable, Member
-from litellm.proxy.auth.handle_jwt import JWTAuthManager
 
 
 def test_get_team_models_for_all_models_and_team_only_models():
@@ -526,6 +523,92 @@ def test_wildcard_credential_hydration_preserves_missing_credential_name(
     }
 
 
+def test_hydrate_credential_name_none_leaves_params_untouched(monkeypatch):
+    import litellm
+    from litellm.proxy.auth.model_checks import _hydrate_litellm_credential_name
+    from litellm.types.router import LiteLLM_Params
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="shared-credential",
+                credential_info={},
+                credential_values={"api_key": "sk-shared"},
+            )
+        ],
+    )
+    params = LiteLLM_Params(model="openai/gpt-4o", litellm_credential_name=None)
+
+    result = _hydrate_litellm_credential_name(params)
+
+    assert result is not None
+    assert result.api_key is None
+    assert result.litellm_credential_name is None
+
+
+def test_hydrate_replaced_credential_uses_new_credential_values(monkeypatch):
+    import litellm
+    from litellm.proxy.auth.model_checks import _hydrate_litellm_credential_name
+    from litellm.types.router import LiteLLM_Params
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="shared-credential",
+                credential_info={},
+                credential_values={"api_key": "sk-shared"},
+            ),
+            CredentialItem(
+                credential_name="other-credential",
+                credential_info={},
+                credential_values={"api_key": "sk-other"},
+            ),
+        ],
+    )
+    params = LiteLLM_Params(model="openai/gpt-4o", litellm_credential_name="other-credential")
+
+    result = _hydrate_litellm_credential_name(params)
+
+    assert result is not None
+    assert result.api_key == "sk-other"
+    assert result.litellm_credential_name is None
+
+
+def test_hydrate_inline_api_key_wins_over_stored_credential(monkeypatch):
+    import litellm
+    from litellm.proxy.auth.model_checks import _hydrate_litellm_credential_name
+    from litellm.types.router import LiteLLM_Params
+    from litellm.types.utils import CredentialItem
+
+    monkeypatch.setattr(
+        litellm,
+        "credential_list",
+        [
+            CredentialItem(
+                credential_name="shared-credential",
+                credential_info={},
+                credential_values={"api_key": "sk-shared"},
+            )
+        ],
+    )
+    params = LiteLLM_Params(
+        model="openai/gpt-4o",
+        api_key="sk-inline",
+        litellm_credential_name="shared-credential",
+    )
+
+    result = _hydrate_litellm_credential_name(params)
+
+    assert result is not None
+    assert result.api_key == "sk-inline"
+
+
 @pytest.mark.asyncio
 async def test_get_available_models_for_user_expands_query_team_wildcard(
     monkeypatch,
@@ -700,7 +783,6 @@ def test_expand_wildcard_deployments_non_wildcard_passthrough():
 
 def test_expand_wildcard_deployments_openai_wildcard():
     """openai/* should expand into ≥1 known openai model entries."""
-    from unittest.mock import patch
 
     from litellm.proxy.auth.model_checks import (
         expand_wildcard_deployments_for_model_info,
@@ -755,6 +837,84 @@ def test_expand_wildcard_invalid_litellm_params_passthrough():
     assert result == [deployment]
 
 
+def test_get_complete_model_list_excludes_wildcard_routes_by_default():
+    """Regression (LIT-4108): a wildcard with a matching router deployment leaked into /v1/models."""
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+            },
+            {
+                "model_name": "gpt-4",
+                "litellm_params": {"model": "openai/gpt-4"},
+            },
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["bedrock/*", "gpt-4"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=False,
+        llm_router=router,
+    )
+
+    assert "bedrock/*" not in result
+    assert "gpt-4" in result
+    assert any(m.startswith("bedrock/") for m in result)
+
+
+def test_get_complete_model_list_excludes_wildcard_routes_without_router():
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["bedrock/*", "gpt-4"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=False,
+        llm_router=None,
+    )
+
+    assert "bedrock/*" not in result
+    assert "gpt-4" in result
+    assert any(m.startswith("bedrock/") for m in result)
+
+
+def test_get_complete_model_list_includes_wildcard_routes_when_requested():
+    from litellm import Router
+    from litellm.proxy.auth.model_checks import get_complete_model_list
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "bedrock/*",
+                "litellm_params": {"model": "bedrock/*"},
+            },
+        ]
+    )
+
+    result = get_complete_model_list(
+        key_models=[],
+        team_models=[],
+        proxy_model_list=["bedrock/*"],
+        user_model=None,
+        infer_model_from_keys=False,
+        return_wildcard_routes=True,
+        llm_router=router,
+    )
+
+    assert result.count("bedrock/*") == 1
+    assert any(m.startswith("bedrock/") and m != "bedrock/*" for m in result)
+
+
 def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
     """models_by_provider was a frozen import-time snapshot of set unions, so cost map
     reloads (which call add_known_models) never reached wildcard expansion until a
@@ -780,6 +940,7 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
         litellm.add_known_models(model_cost_map={})
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
 
+
 def test_get_complete_model_list_drops_no_default_models_sentinel():
     from litellm.proxy.auth.model_checks import get_complete_model_list
 
@@ -804,3 +965,18 @@ def test_get_complete_model_list_sentinel_only_grants_nothing():
         infer_model_from_keys=False,
     )
     assert result == []
+
+
+def test_transcribe_is_a_known_provider_for_wildcard_expansion():
+    import litellm
+    from litellm.proxy.auth.model_checks import (
+        get_known_models_from_wildcard,
+        get_provider_models,
+    )
+
+    assert "transcribe" in litellm.models_by_provider
+    assert "transcribe/StartTranscriptionJob" in litellm.models_by_provider["transcribe"]
+    assert get_provider_models("transcribe") == ["transcribe/StartTranscriptionJob"]
+    assert get_known_models_from_wildcard("transcribe/*") == [
+        "transcribe/StartTranscriptionJob"
+    ]

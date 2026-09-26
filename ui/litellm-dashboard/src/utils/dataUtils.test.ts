@@ -1,5 +1,13 @@
+// @vitest-environment jsdom
+
 import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
-import { copyToClipboard, formatNumberWithCommas, getSpendString, updateExistingKeys } from "./dataUtils";
+import {
+  copyToClipboard,
+  formatNumberWithCommas,
+  formatPerSecondCost,
+  getSpendString,
+  updateExistingKeys,
+} from "./dataUtils";
 
 // Import the mocked module
 import { toast } from "@/lib/toast";
@@ -110,6 +118,18 @@ describe("dataUtils", () => {
     it("should respect custom decimals", () => {
       expect(getSpendString(0.01234, 3)).toBe("$0.012");
       expect(getSpendString(999.9999, 1)).toBe("$1,000.0");
+    });
+  });
+
+  describe("formatPerSecondCost", () => {
+    it("should keep at least two decimals and append the per-second unit", () => {
+      expect(formatPerSecondCost(0.4)).toBe("$0.40/s");
+      expect(formatPerSecondCost(1)).toBe("$1.00/s");
+    });
+
+    it("should show sub-cent rates without rounding them to zero", () => {
+      expect(formatPerSecondCost(0.015)).toBe("$0.015/s");
+      expect(formatPerSecondCost(0.000025)).toBe("$0.000025/s");
     });
   });
 

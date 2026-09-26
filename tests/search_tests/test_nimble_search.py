@@ -3,13 +3,10 @@ Tests for Nimble Search API integration.
 """
 
 import json
-import os
-import sys
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from tests.search_tests.base_search_unit_tests import BaseSearchTest
@@ -61,7 +58,7 @@ class TestNimbleSearch(BaseSearchTest):
 class TestNimbleSearchTransformation:
     """
     Full-stack tests through `litellm.search` / `litellm.asearch` with the HTTP layer mocked.
-    Transformation details are unit-tested in tests/test_litellm/llms/nimble/search/.
+    Transformation details are unit-tested in tests/unit/llms/nimble/search/.
     """
 
     @pytest.fixture(autouse=True)

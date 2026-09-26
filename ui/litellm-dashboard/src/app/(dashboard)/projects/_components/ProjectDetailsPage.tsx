@@ -9,20 +9,10 @@ import { StatusBadge } from "@/components/shared/table_cells/status_badge";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Meter, MeterIndicator, MeterTrack } from "@/components/ui/meter";
+import { Meter, MeterIndicator, MeterTrack } from "@/components/shared/Meter";
 import { UiLoadingSpinner } from "@/components/ui/ui-loading-spinner";
 import { EditProjectModal } from "./ProjectModals/EditProjectModal";
 import { ProjectKeysSection } from "./ProjectKeysSection";
-
-interface TeamInfoShape {
-  team_id: string;
-  team_alias?: string;
-  models?: string[];
-  max_budget?: number | null;
-  budget_duration?: string | null;
-  spend?: number;
-  members_with_roles?: { user_id: string; role: string }[];
-}
 
 interface ProjectDetailProps {
   projectId: string;
@@ -33,10 +23,7 @@ const utilisationTone = (percent: number) => (percent >= 90 ? "over" : percent >
 
 export function ProjectDetail({ projectId, onBack }: ProjectDetailProps) {
   const { data: project, isLoading } = useProjectDetails(projectId);
-  const { data: teamData } = useTeam(project?.team_id ?? undefined);
-  // teamInfoCall returns { team_id, team_info: {...}, keys, team_memberships }
-  const teamInfo: TeamInfoShape | undefined = ((teamData as unknown as { team_info?: TeamInfoShape })?.team_info ??
-    teamData) as TeamInfoShape | undefined;
+  const { data: teamInfo } = useTeam(project?.team_id ?? undefined);
   const [isEditModalVisible, setIsEditModalVisible] = useState(false);
 
   const spend = project?.spend ?? 0;

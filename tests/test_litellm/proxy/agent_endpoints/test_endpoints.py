@@ -1,14 +1,18 @@
+import json
+from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+from litellm.constants import REDACTED_BY_LITELM_STRING
+from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.agent_endpoints import endpoints as agent_endpoints
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import (
     RestrictedAgentAccess,
-    UnrestrictedAgentAccess,
 )
 from litellm.proxy.agent_endpoints.endpoints import (
     _attach_keys_to_agents,
@@ -484,11 +488,15 @@ class TestAgentRBACInternalUserViewOnly:
         assert resp.status_code == 403
 
 
+SENTINEL_AGENT_API_KEY = "sk-test-sentinel-do-not-use"
+
+
 class TestAgentRBACProxyAdminViewOnly:
     """Read-only proxy admins go through the object-permission scoped branch on
     GET /v1/agents (the admin fast path stays full PROXY_ADMIN only, so viewers
-    cannot fan out health checks beyond their allowlist), and secret unredaction
-    also stays gated on full PROXY_ADMIN."""
+    cannot fan out health checks beyond their allowlist). litellm_params
+    secrets are redacted for every caller, admin included (LIT-6736); only the
+    virtual-key/header visibility stays gated on full PROXY_ADMIN."""
 
     @pytest.fixture(autouse=True)
     def _setup(self, monkeypatch):
@@ -501,7 +509,7 @@ class TestAgentRBACProxyAdminViewOnly:
                 agent_id=f"agent-{index}",
                 agent_name=f"Agent {index}",
                 agent_card_params=_sample_agent_card_params(),
-                litellm_params={"api_key": "sk-super-secret-agent-key"},
+                litellm_params={"api_key": SENTINEL_AGENT_API_KEY},
             )
             for index in (1, 2)
         ]
@@ -543,9 +551,9 @@ class TestAgentRBACProxyAdminViewOnly:
         self.allowed_agents_spy.assert_awaited_once()
 
     def test_should_still_redact_secrets_for_view_only_admin(self):
-        """An unrestricted viewer sees the same agents as an admin but with keys
-        stripped and litellm_params masked."""
-        self.allowed_agents_spy.return_value = UnrestrictedAgentAccess()
+        """A viewer granted every agent sees the same agents as an admin but with keys
+        stripped; litellm_params secrets never appear in either response."""
+        self.allowed_agents_spy.return_value = RestrictedAgentAccess(frozenset({"agent-1", "agent-2"}))
         viewer_resp = self._list_agents(self.viewer_client)
         admin_resp = self._list_agents(self.admin_client)
 
@@ -553,14 +561,12 @@ class TestAgentRBACProxyAdminViewOnly:
         viewer_by_id = {agent["agent_id"]: agent for agent in viewer_resp.json()}
         assert set(viewer_by_id) == {"agent-1", "agent-2"}
         assert viewer_by_id["agent-1"]["keys"] is None
-        assert "sk-super-secret-agent-key" not in viewer_resp.text
+        assert SENTINEL_AGENT_API_KEY not in viewer_resp.text
 
         admin_by_id = {agent["agent_id"]: agent for agent in admin_resp.json()}
         assert admin_by_id["agent-1"]["keys"][0]["token"] == "hash-aaa"
-        assert (
-            admin_by_id["agent-1"]["litellm_params"]["api_key"]
-            == "sk-super-secret-agent-key"
-        )
+        assert SENTINEL_AGENT_API_KEY not in admin_resp.text
+        assert admin_by_id["agent-1"]["litellm_params"]["api_key"] == REDACTED_BY_LITELM_STRING
 
 
 class TestAgentRBACProxyAdmin:
@@ -615,6 +621,109 @@ class TestAgentRBACProxyAdmin:
             )
             # Security scheme is the LiteLLM scheme.
             assert "LiteLLMKey" in stored_card["securitySchemes"]
+
+    def test_create_agent_response_never_echoes_secret(self):
+        """LIT-6736: POST /v1/agents must not echo the stored secret back, even
+        though it's the caller's own value and even for a proxy admin."""
+        with patch("litellm.proxy.proxy_server.prisma_client"):  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            self.mock_registry.get_agent_by_name = MagicMock(return_value=None)
+            self.mock_registry.add_agent_to_db = AsyncMock(
+                return_value=AgentResponse(
+                    agent_id="agent-123",
+                    agent_name="Test Agent",
+                    agent_card_params=_sample_agent_card_params(),
+                    litellm_params={
+                        "aws_secret_access_key": SENTINEL_AGENT_API_KEY,
+                        "model": "bedrock/agentcore/my-agent",
+                    },
+                )
+            )
+            self.mock_registry.register_agent = MagicMock()
+
+            resp = self.admin_client.post(
+                "/v1/agents",
+                json={
+                    "agent_name": "Test Agent",
+                    "agent_card_params": _sample_agent_card_params(),
+                    "litellm_params": {
+                        "aws_secret_access_key": SENTINEL_AGENT_API_KEY,
+                        "model": "bedrock/agentcore/my-agent",
+                    },
+                },
+                headers={"Authorization": "Bearer k"},
+            )
+
+            assert resp.status_code == 200
+            assert SENTINEL_AGENT_API_KEY not in resp.text
+            body = resp.json()
+            assert body["litellm_params"]["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
+            assert body["litellm_params"]["model"] == "bedrock/agentcore/my-agent"
+
+    def test_update_agent_response_never_echoes_secret(self):
+        """LIT-6736: PUT /v1/agents/{id} must not echo the stored secret back."""
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+                return_value={
+                    "agent_id": "agent-123",
+                    "agent_name": "Existing Agent",
+                    "agent_card_params": _sample_agent_card_params(),
+                }
+            )
+            self.mock_registry.update_agent_in_db = AsyncMock(
+                return_value=AgentResponse(
+                    agent_id="agent-123",
+                    agent_name="Test Agent",
+                    agent_card_params=_sample_agent_card_params(),
+                    litellm_params={"aws_secret_access_key": SENTINEL_AGENT_API_KEY},
+                )
+            )
+            self.mock_registry.deregister_agent = MagicMock()
+            self.mock_registry.register_agent = MagicMock()
+
+            resp = self.admin_client.put(
+                "/v1/agents/agent-123",
+                json={
+                    "agent_name": "Test Agent",
+                    "agent_card_params": _sample_agent_card_params(),
+                    "litellm_params": {"aws_secret_access_key": REDACTED_BY_LITELM_STRING},
+                },
+                headers={"Authorization": "Bearer k"},
+            )
+
+            assert resp.status_code == 200
+            assert SENTINEL_AGENT_API_KEY not in resp.text
+            assert resp.json()["litellm_params"]["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
+
+    def test_patch_agent_response_never_echoes_secret(self):
+        """LIT-6736: PATCH /v1/agents/{id} must not echo the stored secret back."""
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:  # test-quality-ok: proxy_server module global is the endpoint's only injection point
+            mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
+                return_value={
+                    "agent_id": "agent-123",
+                    "agent_name": "Existing Agent",
+                    "agent_card_params": _sample_agent_card_params(),
+                }
+            )
+            self.mock_registry.patch_agent_in_db = AsyncMock(
+                return_value=AgentResponse(
+                    agent_id="agent-123",
+                    agent_name="Renamed Agent",
+                    agent_card_params=_sample_agent_card_params(),
+                    litellm_params={"aws_secret_access_key": SENTINEL_AGENT_API_KEY},
+                )
+            )
+            self.mock_registry.deregister_agent = MagicMock()
+            self.mock_registry.register_agent = MagicMock()
+
+            resp = self.admin_client.patch(
+                "/v1/agents/agent-123",
+                json={"agent_name": "Renamed Agent"},
+                headers={"Authorization": "Bearer k"},
+            )
+
+            assert resp.status_code == 200
+            assert SENTINEL_AGENT_API_KEY not in resp.text
+            assert resp.json()["litellm_params"]["aws_secret_access_key"] == REDACTED_BY_LITELM_STRING
 
     def test_should_allow_admin_to_delete_agent(self):
         existing = {
@@ -956,3 +1065,295 @@ def test_merged_agent_card_url_has_no_double_slash_without_proxy_base_url(
     interface_url = merged["supportedInterfaces"][0]["url"]
     assert interface_url == f"{base_url.rstrip('/')}/a2a/agent-xyz"
     assert "//a2a" not in interface_url
+
+
+class _DbBackedProxyConfig:
+    """Round-trips `litellm_settings` through the DB overlay the proxy applies on every
+    `get_config()`, which is what re-assigns the `litellm.public_*` globals in production.
+
+    Storage goes through JSON the way the `litellm_config` row does, so every read hands back
+    freshly built values instead of the objects the endpoint still holds a reference to."""
+
+    def __init__(self, stored_litellm_settings: dict[str, object] | None = None) -> None:
+        self.stored_litellm_settings_json: str = json.dumps(stored_litellm_settings or {})
+
+    async def get_config(self) -> dict[str, dict[str, object]]:
+        from litellm.proxy.proxy_server import ProxyConfig
+
+        config: Final[dict[str, dict[str, object]]] = {"litellm_settings": {}}
+        db_param_value: Final[dict[str, object]] = json.loads(self.stored_litellm_settings_json)
+        if not db_param_value:
+            return config
+        proxy_config: Final = ProxyConfig()
+        db_values: Final = proxy_config._prepared_db_settings_values("litellm_settings", db_param_value)
+        proxy_config._apply_litellm_settings_db_values(db_values)
+        return {"litellm_settings": dict(proxy_config.litellm_settings.resolved())}
+
+    async def save_config(self, new_config: dict[str, dict[str, object]]) -> None:
+        self.stored_litellm_settings_json = json.dumps(new_config.get("litellm_settings") or {})
+
+
+def test_make_agent_public_twice_keeps_both_agents_public(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A second /make_public call must not drop the agent published by the first one."""
+    import litellm
+    from litellm.proxy.agent_endpoints import agent_registry as agent_registry_module
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+
+    registry: Final = AgentRegistry()
+    registry.register_agent(_sample_agent_response(agent_id="agent-1", agent_name="Agent One"))
+    registry.register_agent(_sample_agent_response(agent_id="agent-2", agent_name="Agent Two"))
+
+    monkeypatch.setattr(agent_registry_module, "global_agent_registry", registry)
+    monkeypatch.setattr(litellm, "public_agent_groups", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_config", _DbBackedProxyConfig())
+
+    first: Final = client.post("/v1/agents/agent-1/make_public", headers={"Authorization": "Bearer test-key"})
+    second: Final = client.post("/v1/agents/agent-2/make_public", headers={"Authorization": "Bearer test-key"})
+
+    assert first.status_code == 200
+    assert second.status_code == 200
+    assert second.json()["public_agent_groups"] == ["agent-1", "agent-2"]
+    assert [agent.agent_id for agent in registry.get_public_agent_list()] == ["agent-1", "agent-2"]
+
+
+def test_make_agent_public_rejects_an_agent_published_only_in_the_db(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The duplicate guard must fire off the stored list, not just what this process published."""
+    import litellm
+    from litellm.proxy.agent_endpoints import agent_registry as agent_registry_module
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+
+    registry: Final = AgentRegistry()
+    registry.register_agent(_sample_agent_response(agent_id="agent-1", agent_name="Agent One"))
+
+    monkeypatch.setattr(agent_registry_module, "global_agent_registry", registry)
+    monkeypatch.setattr(litellm, "public_agent_groups", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    monkeypatch.setattr(
+        "litellm.proxy.proxy_server.proxy_config",
+        _DbBackedProxyConfig({"public_agent_groups": ["agent-1"]}),
+    )
+
+    duplicate: Final = client.post("/v1/agents/agent-1/make_public", headers={"Authorization": "Bearer test-key"})
+
+    assert duplicate.status_code == 400
+    assert "already in public agent groups" in duplicate.json()["detail"]
+
+
+_KILL_SWITCH: Final = {
+    "url": "https://ops.example.com/kill",
+    "method": "POST",
+    "headers": {"X-Env": "prod"},
+    "query_params": {"reason": "manual"},
+    "body": {"action": "stop"},
+    "auth": {"type": "bearer", "token": "tok-real"},
+}
+
+
+def _agent_with_kill_switch() -> AgentResponse:
+    return AgentResponse(
+        agent_id="agent-123",
+        agent_name="Test Agent",
+        agent_card_params=_sample_agent_card_params(),
+        litellm_params={},
+        kill_switch=_KILL_SWITCH,
+    )
+
+
+class _FakeKillSwitchClient:
+    def __init__(self, response: httpx.Response) -> None:
+        self.calls: list[tuple[str, str, dict[str, str], object, float]] = []  # mutable-ok: test double records calls
+        self._response: Final = response
+
+    def build_request(self, method: str, url: str, *, headers, json, timeout: float) -> httpx.Request:
+        self.calls.append((method, url, dict(headers), json, timeout))
+        return httpx.Request(method, url, headers=dict(headers), json=json)
+
+    async def send(self, request: httpx.Request, *, stream: bool, follow_redirects: bool) -> httpx.Response:
+        return self._response
+
+
+class _AuditLogRecorder:
+    def __init__(self) -> None:
+        self.rows: list[LiteLLM_AuditLogs] = []  # mutable-ok: test double records writes
+
+    async def __call__(self, request_data: LiteLLM_AuditLogs) -> None:
+        self.rows.append(request_data)
+
+
+def _kill_switch_app(
+    role: LitellmUserRoles,
+    http_client: _FakeKillSwitchClient,
+    audit_log: _AuditLogRecorder | None = None,
+) -> TestClient:
+    test_client: Final = _make_app_with_role(role)
+    test_client.app.dependency_overrides[agent_endpoints.default_kill_switch_http_client] = lambda: http_client
+    test_client.app.dependency_overrides[agent_endpoints.default_kill_switch_audit_log_writer] = (
+        lambda: audit_log or _AuditLogRecorder()
+    )
+    return test_client
+
+
+def test_kill_switch_trigger_fires_the_configured_webhook_and_returns_the_result(monkeypatch) -> None:
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    fake: Final = _FakeKillSwitchClient(httpx.Response(200, text="ok"))
+
+    resp: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake).post(
+        "/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    assert resp.json() == {
+        "agent_id": "agent-123",
+        "url": "https://ops.example.com/kill",
+        "method": "POST",
+        "status_code": 200,
+        "response_body": "ok",
+        "error": None,
+    }
+    (method, url, headers, body, _timeout) = fake.calls[0]
+    assert (method, url, body) == ("POST", "https://ops.example.com/kill?reason=manual", {"action": "stop"})
+    assert headers == {"X-Env": "prod", "Authorization": "Bearer tok-real"}
+
+
+def test_kill_switch_trigger_writes_an_audit_log_row_naming_the_admin_and_the_sanitized_result(monkeypatch) -> None:
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    fake: Final = _FakeKillSwitchClient(httpx.Response(202, text='{"stopped": true}'))
+    audit: Final = _AuditLogRecorder()
+    test_client: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake, audit)
+    test_client.app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        user_id="test-user", user_role=LitellmUserRoles.PROXY_ADMIN, api_key="hashed-k"
+    )
+
+    resp: Final = test_client.post("/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"})
+
+    assert resp.status_code == 200, resp.text
+    (row,) = audit.rows
+    assert (row.action, row.table_name, row.object_id) == (
+        "kill_switch_fired",
+        LitellmTableNames.AGENT_TABLE_NAME,
+        "agent-123",
+    )
+    assert (row.changed_by, row.changed_by_api_key) == ("test-user", "hashed-k")
+    assert row.before_value is None
+    assert json.loads(row.updated_values) == {
+        "agent_id": "agent-123",
+        "url": "https://ops.example.com/kill",
+        "method": "POST",
+        "status_code": 202,
+        "response_body": '{"stopped": true}',
+    }
+    assert "tok-real" not in row.model_dump_json()
+
+
+def test_kill_switch_trigger_returns_502_and_still_audits_when_the_webhook_rejects(monkeypatch) -> None:
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    fake: Final = _FakeKillSwitchClient(httpx.Response(401, text="bad token"))
+    audit: Final = _AuditLogRecorder()
+
+    resp: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake, audit).post(
+        "/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"}
+    )
+
+    assert resp.status_code == 502, resp.text
+    assert resp.json()["detail"]["status_code"] == 401
+    assert resp.json()["detail"]["response_body"] == "bad token"
+    (row,) = audit.rows
+    assert row.action == "kill_switch_fired"
+    assert json.loads(row.updated_values)["status_code"] == 401
+
+
+@pytest.mark.parametrize("role", [LitellmUserRoles.INTERNAL_USER, LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY])
+def test_kill_switch_trigger_is_refused_before_any_webhook_call_for_non_admins(monkeypatch, role) -> None:
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    fake: Final = _FakeKillSwitchClient(httpx.Response(200))
+    audit: Final = _AuditLogRecorder()
+
+    resp: Final = _kill_switch_app(role, fake, audit).post(
+        "/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"}
+    )
+
+    assert resp.status_code == 403, resp.text
+    assert fake.calls == []
+    assert audit.rows == []
+
+
+def test_kill_switch_trigger_404s_unknown_agent_and_400s_an_agent_without_one(monkeypatch) -> None:
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(side_effect=[None, _sample_agent_response()])
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", None)
+    fake: Final = _FakeKillSwitchClient(httpx.Response(200))
+    audit: Final = _AuditLogRecorder()
+    test_client: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake, audit)
+
+    missing: Final = test_client.post("/v1/agents/nope/kill_switch", headers={"Authorization": "Bearer k"})
+    unconfigured: Final = test_client.post("/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"})
+
+    assert missing.status_code == 404
+    assert unconfigured.status_code == 400
+    assert "no kill_switch configured" in unconfigured.json()["detail"]
+    assert fake.calls == []
+    assert audit.rows == []
+
+
+def test_kill_switch_trigger_fires_the_db_row_config_over_a_stale_in_memory_copy(monkeypatch) -> None:
+    """Another replica may have updated the agent; the row is the source of truth for what gets fired."""
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    db_row: Final = SimpleNamespace(
+        agent_id="agent-123",
+        kill_switch={"url": "https://ops.example.com/kill-v2", "method": "DELETE", "auth": None},
+    )
+    prisma: Final = MagicMock()
+    prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=db_row)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma)
+    fake: Final = _FakeKillSwitchClient(httpx.Response(204))
+
+    resp: Final = _kill_switch_app(LitellmUserRoles.PROXY_ADMIN, fake).post(
+        "/v1/agents/agent-123/kill_switch", headers={"Authorization": "Bearer k"}
+    )
+
+    assert resp.status_code == 200, resp.text
+    (method, url, headers, body, _timeout) = fake.calls[0]
+    assert (method, url, headers, body) == ("DELETE", "https://ops.example.com/kill-v2", {}, None)
+    assert prisma.db.litellm_agentstable.find_unique.await_args.kwargs == {"where": {"agent_id": "agent-123"}}
+    registry.get_agent_by_id.assert_not_called()
+
+
+def test_get_agent_redacts_kill_switch_secret_for_admins_and_hides_it_from_others(monkeypatch) -> None:
+    registry: Final = MagicMock()
+    registry.get_agent_by_id = MagicMock(return_value=_agent_with_kill_switch())
+    registry.ids_for_agent = MagicMock(return_value=("agent-123",))
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+
+    def _get_as(role: LitellmUserRoles):
+        with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
+            mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+            return _make_app_with_role(role).get("/v1/agents/agent-123", headers={"Authorization": "Bearer k"})
+
+    admin: Final = _get_as(LitellmUserRoles.PROXY_ADMIN)
+    assert admin.status_code == 200, admin.text
+    assert admin.json()["kill_switch"] == {
+        **_KILL_SWITCH,
+        "auth": {"type": "bearer", "token": REDACTED_BY_LITELM_STRING},
+    }
+
+    internal: Final = _get_as(LitellmUserRoles.INTERNAL_USER)
+    assert internal.status_code == 200, internal.text
+    assert internal.json()["kill_switch"] is None
+    assert "tok-real" not in internal.text

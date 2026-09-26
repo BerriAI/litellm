@@ -1,4 +1,4 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { useState } from "react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -161,7 +161,7 @@ describe("AgentBuilderView", () => {
     await waitForRoster();
 
     await user.click(screen.getByRole("button", { name: /New agent/i }));
-    await user.type(screen.getByPlaceholderText("My Agent"), "billing-agent");
+    fireEvent.change(screen.getByPlaceholderText("My Agent"), { target: { value: "billing-agent" } });
     await user.click(screen.getByRole("button", { name: /Save Agent/i }));
 
     await waitFor(() => expect(modelCreateCall).toHaveBeenCalled());
@@ -236,6 +236,7 @@ describe("AgentBuilderView", () => {
     const snippet = await screen.findByTestId("code-block");
     expect(snippet).toHaveTextContent("https://proxy.example.com/v1/chat/completions");
     expect(snippet).toHaveTextContent('"model": "support-agent"');
+    expect(snippet).toHaveTextContent("x-litellm-api-key: Bearer <your-master-key>");
   });
 
   it("mints a key scoped to the selected agent", async () => {
@@ -258,7 +259,7 @@ describe("AgentBuilderView", () => {
 
     await user.click(screen.getByRole("tab", { name: /Chat/i }));
     const scratch = await screen.findByLabelText("chat scratch");
-    await user.type(scratch, "half a thought");
+    fireEvent.change(scratch, { target: { value: "half a thought" } });
     expect(scratch).toHaveValue("half a thought");
 
     await user.click(screen.getByRole("tab", { name: /Configure/i }));
@@ -274,7 +275,7 @@ describe("AgentBuilderView", () => {
     await waitForRoster();
 
     await user.click(screen.getByRole("tab", { name: /Batch Test/i }));
-    await user.type(await screen.findByLabelText("batch scratch"), "seven cases");
+    fireEvent.change(await screen.findByLabelText("batch scratch"), { target: { value: "seven cases" } });
 
     await user.click(screen.getByRole("tab", { name: /Connect/i }));
     await screen.findByTestId("code-block");

@@ -3,16 +3,15 @@ import copy
 import json
 import logging
 import os
-import sys
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
 
 logging.basicConfig(level=logging.DEBUG)
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm import completion
 from litellm.caching import InMemoryCache
+from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
 
 litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
@@ -38,7 +37,7 @@ def langfuse_client():
         langfuse_client = langfuse.Langfuse(
             public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
             secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-            host="https://us.cloud.langfuse.com",
+            host=os.environ.get("LANGFUSE_HOST", "https://us.cloud.langfuse.com"),
         )
         litellm.in_memory_llm_clients_cache.set_cache(
             key=_langfuse_cache_key,
@@ -229,29 +228,27 @@ async def test_langfuse_logging_without_request_response(stream, langfuse_client
                 print(chunk)
 
         langfuse_client.flush()
-        await asyncio.sleep(5)
 
-        # get trace with _unique_trace_name
-        trace = langfuse_client.get_generations(trace_id=_unique_trace_name)
-
-        print("trace_from_langfuse", trace)
-
-        _trace_data = trace.data
-
-        if (
-            len(_trace_data) == 0
-        ):  # prevent infrequent list index out of range error from langfuse api
-            return
+        for _ in range(30):
+            _trace_data = langfuse_client.api.observations.get_many(
+                trace_id=resolve_trace_id(_unique_trace_name),
+                type="GENERATION",
+                fields="core,io",
+            ).data
+            if _trace_data:
+                break
+            await asyncio.sleep(3)
 
         print(f"_trace_data: {_trace_data}")
-        assert _trace_data[0].input == {
+        assert json.loads(_trace_data[0].input) == {
             "messages": [{"content": "redacted-by-litellm", "role": "user"}]
         }
-        assert _trace_data[0].output == {
+        assert json.loads(_trace_data[0].output) == {
             "role": "assistant",
             "content": "redacted-by-litellm",
             "function_call": None,
             "tool_calls": None,
+            "provider_specific_fields": None,
         }
 
     except Exception as e:

@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent, { PointerEventsCheckLevel } from "@testing-library/user-event";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
@@ -10,6 +10,7 @@ import { MCPServer, MCPUserEnvVarsStatus } from "@/components/mcp_tools/types";
 vi.mock("@/components/networking", () => ({
   getMCPUserEnvVars: vi.fn(),
   storeMCPUserEnvVars: vi.fn(),
+  clearMCPUserEnvVars: vi.fn(),
 }));
 
 const createQueryClient = () => new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
@@ -23,21 +24,27 @@ const statusWith = (required: MCPUserEnvVarsStatus["required"]): MCPUserEnvVarsS
 
 const renderModal = (status: MCPUserEnvVarsStatus, onSaved = vi.fn(), onClose = vi.fn()) => {
   vi.mocked(networking.getMCPUserEnvVars).mockResolvedValue(status);
-  render(
+  const view = render(
     <QueryClientProvider client={createQueryClient()}>
       <UserEnvVarsModal server={server} open accessToken="sk-test" onClose={onClose} onSaved={onSaved} />
     </QueryClientProvider>,
   );
-  return { onSaved, onClose };
+  const setOpen = (open: boolean) =>
+    view.rerender(
+      <QueryClientProvider client={createQueryClient()}>
+        <UserEnvVarsModal server={server} open={open} accessToken="sk-test" onClose={onClose} onSaved={onSaved} />
+      </QueryClientProvider>,
+    );
+  return { onSaved, onClose, setOpen };
 };
 
 const save = (user: ReturnType<typeof setup>) => user.click(screen.getByRole("button", { name: "Save Credentials" }));
 
+// Opening the modal remounts the form so nothing carries over from the last time it was open.
+// Settle that remount before handing back a node, or the caller holds a detached one.
 const fieldAfterOpen = async (label: RegExp): Promise<HTMLElement> => {
-  const initial = await screen.findByLabelText(label);
-  await waitFor(() => {
-    expect(initial).not.toBeInTheDocument();
-  });
+  await screen.findByLabelText(label);
+  await act(async () => {});
   return screen.getByLabelText(label);
 };
 
@@ -56,8 +63,8 @@ describe("UserEnvVarsModal", () => {
       ]),
     );
 
-    await user.type(await fieldAfterOpen(/^API_KEY/), "  secret-value  ");
-    await user.type(screen.getByLabelText(/^REGION/), "us-east-1");
+    fireEvent.change(await fieldAfterOpen(/^API_KEY/), { target: { value: "  secret-value  " } });
+    fireEvent.change(screen.getByLabelText(/^REGION/), { target: { value: "us-east-1" } });
     await save(user);
 
     await waitFor(() => {
@@ -79,7 +86,7 @@ describe("UserEnvVarsModal", () => {
       ]),
     );
 
-    await user.type(await fieldAfterOpen(/^REGION/), "eu-west-2");
+    fireEvent.change(await fieldAfterOpen(/^REGION/), { target: { value: "eu-west-2" } });
     await save(user);
 
     await waitFor(() => {
@@ -145,8 +152,24 @@ describe("UserEnvVarsModal", () => {
 
     const input = await fieldAfterOpen(/^API_KEY/);
     expect(input).toHaveAttribute("type", "password");
-    await user.type(input, "hunter2");
+    fireEvent.change(input, { target: { value: "hunter2" } });
     expect(screen.getByLabelText(/^API_KEY/)).toHaveAttribute("type", "password");
+  });
+
+  it("starts from a blank form each time it is opened", async () => {
+    const { setOpen } = renderModal(statusWith([{ name: "API_KEY", description: null, is_set: false }]));
+
+    const input = await fieldAfterOpen(/^API_KEY/);
+    fireEvent.change(input, { target: { value: "hunter2" } });
+    expect(screen.getByLabelText(/^API_KEY/)).toHaveValue("hunter2");
+
+    setOpen(false);
+    await waitFor(() => {
+      expect(screen.queryByLabelText(/^API_KEY/)).not.toBeInTheDocument();
+    });
+
+    setOpen(true);
+    expect(await fieldAfterOpen(/^API_KEY/)).toHaveValue("");
   });
 
   it("reports the empty state instead of a form when nothing is required", async () => {
@@ -162,7 +185,7 @@ describe("UserEnvVarsModal", () => {
     vi.mocked(networking.storeMCPUserEnvVars).mockResolvedValue(saved);
     const { onSaved, onClose } = renderModal(statusWith([{ name: "API_KEY", description: null, is_set: false }]));
 
-    await user.type(await fieldAfterOpen(/^API_KEY/), "abc");
+    fireEvent.change(await fieldAfterOpen(/^API_KEY/), { target: { value: "abc" } });
     await save(user);
 
     await waitFor(() => {
@@ -175,7 +198,7 @@ describe("UserEnvVarsModal", () => {
     const user = setup();
     renderModal(statusWith([{ name: "API_KEY", description: null, is_set: false }]));
 
-    await user.type(await fieldAfterOpen(/^API_KEY/), "hunter2");
+    fireEvent.change(await fieldAfterOpen(/^API_KEY/), { target: { value: "hunter2" } });
     await user.click(screen.getByRole("button", { name: "Show password" }));
     expect(screen.getByLabelText(/^API_KEY/)).toHaveAttribute("type", "text");
     expect(screen.getByLabelText(/^API_KEY/)).toHaveValue("hunter2");
@@ -194,12 +217,95 @@ describe("UserEnvVarsModal", () => {
     expect(networking.storeMCPUserEnvVars).not.toHaveBeenCalled();
   });
 
+  it("clears every stored value through the delete endpoint once the user confirms", async () => {
+    const user = setup();
+    const cleared = statusWith([{ name: "API_KEY", description: null, is_set: false }]);
+    vi.mocked(networking.clearMCPUserEnvVars).mockResolvedValue(cleared);
+    const { onSaved, onClose } = renderModal(statusWith([{ name: "API_KEY", description: null, is_set: true }]));
+
+    await fieldAfterOpen(/^API_KEY/);
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    expect(networking.clearMCPUserEnvVars).not.toHaveBeenCalled();
+    const confirm = await screen.findByRole("alertdialog", { name: "Clear saved credentials" });
+    await user.click(within(confirm).getByRole("button", { name: "Clear credentials" }));
+
+    await waitFor(() => {
+      expect(onSaved).toHaveBeenCalledWith(cleared);
+    });
+    expect(networking.clearMCPUserEnvVars).toHaveBeenCalledWith("sk-test", "srv-1");
+    expect(networking.storeMCPUserEnvVars).not.toHaveBeenCalled();
+    expect(onClose).toHaveBeenCalled();
+  });
+
+  it("keeps every stored value when the clear confirmation is cancelled", async () => {
+    const user = setup();
+    const { onSaved, onClose } = renderModal(statusWith([{ name: "API_KEY", description: null, is_set: true }]));
+
+    await fieldAfterOpen(/^API_KEY/);
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    const confirm = await screen.findByRole("alertdialog", { name: "Clear saved credentials" });
+    await user.click(within(confirm).getByRole("button", { name: "Cancel" }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+    expect(networking.clearMCPUserEnvVars).not.toHaveBeenCalled();
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+    expect(screen.getByRole("button", { name: "Clear" })).toBeEnabled();
+  });
+
+  it("drops a pending clear confirmation when the modal is closed and reopened", async () => {
+    const user = setup();
+    const { onClose, setOpen } = renderModal(statusWith([{ name: "API_KEY", description: null, is_set: true }]));
+
+    await fieldAfterOpen(/^API_KEY/);
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    await screen.findByRole("alertdialog", { name: "Clear saved credentials" });
+
+    await user.click(screen.getByRole("button", { name: "Close", hidden: true }));
+    expect(onClose).toHaveBeenCalledTimes(1);
+    setOpen(false);
+    await waitFor(() => {
+      expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    });
+
+    setOpen(true);
+    await fieldAfterOpen(/^API_KEY/);
+    expect(screen.queryByRole("alertdialog")).not.toBeInTheDocument();
+    expect(networking.clearMCPUserEnvVars).not.toHaveBeenCalled();
+  });
+
+  it("offers Clear only when a value is stored", async () => {
+    renderModal(statusWith([{ name: "API_KEY", description: null, is_set: false }]));
+
+    await fieldAfterOpen(/^API_KEY/);
+    expect(screen.queryByRole("button", { name: "Clear" })).not.toBeInTheDocument();
+  });
+
+  it("surfaces a clear failure without closing", async () => {
+    const user = setup();
+    vi.mocked(networking.clearMCPUserEnvVars).mockRejectedValue(new Error("boom"));
+    const { onSaved, onClose } = renderModal(statusWith([{ name: "API_KEY", description: null, is_set: true }]));
+
+    await fieldAfterOpen(/^API_KEY/);
+    await user.click(screen.getByRole("button", { name: "Clear" }));
+    const confirm = await screen.findByRole("alertdialog", { name: "Clear saved credentials" });
+    await user.click(within(confirm).getByRole("button", { name: "Clear credentials" }));
+
+    await waitFor(() => {
+      expect(networking.clearMCPUserEnvVars).toHaveBeenCalledTimes(1);
+    });
+    expect(onSaved).not.toHaveBeenCalled();
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
   it("surfaces a save failure without closing", async () => {
     const user = setup();
     vi.mocked(networking.storeMCPUserEnvVars).mockRejectedValue(new Error("boom"));
     const { onSaved, onClose } = renderModal(statusWith([{ name: "API_KEY", description: null, is_set: false }]));
 
-    await user.type(await fieldAfterOpen(/^API_KEY/), "abc");
+    fireEvent.change(await fieldAfterOpen(/^API_KEY/), { target: { value: "abc" } });
     await save(user);
 
     await waitFor(() => {

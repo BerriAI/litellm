@@ -6,8 +6,8 @@ Extends InteractionsHTTPHandler so that the shared HTTP infrastructure
 duplicated. BaseAgentsAPIConfig stays as pure transform code.
 """
 
-from collections.abc import Coroutine
-from typing import Any, Final
+from collections.abc import Coroutine, Mapping
+from typing import Final
 
 import httpx
 
@@ -38,12 +38,12 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
-        extra_body: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> AgentCreateResponse | Coroutine[Any, Any, AgentCreateResponse]:
+    ) -> AgentCreateResponse | Coroutine[object, object, AgentCreateResponse]:
         if _is_async:
             return self.async_create_agent(
                 agents_api_config=agents_api_config,
@@ -93,8 +93,8 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
-        extra_body: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
+        extra_body: Mapping[str, object] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> AgentCreateResponse:
@@ -141,11 +141,11 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         agents_api_config: BaseAgentsAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> AgentListResponse | Coroutine[Any, Any, AgentListResponse]:
+    ) -> AgentListResponse | Coroutine[object, object, AgentListResponse]:
         if _is_async:
             return self.async_list_agents(
                 agents_api_config=agents_api_config,
@@ -181,7 +181,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         agents_api_config: BaseAgentsAPIConfig,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> AgentListResponse:
@@ -216,11 +216,11 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> AgentCreateResponse | Coroutine[Any, Any, AgentCreateResponse]:
+    ) -> AgentCreateResponse | Coroutine[object, object, AgentCreateResponse]:
         if _is_async:
             return self.async_get_agent(
                 agents_api_config=agents_api_config,
@@ -259,7 +259,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> AgentCreateResponse:
@@ -295,11 +295,11 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> AgentDeleteResult | Coroutine[Any, Any, AgentDeleteResult]:
+    ) -> AgentDeleteResult | Coroutine[object, object, AgentDeleteResult]:
         if _is_async:
             return self.async_delete_agent(
                 agents_api_config=agents_api_config,
@@ -338,7 +338,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> AgentDeleteResult:
@@ -374,11 +374,11 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: HTTPHandler | None = None,
         _is_async: bool = False,
-    ) -> AgentVersionsResponse | Coroutine[Any, Any, AgentVersionsResponse]:
+    ) -> AgentVersionsResponse | Coroutine[object, object, AgentVersionsResponse]:
         if _is_async:
             return self.async_list_agent_versions(
                 agents_api_config=agents_api_config,
@@ -417,7 +417,7 @@ class AgentsHTTPHandler(InteractionsHTTPHandler):
         name: str,
         litellm_params: GenericLiteLLMParams,
         logging_obj: LiteLLMLoggingObj,
-        extra_headers: dict[str, Any] | None = None,
+        extra_headers: dict[str, str] | None = None,
         timeout: float | httpx.Timeout | None = None,
         client: AsyncHTTPHandler | None = None,
     ) -> AgentVersionsResponse:

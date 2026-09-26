@@ -39,7 +39,7 @@ export function InputCard({ messages, promptTokens, inputCost }: InputCardProps)
   return (
     <div
       style={{
-        border: "1px solid #f0f0f0",
+        border: "1px solid var(--color-border)",
         borderRadius: 6,
         marginBottom: 8,
         overflow: "hidden",

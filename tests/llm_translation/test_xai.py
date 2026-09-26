@@ -1,12 +1,8 @@
 import json
 import os
-import sys
 from datetime import datetime
 from unittest.mock import AsyncMock
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 
 import httpx
@@ -168,7 +164,7 @@ def test_xai_message_name_filtering():
 class TestXAIReasoningEffort(BaseReasoningLLMTests):
     def get_base_completion_call_args(self):
         return {
-            "model": "xai/grok-3-mini-beta",
+            "model": "xai/grok-4.7",
             "messages": [{"role": "user", "content": "Hello"}],
         }
 

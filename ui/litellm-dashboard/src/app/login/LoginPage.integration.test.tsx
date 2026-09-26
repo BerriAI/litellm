@@ -1,5 +1,5 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import LoginPage from "./LoginPage";
@@ -99,8 +99,8 @@ describe("LoginPage submit payload", () => {
     renderLoginPage();
     await screen.findByRole("heading", { name: "Login" });
 
-    await user.type(screen.getByLabelText("Username"), "admin");
-    await user.type(screen.getByLabelText("Password"), "sk-1234");
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "sk-1234" } });
     await user.click(screen.getByRole("button", { name: "Login" }));
 
     await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
@@ -113,7 +113,7 @@ describe("LoginPage submit payload", () => {
     renderLoginPage();
     await screen.findByRole("heading", { name: "Login" });
 
-    await user.type(screen.getByLabelText("Username"), "admin");
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "admin" } });
     await user.type(screen.getByLabelText("Password"), "sk-1234{Enter}");
 
     await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
@@ -154,8 +154,8 @@ describe("LoginPage submit payload", () => {
 
     await user.click(screen.getAllByRole("combobox")[0]);
     await user.click(await screen.findByText("Worker B"));
-    await user.type(screen.getByLabelText("Username"), "admin");
-    await user.type(screen.getByLabelText("Password"), "sk-1234");
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "sk-1234" } });
     await user.click(screen.getByRole("button", { name: "Login" }));
 
     await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
@@ -181,8 +181,8 @@ describe("LoginPage submit payload", () => {
     renderLoginPage();
     await screen.findByRole("heading", { name: "Login" });
 
-    await user.type(screen.getByLabelText("Username"), "admin");
-    await user.type(screen.getByLabelText("Password"), "sk-1234");
+    fireEvent.change(screen.getByLabelText("Username"), { target: { value: "admin" } });
+    fireEvent.change(screen.getByLabelText("Password"), { target: { value: "sk-1234" } });
     await user.click(screen.getByRole("button", { name: "Login" }));
 
     await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));

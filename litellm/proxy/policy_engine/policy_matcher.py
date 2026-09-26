@@ -7,10 +7,12 @@ apply to a given request based on team alias, key alias, and model.
 Policies are matched via policy_attachments which define WHERE each policy applies.
 """
 
+from collections.abc import Callable, Sequence
 from typing import Final
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy.auth.route_checks import RouteChecks
+from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.types.proxy.policy_engine import Policy, PolicyMatchContext, PolicyScope
 
 
@@ -30,7 +32,7 @@ class PolicyMatcher:
         """
         Check if a value matches any of the given patterns.
 
-        Uses the existing RouteChecks._route_matches_wildcard_pattern helper.
+        Uses the existing RouteChecks.route_matches_wildcard_pattern helper.
 
         Args:
             value: The value to check (e.g., team alias, key alias, model)
@@ -45,7 +47,7 @@ class PolicyMatcher:
 
         for pattern in patterns:
             # Use existing wildcard pattern matching helper
-            if RouteChecks._route_matches_wildcard_pattern(route=value, pattern=pattern):
+            if RouteChecks.route_matches_wildcard_pattern(route=value, pattern=pattern):
                 return True
 
         return False
@@ -113,7 +115,7 @@ class PolicyMatcher:
             verbose_proxy_logger.debug("AttachmentRegistry not initialized, returning empty list")
             return []
 
-        return registry.get_attached_policies(context)
+        return registry.get_attached_policies(context, PolicyMatcher.policy_applies(context))
 
     @staticmethod
     def get_matching_policies_from_registry(
@@ -131,17 +133,74 @@ class PolicyMatcher:
         return PolicyMatcher.get_matching_policies(context=context)
 
     @staticmethod
+    def policy_applies(
+        context: PolicyMatchContext,
+        policies: dict[str, Policy] | None = None,
+    ) -> Callable[[str], bool]:
+        """
+        Predicate telling whether a policy exists and any policy in its
+        inheritance chain applies to the context. Admissions where the
+        policy's own condition missed but an ancestor applies are logged at
+        INFO, once per attachment scan.
+        """
+        resolved: Final = policies if policies is not None else PolicyMatcher._registry_policies()
+
+        def applies(policy_name: str) -> bool:
+            applying: Final = PolicyMatcher._applying_chain_members(
+                policy_name=policy_name, context=context, policies=resolved
+            )
+            if applying and policy_name not in applying:
+                verbose_proxy_logger.info(
+                    "Policy '%s' applied through ancestor '%s' although its own condition did not match "
+                    "(team_alias=%s, key_alias=%s, model=%s)",
+                    policy_name,
+                    applying[0],
+                    context.team_alias,
+                    context.key_alias,
+                    context.model,
+                )
+            return bool(applying)
+
+        return applies
+
+    @staticmethod
+    def _applying_chain_members(
+        policy_name: str,
+        context: PolicyMatchContext,
+        policies: dict[str, Policy],
+    ) -> tuple[str, ...]:
+        from litellm.proxy.policy_engine.condition_evaluator import ConditionEvaluator
+
+        chain: Final = PolicyResolver.resolve_inheritance_chain(policy_name=policy_name, policies=policies)
+        return tuple(
+            name
+            for name in chain
+            if (policy := policies.get(name)) is not None
+            and (policy.condition is None or ConditionEvaluator.evaluate(policy.condition, context))
+        )
+
+    @staticmethod
+    def _registry_policies() -> dict[str, Policy]:
+        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
+
+        registry: Final = get_policy_registry()
+        return registry.get_all_policies() if registry.is_initialized() else {}
+
+    @staticmethod
     def get_policies_with_matching_conditions(
-        policy_names: list[str],
+        policy_names: Sequence[str],
         context: PolicyMatchContext,
         policies: dict[str, Policy] | None = None,
     ) -> list[str]:
         """
-        Filter policies to only those whose conditions match the context.
+        Filter policies to only those that apply to the given context.
 
-        A policy's condition matches if:
-        - The policy has no condition (condition is None), OR
-        - The policy's condition evaluates to True for the given context
+        A policy applies when any policy in its inheritance chain has no
+        condition or a condition that evaluates to True for the context. The
+        resolver then drops only the chain members whose own condition fails,
+        so a child whose condition misses still contributes the guardrails of
+        its unconditional ancestors. A missing policy resolves to an empty
+        chain and does not apply.
 
         Args:
             policy_names: List of policy names to filter
@@ -149,24 +208,11 @@ class PolicyMatcher:
             policies: Dictionary of all policies (if None, uses global registry)
 
         Returns:
-            List of policy names whose conditions match the context
+            List of policy names that apply to the context
         """
-        from litellm.proxy.policy_engine.condition_evaluator import ConditionEvaluator
-        from litellm.proxy.policy_engine.policy_registry import get_policy_registry
-
-        if policies is None:
-            registry: Final = get_policy_registry()
-            if not registry.is_initialized():
-                return []
-            policies = registry.get_all_policies()
-
-        matching_policies: Final = []
-        for policy_name in policy_names:
-            policy = policies.get(policy_name)
-            if policy is None:
-                continue
-            # Policy matches if it has no condition OR condition evaluates to True
-            if policy.condition is None or ConditionEvaluator.evaluate(policy.condition, context):
-                matching_policies.append(policy_name)
-
-        return matching_policies
+        resolved: Final = policies if policies is not None else PolicyMatcher._registry_policies()
+        return [
+            policy_name
+            for policy_name in policy_names
+            if PolicyMatcher._applying_chain_members(policy_name, context, resolved)
+        ]

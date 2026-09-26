@@ -1,7 +1,7 @@
 from typing import Any, Literal
 
 from pydantic import BaseModel
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 from .llms.openai import (
     OpenAIRealtimeEvents,
@@ -78,15 +78,15 @@ class RealtimeSessionConfig(BaseModel):
     type: str | None = None
     model: str | None = None
     instructions: str | None = None
-    audio: dict[str, Any] | None = None
+    audio: dict[str, object] | None = None
     include: list[str] | None = None
     max_output_tokens: int | str | None = None
     output_modalities: list[str] | None = None
-    tool_choice: Any | None = None
-    tools: list[dict[str, Any]] | None = None
-    tracing: Any | None = None
-    truncation: Any | None = None
-    prompt: dict[str, Any] | None = None
+    tool_choice: object | None = None
+    tools: list[dict[str, object]] | None = None
+    tracing: object | None = None
+    truncation: object | None = None
+    prompt: dict[str, object] | None = None
 
 
 class RealtimeClientSecretRequest(BaseModel):
@@ -114,7 +114,7 @@ class RealtimeClientSecretResponse(BaseModel):
 
     expires_at: int | None = None
     value: str
-    session: dict[str, Any] | None = None
+    session: dict[str, object] | None = None
 
 
 class RealtimeTranscriptionSessionRequest(BaseModel):
@@ -151,4 +151,37 @@ class RealtimeTranscriptionSessionResponse(BaseModel):
 
     model_config = {"extra": "allow"}
 
-    client_secret: dict[str, Any] | None = None
+    client_secret: dict[str, object] | None = None
+
+
+class RealtimeErrorDetail(TypedDict):
+    type: ReadOnly[str]
+    message: ReadOnly[str]
+
+
+class RealtimeErrorEvent(TypedDict):
+    type: ReadOnly[Literal["error"]]
+    error: ReadOnly[RealtimeErrorDetail]
+
+
+class RealtimeInputAudioTranscriptionUsageInputTokenDetails(TypedDict):
+    text_tokens: ReadOnly[int]
+    audio_tokens: ReadOnly[int]
+
+
+class RealtimeInputAudioTranscriptionTokenUsage(TypedDict):
+    type: ReadOnly[Literal["tokens"]]
+    input_tokens: ReadOnly[int]
+    output_tokens: ReadOnly[int]
+    total_tokens: ReadOnly[int]
+    input_token_details: ReadOnly[RealtimeInputAudioTranscriptionUsageInputTokenDetails]
+
+
+class RealtimeInputAudioTranscriptionDurationUsage(TypedDict):
+    type: ReadOnly[Literal["duration"]]
+    seconds: ReadOnly[float]
+
+
+RealtimeInputAudioTranscriptionUsage = (
+    RealtimeInputAudioTranscriptionTokenUsage | RealtimeInputAudioTranscriptionDurationUsage
+)

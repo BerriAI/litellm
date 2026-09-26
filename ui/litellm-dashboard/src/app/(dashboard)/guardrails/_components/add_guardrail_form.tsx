@@ -1,4 +1,3 @@
-import { Modal } from "antd";
 import React, { useEffect, useMemo, useState } from "react";
 import { useForm, type UseFormReturn } from "react-hook-form";
 import { toast } from "@/lib/toast";
@@ -26,7 +25,7 @@ import {
 } from "./guardrail_info_helpers";
 import { Logo } from "@/components/molecules/logo/Logo";
 import { MultiSelect } from "@/components/shared/MultiSelect";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import {
   Combobox,
@@ -57,6 +56,7 @@ import GuardrailProviderFields from "./guardrail_provider_fields";
 import LLMJudgeFields from "./llm_judge/LLMJudgeFields";
 import PiiConfiguration from "./pii_configuration";
 import ToolPermissionRulesEditor, { ToolPermissionConfig } from "./tool_permission/ToolPermissionRulesEditor";
+import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 
 // Define human-friendly descriptions for each mode
 const modeDescriptions = {
@@ -144,15 +144,14 @@ const createEmptyToolPermissionConfig = (): ToolPermissionConfig => ({
 });
 
 const getStepIndicatorClass = (isDone: boolean, isCurrent: boolean): string => {
-  if (isDone) return "bg-indigo-600 text-white dark:bg-indigo-500";
-  if (isCurrent)
-    return "bg-background text-indigo-600 border-2 border-indigo-600 dark:text-indigo-400 dark:border-indigo-400";
+  if (isDone) return "bg-info text-info-foreground";
+  if (isCurrent) return "bg-background text-info border-2 border-info";
   return "bg-muted text-muted-foreground border border-border";
 };
 
 const getStepTitleClass = (isDone: boolean, isCurrent: boolean): string => {
   if (isCurrent) return "font-semibold text-foreground";
-  if (isDone) return "font-medium text-indigo-600 dark:text-indigo-400";
+  if (isDone) return "font-medium text-info";
   return "font-medium text-muted-foreground";
 };
 
@@ -1092,107 +1091,94 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
   const stepConfigs = getStepConfigs();
 
   return (
-    <Modal
-      title={null}
-      open={visible}
-      onCancel={handleClose}
-      maskClosable={false}
-      footer={null}
-      width={1000}
-      closable={false}
-      className="top-8"
-      styles={{
-        body: { padding: 0 },
-      }}
-    >
-      <TooltipProvider>
-        <div className="flex flex-col">
-          {/* Header */}
-          <div className="flex items-center justify-between border-b border-border px-6 py-4">
-            <h3 className="m-0 text-base font-semibold text-foreground">Create guardrail</h3>
-            <button
-              type="button"
-              onClick={handleClose}
-              className="cursor-pointer border-none bg-transparent p-1 text-base leading-none text-muted-foreground hover:text-foreground"
-            >
-              &#x2715;
-            </button>
-          </div>
+    <Dialog open={visible} onOpenChange={(open) => !open && handleClose()} disablePointerDismissal>
+      <DialogContent
+        className="top-8 max-h-[calc(100dvh-4rem)] translate-y-0 gap-0 overflow-hidden p-0 sm:max-w-[1000px]"
+        showCloseButton={false}
+      >
+        <TooltipProvider>
+          <div className="flex flex-col">
+            {/* Header */}
+            <div className="flex items-center justify-between border-b border-border px-6 py-4">
+              <DialogTitle className="m-0 text-base font-semibold text-foreground">Create guardrail</DialogTitle>
+              <button
+                type="button"
+                onClick={handleClose}
+                className="cursor-pointer border-none bg-transparent p-1 text-base leading-none text-muted-foreground hover:text-foreground"
+              >
+                &#x2715;
+              </button>
+            </div>
 
-          {/* Scrollable content - inline vertical stepper */}
-          <div className="max-h-[calc(80vh-120px)] overflow-auto px-6 py-4">
-            <form onSubmit={(event) => event.preventDefault()}>
-              {stepConfigs.map((step, index) => {
-                const isDone = index < currentStep;
-                const isCurrent = index === currentStep;
-                const isLast = index === stepConfigs.length - 1;
-                return (
-                  <div key={index} className={`relative flex gap-4 ${isLast ? "" : "pb-2"}`}>
-                    {/* Vertical line + step indicator */}
-                    <div className="flex w-6 shrink-0 flex-col items-center">
-                      <div
-                        className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-medium ${getStepIndicatorClass(isDone, isCurrent)}`}
-                      >
-                        {isDone ? "\u2713" : index + 1}
-                      </div>
-                      {!isLast && (
+            {/* Scrollable content - inline vertical stepper */}
+            <div className="max-h-[calc(80vh-120px)] overflow-auto px-6 py-4">
+              <form onSubmit={(event) => event.preventDefault()}>
+                {stepConfigs.map((step, index) => {
+                  const isDone = index < currentStep;
+                  const isCurrent = index === currentStep;
+                  const isLast = index === stepConfigs.length - 1;
+                  return (
+                    <div key={index} className={`relative flex gap-4 ${isLast ? "" : "pb-2"}`}>
+                      {/* Vertical line + step indicator */}
+                      <div className="flex w-6 shrink-0 flex-col items-center">
                         <div
-                          className={`min-h-4 w-px flex-1 ${isDone ? "bg-indigo-600 dark:bg-indigo-500" : "bg-border"}`}
-                        />
-                      )}
-                    </div>
-
-                    {/* Step content */}
-                    <div className={`min-w-0 flex-1 ${isLast ? "" : "pb-4"}`}>
-                      {/* Step header - clickable for completed steps */}
-                      <div
-                        className={`flex min-h-6 items-center gap-2 ${isDone ? "cursor-pointer" : ""}`}
-                        onClick={() => {
-                          if (isDone) setCurrentStep(index);
-                        }}
-                      >
-                        <span className={`text-sm ${getStepTitleClass(isDone, isCurrent)}`}>{step.title}</span>
-                        {step.optional && !isCurrent && (
-                          <span className="text-[11px] text-muted-foreground">optional</span>
-                        )}
-                        {isDone && (
-                          <span className="text-[11px] text-indigo-600 hover:underline dark:text-indigo-400">Edit</span>
-                        )}
+                          className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-xs font-medium ${getStepIndicatorClass(isDone, isCurrent)}`}
+                        >
+                          {isDone ? "\u2713" : index + 1}
+                        </div>
+                        {!isLast && <div className={`min-h-4 w-px flex-1 ${isDone ? "bg-info" : "bg-border"}`} />}
                       </div>
 
-                      {/* Expanded form content for current step */}
-                      {isCurrent && <div className="mt-3">{renderStepContent()}</div>}
-                    </div>
-                  </div>
-                );
-              })}
-            </form>
-          </div>
+                      {/* Step content */}
+                      <div className={`min-w-0 flex-1 ${isLast ? "" : "pb-4"}`}>
+                        {/* Step header - clickable for completed steps */}
+                        <div
+                          className={`flex min-h-6 items-center gap-2 ${isDone ? "cursor-pointer" : ""}`}
+                          onClick={() => {
+                            if (isDone) setCurrentStep(index);
+                          }}
+                        >
+                          <span className={`text-sm ${getStepTitleClass(isDone, isCurrent)}`}>{step.title}</span>
+                          {step.optional && !isCurrent && (
+                            <span className="text-[11px] text-muted-foreground">optional</span>
+                          )}
+                          {isDone && <span className="text-[11px] text-info hover:underline">Edit</span>}
+                        </div>
 
-          {/* Bottom bar */}
-          <div className="flex items-center justify-end space-x-3 border-t border-border px-6 py-3">
-            <Button type="button" variant="outline" onClick={handleClose}>
-              Cancel
-            </Button>
-            {currentStep > 0 && (
-              <Button type="button" variant="outline" onClick={prevStep}>
-                Previous
+                        {/* Expanded form content for current step */}
+                        {isCurrent && <div className="mt-3">{renderStepContent()}</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </form>
+            </div>
+
+            {/* Bottom bar */}
+            <div className="flex items-center justify-end space-x-3 border-t border-border px-6 py-3">
+              <Button type="button" variant="outline" onClick={handleClose}>
+                Cancel
               </Button>
-            )}
-            {currentStep < stepConfigs.length - 1 ? (
-              <Button type="button" onClick={nextStep}>
-                Next
-              </Button>
-            ) : (
-              <Button type="button" onClick={handleSubmit} disabled={loading}>
-                {loading && <UiLoadingSpinner className="size-4" />}
-                Create Guardrail
-              </Button>
-            )}
+              {currentStep > 0 && (
+                <Button type="button" variant="outline" onClick={prevStep}>
+                  Previous
+                </Button>
+              )}
+              {currentStep < stepConfigs.length - 1 ? (
+                <Button type="button" onClick={nextStep}>
+                  Next
+                </Button>
+              ) : (
+                <Button type="button" onClick={handleSubmit} disabled={loading}>
+                  {loading && <UiLoadingSpinner className="size-4" />}
+                  Create Guardrail
+                </Button>
+              )}
+            </div>
           </div>
-        </div>
-      </TooltipProvider>
-    </Modal>
+        </TooltipProvider>
+      </DialogContent>
+    </Dialog>
   );
 };
 

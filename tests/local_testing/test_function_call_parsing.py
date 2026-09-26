@@ -1,18 +1,12 @@
 # What is this?
 ## Test to make sure function call response always works with json.loads() -> no extra parsing required. Relevant issue - https://github.com/BerriAI/litellm/issues/2654
-import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import json
 import warnings
 from typing import List
@@ -142,7 +136,7 @@ def trade(model_name: str) -> List[Trade]:  # type: ignore
 
 
 @pytest.mark.parametrize(
-    "model", ["claude-haiku-4-5-20251001", "anthropic.claude-3-haiku-20240307-v1:0"]
+    "model", ["claude-haiku-4-5-20251001", "us.anthropic.claude-haiku-4-5-20251001-v1:0"]
 )
 @pytest.mark.flaky(retries=6, delay=10)
 def test_function_call_parsing(model):

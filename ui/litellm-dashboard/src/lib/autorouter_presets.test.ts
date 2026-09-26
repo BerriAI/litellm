@@ -1,7 +1,8 @@
 import { describe, it, expect } from "vitest";
+import { BUNDLED_PRESETS_RESPONSE } from "../../tests/mocks/autoRouterPresets";
 import {
-  getAllPresets,
-  getPresetByKey,
+  hydratePresets,
+  AutoRouterPreset,
   getRequiredModelsInPreset,
   getMissingModelsInPreset,
   getRequiredModels,
@@ -11,20 +12,57 @@ import {
   buildPresetPrefill,
   buildModelAvailability,
   deploymentRefsFromModelInfo,
+  normalizeModelName,
+  resolveAvailableModel,
+  resolveAvailableModels,
 } from "./autorouter_presets";
 import { DEFAULT_MATCH_THRESHOLD } from "@/components/add_model/SemanticKeywordMatching";
 import { DEFAULT_ESCALATION_KEYWORDS } from "@/components/add_model/EscalationKeywords";
 
 const groupsOnly = (models: Iterable<string>) => buildModelAvailability(models, []);
 
+// Hydrated from the real bundled catalog so a catalog edit flows into these expectations.
+const PRESETS = hydratePresets(BUNDLED_PRESETS_RESPONSE);
+const getAllPresets = (): AutoRouterPreset[] => PRESETS;
+const getPresetByKey = (key: string): AutoRouterPreset | undefined => PRESETS.find((p) => p.key === key);
+
 describe("autorouter_presets", () => {
-  it("loads exactly the bundled presets", () => {
+  it("hydrates exactly the bundled presets", () => {
     const presets = getAllPresets();
-    expect(presets.map((p) => p.label).sort()).toEqual(["Anthropic Family", "Lite", "OpenAI Family"]);
+    expect(presets.map((p) => p.label).sort()).toEqual([
+      "1M Context",
+      "Anthropic Family",
+      "Gemini Family",
+      "Lite",
+      "OpenAI Family",
+    ]);
     // Every preset carries all four fields the UI relies on; a JSON typo dropping one fails here.
     for (const p of presets) {
       expect(p).toMatchObject({ key: expect.any(String), label: expect.any(String), description: expect.any(String) });
       expect(p.complexity_router_config.tiers).toBeTruthy();
+    }
+  });
+
+  // buildPresetPrefill resolves every model reference through normalizeModelName, so two spellings
+  // of the same model in one tier (e.g. "claude-sonnet-4-5" and "claude-sonnet-4.5") collapse to one
+  // key. For tier_model_configs that silently drops one model's litellm_params; catch it in the
+  // bundled data itself, since nothing else validates preset authoring.
+  it("never spells the same model two ways within a single tier", () => {
+    for (const preset of getAllPresets()) {
+      const { tiers, tier_model_configs: configs } = preset.complexity_router_config;
+      for (const tier of Object.keys(tiers) as (keyof typeof tiers)[]) {
+        const fromTierList = tiers[tier] ?? [];
+        const fromConfigs = (configs?.[tier] ?? []).map((entry) => entry.model_name);
+        const names = new Set([...fromTierList, ...fromConfigs]);
+        const byNormalized = new Map<string, string[]>();
+        for (const name of names) {
+          const key = normalizeModelName(name);
+          byNormalized.set(key, [...(byNormalized.get(key) ?? []), name]);
+        }
+        for (const spellings of byNormalized.values()) {
+          expect(new Set(spellings).size, `${preset.key}.${tier}: ${spellings.join(", ")}`).toBe(1);
+        }
+      }
     }
   });
 
@@ -47,11 +85,49 @@ describe("autorouter_presets", () => {
       expect(config.tier_boundaries).toBeUndefined();
       expect(config.token_thresholds).toBeUndefined();
       expect(config.dimension_weights).toBeUndefined();
+      expect(config.session_affinity_ttl_seconds).toBeUndefined();
     }
   });
 
+  it("keeps every preset free of custom dimensions, so applying one never adds scoring rows", () => {
+    for (const { complexity_router_config: config } of getAllPresets()) {
+      expect(config.custom_dimensions).toBeUndefined();
+    }
+    const config = getPresetByKey("anthropic_family")!.complexity_router_config;
+    expect(buildPresetPrefill(config, groupsOnly([])).complexityRouterConfig.custom_dimensions).toBeUndefined();
+  });
+
+  it("resets both scoring overrides when the form falls back to an empty prefill", () => {
+    expect(buildEmptyPrefill().complexityRouterConfig.custom_dimensions).toBeUndefined();
+    expect(buildEmptyPrefill().complexityRouterConfig.dimension_weights).toBeUndefined();
+  });
+
+  it("carries a preset's session affinity idle window into the prefilled form state", () => {
+    const config = getPresetByKey("anthropic_family")!.complexity_router_config;
+    const prefill = buildPresetPrefill({ ...config, session_affinity_ttl_seconds: 300 }, groupsOnly([]));
+    expect(prefill.complexityRouterConfig.session_affinity_ttl_seconds).toBe(300);
+    expect(
+      buildPresetPrefill(config, groupsOnly([])).complexityRouterConfig.session_affinity_ttl_seconds,
+    ).toBeUndefined();
+  });
+
+  it("carries a preset's stored weights and custom dimensions into the prefill without rebalancing them", () => {
+    const config = getPresetByKey("anthropic_family")!.complexity_router_config;
+    const weights = { codePresence: 0.4 };
+    const dimension = { name: "domain", weight: 0.9, keywords: ["orbitmesh"] };
+    const prefill = buildPresetPrefill(
+      { ...config, dimension_weights: weights, custom_dimensions: [dimension] },
+      groupsOnly([]),
+    ).complexityRouterConfig;
+    expect(prefill.dimension_weights).toEqual(weights);
+    expect(prefill.custom_dimensions).toEqual([{ ...dimension, id: "stored-0" }]);
+    const plain = buildPresetPrefill(config, groupsOnly([])).complexityRouterConfig;
+    expect(plain.dimension_weights).toBeUndefined();
+    expect(plain.custom_dimensions).toBeUndefined();
+  });
+
   it("keeps the model-family presets on the heuristic classifier", () => {
-    for (const key of ["anthropic_family", "openai_family"]) {
+    for (const key of ["anthropic_family", "gemini_family", "openai_family"]) {
       expect(getPresetByKey(key)!.complexity_router_config.classifier_type).toBe("heuristic");
     }
   });
@@ -71,8 +147,139 @@ describe("autorouter_presets", () => {
     expect(config.classifier_context_window_size).toBe(0);
     expect(config.classifier_context_per_turn_chars).toBeUndefined();
     expect(getRequiredModelsInPreset(lite)).toEqual(
-      new Set(["deepseek-v4-flash", "muse-spark-1.2", "kimi-k3", "claude-opus-5"]),
+      new Set(["deepseek-v4-flash", "muse-spark-1.3", "kimi-k3", "claude-opus-5-5"]),
     );
+  });
+
+  it("pins the anthropic preset's reasoning tier to Fable 5.1 at high thinking", () => {
+    const config = getPresetByKey("anthropic_family")!.complexity_router_config;
+    expect(config.tiers.COMPLEX).toEqual(["claude-opus-5-5"]);
+    expect(config.tiers.REASONING).toEqual(["claude-fable-5-1"]);
+    expect(config.tier_model_configs).toEqual({
+      REASONING: [{ model_name: "claude-fable-5-1", litellm_params: { reasoning_effort: "high" } }],
+    });
+  });
+
+  // Kimi K3 at max needs the map to declare max for kimi-k3, which is the commit below this one.
+  it("pins the lite preset's per-tier reasoning efforts", () => {
+    expect(getPresetByKey("lite")!.complexity_router_config.tier_model_configs).toEqual({
+      MEDIUM: [{ model_name: "muse-spark-1.3", litellm_params: { reasoning_effort: "xhigh" } }],
+      COMPLEX: [{ model_name: "kimi-k3", litellm_params: { reasoning_effort: "max" } }],
+    });
+  });
+
+  // serializeTierModelConfigs filters on the tier's models, so a stray name drops silently.
+  it("never names a model in tier_model_configs that its own tier does not hold", () => {
+    for (const preset of getAllPresets()) {
+      const { tiers, tier_model_configs: configs } = preset.complexity_router_config;
+      for (const [tier, entries] of Object.entries(configs ?? {})) {
+        for (const entry of entries) {
+          expect(tiers[tier as keyof typeof tiers] ?? [], `${preset.key}.${tier}`).toContain(entry.model_name);
+        }
+      }
+    }
+  });
+
+  it("carries a preset's modality_routing into the prefilled form state", () => {
+    const preset = getPresetByKey("anthropic_family")!;
+    const withFlag = { ...preset.complexity_router_config, modality_routing: true };
+    const prefill = buildPresetPrefill(withFlag, groupsOnly(getRequiredModelsInPreset(preset)));
+    expect(prefill.complexityRouterConfig.modality_routing).toBe(true);
+    const withoutFlag = buildPresetPrefill(
+      preset.complexity_router_config,
+      groupsOnly(getRequiredModelsInPreset(preset)),
+    );
+    expect(withoutFlag.complexityRouterConfig.modality_routing).toBe(false);
+  });
+
+  it("carries a preset's modality_pin_override into the prefilled form state", () => {
+    const preset = getPresetByKey("anthropic_family")!;
+    const withFlag = { ...preset.complexity_router_config, modality_routing: true, modality_pin_override: true };
+    const prefill = buildPresetPrefill(withFlag, groupsOnly(getRequiredModelsInPreset(preset)));
+    expect(prefill.complexityRouterConfig.modality_pin_override).toBe(true);
+    const withoutFlag = buildPresetPrefill(
+      preset.complexity_router_config,
+      groupsOnly(getRequiredModelsInPreset(preset)),
+    );
+    expect(withoutFlag.complexityRouterConfig.modality_pin_override).toBe(false);
+  });
+
+  it("ships every bundled preset with both modality flags written out, since the payload type requires them", () => {
+    for (const preset of getAllPresets()) {
+      expect(preset.complexity_router_config.modality_routing, preset.key).toBe(false);
+      expect(preset.complexity_router_config.modality_pin_override, preset.key).toBe(false);
+    }
+  });
+
+  it("prefills the anthropic preset's effort through to tier_model_params", () => {
+    const preset = getPresetByKey("anthropic_family")!;
+    const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
+    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+      REASONING: { "claude-fable-5-1": { reasoning_effort: "high" } },
+    });
+  });
+
+  it("prefills the lite preset's efforts through to tier_model_params", () => {
+    const lite = getPresetByKey("lite")!;
+    const prefill = buildPresetPrefill(lite.complexity_router_config, groupsOnly(getRequiredModelsInPreset(lite)));
+    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+      MEDIUM: { "muse-spark-1.3": { reasoning_effort: "xhigh" } },
+      COMPLEX: { "kimi-k3": { reasoning_effort: "max" } },
+    });
+  });
+
+  it("pins the OpenAI preset to the Luna, Terra, Sol, and Astra progression", () => {
+    const preset = getPresetByKey("openai_family")!;
+    const expectedTiers = {
+      SIMPLE: ["gpt-6-luna"],
+      MEDIUM: ["gpt-5.6-terra"],
+      COMPLEX: ["gpt-6-sol"],
+      REASONING: ["gpt-6-astra"],
+    };
+    expect(preset.complexity_router_config.tiers).toEqual(expectedTiers);
+    expect(preset.complexity_router_config.tier_model_configs).toEqual({
+      REASONING: [{ model_name: "gpt-6-astra", litellm_params: { reasoning_effort: "xhigh" } }],
+    });
+    const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
+    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+      REASONING: { "gpt-6-astra": { reasoning_effort: "xhigh" } },
+    });
+  });
+
+  it("pins the 1M context preset to Luna, Terra, Sol, and Opus at high thinking", () => {
+    const preset = getPresetByKey("1m_context")!;
+    const expectedTiers = {
+      SIMPLE: ["gpt-6-luna"],
+      MEDIUM: ["gpt-5.6-terra"],
+      COMPLEX: ["gpt-6-sol"],
+      REASONING: ["claude-opus-5-5"],
+    };
+    expect(preset.complexity_router_config.classifier_type).toBe("heuristic_v2");
+    expect(preset.complexity_router_config.tiers).toEqual(expectedTiers);
+    expect(preset.complexity_router_config.tier_model_configs).toEqual({
+      REASONING: [{ model_name: "claude-opus-5-5", litellm_params: { reasoning_effort: "high" } }],
+    });
+    const prefill = buildPresetPrefill(preset.complexity_router_config, groupsOnly(getRequiredModelsInPreset(preset)));
+    expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+      REASONING: { "claude-opus-5-5": { reasoning_effort: "high" } },
+    });
+  });
+
+  it("pins the gemini preset to concrete model ids, never Google's hot-swapping -latest aliases", () => {
+    const gemini = getPresetByKey("gemini_family")!;
+    const config = gemini.complexity_router_config;
+    expect(config.classifier_type).toBe("heuristic");
+    expect(config.classifier_llm_config).toBeUndefined();
+    const expectedTiers = {
+      SIMPLE: ["gemini-3.5-flash-lite"],
+      MEDIUM: ["gemini-3.8-flash"],
+      COMPLEX: ["gemini-3.8-flash"],
+      REASONING: ["gemini-3.1-pro-preview"],
+    };
+    expect(config.tiers).toEqual(expectedTiers);
+    const required = getRequiredModelsInPreset(gemini);
+    for (const model of required) expect(model).not.toMatch(/-latest$/);
+    expect(required.size).toBe(new Set(Object.values(expectedTiers).flat()).size);
   });
 
   it("collects every tier model as a required model", () => {
@@ -142,6 +349,7 @@ describe("autorouter_presets", () => {
       const config = {
         tiers: { SIMPLE: [presetModel], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
@@ -174,31 +382,157 @@ describe("autorouter_presets", () => {
       expect(availability.underlyingIndex.size).toBe(0);
     });
 
-    it("breaks ties between groups serving the same model deterministically, alphabetically", () => {
+    it("returns every configured group serving the same underlying model", () => {
       const availability = buildModelAvailability(
         ["z-group", "a-group"],
         [
-          { modelGroup: "z-group", underlyingModels: ["anthropic/claude-opus-5"] },
-          { modelGroup: "a-group", underlyingModels: ["bedrock/us.anthropic.claude-opus-5-v1:0"] },
+          { modelGroup: "z-group", underlyingModels: ["anthropic/claude-sonnet-5"] },
+          { modelGroup: "a-group", underlyingModels: ["bedrock/us.anthropic.claude-sonnet-5-v1:0"] },
         ],
       );
-      const config = {
-        tiers: { SIMPLE: ["claude-opus-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
-        classifier_type: "heuristic" as const,
-        session_affinity: false,
-        deployment_affinity: true,
-      };
-      expect(buildPresetPrefill(config, availability).complexityRouterConfig.tiers.SIMPLE).toEqual(["a-group"]);
+
+      expect(resolveAvailableModels("anthropic/claude-sonnet-5", availability)).toEqual(["a-group", "z-group"]);
     });
 
-    it("prefers an exact group-name match over the deployment index", () => {
+    it.each([
+      ["OpenAI", getPresetByKey("openai_family")!.complexity_router_config.tiers.MEDIUM[0], "openai", "azure"],
+      [
+        "Anthropic",
+        getPresetByKey("anthropic_family")!.complexity_router_config.tiers.COMPLEX[0],
+        "anthropic",
+        "bedrock",
+      ],
+      ["Gemini", getPresetByKey("gemini_family")!.complexity_router_config.tiers.SIMPLE[0], "gemini", "vertex_ai"],
+      ["DeepSeek", getPresetByKey("lite")!.complexity_router_config.tiers.SIMPLE[0], "deepseek", "openrouter"],
+      ["Muse", getPresetByKey("lite")!.complexity_router_config.tiers.MEDIUM[0], "meta", "openrouter"],
+      ["Kimi", getPresetByKey("lite")!.complexity_router_config.tiers.COMPLEX[0], "moonshot", "openrouter"],
+      ["Grok", "grok-4.7", "xai", "openrouter"],
+    ])(
+      "prefills %s through its native provider and falls back when only the cloud group is available",
+      (_family, model, native, cloud) => {
+        const deployments = [
+          { modelGroup: "a-cloud", underlyingModels: [`${cloud}/${model}`] },
+          { modelGroup: "z-native", underlyingModels: [`${native}/${model}`] },
+        ];
+        const config = {
+          tiers: { SIMPLE: [model], MEDIUM: [], COMPLEX: [], REASONING: [] },
+          tier_model_configs: { SIMPLE: [{ model_name: model, litellm_params: { reasoning_effort: "high" } }] },
+          classifier_type: "llm" as const,
+          classifier_llm_config: { model, timeout_ms: 3000 },
+          classification_mode: "every_request" as const,
+          session_affinity: false,
+          deployment_affinity: true,
+          modality_routing: false,
+          modality_pin_override: false,
+        };
+
+        for (const [groups, selected] of [
+          [["a-cloud", "z-native"], "z-native"],
+          [["a-cloud"], "a-cloud"],
+        ] as const) {
+          const availability = buildModelAvailability(groups, deployments);
+          const prefill = buildPresetPrefill(config, availability).complexityRouterConfig;
+
+          expect(prefill.tiers.SIMPLE).toEqual([selected]);
+          expect(prefill.tier_model_params).toEqual({ SIMPLE: { [selected]: { reasoning_effort: "high" } } });
+          expect(prefill.classifier_llm_config).toEqual({ model: selected, timeout_ms: 3000 });
+        }
+      },
+    );
+
+    it.each(["claude-opus-5-5", "claude-opus-5.5"])(
+      "prefers a native deployment over the cloud group named %s",
+      (cloudGroup) => {
+        const availability = buildModelAvailability(
+          [cloudGroup, "z-native"],
+          [
+            { modelGroup: cloudGroup, underlyingModels: ["bedrock/us.anthropic.claude-opus-5-5-v1:0"] },
+            { modelGroup: "z-native", underlyingModels: ["anthropic/claude-opus-5-5"] },
+          ],
+        );
+
+        expect(resolveAvailableModel("claude-opus-5-5", availability)).toBe("z-native");
+        expect(resolveAvailableModels("claude-opus-5-5", availability)).toEqual([cloudGroup]);
+      },
+    );
+
+    it("breaks ties between native groups alphabetically regardless of deployment order", () => {
+      const availability = buildModelAvailability(
+        ["z-native", "a-native"],
+        [
+          { modelGroup: "z-native", underlyingModels: ["anthropic/claude-opus-5-5"] },
+          { modelGroup: "a-native", underlyingModels: ["anthropic/claude-opus-5-5"] },
+        ],
+      );
+
+      expect(resolveAvailableModel("claude-opus-5-5", availability)).toBe("a-native");
+    });
+
+    it.each(["gpt-6-sol", "claude-opus-5-5"])("recognizes the native default of bare %s", (model) => {
+      const availability = buildModelAvailability(
+        ["a-cloud", "z-native"],
+        [
+          { modelGroup: "a-cloud", underlyingModels: [`openrouter/${model}`] },
+          { modelGroup: "z-native", underlyingModels: [model] },
+        ],
+      );
+
+      expect(resolveAvailableModel(model, availability)).toBe("z-native");
+    });
+
+    it.each(["bedrock/claude-opus-5-5", "unknown-model"])(
+      "prefers an exclusively native group over one that also routes to %s",
+      (otherModel) => {
+        const deployments = [
+          { modelGroup: "a-cloud", underlyingModels: ["bedrock/claude-opus-5-5"] },
+          { modelGroup: "b-mixed", underlyingModels: ["anthropic/claude-opus-5-5"] },
+          { modelGroup: "b-mixed", underlyingModels: [otherModel] },
+          { modelGroup: "z-native", underlyingModels: ["anthropic/claude-opus-5-5"] },
+        ];
+        const availability = buildModelAvailability(["a-cloud", "b-mixed", "z-native"], deployments);
+
+        expect(resolveAvailableModel("claude-opus-5-5", availability)).toBe("z-native");
+        const noNativeGroup = buildModelAvailability(["a-cloud", "b-mixed"], deployments);
+        expect(resolveAvailableModel("claude-opus-5-5", noNativeGroup)).toBe("a-cloud");
+      },
+    );
+
+    it.each([
+      { model: "azure/opaque-deployment", base_model: "openai/gpt-6-sol" },
+      { model: "openai/gpt-6-sol", custom_llm_provider: "openrouter" },
+    ])("keeps cloud routing authoritative over native-looking model metadata: %j", (litellmParams) => {
+      const availability = buildModelAvailability(
+        ["a-cloud", "z-native"],
+        deploymentRefsFromModelInfo([
+          { model_name: "a-cloud", litellm_params: litellmParams, model_info: { base_model: "openai/gpt-6-sol" } },
+          { model_name: "z-native", litellm_params: { model: "openai/gpt-6-sol" } },
+        ]),
+      );
+
+      expect(resolveAvailableModel("gpt-6-sol", availability)).toBe("z-native");
+    });
+
+    it("recognizes an explicit native provider on an otherwise unqualified model", () => {
+      const availability = buildModelAvailability(
+        ["a-cloud", "z-native"],
+        deploymentRefsFromModelInfo([
+          { model_name: "a-cloud", litellm_params: { model: "openrouter/meta/muse-spark-1.3" } },
+          { model_name: "z-native", litellm_params: { model: "muse-spark-1.3", custom_llm_provider: "meta" } },
+        ]),
+      );
+
+      expect(resolveAvailableModel("muse-spark-1.3", availability)).toBe("z-native");
+    });
+
+    it("preserves exact group-name precedence when no known native deployment is available", () => {
       const availability = buildModelAvailability(
         ["claude-opus-5", "renamed-opus"],
-        [{ modelGroup: "renamed-opus", underlyingModels: ["anthropic/claude-opus-5"] }],
+        [{ modelGroup: "renamed-opus", underlyingModels: ["bedrock/us.anthropic.claude-opus-5-v1:0"] }],
       );
       const config = {
         tiers: { SIMPLE: ["claude-opus-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
@@ -232,6 +566,7 @@ describe("autorouter_presets", () => {
     const simpleTierConfig = (presetModel: string) => ({
       tiers: { SIMPLE: [presetModel], MEDIUM: [], COMPLEX: [], REASONING: [] },
       classifier_type: "heuristic" as const,
+      classification_mode: "every_request" as const,
       session_affinity: false,
       deployment_affinity: true,
     });
@@ -351,6 +686,70 @@ describe("autorouter_presets", () => {
       ]);
     });
 
+    it.each(["native/*", "*"])("ranks wildcard groups using their routing deployment: %s", (nativePattern) => {
+      const nativeGroup = nativePattern === "*" ? "openai/gpt-6-sol" : "native/gpt-6-sol";
+      const availability = buildModelAvailability(
+        ["azure/gpt-6-sol", nativeGroup],
+        [
+          { modelGroup: "azure/*", underlyingModels: ["openrouter/*"] },
+          { modelGroup: nativePattern, underlyingModels: ["openai/*"] },
+        ],
+      );
+
+      expect(resolveAvailableModel("gpt-6-sol", availability)).toBe(nativeGroup);
+    });
+
+    it("does not treat a native-looking wildcard group as native when its deployment uses the cloud", () => {
+      const availability = buildModelAvailability(
+        ["openai/gpt-6-sol", "z-native/gpt-6-sol"],
+        [
+          { modelGroup: "openai/*", underlyingModels: ["azure/*"] },
+          { modelGroup: "z-native/*", underlyingModels: ["openai/*"] },
+        ],
+      );
+
+      expect(resolveAvailableModel("gpt-6-sol", availability)).toBe("z-native/gpt-6-sol");
+    });
+
+    it("keeps literal native deployments ahead of a matching cloud wildcard", () => {
+      const availability = buildModelAvailability(
+        ["a-cloud", "team/gpt-6-sol"],
+        [
+          { modelGroup: "a-cloud", underlyingModels: ["azure/gpt-6-sol"] },
+          { modelGroup: "team/gpt-6-sol", underlyingModels: ["openai/gpt-6-sol"] },
+          { modelGroup: "team/*", underlyingModels: ["azure/*"] },
+        ],
+      );
+
+      expect(resolveAvailableModel("gpt-6-sol", availability)).toBe("team/gpt-6-sol");
+    });
+
+    it("does not promote a bare-star expansion when its routing group also contains a cloud deployment", () => {
+      const availability = buildModelAvailability(
+        ["openai/gpt-6-sol", "z-native"],
+        [
+          { modelGroup: "*", underlyingModels: ["openai/*"] },
+          { modelGroup: "*", underlyingModels: ["azure/*"] },
+          { modelGroup: "z-native", underlyingModels: ["openai/gpt-6-sol"] },
+        ],
+      );
+
+      expect(resolveAvailableModel("gpt-6-sol", availability)).toBe("z-native");
+    });
+
+    it("retains fallback ordering when overlapping wildcard routes have different providers", () => {
+      const availability = buildModelAvailability(
+        ["a-cloud", "team/gpt-6-sol"],
+        [
+          { modelGroup: "a-cloud", underlyingModels: ["azure/gpt-6-sol"] },
+          { modelGroup: "team/*", underlyingModels: ["azure/*"] },
+          { modelGroup: "team/gpt-*", underlyingModels: ["openai/gpt-*"] },
+        ],
+      );
+
+      expect(resolveAvailableModel("gpt-6-sol", availability)).toBe("a-cloud");
+    });
+
     it.each(getAllPresets().map((preset) => [preset.key, preset] as const))(
       "fully resolves the %s preset through wildcard-expanded groups only",
       (_key, preset) => {
@@ -380,7 +779,9 @@ describe("autorouter_presets", () => {
         { model_name: "no-underlying", litellm_params: {}, model_info: {} },
         { litellm_params: { model: "openai/gpt-5.4" } },
       ]);
-      expect(refs).toEqual([{ modelGroup: "azure-prod", underlyingModels: ["azure/my-deployment", "azure/gpt-5.4"] }]);
+      expect(refs).toEqual([
+        { modelGroup: "azure-prod", underlyingModels: ["azure/my-deployment", "azure/gpt-5.4"], provider: "azure" },
+      ]);
     });
 
     it("lets an azure deployment resolve through base_model declared under litellm_params", () => {
@@ -458,6 +859,44 @@ describe("autorouter_presets", () => {
   });
 
   describe("buildPresetPrefill", () => {
+    it("preserves JEV settings and drops inactive classifier settings when prefilling", () => {
+      const config = {
+        tiers: { SIMPLE: ["fast"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+        classifier_type: "jev" as const,
+        classification_mode: "every_request" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+        modality_routing: false,
+        modality_pin_override: false,
+        jev_classifier_config: { model: "jev-test", timeout_ms: 4000, circuit_breaker_enabled: false },
+        classifier_llm_config: { model: "stale-judge", timeout_ms: 6000 },
+        classifier_context_window_size: 6,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(["fast"]));
+      const expectedJevConfig = {
+        classifier_type: "jev",
+        jev_classifier_config: config.jev_classifier_config,
+        classifier_context_window_size: 6,
+        classifier_llm_config: undefined,
+      };
+      expect(prefill.complexityRouterConfig).toMatchObject(expectedJevConfig);
+      const llmConfig = { ...config, classifier_type: "llm" as const };
+      const llmPrefill = buildPresetPrefill(llmConfig, groupsOnly(["fast"]));
+      expect(llmPrefill.complexityRouterConfig.jev_classifier_config).toBeUndefined();
+      expect(llmPrefill.complexityRouterConfig.classifier_llm_config).toEqual(config.classifier_llm_config);
+    });
+
+    it.each([undefined, 0, 0.95])("carries a preset's success threshold %s into the form", (threshold) => {
+      const preset = getPresetByKey("anthropic_family")!;
+      const config = {
+        ...preset.complexity_router_config,
+        classifier_type: "heuristic_v2" as const,
+        heuristic_v2_success_threshold: threshold,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(getRequiredModelsInPreset(preset)));
+      expect(prefill.complexityRouterConfig.heuristic_v2_success_threshold).toBe(threshold);
+    });
+
     it("prefills a real bundled preset's tiers into the config", () => {
       const preset = getPresetByKey("anthropic_family")!;
       const prefill = buildPresetPrefill(
@@ -475,6 +914,7 @@ describe("autorouter_presets", () => {
       const config = {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
         match_threshold: 0,
@@ -485,11 +925,46 @@ describe("autorouter_presets", () => {
       expect(prefill.escalationKeywords).toEqual([]);
     });
 
+    it.each([undefined, false, true])("preserves a preset's context-window escalation setting: %s", (enabled) => {
+      const prefill = buildPresetPrefill(
+        {
+          tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+          classifier_type: "heuristic",
+          classification_mode: "every_request",
+          session_affinity: false,
+          deployment_affinity: true,
+          enable_context_window_escalation: enabled,
+          context_window_escalation_buffer: 0.9,
+        },
+        groupsOnly(["gpt-5-nano"]),
+      );
+      expect(prefill.complexityRouterConfig.enable_context_window_escalation).toBe(enabled);
+      expect(prefill.complexityRouterConfig.context_window_escalation_buffer).toBe(0.9);
+    });
+
+    it("carries a preset's classification_mode and defaults it when the preset omits one", () => {
+      const tiers = { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] };
+      const base = {
+        tiers,
+        classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
+      const availability = groupsOnly(["gpt-5-nano"]);
+      expect(
+        buildPresetPrefill({ ...base, classification_mode: "user_turn" }, availability).complexityRouterConfig
+          .classification_mode,
+      ).toBe("user_turn");
+      expect(buildPresetPrefill(base, availability).complexityRouterConfig.classification_mode).toBe("every_request");
+    });
+
     it("falls back to the defaults when a preset omits match_threshold and escalation_keywords", () => {
       const prefill = buildPresetPrefill(
         {
           tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
           classifier_type: "heuristic",
+          classification_mode: "every_request" as const,
           session_affinity: false,
           deployment_affinity: true,
         },
@@ -506,6 +981,7 @@ describe("autorouter_presets", () => {
       const base = {
         tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
@@ -521,11 +997,86 @@ describe("autorouter_presets", () => {
       const config = {
         tiers: { SIMPLE: ["claude-sonnet-4-5"], MEDIUM: [], COMPLEX: [], REASONING: [] },
         classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
         session_affinity: false,
         deployment_affinity: true,
       };
       const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
       expect(prefill.complexityRouterConfig.tiers.SIMPLE).toEqual(["claude-sonnet-4.5"]);
+    });
+
+    it("prefills the per-model litellm_params a preset carries in tier_model_configs", () => {
+      const config = {
+        tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: ["o3"] },
+        tier_model_configs: {
+          REASONING: [{ model_name: "o3", litellm_params: { reasoning_effort: "high" } }],
+        },
+        classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(["gpt-5-nano", "o3"]));
+      expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+        REASONING: { o3: { reasoning_effort: "high" } },
+      });
+    });
+
+    // The params key on the preset's own spelling while the tier entry gets rewritten to the
+    // caller's. Leaving the key alone names a model the tier no longer holds, and
+    // serializeTierModelConfigs then drops the params on submit without saying so.
+    it("rewrites a param key to the same registered spelling its tier entry was rewritten to", () => {
+      const config = {
+        tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: ["claude-sonnet-4-5"] },
+        tier_model_configs: {
+          REASONING: [{ model_name: "claude-sonnet-4-5", litellm_params: { reasoning_effort: "high" } }],
+        },
+        classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
+      expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+        REASONING: { "claude-sonnet-4.5": { reasoning_effort: "high" } },
+      });
+    });
+
+    // Two spellings of one model in a tier collapse to a single registered key, and one model can
+    // only hold one param set downstream. Merging keeps whatever only one spelling set instead of
+    // dropping that spelling's params wholesale.
+    it("merges rather than drops params when two spellings resolve to the same registered model", () => {
+      const config = {
+        tiers: { SIMPLE: [], MEDIUM: [], COMPLEX: [], REASONING: ["claude-sonnet-4-5", "claude-sonnet-4.5"] },
+        tier_model_configs: {
+          REASONING: [
+            { model_name: "claude-sonnet-4-5", litellm_params: { reasoning_effort: "high", temperature: 0.2 } },
+            { model_name: "claude-sonnet-4.5", litellm_params: { reasoning_effort: "low" } },
+          ],
+        },
+        classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(["claude-sonnet-4.5"]));
+      // temperature survives from the spelling that would otherwise have been overwritten;
+      // reasoning_effort, set by both, resolves last-wins.
+      expect(prefill.complexityRouterConfig.tier_model_params).toEqual({
+        REASONING: { "claude-sonnet-4.5": { reasoning_effort: "low", temperature: 0.2 } },
+      });
+    });
+
+    it("leaves tier_model_params undefined for a preset that carries no per-model params", () => {
+      const config = {
+        tiers: { SIMPLE: ["gpt-5-nano"], MEDIUM: [], COMPLEX: [], REASONING: [] },
+        classifier_type: "heuristic" as const,
+        classification_mode: "every_request" as const,
+        session_affinity: false,
+        deployment_affinity: true,
+      };
+      const prefill = buildPresetPrefill(config, groupsOnly(["gpt-5-nano"]));
+      expect(prefill.complexityRouterConfig.tier_model_params).toBeUndefined();
     });
   });
 });

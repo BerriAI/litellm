@@ -133,3 +133,10 @@ meta.llama3-2-11b-instruct-v1:0
 us.meta.llama3-2-11b-instruct-v1:0
 meta.llama3-2-90b-instruct-v1:0
 us.meta.llama3-2-90b-instruct-v1:0
+bedrock/ap-northeast-1/qwen.qwen3-next-80b-a3b
+bedrock/ap-south-1/qwen.qwen3-next-80b-a3b
+bedrock/ap-southeast-2/qwen.qwen3-next-80b-a3b
+bedrock/eu-west-1/qwen.qwen3-next-80b-a3b
+bedrock/eu-west-2/qwen.qwen3-next-80b-a3b
+bedrock/sa-east-1/qwen.qwen3-next-80b-a3b
+bedrock/eu-west-2/nvidia.nemotron-super-3-120b

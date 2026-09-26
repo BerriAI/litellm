@@ -1,6 +1,7 @@
 import json
+import re
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Collection, Mapping, Sequence
 from enum import Enum
 from types import MappingProxyType
 from typing import (
@@ -11,6 +12,7 @@ from typing import (
     get_args,
 )
 
+import httpx
 from openai._models import BaseModel as OpenAIObject
 from openai.types.audio.transcription_create_params import (
     FileTypes as FileTypes,
@@ -34,24 +36,35 @@ from pydantic import (
     BaseModel,
     ConfigDict,
     Field,
+    FieldSerializationInfo,
+    JsonValue,
     PrivateAttr,
     SkipValidation,
     field_serializer,
     field_validator,
 )
-from typing_extensions import ReadOnly, Required, TypedDict
+from pydantic.main import IncEx
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
+    CachedTokensDetails,
     LiteLLMPydanticObjectBase,
 )
 from litellm.types.mcp import MCPServerCostInfo
 
-from ..litellm_core_utils.core_helpers import map_finish_reason
+from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
+from . import litellm_params as _litellm_params
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
+from .litellm_params import (
+    AGENTIC_LOOP_KWARG_NAMES,
+    BEDROCK_BATCH_KWARG_NAMES,
+    KWARG_ARTIFACTS,
+    OWNED_KWARG_NAMES,
+)
 from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from .llms.base import HiddenParams
 from .llms.openai import (
@@ -76,7 +89,30 @@ from .llms.openai import (
 )
 from .rerank import RerankResponse as RerankResponse
 
+
+def _nested_selector(
+    selector: IncEx | None,
+    index: int,
+    count: int,
+    is_include: bool,
+) -> tuple[bool, IncEx | None]:
+    if selector is None:
+        return True, None
+    if isinstance(selector, Mapping):
+        value: Final = selector.get(index, selector.get(index - count, selector.get("__all__")))
+        keep: Final = value is not None if is_include else value is not True
+        per_item_selector: Final = None if value is True or value is None else value
+        return keep, per_item_selector
+    if isinstance(selector, Collection) and not isinstance(selector, (str, bytes)):
+        if all(isinstance(item, int) for item in selector):
+            addressed: Final = index in selector or index - count in selector
+            return (addressed if is_include else not addressed), None
+    return True, selector
+
+
 if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Tokenizer
+
     from .vector_stores import VectorStoreSearchResponse
 else:
     VectorStoreSearchResponse = Any
@@ -141,6 +177,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_tool_choice: bool | None
     supports_assistant_prefill: bool | None
     supports_prompt_caching: bool | None
+    supports_prompt_cache_breakpoint: ReadOnly[bool | None]
+    supports_thinking_cache_preservation: ReadOnly[bool | None]
     supports_computer_use: bool | None
     supports_audio_input: bool | None
     supports_embedding_image_input: bool | None
@@ -152,6 +190,8 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_web_search: bool | None
     supports_reasoning: bool | None
     supports_adaptive_thinking: bool | None
+    supports_legacy_thinking: ReadOnly[bool | None]
+    thinking_always_on: ReadOnly[bool | None]
     supports_tool_search: bool | None
     supports_mid_conversation_system: bool | None
     supports_url_context: bool | None
@@ -160,8 +200,14 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     supports_low_reasoning_effort: bool | None
     supports_xhigh_reasoning_effort: bool | None
     supports_max_reasoning_effort: bool | None
+    reasoning_effort_levels: ReadOnly[Sequence[str] | None]
+    default_reasoning_effort: ReadOnly[Literal["none", "minimal", "low", "medium", "high", "xhigh"] | None]
     supports_output_config: bool | None
     supports_image_size: bool | None
+    supports_anthropic_thinking_payload: ReadOnly[bool | None]
+    supports_anthropic_compaction: ReadOnly[bool | None]
+    supported_audio_formats: ReadOnly[Sequence[Literal["mp3", "wav"]] | None]
+    vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"] | None]
     bedrock_output_config_effort_ceiling: Literal["low", "medium", "high", "max", "xhigh"] | None
     bedrock_converse_supports_strict_tools: bool | None
 
@@ -187,6 +233,40 @@ class AgenticLoopParams(TypedDict, total=False):
     """The LLM provider name (e.g., 'bedrock', 'anthropic')"""
 
 
+class OffPeakWindow(TypedDict, total=False):
+    """One off-peak rule: UTC time-of-day windows, optionally restricted to weekdays.
+
+    hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of them; a window may wrap past
+    midnight and an equal-ended window covers the whole day. weekdays is a list of days the
+    rule applies on, as ISO-8601 numbers (1 = Monday .. 7 = Sunday) or English day names;
+    omitted means every day. The weekday is read on the calendar named by the block's
+    weekday_timezone.
+    """
+
+    hours_utc: ReadOnly[str | Sequence[str]]
+    weekdays: ReadOnly[Sequence[int | str]]
+
+
+class OffPeakPricing(TypedDict, total=False):
+    """Time-windowed off-peak rates for providers that discount by time of day (e.g. DeepSeek).
+
+    hours_utc is a "HH:MM-HH:MM" string in UTC, or a list of them for multiple daily windows,
+    applying on every day of the week; a window may wrap past midnight. windows adds
+    day-of-week-qualified rules (e.g. weekend-only whole-day off-peak), matched as a union
+    with hours_utc. weekday_timezone names the IANA calendar weekdays are read on, defaulting
+    to UTC. Any rate left unset falls back to the standard rate.
+    """
+
+    hours_utc: ReadOnly[str | Sequence[str]]
+    windows: ReadOnly[Sequence[OffPeakWindow]]
+    weekday_timezone: ReadOnly[str]
+    input_cost_per_token: ReadOnly[float]
+    output_cost_per_token: ReadOnly[float]
+    output_cost_per_reasoning_token: ReadOnly[float]
+    cache_read_input_token_cost: ReadOnly[float]
+    cache_creation_input_token_cost: ReadOnly[float]
+
+
 class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     key: Required[str]  # the key in litellm.model_cost which is returned
 
@@ -207,6 +287,8 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_creation_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_creation_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost: float | None
+    cache_read_input_audio_token_cost: ReadOnly[float | None]
+    cache_read_input_image_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
@@ -216,9 +298,16 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_272k_tokens_priority: float | None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None
     cache_read_input_token_cost_above_512k_tokens: float | None
+    cache_read_input_token_cost_batches: ReadOnly[float | None]
+    cache_read_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
+    cache_read_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
     prompt_cache_min_tokens: int | None
+    off_peak_pricing: ReadOnly[OffPeakPricing | None]  # time-windowed off-peak rates
     input_cost_per_character: float | None  # only for vertex ai models
     input_cost_per_audio_token: float | None
     input_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
@@ -229,15 +318,22 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token_above_272k_tokens_flex: float | None
     input_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x input
     input_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
-    input_cost_per_query: float | None  # only for rerank models
+    input_cost_per_query: float | None  # per-request pricing: rerank, search, and Bedrock Marengo embeddings
     input_cost_per_image: float | None  # only for vertex ai models
     input_cost_per_image_token: float | None  # for gpt-image-1 and similar models
     input_cost_per_video_token: float | None  # for gemini omni models with video input
     input_cost_per_audio_per_second: float | None  # only for vertex ai models
     input_cost_per_video_per_second: float | None  # only for vertex ai models
+    input_cost_per_audio_token_batches: ReadOnly[float | None]
+    input_cost_per_image_token_batches: ReadOnly[float | None]
     input_cost_per_second: float | None  # for OpenAI Speech models
     input_cost_per_token_batches: float | None
+    input_cost_per_video_token_batches: ReadOnly[float | None]
+    input_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
+    input_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_batches: float | None
+    output_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
+    output_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token: Required[float | None]
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     output_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
@@ -248,6 +344,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     regional_processing_uplift_multiplier_us: (
         float | None
     )  # OpenAI US data-residency uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
+    regional_endpoint_uplift_multiplier: ReadOnly[
+        float | None
+    ]  # Vertex AI non-global (regional) endpoint uplift multiplier applied to all token costs (e.g. 1.10 = +10%)
     output_cost_per_character: float | None  # only for vertex ai models
     output_cost_per_audio_token: float | None
     output_cost_per_token_above_128k_tokens: float | None  # only for vertex ai models
@@ -259,6 +358,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token_above_512k_tokens: float | None  # MiniMax-M3: prompts >512K priced at 2x output
     output_cost_per_character_above_128k_tokens: float | None  # only for vertex ai models
     output_cost_per_image: float | None
+    output_cost_per_pixel: ReadOnly[float | None]
     output_cost_per_image_token: float | None
     output_cost_per_video_token: float | None  # for gemini omni models with video output
     output_vector_size: int | None
@@ -271,13 +371,24 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_second_1080p: (
         float | None
     )  # video_generation tier: key output_cost_per_second_<resolution> (e.g. 1080p, 720p)
+    output_cost_per_second_480p: ReadOnly[float | None]
+    output_cost_per_second_720p: ReadOnly[float | None]
+    output_cost_per_second_768p: ReadOnly[float | None]
+    output_cost_per_second_2k: ReadOnly[float | None]
+    output_cost_per_second_4k: ReadOnly[float | None]
+    output_cost_per_image_512: ReadOnly[float | None]
+    output_cost_per_image_1024: ReadOnly[float | None]
+    output_cost_per_image_1536: ReadOnly[float | None]
     ocr_cost_per_page: float | None  # for OCR models
+    ocr_cost_per_page_batches: ReadOnly[float | None]
     ocr_cost_per_credit: float | None  # for OCR models priced by credit
     annotation_cost_per_page: float | None  # for OCR models
+    annotation_cost_per_page_batches: ReadOnly[float | None]
     search_context_cost_per_query: SearchContextCostPerQuery | None  # Cost for using web search tool
     web_search_billing_unit: (
         Literal["per_query", "per_prompt"] | None
     )  # "per_query" (Gemini 3.x) or "per_prompt" (Gemini 2.x)
+    google_maps_grounding_cost_per_query: ReadOnly[float | None]
     citation_cost_per_token: float | None  # Cost per citation token for Perplexity
     tiered_pricing: list[dict[str, Any]] | None  # Tiered pricing structure for models like Dashscope
     litellm_provider: Required[str]
@@ -288,7 +399,9 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
             "image_generation",
             "chat",
             "audio_transcription",
+            "audio_speech",
             "responses",
+            "evaluation",
             "ocr",
             "realtime",
         ]
@@ -392,6 +505,8 @@ class CallTypes(str, Enum):
     #########################################################
     create_video = "create_video"
     acreate_video = "acreate_video"
+    video_generation = "video_generation"
+    avideo_generation = "avideo_generation"
     avideo_retrieve = "avideo_retrieve"
     video_retrieve = "video_retrieve"
     avideo_content = "avideo_content"
@@ -433,6 +548,12 @@ class CallTypes(str, Enum):
     aingest = "aingest"
     query = "query"
     aquery = "aquery"
+
+    #########################################################
+    # Google Interactions API Call Types
+    #########################################################
+    create_interaction = "create_interaction"
+    acreate_interaction = "acreate_interaction"
 
     #########################################################
     # Container Call Types
@@ -524,8 +645,11 @@ CallTypesLiteral = Literal[
     "search",
     "asearch",
     "_arealtime",
+    "_aresponses_websocket",
     "create_batch",
     "acreate_batch",
+    "create_file",
+    "acreate_file",
     "pass_through_endpoint",
     "allm_passthrough_route",
     "anthropic_messages",
@@ -899,6 +1023,14 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
         CallTypes.agenerate_content_stream,
         CallTypes.generate_content_stream,
     ],
+    "/v1beta/models/{model}:generateContent": (
+        CallTypes.agenerate_content,
+        CallTypes.generate_content,
+    ),
+    "/v1beta/models/{model}:streamGenerateContent": (
+        CallTypes.agenerate_content_stream,
+        CallTypes.generate_content_stream,
+    ),
     # MCP (Model Context Protocol)
     "/mcp/call_tool": [CallTypes.call_mcp_tool],
     # A2A (Agent-to-Agent)
@@ -906,12 +1038,12 @@ API_ROUTE_TO_CALL_TYPES: Final[Mapping[str, Sequence[CallTypes]]] = {
     "/a2a/{agent_id}/message/send": [CallTypes.asend_message, CallTypes.send_message],
     # Passthrough endpoints
     "/llm_passthrough": [
-        CallTypes.llm_passthrough_route,
         CallTypes.allm_passthrough_route,
+        CallTypes.llm_passthrough_route,
     ],
     "/v1/llm_passthrough": [
-        CallTypes.llm_passthrough_route,
         CallTypes.allm_passthrough_route,
+        CallTypes.llm_passthrough_route,
     ],
     "/v1/messages": [CallTypes.anthropic_messages],
     # OCR
@@ -1233,9 +1365,7 @@ def add_provider_specific_fields(object: BaseModel, provider_specific_fields: di
 class Message(SafeAttributeModel, OpenAIObject):
     content: str | None
     role: Literal["assistant", "user", "system", "tool", "function"]
-    tool_calls: (
-        list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
-    )  # mutable-ok: public pydantic response field; only the union member is new
+    tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
     function_call: FunctionCall | None
     audio: ChatCompletionAudioResponse | None = None
     images: list[ImageURLListItem] | None = None
@@ -1358,9 +1488,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         content: str | None
         role: str | None
         function_call: FunctionCall | None
-        tool_calls: (
-            list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
-        )  # mutable-ok: public pydantic response field; only the union member is new
+        tool_calls: list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
         audio: ChatCompletionAudioResponse | None
         images: list[ImageURLListItem] | None
         annotations: list[ChatCompletionAnnotation] | None
@@ -1567,6 +1695,17 @@ class Choices(SafeAttributeModel, OpenAIObject):
         setattr(self, key, value)
 
 
+def text_tokens_without_nested_reasoning(
+    completion_tokens: int,
+    text_tokens: int,
+    reasoning_tokens: int,
+    other_modality_tokens: int,
+) -> int:
+    reported_total: Final = text_tokens + reasoning_tokens + other_modality_tokens
+    nested_reasoning_tokens: Final = min(reasoning_tokens, text_tokens, max(reported_total - completion_tokens, 0))
+    return text_tokens - nested_reasoning_tokens
+
+
 class CompletionTokensDetailsWrapper(CompletionTokensDetails):  # wrapper for older openai versions
     text_tokens: int | None = None
     """Text tokens generated by the model."""
@@ -1598,6 +1737,9 @@ class PromptTokensDetailsWrapper(
     web_search_requests: int | None = None
     """Number of web search requests made by the tool call. Used for Anthropic to calculate web search cost."""
 
+    google_maps_grounding_requests: int | None = None
+    """Number of Grounding with Google Maps requests made by the tool call. Used for Gemini to calculate Maps cost."""
+
     tool_use_tokens: int | None = None
     """Prompt tokens consumed by server-side tool use (e.g. Gemini grounding via googleSearch)."""
 
@@ -1613,6 +1755,9 @@ class PromptTokensDetailsWrapper(
     audio_length_seconds: float | None = None
     """Length of audio sent to the model. Used for multimodal embeddings priced per audio-second."""
 
+    query_count: int | None = None
+    """Number of billable requests sent to the model. Used for embeddings priced per request, such as Bedrock Marengo."""
+
     cache_write_tokens: int | None = None
     """Number of cache write (creation) tokens sent to the model. OpenAI naming (prompt_tokens_details.cache_write_tokens); this is the canonical field."""
 
@@ -1621,6 +1766,9 @@ class PromptTokensDetailsWrapper(
 
     cache_creation_token_details: CacheCreationTokenDetails | None = None
     """Details of cache creation tokens sent to the model. Used for tracking 5m/1h cache creation tokens for Anthropic prompt caching."""
+
+    cached_tokens_details: CachedTokensDetails | None = None
+    """Details of cached (cache-hit) tokens sent to the model. OpenAI realtime naming; carries the per-modality cache-read split."""
 
     def __setattr__(self, name: str, value: object) -> None:
         super().__setattr__(name, value)
@@ -1631,8 +1779,20 @@ class PromptTokensDetailsWrapper(
 
     def __init__(self, *args, **kwargs) -> None:
         super().__init__(*args, **kwargs)
+        extra_fields: Final = self.model_extra
+        nested_cache_creation_input_tokens: Final = (
+            extra_fields.get("cache_creation_input_tokens") if extra_fields is not None else None
+        )
         self.cache_write_tokens = (
-            self.cache_write_tokens if self.cache_write_tokens is not None else self.cache_creation_tokens
+            self.cache_write_tokens
+            if self.cache_write_tokens is not None
+            else (
+                self.cache_creation_tokens
+                if self.cache_creation_tokens is not None
+                else (
+                    nested_cache_creation_input_tokens if isinstance(nested_cache_creation_input_tokens, int) else None
+                )
+            )
         )
         if self.character_count is None:
             del self.character_count
@@ -1642,8 +1802,12 @@ class PromptTokensDetailsWrapper(
             del self.video_length_seconds
         if self.audio_length_seconds is None:
             del self.audio_length_seconds
+        if self.query_count is None:
+            del self.query_count
         if self.web_search_requests is None:
             del self.web_search_requests
+        if self.google_maps_grounding_requests is None:
+            del self.google_maps_grounding_requests
         if self.tool_use_tokens is None:
             del self.tool_use_tokens
         if self.cache_write_tokens is None:
@@ -1652,6 +1816,8 @@ class PromptTokensDetailsWrapper(
             del self.cache_creation_tokens
         if self.cache_creation_token_details is None:
             del self.cache_creation_token_details
+        if self.cached_tokens_details is None:
+            del self.cached_tokens_details
 
 
 class ServerToolUse(BaseModel):
@@ -1899,6 +2065,10 @@ class ModelResponseBase(OpenAIObject):
     _hidden_params: dict = {}
 
     _response_headers: dict | None = None
+
+    def set_provider_response_headers(self, headers: httpx.Headers) -> None:
+        """Surface a provider's raw response headers to the caller as `llm_provider-*` headers."""
+        self._hidden_params["additional_headers"] = process_response_headers(headers)
 
     def model_dump(self, **kwargs):
         """Default to exclude_unset to avoid Pydantic serializer warnings for OpenAIObject-derived types."""
@@ -2428,6 +2598,37 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
 
     model_config = ConfigDict(extra="allow", protected_namespaces=())
 
+    @field_serializer("data")
+    def _serialize_image_data(
+        self,
+        data: Sequence[OpenAIImage] | None,
+        info: FieldSerializationInfo,
+    ) -> Sequence[Mapping[str, object]] | None:
+        if data is None:
+            return None
+        include: Final = info.include
+        exclude: Final = info.exclude
+
+        def _serialize_image(index: int, image: OpenAIImage) -> Mapping[str, object] | None:
+            include_keep, include_selector = _nested_selector(include, index, len(data), is_include=True)
+            exclude_keep, exclude_selector = _nested_selector(exclude, index, len(data), is_include=False)
+            if not include_keep or not exclude_keep:
+                return None
+            return image.model_dump(
+                mode=info.mode,
+                include=include_selector,
+                exclude=exclude_selector,
+                context=info.context,
+                exclude_none=info.exclude_none,
+                exclude_unset=info.exclude_unset,
+                exclude_defaults=info.exclude_defaults,
+                round_trip=info.round_trip,
+                by_alias=info.by_alias,
+            )
+
+        serialized_images: Final = tuple(_serialize_image(index, image) for index, image in enumerate(data))
+        return [image for image in serialized_images if image is not None]
+
     def __init__(
         self,
         created: int | None = None,
@@ -2469,6 +2670,7 @@ class ImageResponse(OpenAIImageResponse, BaseLiteLLMOpenAIResponseObject):
         )
         super().__init__(created=created, data=_data, usage=_usage)
 
+        self.background = kwargs.get("background", None)
         self.quality = kwargs.get("quality", None)
         self.output_format = kwargs.get("output_format", None)
         self.size = kwargs.get("size", None)
@@ -2765,17 +2967,32 @@ class StandardLoggingRoutingDecisionTierBoundaries(TypedDict):
 
 RoutingDecisionCause = Literal[
     "heuristic_scorer",
+    "heuristic_v2",
     # The scorer found 2+ reasoning markers and forced REASONING regardless of score.
     # A distinct cause rather than a marker inside `signals`, because it is the fact
     # that tells a reader the score did NOT choose the tier; encoding it as free text
     # meant anything that filtered `signals` silently changed what the row claimed.
     "reasoning_override",
     "llm_classifier",
+    "capability_classifier",
+    "jev_classifier",
+    "llm_v2_classifier",
+    "llm_v2_fallback",
+    # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at
+    # or below heuristic_first_max_tier, so it decided the tier and the LLM classifier was never
+    # called. Distinct from "heuristic_scorer", which is a router whose only classifier IS the
+    # scorer, and from "classifier_fallback", which is the scorer running because a call failed:
+    # only this cause means an LLM classifier was configured, reachable, and deliberately skipped.
+    "heuristic_first_short_circuit",
+    "hybrid_short_circuit",
     # The operator's classifier plugin (classifier_type 'custom') decided the tier.
     "classifier_plugin",
     # The LLM classifier or classifier plugin failed on a router with an operator-defined
     # tier set, so the request routed to the configured fallback_tier without being classified.
     "classifier_fallback",
+    # The capability judge failed or returned an invalid verdict, so its fail-closed policy
+    # routed to capable_tier without consulting the unrelated complexity heuristic.
+    "capability_classifier_fallback",
     # The LLM classifier or classifier plugin failed and classifier_fallback is
     # 'default_model', so the request went to default_model without being classified.
     # Distinct from "default_fallback",
@@ -2788,8 +3005,31 @@ RoutingDecisionCause = Literal[
     # keyword rule, or session pin), or the floor was already the top configured tier and the
     # classifier was skipped. The matched sentinel rides in matched_keyword.
     "plan_mode",
+    # A client housekeeping sentinel (a coding agent's conversation-title prompt) was detected on
+    # the newest ask, so the request routed to the cheapest configured tier and the classifier was
+    # never called. The matched sentinel rides in matched_keyword. Distinct from the keyword causes,
+    # which are operator-authored rules; these sentinels ship with the router.
+    "housekeeping",
+    # modality_routing replaced the decided placement: the request carries an image and the
+    # routed model does not accept image input, so the nearest higher capable tier or
+    # default_model served instead. The displaced placement rides in signals.
+    "modality_escalation",
+    # modality_pin_override replaced a KEPT session-affinity pin for this request only: the turn
+    # carries an image the pinned model cannot accept. The stored pin is untouched, so the next
+    # text turn replays it. Distinct from "modality_escalation", which never displaces a pin.
+    "modality_pin_override",
+    # Every deployment behind the decided model group was in cooldown, so a healthy peer in the
+    # same tier served instead. The displaced group rides in signals. Reported even on a kept
+    # session pin, since the pinned model did not serve the request.
+    "health_failover",
+    "health_default_fallback",
     "session_affinity_pin",
     "session_affinity_escalation",
+    # classification_mode 'user_turn': the request is an agent loop's continuation turn (no new
+    # human ask), so the session's held routing decision was replayed and the classifier was never
+    # called. Distinct from "session_affinity_pin", which reports the session_affinity flag pinning
+    # every turn including new asks; this cause only appears when session_affinity is off.
+    "user_turn_continuation",
     "default_fallback",
     "keyword",
     "quality_tier",
@@ -2797,13 +3037,29 @@ RoutingDecisionCause = Literal[
 ]
 
 
-InternalCallOrigin = Literal["autorouter_classifier", "shadow_eval_router", "shadow_eval_judge"]
+InternalCallOrigin = Literal[
+    "autorouter_classifier",
+    "autorouter_compaction",
+    "shadow_eval_router",
+    "shadow_eval_judge",
+    "llm_as_a_judge_guardrail",
+    "background_response_cost_poll",
+]
 """Which internal litellm feature originated a billed sub-call, so a spend log row
 records that it is not traffic the caller sent."""
 
 AUTOROUTER_CLASSIFIER_CALL_ORIGIN: Final[InternalCallOrigin] = "autorouter_classifier"
 SHADOW_EVAL_ROUTER_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_router"
 SHADOW_EVAL_JUDGE_CALL_ORIGIN: Final[InternalCallOrigin] = "shadow_eval_judge"
+LLM_AS_A_JUDGE_GUARDRAIL_CALL_ORIGIN: Final[InternalCallOrigin] = "llm_as_a_judge_guardrail"
+BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN: Final[InternalCallOrigin] = "background_response_cost_poll"
+
+
+class StandardLoggingHeuristicV2Forecast(TypedDict):
+    probabilities: ReadOnly[Mapping[str, float]]
+    threshold: ReadOnly[float]
+    predicted_tier: ReadOnly[str]
+    request_type: ReadOnly[str]
 
 
 class StandardLoggingRoutingDecision(TypedDict, total=False):
@@ -2822,18 +3078,40 @@ class StandardLoggingRoutingDecision(TypedDict, total=False):
     escalation_keyword: str
     classifier_model: str
     classifier_cost: float
+    classifier_probabilities: ReadOnly[Mapping[str, float]]
+    classifier_confidence: ReadOnly[float]
+    heuristic_v2_forecast: ReadOnly[StandardLoggingHeuristicV2Forecast]
+    classifier_crux: str  # writable-ok: added only when a capability verdict is available
+    classifier_primary_rule: str  # writable-ok: added only when a capability verdict is available
+    classifier_capability_boundary: str  # writable-ok: added only when a capability verdict is available
+    classifier_p_solve: float  # writable-ok: added only when a capability verdict is available
+    classifier_calibrated_p_solve: ReadOnly[float]
+    classifier_calibration_version: ReadOnly[str]
+    classifier_efficient_p_solve: ReadOnly[float]
+    classifier_capable_p_solve: ReadOnly[float]
+    classifier_calibrated_efficient_p_solve: ReadOnly[float]
+    classifier_calibrated_capable_p_solve: ReadOnly[float]
+    classifier_max_quality_gap: ReadOnly[float]
+    classifier_prompt_version: ReadOnly[str]
+    classifier_threshold: float  # writable-ok: added only when a capability verdict is available
     escalated: bool
+    context_escalated: bool  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
+    context_escalation_original_tier: str  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     tier_boundaries: StandardLoggingRoutingDecisionTierBoundaries
+    reasoning_override_min_score: float  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
     conversation_continuing: bool
     savings_baseline_model: str
     savings_baseline_deployment_id: str
+    tier_litellm_params: Mapping[str, object]  # writable-ok: Pydantic warns on ReadOnly TypedDict fields
 
 
 # Fields whose values quote the caller's prompt. Dropped when an operator turns message
 # logging off. Every other field aggregates the prompt without reproducing it and is kept,
 # so a redacted row stays explainable. `test_every_routing_decision_field_is_classified`
 # fails if a field is added to the record without being placed in one set or the other.
-PROMPT_QUOTING_ROUTING_DECISION_FIELDS: frozenset[str] = frozenset({"signals", "matched_keyword", "escalation_keyword"})
+PROMPT_QUOTING_ROUTING_DECISION_FIELDS: frozenset[str] = frozenset(
+    {"signals", "matched_keyword", "escalation_keyword", "classifier_crux"}
+)
 DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
     {
         "router_model_name",
@@ -2846,11 +3124,30 @@ DERIVED_ROUTING_DECISION_FIELDS: Final[frozenset[str]] = frozenset(
         "score",
         "classifier_model",
         "classifier_cost",
+        "classifier_probabilities",
+        "classifier_confidence",
+        "heuristic_v2_forecast",
+        "classifier_primary_rule",
+        "classifier_capability_boundary",
+        "classifier_p_solve",
+        "classifier_calibrated_p_solve",
+        "classifier_calibration_version",
+        "classifier_efficient_p_solve",
+        "classifier_capable_p_solve",
+        "classifier_calibrated_efficient_p_solve",
+        "classifier_calibrated_capable_p_solve",
+        "classifier_max_quality_gap",
+        "classifier_prompt_version",
+        "classifier_threshold",
         "escalated",
+        "context_escalated",
+        "context_escalation_original_tier",
         "tier_boundaries",
+        "reasoning_override_min_score",
         "conversation_continuing",
         "savings_baseline_model",
         "savings_baseline_deployment_id",
+        "tier_litellm_params",
     }
 )
 
@@ -2876,6 +3173,12 @@ class StandardLoggingMetadata(StandardLoggingUserAPIKeyMetadata):
     team_id: str | None
 
 
+class AzureSpillover(TypedDict):
+    """Spillover Azure reports in its response headers for a request it served from pay-as-you-go capacity."""
+
+    from_deployment: ReadOnly[str | None]
+
+
 class StandardLoggingAdditionalHeaders(TypedDict, total=False):
     x_ratelimit_limit_requests: int
     x_ratelimit_limit_tokens: int
@@ -2895,6 +3198,8 @@ class StandardLoggingHiddenParams(TypedDict):
     litellm_overhead_time_ms: float | None
     additional_headers: StandardLoggingAdditionalHeaders | None
     batch_models: list[str] | None
+    batch_successful_requests: ReadOnly[int | None]
+    batch_failed_requests: ReadOnly[int | None]
     litellm_model_name: str | None  # the model name sent to the provider by litellm
     usage_object: dict | None
 
@@ -2921,12 +3226,22 @@ class StandardLoggingModelCostFailureDebugInformation(TypedDict, total=False):
     custom_pricing: bool | None
 
 
+ZeroCostReason = Literal["missing_pricing_key", "pricing_not_applied", "cost_calculation_error"]
+
+
+class StandardLoggingZeroCostDiagnostic(TypedDict):
+    reason: ReadOnly[ZeroCostReason]
+    pricing_model: ReadOnly[str]
+    missing_pricing_keys: ReadOnly[tuple[str, ...]]
+
+
 class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_code: str | None
     error_class: str | None
     llm_provider: str | None
     traceback: str | None
     error_message: str | None
+    error_provider_request_id: ReadOnly[str | None]
     # error_rate_limit_category:
     #   For 429 / rate-limit errors, the source of the rate limit. One of the
     #   string values defined by `litellm.exceptions.RateLimitErrorCategory`
@@ -2948,6 +3263,7 @@ class StandardLoggingPayloadErrorInformation(TypedDict, total=False):
     error_budget_entity_id: str | None
     error_budget_limit: float | None
     error_budget_spend: float | None
+    normalized_error: ReadOnly[str | None]
 
 
 class GuardrailMode(TypedDict, total=False):
@@ -2955,7 +3271,54 @@ class GuardrailMode(TypedDict, total=False):
     default: str | list[str] | None
 
 
-GuardrailStatus = Literal["success", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"]
+GuardrailStatus = Literal[
+    "success", "guardrail_flagged", "guardrail_intervened", "guardrail_failed_to_respond", "not_run"
+]
+
+# Fields on a guardrail record whose values can quote the caller's prompt: the payload sent to the
+# guardrail, the provider response that echoes it back, and the two first-party hooks that inline
+# prompt substrings (``block_code_execution`` and ``litellm_content_filter``). Every other field
+# reports what the guardrail decided without reproducing the prompt, so redaction replaces these
+# four and keeps the rest of the record.
+PROMPT_CARRYING_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "guardrail_request",
+        "guardrail_response",
+        "match_details",
+        "classification",
+    }
+)
+
+# The rest of the record: what the guardrail is, what it decided, how long it took and what it cost.
+# None of these reproduce the prompt, so a redacted record keeps them and stays explainable.
+# `test_a_redacted_span_carries_every_declared_guardrail_field` fails if a field is added to the record without being
+# placed in one set or the other, so a new field is dropped from redacted records rather than
+# shipped unexamined.
+AUDIT_GUARDRAIL_FIELDS: Final[frozenset[str]] = frozenset(
+    {
+        "guardrail_name",
+        "guardrail_provider",
+        "guardrail_mode",
+        "guardrail_status",
+        "start_time",
+        "end_time",
+        "duration",
+        "masked_entity_count",
+        "guardrail_id",
+        "policy_template",
+        "detection_method",
+        "confidence_score",
+        "patterns_checked",
+        "alert_recipients",
+        "risk_score",
+        "violation_categories",
+        "guardrail_action",
+        "guardrail_usage",
+        "guardrail_cost",
+        "guardrail_cost_by_unit",
+        "guardrail_cost_in_spend",
+    }
+)
 
 
 class StandardLoggingGuardrailInformation(TypedDict, total=False):
@@ -3030,7 +3393,19 @@ class StandardLoggingGuardrailInformation(TypedDict, total=False):
     guardrail_cost: ReadOnly[float | None]
     """USD cost of this guardrail invocation, priced from ``guardrail_usage`` by the
     provider hook. Summed into the request's ``response_cost`` so it counts against
-    spend and budgets like token cost."""
+    spend and budgets like token cost, unless ``guardrail_cost_in_spend`` is False."""
+
+    guardrail_cost_by_unit: ReadOnly[Mapping[str, float | None] | None]
+    """``guardrail_cost`` split per ``guardrail_usage`` counter, so the daily
+    per-counter usage rollup can carry cost at its own grain. Absent when the
+    hook had no pricing for the invocation; a counter is None when the pricing
+    entry has no price for it, which the rollup stores as unknown rather than $0."""
+
+    guardrail_cost_in_spend: ReadOnly[bool | None]
+    """Whether ``guardrail_cost`` participates in the request's ``response_cost`` and
+    the spend/budget aggregates built from it. Absent, None, or True keeps the default
+    (cost counts against spend, the Bedrock behavior); False reports the cost on
+    logs, OTEL spans, and the UI while every spend and budget total ignores it."""
 
 
 class EvalVerdict(TypedDict, total=False):
@@ -3077,6 +3452,8 @@ class GuardrailTracingDetail(TypedDict, total=False):
     guardrail_action: str | None
     guardrail_usage: ReadOnly[Mapping[str, int] | None]
     guardrail_cost: ReadOnly[float | None]
+    guardrail_cost_by_unit: ReadOnly[Mapping[str, float | None] | None]
+    guardrail_cost_in_spend: ReadOnly[bool | None]
 
 
 StandardLoggingPayloadStatus = Literal["success", "failure"]
@@ -3101,16 +3478,17 @@ class CostBreakdown(TypedDict, total=False):
     """
     Detailed cost breakdown for a request.
 
-    ``service_tier`` and ``data_residency`` record the pricing basis the cost was
-    computed on, not what the caller asked for. A consumer that has to price a
-    counterfactual against this request (what another model would have charged for
-    it) needs the same basis to compare like with like, and re-deriving it from the
-    request is not possible after the fact: the tier the biller used comes from
-    ``optional_params``, which no log record carries.
+    ``service_tier``, ``data_residency``, and ``vertex_location`` record the pricing
+    basis the cost was computed on, not what the caller asked for. A consumer that has
+    to price a counterfactual against this request (what another model would have
+    charged for it) needs the same basis to compare like with like, and re-deriving it
+    from the request is not possible after the fact: the tier the biller used comes
+    from ``optional_params``, which no log record carries.
     """
 
     service_tier: str | None
     data_residency: str | None
+    vertex_location: ReadOnly[str | None]
     input_cost: float  # Cost of raw (non-cached) input tokens only
     cache_read_cost: float  # Cost of cache-read tokens (discounted rate)
     cache_creation_cost: float  # Cost of cache-write tokens (premium rate)
@@ -3118,7 +3496,7 @@ class CostBreakdown(TypedDict, total=False):
     reasoning_cost: float  # Cost of reasoning tokens (subset of output_cost)
     total_cost: ReadOnly[float]  # Total cost (input + output + tool usage + guardrail)
     tool_usage_cost: float  # Cost of usage of built-in tools
-    guardrail_cost: ReadOnly[float]  # Cost of guardrail invocations billed by the guardrail provider
+    guardrail_cost: ReadOnly[float]  # Cost counted in spend; report-only (guardrail_cost_in_spend=False) is excluded
     additional_costs: dict[str, float]  # Free-form additional costs (e.g., {"azure_model_router_flat_cost": 0.00014})
     original_cost: float  # Cost before discount (optional)
     discount_percent: float  # Discount percentage applied (e.g., 0.05 = 5%) (optional)
@@ -3137,6 +3515,7 @@ class StandardLoggingPayloadStatusFields(TypedDict, total=False):
     """
     Status of guardrail execution:
     - 'success': Guardrail ran and allowed content through
+    - 'guardrail_flagged': Guardrail allowed content through but recorded a non-blocking violation
     - 'guardrail_intervened': Guardrail blocked or modified content
     - 'guardrail_failed_to_respond': Guardrail had technical failure
     - 'not_run': No guardrail was run
@@ -3157,7 +3536,12 @@ class StandardAuditLogPayload(TypedDict):
     updated_values: str | None
 
 
-class StandardLoggingPayload(TypedDict):
+class ClassifierAudit(TypedDict, total=False):
+    classifier_input: ReadOnly[Mapping[str, JsonValue]]
+    originating_request_masked: ReadOnly[Mapping[str, JsonValue]]
+
+
+class StandardLoggingPayload(ClassifierAudit):
     id: str
     trace_id: str  # Trace multiple LLM calls belonging to same overall request (e.g. fallbacks/retries)
     session_id: str  # End-user/conversation session id (litellm_session_id), independent of trace_id
@@ -3166,7 +3550,11 @@ class StandardLoggingPayload(TypedDict):
     stream: bool | None
     response_cost: float
     cost_breakdown: CostBreakdown | None  # Detailed cost breakdown
+    autorouter_savings: ReadOnly[float | None]
+    autorouter_savings_estimate: ReadOnly[Mapping[str, JsonValue] | None]
+    autorouter_baseline_observation: ReadOnly[str | None]
     response_cost_failure_debug_info: StandardLoggingModelCostFailureDebugInformation | None
+    zero_cost_diagnostic: NotRequired[ReadOnly[StandardLoggingZeroCostDiagnostic | None]]
     status: StandardLoggingPayloadStatus
     status_fields: StandardLoggingPayloadStatusFields
     custom_llm_provider: str | None
@@ -3187,6 +3575,7 @@ class StandardLoggingPayload(TypedDict):
     cache_key: str | None
     saved_cache_cost: float
     request_tags: list
+    request_model_access_groups: NotRequired[ReadOnly[Sequence[str]]]
     end_user: str | None
     requester_ip_address: str | None
     user_agent: str | None
@@ -3229,12 +3618,18 @@ OPENAI_RESPONSE_HEADERS: Final = [
 ]
 
 
+OtelSpanScope = Literal["full", "llm_only"]
+OTEL_SPAN_SCOPES: Final[frozenset[str]] = frozenset(get_args(OtelSpanScope))
+
+
 class StandardCallbackDynamicParams(TypedDict, total=False):
     # Langfuse dynamic params
     langfuse_public_key: str | None
     langfuse_secret: str | None
     langfuse_secret_key: str | None
     langfuse_host: str | None
+    langfuse_environment: ReadOnly[str | None]
+    langfuse_span_scope: ReadOnly[OtelSpanScope | None]
 
     # Langfuse prompt version
     langfuse_prompt_version: int | None
@@ -3257,6 +3652,8 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     arize_api_key: str | None
     arize_space_key: str | None
     arize_space_id: str | None
+    arize_success_sampling_rate: ReadOnly[float | None]
+    arize_error_sampling_rate: ReadOnly[float | None]
 
     # PostHog dynamic params
     posthog_api_key: str | None
@@ -3271,6 +3668,11 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     dd_site: str | None
     dd_agent_host: str | None
     dd_agent_port: str | None
+
+    # New Relic dynamic params (proxy-stamped team/key callback vars only;
+    # request-supplied values are blocked)
+    newrelic_api_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
+    newrelic_region: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
 
     # Logging settings
     turn_off_message_logging: bool | None  # when true will not log messages
@@ -3298,6 +3700,14 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_second: float | None = None
     output_cost_per_second: float | None = None
     output_cost_per_second_1080p: float | None = None
+    output_cost_per_second_480p: float | None = None
+    output_cost_per_second_720p: float | None = None
+    output_cost_per_second_768p: float | None = None
+    output_cost_per_second_2k: float | None = None
+    output_cost_per_second_4k: float | None = None
+    output_cost_per_image_512: float | None = None
+    output_cost_per_image_1024: float | None = None
+    output_cost_per_image_1536: float | None = None
     input_cost_per_pixel: float | None = None
     output_cost_per_pixel: float | None = None
 
@@ -3322,7 +3732,14 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_200k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
+    cache_read_input_token_cost_batches: float | None = None
+    cache_read_input_token_cost_above_200k_tokens_batches: float | None = None
+    cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
+    cache_creation_input_token_cost_batches: float | None = None
+    cache_creation_input_token_cost_above_200k_tokens_batches: float | None = None
+    cache_creation_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_read_input_audio_token_cost: float | None = None
+    cache_read_input_image_token_cost: float | None = None
     input_cost_per_character_above_128k_tokens: float | None = None
     input_cost_per_audio_token: float | None = None
     input_cost_per_token_cache_hit: float | None = None
@@ -3331,6 +3748,8 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_above_200k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_flex: float | None = None
+    input_cost_per_token_above_200k_tokens_batches: float | None = None
+    input_cost_per_token_above_272k_tokens_batches: float | None = None
     input_cost_per_query: float | None = None
     input_cost_per_image: float | None = None
     input_cost_per_image_above_128k_tokens: float | None = None
@@ -3340,7 +3759,10 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_video_per_second_above_128k_tokens: float | None = None
     input_cost_per_video_per_second_above_15s_interval: float | None = None
     input_cost_per_video_per_second_above_8s_interval: float | None = None
+    input_cost_per_audio_token_batches: float | None = None
+    input_cost_per_image_token_batches: float | None = None
     input_cost_per_token_batches: float | None = None
+    input_cost_per_video_token_batches: float | None = None
     output_cost_per_token_batches: float | None = None
     output_cost_per_token_flex: float | None = None
     output_cost_per_token_priority: float | None = None
@@ -3351,6 +3773,8 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_200k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_flex: float | None = None
+    output_cost_per_token_above_200k_tokens_batches: float | None = None
+    output_cost_per_token_above_272k_tokens_batches: float | None = None
     output_cost_per_character_above_128k_tokens: float | None = None
     output_cost_per_image: float | None = None
     output_cost_per_image_token: float | None = None
@@ -3361,6 +3785,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_video_per_second: float | None = None
     output_cost_per_audio_per_second: float | None = None
     search_context_cost_per_query: dict[str, Any] | None = None
+    google_maps_grounding_cost_per_query: float | None = None
     citation_cost_per_token: float | None = None
     cache_read_input_token_cost_above_272k_tokens: float | None = None
     cache_read_input_token_cost_above_512k_tokens: float | None = None
@@ -3372,10 +3797,13 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_512k_tokens: float | None = None
     output_vector_size: int | None = None
     ocr_cost_per_page: float | None = None
+    ocr_cost_per_page_batches: float | None = None
     ocr_cost_per_credit: float | None = None
     annotation_cost_per_page: float | None = None
+    annotation_cost_per_page_batches: float | None = None
     regional_processing_uplift_multiplier_eu: float | None = None
     regional_processing_uplift_multiplier_us: float | None = None
+    regional_endpoint_uplift_multiplier: float | None = None
 
     @classmethod
     def strip_custom_pricing_fields(cls, model_info: dict[str, Any]) -> dict[str, Any]:
@@ -3389,192 +3817,118 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
         return {k: v for k, v in model_info.items() if k not in cls.model_fields}
 
 
-SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = frozenset(
-    ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__
-) - frozenset(CustomPricingLiteLLMParams.model_fields)
+DEPLOYMENT_SCOPED_PRICING_FIELDS: Final[frozenset[str]] = frozenset({"off_peak_pricing"})
+
+SHARED_BACKEND_MODEL_INFO_FIELDS: Final[frozenset[str]] = (
+    frozenset(ModelInfoBase.__required_keys__ | ModelInfoBase.__optional_keys__)
+    - frozenset(CustomPricingLiteLLMParams.model_fields)
+    - DEPLOYMENT_SCOPED_PRICING_FIELDS
+)
 
 
 def shared_backend_model_info(model_info: dict[str, Any]) -> dict[str, Any]:
     """Return only the fields safe to register under a shared ``{provider}/{model}``
     key in ``litellm.model_cost``: cost-map schema fields (``ModelInfoBase``) minus
-    per-deployment pricing overrides. Per-deployment metadata (``id``,
-    ``access_via_team_ids``, arbitrary custom keys) never belongs on the shared key;
-    it stays under the deployment's unique model id.
+    per-deployment pricing overrides and deployment-scoped pricing blocks such as
+    ``off_peak_pricing``. Per-deployment metadata (``id``, ``access_via_team_ids``,
+    arbitrary custom keys) never belongs on the shared key; it stays under the
+    deployment's unique model id.
     """
     return {k: v for k, v in model_info.items() if k in SHARED_BACKEND_MODEL_INFO_FIELDS}
 
 
-# Server-controlled fields that bound or drive an interceptor's agentic loop
-# (depth, cycle fingerprints, ceiling, code-interpreter sandbox state). Listed
-# in all_litellm_params so they are treated as LiteLLM-level and excluded from
-# get_non_default_completion_params; otherwise the OpenAI param builder sweeps
-# any unrecognized top-level key into extra_body and leaks them to the provider.
-# This is what lets the loop carry state across rerun calls without a provider
-# scrubber.
-agentic_loop_internal_litellm_params: Final = [
-    "_agentic_loop_depth",
-    "_agentic_loop_fingerprints",
-    "_agentic_loop_api_surface",
-    "max_agentic_loops",
-    "_code_interpreter_interception_active",
-    "_code_interpreter_interception_sandbox_key",
-    "_code_interpreter_interception_session_scoped",
-    "_code_interpreter_interception_converted_stream",
-    "_websearch_interception_emit_native_blocks",
-    "_websearch_interception_converted_stream",
+ABOVE_THRESHOLD_COST_KEY_PATTERN: Final = re.compile(r"_above_\d+k?_tokens$")
+
+_PRICING_FIELD_EXEMPTIONS: Final[frozenset[str]] = frozenset({"output_vector_size"})
+
+SERVER_DERIVED_PRICING_FIELDS: Final[frozenset[str]] = (
+    frozenset(CustomPricingLiteLLMParams.model_fields) - _PRICING_FIELD_EXEMPTIONS
+)
+
+
+def is_server_derived_pricing_key(key: str) -> bool:
+    """Whether ``/model/info`` can fill ``key`` into ``model_info`` from the cost map.
+
+    Two sources, because ``get_model_info`` emits two: the declared pricing fields, and
+    the tiered ``*_above_<N>_tokens`` rates that ride through on a pattern match and are
+    declared nowhere. Both are read here from the same objects the read path uses, so the
+    set cannot drift as new rates are added.
+    """
+    return key in SERVER_DERIVED_PRICING_FIELDS or ABOVE_THRESHOLD_COST_KEY_PATTERN.search(key) is not None
+
+
+PRICING_OVERRIDES_KEY: Final = "pricing_overrides"
+COST_MAP_LOOKUP_KEY: Final = "key"
+
+
+def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str, Any]:
+    """Drop the pricing ``/model/info`` derives for display, keeping everything else.
+
+    ``/model/info`` fills a deployment's missing pricing in from the cost map so the
+    Admin UI has a rate to show. Clients that echo that response back on save would
+    otherwise persist the display value as a real per-deployment override, freezing the
+    deployment at that day's price where no cost map refresh can reach it. A deployment's
+    own pricing belongs on ``litellm_params``, which is unaffected.
+    """
+    return MappingProxyType(
+        {k: v for k, v in model_info.items() if k != PRICING_OVERRIDES_KEY and not is_server_derived_pricing_key(k)}
+    )
+
+
+def echoed_cost_map_pricing_fields(model_info: Mapping[str, object]) -> tuple[str, ...]:
+    """Pricing fields a stored ``model_info`` blob copied from a ``/model/info`` response.
+
+    Only ``litellm.get_model_info`` emits ``key`` (the resolved cost-map entry), so a stored
+    blob carrying it alongside pricing fields holds the cost map as it stood on the day the
+    row was saved, not a price anyone typed. Rows saved before 1.102 through the Admin UI
+    edit form look exactly like this, and a price typed into ``litellm_params`` never does.
+    """
+    if COST_MAP_LOOKUP_KEY not in model_info:
+        return ()
+    return tuple(sorted(k for k in model_info if is_server_derived_pricing_key(k)))
+
+
+def echoed_cost_map_fields(
+    model_info: Mapping[str, object], *cost_map_entries: Mapping[str, object]
+) -> tuple[str, ...]:
+    """Fields a ``/model/info`` echo copied from the cost map unchanged.
+
+    Only ``litellm.get_model_info`` emits ``key``, so a blob carrying it is an echo of that
+    response. Anything in it that still equals a resolved cost-map entry is a display value
+    nobody typed; a value the operator edited differs from every entry and stays a real override.
+    Callers pass both the live entry, which the router rewrites with each deployment's own
+    overrides, and the catalog entry as loaded, so a reset to the catalog value reads as an echo either way.
+    """
+    if COST_MAP_LOOKUP_KEY not in model_info:
+        return ()
+    return tuple(
+        sorted(k for k, v in model_info.items() if any(k in entry and entry[k] == v for entry in cost_map_entries))
+    )
+
+
+def pricing_override_fields(*sources: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(
+        sorted(
+            frozenset(
+                k for source in sources for k, v in source.items() if v is not None and is_server_derived_pricing_key(k)
+            )
+        )
+    )
+
+
+agentic_loop_internal_litellm_params: Final = list(AGENTIC_LOOP_KWARG_NAMES)  # mutable-ok: public type stays a list
+
+bedrock_batch_litellm_params: Final = BEDROCK_BATCH_KWARG_NAMES
+
+TRUSTED_CALLBACK_VARS_FIELD: Final = _litellm_params.TRUSTED_CALLBACK_VARS_FIELD
+ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
+
+all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it  # mutable-ok: callers concat
+    *OWNED_KWARG_NAMES,
+    *KWARG_ARTIFACTS,
+    *StandardCallbackDynamicParams.__annotations__,
+    *CustomPricingLiteLLMParams.model_fields,
 ]
-
-# Proxy-owned callback credentials, stamped from admin-configured team/key callback
-# settings. Listed in all_litellm_params for the same reason as the agentic-loop
-# fields above: an unrecognized top-level key is swept into extra_body and sent to
-# the provider.
-TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
-
-# Bedrock managed-batch deployment config, read from litellm_params by the batch and
-# files transformations. Listed for the same reason as the fields above: these sit on
-# a deployment that also serves chat, so leaking them into extra_body makes Bedrock
-# reject every non-batch request to that deployment.
-bedrock_batch_litellm_params: Final = (
-    "aws_batch_role_arn",
-    "s3_bucket_name",
-    "s3_region_name",
-    "s3_output_bucket_name",
-    "bedrock_tags",
-)
-
-all_litellm_params = (
-    agentic_loop_internal_litellm_params
-    + [TRUSTED_CALLBACK_VARS_FIELD, *bedrock_batch_litellm_params]
-    + [
-        "metadata",
-        "litellm_metadata",
-        "keepalive_seconds",
-        "allow_client_keepalive_override",
-        "litellm_trace_id",
-        "litellm_request_debug",
-        "guardrails",
-        "tags",
-        "acompletion",
-        "aimg_generation",
-        "atext_completion",
-        "text_completion",
-        "caching",
-        "mock_response",
-        "mock_timeout",
-        "disable_add_transform_inline_image_block",
-        "api_key",
-        "api_version",
-        "prompt_id",
-        "prompt_variables",
-        "litellm_system_prompt",
-        "provider_specific_header",
-        "prompt_version",
-        "api_base",
-        "force_timeout",
-        "logger_fn",
-        "verbose",
-        "custom_llm_provider",
-        "model_file_id_mapping",
-        "litellm_logging_obj",
-        "litellm_call_id",
-        "_litellm_strip_stream_usage",
-        "use_client",
-        "id",
-        "fallbacks",
-        "routing_strategy",
-        "azure",
-        "headers",
-        "model_list",
-        "num_retries",
-        "context_window_fallback_dict",
-        "retry_policy",
-        "retry_strategy",
-        "roles",
-        "final_prompt_value",
-        "bos_token",
-        "eos_token",
-        "request_timeout",
-        "client_side_timeout",
-        "complete_response",
-        "self",
-        "client",
-        "rpm",
-        "tpm",
-        "itpm",
-        "otpm",
-        "max_parallel_requests",
-        "input_cost_per_token",
-        "output_cost_per_token",
-        "input_cost_per_second",
-        "output_cost_per_second",
-        "hf_model_name",
-        "model_info",
-        "proxy_server_request",
-        "secret_fields",
-        "preset_cache_key",
-        "caching_groups",
-        "ttl",
-        "cache",
-        "enable_prompt_caching",
-        "no-log",
-        "base_model",
-        "stream_timeout",
-        "supports_system_message",
-        "region_name",
-        "allowed_model_region",
-        "model_config",
-        "fastest_response",
-        "cooldown_time",
-        "cache_key",
-        "max_retries",
-        "azure_ad_token_provider",
-        "tenant_id",
-        "client_id",
-        "azure_username",
-        "azure_password",
-        "azure_scope",
-        "client_secret",
-        "user_continue_message",
-        "configurable_clientside_auth_params",
-        "weight",
-        "ensure_alternating_roles",
-        "assistant_continue_message",
-        "user_continue_message",
-        "fallback_depth",
-        "max_fallbacks",
-        "attempted_targets",
-        "max_budget",
-        "budget_duration",
-        "use_in_pass_through",
-        "merge_reasoning_content_in_choices",
-        "litellm_credential_name",
-        "allowed_openai_params",
-        "litellm_session_id",
-        "use_litellm_proxy",
-        "use_chat_completions_api",
-        "rust",
-        "prompt_label",
-        "shared_session",
-        "search_tool_name",
-        "order",
-        "enable_tag_filtering",
-        "enable_json_schema_validation",
-        "use_xai_oauth",
-        "auto_router_config_path",
-        "auto_router_config",
-        "auto_router_default_model",
-        "auto_router_embedding_model",
-        "auto_router_max_input_chars",
-        "complexity_router_config",
-        "complexity_router_default_model",
-        "adaptive_router_config",
-        "adaptive_router_default_model",
-        "quality_router_config",
-        "quality_router_default_model",
-    ]
-    + list(StandardCallbackDynamicParams.__annotations__.keys())
-    + list(CustomPricingLiteLLMParams.model_fields.keys())
-)
 
 
 class KeyGenerationConfig(TypedDict, total=False):
@@ -3632,8 +3986,10 @@ class LlmProviders(str, Enum):
     BYTEZ = "bytez"
     REPLICATE = "replicate"
     REDUCTO = "reducto"
+    AWS_TEXTRACT = "aws_textract"
     RUNWAYML = "runwayml"
     AWS_POLLY = "aws_polly"
+    TRANSCRIBE = "transcribe"
     HUGGINGFACE = "huggingface"
     TOGETHER_AI = "together_ai"
     OPENROUTER = "openrouter"
@@ -3668,11 +4024,14 @@ class LlmProviders(str, Enum):
     NVIDIA_RIVA = "nvidia_riva"
     SONIOX = "soniox"
     CEREBRAS = "cerebras"
+    NADIR = "nadir"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"
     CODESTRAL = "codestral"
     TEXT_COMPLETION_CODESTRAL = "text-completion-codestral"
     DASHSCOPE = "dashscope"
+    QWENCLOUD = "qwencloud"
+    QWEN_AI_PLATFORM = "qwen_ai_platform"
     MODELSCOPE = "modelscope"
     MOONSHOT = "moonshot"
     PUBLICAI = "publicai"
@@ -3718,6 +4077,7 @@ class LlmProviders(str, Enum):
     TOPAZ = "topaz"
     SAP_GENERATIVE_AI_HUB = "sap"
     ASSEMBLYAI = "assemblyai"
+    AZURE_SPEECH = "azure_speech"
     CHARITY_ENGINE = "charity_engine"
     GITHUB_COPILOT = "github_copilot"
     SNOWFLAKE = "snowflake"
@@ -3727,6 +4087,7 @@ class LlmProviders(str, Enum):
     PG_VECTOR = "pg_vector"
     S3_VECTORS = "s3_vectors"
     VALKEY = "valkey"
+    MONGODB = "mongodb"
     HELICONE = "helicone"
     HYPERBOLIC = "hyperbolic"
     RECRAFT = "recraft"
@@ -3738,6 +4099,7 @@ class LlmProviders(str, Enum):
     OCI = "oci"
     AUTO_ROUTER = "auto_router"
     VERCEL_AI_GATEWAY = "vercel_ai_gateway"
+    EDENAI = "edenai"
     DOTPROMPT = "dotprompt"
     MANUS = "manus"
     WANDB = "wandb"
@@ -3760,6 +4122,8 @@ class LlmProviders(str, Enum):
     TENSORMESH = "tensormesh"
     LIBERTAI = "libertai"
     PINSTRIPES = "pinstripes"
+    COGNITION = "cognition"
+    SCX_AI = "scx-ai"
     DARKBLOOM = "darkbloom"
     META = "meta"
     LITELLM_AGENT = "litellm_agent"
@@ -3778,7 +4142,13 @@ OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS: set[str] = {
     LlmProviders.LITELLM_PROXY.value,
 }
 
-ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai"]
+FILE_CONTENT_STREAMING_PROVIDERS: Final[frozenset[str]] = frozenset(
+    {*OPENAI_COMPATIBLE_BATCH_AND_FILES_PROVIDERS, LlmProviders.VERTEX_AI.value}
+)
+
+LITELLM_EXECUTED_BATCH_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.HOSTED_VLLM.value})
+
+ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai", "xai"]
 
 LIST_BATCHES_SUPPORTED_PROVIDERS: Final[frozenset[str]] = frozenset(get_args(ListBatchesSupportedProvider))
 
@@ -3806,7 +4176,9 @@ class SearchProviders(str, Enum):
     YOU_COM = "you_com"
     APISERPENT = "apiserpent"
     TINYFISH = "tinyfish"
+    AGENTCORE = "agentcore"
     NIMBLE = "nimble"
+    BING_GROUNDING = "bing_grounding"
 
 
 # Create a set of all search provider values for quick lookup
@@ -3883,7 +4255,7 @@ class ProviderSpecificHeader(TypedDict):
 
 class SelectTokenizerResponse(TypedDict):
     type: Literal["openai_tokenizer", "huggingface_tokenizer"]
-    tokenizer: Any
+    tokenizer: ReadOnly["Tokenizer"]
 
 
 class LiteLLMFineTuningJob(FineTuningJob):
@@ -3930,6 +4302,7 @@ class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
     # rate_limits.updated), blocks the event loop, and discards the session usage.
     results: SkipValidation[OpenAIRealtimeStreamList]
     usage: Usage
+    service_tier: str | None = None
     _hidden_params: dict = {}
 
     @field_serializer("results")

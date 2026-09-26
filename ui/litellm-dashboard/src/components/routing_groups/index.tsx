@@ -1,8 +1,10 @@
 "use client";
 
 import React, { useMemo, useState } from "react";
-import { Button, Card, Flex, Input, Modal, Space, Typography } from "antd";
-import { PlusOutlined, ReloadOutlined, SearchOutlined } from "@ant-design/icons";
+import { Button } from "@/components/ui/button";
+import { Card, CardContent } from "@/components/ui/card";
+import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput } from "@/components/ui/input-group";
+import { Plus, RefreshCw, Search, X } from "lucide-react";
 import { useRoutingGroups, useSaveRoutingGroups } from "@/app/(dashboard)/hooks/routingGroups/useRoutingGroups";
 import { useRouterFields } from "@/app/(dashboard)/hooks/router/useRouterFields";
 import { useModelHub } from "@/app/(dashboard)/hooks/models/useModels";
@@ -12,8 +14,8 @@ import RoutingGroupsTable from "./RoutingGroupsTable";
 import RoutingGroupModal from "./RoutingGroupModal";
 import { toast } from "@/lib/toast";
 import type { RoutingGroup } from "./types";
-
-const { Text } = Typography;
+import { groupNameByModel } from "./modelOwnership";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 const RoutingGroups: React.FC = () => {
   const { data, isLoading, refetch, isFetching } = useRoutingGroups();
@@ -29,7 +31,7 @@ const RoutingGroups: React.FC = () => {
   const [editingGroup, setEditingGroup] = useState<RoutingGroup | null>(null);
   const [deletingGroup, setDeletingGroup] = useState<RoutingGroup | null>(null);
 
-  const groups = data?.routingGroups ?? [];
+  const groups = useMemo(() => data?.routingGroups ?? [], [data?.routingGroups]);
 
   const filteredGroups = useMemo(() => {
     const q = searchQuery.trim().toLowerCase();
@@ -44,11 +46,17 @@ const RoutingGroups: React.FC = () => {
 
   const availableStrategies = useMemo(() => {
     if (data?.availableStrategies?.length) return data.availableStrategies;
+    if (routerFields?.routing_group_strategies?.length) return routerFields.routing_group_strategies;
     const fromFields = routerFields?.fields?.find((f) => f.field_name === "routing_strategy")?.options;
     return fromFields ?? [];
   }, [data?.availableStrategies, routerFields]);
 
   const strategyDescriptions = routerFields?.routing_strategy_descriptions ?? {};
+
+  const ownerByModel = useMemo(
+    () => groupNameByModel(groups, drawerMode === "edit" ? editingGroup?.group_name : undefined),
+    [groups, drawerMode, editingGroup],
+  );
 
   const modelOptions = useMemo<string[]>(() => {
     const records = (modelHub?.data ?? []) as Array<{ model_group?: string }>;
@@ -100,37 +108,55 @@ const RoutingGroups: React.FC = () => {
   };
 
   return (
-    <Space direction="vertical" size={16} className="w-full">
-      <Card bodyStyle={{ padding: 16 }}>
-        <Flex justify="space-between" align="center" gap={12} className="mb-4">
-          <Input
-            allowClear
-            prefix={<SearchOutlined className="text-gray-400" />}
-            placeholder="Search groups..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="max-w-sm"
-          />
-          <Flex align="center" gap={12}>
-            <Button icon={<ReloadOutlined />} onClick={() => refetch()} loading={isFetching && !isLoading}>
-              Refresh
-            </Button>
-            <Button type="primary" icon={<PlusOutlined />} onClick={openCreate}>
-              Create Group
-            </Button>
-            <Text type="secondary" className="text-sm whitespace-nowrap">
-              Showing {filteredGroups.length} {filteredGroups.length === 1 ? "result" : "results"}
-            </Text>
-          </Flex>
-        </Flex>
+    <div className="flex w-full flex-col gap-4">
+      <Card size="sm">
+        <CardContent>
+          <div className="mb-4 flex items-center justify-between gap-3">
+            <InputGroup className="max-w-sm">
+              <InputGroupAddon>
+                <Search className="size-4 text-muted-foreground" />
+              </InputGroupAddon>
+              <InputGroupInput
+                placeholder="Search groups..."
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+              />
+              {searchQuery && (
+                <InputGroupAddon align="inline-end">
+                  <InputGroupButton size="icon-xs" aria-label="Clear search" onClick={() => setSearchQuery("")}>
+                    <X />
+                  </InputGroupButton>
+                </InputGroupAddon>
+              )}
+            </InputGroup>
+            <div className="flex items-center gap-3">
+              <Button
+                variant="outline"
+                onClick={() => refetch()}
+                disabled={isFetching && !isLoading}
+                aria-busy={isFetching && !isLoading}
+              >
+                <RefreshCw />
+                Refresh
+              </Button>
+              <Button onClick={openCreate}>
+                <Plus />
+                Create Group
+              </Button>
+              <span className="text-sm whitespace-nowrap text-muted-foreground">
+                Showing {filteredGroups.length} {filteredGroups.length === 1 ? "result" : "results"}
+              </span>
+            </div>
+          </div>
 
-        <RoutingGroupsTable
-          groups={filteredGroups}
-          isLoading={isLoading}
-          onEdit={openEdit}
-          onDelete={(g) => setDeletingGroup(g)}
-          proxyBaseUrl={proxySettings.LITELLM_UI_API_DOC_BASE_URL?.trim() || proxySettings.PROXY_BASE_URL || ""}
-        />
+          <RoutingGroupsTable
+            groups={filteredGroups}
+            isLoading={isLoading}
+            onEdit={openEdit}
+            onDelete={(g) => setDeletingGroup(g)}
+            proxyBaseUrl={proxySettings.LITELLM_UI_API_DOC_BASE_URL?.trim() || proxySettings.PROXY_BASE_URL || ""}
+          />
+        </CardContent>
       </Card>
 
       <RoutingGroupModal
@@ -141,26 +167,46 @@ const RoutingGroups: React.FC = () => {
         strategyDescriptions={strategyDescriptions}
         modelOptions={modelOptions}
         existingGroupNames={groups.map((g) => g.group_name)}
+        groupNameByModel={ownerByModel}
         onClose={() => setDrawerOpen(false)}
         onSubmit={handleSubmit}
         saving={saveMutation.isPending}
       />
 
-      <Modal
-        open={Boolean(deletingGroup)}
-        title="Delete routing group?"
-        okText="Delete"
-        okButtonProps={{ danger: true, loading: saveMutation.isPending }}
-        cancelText="Cancel"
-        onOk={confirmDelete}
-        onCancel={() => setDeletingGroup(null)}
-      >
-        <Text>
-          Models in <Text strong>{deletingGroup?.group_name}</Text> will fall back to the proxy&apos;s top-level routing
-          strategy. This cannot be undone.
-        </Text>
-      </Modal>
-    </Space>
+      <Dialog open={Boolean(deletingGroup)} onOpenChange={(open) => !open && setDeletingGroup(null)}>
+        <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Delete routing group?</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-foreground">
+            {deletingGroup?.routing_strategy === "priority" ? (
+              <>
+                Calls to <span className="font-medium">{deletingGroup.group_name}</span> will stop working. Direct
+                requests to its member models keep their existing routing behavior. This cannot be undone.
+              </>
+            ) : (
+              <>
+                Models in <span className="font-medium">{deletingGroup?.group_name}</span> will fall back to the
+                proxy&apos;s top-level routing strategy. This cannot be undone.
+              </>
+            )}
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeletingGroup(null)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={confirmDelete}
+              variant="destructive"
+              disabled={saveMutation.isPending}
+              aria-busy={saveMutation.isPending}
+            >
+              Delete
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+    </div>
   );
 };
 

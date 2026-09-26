@@ -1,17 +1,36 @@
-import os
-import sys
 from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../../../.."))
-
 from litellm.proxy.openai_files_endpoints.common_utils import (
     apply_unified_file_ids,
+    get_credentials_for_model,
+    is_litellm_executed_batch,
     map_raw_file_ids_to_unified,
 )
+from litellm.proxy.route_llm_request import ProxyModelNotFoundError
+from litellm.proxy.utils import handle_exception_on_proxy
 from litellm.types.utils import LiteLLMBatch
+
+_RAW_MODEL_WITH_PROMPT: Final = "opus-4.6 Please summarize my medical records\nPatient has diabetes"
+
+
+def test_get_credentials_for_model_rejects_an_unknown_model_without_persisting_the_raw_model():
+    llm_router: Final = MagicMock()
+    llm_router.get_deployment_credentials_with_provider.return_value = None
+
+    with pytest.raises(ProxyModelNotFoundError) as raised:
+        get_credentials_for_model(
+            llm_router=llm_router, model_id=_RAW_MODEL_WITH_PROMPT, operation_context="file upload"
+        )
+
+    assert (raised.value.status_code, handle_exception_on_proxy(raised.value).code) == (400, "400")
+    assert _RAW_MODEL_WITH_PROMPT in raised.value.detail["error"]
+    assert raised.value.retryable_with_model_read_through is False
+    assert raised.value.spend_log_error_message.startswith("file upload: ")
+    assert "medical records" not in raised.value.spend_log_error_message
 
 
 def _batch(input_file_id, output_file_id, error_file_id) -> LiteLLMBatch:
@@ -431,3 +450,67 @@ def test_add_internal_model_credentials_survives_a_failing_deployment_lookup():
     add_internal_model_credentials(data=data, llm_router=router, model_id="deployment-gone")
 
     assert data == {"batch_id": "unified-batch-id"}
+
+
+from openai.types.batch import BatchRequestCounts
+
+from litellm.proxy.openai_files_endpoints.common_utils import (
+    _completed_batch_safe_to_retire,
+)
+
+
+def _completed_batch_for_retire(
+    output_file_id: str | None, counts: BatchRequestCounts | None = None
+) -> LiteLLMBatch:
+    kwargs = dict(
+        id="batch-1",
+        completion_window="24h",
+        created_at=1234567890,
+        endpoint="/v1/chat/completions",
+        input_file_id="file-in",
+        object="batch",
+        status="completed",
+        output_file_id=output_file_id,
+        error_file_id=None,
+    )
+    if counts is not None:
+        kwargs["request_counts"] = counts
+    return LiteLLMBatch(**kwargs)
+
+
+class TestCompletedBatchSafeToRetire:
+    """A completed batch is only safe to retire from cost recovery once its output
+    file has arrived or the provider proves it enumerated a positive total of
+    request lines and none succeeded (#37713, LIT-6360)."""
+
+    def test_output_file_present_is_safe(self):
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire("file-out")) is True
+
+    def test_no_output_and_synthesized_zero_counts_is_not_safe(self):
+        counts = BatchRequestCounts(total=0, completed=0, failed=0)
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None, counts)) is False
+
+    def test_no_output_but_successful_lines_is_not_safe(self):
+        counts = BatchRequestCounts(total=100, completed=100, failed=0)
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None, counts)) is False
+
+    def test_no_output_and_all_lines_failed_is_safe(self):
+        counts = BatchRequestCounts(total=100, completed=0, failed=100)
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None, counts)) is True
+
+    def test_no_output_and_unknown_counts_is_not_safe(self):
+        assert _completed_batch_safe_to_retire(_completed_batch_for_retire(None)) is False
+
+
+@pytest.mark.parametrize(
+    "decoded_unified_batch_id, executed",
+    [
+        ("litellm_proxy;model_id:my-vllm;llm_batch_id:litellm_batch_0123abcd", True),
+        ("litellm_proxy;model_id:my-vllm;llm_batch_id:batch_0123abcd", False),
+        ("litellm_proxy;model_id:my-vllm;generic_response_id:resp_0123abcd", False),
+        ("litellm_proxy;model_id:my-vllm;llm_output_file_id:file-0123abcd", False),
+        ("batch_0123abcd", False),
+    ],
+)
+def test_is_litellm_executed_batch_reads_the_llm_batch_id_prefix(decoded_unified_batch_id: str, executed: bool):
+    assert is_litellm_executed_batch(decoded_unified_batch_id) is executed

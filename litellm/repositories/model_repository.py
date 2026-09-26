@@ -3,36 +3,42 @@ Model repository for database operations on LiteLLM_ProxyModelTable.
 """
 
 import json
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final
 
 from litellm.models.model import LiteLLM_ProxyModelTable
-from litellm.proxy.common_utils.config_sync_pubsub import wrap_table_actions_for_config_sync
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
 )
 from litellm.repositories.base_repository import BaseRepository
+from litellm.repositories.prisma_protocols import TableActions
+from litellm.repositories.table_repositories import PrismaTableRepository
+
+if TYPE_CHECKING:
+    from prisma import models as prisma_models
+
+
+class _ProxyModelTableRepository(PrismaTableRepository["prisma_models.LiteLLM_ProxyModelTable"]):
+    table_name = "litellm_proxymodeltable"
 
 
 class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
     """Repository for proxy model database operations with encryption support."""
 
-    def __init__(self, prisma_client: Any, encryption_key: str | None = None):
+    def __init__(self, prisma_client: object, encryption_key: str | None = None) -> None:
         super().__init__(prisma_client)
         self._encryption_key = encryption_key
 
     @property
-    def table(self) -> Any:
-        return wrap_table_actions_for_config_sync(
-            actions=self.prisma_client.db.litellm_proxymodeltable,
-            table_name="litellm_proxymodeltable",
-        )
+    def table(self) -> TableActions["prisma_models.LiteLLM_ProxyModelTable"]:
+        return _ProxyModelTableRepository(self._prisma_client).table
 
     @property
     def model_class(self) -> type[LiteLLM_ProxyModelTable]:
         return LiteLLM_ProxyModelTable
 
-    def _encrypt_litellm_params(self, litellm_params: dict[str, Any]) -> dict[str, Any]:
+    def _encrypt_litellm_params(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
         """Encrypt sensitive values in litellm_params."""
         encrypted: Final = {}
         for key, value in litellm_params.items():
@@ -42,7 +48,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
                 encrypted[key] = value
         return encrypted
 
-    def _decrypt_litellm_params(self, litellm_params: dict[str, Any]) -> dict[str, Any]:
+    def _decrypt_litellm_params(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
         """Decrypt sensitive values in litellm_params."""
         decrypted: Final = {}
         for key, value in litellm_params.items():
@@ -89,6 +95,13 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         records: Final = await self.table.find_many(where={"blocked": False})
         return self._to_model_list(records)
 
+    async def find_all_except(self, model_id: str) -> Sequence[LiteLLM_ProxyModelTable]:
+        """Find every model except the row currently being updated."""
+        records: Final = await self.table.find_many(
+            where={"model_id": {"not": model_id}}  # mutable-ok: Prisma requires plain dicts for query serialization
+        )
+        return tuple(self._to_model_list(records))
+
     async def find_by_team_id(self, team_id: str) -> list[LiteLLM_ProxyModelTable]:
         """Find models associated with a specific team.
 
@@ -102,16 +115,16 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
     async def create_model(
         self,
         model_name: str,
-        litellm_params: dict[str, Any],
+        litellm_params: Mapping[str, object],
         created_by: str,
         model_id: str | None = None,
-        model_info: dict[str, Any] | None = None,
+        model_info: Mapping[str, object] | None = None,
         blocked: bool = False,
     ) -> LiteLLM_ProxyModelTable:
         """Create a new model with encryption."""
         encrypted_params: Final = self._encrypt_litellm_params(litellm_params)
 
-        data: Final[dict[str, Any]] = {
+        data: Final[dict[str, str | bool]] = {
             "model_name": model_name,
             "litellm_params": json.dumps(encrypted_params),
             "created_by": created_by,
@@ -133,12 +146,12 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         model_id: str,
         updated_by: str,
         model_name: str | None = None,
-        litellm_params: dict[str, Any] | None = None,
-        model_info: dict[str, Any] | None = None,
+        litellm_params: Mapping[str, object] | None = None,
+        model_info: Mapping[str, object] | None = None,
         blocked: bool | None = None,
     ) -> LiteLLM_ProxyModelTable | None:
         """Update a model with encryption."""
-        data: Final[dict[str, Any]] = {"updated_by": updated_by}
+        data: Final[dict[str, str | bool]] = {"updated_by": updated_by}
         if model_name is not None:
             data["model_name"] = model_name
         if litellm_params is not None:

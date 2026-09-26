@@ -35,6 +35,15 @@ span orphaned into its own trace). The anchor — a contextvar inherited by thos
 child tasks — gives a stable parent in both cases. DB/service spans keep ambient
 parenting so an auth DB lookup still nests under `auth`.
 
+The anchor is also what `litellm.request.route` is read from: `request_root_http_route`
+returns the server span's own `http.route`, so the LLM call span cannot disagree with
+its parent about which endpoint served the request. That means the route template on a
+normal route and the literal path on a passthrough prefix, because the passthrough hook
+rewrote the attribute; an MCP call anchors the same server span, so it reports the
+`/mcp` mount point. Attributes stay readable after a span ends, so the async close
+callback reads the same value. Where no server span was anchored at all, the route the
+proxy recorded at auth (`metadata.user_api_key_request_route`) is the backstop.
+
 **Which service calls become spans (`spans.span_role_for_service`).** LiteLLM's
 service-logging layer instruments many internal functions, but only some are
 traceable units of work:
@@ -54,7 +63,24 @@ Spans are named `"{service} {call_type}"` (e.g. `"redis set"`) so repeated calls
 to one service stay distinguishable. Like every other span they parent to the
 **ambient** context, falling back to the threaded `litellm_parent_otel_span` only
 when ambient has no live span; a background job with neither starts its own root
-trace. Caller-supplied `event_metadata` is **sanitized** before it reaches a span
+trace.
+
+**Post-response work is its own trace.** Spend tracking, the response cache write
+and the spend-counter increment all run after the response is on the wire, so they
+add nothing to the request's latency. Parenting them under the (already ended)
+server span stretched the request trace past the request itself, which is what a
+viewer shows as trace duration. `context.resolve_service_span_context` compares
+the call's end time with the resolved parent's end time: a call that finished
+after its parent ended starts a **new root trace** carrying a **span link** back
+to the request span (the `FollowsFrom` relationship of OpenTracing; the default
+`:link` propagation style of the OTel Ruby ActiveJob and Sidekiq
+instrumentations). Identity Baggage still rides along, so the detached span keeps
+its team / key / user attributes. Only an SDK span that has really ended detaches:
+a sampled-out or remote `NonRecordingSpan` is never recording but is still the
+right parent. A call that ended before the server span did stays a child even when
+its `asyncio.create_task`-dispatched hook runs after the response.
+
+Caller-supplied `event_metadata` is **sanitized** before it reaches a span
 (primitives only, no live objects, no secrets/headers, bounded) — see
 `payloads.sanitize_event_metadata`.
 

@@ -1,23 +1,21 @@
 import datetime as real_datetime
-import os
 import smtplib
-import sys
+from typing import Final
 
 import pytest
 from fastapi import HTTPException
 
 from litellm.caching.caching import DualCache
+from litellm.exceptions import InternalServerError
 from litellm.integrations.custom_guardrail import CustomGuardrail
-from litellm.proxy._types import ProxyErrorTypes
-from litellm.proxy.utils import ProxyLogging
+from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.bug_report import ISSUE_URL_BASE
+from litellm.proxy._types import ProxyErrorTypes, UserAPIKeyAuth
+from litellm.proxy.utils import PrismaClient, ProxyLogging, handle_exception_on_proxy
 from litellm.types.guardrails import GuardrailEventHooks
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
-
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from litellm.proxy.utils import get_custom_url, join_paths
 
@@ -87,9 +85,7 @@ async def test_proxy_only_error_log_marks_no_upstream_llm_call():
     captured = {}
 
     def fake_pre_call(self, *args, **kwargs):
-        captured["flag"] = self.model_call_details.get(
-            LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
-        )
+        captured["flag"] = self.model_call_details.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)
 
     from litellm.litellm_core_utils.litellm_logging import Logging
 
@@ -107,9 +103,7 @@ async def test_proxy_only_error_log_marks_no_upstream_llm_call():
                 "model": "gpt-4o",
                 "messages": [{"role": "user", "content": "hi"}],
             },
-            user_api_key_dict=UserAPIKeyAuth(
-                api_key="sk-bad", request_route="/v1/chat/completions"
-            ),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-bad", request_route="/v1/chat/completions"),
             route="/v1/chat/completions",
             original_exception=Exception("bad key"),
         )
@@ -153,13 +147,9 @@ async def test_proxy_only_error_log_keeps_litellm_metadata_in_litellm_params():
             request_data={
                 "model": "gpt-4o",
                 "input": "blocked prompt",
-                "litellm_metadata": {
-                    "standard_logging_guardrail_information": guardrail_info
-                },
+                "litellm_metadata": {"standard_logging_guardrail_information": guardrail_info},
             },
-            user_api_key_dict=UserAPIKeyAuth(
-                api_key="sk-1234", request_route="/v1/responses"
-            ),
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/responses"),
             route="/v1/responses",
             original_exception=HTTPException(status_code=400, detail="blocked"),
         )
@@ -168,13 +158,39 @@ async def test_proxy_only_error_log_keeps_litellm_metadata_in_litellm_params():
         Logging.pre_call = orig_pre_call
         Logging.async_failure_handler = orig_async_failure
 
-    assert (
-        captured["litellm_params"]["litellm_metadata"][
-            "standard_logging_guardrail_information"
-        ]
-        == guardrail_info
-    )
+    assert captured["litellm_params"]["litellm_metadata"]["standard_logging_guardrail_information"] == guardrail_info
     assert "litellm_metadata" not in captured["optional_params"]
+
+
+@pytest.mark.asyncio
+async def test_proxy_only_error_log_keeps_the_request_litellm_call_id(monkeypatch: pytest.MonkeyPatch):
+    """LIT-7836: a route that already stamped the caller's litellm_call_id must
+    keep it when the failure is a proxy-only error, so the spend-log row and the
+    error line share one id instead of a fresh uuid minted here."""
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    call_id: Final = "caller-supplied-7836"
+    captured: dict[str, object] = {}
+
+    def fake_pre_call(self, *args, **kwargs):
+        captured["litellm_call_id"] = self.litellm_call_id
+
+    async def _noop_async_failure(self, *args, **kwargs):
+        return None
+
+    monkeypatch.setattr(Logging, "pre_call", fake_pre_call)
+    monkeypatch.setattr(Logging, "async_failure_handler", _noop_async_failure)
+    request_data: Final[dict[str, object]] = {"model": "gpt-4o", "input": "hi", "litellm_call_id": call_id}
+
+    await ProxyLogging(user_api_key_cache=DualCache())._handle_logging_proxy_only_error(
+        request_data=request_data,
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-bad", request_route="/v1/moderations"),
+        route="/v1/moderations",
+        original_exception=Exception("bad key"),
+    )
+
+    assert request_data["litellm_call_id"] == call_id
+    assert captured["litellm_call_id"] == call_id
 
 
 def test_get_model_group_info_order():
@@ -211,9 +227,7 @@ def test_get_model_group_info_order():
 
 def test_join_paths_no_duplication():
     """Test that join_paths doesn't duplicate route when base_path already ends with it"""
-    result = join_paths(
-        base_path="http://0.0.0.0:4000/my-custom-path/", route="/my-custom-path"
-    )
+    result = join_paths(base_path="http://0.0.0.0:4000/my-custom-path/", route="/my-custom-path")
     assert result == "http://0.0.0.0:4000/my-custom-path"
 
 
@@ -469,6 +483,23 @@ class TestPostCallFailureHookLiftsRecoveredPartialSpend:
         assert "litellm_logging_obj" not in request_data
 
     @pytest.mark.asyncio
+    async def test_recovered_usage_without_cost_clobbers_client_cost_with_zero(self):
+        from litellm.types.utils import Usage
+
+        recovered_usage = Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31)
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"combined_usage_object": recovered_usage}
+        request_data = {
+            "litellm_logging_obj": logging_obj,
+            "response_cost": 999.0,
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        assert request_data["combined_usage_object"] is recovered_usage
+        assert request_data["response_cost"] == 0.0
+
+    @pytest.mark.asyncio
     async def test_no_recovered_usage_is_noop(self):
         logging_obj = MagicMock()
         logging_obj.model_call_details = {}
@@ -478,10 +509,488 @@ class TestPostCallFailureHookLiftsRecoveredPartialSpend:
         assert "response_cost" not in request_data
 
 
+class TestPostCallFailureHookLiftsStandardLoggingObject:
+    """Failure callbacks read standard_logging_object from request_data, but
+    post_call_failure_hook pops litellm_logging_obj before they run. The hook
+    must lift the logging obj's standard_logging_object onto request_data so
+    failed-request spend logs keep deployment attribution (LIT-5795).
+    """
+
+    async def _run(self, request_data):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("boom"),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+    @pytest.mark.asyncio
+    async def test_lifts_standard_logging_object(self):
+        sl_object = {"model_id": "mid-123", "model_group": "group-x"}
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"standard_logging_object": sl_object}
+        request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(request_data)
+        assert request_data["standard_logging_object"] is sl_object
+        assert "litellm_logging_obj" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_logging_obj_value_overwrites_preexisting_key(self):
+        authoritative = {"model_id": "from-logging-obj"}
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {"standard_logging_object": authoritative}
+        request_data = {
+            "litellm_logging_obj": logging_obj,
+            "standard_logging_object": {"model_id": "client-injected"},
+            "metadata": {},
+        }
+        await self._run(request_data)
+        assert request_data["standard_logging_object"] is authoritative
+
+    @pytest.mark.asyncio
+    async def test_client_supplied_key_is_stripped_when_logging_obj_supplies_none(self):
+        spoofed = {"model_id": "client-injected"}
+        request_data = {"standard_logging_object": spoofed, "metadata": {}}
+        await self._run(request_data)
+        assert "standard_logging_object" not in request_data
+
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        request_data_with_obj = {
+            "litellm_logging_obj": logging_obj,
+            "standard_logging_object": spoofed,
+            "metadata": {},
+        }
+        await self._run(request_data_with_obj)
+        assert "standard_logging_object" not in request_data_with_obj
+
+    @pytest.mark.asyncio
+    async def test_pass_through_failure_never_relifts_client_supplied_key(self):
+        from datetime import datetime
+        from unittest.mock import AsyncMock, patch
+
+        from fastapi import HTTPException
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        logging_obj = Logging(
+            model="claude-haiku-4-5",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=False,
+            call_type="pass_through_endpoint",
+            start_time=datetime.now(),
+            litellm_call_id="test-call-id",
+            function_id="test-function-id",
+        )
+        request_data = {
+            "litellm_logging_obj": logging_obj,
+            "standard_logging_object": {"model_id": "client-injected"},
+            "metadata": {},
+        }
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=HTTPException(status_code=401, detail="unauthorized"),
+                user_api_key_dict=UserAPIKeyAuth(request_route="/v1/chat/completions"),
+            )
+        assert "standard_logging_object" not in request_data
+        assert "standard_logging_object" not in logging_obj.model_call_details
+
+    @pytest.mark.asyncio
+    async def test_no_standard_logging_object_is_noop(self):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = {}
+        request_data = {"litellm_logging_obj": logging_obj, "metadata": {}}
+        await self._run(request_data)
+        assert "standard_logging_object" not in request_data
+
+
+class TestPostCallFailureHookLiftsCallTypeAndStartTime:
+    """A guardrail-blocked MCP tool call fails before any LLM call. The failure
+    spend row is built from request_data after ``litellm_logging_obj`` is popped,
+    so ``call_type`` and the request ``start_time`` must be lifted off the logging
+    object first, or the Logs page shows the row as an LLM call with a blank call
+    type and a 0s duration (LIT-7453).
+    """
+
+    @pytest.mark.asyncio
+    async def test_failed_mcp_tool_call_spend_row_keeps_call_type_model_and_duration(self):
+        import traceback
+        from types import SimpleNamespace
+        from unittest.mock import AsyncMock
+
+        from litellm.litellm_core_utils.litellm_logging import Logging
+        from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
+        from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+
+        request_start = real_datetime.datetime.now() - real_datetime.timedelta(seconds=2)
+        logging_obj = Logging(
+            model="MCP: deepwiki-ask_question",
+            messages=[],
+            stream=False,
+            call_type="call_mcp_tool",
+            start_time=request_start,
+            litellm_call_id="call-1",
+            function_id="fn-1",
+        )
+        logging_obj.update_environment_variables(
+            model="MCP: deepwiki-ask_question",
+            user="",
+            optional_params={},
+            litellm_params={"metadata": {"user_api_key_hash": "hashed"}},
+        )
+        blocked = Exception("Content blocked: keyword 'confidential' detected")
+        logging_obj.failure_handler(blocked, traceback.format_exc(), request_start, real_datetime.datetime.now())
+        request_data = {
+            "name": "deepwiki-ask_question",
+            "arguments": {"question": "confidential"},
+            "litellm_logging_obj": logging_obj,
+        }
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        spend_writer = SimpleNamespace(update_database=AsyncMock())
+        original_callbacks = list(litellm.callbacks)
+        litellm.callbacks = [_ProxyDBLogger(spend_writer=lambda: spend_writer)]
+        try:
+            with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+                await proxy_logging_obj.post_call_failure_hook(
+                    request_data=request_data,
+                    original_exception=blocked,
+                    user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+                )
+        finally:
+            litellm.callbacks = original_callbacks
+            ProxyLogging._callback_capabilities_cache.clear()
+
+        db_call = spend_writer.update_database.call_args.kwargs
+        payload = get_logging_payload(
+            kwargs=db_call["kwargs"],
+            response_obj=db_call["completion_response"],
+            start_time=db_call["start_time"],
+            end_time=db_call["end_time"],
+        )
+        assert payload["call_type"] == "call_mcp_tool"
+        assert payload["model"] == "MCP: deepwiki-ask_question"
+        assert payload["endTime"] - payload["startTime"] >= real_datetime.timedelta(seconds=2)
+
+
+class TestPostCallFailureHookEstimatesDispatchedInputTokens:
+    """A non-stream request that failed after dispatch (timeout, provider
+    error) consumed provider-billed input tokens but recovered no usage.
+    post_call_failure_hook must estimate the input side onto request_data so
+    the spend log's failure row records what was sent instead of zero, while
+    never charging spend for the failure (LIT-5690).
+    """
+
+    async def _run(self, request_data):
+        from unittest.mock import AsyncMock, patch
+
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+        proxy_logging_obj.alert_types = []
+        with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+            await proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("boom"),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+
+    def _logging_obj(self, model_call_details):
+        logging_obj = MagicMock()
+        logging_obj.model_call_details = model_call_details
+        return logging_obj
+
+    @pytest.mark.asyncio
+    async def test_dispatched_failure_estimates_input_tokens_with_zero_cost(self):
+        from datetime import datetime
+
+        from litellm.types.utils import Usage
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "count these input tokens please"}],
+                    "call_type": "acompletion",
+                }
+            ),
+            "metadata": {},
+            "response_cost": 123.0,
+        }
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        assert estimated.prompt_tokens > 0
+        assert estimated.completion_tokens == 0
+        assert estimated.total_tokens == estimated.prompt_tokens
+        assert request_data["response_cost"] == 0.0
+
+    @pytest.mark.asyncio
+    async def test_failure_before_dispatch_stays_zero(self):
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "never dispatched"}],
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        assert "combined_usage_object" not in request_data
+        assert "response_cost" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_proxy_only_error_never_dispatched_stays_zero(self):
+        from datetime import datetime
+
+        from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "no-such-model",
+                    "messages": [{"role": "user", "content": "hi"}],
+                    LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: True,
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        assert "combined_usage_object" not in request_data
+        assert "response_cost" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_recovered_partial_usage_wins_over_estimate(self):
+        from datetime import datetime
+
+        from litellm.types.utils import Usage
+
+        recovered_usage = Usage(prompt_tokens=30, completion_tokens=7, total_tokens=37)
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": [{"role": "user", "content": "mid-stream failure"}],
+                    "call_type": "acompletion",
+                    "combined_usage_object": recovered_usage,
+                    "response_cost": 3.5e-05,
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        assert request_data["combined_usage_object"] is recovered_usage
+        assert request_data["response_cost"] == 3.5e-05
+
+    @pytest.mark.asyncio
+    async def test_dispatched_failure_with_text_completion_prompt(self):
+        from datetime import datetime
+
+        from litellm.types.utils import Usage
+
+        request_data = {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": "a plain text-completion prompt string",
+                    "call_type": "atext_completion",
+                }
+            ),
+            "metadata": {},
+        }
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        assert estimated.prompt_tokens > 0
+        assert estimated.completion_tokens == 0
+
+    def _dispatched_request_data(self, messages, optional_params, call_type="acompletion"):
+        from datetime import datetime
+
+        return {
+            "litellm_logging_obj": self._logging_obj(
+                {
+                    "first_api_call_start_time": datetime.now(),
+                    "model": "gpt-3.5-turbo",
+                    "messages": messages,
+                    "optional_params": optional_params,
+                    "call_type": call_type,
+                }
+            ),
+            "metadata": {},
+        }
+
+    @pytest.mark.asyncio
+    async def test_image_message_estimated_without_fetching_image(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        messages = [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe this image"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "http://127.0.0.1:1/unreachable.png", "detail": "high"},
+                    },
+                ],
+            }
+        ]
+        request_data = self._dispatched_request_data(messages, {})
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(
+            model="gpt-3.5-turbo", messages=messages, use_default_image_token_count=True
+        )
+        assert estimated.prompt_tokens == expected
+        assert estimated.prompt_tokens > 0
+
+    @pytest.mark.asyncio
+    async def test_embedding_string_list_input_counted_in_estimate(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        embedding_input = ["first embedding text", "second embedding text"]
+        request_data = self._dispatched_request_data(embedding_input, {}, call_type="aembedding")
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(model="gpt-3.5-turbo", text="".join(embedding_input))
+        assert estimated.prompt_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_transcription_checksum_not_estimated(self):
+        request_data = self._dispatched_request_data("a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6", {}, call_type="atranscription")
+        await self._run(request_data)
+
+        assert "combined_usage_object" not in request_data
+        assert "response_cost" not in request_data
+
+    @pytest.mark.asyncio
+    async def test_anthropic_system_prompt_counted_in_estimate(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        system_prompt = "You are a verbose historian who narrates every fact in exhaustive detail."
+        messages = [{"role": "user", "content": "write a short essay"}]
+        request_data = self._dispatched_request_data(messages, {"system": system_prompt, "max_tokens": 100})
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(
+            model="gpt-3.5-turbo", messages=messages
+        ) + litellm_module.token_counter(model="gpt-3.5-turbo", text=system_prompt)
+        assert estimated.prompt_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_anthropic_system_text_blocks_counted_in_estimate(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        system_blocks = [
+            {"type": "text", "text": "part one of the system prompt. "},
+            {"type": "text", "text": "part two of the system prompt."},
+        ]
+        messages = [{"role": "user", "content": "write a short essay"}]
+        request_data = self._dispatched_request_data(messages, {"system": system_blocks})
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(
+            model="gpt-3.5-turbo", messages=messages
+        ) + litellm_module.token_counter(
+            model="gpt-3.5-turbo", text="part one of the system prompt. part two of the system prompt."
+        )
+        assert estimated.prompt_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_responses_instructions_counted_in_estimate(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        instructions = "Answer every question as a meticulous archivist."
+        request_data = self._dispatched_request_data("summarize the archive", {"instructions": instructions})
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(
+            model="gpt-3.5-turbo", text="summarize the archive"
+        ) + litellm_module.token_counter(model="gpt-3.5-turbo", text=instructions)
+        assert estimated.prompt_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_request_body_system_counted_when_optional_params_empty(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        system_prompt = "You are a meticulous cartographer who labels every landmark."
+        messages = [{"role": "user", "content": "draw me a map"}]
+        request_data = {
+            **self._dispatched_request_data(messages, {}, call_type="aanthropic_messages"),
+            "system": system_prompt,
+        }
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(
+            model="gpt-3.5-turbo", messages=messages
+        ) + litellm_module.token_counter(model="gpt-3.5-turbo", text=system_prompt)
+        assert estimated.prompt_tokens == expected
+
+    @pytest.mark.asyncio
+    async def test_optional_params_system_wins_over_request_body_system(self):
+        import litellm as litellm_module
+        from litellm.types.utils import Usage
+
+        dispatched_system = "short dispatched system prompt"
+        messages = [{"role": "user", "content": "hello"}]
+        request_data = {
+            **self._dispatched_request_data(messages, {"system": dispatched_system}),
+            "system": "a much longer request body system prompt that must not be double counted here",
+        }
+        await self._run(request_data)
+
+        estimated = request_data["combined_usage_object"]
+        assert isinstance(estimated, Usage)
+        expected = litellm_module.token_counter(
+            model="gpt-3.5-turbo", messages=messages
+        ) + litellm_module.token_counter(model="gpt-3.5-turbo", text=dispatched_system)
+        assert estimated.prompt_tokens == expected
+
+
 from typing import cast
 
 import litellm
 from litellm.proxy.utils import create_model_info_response
+from litellm.types.router import DeploymentModelListingInfo
 from litellm.types.utils import ModelInfo
 
 
@@ -498,9 +1007,7 @@ def test_create_model_info_response_includes_max_tokens_from_lookup():
         model_id="some-model",
         provider="openai",
         llm_router=None,
-        get_model_info=lambda _model: _fake_model_info(
-            max_input_tokens=128000, max_output_tokens=16384
-        ),
+        get_model_info=lambda _model: _fake_model_info(max_input_tokens=128000, max_output_tokens=16384),
     )
 
     assert response["id"] == "some-model"
@@ -511,15 +1018,13 @@ def test_create_model_info_response_includes_max_tokens_from_lookup():
 
 def test_create_model_info_response_does_not_call_router_group_info():
     router = MagicMock()
-    router.get_configured_token_limits.return_value = (None, None)
+    router.get_model_listing_info.return_value = None
 
     response = create_model_info_response(
         model_id="some-model",
         provider="openai",
         llm_router=router,
-        get_model_info=lambda _model: _fake_model_info(
-            max_input_tokens=128000, max_output_tokens=16384
-        ),
+        get_model_info=lambda _model: _fake_model_info(max_input_tokens=128000, max_output_tokens=16384),
     )
 
     router.get_model_group_info.assert_not_called()
@@ -528,7 +1033,9 @@ def test_create_model_info_response_does_not_call_router_group_info():
 
 def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map():
     router = MagicMock()
-    router.get_configured_token_limits.return_value = (32000, 8000)
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("my-custom-deployment",), max_input_tokens=32000, max_output_tokens=8000
+    )
 
     response = create_model_info_response(
         model_id="my-custom-deployment",
@@ -542,21 +1049,110 @@ def test_create_model_info_response_uses_deployment_limits_when_not_in_cost_map(
     assert response["max_output_tokens"] == 8000
 
 
+def test_create_model_info_response_uses_deployment_mode_for_auto_router():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "claude-sonnet",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+            },
+            {
+                "model_name": "claude-auto",
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "tiers": {
+                            "SIMPLE": "claude-sonnet",
+                            "MEDIUM": "claude-sonnet",
+                            "COMPLEX": "claude-sonnet",
+                        }
+                    },
+                    "complexity_router_default_model": "claude-sonnet",
+                },
+                "model_info": {
+                    "mode": "chat",
+                    "max_input_tokens": 1_000_000,
+                    "max_output_tokens": 128_000,
+                },
+            },
+        ]
+    )
+
+    response = create_model_info_response(
+        model_id="claude-auto",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_raise_unmapped,
+    )
+
+    assert response["mode"] == "chat"
+    assert response["max_input_tokens"] == 1_000_000
+    assert response["max_output_tokens"] == 128_000
+
+
 def test_create_model_info_response_deployment_limits_override_cost_map():
     router = MagicMock()
-    router.get_configured_token_limits.return_value = (200000, None)
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("gpt-4o",), max_input_tokens=200000, max_output_tokens=None
+    )
 
     response = create_model_info_response(
         model_id="gpt-4o",
         provider="openai",
         llm_router=router,
-        get_model_info=lambda _model: _fake_model_info(
-            max_input_tokens=128000, max_output_tokens=16384
-        ),
+        get_model_info=lambda _model: _fake_model_info(max_input_tokens=128000, max_output_tokens=16384),
     )
 
     assert response["max_input_tokens"] == 200000
     assert response["max_output_tokens"] == 16384
+
+
+def test_create_model_info_response_reports_widest_window_in_a_mixed_group():
+    """A group mixing models advertises the widest window, not whichever is listed first."""
+    limits = {
+        "small-model": _fake_model_info(max_input_tokens=200000, max_output_tokens=4096, mode="chat"),
+        "large-model": _fake_model_info(max_input_tokens=1000000, max_output_tokens=128000, mode="chat"),
+    }
+
+    for keys in (("small-model", "large-model"), ("large-model", "small-model")):
+        router = MagicMock()
+        router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+            cost_map_keys=keys, max_input_tokens=None, max_output_tokens=None
+        )
+
+        response = create_model_info_response(
+            model_id="house-claude",
+            provider="openai",
+            llm_router=router,
+            get_model_info=lambda model: limits[model],
+        )
+
+        assert response["max_input_tokens"] == 1000000, keys
+        assert response["max_output_tokens"] == 128000, keys
+
+
+def test_create_model_info_response_resolves_alias_once_per_listing():
+    """The alias is the same for every deployment in the group, so it is looked up once."""
+    seen: list[str] = []
+
+    def _tracking_get_model_info(model: str) -> ModelInfo:
+        seen.append(model)
+        return _fake_model_info(max_input_tokens=128000)
+
+    router = MagicMock()
+    router.get_model_listing_info.return_value = DeploymentModelListingInfo(
+        cost_map_keys=("model-a", "model-b"), max_input_tokens=None, max_output_tokens=None
+    )
+
+    create_model_info_response(
+        model_id="house-model",
+        provider="openai",
+        llm_router=router,
+        get_model_info=_tracking_get_model_info,
+    )
+
+    assert seen.count("house-model") == 1
+    assert sorted(seen) == ["house-model", "model-a", "model-b"]
 
 
 def test_create_model_info_response_survives_malformed_configured_limits():
@@ -590,9 +1186,7 @@ def test_create_model_info_response_survives_malformed_cost_map_limits(bad_value
         model_id="some-model",
         provider="openai",
         llm_router=None,
-        get_model_info=lambda _model: _fake_model_info(
-            max_input_tokens=bad_value, max_output_tokens=bad_value
-        ),
+        get_model_info=lambda _model: _fake_model_info(max_input_tokens=bad_value, max_output_tokens=bad_value),
     )
 
     assert response["id"] == "some-model"
@@ -605,9 +1199,7 @@ def test_create_model_info_response_keeps_valid_cost_map_limit_beside_malformed_
         model_id="some-model",
         provider="openai",
         llm_router=None,
-        get_model_info=lambda _model: _fake_model_info(
-            max_input_tokens="128,000", max_output_tokens=16384
-        ),
+        get_model_info=lambda _model: _fake_model_info(max_input_tokens="128,000", max_output_tokens=16384),
     )
 
     assert "max_input_tokens" not in response
@@ -650,9 +1242,7 @@ def test_create_model_info_response_emits_integer_token_counts():
         model_id="some-model",
         provider="openai",
         llm_router=None,
-        get_model_info=lambda _model: _fake_model_info(
-            max_input_tokens=128000, max_output_tokens=16384
-        ),
+        get_model_info=lambda _model: _fake_model_info(max_input_tokens=128000, max_output_tokens=16384),
     )
 
     assert isinstance(response["max_input_tokens"], int)
@@ -701,9 +1291,7 @@ def test_create_model_info_response_no_router_keeps_base_fields():
 
 
 def test_create_model_info_response_reads_real_cost_map():
-    response = create_model_info_response(
-        model_id="gpt-4o", provider="openai", llm_router=None
-    )
+    response = create_model_info_response(model_id="gpt-4o", provider="openai", llm_router=None)
 
     assert isinstance(response["max_input_tokens"], int)
     assert response["max_input_tokens"] > 0
@@ -748,12 +1336,10 @@ class TestPostCallFailureHookLLMExceptionAlerting:
     """The llm_exceptions alert is for infra / LLM-API failures, not user
     errors (https://github.com/BerriAI/litellm/issues/3395). Already-normalized
     client errors must be excluded so a guardrail content-policy block never
-    pages on-call. ProxyException is such an error; before LIT-3751 only
-    HTTPException was excluded, so AIM blocks paged as if the LLM API failed."""
+    pages on-call. 5xx proxy errors still alert."""
 
-    async def _alerted(self, exc) -> bool:
+    async def _alerted(self, exc: Exception) -> AsyncMock:
         import asyncio
-        from unittest.mock import AsyncMock
 
         from litellm.proxy._types import AlertType, UserAPIKeyAuth
 
@@ -770,7 +1356,7 @@ class TestPostCallFailureHookLLMExceptionAlerting:
                 user_api_key_dict=UserAPIKeyAuth(),
             )
         await asyncio.sleep(0)  # let the fire-and-forget alert task run
-        return alerting_handler.called
+        return alerting_handler
 
     @pytest.mark.asyncio
     async def test_proxy_exception_does_not_alert(self):
@@ -783,18 +1369,49 @@ class TestPostCallFailureHookLLMExceptionAlerting:
             code=400,
             openai_code="content_policy_violation",
         )
-        assert await self._alerted(exc) is False
+        assert (await self._alerted(exc)).called is False
 
     @pytest.mark.asyncio
     async def test_http_exception_does_not_alert(self):
-        assert (
-            await self._alerted(HTTPException(status_code=400, detail="blocked"))
-            is False
-        )
+        assert (await self._alerted(HTTPException(status_code=400, detail="blocked"))).called is False
 
     @pytest.mark.asyncio
     async def test_genuine_llm_api_error_still_alerts(self):
-        assert await self._alerted(Exception("upstream 503")) is True
+        assert (await self._alerted(Exception("upstream 503"))).called is True
+
+    @pytest.mark.asyncio
+    async def test_http_exception_5xx_alerts(self):
+        alerting_handler = await self._alerted(
+            HTTPException(
+                status_code=502,
+                detail={
+                    "error": "Headroom compression service returned an error",
+                    "status_code": 503,
+                    "guardrail_name": "headroom-compression-global",
+                },
+            )
+        )
+        assert alerting_handler.called is True
+        assert "headroom-compression-global" in alerting_handler.call_args.kwargs["message"]
+
+    @pytest.mark.asyncio
+    async def test_proxy_exception_5xx_alerts(self):
+        from litellm.proxy._types import ProxyException
+
+        alerting_handler = await self._alerted(
+            ProxyException(
+                message="guardrail backend down",
+                type="internal_server_error",
+                param=None,
+                code=503,
+            )
+        )
+        assert alerting_handler.called is True
+
+    @pytest.mark.asyncio
+    async def test_http_exception_429_does_not_alert(self):
+        alerting_handler = await self._alerted(HTTPException(status_code=429, detail="rate limited"))
+        assert alerting_handler.called is False
 
 
 class TestPostCallFailureHookProxyExceptionLogging:
@@ -823,9 +1440,7 @@ class TestPostCallFailureHookProxyExceptionLogging:
             await proxy_logging_obj.post_call_failure_hook(
                 request_data={},
                 original_exception=exc,
-                user_api_key_dict=UserAPIKeyAuth(
-                    api_key="sk-test", request_route=request_route
-                ),
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", request_route=request_route),
             )
         return handle_mock.await_count > 0
 
@@ -842,20 +1457,12 @@ class TestPostCallFailureHookProxyExceptionLogging:
 
     @pytest.mark.asyncio
     async def test_proxy_exception_on_llm_route_is_logged(self):
-        assert (
-            await self._logged(self._block(), request_route="/v1/chat/completions")
-            is True
-        )
+        assert await self._logged(self._block(), request_route="/v1/chat/completions") is True
 
     @pytest.mark.asyncio
     async def test_generic_exception_on_llm_route_is_not_logged(self):
         # A raw provider/unknown exception is logged by the LLM call path, not here.
-        assert (
-            await self._logged(
-                Exception("upstream 503"), request_route="/v1/chat/completions"
-            )
-            is False
-        )
+        assert await self._logged(Exception("upstream 503"), request_route="/v1/chat/completions") is False
 
 
 class TestShouldUseSmtpSsl:
@@ -889,15 +1496,14 @@ class TestCreateSmtpConnection:
             patch("smtplib.SMTP_SSL") as mock_smtp_ssl,
             patch("smtplib.SMTP") as mock_smtp,
         ):
-            result = _create_smtp_connection(
-                smtp_host="mail.example.com", smtp_port=465
-            )
+            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=465, timeout=30.0)
 
         mock_smtp.assert_not_called()
         assert result is mock_smtp_ssl.return_value
         _, kwargs = mock_smtp_ssl.call_args
         assert kwargs["host"] == "mail.example.com"
         assert kwargs["port"] == 465
+        assert kwargs["timeout"] == 30.0
         context = kwargs["context"]
         assert isinstance(context, ssl.SSLContext)
         assert context.verify_mode == ssl.CERT_REQUIRED
@@ -911,13 +1517,11 @@ class TestCreateSmtpConnection:
             patch("smtplib.SMTP_SSL") as mock_smtp_ssl,
             patch("smtplib.SMTP") as mock_smtp,
         ):
-            result = _create_smtp_connection(
-                smtp_host="mail.example.com", smtp_port=587
-            )
+            result = _create_smtp_connection(smtp_host="mail.example.com", smtp_port=587, timeout=30.0)
 
         mock_smtp_ssl.assert_not_called()
         assert result is mock_smtp.return_value
-        mock_smtp.assert_called_once_with(host="mail.example.com", port=587)
+        mock_smtp.assert_called_once_with(host="mail.example.com", port=587, timeout=30.0)
 
 
 class TestSendEmailStartTls:
@@ -934,9 +1538,7 @@ class TestSendEmailStartTls:
         monkeypatch.delenv("SMTP_USE_SSL", raising=False)
 
         mock_server = MagicMock(spec=smtplib.SMTP)
-        with patch(
-            "litellm.proxy.utils._create_smtp_connection"
-        ) as mock_create_connection:
+        with patch("litellm.proxy.utils._create_smtp_connection") as mock_create_connection:
             mock_create_connection.return_value.__enter__.return_value = mock_server
             await send_email(
                 receiver_email="receiver@example.com",
@@ -1161,7 +1763,7 @@ async def test_prisma_health_check_failure_redacts_database_credentials(caplog):
     client._report_health_check_failure = AsyncMock()
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-        with pytest.raises(Exception):
+        with pytest.raises(Exception, match="could not connect to"):
             await PrismaClient.health_check(client)
 
     emitted = [record.getMessage() for record in caplog.records if record.name == "LiteLLM Proxy"]
@@ -1221,3 +1823,613 @@ async def test_post_mcp_call_hook_skips_opted_out_guardrail(restore_callbacks):
 
     assert guardrail.call_count == 0
     assert [item.text for item in returned.content] == ["jane@example.com"]
+
+
+FAILURE_USAGE_MODEL = "gpt-4o"
+ONE_USER_MESSAGE = [{"role": "user", "content": "hi"}]
+
+
+class _LoggingObj:
+    def __init__(self, model_call_details):
+        self.model_call_details = model_call_details
+
+
+@pytest.mark.parametrize(
+    "system_input, expected",
+    [
+        ("be brief", "be brief"),
+        ([{"type": "text", "text": "a"}, {"type": "text", "text": "b"}], "ab"),
+        (["a", {"text": "b"}], "ab"),
+        ([{"type": "image"}], ""),
+        (None, ""),
+        (17, ""),
+    ],
+)
+def test_a_system_prompt_reads_the_same_whatever_shape_it_arrived_in(system_input, expected):
+    from litellm.proxy.utils import _system_prompt_text
+
+    assert _system_prompt_text(system_input) == expected
+
+
+def test_a_system_prompt_is_counted_on_top_of_the_request():
+    from litellm.proxy.utils import _count_request_input_tokens
+
+    without = _count_request_input_tokens(FAILURE_USAGE_MODEL, "hello world", None)
+    with_system = _count_request_input_tokens(FAILURE_USAGE_MODEL, "hello world", "be brief")
+
+    assert without > 0
+    assert with_system > without
+
+
+def test_a_request_with_nothing_in_it_counts_zero():
+    from litellm.proxy.utils import _count_request_input_tokens
+
+    assert _count_request_input_tokens(FAILURE_USAGE_MODEL, [], None) == 0
+    assert _count_request_input_tokens(FAILURE_USAGE_MODEL, None, None) == 0
+
+
+def test_a_failed_dispatch_is_estimated_as_input_only():
+    from litellm.proxy.utils import _count_request_input_tokens, _estimate_dispatched_failure_usage
+
+    usage = _estimate_dispatched_failure_usage(FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None)
+
+    assert usage is not None
+    assert usage.prompt_tokens == _count_request_input_tokens(FAILURE_USAGE_MODEL, ONE_USER_MESSAGE, None)
+    assert usage.completion_tokens == 0
+    assert usage.total_tokens == usage.prompt_tokens
+
+
+@pytest.mark.parametrize("request_input", [[], object()])
+def test_nothing_is_estimated_when_there_is_nothing_to_count(request_input):
+    from litellm.proxy.utils import _estimate_dispatched_failure_usage
+
+    assert _estimate_dispatched_failure_usage(FAILURE_USAGE_MODEL, request_input, None) is None
+
+
+def test_usage_the_stream_already_recovered_beats_an_estimate():
+    from litellm.proxy.utils import _failure_usage_to_lift
+    from litellm.types.utils import Usage
+
+    recovered = Usage(prompt_tokens=5, completion_tokens=7, total_tokens=12)
+
+    lifted = _failure_usage_to_lift(
+        model_call_details={"combined_usage_object": recovered, "response_cost": 0.25},
+        request_body={},
+        dispatched=True,
+    )
+
+    assert lifted == (recovered, 0.25)
+
+
+def test_a_request_that_reached_a_provider_bills_its_input_at_no_cost():
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    lifted = _failure_usage_to_lift(
+        model_call_details={
+            "call_type": "acompletion",
+            "model": FAILURE_USAGE_MODEL,
+            "messages": ONE_USER_MESSAGE,
+        },
+        request_body={},
+        dispatched=True,
+    )
+
+    assert lifted is not None
+    usage, response_cost = lifted
+    assert usage.prompt_tokens > 0
+    assert usage.completion_tokens == 0
+    assert response_cost == 0.0
+
+
+@pytest.mark.parametrize(
+    "model_call_details, dispatched",
+    [
+        ({"call_type": "acompletion", "model": FAILURE_USAGE_MODEL, "messages": ONE_USER_MESSAGE}, False),
+        (
+            {
+                "litellm_no_upstream_llm_call": True,
+                "call_type": "acompletion",
+                "model": FAILURE_USAGE_MODEL,
+                "messages": ONE_USER_MESSAGE,
+            },
+            True,
+        ),
+        ({"call_type": "afile_content", "model": FAILURE_USAGE_MODEL, "messages": ONE_USER_MESSAGE}, True),
+    ],
+    ids=["never dispatched", "no upstream call", "call type has no input to price"],
+)
+def test_a_failure_that_cost_the_provider_nothing_lifts_nothing(model_call_details, dispatched):
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    assert _failure_usage_to_lift(model_call_details=model_call_details, request_body={}, dispatched=dispatched) is None
+
+
+def test_the_no_upstream_call_key_the_module_uses_is_the_one_asserted_above():
+    from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL
+
+    assert LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL == "litellm_no_upstream_llm_call"
+
+
+def test_the_dispatched_system_prompt_wins_over_the_one_in_the_request_body():
+    from litellm.proxy.utils import _failure_usage_to_lift
+
+    def lift(model_call_details, request_body):
+        lifted = _failure_usage_to_lift(
+            model_call_details=model_call_details, request_body=request_body, dispatched=True
+        )
+        assert lifted is not None
+        return lifted[0].prompt_tokens
+
+    base = {
+        "call_type": "aanthropic_messages",
+        "model": FAILURE_USAGE_MODEL,
+        "messages": ONE_USER_MESSAGE,
+    }
+    long_system = "answer as briefly as you possibly can, in one short sentence"
+
+    from_body = lift(base, {"system": long_system})
+    from_params = lift({**base, "optional_params": {"system": "x"}}, {"system": long_system})
+    body_only_short = lift(base, {"system": "x"})
+
+    assert from_body > body_only_short
+    assert from_params == body_only_short
+
+
+def test_a_failure_with_no_logging_object_lifts_nothing():
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    assert dict(_failure_fields_to_lift({})) == {}
+    assert dict(_failure_fields_to_lift({"litellm_logging_obj": _LoggingObj({})})) == {}
+
+
+def test_a_dispatched_failure_lifts_the_fields_the_spend_log_needs():
+    from litellm.proxy.utils import _failure_fields_to_lift
+
+    lifted = _failure_fields_to_lift(
+        {
+            "litellm_logging_obj": _LoggingObj(
+                {
+                    "start_time": 1699999999.0,
+                    "first_api_call_start_time": 1700000000.0,
+                    "call_type": "acompletion",
+                    "model": FAILURE_USAGE_MODEL,
+                    "messages": ONE_USER_MESSAGE,
+                    "standard_logging_object": {"id": "log-1"},
+                }
+            )
+        }
+    )
+
+    assert set(lifted) == {
+        "start_time",
+        "first_api_call_start_time",
+        "call_type",
+        "combined_usage_object",
+        "response_cost",
+        "standard_logging_object",
+    }
+    assert lifted["start_time"] == 1699999999.0
+    assert lifted["first_api_call_start_time"] == 1700000000.0
+    assert lifted["call_type"] == "acompletion"
+    assert lifted["response_cost"] == 0.0
+    assert lifted["combined_usage_object"].prompt_tokens > 0
+    assert lifted["standard_logging_object"] == {"id": "log-1"}
+
+
+@pytest.mark.asyncio
+async def test_a_dispatched_failure_is_counted_off_the_event_loop():
+    from unittest.mock import AsyncMock, patch
+
+    from tests.large_text import text
+    from tests.unit.litellm_core_utils.event_loop_lag import (
+        assert_loop_stayed_free,
+        timed_with_loop_lags,
+        warm_tokenizer,
+    )
+
+    warm_tokenizer("claude-fable-5")
+    request_data = {
+        "litellm_logging_obj": _LoggingObj(
+            {
+                "first_api_call_start_time": 1700000000.0,
+                "call_type": "acompletion",
+                "model": "claude-fable-5",
+                "messages": [{"role": "user", "content": text * 100}],
+            }
+        ),
+        "metadata": {},
+    }
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.alert_types = []
+    with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+        _, took, lags = await timed_with_loop_lags(
+            lambda: proxy_logging_obj.post_call_failure_hook(
+                request_data=request_data,
+                original_exception=Exception("boom"),
+                user_api_key_dict=UserAPIKeyAuth(),
+            )
+        )
+
+    assert request_data["combined_usage_object"].prompt_tokens > 0
+    assert_loop_stayed_free(took, lags)
+
+
+@pytest.mark.asyncio
+async def test_proxy_only_error_expected_4xx_skips_traceback_for_both_handlers(monkeypatch):
+    """Regression for LIT-6043: an expected 4xx must not format a traceback for
+    either the async or the threaded sync failure handler."""
+    import asyncio
+
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    captured = {}
+    sync_ran = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    async def fake_async_failure(self, exception, traceback_exception, *args, **kwargs):
+        captured["async_traceback"] = traceback_exception
+
+    def fake_sync_failure(self, exception, traceback_exception, *args, **kwargs):
+        captured["sync_traceback"] = traceback_exception
+        loop.call_soon_threadsafe(sync_ran.set)
+
+    orig_async_failure = Logging.async_failure_handler
+    orig_sync_failure = Logging.failure_handler
+    Logging.async_failure_handler = fake_async_failure
+    Logging.failure_handler = fake_sync_failure
+    try:
+        try:
+            raise HTTPException(status_code=400, detail="Invalid model name passed in")
+        except HTTPException as exc:
+            await proxy_logging_obj._handle_logging_proxy_only_error(
+                request_data={
+                    "model": "does-not-exist",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/chat/completions"),
+                route="/v1/chat/completions",
+                original_exception=exc,
+            )
+        await asyncio.wait_for(sync_ran.wait(), timeout=5)
+    finally:
+        Logging.async_failure_handler = orig_async_failure
+        Logging.failure_handler = orig_sync_failure
+
+    assert captured["async_traceback"] == ""
+    assert captured["sync_traceback"] == ""
+
+
+@pytest.mark.asyncio
+async def test_proxy_only_error_5xx_keeps_traceback_and_runs_sync_callbacks(monkeypatch):
+    """Unexpected (5xx) errors keep the full traceback, and a configured
+    sync-only failure callback still gets its threaded handler."""
+    import asyncio
+
+    import litellm
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    def _custom_sync_callback(kwargs, completion_response, start_time, end_time):
+        pass
+
+    monkeypatch.setattr(litellm, "failure_callback", [_custom_sync_callback])
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    captured = {}
+    sync_ran = asyncio.Event()
+    loop = asyncio.get_running_loop()
+
+    async def fake_async_failure(self, exception, traceback_exception, *args, **kwargs):
+        captured["async_traceback"] = traceback_exception
+
+    def fake_sync_failure(self, *args, **kwargs):
+        loop.call_soon_threadsafe(sync_ran.set)
+
+    orig_async_failure = Logging.async_failure_handler
+    orig_sync_failure = Logging.failure_handler
+    Logging.async_failure_handler = fake_async_failure
+    Logging.failure_handler = fake_sync_failure
+    try:
+        try:
+            raise HTTPException(status_code=500, detail="internal error")
+        except HTTPException as exc:
+            await proxy_logging_obj._handle_logging_proxy_only_error(
+                request_data={
+                    "model": "gpt-4o",
+                    "messages": [{"role": "user", "content": "hi"}],
+                },
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-1234", request_route="/v1/chat/completions"),
+                route="/v1/chat/completions",
+                original_exception=exc,
+            )
+        await asyncio.wait_for(sync_ran.wait(), timeout=5)
+    finally:
+        Logging.async_failure_handler = orig_async_failure
+        Logging.failure_handler = orig_sync_failure
+
+    assert "test_proxy_utils" in captured["async_traceback"]
+
+
+def test_create_model_info_response_resolves_mode_through_deployment_model():
+    """`mode` is derived from the same lookup, so an aliased embedding deployment
+    currently reports no mode at all; it must report `embedding`."""
+    from litellm import Router
+
+    saved_model_cost = dict(litellm.model_cost)
+    try:
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "my-embeddings",
+                    "litellm_params": {"model": "openai/text-embedding-3-small"},
+                }
+            ]
+        )
+
+        response = create_model_info_response(
+            model_id="my-embeddings", provider="openai", llm_router=router
+        )
+    finally:
+        litellm.model_cost.clear()
+        litellm.model_cost.update(saved_model_cost)
+
+    assert response["mode"] == "embedding"
+
+
+@pytest.mark.parametrize(
+    "model_group_alias",
+    [
+        {"team-embeddings": "my-embeddings"},
+        {"team-embeddings": {"model": "my-embeddings", "hidden": False}},
+    ],
+)
+def test_create_model_info_response_resolves_model_group_alias_to_target(model_group_alias, local_model_cost_map):
+    """A `model_group_alias` row must report the metadata of the group it points at,
+    not the cost-map generalization or nothing that the alias name resolves to."""
+    from litellm import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "my-embeddings",
+                "litellm_params": {"model": "openai/text-embedding-3-small"},
+            }
+        ],
+        model_group_alias=model_group_alias,
+    )
+
+    alias_response = create_model_info_response(
+        model_id="team-embeddings", provider="openai", llm_router=router
+    )
+    target_response = create_model_info_response(
+        model_id="my-embeddings", provider="openai", llm_router=router
+    )
+
+    assert alias_response["id"] == "team-embeddings"
+    for field in ("mode", "max_input_tokens", "max_output_tokens"):
+        assert alias_response.get(field) == target_response.get(field)
+    assert alias_response["mode"] == "embedding"
+
+
+@pytest.mark.parametrize(
+    "key_metadata, team_metadata, expected_to_run",
+    [
+        ({"guardrails": ["key-scoped-guardrail"]}, None, True),
+        ({}, {"guardrails": ["key-scoped-guardrail"]}, True),
+        ({"guardrails": ["some-other-guardrail"]}, None, False),
+        ({}, None, False),
+    ],
+)
+def test_convert_mcp_to_llm_format_carries_key_and_team_guardrails(key_metadata, team_metadata, expected_to_run):
+    from litellm.responses.mcp.request_context import MCPRequestContext
+
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    guardrail = CustomGuardrail(guardrail_name="key-scoped-guardrail", event_hook="pre_mcp_call", default_on=False)
+    kwargs = {
+        "name": "ask_question",
+        "arguments": {"question": "hello"},
+        "server_name": "deepwiki",
+        "guardrail_context": MCPRequestContext.resolve_guardrail_context({"guardrails": ["parent-rule"]}),
+        "user_api_key_auth": UserAPIKeyAuth(metadata=key_metadata, team_metadata=team_metadata),
+    }
+    request_obj = proxy_logging._create_mcp_request_object_from_kwargs(kwargs)
+
+    with patch(  # test-quality-ok: the key-guardrail premium gate reads this proxy_server module global and has no injection seam
+        "litellm.proxy.proxy_server.premium_user", True
+    ):
+        synthetic = proxy_logging._convert_mcp_to_llm_format(request_obj, kwargs)
+
+    assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is expected_to_run
+
+    assert "parent-rule" in synthetic["metadata"]["guardrails"]
+
+
+class _TracebackRecordingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.received_traceback: str | None = None
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> HTTPException | None:
+        self.received_traceback = traceback_str
+        return None
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_redacts_traceback_before_callbacks(monkeypatch):
+    """A pass-through upstream failure hands the hook the httpx traceback, whose
+    message quotes the upstream URL with the provider key in its query string.
+    Every callback, custom loggers included, must receive it redacted."""
+    import traceback
+    from unittest.mock import AsyncMock, patch
+
+    import httpx
+
+    provider_key = "AIza" + "S" * 35
+    upstream_url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini:generateContent?key={provider_key}"
+    response = httpx.Response(400, request=httpx.Request("POST", upstream_url))
+    try:
+        response.raise_for_status()
+    except httpx.HTTPStatusError:
+        upstream_traceback = traceback.format_exc()
+    assert provider_key in upstream_traceback
+
+    recorder = _TracebackRecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.alert_types = []
+    with patch.object(proxy_logging_obj, "update_request_status", new=AsyncMock()):
+        await proxy_logging_obj.post_call_failure_hook(
+            request_data={"metadata": {}},
+            original_exception=HTTPException(status_code=400, detail="Upstream passthrough request failed with status 400"),
+            user_api_key_dict=UserAPIKeyAuth(),
+            traceback_str=upstream_traceback,
+        )
+
+    assert recorder.received_traceback is not None
+    assert provider_key not in recorder.received_traceback
+    assert "REDACTED" in recorder.received_traceback
+
+
+class TestPrismaClientTokenAuthBehindThePool:
+    """Behind the in-container pool the supervisor renews the writer's database
+    token and hands the workers a loopback URL with a static password, so the
+    writer wrapper must not run its own refresh loop. The reader is not pooled
+    and keeps refreshing its own token."""
+
+    UPSTREAM: Final = "postgresql://litellm:TOKEN@db.internal:5432/litellm"
+    READER: Final = "postgresql://litellm:TOKEN@reader.internal:5432/litellm"
+
+    def _client(self, monkeypatch: pytest.MonkeyPatch, pooled: bool) -> PrismaClient:
+        from litellm.proxy.db.pgbouncer import PGBOUNCER_POOLED_ENV_VAR
+
+        monkeypatch.delenv("AZURE_POSTGRESQL_AUTH", raising=False)
+        monkeypatch.setenv("IAM_TOKEN_DB_AUTH", "true")
+        monkeypatch.setenv("AWS_REGION_NAME", "us-east-1")
+        monkeypatch.setenv("DATABASE_URL", self.UPSTREAM)
+        monkeypatch.setenv("DATABASE_URL_READ_REPLICA", self.READER)
+        if pooled:
+            monkeypatch.setenv(PGBOUNCER_POOLED_ENV_VAR, "true")
+        else:
+            monkeypatch.delenv(PGBOUNCER_POOLED_ENV_VAR, raising=False)
+        rds: Final = MagicMock()
+        rds.generate_db_auth_token.return_value = "TOKEN"
+        with patch("boto3.client", return_value=rds):
+            return PrismaClient(database_url=self.UPSTREAM, proxy_logging_obj=MagicMock(spec=ProxyLogging))
+
+    def test_a_pooled_writer_leaves_token_refresh_to_the_pooler_while_the_reader_keeps_its_own(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
+        from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+        client = self._client(monkeypatch, pooled=True)
+        assert isinstance(client.db, RoutingPrismaWrapper)
+        assert client.db.writer.iam_token_db_auth is False
+        assert client.db.reader.iam_token_db_auth is True
+        assert client.token_auth is not None
+
+    def test_an_unpooled_writer_still_refreshes_its_own_token(self, monkeypatch: pytest.MonkeyPatch):
+        from litellm.proxy.db.routing_prisma_wrapper import RoutingPrismaWrapper
+
+        client = self._client(monkeypatch, pooled=False)
+        assert isinstance(client.db, RoutingPrismaWrapper)
+        assert client.db.writer.iam_token_db_auth is True
+        assert client.db.reader.iam_token_db_auth is True
+
+
+@pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata"])
+def test_mcp_conversion_preserves_request_policy_and_isolates_guardrail_data(bucket):
+    from copy import deepcopy
+    from litellm.responses.mcp.request_context import MCPRequestContext
+
+    parent = {
+        "model": "parent-model",
+        bucket: {
+            "guardrails": ["policy-rule"], "guardrail_config": {"language": "en"},
+            "applied_policies": ["parent-policy"], "policy_sources": {"parent-policy": "model"},
+            "_guardrail_pipelines": [], "_pipeline_managed_guardrails": ["pipeline-rule"], "tags": ["review"],
+        },
+        "guardrails": [{"request-rule": {"extra_body": {"threshold": 0.9}}}],
+        "guardrail_config": {"entities": ["EMAIL_ADDRESS"]},
+    }
+    original = deepcopy(parent)
+    context = MCPRequestContext.resolve(kwargs=parent, tools=None)
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    kwargs = {"name": "execute", "arguments": {"text": "hello"}, "guardrail_context": context.guardrail_context}
+    request_obj = proxy_logging._create_mcp_request_object_from_kwargs(kwargs)
+    first = proxy_logging._convert_mcp_to_llm_format(request_obj, kwargs)
+    assert first["model"] == "parent-model"
+    assert first["metadata"]["guardrails"] == ["policy-rule", {"request-rule": {"extra_body": {"threshold": 0.9}}}]
+    assert first["metadata"]["guardrail_config"] == {"language": "en", "entities": ["EMAIL_ADDRESS"]}
+    assert first["metadata"]["applied_policies"] == ["parent-policy"]
+    assert first["metadata"]["policy_sources"] == {"parent-policy": "model"}
+    assert first["metadata"]["_pipeline_managed_guardrails"] == ["pipeline-rule"]
+    first["metadata"]["guardrails"].clear()
+    first["metadata"]["guardrail_config"]["entities"].clear()
+    assert parent == original
+    second = proxy_logging._convert_mcp_to_llm_format(request_obj, kwargs)
+    assert second["metadata"]["guardrails"] == ["policy-rule", {"request-rule": {"extra_body": {"threshold": 0.9}}}]
+    assert second["metadata"]["guardrail_config"]["entities"] == ["EMAIL_ADDRESS"]
+
+
+@pytest.mark.parametrize("opt_out", [False, True])
+def test_mcp_conversion_honors_only_authenticated_global_guardrail_opt_outs(opt_out):
+    from litellm.responses.mcp.request_context import MCPRequestContext
+
+    auth = UserAPIKeyAuth(metadata={"opted_out_global_guardrails": ["global-rule"] if opt_out else []})
+    context = MCPRequestContext.resolve(kwargs={"metadata": {
+        "user_api_key_auth": auth, "disable_global_guardrails": True,
+        "user_api_key_metadata": {"disable_global_guardrails": True},
+    }}, tools=None)
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    kwargs = {"name": "execute", "arguments": {}, "user_api_key_auth": auth, "guardrail_context": context.guardrail_context}
+    synthetic = proxy_logging._convert_mcp_to_llm_format(proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs)
+    guardrail = CustomGuardrail(guardrail_name="global-rule", event_hook="pre_mcp_call", default_on=True)
+    assert guardrail.should_run_guardrail(synthetic, GuardrailEventHooks.pre_mcp_call) is (not opt_out)
+    synthetic["metadata"]["user_api_key_metadata"]["opted_out_global_guardrails"].append("unrelated")
+    assert auth.metadata == {"opted_out_global_guardrails": ["global-rule"] if opt_out else []}
+
+
+@pytest.mark.parametrize("model, expected", [("parent-model", True), ("unmatched-model", False)])
+def test_mcp_auth_policy_uses_original_request_model(monkeypatch, model, expected):
+    from litellm.responses.mcp.request_context import MCPRequestContext
+    from litellm.proxy.policy_engine import policy_registry
+    from litellm.types.proxy.policy_engine import Policy, PolicyCondition, PolicyGuardrails
+
+    registry = policy_registry.PolicyRegistry()
+    registry._policies = {"model-policy": Policy(
+        condition=PolicyCondition(model="parent-model"), guardrails=PolicyGuardrails(add=["model-rule"])
+    )}
+    registry._initialized = True
+    monkeypatch.setattr(policy_registry, "_policy_registry", registry)
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True)
+    proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
+    kwargs = {
+        "name": "execute", "arguments": {},
+        "user_api_key_auth": UserAPIKeyAuth(metadata={"policies": ["model-policy"]}),
+        "guardrail_context": MCPRequestContext.resolve_guardrail_context({"model": model, "guardrails": ["request-rule"]}),
+    }
+    synthetic = proxy_logging._convert_mcp_to_llm_format(proxy_logging._create_mcp_request_object_from_kwargs(kwargs), kwargs)
+    assert ("model-rule" in synthetic["metadata"]["guardrails"]) is expected
+    assert "request-rule" in synthetic["metadata"]["guardrails"]
+
+
+def test_handle_exception_on_proxy_logs_bug_report_only_for_unmapped_500(caplog):
+    with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        provider_result = handle_exception_on_proxy(
+            InternalServerError(message="upstream 500", llm_provider="openai", model="gpt-4")
+        )
+        assert ISSUE_URL_BASE not in caplog.text
+        internal_result = handle_exception_on_proxy(KeyError("missing"))
+
+    assert provider_result.code == internal_result.code == "500"
+    assert ISSUE_URL_BASE in caplog.text
+    assert ISSUE_URL_BASE not in internal_result.message
