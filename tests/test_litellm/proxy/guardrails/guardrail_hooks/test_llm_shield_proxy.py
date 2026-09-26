@@ -480,33 +480,59 @@ class TestRequestCoverage:
         assert data["messages"][0]["content"][1]["content"][0]["text"] == "[EMAIL_2]"
 
     @pytest.mark.asyncio
-    async def test_deeply_nested_tool_results_are_bounded(self):
-        """Nesting is caller controlled, so the descent has to stop somewhere.
+    async def test_nesting_past_the_bound_blocks_the_request(self):
+        """Nesting is caller controlled, so the descent has to stop somewhere -- and where
+        it stops, the request must not go out.
 
-        The walk must terminate on a payload built to be pathological, rather than
-        following it as far as it goes.
+        This test used to assert the opposite: that text past the bound was skipped. That
+        sent `past-the-bound@example.com` to the provider unredacted while the guardrail
+        reported as enabled.
         """
         guardrail = _guardrail()
-
-        captured: list = []
-
-        async def echo(url, headers, json, timeout):  # noqa: ARG001
-            captured.append(json["texts"])
-            return _response({"texts": list(json["texts"])})
-
-        guardrail.async_handler.post = AsyncMock(side_effect=echo)  # type: ignore[method-assign]
+        mock = _mock_post(guardrail)
 
         deep: dict = {"type": "tool_result", "content": "past-the-bound@example.com"}
         for _ in range(200):
             deep = {"type": "tool_result", "content": [deep]}
         data = {"messages": [{"role": "user", "content": [{"type": "text", "text": "shallow"}, deep]}]}
 
+        with pytest.raises(GuardrailRaisedException):
+            await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
+        mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_deep_tool_input_blocks_the_request(self):
+        """A tool_use input past the JSON bound must not be forwarded half-redacted."""
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail)
+
+        deep: dict = {"email": "past-the-bound@example.com"}
+        for _ in range(100):
+            deep = {"next": deep}
+        block = {"type": "tool_use", "id": "t1", "name": "f", "input": deep}
+        data = {"messages": [{"role": "assistant", "content": [block]}]}
+
+        with pytest.raises(GuardrailRaisedException):
+            await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
+        mock.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_realistic_nesting_is_redacted_in_full(self):
+        """The bounds are far past real payloads: a tool input nested inside a tool result,
+        several JSON levels deep, is redacted whole rather than refused."""
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ["[EMAIL_1]"]})
+
+        tool_use = {
+            "type": "tool_use",
+            "id": "t1",
+            "name": "f",
+            "input": {"a": {"b": {"c": {"d": {"to": "x@example.com"}}}}},
+        }
+        data = {"messages": [{"role": "user", "content": [{"type": "tool_result", "content": [tool_use]}]}]}
         await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
 
-        sent = captured[0]
-        assert "shallow" in sent
-        assert "past-the-bound@example.com" not in sent, "the walk followed the chain past its bound"
-        assert len(sent) < 200
+        assert tool_use["input"]["a"]["b"]["c"]["d"]["to"] == "[EMAIL_1]"
 
     @pytest.mark.asyncio
     async def test_responses_prompt_object_variables_are_redacted(self):
@@ -607,8 +633,9 @@ class TestRequestCoverage:
 
         assert data["input"][0]["summary"][0]["text"] == "user asked about [EMAIL_1]"
 
-    def test_tool_schemas_give_up_descriptions_and_nothing_else(self):
-        """Only free text is collected; names, types and enum values must reach the model."""
+    def test_tool_schemas_give_up_their_free_text_and_nothing_else(self):
+        """Descriptions, titles, examples and defaults are collected. Names, types, enum
+        and const values must reach the model exactly as sent."""
         data = {
             "tools": [
                 {
@@ -618,12 +645,16 @@ class TestRequestCoverage:
                         "description": "top",
                         "parameters": {
                             "type": "object",
+                            "title": "title",
                             "properties": {
                                 # A property that is itself named "description".
                                 "description": {"type": "string", "description": "named"},
-                                "kind": {"type": "string", "enum": ["a", "b"], "description": "enum"},
+                                "kind": {"type": "string", "enum": ["a", "b"], "const": "a", "description": "enum"},
                                 "deep": {"type": "array", "items": {"type": "object", "description": "nested"}},
+                                "to": {"type": "string", "examples": ["example"], "default": "default"},
+                                "choice": {"anyOf": [{"type": "object", "default": {"who": "object-default"}}]},
                             },
+                            "$defs": {"shared": {"description": "defined"}},
                         },
                     },
                 }
@@ -631,7 +662,26 @@ class TestRequestCoverage:
         }
         _, privileged = LLMShieldProxyGuardrail._locate_request_texts(data)
 
-        assert sorted(text for text, _ in privileged) == ["enum", "named", "nested", "top"]
+        assert sorted(text for text, _ in privileged) == [
+            "default",
+            "defined",
+            "enum",
+            "example",
+            "named",
+            "nested",
+            "object-default",
+            "title",
+            "top",
+        ]
+
+    def test_schema_nesting_past_the_bound_is_refused(self):
+        schema: dict = {"type": "object", "description": "past-the-bound@example.com"}
+        for _ in range(100):
+            schema = {"type": "object", "properties": {"next": schema}}
+        data = {"tools": [{"type": "function", "function": {"name": "f", "parameters": schema}}]}
+
+        with pytest.raises(Exception, match="schema"):
+            LLMShieldProxyGuardrail._locate_request_texts(data)
 
 
 class TestRestoration:
@@ -1320,6 +1370,19 @@ class TestAnthropicStreamRestoration:
 
         assert out == chunks
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cut", [1, 3, 5, 6])
+    async def test_a_field_name_split_by_the_first_chunk_still_reads_as_sse(self, cut: int):
+        """`b"eve"` then `b"nt: ..."` is still SSE; deciding on the first chunk alone
+        would pass the whole stream through with its placeholders."""
+        guardrail, _ = _shielded(self.VAULT)
+        raw = b"".join(_text_block_stream("Mail [EMAIL_1]"))
+
+        out = await _restore_stream(guardrail, [raw[:cut], raw[cut:]])
+
+        deltas = [e["delta"]["text"] for e in _sse_events(out) if e["type"] == "content_block_delta"]
+        assert "".join(deltas) == "Mail a@example.com"
+
 
 class TestResponsesStreamRestoration:
     """/v1/responses streams are typed events, with no `choices` to walk."""
@@ -1415,3 +1478,48 @@ class TestResponsesStreamRestoration:
         for event in out:
             by_part[event.content_index] = by_part.get(event.content_index, "") + event.delta
         assert by_part == {0: "one a@example.com", 1: "two"}
+
+    @pytest.mark.asyncio
+    async def test_reasoning_summary_part_done_is_restored(self):
+        """The summary part repeats the whole summary text after its deltas."""
+        guardrail, _ = _shielded(self.VAULT)
+        part = SimpleNamespace(type="summary_text", text="asked about [EMAIL_1]")
+        event = SimpleNamespace(
+            type="response.reasoning_summary_part.done", item_id="rs_1", output_index=0, summary_index=0, part=part
+        )
+
+        await _restore_stream(guardrail, [event])
+
+        assert part.text == "asked about a@example.com"
+
+    @pytest.mark.asyncio
+    async def test_mcp_call_arguments_are_restored(self):
+        """A stream family outside the chat-era set: matched by shape, not by name."""
+        guardrail, _ = _shielded(self.VAULT)
+        deltas = [
+            {"type": "response.mcp_call_arguments.delta", "item_id": "mcp_1", "output_index": 0, "delta": d}
+            for d in ('{"to": "[EMAI', 'L_1]"}')
+        ]
+        done = {
+            "type": "response.mcp_call_arguments.done",
+            "item_id": "mcp_1",
+            "output_index": 0,
+            "arguments": '{"to": "[EMAIL_1]"}',
+        }
+
+        out = await _restore_stream(guardrail, [*deltas, done])
+
+        assert json.loads("".join(e["delta"] for e in out[:-1])) == {"to": "a@example.com"}
+        assert json.loads(out[-1]["arguments"]) == {"to": "a@example.com"}
+        assert out[-1]["item_id"] == "mcp_1", "identifiers are not text and stay as sent"
+
+    @pytest.mark.asyncio
+    async def test_audio_deltas_are_not_sent_to_the_shield(self):
+        """Audio arrives base64-encoded; restoring it would cost a round trip for nothing."""
+        guardrail, shield = _shielded(self.VAULT)
+        audio = {"type": "response.audio.delta", "item_id": "a_1", "output_index": 0, "delta": "UklGRiQAAABXQVZF"}
+
+        out = await _restore_stream(guardrail, [audio])
+
+        assert out == [audio]
+        assert shield.urls == []
