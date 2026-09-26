@@ -2283,6 +2283,10 @@ export interface paths {
          *     the key is authenticated and the catalog also holds the disabled plugins granted
          *     to it through `object_permission.skills` on the key or its team.
          *
+         *     With `general_settings.claude_code_marketplace_auth_required: true`, every
+         *     request requires a valid Authorization Bearer key. Query-string keys are
+         *     ignored, and authentication or authorization failures reject the request.
+         *
          *     Returns:
          *         Marketplace catalog with list of available plugins and their git sources.
          *
@@ -28094,6 +28098,12 @@ export interface components {
             claude_code_gateway_managed_settings?: {
                 [key: string]: unknown;
             } | null;
+            /**
+             * Claude Code Marketplace Auth Required
+             * @description Require an Authorization Bearer key for /claude-code/marketplace.json; query-string keys are ignored
+             * @default false
+             */
+            claude_code_marketplace_auth_required: boolean;
             /**
              * Completion Model
              * @description proxy level default model for all chat completion calls

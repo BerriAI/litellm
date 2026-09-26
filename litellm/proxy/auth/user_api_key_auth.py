@@ -160,12 +160,20 @@ def _normalize_public_auth_route(route: str) -> str:
     return route
 
 
+def is_strict_marketplace_auth(route: str, general_settings: Mapping[str, object] | None) -> bool:
+    return (
+        _normalize_public_auth_route(route) == "/claude-code/marketplace.json"
+        and general_settings is not None
+        and general_settings.get("claude_code_marketplace_auth_required") is True
+    )
+
+
 def _route_requires_auth_despite_public(route: str, general_settings: dict | None) -> bool:
     normalized_route: Final = _normalize_public_auth_route(route)
     if normalized_route == "/metrics":
         return litellm.require_auth_for_metrics_endpoint is not False
 
-    return False
+    return is_strict_marketplace_auth(route, general_settings)
 
 
 custom_litellm_key_header: Final = APIKeyHeader(
@@ -1512,7 +1520,10 @@ async def _user_api_key_auth_builder(
                 request=request,
                 route=route,
             )
-        pass_through_endpoints: Final[list[dict] | None] = general_settings.get("pass_through_endpoints", None)
+        strict_marketplace_auth: Final = is_strict_marketplace_auth(route, general_settings)
+        pass_through_endpoints: Final[list[dict] | None] = (
+            None if strict_marketplace_auth else general_settings.get("pass_through_endpoints", None)
+        )
         ## CHECK IF X-LITELM-API-KEY IS PASSED IN - supercedes Authorization header
         api_key, passed_in_key = get_api_key(
             custom_litellm_key_header=custom_litellm_key_header,
@@ -1527,7 +1538,7 @@ async def _user_api_key_auth_builder(
         )
         # if user wants to pass LiteLLM_Master_Key as a custom header, example pass litellm keys as X-LiteLLM-Key: Bearer sk-1234
         custom_litellm_key_header_name: Final = general_settings.get("litellm_key_header_name")
-        if custom_litellm_key_header_name is not None:
+        if custom_litellm_key_header_name is not None and not strict_marketplace_auth:
             api_key = get_api_key_from_custom_header(
                 request=request,
                 custom_litellm_key_header_name=custom_litellm_key_header_name,
@@ -1853,6 +1864,10 @@ async def _user_api_key_auth_builder(
             elif isinstance(response, UserAPIKeyAuth):
                 return response
         if master_key is None:
+            if strict_marketplace_auth:
+                raise HTTPException(
+                    status_code=401, detail="Marketplace authentication requires configured credentials"
+                )
             if isinstance(api_key, str):
                 return UserAPIKeyAuth(
                     api_key=api_key,
@@ -2729,7 +2744,9 @@ async def _run_centralized_common_checks(
     # auth in the builder — the wrapper must not retroactively apply
     # authz on top, or k8s readiness probes and other unauthenticated
     # callers get 401.
-    if route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(current_route=route):
+    if not is_strict_marketplace_auth(route, general_settings) and (
+        route in LiteLLMRoutes.public_routes.value or route_in_additonal_public_routes(current_route=route)
+    ):
         return
 
     # User-configured pass-through endpoints with ``auth: false`` are
@@ -2739,7 +2756,7 @@ async def _run_centralized_common_checks(
     # admin-only. The "auth" flag on the endpoint config is the
     # contract; honor it.
     pass_through_endpoints: Final = general_settings.get("pass_through_endpoints", None)
-    if pass_through_endpoints is not None:
+    if pass_through_endpoints is not None and not is_strict_marketplace_auth(route, general_settings):
         for endpoint in pass_through_endpoints:
             if isinstance(endpoint, dict) and endpoint.get("path", "") == route and endpoint.get("auth") is not True:
                 return

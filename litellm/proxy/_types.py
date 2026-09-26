@@ -2651,6 +2651,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     use_google_kms: bool | None = Field(None, description="decrypt keys with google kms")
     use_azure_key_vault: bool | None = Field(None, description="load keys from azure key vault")
     master_key: str | None = Field(None, description="require a key for all calls to proxy")
+    claude_code_marketplace_auth_required: bool = Field(
+        False,
+        description="Require an Authorization Bearer key for /claude-code/marketplace.json; query-string keys are ignored",
+    )
     dangerously_permit_weak_or_unset_master_key: bool | None = Field(
         None,
         description="local development only: start even when master_key is unset, empty, or a publicly known default",

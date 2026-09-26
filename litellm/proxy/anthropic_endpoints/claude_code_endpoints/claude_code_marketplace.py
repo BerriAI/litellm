@@ -7,7 +7,7 @@ Actual plugin files are hosted on GitHub/GitLab/Bitbucket or as a zip archive on
 any HTTPS host (S3, Artifactory, a static file server).
 
 Endpoints:
-/claude-code/marketplace.json  - GET  - List plugins for Claude Code discovery (unauthenticated; `?key=` adds the key's granted skills)
+/claude-code/marketplace.json  - GET  - List plugins for Claude Code discovery (public unless strict authentication is enabled)
 /claude-code/plugins           - POST - Register a new plugin (create-only, proxy admin only)
 /claude-code/plugins           - GET  - List plugins visible to the key (enabled, plus granted disabled ones)
 /claude-code/plugins/{name}    - GET  - Get plugin details (403 on a disabled plugin the key is not granted)
@@ -21,6 +21,7 @@ import json
 import re
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
+from types import MappingProxyType
 from typing import Annotated, Final, Protocol, TypedDict
 from urllib.parse import urlsplit
 
@@ -33,7 +34,8 @@ from litellm.proxy.anthropic_endpoints.claude_code_endpoints.claude_code_skill_a
     SkillVisibility,
     skill_visibility,
 )
-from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.auth.auth_exception_handler import DB_UNAVAILABLE_FALLBACK_USER_ID
+from litellm.proxy.auth.user_api_key_auth import is_strict_marketplace_auth, user_api_key_auth
 from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.repositories.table_repositories import ClaudeCodePluginRepository
 from litellm.types.proxy.claude_code_endpoints import (
@@ -84,6 +86,26 @@ async def _get_prisma_client() -> object:
     return prisma_client
 
 
+async def _marketplace_caller(request: Request, key: str | None) -> UserAPIKeyAuth | None:
+    from litellm.proxy.proxy_server import general_settings
+
+    if not is_strict_marketplace_auth("/claude-code/marketplace.json", general_settings):
+        return await user_api_key_auth(request=request, api_key=f"Bearer {key}") if key else None
+
+    authorization: Final = request.headers.get("authorization", "")
+    scheme, _, token = authorization.partition(" ")
+    if scheme.lower() != "bearer" or not token or any(character.isspace() for character in token):
+        raise HTTPException(
+            status_code=401,
+            detail="A valid Authorization Bearer key is required",
+            headers=MappingProxyType({"WWW-Authenticate": "Bearer"}),
+        )
+    caller: Final = await user_api_key_auth(request=request, api_key=f"Bearer {token}")
+    if caller.user_id == DB_UNAVAILABLE_FALLBACK_USER_ID:
+        raise HTTPException(status_code=401, detail="A valid LiteLLM key is required")
+    return caller
+
+
 @router.get(
     "/claude-code/marketplace.json",
     tags=["Claude Code Marketplace"],
@@ -100,6 +122,10 @@ async def get_marketplace(request: Request, key: str | None = None):
     the key is authenticated and the catalog also holds the disabled plugins granted
     to it through `object_permission.skills` on the key or its team.
 
+    With `general_settings.claude_code_marketplace_auth_required: true`, every
+    request requires a valid Authorization Bearer key. Query-string keys are
+    ignored, and authentication or authorization failures reject the request.
+
     Returns:
         Marketplace catalog with list of available plugins and their git sources.
 
@@ -111,11 +137,8 @@ async def get_marketplace(request: Request, key: str | None = None):
         ```
     """
     try:
+        caller: Final = await _marketplace_caller(request, key)
         prisma_client: Final = await _get_prisma_client()
-
-        caller: Final[UserAPIKeyAuth | None] = (
-            await user_api_key_auth(request=request, api_key=f"Bearer {key}") if key else None
-        )
         visibility: Final[SkillVisibility] = skill_visibility(caller)
         plugins: Final[Sequence[_PluginRecord]] = await ClaudeCodePluginRepository(prisma_client).table.find_many(
             where=visibility.where()
