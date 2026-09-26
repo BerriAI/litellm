@@ -1834,12 +1834,12 @@ async def test_summary_model_rate_limit_check_errors(limiter_error, summary_call
 
     with (
         patch(
-            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            "litellm.llms.anthropic.pass_through.context_management.editors.compact._read_summary_model_setting",
             return_value="claude-haiku-4-5",
         ),
         patch("litellm.token_counter", return_value=200_000),
         patch(
-            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            "litellm.llms.anthropic.pass_through.context_management.editors.compact._call_summary_model",
             mock_call,
         ),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
@@ -1960,12 +1960,12 @@ async def test_summary_model_allowed_while_the_caller_holds_the_keys_only_parall
 
     with (
         patch(
-            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            "litellm.llms.anthropic.pass_through.context_management.editors.compact._read_summary_model_setting",
             return_value="claude-haiku-4-5",
         ),
         patch("litellm.token_counter", return_value=200_000),
         patch(
-            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            "litellm.llms.anthropic.pass_through.context_management.editors.compact._call_summary_model",
             mock_call,
         ),
         patch("litellm.proxy.proxy_server.proxy_logging_obj", _proxy_logging_like_the_live_proxy(limiter)),
