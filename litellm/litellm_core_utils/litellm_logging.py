@@ -3337,6 +3337,36 @@ class Logging(LiteLLMLoggingBaseClass):
                     "LiteLLM.LoggingError: [Non-Blocking] Exception building the standard logging payload "
                     "for a streaming response; callbacks still run without it"
                 )
+            if self.model_call_details.get("standard_logging_object") is None:
+                # get_standard_logging_object_payload swallows exceptions and
+                # returns None, and the except branch above leaves the key
+                # unset. Loggers gated on standard_logging_object (e.g. s3_v2)
+                # would then silently drop the request while spend tracking
+                # still succeeds via the response_cost fallback. Rebuild from an
+                # empty response object instead, mirroring the failure-path
+                # fallback. See #32019.
+                verbose_logger.error(
+                    "standard_logging_object build failed for streaming call_id=%s call_type=%s; "
+                    "retrying with an empty response object",
+                    self.litellm_call_id,
+                    self.call_type,
+                )
+                try:
+                    self.model_call_details["standard_logging_object"] = self._build_standard_logging_payload(
+                        {}, start_time, end_time
+                    )
+                    if self.model_call_details["standard_logging_object"] is None:
+                        verbose_logger.error(
+                            "standard_logging_object rebuild failed for streaming call_id=%s call_type=%s; "
+                            "loggers gated on standard_logging_object will skip this request",
+                            self.litellm_call_id,
+                            self.call_type,
+                        )
+                except Exception:  # noqa: BLE001  # same rule as above: never block later callbacks
+                    verbose_logger.exception(
+                        "LiteLLM.LoggingError: [Non-Blocking] Exception rebuilding the degraded standard "
+                        "logging payload for a streaming response"
+                    )
 
             # print standard logging payload
             if (standard_logging_payload := self.model_call_details.get("standard_logging_object")) is not None:
