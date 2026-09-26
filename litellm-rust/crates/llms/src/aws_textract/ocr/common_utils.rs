@@ -27,9 +27,7 @@ const HEALTH_CHECK_IMAGE_DATA_URI: &str = "data:image/png;base64,iVBORw0KGgoAAAA
 #[derive(Clone, Copy, Debug, EnumString, IntoStaticStr, VariantNames, PartialEq, Eq)]
 #[strum(serialize_all = "kebab-case", ascii_case_insensitive)]
 pub enum TextractOperation {
-    #[strum(serialize = "Textract.DetectDocumentText")]
     DetectDocumentText,
-    #[strum(serialize = "Textract.AnalyzeDocument")]
     AnalyzeDocument,
 }
 
@@ -45,7 +43,10 @@ impl TextractOperation {
     }
 
     fn target(self) -> &'static str {
-        self.into()
+        match self {
+            Self::DetectDocumentText => "Textract.DetectDocumentText",
+            Self::AnalyzeDocument => "Textract.AnalyzeDocument",
+        }
     }
 }
 
