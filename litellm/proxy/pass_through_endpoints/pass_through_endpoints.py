@@ -920,7 +920,13 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
     async def abandon(self) -> None:
         self._abandoned = True
         self.dispatch()
-        await self._upstream.aclose()
+        try:
+            await self._upstream.aclose()
+        except Exception as err:  # noqa: BLE001  # aclose failures must not mask the exception that abandoned the relay
+            self._log_warning(
+                "pass_through_endpoint: closing the abandoned upstream error response failed: %s",
+                type(err).__name__,
+            )
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         total = 0  # rebind-ok: running byte count against the preview budget

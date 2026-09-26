@@ -4173,12 +4173,15 @@ class _UpstreamErrorBodyStream(httpx.AsyncByteStream):
 
 
 class _UpstreamErrorBodyStreamCloseTracking(_UpstreamErrorBodyStream):
-    def __init__(self, body: bytes) -> None:
+    def __init__(self, body: bytes, close_error: Exception | None = None) -> None:
         super().__init__(body)
+        self._close_error: Final = close_error
         self.closed = False
 
     async def aclose(self) -> None:
         self.closed = True
+        if self._close_error is not None:
+            raise self._close_error
 
 
 def _upstream_error_request() -> MagicMock:
@@ -5094,6 +5097,38 @@ async def test_preview_reporting_stream_abandon_does_not_log_a_client_disconnect
     assert len(warnings) == 1, warnings
     assert "abandoned before reaching the client" in warnings[0][0], warnings
     assert all("client disconnected" not in call[0] for call in warnings), warnings
+
+
+@pytest.mark.asyncio
+async def test_preview_reporting_stream_abandon_keeps_the_original_exception_when_aclose_fails():
+    """A failing upstream close must not replace the exception that abandoned the
+    relay: abandon returns without raising, still reports, and logs the close failure."""
+    upstream_stream: Final = _UpstreamErrorBodyStreamCloseTracking(
+        b"body", close_error=httpx.CloseError("close failed")
+    )
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "text/event-stream"},
+        stream=upstream_stream,
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+    reported: list[bytes] = []
+    log_warning: Final = MagicMock()
+
+    async def report(preview: bytes) -> None:
+        reported.append(preview)
+
+    relay: Final = _PreviewReportingStream(
+        upstream=upstream_response,
+        report=report,
+        log_warning=log_warning,
+    )
+
+    await relay.abandon()
+    await relay.dispatch()
+    assert reported == [b""], reported
+    warnings: Final = [call.args[0] for call in log_warning.call_args_list]
+    assert any("closing the abandoned upstream error response failed" in message for message in warnings), warnings
 
 
 @pytest.mark.asyncio
