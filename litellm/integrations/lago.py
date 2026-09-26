@@ -11,6 +11,10 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.litellm_core_utils.internal_call_metadata import (
+    get_evaluation_billing_owner_from_kwargs,
+    project_evaluation_billing_kwargs,
+)
 from litellm.llms.custom_httpx.http_handler import (
     HTTPHandler,
     get_async_httpx_client,
@@ -61,6 +65,8 @@ class LagoLogger(CustomLogger):
             raise Exception(f"Missing keys={missing_keys} in environment.")
 
     def _common_logic(self, kwargs: dict, response_obj) -> dict:
+        receipt: Final = project_evaluation_billing_kwargs(kwargs)
+        billing_owner: Final = get_evaluation_billing_owner_from_kwargs(receipt)
         response_obj.get("id", kwargs.get("litellm_call_id"))
         get_utc_datetime().isoformat()
         cost: Final = kwargs.get("response_cost", None)
@@ -96,7 +102,9 @@ class LagoLogger(CustomLogger):
             else:
                 raise Exception("invalid LAGO_API_CHARGE_BY set")
 
-        if charge_by == "end_user_id":
+        if billing_owner is not None:
+            external_customer_id = billing_owner.user_id
+        elif charge_by == "end_user_id":
             external_customer_id = end_user_id
         elif charge_by == "team_id":
             external_customer_id = team_id

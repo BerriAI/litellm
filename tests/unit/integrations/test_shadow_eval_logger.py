@@ -2,7 +2,7 @@
 the detached pipeline's single attempt-row write, and the cache-first job lookup."""
 
 import asyncio
-from collections.abc import Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock
@@ -52,6 +52,7 @@ def _job(**overrides) -> ActiveShadowEvalJob:
         router_name="my-router",
         shadow_percentage=100.0,
         judge_model="judge-model",
+        created_by="evaluation-admin",
         max_turns=200,
         ends_at=datetime.now(timezone.utc) + timedelta(days=1),
         attempts=0,
@@ -74,6 +75,7 @@ def _prisma(jobs=(), attempt_counts=(), attempt_costs=()) -> MagicMock:
         ]
     )
     prisma.db.litellm_shadowevalattempt.create = AsyncMock()
+    prisma.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
     return prisma
 
 
@@ -90,6 +92,7 @@ def _job_record(job: ActiveShadowEvalJob, target_type="key", target_id="key-hash
         baseline_model=job.baseline_model,
         shadow_percentage=job.shadow_percentage,
         judge_model=job.judge_model,
+        created_by=job.created_by,
         max_turns=job.max_turns,
         max_budget=job.max_budget,
         ends_at=job.ends_at,
@@ -103,6 +106,8 @@ def _router(
     judge_json='{"preference": "A", "confidence": 0.9, "reasoning": "x"}',
     classifier_cost=None,
     sibling_router_texts=None,
+    *,
+    on_call: Callable[[Mapping[str, object]], Awaitable[None]] | None = None,
 ):
     """One mock router serving the shadow call first, the judge call second, told apart by
     the internal-origin stamp rather than the model, since a reverse job's shadow arm names
@@ -114,6 +119,8 @@ def _router(
     router.get_model_list = MagicMock(return_value=[{"litellm_params": {"model": "openai/gpt-4o-mini"}}])
 
     async def acompletion(**kwargs):
+        if on_call is not None:
+            await on_call(kwargs)
         if kwargs["metadata"].get(INTERNAL_CALL_ORIGIN_METADATA_KEY) != SHADOW_EVAL_ROUTER_CALL_ORIGIN:
             return {"choices": [{"message": {"content": judge_json}}]}
         if kwargs["model"] == "my-router":
@@ -1440,6 +1447,7 @@ class TestActiveJobsCache:
 
         assert [job.id for job in first[("key", "key-hash")]] == ["job-1"]
         assert second[("key", "key-hash")][0].attempts == 7
+        assert second[("key", "key-hash")][0].created_by == job.created_by
         assert prisma.db.litellm_shadowevaljob.find_many.await_count == 1
         where = prisma.db.litellm_shadowevaljob.find_many.call_args.kwargs["where"]
         assert where["stopped_at"] is None
@@ -2521,3 +2529,83 @@ class TestSamplingFunnel:
 
         assert logger._test_funnel == []
         prisma.db.litellm_shadowevalattempt.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("call_type,creator,lookup", [
+    ("acompletion", "initiating-admin", "found"),
+    ("anthropic_messages", None, "found"),
+    ("aresponses", "deleted-admin", "missing"),
+    ("acompletion", "unreadable-admin", "error"),
+])
+async def test_evaluation_uses_current_creator_budgets_and_preserves_source(
+    monkeypatch: pytest.MonkeyPatch, call_type: str, creator: str | None, lookup: str,
+) -> None:
+    from litellm.caching.caching import DualCache
+    from litellm.litellm_core_utils import internal_call_metadata as ownership
+    from litellm.models.user import LiteLLM_UserTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import Litellm_EntityType
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.hooks import model_max_budget_limiter as budgets
+
+    owner_id: Final = creator or proxy_server.litellm_proxy_admin_name
+    user_cache: Final = UserApiKeyCache()
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", user_cache)
+    monkeypatch.setattr(auth_checks, "last_db_access_time", {})
+    limiter: Final = budgets._PROXY_VirtualKeyModelMaxBudgetLimiter(dual_cache=DualCache())
+    prisma: Final = _prisma(jobs=[_job_record(_job(created_by=creator))])
+    source: Final = {"user_api_key_user_id": "sampled-user", "user_api_key_team_id": "sampled-team"}
+    if lookup == "error":
+        prisma.db.litellm_usertable.find_unique.side_effect = RuntimeError("creator budget unavailable")
+
+    async def account_call(kwargs: Mapping[str, object]) -> None:
+        owner: Final = ownership.get_evaluation_billing_owner()
+        assert owner is not None and owner.user_id == owner_id
+        assert owner.user_model_max_budget == (creator_budget if lookup == "found" else None)
+        metadata: Final = kwargs["metadata"]
+        assert isinstance(metadata, Mapping)
+        assert all(metadata[key] == value for key, value in source.items())
+        await limiter.async_log_success_event(
+            {
+                ownership.EVALUATION_BILLING_OWNER_KEY: owner,
+                "standard_logging_object": {
+                    "model_group": kwargs["model"], "response_cost": 0.025, "metadata": metadata,
+                },
+                "litellm_params": {"metadata": metadata},
+            },
+            response_obj=None, start_time=None, end_time=None,
+        )
+
+    logger: Final = _logger(router=_router(on_call=account_call), prisma=prisma)
+    for sample, period in enumerate(("1h", "2h") if lookup == "found" else ("1h",), start=1):
+        creator_budget: Final = {
+            model: {"budget_limit": 0.02, "time_period": period} for model in ("my-router", "judge-model")
+        }
+        if lookup == "found":
+            row: Final = LiteLLM_UserTable(user_id=owner_id, model_max_budget=creator_budget)
+            if sample == 1:
+                prisma.db.litellm_usertable.find_unique.return_value = row
+            else:
+                await user_cache.async_set_cache(key=owner_id, value=row, model_type=LiteLLM_UserTable)
+        event: Final = _success_kwargs(request_id=f"sample-{sample}", call_type=call_type, request_metadata=source)
+        response: Final = RESPONSES_API_RESPONSE if call_type == "aresponses" else RESPONSE
+        await logger.async_log_success_event(event, response, None, None)
+        await _drain(logger)
+        usage: Final = await budgets.build_model_max_budget_usage(
+            Litellm_EntityType.USER, owner_id, creator_budget, limiter.dual_cache,
+        )
+        assert usage == {
+            model: {"current_spend": 0.025 if lookup == "found" else 0.0, "budget_limit": 0.02, "time_period": period}
+            for model in creator_budget
+        }
+        assert prisma.db.litellm_shadowevalattempt.create.await_count == sample
+        assert prisma.db.litellm_shadowevalattempt.create.call_args.kwargs["data"]["outcome"] in ("real", "shadow", "tie")
+        assert event["litellm_params"]["metadata"] == source
+        assert ownership.get_evaluation_billing_owner() is None
+    prisma.db.litellm_usertable.find_unique.assert_awaited_once_with(
+        where={"user_id": owner_id}, include={"organization_memberships": True},
+    )
+    prisma.db.litellm_usertable.create.assert_not_called()
+    prisma.db.litellm_usertable.upsert.assert_not_called()

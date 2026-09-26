@@ -396,19 +396,23 @@ describe("ActivityMetrics", () => {
     expect(avgSpendElements.some((el) => el.textContent?.includes("1.058"))).toBe(true);
   });
 
-  it("should handle zero successful requests without division error", () => {
+  it.each([0, 10])("should handle zero successful requests with $%s spend", (spend) => {
     const modelWithZeroRequests: Record<string, ModelActivityData> = {
       "gpt-4": {
         ...mockModelMetrics["gpt-4"],
+        total_requests: 0,
         total_successful_requests: 0,
-        total_tokens: 0,
-        total_spend: 0,
+        total_tokens: spend * 1000,
+        total_spend: spend,
       },
     };
 
     render(<ActivityMetrics modelMetrics={modelWithZeroRequests} />);
     const zeroElements = screen.getAllByText("0");
     expect(zeroElements.length).toBeGreaterThan(0);
+    expect(screen.getByText("N/A avg per successful request")).toBeInTheDocument();
+    expect(screen.getByText("N/A per successful request")).toBeInTheDocument();
+    expect(screen.getByText(/Request counts exclude internal calls/)).toBeInTheDocument();
   });
 
   it("should display prompt caching token counts when visible", () => {

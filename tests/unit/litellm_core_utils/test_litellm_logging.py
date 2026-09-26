@@ -4788,6 +4788,50 @@ def test_get_standard_logging_object_payload_carries_matched_access_groups(loggi
     assert payload["request_model_access_groups"] == ("premium-pool", "shared-pool")
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("status", ["success", "failure"])
+async def test_evaluation_logging_keeps_captured_owner_after_context_and_thread_handoff(
+    status: Literal["success", "failure"],
+) -> None:
+    from litellm.litellm_core_utils import internal_call_metadata as billing
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+    from litellm.types.utils import StandardLoggingPayload
+
+    now: Final = datetime.datetime.now()
+    owner: Final = billing.EvaluationBillingOwner("evaluation-admin")
+    with billing.evaluation_billing_context(owner):
+        logger: Final = LitellmLogging(
+            model="evaluation-model",
+            messages=[],
+            stream=False,
+            call_type="acompletion",
+            start_time=now,
+            litellm_call_id="evaluation-call",
+            function_id="evaluation-function",
+        )
+
+    def payload_on_logging_thread() -> StandardLoggingPayload | None:
+        with billing.evaluation_billing_context(billing.EvaluationBillingOwner("unrelated-admin")):
+            logger.update_environment_variables(
+                litellm_params={"metadata": {"user_api_key_user_id": "sampled-user"}},
+                optional_params={},
+                **{billing.EVALUATION_BILLING_OWNER_KEY: {"user_id": "forged-owner"}},
+            )
+        return get_standard_logging_object_payload(
+            kwargs=logger.model_call_details,
+            init_response_obj={},
+            start_time=now,
+            end_time=now,
+            logging_obj=logger,
+            status=status,
+        )
+
+    payload: Final = await asyncio.get_running_loop().run_in_executor(None, payload_on_logging_thread)
+    assert payload is not None
+    assert payload["metadata"]["user_api_key_user_id"] == "sampled-user"
+    assert logger.model_call_details[billing.EVALUATION_BILLING_OWNER_KEY] == owner
+
+
 def test_get_standard_logging_object_payload_has_no_access_groups_when_unstamped(
     logging_obj,
 ):

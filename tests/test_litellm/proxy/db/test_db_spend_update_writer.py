@@ -8,6 +8,7 @@ import re
 from collections.abc import AsyncIterator, Callable
 from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from datetime import datetime, timedelta, timezone
+from functools import partial
 from types import SimpleNamespace
 from typing import Final, cast
 from unittest.mock import AsyncMock, MagicMock, call, patch
@@ -1359,7 +1360,7 @@ async def test_add_spend_log_transaction_to_daily_org_transaction_injects_org_id
     update_dict = call_args["update"]
     assert len(update_dict) == 1
     for key, transaction in update_dict.items():
-        assert key == f"{org_id}_2024-01-01_test-key_gpt-4_openai_"
+        assert json.loads(key) == [org_id, "2024-01-01", "test-key", "gpt-4", "openai", "", "", "gpt-4-group"]
         assert transaction["organization_id"] == org_id
         assert transaction["date"] == "2024-01-01"
         assert transaction["api_key"] == "test-key"
@@ -1436,7 +1437,7 @@ async def test_add_spend_log_transaction_to_daily_end_user_transaction_injects_e
     update_dict = call_args["update"]
     assert len(update_dict) == 1
     for key, transaction in update_dict.items():
-        assert key == f"{end_user_id}_2024-01-01_test-key_gpt-4_openai_"
+        assert json.loads(key) == [end_user_id, "2024-01-01", "test-key", "gpt-4", "openai", "", "", "gpt-4-group"]
         assert transaction["end_user_id"] == end_user_id
         assert transaction["date"] == "2024-01-01"
         assert transaction["api_key"] == "test-key"
@@ -1512,7 +1513,7 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agen
     update_dict = call_args["update"]
     assert len(update_dict) == 1
     for key, transaction in update_dict.items():
-        assert key == f"{agent_id}_2024-01-01_test-key_gpt-4_openai_"
+        assert json.loads(key) == [agent_id, "2024-01-01", "test-key", "gpt-4", "openai", "", "", "gpt-4-group"]
         assert transaction["agent_id"] == agent_id
         assert transaction["date"] == "2024-01-01"
         assert transaction["api_key"] == "test-key"
@@ -1627,7 +1628,9 @@ async def test_endpoint_field_is_correctly_mapped_from_call_type():
 
     for key, transaction in update_dict.items():
         # Verify endpoint is included in the key
-        assert key == f"test-user_2024-01-01_test-key_gpt-4_openai_/chat/completions"
+        assert json.loads(key) == [
+            "test-user", "2024-01-01", "test-key", "gpt-4", "openai", "", "/chat/completions", "gpt-4-group"
+        ]
 
         # Verify endpoint is set in the transaction
         assert transaction["endpoint"] == "/chat/completions"
@@ -3534,7 +3537,8 @@ async def test_commit_spend_updates_to_db_reports_table_committed_before_cache_i
 
 
 @pytest.mark.asyncio
-async def test_daily_transaction_internal_call_keeps_spend_but_not_request_counts():
+@pytest.mark.parametrize("internal_first", (True, False))
+async def test_daily_transaction_internal_call_keeps_spend_but_not_request_counts(internal_first: bool) -> None:
     """Internal sub-calls (auto-router classifier, shadow eval's shadow and judge) bill
     spend and tokens to the key but are not requests the caller made: api_requests,
     successful_requests, and autorouter_savings_spend must all stay zero for them."""
@@ -3546,6 +3550,10 @@ async def test_daily_transaction_internal_call_keeps_spend_but_not_request_count
         return {
             "request_id": "req-internal-1",
             "user": "test-user",
+            "team_id": "test-team",
+            "end_user": "test-end-user",
+            "agent_id": "test-agent",
+            "request_tags": '["test-tag"]',
             "startTime": "2026-08-11T00:00:00",
             "api_key": "test-key",
             "model": "claude-sonnet-5",
@@ -3578,6 +3586,27 @@ async def test_daily_transaction_internal_call_keeps_spend_but_not_request_count
     assert internal["autorouter_savings_spend"] == 0.0
     assert user_sent["api_requests"] == 1
     assert user_sent["successful_requests"] == 1
+
+    groups: Final = (("router/shadow", {"internal_call_origin": "shadow_eval_judge"}), ("production", {}))
+    for producer, queue in (
+        (writer.add_spend_log_transaction_to_daily_user_transaction, writer.daily_spend_update_queue),
+        (writer.add_spend_log_transaction_to_daily_team_transaction, writer.daily_team_spend_update_queue),
+        (
+            partial(writer.add_spend_log_transaction_to_daily_org_transaction, org_id="test-org"),
+            writer.daily_org_spend_update_queue,
+        ),
+        (writer.add_spend_log_transaction_to_daily_end_user_transaction, writer.daily_end_user_spend_update_queue),
+        (writer.add_spend_log_transaction_to_daily_agent_transaction, writer.daily_agent_spend_update_queue),
+        (writer.add_spend_log_transaction_to_daily_tag_transaction, writer.daily_tag_spend_update_queue),
+    ):
+        for group, metadata in groups if internal_first else reversed(groups):
+            payload: Final = {**_payload(metadata), "model_group": group, "spend": 0.05 if metadata else 0.15}
+            await producer(payload=payload, prisma_client=mock_prisma)
+        rows: Final = await queue.flush_and_get_aggregated_daily_spend_update_transactions()
+        assert {row["model_group"]: (row["spend"], row["api_requests"]) for row in rows.values()} == {
+            "router/shadow": (0.05, 0),
+            "production": (0.15, 1),
+        }
 
 
 def _response_time_payload(request_duration_ms: object, metadata: dict | None = None) -> dict:

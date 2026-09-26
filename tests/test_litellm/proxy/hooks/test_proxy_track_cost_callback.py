@@ -9,6 +9,7 @@ import httpx
 import pytest
 
 from litellm._logging import verbose_proxy_logger
+from litellm.litellm_core_utils import internal_call_metadata as billing
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
@@ -1993,7 +1994,8 @@ async def test_failure_hook_drops_error_information_traceback_when_env_set(
 
 
 @pytest.mark.asyncio
-async def test_async_post_call_failure_hook_records_recovered_partial_spend():
+@pytest.mark.parametrize("evaluation,captured", ((False, False), (True, False), (True, True)))
+async def test_async_post_call_failure_hook_records_recovered_partial_spend(evaluation: bool, captured: bool) -> None:
     """A stream that broke mid-flight still billed the provider. The failure
     hook lifts the recovered cost onto request_data as ``response_cost``; this
     hook must pass it through to update_database so the failure row records the
@@ -2003,8 +2005,10 @@ async def test_async_post_call_failure_hook_records_recovered_partial_spend():
 
     logger = _ProxyDBLogger()
     user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key", user_id="u", team_id="t")
+    owner: Final = billing.EvaluationBillingOwner("admin") if evaluation else None
 
     request_data = {
+        billing.EVALUATION_BILLING_OWNER_KEY: owner if captured else None,
         "model": "anthropic/claude-haiku-4-5",
         "messages": [{"role": "user", "content": "Hello"}],
         "metadata": {},
@@ -2013,7 +2017,7 @@ async def test_async_post_call_failure_hook_records_recovered_partial_spend():
         "combined_usage_object": Usage(prompt_tokens=30, completion_tokens=1, total_tokens=31),
     }
 
-    with patch(
+    with billing.evaluation_billing_context(owner), patch(
         "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
         new_callable=AsyncMock,
     ) as mock_update_database:
@@ -2025,6 +2029,15 @@ async def test_async_post_call_failure_hook_records_recovered_partial_spend():
 
         mock_update_database.assert_called_once()
         assert mock_update_database.call_args[1]["response_cost"] == 3.5e-05
+        written: Final = mock_update_database.call_args.kwargs
+        assert written["user_id"] == ("admin" if evaluation else "u")
+        assert written["token"] == (None if evaluation else "test_api_key")
+        assert written["team_id"] == (None if evaluation else "t")
+        row: Final = get_logging_payload(
+            written["kwargs"], written["completion_response"], written["start_time"], written["end_time"]
+        )
+        assert row["user"] == written["user_id"]
+        assert row["total_tokens"] == 31
 
 
 @pytest.mark.asyncio
@@ -2369,14 +2382,16 @@ async def test_spend_counters_keep_every_granted_group_when_the_deployment_is_un
     assert charged == ("premium", "tier0")
 
 
-def _offload_kwargs() -> dict:
+def _offload_kwargs(evaluation: bool = False) -> dict:
     big_prompt = "x" * 10_000
     reservation = {"reserved_cost": 0.5, "entries": [{"counter_key": "key:hash-1", "reserved_cost": 0.5}]}
     return {
+        billing.EVALUATION_BILLING_OWNER_KEY: billing.EvaluationBillingOwner("admin") if evaluation else None,
         "litellm_call_id": "call-1",
         "call_type": "acompletion",
         "model": "gpt-4o",
         "custom_llm_provider": "openai",
+        "agent_id": "agent-1",
         "stream": False,
         "cache_hit": None,
         "response_cost": 0.0125,
@@ -2389,11 +2404,13 @@ def _offload_kwargs() -> dict:
             "proxy_server_request": {"body": {"messages": [{"role": "user", "content": big_prompt}]}},
             "metadata": {
                 "user_api_key": "hash-1",
+                "internal_call_origin": "shadow_eval_judge" if evaluation else None,
                 "user_api_key_hash": "hash-1",
                 "user_api_key_alias": "alias-1",
                 "user_api_key_user_id": "user-1",
                 "user_api_key_team_id": "team-1",
                 "user_api_key_org_id": "org-1",
+                "user_api_key_project_id": "project-1",
                 "user_api_key_end_user_id": "end-user-1",
                 "user_api_key_auth": UserAPIKeyAuth(api_key="hash-1", budget_reservation=reservation),
                 "model_group": "gpt-4o",
@@ -2570,36 +2587,62 @@ async def _spend_row_written_by(run) -> tuple[SpendLogsPayload, dict, tuple[str,
 
 
 @pytest.mark.asyncio
-async def test_sidecar_writes_the_same_spend_row_and_counters_as_the_in_process_path():
+@pytest.mark.parametrize("evaluation", (False, True))
+async def test_sidecar_writes_the_same_spend_row_and_counters_as_the_in_process_path(evaluation: bool) -> None:
     start_time = datetime(2026, 1, 1, 0, 0, 0)
     end_time = datetime(2026, 1, 1, 0, 0, 2)
+    kwargs: Final = _offload_kwargs(evaluation)
 
     async def in_process() -> None:
-        await _ProxyDBLogger().async_log_success_event(_offload_kwargs(), _offload_response(), start_time, end_time)
+        await _ProxyDBLogger().async_log_success_event(kwargs, _offload_response(), start_time, end_time)
 
-    async def via_sidecar() -> None:
-        line = build_spend_event(_offload_kwargs(), _offload_response(), start_time, end_time, store_bodies=False)
+    async def replay(line: bytes) -> None:
         assert isinstance(line, bytes)
         await run_spend_event(line)
+
+    async def via_sidecar() -> None:
+        producer: Final = SpendEventProducer(
+            address=UnixAddress(path="/nonexistent/spend.sock"), on_unavailable="fallback",
+            buffer_size=10, connect_timeout=0.1, fallback=replay,
+        )
+        await _ProxyDBLogger(producer).async_log_success_event(
+            kwargs, _offload_response(), start_time, end_time
+        )
+        await producer.close(drain_timeout=5.0)
 
     in_process_row, in_process_counters, in_process_tools = await _spend_row_written_by(in_process)
     sidecar_row, sidecar_counters, sidecar_tools = await _spend_row_written_by(via_sidecar)
 
     assert sidecar_row == in_process_row
     assert in_process_row["spend"] == 0.0125
-    assert in_process_row["team_id"] == "team-1"
-    assert in_process_row["end_user"] == "end-user-1"
+    assert in_process_row["team_id"] == ("" if evaluation else "team-1")
+    assert in_process_row["end_user"] == ("" if evaluation else "end-user-1")
+    assert bool(in_process_row["api_key"]) == (not evaluation)
+    assert in_process_row["organization_id"] == ("" if evaluation else "org-1")
+    assert in_process_row["agent_id"] == (None if evaluation else "agent-1")
+    origin: Final = json.loads(in_process_row["metadata"])["internal_call_origin"]
+    assert origin == ("shadow_eval_judge" if evaluation else None)
     assert in_process_row["total_tokens"] == 9000
+    assert (in_process_row["prompt_tokens"], in_process_row["completion_tokens"]) == (5000, 4000)
     assert in_process_row["model_id"] == "deployment-1"
-    assert in_process_row["request_tags"] == '["tag-a"]'
+    assert in_process_row["request_tags"] == ("[]" if evaluation else '["tag-a"]')
     assert in_process_row["messages"] == "{}"
     assert in_process_row["response"] == "{}"
     assert sidecar_counters == in_process_counters
-    assert in_process_counters["token"] == "hash-1"
+    assert in_process_row["user"] == in_process_counters["user_id"] == ("admin" if evaluation else "user-1")
+    assert in_process_counters["token"] == (None if evaluation else "hash-1")
+    assert in_process_counters["team_id"] == (None if evaluation else "team-1")
+    assert in_process_counters["org_id"] == (None if evaluation else "org-1")
+    assert in_process_counters["project_id"] == (None if evaluation else "project-1")
+    assert in_process_counters["end_user_id"] == (None if evaluation else "end-user-1")
     assert in_process_counters["response_cost"] == 0.0125
-    assert in_process_counters["budget_reservation"]["reserved_cost"] == 0.5
-    assert in_process_counters["model_access_groups"] == ("premium",)
+    if evaluation:
+        assert in_process_counters["budget_reservation"] is None
+    else:
+        assert in_process_counters["budget_reservation"]["reserved_cost"] == 0.5
+    assert in_process_counters["model_access_groups"] == (() if evaluation else ("premium",))
     assert sidecar_tools == in_process_tools == ("get_weather",)
+    assert kwargs["litellm_params"]["metadata"]["user_api_key_user_id"] == "user-1"
 
 
 @pytest.mark.asyncio

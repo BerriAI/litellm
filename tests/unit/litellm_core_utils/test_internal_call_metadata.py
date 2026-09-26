@@ -1,6 +1,13 @@
 """Unit tests for internal-call metadata forwarding: budget-reservation stripping and origin stamping."""
 
+from copy import deepcopy
+from typing import Final
+
+import pytest
+
+from litellm.litellm_core_utils.core_helpers import get_litellm_metadata_from_kwargs
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
+from litellm.litellm_core_utils import internal_call_metadata as billing
 from litellm.litellm_core_utils.internal_call_metadata import (
     forwarded_internal_call_metadata,
     sanitized_forwardable_call_metadata,
@@ -119,3 +126,50 @@ class TestSubCallMetadataSanitization:
         assert sanitized_auth.team_id == "team-1"
         assert sanitized_auth.api_key == auth.api_key
         assert auth.budget_reservation == {"reserved_cost": 1.0}
+
+
+@pytest.mark.parametrize(
+    "alternate",
+    [
+        {},
+        {"litellm_metadata": None},
+        {"litellm_metadata": {}},
+        {"litellm_metadata": {"model_group": "responses", "internal_call_origin": "shadow_eval_judge"}},
+    ],
+)
+def test_evaluation_receipt_preserves_metadata_selection(alternate: dict[str, object]) -> None:
+    metadata: Final = {
+        **PARENT,
+        "user_api_key_user_id": "sampled",
+        "model_group": "chat",
+        "internal_call_origin": "shadow_eval_router",
+    }
+    kwargs: Final = {
+        billing.EVALUATION_BILLING_OWNER_KEY: billing.EvaluationBillingOwner("admin"),
+        "metadata": metadata,
+        **alternate,
+        "litellm_params": {"metadata": metadata, **alternate, "proxy_server_request": {"body": {"user": "customer"}}},
+    }
+    snapshot: Final = deepcopy(kwargs)
+
+    receipt: Final = billing.project_evaluation_billing_kwargs(kwargs)
+    resolved: Final = get_litellm_metadata_from_kwargs(receipt)
+    expected: Final = alternate.get("litellm_metadata") or metadata
+    assert isinstance(expected, dict)
+    assert resolved["user_api_key_user_id"] == receipt["user"] == "admin"
+    assert all(resolved[key] == expected[key] for key in ("model_group", "internal_call_origin"))
+    params: Final = receipt["litellm_params"]
+    assert isinstance(params, dict)
+    for bucket in (receipt, params):
+        if not alternate.get("litellm_metadata"):
+            assert bucket.get("litellm_metadata") == alternate.get("litellm_metadata")
+            assert ("litellm_metadata" in bucket) == ("litellm_metadata" in alternate)
+    assert params["proxy_server_request"]["body"]["user"] is None
+    assert kwargs == snapshot
+
+
+@pytest.mark.parametrize("marker", [None, "forged-admin", {"user_id": "forged-admin"}])
+def test_evaluation_receipt_requires_a_captured_typed_owner(marker: object) -> None:
+    kwargs: Final = {billing.EVALUATION_BILLING_OWNER_KEY: marker, "user": "sampled-user"}
+    with billing.evaluation_billing_context(billing.EvaluationBillingOwner("ambient-admin")):
+        assert billing.project_evaluation_billing_kwargs(kwargs) is kwargs

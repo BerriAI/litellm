@@ -3,22 +3,26 @@ import json
 import time
 from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from types import MappingProxyType
 from typing import Final
 
 from openai.types import Batch
+from pydantic import TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import Span
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
+from litellm.litellm_core_utils.internal_call_metadata import project_evaluation_billing_kwargs
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
 from litellm.proxy._types import Litellm_EntityType, UserAPIKeyAuth
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
 from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import BudgetConfig, StandardLoggingPayload
+from litellm.types.utils import BudgetConfig
 
 VIRTUAL_KEY_SPEND_CACHE_KEY_PREFIX: Final = "virtual_key_spend"
 END_USER_SPEND_CACHE_KEY_PREFIX: Final = "end_user_model_spend"
@@ -46,6 +50,27 @@ _BUDGET_START_TIME_KEY_PREFIXES: Final = MappingProxyType(
         Litellm_EntityType.TEAM: "team_model_budget_start_time",
     }
 )
+
+
+class _ModelBudgetLogIdentity(TypedDict, total=False):
+    user_api_key_hash: ReadOnly[str | None]
+    user_api_key_user_id: ReadOnly[str | None]
+    user_api_key_team_id: ReadOnly[str | None]
+    user_api_key_end_user_id: ReadOnly[str | None]
+
+
+class _ModelBudgetLogPayload(TypedDict, total=False):
+    model_group: ReadOnly[str | None]
+    model: ReadOnly[str | None]
+    response_cost: ReadOnly[float | None]
+    metadata: ReadOnly[_ModelBudgetLogIdentity | None]
+    end_user: ReadOnly[str | None]
+
+
+_MODEL_BUDGET_LOG_PAYLOAD: Final = TypeAdapter(_ModelBudgetLogPayload)
+_MODEL_BUDGET_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_EMPTY_MODEL_BUDGET_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
+_EMPTY_MODEL_BUDGET_IDENTITY: Final[_ModelBudgetLogIdentity] = {}
 
 
 @dataclass(frozen=True, slots=True)
@@ -484,23 +509,35 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
     ) -> list[dict]:
         return healthy_deployments
 
-    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time):
+    async def async_log_success_event(
+        self,
+        kwargs: Mapping[str, object],
+        response_obj: object,
+        start_time: datetime | None,
+        end_time: datetime | None,
+    ) -> None:
         """
         Track spend for virtual key + model in DualCache
 
         Example: key=sk-1234567890, model=gpt-4o, max_budget=100, time_period=1d
         """
         verbose_proxy_logger.debug("in RouterBudgetLimiting.async_log_success_event")
-        standard_logging_payload: Final[StandardLoggingPayload | None] = kwargs.get("standard_logging_object", None)
-        if standard_logging_payload is None:
+        receipt: Final = project_evaluation_billing_kwargs(kwargs)
+        payload_value: Final = receipt.get("standard_logging_object")
+        if payload_value is None:
             verbose_proxy_logger.debug(
                 "Skipping _PROXY_VirtualKeyModelMaxBudgetLimiter.async_log_success_event: standard_logging_payload is None"
             )
             return
 
-        _litellm_params: Final[dict] = kwargs.get("litellm_params", {}) or {}
-        _metadata: Final[dict] = _litellm_params.get("metadata", {}) or {}
-        payload_metadata: Final = standard_logging_payload.get("metadata") or {}
+        standard_logging_payload: Final = _MODEL_BUDGET_LOG_PAYLOAD.validate_python(payload_value)
+        _litellm_params: Final = _MODEL_BUDGET_MAPPING.validate_python(
+            receipt.get("litellm_params") or _EMPTY_MODEL_BUDGET_MAPPING
+        )
+        _metadata: Final = _MODEL_BUDGET_MAPPING.validate_python(
+            _litellm_params.get("metadata") or _EMPTY_MODEL_BUDGET_MAPPING
+        )
+        payload_metadata: Final = standard_logging_payload.get("metadata") or _EMPTY_MODEL_BUDGET_IDENTITY
 
         # Use model_group (the user-facing model alias, e.g. "gpt-4o") when
         # available.  The enforcement path receives the model name from
@@ -512,7 +549,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
         if model is None:
             return
 
-        response_cost: Final[float] = standard_logging_payload.get("response_cost", 0)
+        response_cost: Final = standard_logging_payload.get("response_cost", 0)
+        if response_cost is None:
+            return
         key_model_max_budget: Final = _metadata.get("user_api_key_model_max_budget")
         entity_budgets: Final = (
             (
@@ -528,7 +567,9 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
                     if team_model_budget_applies(
                         model=model,
                         key_model_max_budget=(
-                            key_model_max_budget if isinstance(key_model_max_budget, Mapping) else None
+                            _MODEL_BUDGET_MAPPING.validate_python(key_model_max_budget)
+                            if isinstance(key_model_max_budget, Mapping)
+                            else None
                         ),
                     )
                     else None
@@ -556,7 +597,7 @@ class _PROXY_VirtualKeyModelMaxBudgetLimiter(RouterBudgetLimiting):
             return
 
         batch_id: Final = batch_id_to_charge_once(
-            call_type=kwargs.get("call_type"),
+            call_type=receipt.get("call_type"),
             response_obj=response_obj,
             response_cost=response_cost,
         )

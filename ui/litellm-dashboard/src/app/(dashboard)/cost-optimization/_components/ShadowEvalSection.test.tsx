@@ -970,6 +970,9 @@ describe("ShadowEvalSection", () => {
 
     await user.click(screen.getByRole("button", { name: /Previous evaluations \(1\)/ }));
     expect(screen.getByText("view results")).toBeInTheDocument();
+    expect(screen.getByText(/Created /)).toHaveTextContent(
+      `Created ${new Date(older.created_at).toLocaleDateString()}`,
+    );
     await user.click(screen.getByRole("button", { name: /10% of prod-alpha traffic via claude-auto/ }));
 
     expect(await screen.findByText("SIMPLE")).toBeInTheDocument();

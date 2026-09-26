@@ -38,9 +38,9 @@ const DIRECTION_OPTIONS: readonly { value: ShadowEvalDirection; label: string }[
 
 const START_FORM_DESCRIPTION: Record<ShadowEvalDirection, string> = {
   forward:
-    "Duplicates a sampled slice of the selected targets' traffic (keys, teams, or users) through the auto-router and has an LLM judge compare both answers blind. Each target gets its own spend budget. The router's answers are never served to users; judge calls bill to the sampled traffic's own identity.",
+    "Duplicates a sampled slice of the selected targets' traffic (keys, teams, or users) through the auto-router and has an LLM judge compare both answers blind. Each target gets its own spend budget. The router's answers are never served to users; shadow and judge calls bill to the initiating admin.",
   reverse:
-    "Duplicates a sampled slice of the traffic the auto-router already serves against a fixed baseline model and has an LLM judge compare both answers blind. Each target gets its own spend budget. The baseline's answers are never served to users; judge calls bill to the sampled traffic's own identity.",
+    "Duplicates a sampled slice of the traffic the auto-router already serves against a fixed baseline model and has an LLM judge compare both answers blind. Each target gets its own spend budget. The baseline's answers are never served to users; shadow and judge calls bill to the initiating admin.",
 };
 
 const DURATION_OPTIONS = [
