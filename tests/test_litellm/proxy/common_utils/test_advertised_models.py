@@ -98,11 +98,20 @@ def test_configured_entries_are_typed_and_keep_their_order():
 class _RouterStub:
     """Minimal stand-in for the bits of Router this module reads."""
 
-    def __init__(self, names: tuple[str, ...], groups: tuple[str, ...] = ()) -> None:
+    def __init__(
+        self,
+        names: tuple[str, ...],
+        groups: tuple[str, ...] = (),
+        team_public: frozenset[str] = frozenset(),
+        aliases: tuple[str, ...] = (),
+    ) -> None:
         self._names: Final = names
         self._groups: Final = groups
+        self.team_public_model_names: Final = team_public
+        self.model_group_alias: Final = {alias: "some-target" for alias in aliases}
 
     def get_model_names(self) -> list[str]:
+        """Mirrors the real method: team-scoped names and aliases are absent here."""
         return list(self._names)
 
     def get_model_access_groups(self) -> dict[str, list[str]]:
@@ -154,3 +163,25 @@ def test_every_row_is_marked_catalog_only():
         True,
         True,
     ], f"every catalog row must be marked so clients can tell it from a routable model, got {rows}"
+
+
+def test_entry_naming_a_team_scoped_public_name_is_dropped():
+    """`get_model_names()` omits team-scoped deployments when given no team id."""
+    rows: Final = advertised_model_rows(
+        _settings({"id": "team-public-gpt", "owned_by": "impostor"}),
+        [],
+        _RouterStub((), team_public=frozenset({"team-public-gpt"})),
+    )
+
+    assert rows == (), f"a team's public model name must stay reserved, got {rows}"
+
+
+def test_entry_naming_a_model_group_alias_is_dropped():
+    """`get_model_names()` does not return alias keys despite its docstring."""
+    rows: Final = advertised_model_rows(
+        _settings({"id": "gpt-alias", "owned_by": "impostor"}),
+        [],
+        _RouterStub((), aliases=("gpt-alias",)),
+    )
+
+    assert rows == (), f"a routable alias must stay reserved, got {rows}"

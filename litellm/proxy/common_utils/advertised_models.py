@@ -81,13 +81,22 @@ def _listing_row(entry: AdvertisedModel) -> ModelInfoResponse:
 def _reserved_ids(listed_ids: Collection[str], llm_router: Router | None) -> frozenset[str]:
     """Ids a catalog entry may not claim.
 
-    Every name the router knows counts, not just the ids this caller can see, so
-    an entry cannot re-expose a deployment that team scoping, a pause or a health
-    filter had already removed from their listing.
+    Every routable name counts, not just the ids this caller can see, so an entry
+    cannot re-expose a deployment that team scoping, a pause or a health filter
+    had already removed from their listing.
+
+    `get_model_names()` alone is not that set: with no team id it drops
+    team-scoped deployments, and despite its docstring it never returns
+    `model_group_alias` keys, so both are unioned in explicitly.
     """
     if llm_router is None:
         return frozenset(listed_ids)
-    return frozenset(listed_ids).union(llm_router.get_model_names(), llm_router.get_model_access_groups())
+    return frozenset(listed_ids).union(
+        llm_router.get_model_names(),
+        llm_router.get_model_access_groups(),
+        llm_router.team_public_model_names,
+        llm_router.model_group_alias or (),
+    )
 
 
 def _first_per_id(entries: tuple[AdvertisedModel, ...]) -> tuple[AdvertisedModel, ...]:

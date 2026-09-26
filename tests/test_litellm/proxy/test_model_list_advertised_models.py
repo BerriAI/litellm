@@ -174,10 +174,10 @@ class _HidingGate(CustomLogger):
     def __init__(self, hidden: frozenset[str]) -> None:
         super().__init__()
         self.hidden = hidden
-        self.seen: list[tuple[str, ...]] = []
+        self.seen: tuple[tuple[str, ...], ...] = ()
 
     async def async_filter_listed_models(self, user_api_key_dict, model_names):
-        self.seen.append(tuple(model_names))
+        self.seen = (*self.seen, tuple(model_names))
         return [name for name in model_names if name not in self.hidden]
 
 
