@@ -854,6 +854,9 @@ class LiteLLMRoutes(enum.Enum):
             # Tag usage endpoints scope internal users to tags produced by
             # their own keys in tag_management_endpoints.py.
             "/tag/daily/activity",
+            "/tag/daily/activity/aggregated",
+            "/tag/daily/activity/aggregated/search",
+            "/tag/daily/activity/export",
             "/tag/list",
             "/v1/models/{model_id}",
             "/models/{model_id}",
@@ -878,6 +881,9 @@ class LiteLLMRoutes(enum.Enum):
             # Tag usage endpoints scope internal viewers to tags produced by
             # their own keys in tag_management_endpoints.py.
             "/tag/daily/activity",
+            "/tag/daily/activity/aggregated",
+            "/tag/daily/activity/aggregated/search",
+            "/tag/daily/activity/export",
             "/tag/list",
         ]
     )
@@ -918,6 +924,9 @@ class LiteLLMRoutes(enum.Enum):
         # Endpoint restricts results to organizations the caller is ORG_ADMIN
         # of; a caller who administers none gets an empty result set.
         "/organization/daily/activity",
+        "/organization/daily/activity/aggregated",
+        "/organization/daily/activity/aggregated/search",
+        "/organization/daily/activity/export",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         # Claude Code gateway: the signed-in CLI fetches its managed settings and posts its own telemetry
         "/claude_code_gateway/managed/settings",
@@ -1001,6 +1010,9 @@ class LiteLLMRoutes(enum.Enum):
             "/team/daily/activity/export",
             "/team/daily/activity/aggregated/search",
             "/tag/daily/activity",
+            "/tag/daily/activity/aggregated",
+            "/tag/daily/activity/aggregated/search",
+            "/tag/daily/activity/export",
             "/tag/list",
             "/audit",
             "/audit/{id}",

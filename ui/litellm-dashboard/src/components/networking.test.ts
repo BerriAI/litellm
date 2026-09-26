@@ -936,3 +936,165 @@ describe("userFilterUICall", () => {
     expect(parsed.searchParams.get("search")).toBe("svc");
   });
 });
+
+describe("entity daily activity aggregated/search/export helpers", () => {
+  const startTime = new Date("2025-02-12T00:00:00.000Z");
+  const endTime = new Date("2025-02-19T00:00:00.000Z");
+  let currentFetch: typeof global.fetch;
+
+  const setupSuccessfulFetch = () => {
+    const mockFetch = vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ data: [] }),
+      text: vi.fn().mockResolvedValue("{}"),
+      blob: vi.fn().mockResolvedValue(new Blob(["csv"])),
+    } as any);
+    global.fetch = mockFetch as any;
+    return mockFetch;
+  };
+
+  const calledUrl = (mockFetch: ReturnType<typeof vi.fn>) =>
+    new URL(mockFetch.mock.calls[0][0] as string, "http://example.com");
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    currentFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = currentFetch;
+  });
+
+  it.each([
+    {
+      fnName: "tagDailyActivityAggregatedCall",
+      path: "tag",
+      idsParam: "tags",
+      ids: ["tag-a", "tag-b"],
+      expected: "tag-a,tag-b",
+    },
+    {
+      fnName: "organizationDailyActivityAggregatedCall",
+      path: "organization",
+      idsParam: "organization_ids",
+      ids: ["org-a", "org-b"],
+      expected: "org-a,org-b",
+    },
+    {
+      fnName: "customerDailyActivityAggregatedCall",
+      path: "customer",
+      idsParam: "end_user_ids",
+      ids: ["cust-a"],
+      expected: "cust-a",
+    },
+    {
+      fnName: "agentDailyActivityAggregatedCall",
+      path: "agent",
+      idsParam: "agent_ids",
+      ids: ["agent-a"],
+      expected: "agent-a",
+    },
+  ] as const)(
+    "$fnName hits the aggregated route with the entity ids serialized",
+    async ({ fnName, path, idsParam, ids, expected }) => {
+      const mockFetch = setupSuccessfulFetch();
+
+      await Networking[fnName]("token", startTime, endTime, [...ids]);
+
+      const parsed = calledUrl(mockFetch);
+      expect(parsed.pathname).toBe(`/litellm/${path}/daily/activity/aggregated`);
+      expect(parsed.searchParams.get(idsParam)).toBe(expected);
+      expect(parsed.searchParams.get("start_date")).toBe("2025-02-12");
+      expect(parsed.searchParams.get("end_date")).toBe("2025-02-19");
+    },
+  );
+
+  it.each([
+    { fnName: "tagDailyActivityKeySearchCall", path: "tag", idsParam: "tags", ids: ["tag-a"], expected: "tag-a" },
+    {
+      fnName: "organizationDailyActivityKeySearchCall",
+      path: "organization",
+      idsParam: "organization_ids",
+      ids: ["org-a"],
+      expected: "org-a",
+    },
+    {
+      fnName: "customerDailyActivityKeySearchCall",
+      path: "customer",
+      idsParam: "end_user_ids",
+      ids: ["cust-a"],
+      expected: "cust-a",
+    },
+    {
+      fnName: "agentDailyActivityKeySearchCall",
+      path: "agent",
+      idsParam: "agent_ids",
+      ids: ["agent-a"],
+      expected: "agent-a",
+    },
+  ] as const)("$fnName sends the search term and entity ids", async ({ fnName, path, idsParam, ids, expected }) => {
+    const mockFetch = setupSuccessfulFetch();
+
+    await Networking[fnName]("token", startTime, endTime, "needle", [...ids]);
+
+    const parsed = calledUrl(mockFetch);
+    expect(parsed.pathname).toBe(`/litellm/${path}/daily/activity/aggregated/search`);
+    expect(parsed.searchParams.get("search")).toBe("needle");
+    expect(parsed.searchParams.get(idsParam)).toBe(expected);
+  });
+
+  it.each([
+    { fnName: "tagDailyActivityExportCall", path: "tag", idsParam: "tags", ids: ["tag-a"], expected: "tag-a" },
+    {
+      fnName: "organizationDailyActivityExportCall",
+      path: "organization",
+      idsParam: "organization_ids",
+      ids: ["org-a"],
+      expected: "org-a",
+    },
+    {
+      fnName: "customerDailyActivityExportCall",
+      path: "customer",
+      idsParam: "end_user_ids",
+      ids: ["cust-a"],
+      expected: "cust-a",
+    },
+    {
+      fnName: "agentDailyActivityExportCall",
+      path: "agent",
+      idsParam: "agent_ids",
+      ids: ["agent-a"],
+      expected: "agent-a",
+    },
+  ] as const)(
+    "$fnName requests the export route as a blob with entity ids",
+    async ({ fnName, path, idsParam, ids, expected }) => {
+      const mockFetch = setupSuccessfulFetch();
+
+      const exportArgs = {
+        accessToken: "token",
+        startTime,
+        endTime,
+        entityIds: [...ids],
+        exportType: "daily_with_keys" as const,
+        format: "csv" as const,
+      };
+      await Networking[fnName](exportArgs);
+
+      const parsed = calledUrl(mockFetch);
+      expect(parsed.pathname).toBe(`/litellm/${path}/daily/activity/export`);
+      expect(parsed.searchParams.get("export_type")).toBe("daily_with_keys");
+      expect(parsed.searchParams.get("format")).toBe("csv");
+      expect(parsed.searchParams.get(idsParam)).toBe(expected);
+    },
+  );
+
+  it("drops the entity filter param entirely when ids are null", async () => {
+    const mockFetch = setupSuccessfulFetch();
+
+    await Networking.tagDailyActivityAggregatedCall("token", startTime, endTime, null);
+
+    const parsed = calledUrl(mockFetch);
+    expect(parsed.searchParams.has("tags")).toBe(false);
+  });
+});

@@ -1523,6 +1523,109 @@ export const teamDailyActivityKeySearchCall = async (
   }
 };
 
+interface EntityDailyActivityExportOptions {
+  accessToken: string;
+  startTime: Date;
+  endTime: Date;
+  entityIds: string[] | null;
+  exportType: ExportScope;
+  format: ExportFormat;
+}
+
+const entityDailyActivityAggregatedCall =
+  (path: string, idsParam: string) =>
+  async (accessToken: string, startTime: Date, endTime: Date, ids: string[] | null = null) => {
+    try {
+      return await apiClient.get(`/${path}/daily/activity/aggregated`, {
+        accessToken,
+        query: {
+          start_date: formatDate(startTime),
+          end_date: formatDate(endTime),
+          timezone: new Date().getTimezoneOffset().toString(),
+          [idsParam]: ids && ids.length > 0 ? ids.join(",") : undefined,
+        },
+      });
+    } catch (error) {
+      console.error(`Failed to fetch aggregated ${path} daily activity:`, error);
+      throw error;
+    }
+  };
+
+const entityDailyActivityKeySearchCall =
+  (path: string, idsParam: string) =>
+  async (accessToken: string, startTime: Date, endTime: Date, ...options: [search: string, ids?: string[] | null]) => {
+    const [search, ids = null] = options;
+    try {
+      return await apiClient.get(`/${path}/daily/activity/aggregated/search`, {
+        accessToken,
+        query: {
+          start_date: formatDate(startTime),
+          end_date: formatDate(endTime),
+          timezone: new Date().getTimezoneOffset().toString(),
+          search,
+          [idsParam]: ids && ids.length > 0 ? ids.join(",") : undefined,
+        },
+      });
+    } catch (error) {
+      console.error(`Failed to search ${path} daily activity keys:`, error);
+      throw error;
+    }
+  };
+
+const entityDailyActivityExportCall =
+  (path: string, idsParam: string) =>
+  async ({
+    accessToken,
+    startTime,
+    endTime,
+    entityIds,
+    exportType,
+    format,
+  }: EntityDailyActivityExportOptions): Promise<Blob> => {
+    return apiClient.get<Blob>(`/${path}/daily/activity/export`, {
+      accessToken,
+      responseType: "blob",
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        export_type: exportType,
+        format,
+        [idsParam]: entityIds && entityIds.length > 0 ? entityIds.join(",") : undefined,
+      },
+    });
+  };
+
+export const tagDailyActivityAggregatedCall = entityDailyActivityAggregatedCall("tag", "tags");
+
+export const tagDailyActivityKeySearchCall = entityDailyActivityKeySearchCall("tag", "tags");
+
+export const tagDailyActivityExportCall = entityDailyActivityExportCall("tag", "tags");
+
+export const organizationDailyActivityAggregatedCall = entityDailyActivityAggregatedCall(
+  "organization",
+  "organization_ids",
+);
+
+export const organizationDailyActivityKeySearchCall = entityDailyActivityKeySearchCall(
+  "organization",
+  "organization_ids",
+);
+
+export const organizationDailyActivityExportCall = entityDailyActivityExportCall("organization", "organization_ids");
+
+export const customerDailyActivityAggregatedCall = entityDailyActivityAggregatedCall("customer", "end_user_ids");
+
+export const customerDailyActivityKeySearchCall = entityDailyActivityKeySearchCall("customer", "end_user_ids");
+
+export const customerDailyActivityExportCall = entityDailyActivityExportCall("customer", "end_user_ids");
+
+export const agentDailyActivityAggregatedCall = entityDailyActivityAggregatedCall("agent", "agent_ids");
+
+export const agentDailyActivityKeySearchCall = entityDailyActivityKeySearchCall("agent", "agent_ids");
+
+export const agentDailyActivityExportCall = entityDailyActivityExportCall("agent", "agent_ids");
+
 export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
 
 export const teamSpendByUserCall = async (

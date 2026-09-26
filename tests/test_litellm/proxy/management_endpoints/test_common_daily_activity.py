@@ -17,11 +17,11 @@ from litellm.constants import (
     USAGE_TOP_API_KEYS_LIMIT,
 )
 from litellm.proxy.management_endpoints.common_daily_activity import (
-    _adjust_dates_for_timezone,
     _build_aggregated_sql_query,
     _build_entity_rollup_sql_query,
     _is_user_agent_tag,
     _record_to_spend_metrics,
+    adjust_dates_for_timezone,
     get_api_key_metadata,
     get_daily_activity,
     get_daily_activity_aggregated,
@@ -1160,7 +1160,7 @@ class TestAdjustDatesForTimezone:
         ],
     )
     def test_returns_input_dates_unchanged_for_any_offset(self, offset_minutes):
-        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-05-29", offset_minutes)
+        start, end = adjust_dates_for_timezone("2026-05-29", "2026-05-29", offset_minutes)
         assert start == "2026-05-29"
         assert end == "2026-05-29"
 
@@ -1169,14 +1169,14 @@ class TestAdjustDatesForTimezone:
         Pins the boundary that caused the original 2x bug: a single IST day must
         not be translated into a SQL filter covering two UTC days.
         """
-        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-05-29", -330)
+        start, end = adjust_dates_for_timezone("2026-05-29", "2026-05-29", -330)
         assert start == end == "2026-05-29", (
             "Single-day IST query expanded to a multi-day UTC range; this is "
             "the regression that produced approximately 2x over-counting."
         )
 
     def test_multi_day_range_endpoints_are_preserved(self):
-        start, end = _adjust_dates_for_timezone("2026-05-29", "2026-06-02", -330)
+        start, end = adjust_dates_for_timezone("2026-05-29", "2026-06-02", -330)
         assert (start, end) == ("2026-05-29", "2026-06-02")
 
     @pytest.mark.parametrize("offset_minutes", [-330, 480])
@@ -1188,8 +1188,8 @@ class TestAdjustDatesForTimezone:
         exceeded the multi-day total by ~50% over a 5-day IST window.
         """
         days = ["2026-05-29", "2026-05-30", "2026-05-31", "2026-06-01", "2026-06-02"]
-        single_day_ranges = [_adjust_dates_for_timezone(d, d, offset_minutes) for d in days]
-        multi_day_range = _adjust_dates_for_timezone(days[0], days[-1], offset_minutes)
+        single_day_ranges = [adjust_dates_for_timezone(d, d, offset_minutes) for d in days]
+        multi_day_range = adjust_dates_for_timezone(days[0], days[-1], offset_minutes)
 
         per_day_starts = [r[0] for r in single_day_ranges]
         per_day_ends = [r[1] for r in single_day_ranges]
@@ -1215,43 +1215,43 @@ class TestAdjustDatesForTimezoneLiveEnd:
     PT_EVENING_UTC: Final = datetime(2026, 8, 6, 4, 30, tzinfo=timezone.utc)
 
     def test_pt_evening_range_ending_today_extends_to_utc_today(self):
-        start, end = _adjust_dates_for_timezone(
+        start, end = adjust_dates_for_timezone(
             "2026-07-06", "2026-08-05", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
         )
         assert (start, end) == ("2026-07-06", "2026-08-06")
 
     def test_without_opt_in_live_range_keeps_pass_through(self):
-        start, end = _adjust_dates_for_timezone("2026-07-06", "2026-08-05", 420, utc_now=self.PT_EVENING_UTC)
+        start, end = adjust_dates_for_timezone("2026-07-06", "2026-08-05", 420, utc_now=self.PT_EVENING_UTC)
         assert (start, end) == ("2026-07-06", "2026-08-05")
 
     def test_pt_historical_range_is_untouched(self):
-        start, end = _adjust_dates_for_timezone(
+        start, end = adjust_dates_for_timezone(
             "2026-07-01", "2026-08-04", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
         )
         assert (start, end) == ("2026-07-01", "2026-08-04")
 
     def test_east_of_utc_local_today_already_covers_utc_today(self):
         ist_evening_utc: Final = datetime(2026, 8, 5, 17, 0, tzinfo=timezone.utc)
-        start, end = _adjust_dates_for_timezone(
+        start, end = adjust_dates_for_timezone(
             "2026-07-07", "2026-08-06", -330, include_current_utc_day=True, utc_now=ist_evening_utc
         )
         assert (start, end) == ("2026-07-07", "2026-08-06")
 
     def test_missing_offset_stays_pass_through_even_for_live_range(self):
-        start, end = _adjust_dates_for_timezone(
+        start, end = adjust_dates_for_timezone(
             "2026-07-06", "2026-08-05", None, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
         )
         assert (start, end) == ("2026-07-06", "2026-08-05")
 
     def test_utc_caller_range_ending_today_is_unchanged(self):
         utc_noon: Final = datetime(2026, 8, 5, 12, 0, tzinfo=timezone.utc)
-        start, end = _adjust_dates_for_timezone(
+        start, end = adjust_dates_for_timezone(
             "2026-07-06", "2026-08-05", 0, include_current_utc_day=True, utc_now=utc_noon
         )
         assert (start, end) == ("2026-07-06", "2026-08-05")
 
     def test_future_end_date_extends_no_further_than_requested(self):
-        start, end = _adjust_dates_for_timezone(
+        start, end = adjust_dates_for_timezone(
             "2026-07-06", "2026-08-09", 420, include_current_utc_day=True, utc_now=self.PT_EVENING_UTC
         )
         assert (start, end) == ("2026-07-06", "2026-08-09")
@@ -1261,7 +1261,7 @@ class TestBuildAggregatedSqlQuery:
     """
     Asserts the SQL emitted by the aggregated query path stays anchored to the
     user-supplied date range. The original bug shipped a function that returned
-    expanded dates from _adjust_dates_for_timezone, so the regression surface is
+    expanded dates from adjust_dates_for_timezone, so the regression surface is
     not just the helper but the SQL it feeds into.
     """
 
@@ -3003,7 +3003,7 @@ async def test_export_keys_returns_every_key_beyond_the_top_n_cap(
 
     assert {row.api_key for row in rows} == {f"key-{i:03d}" for i in range(n_keys)}
     assert len(rows) == n_keys
-    assert all(row.team_id == "team-1" for row in rows)
+    assert all(row.entity_id == "team-1" for row in rows)
     by_key: Final = {row.api_key: row for row in rows}
     assert by_key["key-000"].spend == pytest.approx(1.0)
     assert sum(row.spend for row in rows) == pytest.approx(n_keys * (n_keys + 1) / 2)
@@ -3040,13 +3040,45 @@ async def test_export_daily_keeps_ptu_sentinel_in_the_team_rollup(
         exclude_entity_ids=None,
         timezone_offset_minutes=None,
         export_type="daily",
+        alias_metadata_key="team_alias",
     )
 
     assert len(rows) == 1
-    assert rows[0].team_id == "team-1"
-    assert rows[0].team_alias == "Alpha"
+    assert rows[0].entity_id == "team-1"
+    assert rows[0].entity_alias == "Alpha"
     assert rows[0].api_key is None
     assert rows[0].spend == pytest.approx(1002.0)
+
+
+@pytest.mark.asyncio
+async def test_export_daily_drops_alias_when_alias_metadata_key_is_none(
+    _aggregated_postgresql: psycopg.Connection,
+):
+    """Entities without a name lookup (tags) pass alias_metadata_key=None; the
+    metadata dict must then be ignored so no column leaks across entity types."""
+    _seed_daily_team_spend(
+        _aggregated_postgresql,
+        [_team_spend_row("row-1", "team-1", "key-1", 2.0)],
+    )
+
+    rows = await get_daily_activity_export_rows(
+        prisma_client=_export_prisma(_aggregated_postgresql),
+        table_name="litellm_dailyteamspend",
+        entity_id_field="team_id",
+        entity_id="team-1",
+        entity_metadata_field={"team-1": {"team_alias": "Alpha"}},
+        start_date="2026-06-01",
+        end_date="2026-06-01",
+        api_key=None,
+        exclude_entity_ids=None,
+        timezone_offset_minutes=None,
+        export_type="daily",
+        alias_metadata_key=None,
+    )
+
+    assert len(rows) == 1
+    assert rows[0].entity_id == "team-1"
+    assert rows[0].entity_alias is None
 
 
 @pytest.mark.asyncio
@@ -3190,3 +3222,76 @@ async def test_export_csv_omits_flat_cost_columns_when_no_ptu_spend_exists(
     header: Final = _team_export_csv("daily", rows).splitlines()[0]
     assert "Flat Cost" not in header
     assert "Total Cost" not in header
+
+
+def test_build_daily_activity_key_search_sql_scopes_limit_inside_where():
+    """The entity scope sits inside the same WHERE as the LIMIT, so matching
+    keys outside the caller's orgs cannot take the top-N slots."""
+    from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
+    from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+        build_daily_activity_key_search_sql,
+    )
+
+    sql, params = build_daily_activity_key_search_sql(
+        table_name="litellm_dailyorganizationspend",
+        entity_id_field="organization_id",
+        entity_id=["org-1", "org-2"],
+        exclude_entity_ids=["org-skip"],
+        api_key=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        timezone_offset_minutes=None,
+        search="shared-key",
+    )
+
+    assert 'FROM "LiteLLM_DailyOrganizationSpend" s' in sql
+    assert "EXISTS" in sql
+    assert '"organization_id" IN ($3, $4)' in sql
+    assert '"organization_id" NOT IN ($5)' in sql
+    assert f"LIMIT {USAGE_TOP_API_KEYS_LIMIT}" in sql
+    assert params == ["2024-01-01", "2024-01-31", "org-1", "org-2", "org-skip", "shared-key", "%shared-key%"]
+
+
+def test_build_daily_activity_key_search_sql_escapes_like_wildcards():
+    """`%`, `_` and `\\` in the search term must be backslash-escaped in the
+    ILIKE param so the term matches literally; the exact-token param stays raw."""
+    from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+        build_daily_activity_key_search_sql,
+    )
+
+    _, params = build_daily_activity_key_search_sql(
+        table_name="litellm_dailyorganizationspend",
+        entity_id_field="organization_id",
+        entity_id=None,
+        exclude_entity_ids=None,
+        api_key=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        timezone_offset_minutes=None,
+        search="a%b_c\\d",
+    )
+
+    assert params[2] == "a%b_c\\d"
+    assert params[3] == "%a\\%b\\_c\\\\d%"
+
+
+def test_build_daily_activity_key_search_sql_empty_entity_list_is_false():
+    """An empty explicit entity list must match nothing, not everything."""
+    from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+        build_daily_activity_key_search_sql,
+    )
+
+    sql, params = build_daily_activity_key_search_sql(
+        table_name="litellm_dailyagentspend",
+        entity_id_field="agent_id",
+        entity_id=[],
+        exclude_entity_ids=None,
+        api_key=None,
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        timezone_offset_minutes=None,
+        search="k",
+    )
+
+    assert "FALSE" in sql
+    assert params[-2:] == ["k", "%k%"]

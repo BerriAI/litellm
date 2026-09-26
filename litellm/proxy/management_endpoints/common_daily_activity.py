@@ -29,6 +29,8 @@ from litellm.repositories.verification_token_repository import (
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     BreakdownMetrics,
+    DailyActivityExportRow,
+    DailyActivityExportType,
     DailySpendData,
     DailySpendMetadata,
     GroupedData,
@@ -37,10 +39,6 @@ from litellm.types.proxy.management_endpoints.common_daily_activity import (
     MetricWithMetadata,
     SpendAnalyticsPaginatedResponse,
     SpendMetrics,
-)
-from litellm.types.proxy.management_endpoints.team_endpoints import (
-    TeamDailyActivityExportRow,
-    TeamDailyActivityExportType,
 )
 
 if TYPE_CHECKING:
@@ -52,7 +50,7 @@ if TYPE_CHECKING:
     )
 
 # Mapping from Prisma accessor names to actual PostgreSQL table names.
-_PRISMA_TO_PG_TABLE: Final[Mapping[str, str]] = {
+PRISMA_TO_PG_TABLE: Final[Mapping[str, str]] = {
     "litellm_dailyuserspend": "LiteLLM_DailyUserSpend",
     "litellm_dailyteamspend": "LiteLLM_DailyTeamSpend",
     "litellm_dailyorganizationspend": "LiteLLM_DailyOrganizationSpend",
@@ -568,7 +566,7 @@ async def get_api_key_metadata(
     return await attach_user_details(prisma_client, combined)
 
 
-def _adjust_dates_for_timezone(
+def adjust_dates_for_timezone(
     start_date: str,
     end_date: str,
     timezone_offset_minutes: int | None,
@@ -628,7 +626,7 @@ def _build_where_conditions(
 ) -> dict[str, "_WhereValue"]:
     """Build prisma where clause for daily activity queries."""
     # Adjust dates for timezone if provided
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+    adjusted_start, adjusted_end = adjust_dates_for_timezone(
         start_date, end_date, timezone_offset_minutes, include_current_utc_day
     )
 
@@ -663,7 +661,7 @@ def _build_where_conditions(
     return where_conditions
 
 
-def _build_aggregated_where_clause(
+def build_aggregated_where_clause(
     *,
     entity_id_field: str,
     entity_id: str | list[str] | None,
@@ -842,15 +840,15 @@ def _build_aggregated_sql_query(
     Returns:
         Tuple of (sql_query, params_list) ready for prisma_client.db.query_raw().
     """
-    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
+    pg_table: Final = PRISMA_TO_PG_TABLE.get(table_name)
     if pg_table is None:
         raise ValueError(f"Unknown table name: {table_name}")
 
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+    adjusted_start, adjusted_end = adjust_dates_for_timezone(
         start_date, end_date, timezone_offset_minutes, include_current_utc_day
     )
 
-    where_clause, where_params = _build_aggregated_where_clause(
+    where_clause, where_params = build_aggregated_where_clause(
         entity_id_field=entity_id_field,
         entity_id=entity_id,
         adjusted_start=adjusted_start,
@@ -947,15 +945,15 @@ def _build_entity_rollup_sql_query(
     (date, entity, api_key) — told apart by GROUPING(api_key): 1 when the
     api_key column is rolled up, 0 when it is part of the key.
     """
-    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
+    pg_table: Final = PRISMA_TO_PG_TABLE.get(table_name)
     if pg_table is None:
         raise ValueError(f"Unknown table name: {table_name}")
 
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(
+    adjusted_start, adjusted_end = adjust_dates_for_timezone(
         start_date, end_date, timezone_offset_minutes, include_current_utc_day
     )
 
-    where_clause, sql_params = _build_aggregated_where_clause(
+    where_clause, sql_params = build_aggregated_where_clause(
         entity_id_field=entity_id_field,
         entity_id=entity_id,
         adjusted_start=adjusted_start,
@@ -992,7 +990,7 @@ def _build_export_sql_query(
     api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
     exclude_entity_ids: list[str] | None,  # mutable-ok: filter union shared with the paginated path
     timezone_offset_minutes: int | None,
-    export_type: TeamDailyActivityExportType,
+    export_type: DailyActivityExportType,
 ) -> tuple[str, tuple[str, ...]]:
     """One unbounded rollup for the export route, on the aggregated path's WHERE clause.
 
@@ -1001,12 +999,12 @@ def _build_export_sql_query(
     totals match breakdown.entities, and are excluded from the key, user and
     model exports where the flat-cost row has no meaning.
     """
-    pg_table: Final = _PRISMA_TO_PG_TABLE.get(table_name)
+    pg_table: Final = PRISMA_TO_PG_TABLE.get(table_name)
     if pg_table is None:
         raise ValueError(f"Unknown table name: {table_name}")
 
-    adjusted_start, adjusted_end = _adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
-    where_clause, where_params = _build_aggregated_where_clause(
+    adjusted_start, adjusted_end = adjust_dates_for_timezone(start_date, end_date, timezone_offset_minutes)
+    where_clause, where_params = build_aggregated_where_clause(
         entity_id_field=entity_id_field,
         entity_id=entity_id,
         adjusted_start=adjusted_start,
@@ -1043,8 +1041,14 @@ class _ExportRow(_RollupMetricsRow):
     model: str | None
 
 
-def _export_team_alias(entity_metadata_field: Mapping[str, dict[str, object]] | None, entity_id: str) -> str | None:
-    alias: Final = _entity_metadata(entity_metadata_field, entity_id).get("team_alias")
+def _export_entity_alias(
+    entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    entity_id: str,
+    alias_metadata_key: str | None,
+) -> str | None:
+    if alias_metadata_key is None:
+        return None
+    alias: Final = _entity_metadata(entity_metadata_field, entity_id).get(alias_metadata_key)
     return alias if isinstance(alias, str) else None
 
 
@@ -1107,13 +1111,14 @@ class _ExportMetrics:
 def _export_base_row(
     record: _ExportRow,
     entity_metadata_field: Mapping[str, dict[str, object]] | None,
-) -> TeamDailyActivityExportRow:
+    alias_metadata_key: str | None,
+) -> DailyActivityExportRow:
     entity_id: Final = record.entity_id or "Unassigned"
     metrics: Final = _ExportMetrics.from_record(record)
-    return TeamDailyActivityExportRow(
+    return DailyActivityExportRow(
         date=record.date,
-        team_id=entity_id,
-        team_alias=_export_team_alias(entity_metadata_field, entity_id),
+        entity_id=entity_id,
+        entity_alias=_export_entity_alias(entity_metadata_field, entity_id, alias_metadata_key),
         model=record.model,
         spend=metrics.spend,
         flat_cost=_reported_flat_cost(record),
@@ -1131,15 +1136,16 @@ def _export_base_row(
 def _export_key_row(
     record: _ExportRow,
     entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    alias_metadata_key: str | None,
     api_key_metadata: Mapping[str, _KeyMetadataDict],
-) -> TeamDailyActivityExportRow:
+) -> DailyActivityExportRow:
     entity_id: Final = record.entity_id or "Unassigned"
     metadata: Final = _key_metadata(api_key_metadata, record.api_key or "")
     metrics: Final = _ExportMetrics.from_record(record)
-    return TeamDailyActivityExportRow(
+    return DailyActivityExportRow(
         date=record.date,
-        team_id=entity_id,
-        team_alias=_export_team_alias(entity_metadata_field, entity_id),
+        entity_id=entity_id,
+        entity_alias=_export_entity_alias(entity_metadata_field, entity_id, alias_metadata_key),
         api_key=record.api_key,
         key_alias=metadata.key_alias,
         user_id=metadata.user_id,
@@ -1159,8 +1165,9 @@ def _export_key_row(
 def _fold_export_users(
     records: Sequence[_ExportRow],
     entity_metadata_field: Mapping[str, dict[str, object]] | None,
+    alias_metadata_key: str | None,
     api_key_metadata: Mapping[str, _KeyMetadataDict],
-) -> tuple[TeamDailyActivityExportRow, ...]:
+) -> tuple[DailyActivityExportRow, ...]:
     """Fold (date, team, api_key) rows into (date, team, user) rows."""
 
     def bucket_of(record: _ExportRow) -> tuple[str, str, str]:
@@ -1187,7 +1194,12 @@ def _fold_export_users(
             emails[bucket_key] = metadata.user_email
     return tuple(
         _export_folded_user_row(
-            bucket_key, sums[bucket_key], emails[bucket_key], len(key_sets[bucket_key]), entity_metadata_field
+            bucket_key,
+            sums[bucket_key],
+            emails[bucket_key],
+            len(key_sets[bucket_key]),
+            entity_metadata_field,
+            alias_metadata_key,
         )
         for bucket_key in sorted(sums)
     )
@@ -1199,12 +1211,13 @@ def _export_folded_user_row(
     user_email: str | None,
     keys: int,
     entity_metadata_field: Mapping[str, dict[str, object]] | None,
-) -> TeamDailyActivityExportRow:
+    alias_metadata_key: str | None,
+) -> DailyActivityExportRow:
     date, entity_id, user_id = bucket_key
-    return TeamDailyActivityExportRow(
+    return DailyActivityExportRow(
         date=date,
-        team_id=entity_id,
-        team_alias=_export_team_alias(entity_metadata_field, entity_id),
+        entity_id=entity_id,
+        entity_alias=_export_entity_alias(entity_metadata_field, entity_id, alias_metadata_key),
         user_id=user_id if user_id != "Unassigned" else None,
         user_email=user_email,
         keys=keys,
@@ -1232,8 +1245,9 @@ async def get_daily_activity_export_rows(
     api_key: str | list[str] | None,  # mutable-ok: filter union shared with the paginated path
     exclude_entity_ids: list[str] | None,  # mutable-ok: filter union shared with the paginated path
     timezone_offset_minutes: int | None,
-    export_type: TeamDailyActivityExportType,
-) -> tuple[TeamDailyActivityExportRow, ...]:
+    export_type: DailyActivityExportType,
+    alias_metadata_key: str | None = None,
+) -> tuple[DailyActivityExportRow, ...]:
     """Every (date, entity[, api_key|model]) rollup row in the range, uncapped."""
     sql_query, sql_params = _build_export_sql_query(
         table_name=table_name,
@@ -1251,7 +1265,7 @@ async def get_daily_activity_export_rows(
 
     if export_type in ("daily", "daily_with_models"):
         return await asyncio.to_thread(
-            lambda: tuple(_export_base_row(record, entity_metadata_field) for record in records)
+            lambda: tuple(_export_base_row(record, entity_metadata_field, alias_metadata_key) for record in records)
         )
 
     api_keys: Final = frozenset(record.api_key for record in records if record.api_key)
@@ -1262,9 +1276,14 @@ async def get_daily_activity_export_rows(
     )
     if export_type == "daily_with_keys":
         return await asyncio.to_thread(
-            lambda: tuple(_export_key_row(record, entity_metadata_field, api_key_metadata) for record in records)
+            lambda: tuple(
+                _export_key_row(record, entity_metadata_field, alias_metadata_key, api_key_metadata)
+                for record in records
+            )
         )
-    return await asyncio.to_thread(_fold_export_users, records, entity_metadata_field, api_key_metadata)
+    return await asyncio.to_thread(
+        _fold_export_users, records, entity_metadata_field, alias_metadata_key, api_key_metadata
+    )
 
 
 def _aggregate_spend_records_sync(

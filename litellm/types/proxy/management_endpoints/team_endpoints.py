@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, Literal
+from typing import Any, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from typing_extensions import NotRequired, ReadOnly, TypedDict
@@ -13,6 +13,10 @@ from litellm.proxy._types import (
     MemberDeleteRequest,
 )
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
+from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    DailyActivityExportFormat,
+    DailyActivityExportType,
+)
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
 from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
 
@@ -279,8 +283,8 @@ class TeamUserSpendResponse(BaseModel):
     results: tuple[TeamUserSpendRow, ...]
 
 
-TeamDailyActivityExportType = Literal["daily", "daily_with_keys", "daily_with_users", "daily_with_models"]
-TeamDailyActivityExportFormat = Literal["csv", "json"]
+TeamDailyActivityExportType: TypeAlias = DailyActivityExportType
+TeamDailyActivityExportFormat: TypeAlias = DailyActivityExportFormat
 
 
 class TeamDailyActivityExportRow(BaseModel):

@@ -1049,3 +1049,156 @@ def test_customer_delete_invalidates_end_user_and_registry_caches(mock_prisma_cl
         "end_user_id:c2",
         "end_user_restricted_registry",
     ]
+
+
+@pytest.mark.asyncio
+async def test_customer_daily_activity_routes_reject_non_admin(monkeypatch):
+    """All three new routes keep the same admin-only gate as the paginated one:
+    LiteLLM_EndUserTable has no per-tenant ownership, so non-admin scoping is
+    impossible."""
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import customer_endpoints
+    from litellm.proxy.management_endpoints.customer_endpoints import (
+        get_customer_daily_activity_aggregated,
+        get_customer_daily_activity_export,
+        search_customer_daily_activity_keys,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    aggregated_mock = AsyncMock()
+    monkeypatch.setattr(customer_endpoints, "get_daily_activity_aggregated", aggregated_mock)
+
+    non_admin_key = UserAPIKeyAuth(user_id="regular-user-abc", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_customer_daily_activity_aggregated(
+            end_user_ids=None,
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            model=None,
+            api_key=None,
+            exclude_end_user_ids=None,
+            timezone=None,
+            user_api_key_dict=non_admin_key,
+        )
+    assert exc_info.value.status_code == 401
+
+    with pytest.raises(HTTPException) as exc_info:
+        await search_customer_daily_activity_keys(
+            user_api_key_dict=non_admin_key,
+            search="k",
+            end_user_ids=None,
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            exclude_end_user_ids=None,
+            timezone=None,
+        )
+    assert exc_info.value.status_code == 401
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_customer_daily_activity_export(
+            user_api_key_dict=non_admin_key,
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            export_type="daily",
+            format="csv",
+            end_user_ids=None,
+            exclude_end_user_ids=None,
+            timezone_offset=None,
+        )
+    assert exc_info.value.status_code == 401
+
+    aggregated_mock.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_customer_daily_activity_aggregated_alias_metadata_and_breakdown(monkeypatch):
+    """Admin aggregated calls must pass the end-user alias metadata under the
+    same `alias` key the paginated route uses and request the entity breakdown."""
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import customer_endpoints
+    from litellm.proxy.management_endpoints.customer_endpoints import (
+        get_customer_daily_activity_aggregated,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_end_user = MagicMock()
+    mock_end_user.user_id = "end-user-1"
+    mock_end_user.alias = "Customer One"
+    mock_prisma_client.db.litellm_endusertable.find_many = AsyncMock(return_value=[mock_end_user])
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    aggregated_mock = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr(customer_endpoints, "get_daily_activity_aggregated", aggregated_mock)
+
+    await get_customer_daily_activity_aggregated(
+        end_user_ids="end-user-1",
+        start_date="2024-01-01",
+        end_date="2024-01-31",
+        model=None,
+        api_key=None,
+        exclude_end_user_ids=None,
+        timezone=480,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="admin1"),
+    )
+
+    kwargs = aggregated_mock.call_args.kwargs
+    assert kwargs["table_name"] == "litellm_dailyenduserspend"
+    assert kwargs["entity_id_field"] == "end_user_id"
+    assert kwargs["entity_id"] == ["end-user-1"]
+    assert kwargs["entity_metadata_field"] == {"end-user-1": {"alias": "Customer One"}}
+    assert kwargs["include_entity_breakdown"] is True
+    assert kwargs["timezone_offset_minutes"] == 480
+
+
+@pytest.mark.asyncio
+async def test_search_customer_daily_activity_keys_scopes_search_to_caller_end_users():
+    """The key search must pass the resolved end-user ids into the scoped query
+    so its LIMIT ranks only keys with spend rows for the caller's customers."""
+    from litellm.proxy.management_endpoints import customer_endpoints
+    from litellm.proxy.management_endpoints.customer_endpoints import (
+        search_customer_daily_activity_keys,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client"),
+        patch.object(
+            customer_endpoints,
+            "_resolve_customer_daily_activity_scope",
+            new=AsyncMock(
+                return_value=customer_endpoints._CustomerDailyActivityScope(
+                    end_user_ids=["cust-1"],
+                    exclude_end_user_ids=["cust-skip"],
+                    end_user_alias_metadata={},
+                )
+            ),
+        ),
+        patch.object(
+            customer_endpoints,
+            "search_daily_activity_key_tokens",
+            new=AsyncMock(return_value=("sk-1",)),
+        ) as mock_search,
+        patch.object(
+            customer_endpoints,
+            "get_daily_activity_aggregated",
+            new=AsyncMock(return_value=MagicMock()),
+        ),
+    ):
+        await search_customer_daily_activity_keys(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            search="shared-key",
+            end_user_ids="cust-1",
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            exclude_end_user_ids="cust-skip",
+            timezone=None,
+        )
+
+        kwargs = mock_search.call_args[1]
+        assert kwargs["table_name"] == "litellm_dailyenduserspend"
+        assert kwargs["entity_id_field"] == "end_user_id"
+        assert kwargs["entity_id"] == ["cust-1"]
+        assert kwargs["exclude_entity_ids"] == ["cust-skip"]
+        assert kwargs["search"] == "shared-key"

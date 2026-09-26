@@ -834,6 +834,66 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/agent/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Daily Activity Aggregated
+         * @description Aggregated daily activity for agents without pagination, including per-agent breakdown.
+         */
+        get: operations["get_agent_daily_activity_aggregated_agent_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agent/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Agent Daily Activity Keys
+         * @description Key search over aggregated agent daily activity.
+         */
+        get: operations["search_agent_daily_activity_keys_agent_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/agent/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Agent Daily Activity Export
+         * @description Export daily activity for agents as CSV or JSON, uncapped.
+         */
+        get: operations["get_agent_daily_activity_export_agent_daily_activity_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/alerting/settings": {
         parameters: {
             query?: never;
@@ -3982,6 +4042,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/customer/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Daily Activity Aggregated
+         * @description Aggregated daily activity for customers without pagination, including
+         *     per-customer breakdown.
+         */
+        get: operations["get_customer_daily_activity_aggregated_customer_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/customer/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Customer Daily Activity Keys
+         * @description Key search over aggregated customer daily activity.
+         */
+        get: operations["search_customer_daily_activity_keys_customer_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/customer/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Daily Activity Export
+         * @description Export daily activity for customers as CSV or JSON, uncapped.
+         */
+        get: operations["get_customer_daily_activity_export_customer_daily_activity_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/customer/delete": {
         parameters: {
             query?: never;
@@ -4534,6 +4655,67 @@ export interface paths {
          * @description Get daily activity for specific organizations or all accessible organizations.
          */
         get: operations["get_customer_daily_activity_end_user_daily_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Daily Activity Aggregated
+         * @description Aggregated daily activity for customers without pagination, including
+         *     per-customer breakdown.
+         */
+        get: operations["get_customer_daily_activity_aggregated_end_user_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Customer Daily Activity Keys
+         * @description Key search over aggregated customer daily activity.
+         */
+        get: operations["search_customer_daily_activity_keys_end_user_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/end_user/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Customer Daily Activity Export
+         * @description Export daily activity for customers as CSV or JSON, uncapped.
+         */
+        get: operations["get_customer_daily_activity_export_end_user_daily_activity_export_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -10750,6 +10932,67 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/organization/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Organization Daily Activity Aggregated
+         * @description Aggregated daily activity for organizations without pagination, including
+         *     per-organization breakdown.
+         */
+        get: operations["get_organization_daily_activity_aggregated_organization_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organization/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Organization Daily Activity Keys
+         * @description Key search over aggregated organization daily activity.
+         */
+        get: operations["search_organization_daily_activity_keys_organization_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/organization/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Organization Daily Activity Export
+         * @description Export daily activity for organizations as CSV or JSON, uncapped.
+         */
+        get: operations["get_organization_daily_activity_export_organization_daily_activity_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/organization/delete": {
         parameters: {
             query?: never;
@@ -15174,6 +15417,67 @@ export interface paths {
          *         SpendAnalyticsPaginatedResponse: Paginated response containing daily activity data.
          */
         get: operations["get_tag_daily_activity_tag_daily_activity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tag/daily/activity/aggregated": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tag Daily Activity Aggregated
+         * @description Aggregated daily activity for tags without pagination.
+         */
+        get: operations["get_tag_daily_activity_aggregated_tag_daily_activity_aggregated_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tag/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Tag Daily Activity Keys
+         * @description Key search over aggregated tag daily activity. Returns the aggregated
+         *     response restricted to the top-spend matching keys.
+         */
+        get: operations["search_tag_daily_activity_keys_tag_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/tag/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Tag Daily Activity Export
+         * @description Export daily activity for tags as CSV or JSON, uncapped.
+         */
+        get: operations["get_tag_daily_activity_export_tag_daily_activity_export_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -29485,6 +29789,87 @@ export interface components {
              * @description Set to false to disable SSL verification (e.g., for self-signed certificates)
              */
             ssl_verify?: string | null;
+        };
+        /** DailyActivityExportMetadata */
+        DailyActivityExportMetadata: {
+            /** End Date */
+            end_date: string;
+            /** Entity Ids */
+            entity_ids: string[] | null;
+            /** Export Date */
+            export_date: string;
+            /**
+             * Export Type
+             * @enum {string}
+             */
+            export_type: "daily" | "daily_with_keys" | "daily_with_users" | "daily_with_models";
+            /** Start Date */
+            start_date: string;
+            /** Total Api Requests */
+            total_api_requests: number;
+            /** Total Failed Requests */
+            total_failed_requests: number;
+            /**
+             * Total Flat Cost
+             * @default 0
+             */
+            total_flat_cost: number;
+            /** Total Spend */
+            total_spend: number;
+            /** Total Successful Requests */
+            total_successful_requests: number;
+            /** Total Tokens */
+            total_tokens: number;
+        };
+        /** DailyActivityExportResponse */
+        DailyActivityExportResponse: {
+            /** Data */
+            data: components["schemas"]["DailyActivityExportRow"][];
+            metadata: components["schemas"]["DailyActivityExportMetadata"];
+        };
+        /** DailyActivityExportRow */
+        DailyActivityExportRow: {
+            /** Api Key */
+            api_key?: string | null;
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Creation Input Tokens */
+            cache_creation_input_tokens: number;
+            /** Cache Read Input Tokens */
+            cache_read_input_tokens: number;
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Date */
+            date: string;
+            /** Entity Alias */
+            entity_alias?: string | null;
+            /** Entity Id */
+            entity_id: string;
+            /** Failed Requests */
+            failed_requests: number;
+            /**
+             * Flat Cost
+             * @default 0
+             */
+            flat_cost: number;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Keys */
+            keys?: number | null;
+            /** Model */
+            model?: string | null;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Spend */
+            spend: number;
+            /** Successful Requests */
+            successful_requests: number;
+            /** Total Tokens */
+            total_tokens: number;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /** DailySpendData */
         DailySpendData: {
@@ -47989,6 +48374,118 @@ export interface operations {
             };
         };
     };
+    get_agent_daily_activity_aggregated_agent_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                agent_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_agent_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_agent_daily_activity_keys_agent_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                /** @description Search term matching key hash, key alias or user id */
+                search: string;
+                agent_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                exclude_agent_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_daily_activity_export_agent_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                start_date?: string | null;
+                end_date?: string | null;
+                export_type?: "daily" | "daily_with_keys" | "daily_with_users" | "daily_with_models";
+                format?: "csv" | "json";
+                agent_ids?: string | null;
+                exclude_agent_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityExportResponse"];
+                    "text/csv": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     alerting_settings_alerting_settings_get: {
         parameters: {
             query?: never;
@@ -53032,6 +53529,118 @@ export interface operations {
             };
         };
     };
+    get_customer_daily_activity_aggregated_customer_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_customer_daily_activity_keys_customer_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                /** @description Search term matching key hash, key alias or user id */
+                search: string;
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_export_customer_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                start_date?: string | null;
+                end_date?: string | null;
+                export_type?: "daily" | "daily_with_keys" | "daily_with_users" | "daily_with_models";
+                format?: "csv" | "json";
+                end_user_ids?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityExportResponse"];
+                    "text/csv": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_end_user_customer_delete_post: {
         parameters: {
             query?: never;
@@ -53602,6 +54211,117 @@ export interface operations {
                 page?: number;
                 page_size?: number;
                 exclude_end_user_ids?: string | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_aggregated_end_user_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_customer_daily_activity_keys_end_user_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                /** @description Search term matching key hash, key alias or user id */
+                search: string;
+                end_user_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_customer_daily_activity_export_end_user_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                start_date?: string | null;
+                end_date?: string | null;
+                export_type?: "daily" | "daily_with_keys" | "daily_with_users" | "daily_with_models";
+                format?: "csv" | "json";
+                end_user_ids?: string | null;
+                exclude_end_user_ids?: string | null;
+                timezone?: number | null;
             };
             header?: never;
             path?: never;
@@ -61702,6 +62422,118 @@ export interface operations {
             };
         };
     };
+    get_organization_daily_activity_aggregated_organization_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                organization_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_organization_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_organization_daily_activity_keys_organization_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                /** @description Search term matching key hash, key alias or user id */
+                search: string;
+                organization_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                exclude_organization_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_organization_daily_activity_export_organization_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                start_date?: string | null;
+                end_date?: string | null;
+                export_type?: "daily" | "daily_with_keys" | "daily_with_users" | "daily_with_models";
+                format?: "csv" | "json";
+                organization_ids?: string | null;
+                exclude_organization_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityExportResponse"];
+                    "text/csv": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_organization_organization_delete_delete: {
         parameters: {
             query?: never;
@@ -66480,6 +67312,118 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tag_daily_activity_aggregated_tag_daily_activity_aggregated_get: {
+        parameters: {
+            query?: {
+                tags?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                model?: string | null;
+                api_key?: string | null;
+                exclude_tags?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_tag_daily_activity_keys_tag_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                /** @description Search term matching key hash, key alias or user id */
+                search: string;
+                tags?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                exclude_tags?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_tag_daily_activity_export_tag_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                start_date?: string | null;
+                end_date?: string | null;
+                export_type?: "daily" | "daily_with_keys" | "daily_with_users" | "daily_with_models";
+                format?: "csv" | "json";
+                tags?: string | null;
+                exclude_tags?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["DailyActivityExportResponse"];
+                    "text/csv": unknown;
                 };
             };
             /** @description Validation Error */
