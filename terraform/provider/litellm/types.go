@@ -193,12 +193,20 @@ type MCPServerRequest struct {
 	Transport       string            `json:"transport"`
 	SpecVersion     string            `json:"spec_version,omitempty"`
 	AuthType        string            `json:"auth_type,omitempty"`
+	Credentials     *MCPCredentials   `json:"credentials,omitempty"`
 	URL             string            `json:"url"`
 	MCPInfo         *MCPInfo          `json:"mcp_info,omitempty"`
 	MCPAccessGroups []string          `json:"mcp_access_groups,omitempty"`
 	Command         string            `json:"command,omitempty"`
 	Args            []string          `json:"args,omitempty"`
 	Env             map[string]string `json:"env,omitempty"`
+}
+
+// MCPCredentials mirrors litellm.types.mcp.MCPCredentials: the credential
+// blob accepted by the LiteLLM API's NewMCPServerRequest. Only the fields the
+// provider sets are modeled here.
+type MCPCredentials struct {
+	AuthValue string `json:"auth_value,omitempty"`
 }
 
 // MCPServerResponse represents a response from the API containing MCP server information.
