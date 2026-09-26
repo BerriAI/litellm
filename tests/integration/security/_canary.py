@@ -81,6 +81,10 @@ SLOTS: Final = MappingProxyType(
     {
         MARKER: Slot(MARKER, "Sensitivity marker in message content; must appear where prompts are stored"),
         "B1": Slot("B1", "Deployment api_key declared in the proxy config.yaml model_list"),
+        "D1": Slot("D1", "Client-side api_key in the request body"),
+        "D2": Slot("D2", "Client x-api-key header forwarded as the provider key"),
+        "D3": Slot("D3", "Client x- header forwarded to the provider"),
+        "D4": Slot("D4", "Anthropic OAuth token in the client Authorization header", prefix="sk-ant-oat01-"),
     }
 )
 
