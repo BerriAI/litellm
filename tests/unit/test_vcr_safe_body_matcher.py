@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import itertools
 import json
 import os
 import queue
@@ -397,11 +398,12 @@ def test_before_record_request_is_idempotent_on_the_same_request_object():
 @pytest.fixture
 def local_upstream() -> Iterator[tuple[str, "queue.Queue[str]"]]:
     served_paths: Final = queue.Queue[str]()
+    hits: Final = itertools.count(1)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:
             served_paths.put(self.path)
-            payload: Final = json.dumps({"served_by": "live server"}).encode()
+            payload: Final = json.dumps({"served_by": "live server", "hit": next(hits)}).encode()
             self.send_response(200)
             self.send_header("content-type", "application/json")
             self.send_header("content-length", str(len(payload)))
@@ -457,6 +459,31 @@ def test_config_never_records_or_replays_a_test_owned_local_upstream(
         second_body: Final = _fetch_json(url)
 
     assert _paths_served(served_paths, expected=2) == ("/v1/moderations", "/v1/moderations")
-    assert first_body == second_body == {"served_by": "live server"}
+    assert (first_body, second_body) == (
+        {"served_by": "live server", "hit": 1},
+        {"served_by": "live server", "hit": 2},
+    )
     assert (first_session.play_count, second_session.play_count) == (0, 0)
     assert not (tmp_path / "local_upstream.yaml").exists()
+
+
+def test_config_never_replays_a_localhost_response_an_earlier_run_stored(
+    tmp_path: Path, local_upstream: tuple[str, "queue.Queue[str]"]
+):
+    url, served_paths = local_upstream
+    recorder: Final = _recorder_with_repo_matchers(tmp_path)
+    config_that_recorded_localhost: Final = vcr_config_dict() | {"ignore_localhost": False}
+
+    with recorder.use_cassette("stored_by_an_earlier_run.yaml", **config_that_recorded_localhost):
+        stored_body: Final = _fetch_json(url)
+    assert (tmp_path / "stored_by_an_earlier_run.yaml").exists()
+
+    with recorder.use_cassette("stored_by_an_earlier_run.yaml", **vcr_config_dict()) as session:
+        live_body: Final = _fetch_json(url)
+
+    assert _paths_served(served_paths, expected=2) == ("/v1/moderations", "/v1/moderations")
+    assert (stored_body, live_body) == (
+        {"served_by": "live server", "hit": 1},
+        {"served_by": "live server", "hit": 2},
+    )
+    assert session.play_count == 0
