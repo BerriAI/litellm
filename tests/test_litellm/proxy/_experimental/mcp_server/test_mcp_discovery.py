@@ -90,6 +90,25 @@ class TestMCPRegistryFile:
         assert linear["url"] == "https://mcp.linear.app/mcp"
         assert "/sse" not in linear["url"]
 
+    def test_parallel_search_uses_anonymous_streamable_http(self, registry_path):
+        with open(registry_path, "r") as f:
+            data = json.load(f)
+
+        parallel_search = next(
+            server for server in data["servers"] if server["name"] == "parallel_search"
+        )
+        assert parallel_search == {
+            "name": "parallel_search",
+            "title": "Parallel Search",
+            "description": "AI-optimized web search and extraction for agents",
+            "icon_url": "https://assets.parallel.ai/dark-parallel-avatar-270.png",
+            "category": "Search",
+            "registry_url": None,
+            "transport": "http",
+            "url": "https://search.parallel.ai/mcp",
+            "env_vars": [],
+        }
+
     def test_well_known_servers_present(self, registry_path):
         """Ensure key well-known MCPs are in the registry."""
         with open(registry_path, "r") as f:
