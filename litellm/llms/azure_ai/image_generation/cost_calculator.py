@@ -159,44 +159,24 @@ def cost_calculator(
                 prices, image_response
             )
 
-        return _generated_cost(
-            model=model,
-            resolved=_model_info,
-            image_response=image_response,
-            size=size,
-            n=n,
-            optional_params=optional_params,
+        num_images: Final = n if n is not None else len(image_response.data or ())
+        output_cost_per_image: Final[float] = _model_info.get("output_cost_per_image") or 0.0
+        if output_cost_per_image:
+            return output_cost_per_image * num_images
+        if not _pixel_rate(_model_info, "input_cost_per_pixel"):
+            return 0.0
+
+        from litellm.cost_calculator import default_image_cost_calculator
+
+        return default_image_cost_calculator(
+            model=_model_info.get("key", model),
+            custom_llm_provider=litellm.LlmProviders.AZURE_AI.value,
+            size=_output_size(size, optional_params, image_response),
+            n=num_images,
             model_info=model_info,
         )
 
     raise ValueError(f"image_response must be of type ImageResponse got type={type(image_response)}")
-
-
-def _generated_cost(
-    model: str,
-    resolved: ModelInfo,
-    image_response: ImageResponse,
-    size: str | None,
-    n: int | None,
-    optional_params: Mapping[str, object] | None,
-    model_info: ModelInfo | None,
-) -> float:
-    num_images: Final = n if n is not None else len(image_response.data or ())
-    output_cost_per_image: Final[float] = resolved.get("output_cost_per_image") or 0.0
-    if output_cost_per_image:
-        return output_cost_per_image * num_images
-    if not _pixel_rate(resolved, "input_cost_per_pixel"):
-        return 0.0
-
-    from litellm.cost_calculator import default_image_cost_calculator
-
-    return default_image_cost_calculator(
-        model=resolved.get("key", model),
-        custom_llm_provider=litellm.LlmProviders.AZURE_AI.value,
-        size=_output_size(size, optional_params, image_response),
-        n=num_images,
-        model_info=model_info,
-    )
 
 
 def _output_size(

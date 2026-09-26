@@ -17,7 +17,6 @@ from litellm.llms.azure_ai.common_utils import (
 from litellm.llms.azure_ai.image_generation.flux_transformation import (
     AzureFoundryFluxImageGenerationConfig,
 )
-from litellm.llms.openai.common_utils import OpenAIError
 from litellm.llms.openai.image_edit.transformation import OpenAIImageEditConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.images.main import ImageEditOptionalRequestParams
@@ -157,13 +156,9 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
     ) -> ImageResponse:
-        try:
-            raw_response_json: Final = raw_response.json()
-        except Exception:
-            raise OpenAIError(message=raw_response.text, status_code=raw_response.status_code)
-        pixels: Final = self.reference_image_pixels
-        hidden_params: Final = {REFERENCE_IMAGE_PIXELS_HIDDEN_PARAM: pixels}  # mutable-ok: the cost path writes into it
-        return ImageResponse(**raw_response_json, hidden_params=hidden_params)
+        image_response: Final = super().transform_image_edit_response(model, raw_response, logging_obj)
+        image_response._hidden_params[REFERENCE_IMAGE_PIXELS_HIDDEN_PARAM] = self.reference_image_pixels
+        return image_response
 
     def get_complete_url(
         self,

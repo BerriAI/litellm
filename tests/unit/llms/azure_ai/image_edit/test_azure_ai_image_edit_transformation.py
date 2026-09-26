@@ -1,6 +1,8 @@
+import asyncio
 import base64
 import contextlib
 import io
+import itertools
 import json
 import pathlib
 import struct
@@ -23,6 +25,7 @@ from litellm.llms.azure_ai.image_edit.transformation import (
 )
 from litellm.llms.custom_httpx import llm_http_handler as llm_http_handler_module
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+from litellm.types.utils import ImageResponse
 
 
 def test_azure_ai_validate_environment():
@@ -672,3 +675,33 @@ async def test_flux2_aimage_edit_bills_references_like_image_edit():
 
     assert response._hidden_params["reference_image_pixels"] == (1024 * 1024, 1024 * 1024)
     assert response._hidden_params["response_cost"] == pytest.approx(rate * 1024 * 1024 + rate * 2 * 1024 * 1024)
+
+
+async def test_concurrent_flux2_image_edits_each_bill_their_own_references():
+    requests_sent: Final = itertools.count(1)
+    both_requests_sent: Final = asyncio.Event()
+
+    async def respond_once_both_are_in_flight(request: httpx.Request) -> httpx.Response:
+        if next(requests_sent) == 2:
+            both_requests_sent.set()
+        await both_requests_sent.wait()
+        return _edit_ok(request)
+
+    client: Final = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(respond_once_both_are_in_flight))
+
+    async def edit_with(reference: bytes) -> ImageResponse:
+        return await litellm.aimage_edit(
+            model="azure_ai/FLUX.2-flex",
+            image=[reference],
+            prompt="Make it a watercolor",
+            api_key="test-key",
+            api_base="https://example.services.ai.azure.com",
+            client=client,
+            size="1024x1024",
+        )
+
+    one_megapixel, four_megapixels = await asyncio.gather(edit_with(_png(1024, 1024)), edit_with(_png(2048, 2048)))
+
+    assert one_megapixel._hidden_params["reference_image_pixels"] == (1024 * 1024,)
+    assert four_megapixels._hidden_params["reference_image_pixels"] == (2048 * 2048,)

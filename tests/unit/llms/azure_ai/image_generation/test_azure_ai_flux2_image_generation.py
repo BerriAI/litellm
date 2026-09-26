@@ -687,6 +687,20 @@ def test_unlisted_azure_ai_model_bills_deployment_input_cost_per_pixel(width: in
     assert cost == pytest.approx(1e-07 * width * height * 2)
 
 
+def test_unlisted_azure_ai_model_bills_its_pixel_rate_on_the_mapped_dimensions() -> None:
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="unlisted-flux-deployment",
+        completion_response=ImageResponse(data=[ImageObject(b64_json="aW1n")]),
+        custom_llm_provider="azure_ai",
+        size="1024x1024",
+        optional_params={"width": 1536, "height": 1024},
+        call_type="image_generation",
+        model_info={"input_cost_per_pixel": 1e-07},
+    )
+
+    assert cost == pytest.approx(1e-07 * 1536 * 1024)
+
+
 def test_unlisted_azure_ai_deployment_without_a_generated_image_price_bills_nothing() -> None:
     cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
         model="unlisted-flux-deployment",
