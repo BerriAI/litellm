@@ -197,12 +197,7 @@ def _is_delta_non_empty(delta: Delta) -> bool:
     # Check all regular attributes of the delta object
     for attr_name in dir(delta):
         # Skip private attributes, methods, and Pydantic-specific fields
-        if (
-            attr_name.startswith("_")
-            or attr_name.startswith("model_")
-            or callable(_attribute_of(delta, attr_name))
-            or attr_name.startswith("model_")
-        ):
+        if attr_name.startswith("_") or attr_name.startswith("model_") or callable(_attribute_of(delta, attr_name)):
             continue
 
         delta_attr_value: object = getattr(delta, attr_name, None)
