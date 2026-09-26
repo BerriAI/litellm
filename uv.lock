@@ -4708,7 +4708,6 @@ dev = [
     { name = "pytest-socket" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
-    { name = "redis-lua-py" },
     { name = "reportlab" },
     { name = "requests-mock" },
     { name = "responses" },
@@ -4744,6 +4743,7 @@ proxy-dev = [
     { name = "opentelemetry-sdk" },
     { name = "prisma" },
     { name = "prometheus-client" },
+    { name = "sentry-sdk" },
 ]
 
 [package.metadata]
@@ -4922,7 +4922,6 @@ dev = [
     { name = "pytest-socket", specifier = "==0.8.1" },
     { name = "pytest-timeout", specifier = "==2.4.0" },
     { name = "pytest-xdist", specifier = "==3.8.0" },
-    { name = "redis-lua-py", specifier = "==0.10.0" },
     { name = "reportlab", specifier = "==5.0.1" },
     { name = "requests-mock", specifier = "==1.12.1" },
     { name = "responses", specifier = "==0.26.0" },
@@ -4958,6 +4957,7 @@ proxy-dev = [
     { name = "opentelemetry-sdk", specifier = "==1.33.1" },
     { name = "prisma", specifier = "==0.11.0" },
     { name = "prometheus-client", specifier = "==0.20.0" },
+    { name = "sentry-sdk", specifier = "==2.21.0" },
 ]
 
 [[package]]
@@ -8416,15 +8416,6 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/6a/cf/128b1b6d7086200c9f387bd4be9b2572a30b90745ef078bd8b235042dc9f/redis-5.3.1.tar.gz", hash = "sha256:ca49577a531ea64039b5a36db3d6cd1a0c7a60c34124d46924a45b956e8cf14c", size = 4626200, upload-time = "2025-07-25T08:06:27.778Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/7f/26/5c5fa0e83c3621db835cfc1f1d789b37e7fa99ed54423b5f519beb931aa7/redis-5.3.1-py3-none-any.whl", hash = "sha256:dc1909bd24669cc31b5f67a039700b16ec30571096c5f1f0d9d2324bff31af97", size = 272833, upload-time = "2025-07-25T08:06:26.317Z" },
-]
-
-[[package]]
-name = "redis-lua-py"
-version = "0.10.0"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/36/9b/a3f6beb0f4d777726fcafa1b680060d72c6c26efbfddff611930dc058a6e/redis_lua_py-0.10.0.tar.gz", hash = "sha256:36b0a522c7d4b4a123bd13d895f17c1ffa081e22f6d0c6e073be6c79837bebbb", size = 311675, upload-time = "2026-09-14T07:52:37.303Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/a0/9a/2234e92ba402e60634a627467dc84ffea0fa512ef669c35dc11e661a06c2/redis_lua_py-0.10.0-py3-none-any.whl", hash = "sha256:c4e85dd6fde5d045e294bdf66578aa6869403417561cf56d02e1d6ce75121208", size = 106443, upload-time = "2026-09-14T07:52:35.922Z" },
 ]
 
 [[package]]

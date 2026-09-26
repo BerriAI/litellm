@@ -3676,7 +3676,7 @@ async def test_post_call_success_hook_contains_header_merge_failures(
 @pytest.mark.asyncio
 async def test_the_project_itpm_reservation_counts_the_request_off_the_event_loop(rate_limiter):
     from tests.large_text import text
-    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+    from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
         warm_tokenizer,

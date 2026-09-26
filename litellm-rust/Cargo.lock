@@ -199,7 +199,7 @@ checksum = "ae36dc4177970ef04fde5178d3e2429882def40e57a451f919c098f72baa6cec"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.0",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -710,14 +710,20 @@ dependencies = [
  "http 1.4.2",
  "http-body 1.1.0",
  "http-body-util",
+ "hyper 1.10.1",
+ "hyper-util",
  "itoa",
  "matchit",
  "memchr",
  "mime",
+ "multer",
  "percent-encoding",
  "pin-project-lite",
  "serde_core",
+ "serde_json",
+ "serde_path_to_error",
  "sync_wrapper",
+ "tokio",
  "tower",
  "tower-layer",
  "tower-service",
@@ -1053,18 +1059,18 @@ dependencies = [
 
 [[package]]
 name = "clap"
-version = "4.6.6"
+version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "473c7e07f409a8d772161724aa8db6a765a2532a70f9667eeb7b49d3d02fbdca"
+checksum = "aa8876b300ab35ba921adea3dfd70157a46249b33f95c9084ae5709785478946"
 dependencies = [
  "clap_builder",
 ]
 
 [[package]]
 name = "clap_builder"
-version = "4.6.6"
+version = "4.6.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7b48fea5a88e9ae728a2dcbedbfc0e730f7d60da42e1cb049a83c9fb8b789889"
+checksum = "ec0797fb7aeb1406c84efac526901f7ec3ead2124f946b494e72879d4b54704d"
 dependencies = [
  "anstyle",
  "clap_lex",
@@ -1180,7 +1186,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e75b2483e97a5a7da73ac68a05b629f9c53cff58d8ed1c77866079e18b00dba5"
 dependencies = [
  "digest 0.10.7",
- "spin",
+ "spin 0.10.1",
 ]
 
 [[package]]
@@ -1579,6 +1585,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e079f19b08ca6239f47f8ba8509c11cf3ea30095831f7fed61441475edd8c449"
 dependencies = [
  "serde",
+]
+
+[[package]]
+name = "encoding_rs"
+version = "0.8.35"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "75030f3c4f45dafd7586dd6780965a8c7e8e285a5ecb86713e63a79c5b2766f3"
+dependencies = [
+ "cfg-if",
 ]
 
 [[package]]
@@ -2817,6 +2832,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "32a66949e030da00e8c7d4434b251670a91556f4144941d37452769c25d58a53"
 
 [[package]]
+name = "litellm"
+version = "0.0.1"
+
+[[package]]
 name = "litellm-auth"
 version = "0.1.0"
 dependencies = [
@@ -2840,6 +2859,7 @@ dependencies = [
  "litellm-http",
  "moka",
  "reqwest 0.12.28",
+ "rstest",
  "serde_json",
  "sha2 0.10.9",
  "thiserror 2.0.19",
@@ -2911,6 +2931,7 @@ dependencies = [
  "litellm-cache",
  "litellm-cache-response",
  "litellm-cache-testing",
+ "litellm-http",
  "reqwest 0.12.28",
  "rstest",
  "serde_json",
@@ -2944,6 +2965,7 @@ dependencies = [
  "litellm-auth-types",
  "litellm-cache",
  "litellm-cache-testing",
+ "litellm-http",
  "percent-encoding",
  "reqwest 0.12.28",
  "rstest",
@@ -2970,6 +2992,7 @@ dependencies = [
  "futures-util",
  "litellm-cache",
  "litellm-cache-testing",
+ "litellm-http",
  "qdrant-client",
  "reqwest 0.12.28",
  "rstest",
@@ -3043,6 +3066,7 @@ dependencies = [
  "litellm-auth-aws",
  "litellm-cache",
  "litellm-cache-testing",
+ "litellm-http",
  "reqwest 0.12.28",
  "rstest",
  "serde_json",
@@ -3088,6 +3112,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-config"
+version = "0.1.0"
+dependencies = [
+ "litellm-auth-types",
+ "rstest",
+ "serde",
+ "serde_yaml_ng",
+ "tempfile",
+ "thiserror 2.0.19",
+]
+
+[[package]]
 name = "litellm-core"
 version = "0.1.0"
 dependencies = [
@@ -3102,6 +3138,7 @@ dependencies = [
  "litellm-http",
  "litellm-llms",
  "litellm-secrets",
+ "litellm-tracing",
  "litellm-types",
  "mime_guess",
  "moka",
@@ -3137,6 +3174,7 @@ dependencies = [
  "serde_json",
  "serde_path_to_error",
  "serde_with",
+ "strum",
  "thiserror 2.0.19",
  "url",
 ]
@@ -3166,10 +3204,74 @@ dependencies = [
  "aws-smithy-types",
  "bytes",
  "futures-util",
+ "proptest",
  "rstest",
- "sse-stream",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-util",
+]
+
+[[package]]
+name = "litellm-gateway"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "http-body-util",
+ "litellm-config",
+ "litellm-core",
+ "litellm-gateway-auth",
+ "litellm-gateway-inference",
+ "litellm-http",
+ "litellm-llms",
+ "litellm-secrets",
+ "litellm-tracing",
+ "rstest",
+ "serde_json",
+ "tokio",
+ "tower",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "litellm-gateway-auth"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "futures-util",
+ "litellm-auth-types",
+ "litellm-config",
+ "litellm-secrets",
+ "rstest",
+ "sha2 0.10.9",
+ "subtle",
+ "thiserror 2.0.19",
+ "tokio",
+ "tower",
+]
+
+[[package]]
+name = "litellm-gateway-inference"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "base64 0.22.1",
+ "bytes",
+ "futures-util",
+ "litellm-auth",
+ "litellm-core",
+ "litellm-http",
+ "litellm-llms",
+ "litellm-router",
+ "litellm-secrets",
+ "litellm-types",
+ "rstest",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "tower",
+ "wiremock",
 ]
 
 [[package]]
@@ -3206,11 +3308,13 @@ dependencies = [
  "http 1.4.2",
  "hyper-util",
  "litellm-core-utils",
+ "rcgen",
  "reqwest 0.12.28",
  "rstest",
  "rustls 0.23.42",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.19",
  "tokio",
  "veil",
@@ -3235,6 +3339,7 @@ dependencies = [
  "litellm-framing",
  "litellm-host",
  "litellm-http",
+ "litellm-python-compat",
  "litellm-secrets",
  "litellm-types",
  "reqwest 0.12.28",
@@ -3256,6 +3361,7 @@ version = "0.1.0"
 dependencies = [
  "indexmap 2.14.0",
  "jsonschema",
+ "litellm-types",
  "rstest",
  "schemars 1.2.2",
  "serde",
@@ -3275,7 +3381,6 @@ dependencies = [
  "futures-util",
  "litellm-auth",
  "litellm-auth-aws",
- "litellm-auth-gcp",
  "litellm-cache",
  "litellm-cache-azure-blob",
  "litellm-cache-disk",
@@ -3310,6 +3415,7 @@ dependencies = [
  "serde_json",
  "serde_with",
  "sha2 0.10.9",
+ "strum",
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",
@@ -3334,6 +3440,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-router"
+version = "0.1.0"
+dependencies = [
+ "litellm-config",
+ "litellm-core",
+ "rstest",
+]
+
+[[package]]
 name = "litellm-secrets"
 version = "0.1.0"
 dependencies = [
@@ -3343,6 +3458,7 @@ dependencies = [
  "google-cloud-auth",
  "google-cloud-kms-v1",
  "litellm-core-utils",
+ "litellm-http",
  "litellm-python-compat",
  "litellm-secrets-aws",
  "litellm-secrets-azure",
@@ -3390,6 +3506,7 @@ dependencies = [
  "litellm-auth-azure",
  "litellm-auth-types",
  "litellm-core-utils",
+ "litellm-http",
  "litellm-secrets-types",
  "percent-encoding",
  "reqwest 0.12.28",
@@ -3409,6 +3526,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "litellm-core-utils",
+ "litellm-http",
  "litellm-secrets-types",
  "litellm-tracing",
  "moka",
@@ -3437,6 +3555,7 @@ dependencies = [
  "litellm-auth-gcp",
  "litellm-auth-types",
  "litellm-core-utils",
+ "litellm-http",
  "litellm-secrets-types",
  "moka",
  "percent-encoding",
@@ -3478,6 +3597,7 @@ dependencies = [
  "rstest",
  "serde",
  "serde_json",
+ "strum",
  "thiserror 2.0.19",
  "tokio",
  "veil",
@@ -3561,6 +3681,7 @@ dependencies = [
 name = "litellm-tracing"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "fancy-regex 0.19.2",
  "percent-encoding",
  "rstest",
@@ -3575,8 +3696,10 @@ name = "litellm-types"
 version = "0.1.0"
 dependencies = [
  "rstest",
+ "schemars 1.2.2",
  "serde",
  "serde_json",
+ "strum",
 ]
 
 [[package]]
@@ -3742,6 +3865,23 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "multer"
+version = "3.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "83e87776546dc87511aa5ee218730c92b666d7264ab6ed41f9d215af9cd5224b"
+dependencies = [
+ "bytes",
+ "encoding_rs",
+ "futures-util",
+ "http 1.4.2",
+ "httparse",
+ "memchr",
+ "mime",
+ "spin 0.9.9",
+ "version_check",
 ]
 
 [[package]]
@@ -4651,7 +4791,7 @@ checksum = "92ecd8964f8453721699a1ed72037b0db49ce2f5a5138486ee89bed6f67cdf3a"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.0",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -5130,7 +5270,7 @@ dependencies = [
  "proc-macro2",
  "quote",
  "serde_derive_internals",
- "syn 3.0.0",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -5218,7 +5358,7 @@ checksum = "e7a5d71263a5a7d47b41f6b3f06ba276f10cc18b0931f1799f710578e2309348"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.0",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -5229,7 +5369,7 @@ checksum = "f852137cce035d6a4df67ccce505ff6b3e9fd3a10e3e52b24dc71e650bb1a9bd"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.0",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -5307,6 +5447,19 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn 2.0.119",
+]
+
+[[package]]
+name = "serde_yaml_ng"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7b4db627b98b36d4203a7b458cf3573730f2bb591b28871d916dfa9efabfd41f"
+dependencies = [
+ "indexmap 2.14.0",
+ "itoa",
+ "ryu",
+ "serde",
+ "unsafe-libyaml",
 ]
 
 [[package]]
@@ -5440,6 +5593,12 @@ dependencies = [
 
 [[package]]
 name = "spin"
+version = "0.9.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3763264f6b73151db08c50ff20d7d8a0b8796e021cdea7ceedad07b80155fa0e"
+
+[[package]]
+name = "spin"
 version = "0.10.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "023a211cb3138dbc438680b32560ad89f699977624c9f8dbb95a47d5b4c07dd3"
@@ -5466,19 +5625,6 @@ dependencies = [
  "js-sys",
  "rsqlite-vfs",
  "wasm-bindgen",
-]
-
-[[package]]
-name = "sse-stream"
-version = "0.2.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c25ac7aff0abd1dbc474536e40416e1102c7dd9bfba0b9861c6d357f835dcfb4"
-dependencies = [
- "bytes",
- "futures-util",
- "http-body 1.1.0",
- "http-body-util",
- "pin-project-lite",
 ]
 
 [[package]]
@@ -5550,9 +5696,9 @@ dependencies = [
 
 [[package]]
 name = "syn"
-version = "3.0.0"
+version = "3.0.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2fac314a64dc9a36e61a9eb4261a5e9bbfbc922b27e518af97bc32b926cf967"
+checksum = "8593e8e72159ed2257d083c7a454a85cbf854f37a0966d8d483aff8c8a3ebcee"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -5664,7 +5810,7 @@ checksum = "43cbfe0cf76104d42a574802844187e84a305e531ed54455f11fbde0f10541cd"
 dependencies = [
  "proc-macro2",
  "quote",
- "syn 3.0.0",
+ "syn 3.0.6",
 ]
 
 [[package]]
@@ -6242,6 +6388,12 @@ name = "unicode_categories"
 version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "39ec24b3121d976906ece63c9daad25b85969647682eee313cb5779fdd69e14e"
+
+[[package]]
+name = "unsafe-libyaml"
+version = "0.2.11"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "untrusted"
