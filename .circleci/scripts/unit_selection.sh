@@ -43,7 +43,6 @@ legacy_paths() {
       echo tests/unit/enterprise/proxy/test_audit_logging_endpoints.py
       echo tests/unit/enterprise/enterprise_callbacks/test_prometheus_logging_callbacks.py ;;
     enterprise-routing)
-      echo tests/unit/router_strategy
       echo tests/unit/google_genai
       echo tests/unit/router_strategy
       echo tests/unit/router_utils
