@@ -38,7 +38,12 @@ class Recording:
 
 async def main() -> None:
     record: Final = Path(sys.argv[1])
-    service: Final = math_service("integration-stdio", rich=sys.argv[2] == "rich")
+
+    def record_negotiation(event: dict[str, object]) -> None:
+        with record.open("a") as sink:
+            sink.write(json.dumps(event) + "\n")
+
+    service: Final = math_service("integration-stdio", rich=sys.argv[2] == "rich", record=record_negotiation)
     stdin: Final = anyio.wrap_file(sys.stdin)
     async with stdio_server(stdin=Recording(stdin, record)) as (read_stream, write_stream):
         lowlevel: Final = service._lowlevel_server

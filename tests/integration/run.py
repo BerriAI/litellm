@@ -92,6 +92,10 @@ def main() -> int:
     if not evidence["complete"]:
         sys.stderr.write("Integration run did not complete: a collected node neither passed nor skipped\n")
         return 1
+    if options.group == "mcp":
+        from integration._support.conformance import require_passes, required_conformance_nodes
+
+        require_passes(output, required_conformance_nodes())
     return 0
 
 

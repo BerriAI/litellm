@@ -3,7 +3,13 @@ branch = true
 parallel = true
 relative_files = true
 patch = ["subprocess"]
-include = ["tests/integration/_support/conformance.py", "tests/integration/_support/process.py"]
+include = [
+    "tests/integration/_support/conformance.py",
+    "tests/integration/_support/process.py",
+    "tests/integration/_support/mcp.py",
+    "tests/integration/_support/mcp_stdio_peer.py",
+    "tests/integration/run.py",
+]
 
 [tool.coverage.report]
 show_missing = true
