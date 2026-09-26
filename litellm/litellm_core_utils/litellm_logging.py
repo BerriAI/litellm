@@ -384,6 +384,7 @@ _DEPLOYMENT_PRICING_KEYS: Final = (
     "cache_read_input_token_cost_above_200k_tokens_batches",
     "cache_read_input_token_cost_above_272k_tokens_batches",
     "cache_creation_input_token_cost_batches",
+    "cache_creation_input_token_cost_above_200k_tokens_batches",
     "cache_creation_input_token_cost_above_272k_tokens_batches",
     "ocr_cost_per_page",
     "ocr_cost_per_page_batches",
