@@ -6293,16 +6293,18 @@ async def test_legacy_token_cannot_classify_a_user_as_native_agent(
     user: Final = SCIMUser.model_validate(
         {"schemas": [], "userName": "agent@example.com", SCIM_AGENT_USER_SCHEMA: extension}
     )
+    request: Final = (
+        scim_v2.create_user(user=user)
+        if method == "create"
+        else scim_v2.update_user(user_id="human", user=user)
+        if method == "replace"
+        else scim_v2.patch_user(
+            user_id="human",
+            patch_ops=SCIMPatchOp(Operations=[{"op": "add", "path": SCIM_AGENT_USER_SCHEMA, "value": extension}]),
+        )
+    )
     with pytest.raises(HTTPException) as failure:
-        if method == "create":
-            await scim_v2.create_user(user=user)
-        elif method == "replace":
-            await scim_v2.update_user(user_id="human", user=user)
-        else:
-            await scim_v2.patch_user(
-                user_id="human",
-                patch_ops=SCIMPatchOp(Operations=[{"op": "add", "path": SCIM_AGENT_USER_SCHEMA, "value": extension}]),
-            )
+        await request
     assert failure.value.status_code == 400
     database.assert_not_awaited()
 

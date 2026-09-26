@@ -467,10 +467,10 @@ async def _source_owned_ids(
         return frozenset()
     where: Final[LiteLLM_SCIMResourceWhereInput] = {
         "kind": kind,
-        "OR": [
-            {"id": {"in": list(local_ids)}},
-            {"local_id": {"in": list(local_ids)}},
-        ],  # mutable-ok: Prisma OR filter contract
+        "OR": [  # mutable-ok: Prisma OR filter contract
+            {"id": {"in": list(local_ids)}},  # mutable-ok: Prisma nested filter contract
+            {"local_id": {"in": list(local_ids)}},  # mutable-ok: Prisma nested filter contract
+        ],
     }
     resources: Final = await SCIMResourceRepository(prisma_client, use_writer=True).table.find_many(where=where)
     return frozenset(filter(None, chain.from_iterable((resource.id, resource.local_id) for resource in resources)))
@@ -1229,9 +1229,9 @@ def _get_resource_types(base_url: str = "/scim/v2") -> Sequence[SCIMResourceType
             name="User",
             description="User Account",
             endpoint="/Users",
-            schemaExtensions=[
+            schemaExtensions=[  # mutable-ok: SCIMResourceType list contract
                 SCIMSchemaExtension(schema_=SCIM_AGENT_USER_SCHEMA, required=False)
-            ],  # mutable-ok: SCIMResourceType list contract
+            ],
             schema_="urn:ietf:params:scim:schemas:core:2.0:User",
             meta={
                 "location": f"{base_url}/ResourceTypes/User",
