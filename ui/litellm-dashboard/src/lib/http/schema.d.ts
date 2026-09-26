@@ -8404,6 +8404,7 @@ export interface paths {
          *     - rpm_limit_type: Optional[str] - RPM rate limit type - "best_effort_throughput", "guaranteed_throughput", or "dynamic"
          *     - allowed_cache_controls: Optional[list] - List of allowed cache control values
          *     - duration: Optional[str] - Key validity duration ("30d", "1h", etc.), null to never expire, or "-1" to never expire (deprecated, use null)
+         *     - expires: Optional[datetime] - Absolute expiration timestamp. An explicitly supplied duration takes precedence
          *     - permissions: Optional[dict] - Key-specific permissions
          *     - send_invite_email: Optional[bool] - Send invite email to user_id
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
