@@ -3346,14 +3346,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "litellm-router"
-version = "0.1.0"
-dependencies = [
- "litellm-core",
- "rstest",
-]
-
-[[package]]
 name = "litellm-secrets"
 version = "0.1.0"
 dependencies = [

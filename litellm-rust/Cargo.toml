@@ -9,7 +9,6 @@ license = "MIT"
 repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
-litellm-router = { path = "crates/router" }
 litellm-tracing = { path = "crates/tracing" }
 litellm-core = { path = "crates/core" }
 litellm-coroutine = { path = "crates/coroutine" }
