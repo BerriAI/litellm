@@ -74,3 +74,21 @@ def test_official_runner_rejects_unknown_scenario(tmp_path: Path) -> None:
     with pytest.raises(AssertionError):
         run_scenario(Path(os.environ["MCP_CONFORMANCE_ROOT"]), "http://127.0.0.1:1/mcp", "missing-scenario", output)
     assert "missing-scenario" in (output / "runner.log").read_text()
+
+
+def test_stalled_reference_is_killed_and_cannot_report_clean_teardown(tmp_path: Path, unused_tcp_port: int) -> None:
+    import signal
+    from contextlib import ExitStack
+
+    import psutil
+
+    children: Final = frozenset(child.pid for child in psutil.Process().children())
+    with ExitStack() as cleanup:
+        cleanup.enter_context(reference_server(Path(os.environ["MCP_CONFORMANCE_ROOT"]), tmp_path, unused_tcp_port))
+        started: Final = tuple(child for child in psutil.Process().children() if child.pid not in children)
+        assert len(started) == 1, started
+        victim: Final = started[0]
+        victim.send_signal(signal.SIGSTOP)
+        with pytest.raises(AssertionError, match="forced cleanup"):
+            cleanup.close()
+    assert not psutil.pid_exists(victim.pid), "Stopped official reference survived forced cleanup"
