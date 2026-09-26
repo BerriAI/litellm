@@ -1151,6 +1151,16 @@ class AmazonConverseConfig(BaseConfig):
                 non_default_params=non_default_params, optional_params=optional_params
             )
 
+        # Bedrock applies a 4096 output-token default when maxTokens is omitted, silently truncating anthropic models
+        if (
+            not self.is_max_tokens_in_request(non_default_params)
+            and "maxTokens" not in optional_params
+            and "anthropic" in model
+        ):
+            default_max_tokens: Final = self._get_default_max_tokens_for_model(model)
+            if default_max_tokens is not None:
+                optional_params["maxTokens"] = default_max_tokens
+
         final_is_thinking_enabled: Final = self.is_thinking_enabled(optional_params)
         if final_is_thinking_enabled and "tool_choice" in optional_params:
             tool_choice_block: Final = optional_params["tool_choice"]
@@ -1292,6 +1302,29 @@ class AmazonConverseConfig(BaseConfig):
             )
             if thinking_token_budget is not None:
                 optional_params["maxTokens"] = thinking_token_budget + DEFAULT_MAX_TOKENS
+
+    @staticmethod
+    def _get_default_max_tokens_for_model(model: str) -> int | None:
+        """
+        Resolve the model's documented max output tokens from the litellm cost map.
+
+        Returns None when the model is not mapped, so the request stays unchanged.
+        Bedrock model ids carry an optional cross-region prefix that cost map keys do
+        not include, so strip it and retry.
+        """
+
+        def lookup(candidate: str) -> int | None:
+            entry: Final = litellm.model_cost.get(candidate)
+            if entry is None:
+                return None
+            if "max_output_tokens" in entry:
+                return entry["max_output_tokens"]
+            return entry.get("max_tokens")
+
+        first_segment, separator, rest = model.partition(".")
+        region_prefixed: Final = separator == "." and first_segment in ("us", "eu", "apac", "global", "ca", "sa")
+        candidates: Final = (model, rest) if region_prefixed else (model,)
+        return next((value for value in map(lookup, candidates) if value is not None), None)
 
     @overload
     def get_cache_point_block(
