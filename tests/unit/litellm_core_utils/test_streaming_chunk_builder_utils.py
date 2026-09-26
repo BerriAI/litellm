@@ -9,6 +9,7 @@ from litellm import ChatCompletionUsageBlock, stream_chunk_builder
 from litellm.types.utils import GenericStreamingChunk
 from litellm.litellm_core_utils.streaming_chunk_builder_utils import ChunkProcessor
 from litellm.llms.anthropic.chat.handler import ModelResponseIterator
+from litellm.types.llms.openai import ChatCompletionThinkingBlock
 from litellm.types.utils import (
     ChatCompletionDeltaToolCall,
     ChatCompletionMessageToolCall,
@@ -218,11 +219,8 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
         ),
     ]
 
-    thinking_chunks = [
-        chunk for chunk in chunks if chunk["choices"][0]["delta"].get("thinking_blocks")
-    ]
     processor = ChunkProcessor(chunks=chunks)
-    result = processor.get_combined_thinking_content(thinking_chunks)
+    result = processor.get_combined_thinking_content(chunks)
 
     assert result is not None
     assert len(result) == 3
@@ -234,6 +232,54 @@ def test_get_combined_thinking_content_preserves_interleaved_blocks():
     assert result[2]["type"] == "thinking"
     assert result[2]["thinking"] == "Step 2 analysis..."
     assert result[2]["signature"] == "sig_block2"
+
+
+@pytest.mark.parametrize("snapshot", [True, False], ids=["provider-snapshot", "genuine-final-delta"])
+def test_stream_chunk_builder_distinguishes_thinking_snapshots_from_repeated_deltas(snapshot: bool) -> None:
+    signed: Final = ChatCompletionThinkingBlock(type="thinking", thinking="echo", signature="test-signature")
+    deltas: Final = (
+        Delta(thinking_blocks=[ChatCompletionThinkingBlock(type="thinking", thinking="echo")]),
+        Delta(thinking_blocks=[signed], provider_specific_fields={"thinking_blocks": [signed]} if snapshot else None),
+    )
+    chunks: Final = [
+        ModelResponseStream(
+            id="chatcmpl-thinking",
+            model="claude-opus-5",
+            choices=[StreamingChoices(index=0, delta=delta, finish_reason="stop" if index == 1 else None)],
+        )
+        for index, delta in enumerate(deltas)
+    ]
+
+    response: Final = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.choices[0].message.thinking_blocks == [
+        {"type": "thinking", "thinking": "echo" if snapshot else "echoecho", "signature": "test-signature"}
+    ]
+
+
+def test_incomplete_thinking_stream_preserves_summary_without_signed_blocks() -> None:
+    chunk: Final = ModelResponseStream(
+        id="chatcmpl-incomplete-thinking",
+        model="claude-opus-5",
+        choices=[
+            StreamingChoices(
+                index=0,
+                finish_reason="length",
+                delta=Delta(
+                    reasoning_content="Unfinished reasoning",
+                    thinking_blocks=[ChatCompletionThinkingBlock(type="thinking", thinking="Unfinished reasoning")],
+                ),
+            )
+        ],
+    )
+
+    response: Final = stream_chunk_builder(chunks=[chunk])
+
+    assert response is not None
+    assert response.choices[0].finish_reason == "length"
+    assert response.choices[0].message.reasoning_content == "Unfinished reasoning"
+    assert response.choices[0].message.thinking_blocks is None
 
 
 def test_cache_read_input_tokens_retained():
