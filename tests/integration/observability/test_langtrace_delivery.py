@@ -7,7 +7,7 @@ from typing import Final
 import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.process import owned_proxy
-from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.wire import Reply, Request, wire_server
 from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 from opentelemetry.proto.trace.v1.trace_pb2 import Span
 from pydantic import TypeAdapter
@@ -57,8 +57,12 @@ def _prompt_events(span: Span) -> tuple[str, ...]:
         for event in span.events
         if event.name == "gen_ai.content.prompt"
         for attribute in event.attributes
-        if attribute.key == "llm.prompts"
+        if attribute.key == "gen_ai.prompt"
     )
+
+
+def _spans_prompted_with(batches: Sequence[Request], marker: str) -> tuple[Span, ...]:
+    return tuple(span for span in _spans(batches) if any(marker in prompt for prompt in _prompt_events(span)))
 
 
 def test_langtrace_callback_posts_protobuf_spans_to_api_trace_with_x_api_key(gateway: Gateway, tmp_path: Path) -> None:
@@ -72,6 +76,12 @@ def test_langtrace_callback_posts_protobuf_spans_to_api_trace_with_x_api_key(gat
         return Reply(body=b'{"message":"Traces added successfully"}')
 
     with wire_server(upstream) as provider, wire_server(langtrace) as sink:
+        received: Final[list[Request]] = []  # mutable-ok: drain() consumes, so batches accumulate across polls
+
+        def collect() -> tuple[Request, ...]:
+            received.extend(sink.drain())
+            return tuple(received)
+
         overrides: Final = {
             "LANGTRACE_API_KEY": api_key,
             "LANGTRACE_API_HOST": sink.url,
@@ -89,14 +99,16 @@ def test_langtrace_callback_posts_protobuf_spans_to_api_trace_with_x_api_key(gat
             )
             assert response.status_code == 200, response.text
             assert response.json()["id"] == "chatcmpl-" + marker, response.text
-            requests: Final = eventually(sink.drain, lambda batches: len(batches) >= 1, seconds=20)
+            requests: Final = eventually(
+                collect, lambda batches: len(_spans_prompted_with(batches, marker)) >= 1, seconds=20
+            )
 
-    request: Final = requests[0]
-    assert (request.method, request.target) == ("POST", TRACE_PATH), requests
-    assert request.headers.get("x-api-key") == api_key, request.headers
-    assert "api_key" not in request.headers, request.headers
-    assert request.headers.get("content-type") == "application/x-protobuf", request.headers
-    spans: Final = tuple(span for span in _spans(requests) if any(marker in prompt for prompt in _prompt_events(span)))
+    for request in requests:
+        assert (request.method, request.target) == ("POST", TRACE_PATH), requests
+        assert request.headers.get("x-api-key") == api_key, request.headers
+        assert "api_key" not in request.headers, request.headers
+        assert request.headers.get("content-type") == "application/x-protobuf", request.headers
+    spans: Final = _spans_prompted_with(requests, marker)
     assert len(spans) == 1, requests
     assert spans[0].name == "litellm_request", spans[0]
     assert api_key.encode() not in b"".join(batch.body for batch in requests)

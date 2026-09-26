@@ -10,6 +10,13 @@ if TYPE_CHECKING:
 else:
     Span = Any
 
+LANGTRACE_DEFAULT_HOST: Final = "https://app.langtrace.ai"
+LANGTRACE_TRACE_PATH: Final = "/api/trace"
+
+
+def langtrace_trace_endpoint(api_host: str | None) -> str:
+    return (api_host or LANGTRACE_DEFAULT_HOST).rstrip("/") + LANGTRACE_TRACE_PATH
+
 
 class LangtraceAttributes:
     """

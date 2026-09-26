@@ -15,6 +15,7 @@ from litellm.integrations._types.open_inference import (
     SpanAttributes,
 )
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.integrations.langtrace import LANGTRACE_TRACE_PATH
 from litellm.integrations.opentelemetry_utils.gen_ai_semconv import (
     OTEL_SEMCONV_STABILITY_OPT_IN_ENV,
     OTELGenAISemconvMixin,
@@ -3332,6 +3333,9 @@ class OpenTelemetry(OTELGenAISemconvMixin, CustomLogger):
 
         # Splunk Observability Cloud OTLP/HTTP uses /v2/trace/otlp (not /v1/traces). Do not rewrite.
         if signal_type == "traces" and "/v2/trace/otlp" in endpoint:
+            return endpoint
+
+        if signal_type == "traces" and self.callback_name == "langtrace" and endpoint.endswith(LANGTRACE_TRACE_PATH):
             return endpoint
 
         # Check if endpoint already ends with the correct signal path
