@@ -1,5 +1,6 @@
 """Typed configuration for the OpenTelemetry instrumentation."""
 
+from collections.abc import Mapping
 from enum import Enum
 from functools import lru_cache
 from typing import Annotated, Any, Final
@@ -12,6 +13,7 @@ from litellm.integrations.otel.model.baggage import (
     DEFAULT_BAGGAGE_METADATA_KEYS,
     DEFAULT_BAGGAGE_TEAM_METADATA_KEYS,
 )
+from litellm.integrations.otel.model.spans import POSTGRESQL, db_system
 from litellm.types.utils import OtelSpanScope
 
 #: Master feature-flag env var. The logger is inert until this is truthy.
@@ -173,6 +175,19 @@ class OpenTelemetryV2Config(BaseSettings):
             "key/team destinations are not affected."
         ),
     )
+    excluded_services: Annotated[frozenset[str], NoDecode] = Field(
+        default_factory=frozenset,
+        validation_alias=AliasChoices("excluded_services", "LITELLM_OTEL_EXCLUDED_SERVICES"),
+        description=(
+            "Datastore services whose spans are withheld from key/team ``callback_vars`` "
+            "OTel destinations (the operator's own exporters still receive them). Accepted "
+            "values are the datastore ``ServiceTypes`` names (``redis``, ``postgres``, "
+            "``batch_write_to_db``, ``redis_*``) or their ``db.system.name`` spellings "
+            "(``redis``, ``postgresql``); stored normalized to ``db.system.name`` values. "
+            "Configure via the ``LITELLM_OTEL_EXCLUDED_SERVICES`` env var (comma-separated) "
+            "or ``callback_settings.otel.excluded_services`` in config.yaml (a YAML list)."
+        ),
+    )
 
     # ----- explicit multi-destination / vocabulary configuration ------------ #
 
@@ -267,6 +282,7 @@ class OpenTelemetryV2Config(BaseSettings):
         "baggage_metadata_keys",
         "baggage_team_metadata_keys",
         "mapper_names",
+        "excluded_services",
         mode="before",
     )
     @classmethod
@@ -315,6 +331,7 @@ class OpenTelemetryV2Config(BaseSettings):
         if self.legacy_compat and "legacy" not in names:
             names.append("legacy")
         self.mapper_names = names
+        self.excluded_services = _normalize_excluded_services(self.excluded_services)
         return self
 
     @property
@@ -333,3 +350,32 @@ class OpenTelemetryV2Config(BaseSettings):
     @classmethod
     def from_env(cls) -> "OpenTelemetryV2Config":
         return cls()
+
+
+def _normalize_excluded_services(services: frozenset[str]) -> frozenset[str]:
+    """Fold each accepted spelling to its ``db.system.name`` value.
+
+    ``postgres`` and ``postgresql`` name the same system, as do every
+    ``ServiceTypes`` member that ``db_system`` maps. Anything else means the
+    operator pointed the setting at a span family it cannot cover.
+    """
+    return frozenset(_db_system_for_excluded_service(service) for service in services)
+
+
+def _db_system_for_excluded_service(service: str) -> str:
+    resolved: Final = db_system(service) if service != POSTGRESQL else POSTGRESQL
+    if resolved is None:
+        raise ValueError(f"excluded_services: {service!r} is not a datastore service; allowed: postgres, redis")
+    return resolved
+
+
+def validate_otel_v2_callback_settings(settings: object) -> None:
+    """Parse ``callback_settings.otel`` so a malformed block fails proxy boot.
+
+    Logger construction is lazy and swallows init errors, so without this a bad
+    value in the shared settings only surfaces as a dropped callback at request
+    time.
+    """
+    if not is_otel_v2_enabled() or not isinstance(settings, Mapping):
+        return
+    OpenTelemetryV2Config(**settings)

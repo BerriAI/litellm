@@ -174,6 +174,11 @@ def initialize_callbacks_on_proxy(
                 imported_list.append(code_interpreter_interception_obj)
                 continue
 
+            if isinstance(callback, str) and callback == "otel":
+                from litellm.integrations.otel.model.config import validate_otel_v2_callback_settings
+
+                validate_otel_v2_callback_settings(callback_specific_params.get("otel"))
+
             # check if callback is a custom logger compatible callback
             if isinstance(callback, str):
                 callback = LoggingCallbackManager._add_custom_callback_generic_api_str(callback)

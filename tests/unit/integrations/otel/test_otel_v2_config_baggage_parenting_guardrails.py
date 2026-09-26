@@ -90,6 +90,36 @@ def test_baggage_processor_allowlist_uses_config_keys():
     assert LiteLLM.TEAM_ALIAS not in span.attributes  # not in this allowlist
 
 
+@pytest.mark.parametrize(
+    "given,expected",
+    [
+        (["redis"], frozenset({"redis"})),
+        (["postgres"], frozenset({"postgresql"})),
+        (["postgresql"], frozenset({"postgresql"})),
+        (["batch_write_to_db"], frozenset({"postgresql"})),
+        (["redis_spend_update_queue"], frozenset({"redis"})),
+        (["redis", "postgres"], frozenset({"redis", "postgresql"})),
+    ],
+)
+def test_excluded_services_normalize_to_db_system_names(given, expected):
+    assert OpenTelemetryV2Config(excluded_services=given).excluded_services == expected
+
+
+def test_excluded_services_from_env_csv(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_EXCLUDED_SERVICES", "redis, postgres")
+    assert OpenTelemetryV2Config().excluded_services == frozenset({"redis", "postgresql"})
+
+
+def test_excluded_services_config_wins_over_env(monkeypatch):
+    monkeypatch.setenv("LITELLM_OTEL_EXCLUDED_SERVICES", "redis")
+    assert OpenTelemetryV2Config(excluded_services=["postgres"]).excluded_services == frozenset({"postgresql"})
+
+
+def test_excluded_services_rejects_a_non_datastore_service():
+    with pytest.raises(Exception, match="'auth' is not a datastore service; allowed: postgres, redis"):
+        OpenTelemetryV2Config(excluded_services=["auth"])
+
+
 # --------------------------------------------------------------------------- #
 #  Area 2 — pass-through LLM span parents to the ambient server span
 # --------------------------------------------------------------------------- #

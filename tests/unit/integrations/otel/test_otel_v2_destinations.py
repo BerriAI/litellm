@@ -514,6 +514,53 @@ class TestFanOut:
         for child in ("auth /v1/chat/completions", "chat gpt-4"):
             assert by_name[child].parent.span_id == root.context.span_id
 
+    def test_excluded_services_drop_only_the_datastore_spans_at_the_tenant(self):
+        """The exclusion is per ``db.system.*`` value: a span naming an excluded
+        datastore never reaches the tenant, while every span of the request's
+        own work (root, auth, guardrail, model) still does, and the operator's
+        own exporter keeps the full tree."""
+        dest_exporter, operator_exporter = InMemorySpanExporter(), InMemorySpanExporter()
+        provider = TracerProvider()
+        provider.add_span_processor(SimpleSpanProcessor(operator_exporter))
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(
+                processor_factory=lambda _d: SimpleSpanProcessor(dest_exporter),
+                excluded_db_systems=frozenset({"redis", "postgresql"}),
+            )
+        )
+        tracer = get_tracer(provider, "litellm")
+
+        def run():
+            set_request_destinations((LANGFUSE_DEST,))
+            with tracer.start_as_current_span("POST /v1/chat/completions"):
+                with tracer.start_as_current_span("auth /v1/chat/completions"):
+                    pass
+                with tracer.start_as_current_span("execute_guardrail pii"):
+                    pass
+                with tracer.start_as_current_span("redis async_get_cache") as redis_span:
+                    redis_span.set_attribute("db.system.name", "redis")
+                with tracer.start_as_current_span("batch_write_to_db _PROXY_track_cost_callback") as spend_span:
+                    spend_span.set_attribute("db.system", "postgresql")
+                with tracer.start_as_current_span("chat gpt-4"):
+                    pass
+
+        in_fresh_context(run)
+
+        assert {s.name for s in dest_exporter.get_finished_spans()} == {
+            "POST /v1/chat/completions",
+            "auth /v1/chat/completions",
+            "execute_guardrail pii",
+            "chat gpt-4",
+        }
+        assert {s.name for s in operator_exporter.get_finished_spans()} == {
+            "POST /v1/chat/completions",
+            "auth /v1/chat/completions",
+            "execute_guardrail pii",
+            "redis async_get_cache",
+            "batch_write_to_db _PROXY_track_cost_callback",
+            "chat gpt-4",
+        }
+
     def test_a_team_naming_two_backends_gets_the_trace_at_both(self):
         """The fan-out rides one provider, so it cannot skip a destination on the
         grounds that some other backend owns it: nothing else would deliver it."""
