@@ -370,6 +370,13 @@ workflows:
           base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
           pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
       - unit:
+          name: unit-core-utils
+          flag: core-utils
+          shards: 2
+          reruns: 1
+          base_ref: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.base.ref or "" >>
+          pull_request_url: << pipeline.event.name == "pull_request" and pipeline.event.github.pull_request.url or "" >>
+      - unit:
           name: unit-integrations
           flag: integrations
           shards: 2

@@ -170,6 +170,11 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "cache_read_input_token_cost_above_200k_tokens_batches": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
         "cache_read_input_token_cost_above_200k_tokens_priority": {
           "type": "number",
           "minimum": 0,
@@ -351,6 +356,11 @@
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "input_cost_per_token_above_200k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "input_cost_per_token_above_200k_tokens_batches": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
@@ -708,6 +718,11 @@
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
         "output_cost_per_token_above_200k_tokens": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "output_cost_per_token_above_200k_tokens_batches": {
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."

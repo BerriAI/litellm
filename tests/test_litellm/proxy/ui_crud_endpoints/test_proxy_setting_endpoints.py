@@ -3817,6 +3817,22 @@ class TestTeamAdminEditableTeamFieldsSetting:
 
         assert response.status_code == 422
 
+    def test_patch_422_never_echoes_the_submitted_value(self, monkeypatch):
+        self._as_proxy_admin(monkeypatch)
+        submitted = "hunter2-Sup3rSecret!"
+
+        try:
+            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": submitted})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 422
+        assert submitted.encode() not in response.content
+        detail = response.json()["detail"]
+        assert detail[0]["loc"] == ["team_admin_editable_team_fields"]
+        assert detail[0]["msg"]
+        assert set(detail[0]) == {"type", "loc", "msg"}
+
     def test_patch_persists_and_syncs_the_list_to_general_settings(self, monkeypatch):
         mock_prisma = self._as_proxy_admin(monkeypatch)
         general_settings: dict = {"team_admin_editable_team_fields": []}
