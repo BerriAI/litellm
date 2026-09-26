@@ -2733,7 +2733,7 @@ def test_build_summary_messages_keeps_midturn_system_correction_in_place():
 
 async def test_threshold_check_counts_tokens_off_the_event_loop(monkeypatch):
     from tests.large_text import text
-    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+    from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
         warm_tokenizer,

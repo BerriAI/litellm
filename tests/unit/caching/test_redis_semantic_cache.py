@@ -1392,7 +1392,7 @@ def test_redis_semantic_cache_defaults_embedding_timeout():
 @pytest.mark.asyncio
 async def test_redis_async_embedding_truncates_off_the_event_loop(monkeypatch):
     from tests.large_text import text
-    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+    from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
         warm_tokenizer,
