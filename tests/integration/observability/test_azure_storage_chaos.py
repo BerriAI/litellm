@@ -14,7 +14,7 @@ from _azure_storage_support import (
 )
 from _s3_v2_support import matched_ids, mixed_burst, surface_reply
 from integration._support.client import Gateway, JsonValue, eventually
-from integration._support.process import group_members, owned_proxy_process
+from integration._support.process import group_members, owned_proxy_process, stop_root_process
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import wire_server
 
@@ -172,3 +172,64 @@ def test_killing_one_worker_keeps_the_other_serving_and_uploading(gateway: Gatew
                 f"lost {len(rest) - _present_count(payloads, rest)} post-kill payloads; "
                 f"process group holds {members_after - 1} workers after the kill"
             )
+
+
+def test_restarting_the_proxy_mid_burst_bounds_the_loss_to_the_unflushed_queue_and_recovers(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = f"azure-{uuid.uuid4().hex[:8]}"
+    sink: Final = RecordingDataLakeSink()
+    cert, key = write_self_signed_cert(tmp_path, SINK_HOSTS)
+    with (
+        wire_server(surface_reply) as provider,
+        wire_server(sink.respond, tls=server_context(cert, key), keep_alive=True) as store,
+    ):
+        environment: Final = {
+            **azure_storage_environment(store.url, cert),
+            "DEFAULT_FLUSH_INTERVAL_SECONDS": FLUSH_SECONDS,
+        }
+        config: Final = azure_storage_config(tmp_path)
+        with owned_proxy_process(gateway, tmp_path, environment, config=config, workers=WORKERS) as first_owned:
+            with first_owned.gateway.scenario() as scenario:
+                openai_model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+                anthropic_model: Final = scenario.model(
+                    model="anthropic/claude-sonnet-4-5-20250929",
+                    api_base=provider.url,
+                    api_key="synthetic-provider-key",
+                )
+                first_key: Final = scenario.key(models=[openai_model, anthropic_model])
+                first: Final = mixed_burst(
+                    first_owned.gateway, openai_model, anthropic_model, first_key, f"{marker}-first", per_surface=2
+                )
+                collect_files(sink, len(first))
+                cut: Final = mixed_burst(
+                    first_owned.gateway, openai_model, anthropic_model, first_key, f"{marker}-cut", per_surface=2
+                )
+        assert stop_root_process(first_owned.process), "the first proxy did not stop on SIGTERM"
+        with owned_proxy_process(gateway, tmp_path, environment, config=config, workers=WORKERS) as second_owned:
+            with second_owned.gateway.scenario() as scenario:
+                second_openai: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
+                second_anthropic: Final = scenario.model(
+                    model="anthropic/claude-sonnet-4-5-20250929",
+                    api_base=provider.url,
+                    api_key="synthetic-provider-key",
+                )
+                second_key: Final = scenario.key(models=[second_openai, second_anthropic])
+                tail: Final = mixed_burst(
+                    second_owned.gateway, second_openai, second_anthropic, second_key, f"{marker}-tail", per_surface=2
+                )
+                payloads: Final = eventually(
+                    lambda: tuple(sink.payloads().values()),
+                    lambda stored: _present_count(stored, tail) == len(tail),
+                    seconds=60,
+                )
+        answered: Final = first + cut + tail
+        landed: Final = matched_ids(payloads, answered)
+        assert sink.duplicated() == (), sink.duplicated()
+        assert len(sink.stored()) == len(landed), f"{len(sink.stored())} files for {len(landed)} matched ids"
+        assert _present_count(payloads, first) == len(first)
+        assert _present_count(payloads, tail) == len(tail)
+        assert len(answered) - len(landed) <= len(cut), (
+            f"lost {len(answered) - len(landed)} of {len(answered)} payloads; the in-memory queue is dropped on "
+            f"restart by design, so at most the {len(cut)} pre-restart unflushed requests may be lost"
+        )
