@@ -24,6 +24,7 @@ test.describe("Logout", () => {
     // Click Logout — the handler clears the auth cookie and navigates via
     // window.location.href = PROXY_LOGOUT_URL (empty string in the e2e env).
     await popup.getByRole("button", { name: "Logout" }).click();
+    await page.waitForURL(/\/ui\/login/, { timeout: 15_000 });
 
     // The cookie is now gone — visiting a protected page must redirect to /ui/login.
     await page.goto("/ui?page=llm-playground", { waitUntil: "domcontentloaded" });
