@@ -6,7 +6,6 @@ from uuid import uuid4
 from fastapi import APIRouter, Depends, HTTPException
 from prisma import Json
 from prisma.types import (
-    LiteLLM_AccessGroupTableWhereInput,
     LiteLLM_SCIMSourceCreateInput,
     LiteLLM_SCIMSourceUpdateInput,
     LiteLLM_SCIMSourceWhereUniqueInput,
@@ -16,6 +15,8 @@ from pydantic import BaseModel
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth, hash_token
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.chunked_in import find_many_in
+from litellm.repositories.table_repositories import AccessGroupRepository
 from litellm.repositories.verification_token_repository import VerificationTokenRepository
 from litellm.types.proxy.management_endpoints.scim_agent_provisioning import (
     SCIMSourceConfig,
@@ -76,8 +77,9 @@ async def create_source(
         group_ids: Final = tuple(
             frozenset(chain.from_iterable(mapping.access_group_ids for mapping in data.group_mappings))
         )
-        group_filter: Final[LiteLLM_AccessGroupTableWhereInput] = {"access_group_id": {"in": list(group_ids)}}
-        groups: Final = await tx.litellm_accessgrouptable.find_many(where=group_filter)
+        groups: Final = await find_many_in(
+            AccessGroupRepository(SimpleNamespace(db=tx)).table, "access_group_id", group_ids
+        )
         if frozenset(group.access_group_id for group in groups) != frozenset(group_ids):
             raise HTTPException(400, "A mapped access group does not exist")
         create_data: Final[LiteLLM_SCIMSourceCreateInput] = LiteLLM_SCIMSourceCreateInput(
@@ -108,8 +110,9 @@ async def update_source(
         group_ids: Final = tuple(
             frozenset(chain.from_iterable(mapping.access_group_ids for mapping in data.group_mappings))
         )
-        group_filter: Final[LiteLLM_AccessGroupTableWhereInput] = {"access_group_id": {"in": list(group_ids)}}
-        groups: Final = await tx.litellm_accessgrouptable.find_many(where=group_filter)
+        groups: Final = await find_many_in(
+            AccessGroupRepository(SimpleNamespace(db=tx)).table, "access_group_id", group_ids
+        )
         if frozenset(group.access_group_id for group in groups) != frozenset(group_ids):
             raise HTTPException(400, "A mapped access group does not exist")
         update_data: Final[LiteLLM_SCIMSourceUpdateInput] = {
