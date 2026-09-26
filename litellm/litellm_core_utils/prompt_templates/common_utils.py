@@ -2497,6 +2497,61 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
     return results
 
 
+MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS: Final = 8
+
+
+def salvage_concatenated_tool_arguments(raw: str) -> tuple[dict[str, object], ...]:
+    """Return complete concatenated JSON objects that are safe to expand.
+
+    Identical objects collapse to the first one and are not capped. More than
+    ``MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS`` objects that are not all identical
+    returns an empty tuple. Anything that is not a full concatenation of JSON
+    objects returns an empty tuple. Repeated copies of the first object are not
+    retained, and once the cap is passed the rest of the string is only checked.
+    """
+    stripped: Final = raw.strip()
+    if not stripped:
+        return ()
+    decoder: Final = json.JSONDecoder()
+    length: Final = len(stripped)
+    idx = 0  # rebind-ok: cursor walks the concatenated JSON string
+    count = 0  # rebind-ok: counts complete objects without retaining duplicates
+    kept = ()  # rebind-ok: holds at most one object past the salvage cap
+    exceeded = False  # rebind-ok: cap already passed, the tail is only validated
+    while idx < length:
+        while idx < length and stripped[idx] in " \t\n\r":
+            idx += 1
+        if idx >= length:
+            break
+        try:
+            obj, end_idx = decoder.raw_decode(stripped, idx)
+        except json.JSONDecodeError:
+            return ()
+        if not isinstance(obj, dict):
+            return ()
+        idx = end_idx
+        if exceeded:
+            continue
+        count += 1
+        if not kept:
+            kept = (obj,)
+            continue
+        if obj == kept[0] and len(kept) == 1:
+            continue
+        if len(kept) == 1 and count > 2 and count - 1 > MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS:
+            exceeded = True
+            continue
+        if len(kept) == 1 and count > 2:
+            kept = (kept[0],) * (count - 1)
+        if len(kept) >= MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS:
+            exceeded = True
+            continue
+        kept = (*kept, obj)
+    if exceeded:
+        return ()
+    return kept
+
+
 def text_completion_prompt_to_messages(prompt: object) -> tuple[AllMessageValues, ...]:
     """
     Wrap an OpenAI ``/v1/completions`` ``prompt`` into Chat Completion messages.

@@ -20,7 +20,9 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
+    parse_tool_call_arguments,
     responses_reasoning_items_from_thinking_blocks,
+    salvage_concatenated_tool_arguments,
     split_concatenated_json_objects,
     strip_encrypted_reasoning_from_messages,
     system_messages_first,
@@ -267,6 +269,40 @@ def test_split_concatenated_json_salvages_prefix_before_truncated_tail():
     """
     result = split_concatenated_json_objects('{"a": 1}{"b": 2}{"c":')
     assert result == [{"a": 1}, {"b": 2}]
+
+
+def test_parse_tool_call_arguments_rejects_concatenated_json() -> None:
+    with pytest.raises(ValueError, match="Failed to parse tool call arguments"):
+        parse_tool_call_arguments('{"a":1}{"b":2}')
+
+
+def _distinct_json_objects(count: int) -> str:
+    return "".join(json.dumps({"n": index}, separators=(",", ":")) for index in range(count))
+
+
+@pytest.mark.parametrize(
+    ("raw", "expected"),
+    (
+        ('{"a":1}{"b":2}', ({"a": 1}, {"b": 2})),
+        ('{"a":1}{"a":1}{"a":1}', ({"a": 1},)),
+        ('{"a":1}{"a":1}{"b":2}', ({"a": 1}, {"a": 1}, {"b": 2})),
+        (_distinct_json_objects(8), tuple({"n": index} for index in range(8))),
+        (_distinct_json_objects(9), ()),
+        (_distinct_json_objects(9) + " junk", ()),
+        ('{"a":1}' * 7 + '{"b":2}', tuple({"a": 1} for _ in range(7)) + ({"b": 2},)),
+        ('{"a":1}' * 8 + '{"b":2}', ()),
+        ('{"a":1}' * 5000, ({"a": 1},)),
+        ('{"a":1}' * 20, ({"a": 1},)),
+        ('{"a":1}{"b":', ()),
+        ('0{"x":1}', ()),
+        ('{"x":1}0', ()),
+        ('[1]{"x":1}', ()),
+        ('{"a":1}{"b":2}}', ()),
+        ('{"a":1} junk', ()),
+    ),
+)
+def test_salvage_concatenated_tool_arguments(raw: str, expected: tuple[dict[str, object], ...]) -> None:
+    assert salvage_concatenated_tool_arguments(raw) == expected
 
 
 # ---------------------------------------------------------------------------
@@ -1949,6 +1985,8 @@ class TestMergeConsecutiveSystemMessages:
         assert merged == [{"role": "system", "content": expected_content}, {"role": "user", "content": "Hello"}]
 
     def test_keeps_the_first_message_when_no_system_message_in_the_run_has_content(self):
-        merged = merge_consecutive_system_messages([{"role": "system"}, {"role": "system"}, {"role": "user", "content": "Hi"}])
+        merged = merge_consecutive_system_messages(
+            [{"role": "system"}, {"role": "system"}, {"role": "user", "content": "Hi"}]
+        )
 
         assert merged == [{"role": "system"}, {"role": "user", "content": "Hi"}]
