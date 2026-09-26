@@ -7266,9 +7266,15 @@ class MCPServerManager:
         if not target_server_ids:
             return []
 
-        tasks: Final = [self.health_check_server(server_id) for server_id in target_server_ids]
-        results: Final = await asyncio.gather(*tasks)
-        return [server for server in results if server is not None]
+        unique_server_ids: Final = tuple(dict.fromkeys(target_server_ids))
+        batch_size: Final = 10
+        batches: Final = [
+            await asyncio.gather(
+                *(self.health_check_server(server_id) for server_id in unique_server_ids[offset : offset + batch_size])
+            )
+            for offset in range(0, len(unique_server_ids), batch_size)
+        ]
+        return [server for batch in batches for server in batch if server is not None]
 
 
 global_mcp_server_manager: Final[MCPServerManager] = MCPServerManager()

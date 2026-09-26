@@ -5098,6 +5098,57 @@ class TestMCPServerManager:
         assert stopped.is_set()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("server_count", [0, 1, 10, 11, 25])
+    @pytest.mark.parametrize("filtered", [False, True])
+    async def test_bulk_health_checks_deduplicate_and_bound_upstream_requests(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: MockRouter, server_count: int, filtered: bool
+    ) -> None:
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+
+        class Probe:
+            def __init__(self) -> None:
+                self.active = 0
+                self.peak = 0
+
+            async def respond(self, request: httpx.Request) -> httpx.Response:
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+                try:
+                    await asyncio.sleep(0)
+                    return httpx.Response(401)
+                finally:
+                    self.active -= 1
+
+        manager: Final = MCPServerManager()
+        server_ids: Final = [f"health-{index}" for index in range(server_count)]
+        manager.registry = {
+            server_id: MCPServer(
+                server_id=server_id, name=server_id, transport=MCPTransport.http,
+                auth_type=MCPAuth.oauth2, url=f"https://health.example.test/{server_id}",
+            )
+            for server_id in server_ids
+        }
+        probe: Final = Probe()
+        route: Final = respx_mock.get(host="health.example.test").mock(side_effect=probe.respond)
+        requested_ids: Final = [*server_ids, *reversed(server_ids), *server_ids, "not-registered"]
+
+        results: Final = (
+            await manager.get_all_mcp_servers_with_health_and_teams(
+                user_api_key_auth=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                server_ids=requested_ids,
+            )
+            if filtered
+            else await manager.get_all_mcp_servers_with_health_unfiltered(server_ids=requested_ids)
+        )
+
+        assert [(server.server_id, server.status) for server in results] == [
+            (server_id, "reachable") for server_id in server_ids
+        ]
+        assert route.call_count == server_count
+        assert probe.peak == min(server_count, 10)
+        assert probe.active == 0
+
+    @pytest.mark.asyncio
     async def test_health_check_server_with_static_headers(self):
         """Test health check with static headers configured"""
         manager = MCPServerManager()
