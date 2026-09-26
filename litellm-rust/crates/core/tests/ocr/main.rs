@@ -4,6 +4,7 @@ use litellm_core::ocr::{
     types::LiteLLMOcrRequest,
     wire::{OcrWireRequest, decode_request},
 };
+use litellm_http::Client;
 use litellm_llms::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
@@ -37,11 +38,7 @@ fn object(value: Value) -> Map<String, Value> {
 }
 
 fn ocr_client() -> OcrClient {
-    let document_http = reqwest::Client::builder()
-        .redirect(reqwest::redirect::Policy::none())
-        .build()
-        .expect("test document client builds");
-    OcrClient::for_test(reqwest::Client::new(), document_http)
+    OcrClient::for_test(Client::plain_for_test(), Client::no_redirect_for_test())
 }
 
 async fn perform(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {

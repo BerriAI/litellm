@@ -27,12 +27,16 @@ fn run_messages(
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     let secrets = crate::secrets::source(py)?;
+    let config = crate::http::call_config(py, &kwargs, asynchronous)?;
+    let machine = messages_machine(crate::http::resources(), &config, secrets)
+        .map_err(crate::http::client_error)?;
     run_legacy_call(
         py,
         SURFACE,
         PublicCall::capture(&request, &args, &kwargs)?,
-        crate::logger::LoggedMachine::new(messages_machine(secrets)),
+        crate::logger::LoggedMachine::new(machine),
         MessagesPythonHost::new(request.unbind()),
+        crate::preflight::sdk_preflight,
         asynchronous,
     )
 }

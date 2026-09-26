@@ -4,6 +4,7 @@ use litellm_core::chat_completions::{
     Error, chat_completions, chat_completions_decline_reason, types::ChatCompletionsRequest,
 };
 use litellm_http::transport::Error as TransportError;
+use litellm_types::utils::ChatCompletionsResponse;
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
 use wiremock::ResponseTemplate;
@@ -12,6 +13,10 @@ mod support;
 use support::*;
 
 const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
+
+async fn complete(request: ChatCompletionsRequest<'_>) -> Result<ChatCompletionsResponse, Error> {
+    chat_completions(&support::resources(), &http_config(), request).await
+}
 
 fn object(value: Value) -> Map<String, Value> {
     let Value::Object(map) = value else {
@@ -50,7 +55,7 @@ async fn anthropic_round_trip_translates_the_conversation_and_normalizes_the_res
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
     let base = upstream.uri();
 
-    let response = chat_completions(ChatCompletionsRequest {
+    let response = complete(ChatCompletionsRequest {
         messages: json!([
             {"role": "system", "content": "be terse"},
             {"role": "user", "content": "hi"}
@@ -90,7 +95,7 @@ async fn the_deployment_key_replaces_a_caller_supplied_x_api_key(
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
     let base = upstream.uri();
 
-    chat_completions(ChatCompletionsRequest {
+    complete(ChatCompletionsRequest {
         api_base: Some(&base),
         extra_headers: Some(object(
             json!({"x-api-key": "caller-key", "x-trace": "kept"}),
@@ -116,7 +121,7 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsReq
     .await;
     let base = upstream.uri();
 
-    let response = chat_completions(ChatCompletionsRequest {
+    let response = complete(ChatCompletionsRequest {
         model: "bedrock/anthropic.claude-sonnet-4-5",
         optional_params: object(json!({
             "aws_access_key_id": "access-key",
@@ -167,7 +172,7 @@ async fn a_response_it_cannot_normalize_is_reported_as_already_sent(
     let upstream = upstream([anthropic_response(body)]).await;
     let base = upstream.uri();
 
-    let error = chat_completions(ChatCompletionsRequest {
+    let error = complete(ChatCompletionsRequest {
         api_base: Some(&base),
         ..request
     })
@@ -188,7 +193,7 @@ async fn an_upstream_error_status_keeps_its_code_and_body(
     let upstream = upstream([ResponseTemplate::new(status).set_body_string("slow down")]).await;
     let base = upstream.uri();
 
-    let error = chat_completions(ChatCompletionsRequest {
+    let error = complete(ChatCompletionsRequest {
         api_base: Some(&base),
         ..request
     })
@@ -210,7 +215,7 @@ async fn an_upstream_error_status_keeps_its_code_and_body(
 async fn a_connection_that_is_never_established_declines_instead_of_failing(
     request: ChatCompletionsRequest<'static>,
 ) {
-    let error = chat_completions(ChatCompletionsRequest {
+    let error = complete(ChatCompletionsRequest {
         api_base: Some(UNREACHABLE_BASE),
         ..request
     })
@@ -232,7 +237,7 @@ async fn a_timeout_after_sending_is_not_a_pre_send_decline(
         upstream([anthropic_response(ANTHROPIC_MESSAGE).set_delay(Duration::from_secs(5))]).await;
     let base = upstream.uri();
 
-    let error = chat_completions(ChatCompletionsRequest {
+    let error = complete(ChatCompletionsRequest {
         api_base: Some(&base),
         timeout: Some(Duration::from_millis(100)),
         ..request
@@ -307,7 +312,7 @@ async fn a_declined_request_fails_the_call_before_sending(
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
     let base = upstream.uri();
 
-    let error = chat_completions(ChatCompletionsRequest {
+    let error = complete(ChatCompletionsRequest {
         optional_params: object(json!({"stream": true})),
         api_base: Some(&base),
         ..request
