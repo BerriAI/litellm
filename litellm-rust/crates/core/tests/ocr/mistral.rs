@@ -1,10 +1,7 @@
 use std::sync::Arc;
 
 use litellm_auth_gcp::VertexAuth;
-use litellm_http::{
-    HttpClientPool, HttpSettings, Resolution,
-    media::{PublicDnsResolver, UrlPolicy},
-};
+use litellm_http::{HttpSettings, Resolution, media::UrlPolicy};
 use litellm_llms::{
     base_llm::ocr::{
         settings::OcrSettings,
@@ -192,12 +189,16 @@ async fn the_client_uses_the_injected_http_pool_configuration() {
         ..HttpSettings::default()
     };
     let client = OcrClient::new(
-        &HttpClientPool::new(Arc::new(PublicDnsResolver)),
+        &http_pool(),
         &Resolution::from(&settings).config,
         UrlPolicy::default(),
         VertexAuth::default(),
         OcrSettings::default(),
-        Arc::new(litellm_secrets::source::EnvironmentSecrets::default()),
+        Arc::new(
+            litellm_secrets::source::EnvironmentSecrets::python_compatible(
+                litellm_http::Client::plain_for_test(),
+            ),
+        ),
     )
     .unwrap();
 
