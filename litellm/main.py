@@ -8952,7 +8952,11 @@ def _delta_carries_more_than_text(delta: Mapping[str, object]) -> bool:
 
 
 def _simple_text_part(choices: Sequence[object]) -> str | None:
+    if not choices:
+        return None
     deltas: Final = tuple(_stream_choice_delta(choice) for choice in choices)
+    if not deltas:
+        return None
     if any(_delta_carries_more_than_text(delta) for delta in deltas):
         return None
     content: Final = deltas[0].get("content")
