@@ -33,6 +33,7 @@ fn run_messages(
         PublicCall::capture(&request, &args, &kwargs)?,
         crate::logger::LoggedMachine::new(messages_machine(secrets)),
         MessagesPythonHost::new(request.unbind()),
+        crate::preflight::sdk_preflight,
         asynchronous,
     )
 }

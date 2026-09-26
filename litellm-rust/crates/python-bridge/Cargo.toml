@@ -55,6 +55,7 @@ pyo3-async-runtimes.workspace = true
 reqwest.workspace = true
 redis = { version = "1.7.0", features = ["tls-rustls"] }
 serde_json.workspace = true
+strum.workspace = true
 veil.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
