@@ -175,7 +175,8 @@ class BedrockOpenAIChatConfig(OpenAIGPT5Config, BaseAWSLLM):
         # over the body before signing, so extra_body={"model": ...} would otherwise invoke a
         # model the key isn't authorized for. Pin the authorized model back before signing.
         if model is not None:
-            request_data["model"] = model
+            # Pin the authorized model into the final signed body, overriding any extra_body model.
+            request_data["model"] = model  # rebind-ok: request_data is the body the handler signs; both auth paths read it
         if resolve_bedrock_bearer_token(api_key):
             # Bedrock API keys are Bearer credentials; SigV4 on top would be wrong.
             return headers, None

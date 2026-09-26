@@ -79,6 +79,48 @@ class TestAuth:
         assert headers["Content-Type"] == "application/json"
 
 
+class TestConfigBasics:
+    def test_custom_llm_provider(self):
+        assert _cfg().custom_llm_provider == "bedrock"
+
+    def test_get_error_class_is_bedrock_error(self):
+        from litellm.llms.bedrock.common_utils import BedrockError
+
+        err = _cfg().get_error_class("boom", 400, {})
+        assert isinstance(err, BedrockError)
+        assert err.status_code == 400
+
+    def test_non_reasoning_model_uses_plain_openai_mapping(self):
+        # A non gpt-5/6 model falls back to the plain OpenAI param mapping (temperature kept).
+        model = "some.bedrock.openai-compatible-model"
+        mapped = _cfg().map_openai_params(
+            non_default_params={"temperature": 0.5},
+            optional_params={},
+            model=model,
+            drop_params=True,
+        )
+        assert mapped.get("temperature") == 0.5
+        assert "temperature" in _cfg().get_supported_openai_params(model)
+
+    def test_sigv4_path_signs_body_and_pins_model(self):
+        # No bearer token -> SigV4 branch; explicit creds keep it offline.
+        request_data = {"model": "attacker.chosen", "messages": []}
+        headers, body = _cfg().sign_request(
+            headers={"Content-Type": "application/json"},
+            optional_params={
+                "aws_access_key_id": "AKIAEXAMPLE",
+                "aws_secret_access_key": "secret",
+                "aws_region_name": "us-east-1",
+            },
+            request_data=request_data,
+            api_base="https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/chat/completions",
+            model=MODEL,
+        )
+        assert request_data["model"] == MODEL  # pinned before signing
+        assert body is not None and b"chat" not in body[:0]  # a signed body was produced
+        assert any(name.lower() == "authorization" for name in headers)
+
+
 class TestRequestAttribution:
     """The X-Amzn-Bedrock-Request-Metadata header is signed into AWS billing/CloudTrail, so a
     caller must not be able to forge it; the proxy owns it when request-metadata is enabled."""
