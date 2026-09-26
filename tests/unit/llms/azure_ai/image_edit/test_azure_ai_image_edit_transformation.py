@@ -604,7 +604,7 @@ async def test_flux2_router_image_edit_bills_the_deployment_rates_with_a_logger_
         "litellm_call_id": "proxy-call-id",
     }
     logging_obj, routed_request = litellm.utils.function_setup(
-        original_function="aimage_edit", rules_obj=litellm.utils.Rules(), start_time=datetime.now(), **request
+        original_function="aimage_edit", rules_obj=litellm.utils.Rules(), start_time=datetime(2026, 1, 1), **request
     )
 
     response: Final = await router.aimage_edit(**routed_request, litellm_logging_obj=logging_obj)
