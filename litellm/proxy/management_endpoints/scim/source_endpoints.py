@@ -69,7 +69,7 @@ async def create_source(
         key: Final = await VerificationTokenRepository(SimpleNamespace(db=tx)).table.find_unique(
             where={"token": token_hash}
         )
-        if key is None or key.allowed_routes != ["/scim/*"]:
+        if key is None or tuple(key.allowed_routes or ()) != ("/scim/*",):
             raise HTTPException(400, "Select a dedicated token restricted to /scim/*")
         if await tx.litellm_scimsource.find_unique(where={"key_hash": token_hash}) is not None:
             raise HTTPException(409, "This token already belongs to a provisioning source")
