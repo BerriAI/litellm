@@ -130,6 +130,41 @@ class TestPrismaFilters:
         assert "chunked_in" not in finding.message
 
 
+class TestTypedDictFieldMaps:
+    """A functional TypedDict's field map names fields: its "in" key is a type, not a filter."""
+
+    def test_a_functional_typed_dict_field_map_is_not_flagged(self, tmp_path):
+        source = 'Filter = TypedDict("Filter", {"in": NotRequired[Sequence[str]], "notIn": Sequence[str]})\n'
+        assert _kinds(tmp_path, source) == ()
+
+    def test_the_typing_and_typing_extensions_attribute_forms_are_not_flagged(self, tmp_path):
+        source = (
+            'A = typing.TypedDict("A", {"in": Sequence[str]})\n'
+            'B = typing_extensions.TypedDict("B", {"notIn": Sequence[str]})\n'
+        )
+        assert _kinds(tmp_path, source) == ()
+
+    def test_a_fields_keyword_field_map_is_not_flagged(self, tmp_path):
+        source = 'Filter = TypedDict("Filter", fields={"in": Sequence[str]}, total=False)\n'
+        assert _kinds(tmp_path, source) == ()
+
+    def test_a_filter_passed_to_another_call_is_still_flagged(self, tmp_path):
+        source = 'rows = find_many("Filter", {"in": user_ids})\n'
+        assert _kinds(tmp_path, source) == ("prisma",)
+
+    def test_a_typed_dict_from_another_module_is_still_flagged(self, tmp_path):
+        source = 'Filter = mylib.TypedDict("Filter", {"in": user_ids})\n'
+        assert _kinds(tmp_path, source) == ("prisma",)
+
+    def test_a_filter_nested_inside_a_field_map_value_is_still_flagged(self, tmp_path):
+        source = 'Filter = TypedDict("Filter", {"where": {"user_id": {"in": user_ids}}})\n'
+        assert _kinds(tmp_path, source) == ("prisma",)
+
+    def test_a_filter_as_the_first_argument_of_typed_dict_is_still_flagged(self, tmp_path):
+        source = 'Filter = TypedDict({"in": user_ids}, {})\n'
+        assert _kinds(tmp_path, source) == ("prisma",)
+
+
 class TestRawSql:
     def test_an_fstring_slice_is_flagged(self, tmp_path):
         assert _kinds(tmp_path, 'sql = f"WHERE team_id IN ({placeholders})"\n') == ("raw-sql",)

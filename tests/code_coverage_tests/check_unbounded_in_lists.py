@@ -53,6 +53,7 @@ BASELINE_HEADER: Final = (
 )
 
 MEMBERSHIP_KEYS: Final = frozenset({"in", "not_in", "notIn"})
+TYPED_DICT_MODULES: Final = frozenset({"typing", "typing_extensions"})
 CONSTANT_WRAPPERS: Final = frozenset({"list", "tuple", "sorted", "frozenset", "set"})
 FREEZING_WRAPPERS: Final = frozenset({"tuple", "frozenset"})
 MIN_REASON_LEN: Final = 3
@@ -242,6 +243,32 @@ def _filtered_fields(tree: ast.AST) -> Mapping[int, str]:
     }
 
 
+def _is_typed_dict(func: ast.expr) -> bool:
+    match func:
+        case ast.Name(id="TypedDict"):
+            return True
+        case ast.Attribute(value=ast.Name(id=module), attr="TypedDict"):
+            return module in TYPED_DICT_MODULES
+        case _:
+            return False
+
+
+def _typed_dict_field_map(node: ast.AST) -> ast.expr | None:
+    """The field map of a functional `TypedDict("Name", {...})`, whose keys are field names, not filters."""
+    match node:
+        case ast.Call(func=func, args=[_, fields, *_]) if _is_typed_dict(func):
+            return fields
+        case ast.Call(func=func, keywords=keywords) if _is_typed_dict(func):
+            return next((keyword.value for keyword in keywords if keyword.arg == "fields"), None)
+        case _:
+            return None
+
+
+def _typed_dict_field_maps(tree: ast.AST) -> frozenset[int]:
+    """id() of each dict literal passed as a functional TypedDict's field map."""
+    return frozenset(id(fields) for fields in map(_typed_dict_field_map, ast.walk(tree)) if fields is not None)
+
+
 def _prisma_advice(key: str) -> str:
     if key == "in":
         return (
@@ -255,8 +282,9 @@ def prisma_findings(path: Path, tree: ast.Module) -> Iterator[Finding]:
     constants: Final = module_constants(tree)
     scope_of: Final = scope_finder(tree)
     fields: Final = _filtered_fields(tree)
+    typed_dict_field_maps: Final = _typed_dict_field_maps(tree)
     for node in ast.walk(tree):
-        if not isinstance(node, ast.Dict):
+        if not isinstance(node, ast.Dict) or id(node) in typed_dict_field_maps:
             continue
         for key, value in zip(node.keys, node.values):
             if not (isinstance(key, ast.Constant) and key.value in MEMBERSHIP_KEYS):

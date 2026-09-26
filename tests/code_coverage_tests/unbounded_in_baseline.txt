@@ -156,5 +156,3 @@ litellm/proxy/utils.py PrismaClient.get_data prisma team_id.in 0
 litellm/proxy/utils.py PrismaClient.get_data prisma user_id.in 0
 litellm/proxy/utils.py prefetch_config_params prisma param_name.in 0
 litellm/router_utils/auto_router_model_naming.py <module> raw-sql classifier_type.IN 0
-litellm/types/proxy/management_endpoints/team_endpoints.py <module> prisma ?.in 0
-litellm/types/proxy/management_endpoints/team_endpoints.py <module> prisma ?.notIn 0
