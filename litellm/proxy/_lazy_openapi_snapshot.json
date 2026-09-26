@@ -2662,6 +2662,17 @@
               "title": "Provider",
               "type": "string"
             },
+            "provisioning_source_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provisioning Source Id"
+            },
             "required_roles": {
               "default": [],
               "items": {
@@ -3172,6 +3183,25 @@
                 }
               ],
               "title": "Created By"
+            },
+            "directory_access_group_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Directory Access Group Ids"
+            },
+            "directory_active": {
+              "default": true,
+              "title": "Directory Active",
+              "type": "boolean"
             },
             "enabled": {
               "default": true,
@@ -3699,6 +3729,17 @@
               "title": "Provider",
               "type": "string"
             },
+            "provisioning_source_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Provisioning Source Id"
+            },
             "required_roles": {
               "default": [],
               "items": {
@@ -3892,6 +3933,25 @@
         },
         "ManagedAgentIdentityStatus": {
           "properties": {
+            "directory_access_group_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Directory Access Group Ids"
+            },
+            "directory_active": {
+              "default": true,
+              "title": "Directory Active",
+              "type": "boolean"
+            },
             "enabled": {
               "default": true,
               "title": "Enabled",

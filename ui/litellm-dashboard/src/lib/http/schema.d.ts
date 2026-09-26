@@ -24378,6 +24378,8 @@ export interface components {
              * @constant
              */
             provider: "microsoft_entra";
+            /** Provisioning Source Id */
+            provisioning_source_id?: string | null;
             /**
              * Required Roles
              * @default []
@@ -24554,6 +24556,13 @@ export interface components {
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /** Directory Access Group Ids */
+            directory_access_group_ids?: string[] | null;
+            /**
+             * Directory Active
+             * @default true
+             */
+            directory_active: boolean;
             /**
              * Enabled
              * @default true
@@ -30261,6 +30270,8 @@ export interface components {
              * @constant
              */
             provider: "microsoft_entra";
+            /** Provisioning Source Id */
+            provisioning_source_id?: string | null;
             /**
              * Required Roles
              * @default []
@@ -35681,6 +35692,13 @@ export interface components {
         };
         /** ManagedAgentIdentityStatus */
         ManagedAgentIdentityStatus: {
+            /** Directory Access Group Ids */
+            directory_access_group_ids?: string[] | null;
+            /**
+             * Directory Active
+             * @default true
+             */
+            directory_active: boolean;
             /**
              * Enabled
              * @default true

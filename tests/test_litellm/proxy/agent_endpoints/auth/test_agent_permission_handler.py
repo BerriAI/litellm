@@ -639,6 +639,8 @@ class TestAgentRequestHandler:
     [
         ({}, True),
         ({"enabled": False}, False),
+        ({"directory_active": False}, False),
+        ({"directory_access_group_ids": ()}, False),
     ],
 )
 async def test_managed_invocation_requires_local_and_directory_admission(
