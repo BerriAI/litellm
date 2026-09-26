@@ -4,7 +4,7 @@ Common base config for all LLM providers
 
 import types
 from abc import ABC, abstractmethod
-from collections.abc import AsyncIterator, Iterator
+from collections.abc import AsyncIterator, Iterator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Union
 
 import httpx
@@ -384,6 +384,7 @@ class BaseConfig(ABC):
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> "CustomStreamWrapper":
         raise NotImplementedError
 
@@ -399,6 +400,7 @@ class BaseConfig(ABC):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> "CustomStreamWrapper":
         raise NotImplementedError
 

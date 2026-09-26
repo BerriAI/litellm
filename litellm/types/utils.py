@@ -3924,8 +3924,11 @@ all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-
 ]
 
 
+_LITELLM_OWNED_KWARG_NAMES: Final = frozenset(all_litellm_params)
+
+
 def is_litellm_owned_kwarg(name: str) -> bool:
-    return name in all_litellm_params or name.startswith(INTERNAL_KWARG_PREFIX)
+    return name in _LITELLM_OWNED_KWARG_NAMES or name.startswith(INTERNAL_KWARG_PREFIX)
 
 
 class KeyGenerationConfig(TypedDict, total=False):

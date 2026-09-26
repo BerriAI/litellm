@@ -7,12 +7,19 @@ Ensures backward compatibility after sparse kwargs extraction optimization.
 from typing import Final
 
 import pytest
+from pydantic import ValidationError
 
+from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.litellm_core_utils.get_litellm_params import (
     _OPTIONAL_KWARGS_KEYS,
+    InvalidControlOption,
     _get_base_model_from_litellm_call_metadata,
     get_litellm_params,
+    parse_control_options,
+    stored_control_options,
+    with_control_options,
 )
+from litellm.types.litellm_params import ControlOptions
 
 NAMED_PRICE_PARAMS: Final = frozenset(
     {"input_cost_per_token", "output_cost_per_token", "input_cost_per_second", "output_cost_per_second"}
@@ -36,9 +43,7 @@ class TestGetBaseModelFromLitellmCallMetadata:
         assert _get_base_model_from_litellm_call_metadata({"model_info": {}}) is None
 
     def test_returns_base_model(self):
-        result = _get_base_model_from_litellm_call_metadata(
-            {"model_info": {"base_model": "gpt-4"}}
-        )
+        result = _get_base_model_from_litellm_call_metadata({"model_info": {"base_model": "gpt-4"}})
         assert result == "gpt-4"
 
 
@@ -90,9 +95,8 @@ class TestGetLitellmParamsKwargsExtraction:
         assert "s3_endpoint_url" not in result_without_s3_kwargs
         assert "s3_region_name" not in result_without_s3_kwargs
 
-    def test_stream_chunk_size_is_carried_as_a_litellm_param(self) -> None:
-        assert get_litellm_params(stream_chunk_size=64)["stream_chunk_size"] == 64
-        assert get_litellm_params()["stream_chunk_size"] is None
+    def test_a_caller_supplied_control_options_key_is_not_carried(self) -> None:
+        assert CONTROL_OPTIONS_KEY not in get_litellm_params(**{CONTROL_OPTIONS_KEY: {"stream_chunk_size": 64}})
 
     def test_s3_credential_kwargs_are_forwarded_for_s3_signing(self):
         result = get_litellm_params(s3_access_key_id="s3-key", s3_secret_access_key="s3-secret")
@@ -122,6 +126,79 @@ class TestGetLitellmParamsKwargsExtraction:
             assert result[key] == f"val_{key}"
 
 
+@pytest.mark.parametrize(
+    "kwargs,expected",
+    [
+        ({"stream_chunk_size": 64, "temperature": 0.2}, ControlOptions(stream_chunk_size=64)),
+        ({"stream_chunk_size": "64"}, ControlOptions(stream_chunk_size=64)),
+        ({"stream_chunk_size": None}, ControlOptions()),
+        ({"temperature": 0.2}, ControlOptions()),
+    ],
+)
+def test_control_options_are_read_from_the_request_kwargs(kwargs: dict[str, object], expected: ControlOptions) -> None:
+    assert parse_control_options(kwargs) == expected
+
+
+@pytest.mark.parametrize(
+    "raw,shown",
+    [
+        ("sixty-four", "'sixty-four'"),
+        (" 64", "' 64'"),
+        ("-1", "'-1'"),
+        ("\uff16\uff14", "'\uff16\uff14'"),
+        ("9" * 19, repr("9" * 19)),
+        ("x" * 500, "'xxxxxxxxxxxx...xxxxxxxxxxxxx'"),
+        pytest.param(-(10**5000), "<int of 16610 bits>", id="huge_negative_int"),
+        (64.0, "64.0"),
+        (True, "True"),
+        (0, "0"),
+        ("0", "'0'"),
+        (-1, "-1"),
+    ],
+)
+def test_control_options_reject_a_stream_chunk_size_that_is_not_a_positive_int(raw: object, shown: str) -> None:
+    assert parse_control_options({"stream_chunk_size": raw}) == InvalidControlOption(
+        param="stream_chunk_size",
+        message=f"Invalid stream_chunk_size={shown}: expected a positive integer",
+        valid=ControlOptions(),
+    )
+
+
+def test_control_options_accept_the_longest_digit_string() -> None:
+    assert parse_control_options({"stream_chunk_size": "9" * 18}) == ControlOptions(stream_chunk_size=int("9" * 18))
+
+
+@pytest.mark.parametrize("raw", [0, -1, "sixty-four", 64.0, True])
+def test_control_options_enforce_their_rule_at_construction(raw: object) -> None:
+    with pytest.raises(ValidationError):
+        ControlOptions(stream_chunk_size=raw)  # pyright: ignore[reportArgumentType]  # the invalid type is the input
+
+
+def test_with_control_options_replaces_a_forged_value() -> None:
+    control: Final = ControlOptions(stream_chunk_size=64)
+    assert (
+        stored_control_options(
+            with_control_options({CONTROL_OPTIONS_KEY: {"stream_chunk_size": 1}, "api_key": "k"}, control)
+        )
+        is control
+    )
+
+
+@pytest.mark.parametrize(
+    "litellm_params,expected",
+    [
+        ({CONTROL_OPTIONS_KEY: ControlOptions(stream_chunk_size=64)}, ControlOptions(stream_chunk_size=64)),
+        ({}, ControlOptions()),
+        ({CONTROL_OPTIONS_KEY: {"stream_chunk_size": 64}}, ControlOptions()),
+        ({"stream_chunk_size": 64}, ControlOptions()),
+    ],
+)
+def test_stored_control_options_reads_only_the_validated_options(
+    litellm_params: dict[str, object], expected: ControlOptions
+) -> None:
+    assert stored_control_options(litellm_params) == expected
+
+
 class TestGetLitellmParamsBaseModel:
     """Verify base_model resolution precedence."""
 
@@ -133,9 +210,7 @@ class TestGetLitellmParamsBaseModel:
         assert result["base_model"] == "explicit"
 
     def test_falls_back_to_metadata(self):
-        result = get_litellm_params(
-            metadata={"model_info": {"base_model": "from-metadata"}}
-        )
+        result = get_litellm_params(metadata={"model_info": {"base_model": "from-metadata"}})
         assert result["base_model"] == "from-metadata"
 
     def test_none_when_no_source(self):
@@ -269,7 +344,5 @@ class TestMetadataFallsBackToLitellmMetadata:
     "value, expected",
     [("true", True), ("false", False), (" TRUE ", True), (True, True), (None, None), ("os.environ/DROP_PARAMS", None)],
 )
-def test_drop_params_strings_reach_litellm_params_as_flags(
-    value: str | bool | None, expected: bool | None
-) -> None:
+def test_drop_params_strings_reach_litellm_params_as_flags(value: str | bool | None, expected: bool | None) -> None:
     assert get_litellm_params(drop_params=value)["drop_params"] is expected

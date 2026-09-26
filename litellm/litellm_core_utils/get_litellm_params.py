@@ -1,9 +1,15 @@
+import reprlib
 from collections.abc import Mapping, MutableMapping
+from dataclasses import dataclass, fields
 from types import MappingProxyType
 from typing import Final
 
+from pydantic import TypeAdapter, ValidationError
+
+from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
+from litellm.types.litellm_params import ControlOptions
 from litellm.types.router import CustomPricingLiteLLMParams
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
@@ -70,6 +76,46 @@ OPTIONAL_KWARGS_KEYS: Final = (
 # Backward-compatible alias for existing imports/tests.
 _OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
 
+_CONTROL_OPTIONS: Final = TypeAdapter(ControlOptions)
+_CONTROL_OPTION_NAMES: Final = tuple(field.name for field in fields(ControlOptions))
+_MAX_SHOWN_INT_BITS: Final = 64
+
+
+def _bounded_repr(value: object) -> str:
+    if isinstance(value, int) and value.bit_length() > _MAX_SHOWN_INT_BITS:
+        return f"<int of {value.bit_length()} bits>"
+    return reprlib.repr(value)
+
+
+@dataclass(frozen=True, slots=True)
+class InvalidControlOption:
+    param: str
+    message: str
+    valid: ControlOptions
+
+
+def parse_control_options(kwargs: Mapping[str, object]) -> ControlOptions | InvalidControlOption:
+    given: Final = {name: kwargs[name] for name in _CONTROL_OPTION_NAMES if name in kwargs}
+    try:
+        return _CONTROL_OPTIONS.validate_python(given)
+    except ValidationError as e:
+        invalid: Final = tuple(str(error["loc"][0]) for error in e.errors(include_url=False))
+        param: Final = invalid[0]
+        return InvalidControlOption(
+            param=param,
+            message=f"Invalid {param}={_bounded_repr(given[param])}: expected a positive integer",
+            valid=_CONTROL_OPTIONS.validate_python({k: v for k, v in given.items() if k not in invalid}),
+        )
+
+
+def stored_control_options(litellm_params: Mapping[str, object]) -> ControlOptions:
+    control: Final = litellm_params.get(CONTROL_OPTIONS_KEY)
+    return control if isinstance(control, ControlOptions) else ControlOptions()
+
+
+def with_control_options(litellm_params: Mapping[str, object], control: ControlOptions) -> dict[str, object]:
+    return {**litellm_params, CONTROL_OPTIONS_KEY: control}
+
 
 def _get_base_model_from_litellm_call_metadata(
     metadata: dict | None,
@@ -130,7 +176,6 @@ def get_litellm_params(
     api_version: str | None = None,
     max_retries: int | None = None,
     litellm_request_debug: bool | None = None,
-    stream_chunk_size: int | None = None,
     **kwargs,
 ) -> dict:
     _litellm_metadata_dict: Final = litellm_metadata if isinstance(litellm_metadata, dict) else None
@@ -193,7 +238,6 @@ def get_litellm_params(
         "max_retries": max_retries,
         "use_litellm_proxy": use_litellm_proxy,
         "litellm_request_debug": litellm_request_debug,
-        "stream_chunk_size": stream_chunk_size,
     }
 
     # Sparse extraction: only add kwargs keys that are actually present

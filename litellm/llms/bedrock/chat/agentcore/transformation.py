@@ -5,7 +5,7 @@ https://docs.aws.amazon.com/bedrock/latest/APIReference/API_agentcore_InvokeAgen
 """
 
 import json
-from collections.abc import AsyncGenerator
+from collections.abc import AsyncGenerator, Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, Union
 from urllib.parse import quote
 
@@ -643,6 +643,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> "CustomStreamWrapper":
         """
         Simplified sync streaming - returns a generator that yields ModelResponse chunks.
@@ -862,6 +863,7 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         client: Optional["AsyncHTTPHandler"] = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> "CustomStreamWrapper":
         """
         Simplified async streaming - returns an async generator that yields ModelResponse chunks.

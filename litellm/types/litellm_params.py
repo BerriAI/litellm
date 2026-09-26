@@ -4,7 +4,10 @@ models and KWARG_ARTIFACTS into all_litellm_params."""
 from collections.abc import Callable, Iterator, Mapping, MutableMapping, Sequence
 from dataclasses import dataclass, field, fields, is_dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final, Literal, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
+
+from pydantic import BeforeValidator, Field
+from pydantic.dataclasses import dataclass as pydantic_dataclass
 
 if TYPE_CHECKING:
     import httpx
@@ -233,9 +236,21 @@ class ResponseOptions:
     merge_reasoning_content_in_choices: bool | None = None
     enable_json_schema_validation: bool | None = None
     complete_response: bool | None = None
-    stream_chunk_size: int | None = None
     keepalive_seconds: float | None = None
     allow_client_keepalive_override: bool | None = None
+
+
+MAX_DECIMAL_STRING_DIGITS: Final = 18
+
+
+def _int_from_decimal_string(value: object) -> object:
+    is_digits: Final = isinstance(value, str) and value.isascii() and value.isdecimal()
+    return int(value) if is_digits and len(value) <= MAX_DECIMAL_STRING_DIGITS else value
+
+
+@pydantic_dataclass(frozen=True, slots=True, kw_only=True)
+class ControlOptions:
+    stream_chunk_size: Annotated[int, BeforeValidator(_int_from_decimal_string), Field(strict=True, gt=0)] | None = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -257,6 +272,7 @@ class LiteLLMOptions:
     guardrails: GuardrailOptions
     prompt: PromptOptions
     response: ResponseOptions
+    control: ControlOptions
     mock: MockOptions
 
 

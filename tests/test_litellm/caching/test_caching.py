@@ -1,10 +1,12 @@
 import asyncio
 import logging
 import re
+from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
 
+import litellm
 import litellm.caching.redis_cache as redis_cache_module
 from litellm.caching.caching import Cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
@@ -49,9 +51,7 @@ def test_cache_key_debug_log_does_not_include_prompt_material(caplog):
     assert re.fullmatch(r"[0-9a-f]{64}", cache_key)
 
     created_cache_key_logs = [
-        record.getMessage()
-        for record in caplog.records
-        if "Created cache key:" in record.getMessage()
+        record.getMessage() for record in caplog.records if "Created cache key:" in record.getMessage()
     ]
     assert created_cache_key_logs
     assert all(prompt_marker not in message for message in created_cache_key_logs)
@@ -84,13 +84,8 @@ def test_add_cache_timeout_only_joins_redis_throttle_for_redis_backends(backend,
 def _embedding_response(prompt_tokens, num_items):
     return EmbeddingResponse(
         model="amazon.titan-embed-image-v1",
-        data=[
-            Embedding(embedding=[0.0], index=i, object="embedding")
-            for i in range(num_items)
-        ],
-        usage=Usage(
-            prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens
-        ),
+        data=[Embedding(embedding=[0.0], index=i, object="embedding") for i in range(num_items)],
+        usage=Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens),
     )
 
 
@@ -142,9 +137,7 @@ def test_semantic_cache_key_excludes_prompt_so_paraphrases_share_a_bucket():
     )
     key_b = cache.get_cache_key(
         model="gpt-4o-mini",
-        messages=[
-            {"role": "user", "content": "Tell me the colour of the daytime sky."}
-        ],
+        messages=[{"role": "user", "content": "Tell me the colour of the daytime sky."}],
         metadata=dict(tenant),
     )
     assert key_a == key_b
@@ -153,12 +146,8 @@ def test_semantic_cache_key_excludes_prompt_so_paraphrases_share_a_bucket():
 def test_semantic_cache_key_isolates_tenants():
     messages = [{"role": "user", "content": "What color is the sky?"}]
     cache = _semantic_cache()
-    key_a = cache.get_cache_key(
-        model="gpt-4o-mini", messages=messages, metadata={"user_api_key": "hash-A"}
-    )
-    key_b = cache.get_cache_key(
-        model="gpt-4o-mini", messages=messages, metadata={"user_api_key": "hash-B"}
-    )
+    key_a = cache.get_cache_key(model="gpt-4o-mini", messages=messages, metadata={"user_api_key": "hash-A"})
+    key_b = cache.get_cache_key(model="gpt-4o-mini", messages=messages, metadata={"user_api_key": "hash-B"})
     key_team = cache.get_cache_key(
         model="gpt-4o-mini",
         messages=messages,
@@ -242,24 +231,18 @@ def test_semantic_cache_key_still_separates_models_and_params():
     cache = _semantic_cache()
     messages = [{"role": "user", "content": "hi"}]
     tenant = {"user_api_key": "hash-A"}
-    assert cache.get_cache_key(
-        model="gpt-4o-mini", messages=messages, metadata=dict(tenant)
-    ) != cache.get_cache_key(model="gpt-4o", messages=messages, metadata=dict(tenant))
+    assert cache.get_cache_key(model="gpt-4o-mini", messages=messages, metadata=dict(tenant)) != cache.get_cache_key(
+        model="gpt-4o", messages=messages, metadata=dict(tenant)
+    )
     assert cache.get_cache_key(
         model="gpt-4o-mini", messages=messages, temperature=0, metadata=dict(tenant)
-    ) != cache.get_cache_key(
-        model="gpt-4o-mini", messages=messages, temperature=1, metadata=dict(tenant)
-    )
+    ) != cache.get_cache_key(model="gpt-4o-mini", messages=messages, temperature=1, metadata=dict(tenant))
 
 
 def test_exact_cache_key_still_includes_prompt():
     cache = Cache(type=LiteLLMCacheType.LOCAL)
-    key_a = cache.get_cache_key(
-        model="gpt-4o-mini", messages=[{"role": "user", "content": "a"}]
-    )
-    key_b = cache.get_cache_key(
-        model="gpt-4o-mini", messages=[{"role": "user", "content": "b"}]
-    )
+    key_a = cache.get_cache_key(model="gpt-4o-mini", messages=[{"role": "user", "content": "a"}])
+    key_b = cache.get_cache_key(model="gpt-4o-mini", messages=[{"role": "user", "content": "b"}])
     assert key_a != key_b
 
 
@@ -277,9 +260,7 @@ def test_exact_cache_key_includes_anthropic_messages_params(anthropic_param):
     cache = Cache(type=LiteLLMCacheType.LOCAL)
     messages = [{"role": "user", "content": "which greek letter?"}]
     baseline = cache.get_cache_key(model="claude-sonnet-4-5", messages=messages)
-    assert baseline != cache.get_cache_key(
-        model="claude-sonnet-4-5", messages=messages, **anthropic_param
-    )
+    assert baseline != cache.get_cache_key(model="claude-sonnet-4-5", messages=messages, **anthropic_param)
 
 
 @pytest.mark.asyncio
@@ -374,7 +355,9 @@ async def test_embedding_cache_serves_base64_string_embeddings_on_repeat(monkeyp
             self.provider_calls += 1
             return EmbeddingResponse(
                 model=model,
-                data=[Embedding(embedding="AACAPwAAAEA=", index=idx, object="embedding") for idx, _ in enumerate(input)],
+                data=[
+                    Embedding(embedding="AACAPwAAAEA=", index=idx, object="embedding") for idx, _ in enumerate(input)
+                ],
             )
 
     embedder = Base64Embedder()
@@ -389,3 +372,15 @@ async def test_embedding_cache_serves_base64_string_embeddings_on_repeat(monkeyp
 
     assert embedder.provider_calls == 1, "a string embedding written to the cache must be served on repeat"
     assert [item["embedding"] for item in second.data] == [item["embedding"] for item in first.data] == ["AACAPwAAAEA="]
+
+
+def test_provider_specific_cache_key_ignores_litellm_owned_kwargs(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "enable_caching_on_provider_specific_optional_params", True)
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    request: Final = {"model": "gpt-4.1-mini", "messages": [{"role": "user", "content": "hi"}], "top_k": 5}
+
+    base_key: Final = cache.get_cache_key(**request)
+
+    assert cache.get_cache_key(**request, _litellm_control={"stream_chunk_size": 64}) == base_key
+    assert cache.get_cache_key(**request, litellm_trace_id="trace-1") == base_key
+    assert cache.get_cache_key(**{**request, "top_k": 6}) != base_key

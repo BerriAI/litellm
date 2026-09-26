@@ -7,6 +7,7 @@ LiteLLM Docs: https://docs.litellm.ai/docs/providers/aws_sagemaker#sagemaker-mes
 Huggingface Docs: https://huggingface.co/docs/text-generation-inference/en/messages_api
 """
 
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
@@ -149,6 +150,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> CustomStreamWrapper:
         if client is None or isinstance(client, AsyncHTTPHandler):
             client = _get_httpx_client(params={})
@@ -191,6 +193,7 @@ class SagemakerChatConfig(OpenAIGPTConfig, BaseAWSLLM):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> CustomStreamWrapper:
         if client is None or isinstance(client, HTTPHandler):
             try:
