@@ -53,6 +53,19 @@ async def _drain(generator) -> list:
     return [chunk async for chunk in generator]
 
 
+def _tool_chunk(arguments: str, finish_reason: str | None = None) -> ModelResponseStream:
+    """One streamed fragment of tool call 0's arguments."""
+    tool_call = {"index": 0, "id": "call_1", "type": "function", "function": {"name": "send", "arguments": arguments}}
+    return ModelResponseStream(
+        choices=[StreamingChoices(index=0, delta=Delta(tool_calls=[tool_call]), finish_reason=finish_reason)]
+    )
+
+
+def _field(holder: object, name: str) -> object:
+    """Reads a field from a dict or a model; the guardrail emits both shapes."""
+    return holder.get(name) if isinstance(holder, dict) else getattr(holder, name)
+
+
 def test_llm_shield_guardrail_config(monkeypatch: pytest.MonkeyPatch):
     """Should register through init_guardrails_v2 like any other provider."""
     monkeypatch.setattr(litellm, "guardrail_name_config_map", {})
@@ -892,6 +905,67 @@ class TestStreamingRehydration:
         }
         assert flushed.get(1) == "one-done", "choice 1's held text was dropped"
         assert flushed.get(0) == "zero-done"
+
+    @pytest.mark.asyncio
+    async def test_held_tool_arguments_land_in_the_finishing_chunk(self):
+        """A client parses tool arguments on finish_reason, so the flush must ride that chunk.
+
+        The finishing chunk also carries its own fragment for the same tool call. That
+        entry has to survive, with the held text appended after it as a continuation.
+        """
+        guardrail = _guardrail(event_hook="post_call")
+        _mock_post(
+            guardrail,
+            {"text": '{"to": "', "carry": "[EMA"},
+            {"text": "", "carry": '[EMAIL_1]"}'},
+            {"text": 'a@example.com"}', "carry": ""},
+        )
+
+        async def stream():
+            yield _tool_chunk('{"to": "[EMA')
+            yield _tool_chunk('IL_1]"}', finish_reason="tool_calls")
+
+        chunks = await _drain(
+            guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=None, response=stream(), request_data={"messages": []}
+            )
+        )
+
+        assert len(chunks) == 2, "the flush must not arrive after the finish_reason chunk"
+        final_calls = chunks[1].choices[0].delta.tool_calls
+        assert len(final_calls) == 2, "the finishing chunk's own fragment was dropped"
+        assert _field(final_calls[1], "index") == 0
+        arguments = "".join(
+            _field(_field(call, "function"), "arguments") or ""
+            for chunk in chunks
+            for call in chunk.choices[0].delta.tool_calls
+        )
+        assert json.loads(arguments) == {"to": "a@example.com"}
+
+    @pytest.mark.asyncio
+    async def test_held_tool_arguments_flush_when_the_stream_ends_unfinished(self):
+        """No finish_reason at all: a trailing chunk carries the held arguments alone."""
+        guardrail = _guardrail(event_hook="post_call")
+        _mock_post(
+            guardrail,
+            {"text": '{"to": "', "carry": "[EMA"},
+            {"text": 'a@example.com"}', "carry": ""},
+        )
+
+        async def stream():
+            yield _tool_chunk('{"to": "[EMA')
+
+        chunks = await _drain(
+            guardrail.async_post_call_streaming_iterator_hook(
+                user_api_key_dict=None, response=stream(), request_data={"messages": []}
+            )
+        )
+
+        assert len(chunks) == 2
+        trailing = chunks[1].choices[0].delta.tool_calls
+        assert trailing == [{"index": 0, "function": {"arguments": 'a@example.com"}'}}], (
+            "the copied chunk's own fragment was already delivered and must not repeat"
+        )
 
     @pytest.mark.asyncio
     async def test_chunks_are_forwarded_as_they_arrive(self):

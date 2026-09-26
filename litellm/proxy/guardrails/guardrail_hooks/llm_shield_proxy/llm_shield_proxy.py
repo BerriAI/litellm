@@ -290,6 +290,14 @@ def _carry_sort_key(key: tuple) -> tuple:
     return (choice_index, -1 if tool_index is None else tool_index)
 
 
+def _continuation_delta(tool_index: int, text: str) -> list[dict[str, object]]:
+    """A `tool_calls` delta carrying `text` as an index-only continuation.
+
+    Clients concatenate tool-call fragments by index, so no id or name is needed.
+    """
+    return [{"index": tool_index, "function": {"arguments": text}}]  # mutable-ok: delta.tool_calls is a list.
+
+
 class LLMShieldProxyGuardrail(CustomGuardrail):
     """Redacts PII before it leaves the proxy and restores it in the response.
 
@@ -761,10 +769,10 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             if tool_index is None:
                 delta.content = text
             else:
-                continuations.append({"index": tool_index, "function": {"arguments": text}})
+                continuations.extend(_continuation_delta(tool_index, text))
         if continuations:
-            existing: Final[list] = list(getattr(delta, "tool_calls", None) or [])
-            delta.tool_calls = existing + continuations
+            existing: Final = tuple(getattr(delta, "tool_calls", None) or ())
+            delta.tool_calls = [*existing, *continuations]  # mutable-ok: delta.tool_calls is a list.
 
     async def _flush_trailing(
         self, last_chunk: Any, carries: _CarryWindows, session_id: str
@@ -799,7 +807,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
                 # delivered. Replace rather than append, and drop the content, or the
                 # client sees them twice.
                 chunk.choices[0].delta.content = None
-                chunk.choices[0].delta.tool_calls = [{"index": tool_index, "function": {"arguments": text}}]
+                chunk.choices[0].delta.tool_calls = _continuation_delta(tool_index, text)
             yield chunk
 
     @staticmethod
@@ -860,8 +868,8 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
         whichever path ran. The request side is left to the native pre-call hook, because
         redacting it here as well would redact it twice.
         """
-        text_list: Final[list] = list(inputs.get("texts") or ())
-        tool_calls: Final[list] = list(inputs.get("tool_calls") or ()) if input_type == "response" else []
+        text_list: Final = tuple(inputs.get("texts") or ())
+        tool_calls: Final = tuple(inputs.get("tool_calls") or ()) if input_type == "response" else ()
         if not text_list and not tool_calls:
             return inputs
 
@@ -882,7 +890,7 @@ class LLMShieldProxyGuardrail(CustomGuardrail):
             if input_type == "request"
             else await self._rehydrate(tuple(spans), self._session_id(request_data))
         )
-        restored_values: Final[list] = list(replaced)
+        restored_values: Final[list] = list(replaced)  # mutable-ok: sliced into the texts list.
 
         for write, replacement in zip(writers, restored_values[len(text_list) :]):
             write(replacement)
