@@ -36,10 +36,10 @@ def resolve_s3_log_prompts_only(configured: object, environ: Mapping[str, str] |
         return True
 
 
-def _resolve_positive_int(setting: str, configured: object, fallback: int) -> int:
+def _resolve_positive_int(setting: str, configured: object, fallback: int, *, reject_bool: bool) -> int:
     if configured is None or configured == "":
         return fallback
-    if isinstance(configured, bool):
+    if reject_bool and isinstance(configured, bool):
         verbose_logger.warning(
             "s3 logging: %s=%r is a boolean, not an integer, using %s", setting, configured, fallback
         )
@@ -56,11 +56,11 @@ def _resolve_positive_int(setting: str, configured: object, fallback: int) -> in
 
 
 def resolve_s3_max_concurrent_uploads(configured: object, fallback: int) -> int:
-    return _resolve_positive_int("s3_max_concurrent_uploads", configured, fallback)
+    return _resolve_positive_int("s3_max_concurrent_uploads", configured, fallback, reject_bool=False)
 
 
 def resolve_s3_max_queue_size(configured: object, fallback: int) -> int:
-    return _resolve_positive_int("s3_max_queue_size", configured, fallback)
+    return _resolve_positive_int("s3_max_queue_size", configured, fallback, reject_bool=True)
 
 
 def resolve_s3_max_retry_age_seconds(configured: object) -> int | None:
@@ -88,7 +88,7 @@ def resolve_s3_max_retry_age_seconds(configured: object) -> int | None:
 
 
 def resolve_s3_max_adaptive_concurrency(configured: object, fallback: int) -> int:
-    return _resolve_positive_int("s3_max_adaptive_concurrency", configured, fallback)
+    return _resolve_positive_int("s3_max_adaptive_concurrency", configured, fallback, reject_bool=True)
 
 
 def resolve_s3_drop_on_terminal_error(configured: object) -> bool:

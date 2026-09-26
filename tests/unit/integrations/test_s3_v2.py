@@ -3638,8 +3638,8 @@ async def test_terminal_drop_of_one_element_does_not_drop_a_sibling_with_the_sam
     )
 
     with patch("asyncio.sleep", new=AsyncMock(side_effect=lambda delay: _real_sleep(0))):
-        assert await logger._upload_bounded(dropped) == "dropped"
-        assert await logger._upload_bounded(sibling) == "retry"
+        assert await logger._upload_outcome(dropped) == "dropped"
+        assert await logger._upload_outcome(sibling) == "retry"
 
 
 def test_upload_semaphore_alias_is_the_limiter() -> None:
@@ -3725,9 +3725,220 @@ async def test_assigning_a_semaphore_changes_the_upload_width() -> None:
     assert logger.log_queue == []
 
 
-def test_bool_config_values_fall_back_to_the_default() -> None:
-    from litellm.integrations.s3 import resolve_s3_max_queue_size, resolve_s3_max_retry_age_seconds
+@pytest.mark.asyncio
+async def test_terminal_code_is_retried_like_base_when_the_drop_flag_is_off() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+    put = _StatusPut([_coded_failure_response(403, "InvalidRequest"), _ok_response()])
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+    failures = AsyncMock()
+    logger.handle_callback_failure = failures
 
+    with patch("asyncio.sleep", new=AsyncMock(side_effect=lambda delay: _real_sleep(0))):
+        assert await logger.async_upload_data_to_s3(_element({"id": "x"}, "x")) is True
+
+    assert put.calls == 2
+    failures.assert_not_called()
+
+    dropping = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_drop_on_terminal_error=True,
+    )
+    put.calls = 0
+    dropping.async_httpx_client = AsyncMock()
+    dropping.async_httpx_client.put = put
+
+    with patch("asyncio.sleep", new=AsyncMock(side_effect=lambda delay: _real_sleep(0))):
+        assert await dropping.async_upload_data_to_s3(_element({"id": "x"}, "x")) is False
+
+    assert put.calls == 1
+
+
+def test_sync_terminal_code_is_retried_like_base_when_the_drop_flag_is_off() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+    mock_sync_client = MagicMock()
+    mock_sync_client.put = MagicMock(side_effect=[_coded_failure_response(403, "InvalidRequest"), _ok_response()])
+    failures = MagicMock()
+    logger.handle_callback_failure = failures
+
+    with (
+        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("time.sleep"),
+    ):
+        logger.upload_data_to_s3(_element({"id": "x"}, "x"))
+
+    assert mock_sync_client.put.call_count == 2
+    failures.assert_not_called()
+
+    dropping = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_drop_on_terminal_error=True,
+    )
+    mock_sync_client.put = MagicMock(side_effect=[_coded_failure_response(403, "InvalidRequest"), _ok_response()])
+
+    with (
+        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("time.sleep"),
+    ):
+        dropping.upload_data_to_s3(_element({"id": "x"}, "x"))
+
+    assert mock_sync_client.put.call_count == 1
+
+
+def test_sync_retry_lines_stay_at_warning_level(caplog) -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+    mock_sync_client = MagicMock()
+    mock_sync_client.put = MagicMock(
+        side_effect=[_transient_failure_response(503), _transient_failure_response(503), _ok_response()]
+    )
+
+    with (
+        caplog.at_level("WARNING"),
+        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("time.sleep"),
+    ):
+        logger.upload_data_to_s3(_element({"id": "x"}, "x"))
+
+    assert mock_sync_client.put.call_count == 3
+    assert sum(1 for record in caplog.records if "retrying in" in record.getMessage()) == 2
+
+
+@pytest.mark.asyncio
+async def test_direct_async_upload_logs_retry_lines_at_warning_level(caplog) -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+    put = _StatusPut([_transient_failure_response(503), _ok_response()])
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+
+    with caplog.at_level("WARNING"), patch("asyncio.sleep", new=AsyncMock(side_effect=lambda delay: _real_sleep(0))):
+        assert await logger.async_upload_data_to_s3(_element({"id": "x"}, "x")) is True
+
+    assert put.calls == 2
+    assert sum(1 for record in caplog.records if "retrying in" in record.getMessage()) == 1
+
+
+def _init_bypassed_logger() -> S3Logger:
+    from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
+
+    logger = S3Logger.__new__(S3Logger)
+    logger.iam_cache = BaseAWSLLM._shared_iam_cache
+    logger.s3_endpoint_url = None
+    logger.s3_bucket_name = "test-bucket"
+    logger.s3_region_name = "us-east-1"
+    logger.s3_use_virtual_hosted_style = False
+    logger.s3_verify = None
+    logger.s3_aws_access_key_id = "test-key"
+    logger.s3_aws_secret_access_key = "test-secret"
+    logger.s3_aws_session_token = None
+    logger.s3_aws_session_name = None
+    logger.s3_aws_profile_name = None
+    logger.s3_aws_role_name = None
+    logger.s3_aws_web_identity_token = None
+    logger.s3_aws_sts_endpoint = None
+    logger.s3_server_side_encryption = None
+    logger.s3_sse_kms_key_id = None
+    logger.s3_log_prompts_only = None
+    return logger
+
+
+@pytest.mark.asyncio
+async def test_init_bypassed_logger_retries_a_503_and_reports_a_404() -> None:
+    logger = _init_bypassed_logger()
+    put = _StatusPut([_transient_failure_response(503), _ok_response()])
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+
+    with patch("asyncio.sleep", new=AsyncMock(side_effect=lambda delay: _real_sleep(0))):
+        assert await logger.async_upload_data_to_s3(_element({"id": "x"}, "x")) is True
+
+    assert put.calls == 2
+
+    put.calls = 0
+    put.responses = [_coded_failure_response(404, None)]
+    with patch("asyncio.sleep", new=AsyncMock(side_effect=lambda delay: _real_sleep(0))):
+        assert await logger.async_upload_data_to_s3(_element({"id": "y"}, "y")) is False
+
+    assert put.calls == 1
+
+
+def test_init_bypassed_sync_logger_retries_a_503_and_reports_a_404() -> None:
+    logger = _init_bypassed_logger()
+    mock_sync_client = MagicMock()
+    mock_sync_client.put = MagicMock(side_effect=[_transient_failure_response(503), _ok_response()])
+
+    with (
+        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("time.sleep"),
+    ):
+        logger.upload_data_to_s3(_element({"id": "x"}, "x"))
+
+    assert mock_sync_client.put.call_count == 2
+
+    mock_sync_client.put = MagicMock(return_value=_coded_failure_response(404, None))
+    with (
+        patch("litellm.integrations.s3_v2._get_httpx_client", return_value=mock_sync_client),
+        patch("time.sleep"),
+    ):
+        logger.upload_data_to_s3(_element({"id": "y"}, "y"))
+
+    assert mock_sync_client.put.call_count == 1
+
+
+@pytest.mark.asyncio
+async def test_subclass_with_base_style_upload_bounded_drains_the_queue() -> None:
+    class _BaseStyleLogger(S3Logger):
+        async def _upload_bounded(self, element: s3BatchLoggingElement) -> bool:
+            return True
+
+    logger = _BaseStyleLogger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+    logger.async_httpx_client = AsyncMock()
+    logger.log_queue = [_element({"id": "a"}, "a")]
+
+    await logger.flush_queue()
+
+    assert logger.log_queue == []
+    logger.async_httpx_client.put.assert_not_called()
+
+
+def test_bool_config_values_fall_back_to_the_default() -> None:
+    from litellm.integrations.s3 import (
+        resolve_s3_max_concurrent_uploads,
+        resolve_s3_max_queue_size,
+        resolve_s3_max_retry_age_seconds,
+    )
+
+    assert resolve_s3_max_concurrent_uploads(True, 16) == 1
     assert resolve_s3_max_queue_size(True, 50000) == 50000
     assert resolve_s3_max_retry_age_seconds(True) is None
 
