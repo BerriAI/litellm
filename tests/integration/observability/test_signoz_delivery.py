@@ -682,17 +682,21 @@ def test_key_level_destination_wins_over_the_team_level_destination(v2_rig: Rig)
     assert span.ingestion_key == TENANT_KEY, span
 
 
-def test_team_endpoint_without_an_ingestion_key_routes_the_span_without_the_operator_key(v2_rig: Rig) -> None:
+def test_team_endpoint_without_an_ingestion_key_is_ignored_and_the_span_stays_at_the_operator_sink(
+    v2_rig: Rig,
+) -> None:
     marker: Final = _marker()
     with v2_rig.proxy.scenario() as scenario:
         team: Final = scenario.team(metadata={"logging": v2_rig.tenant_logging(v2_rig.tenant_sink.wire.url, None)})
         token: Final = scenario.key(team_id=team)
         response: Final = v2_rig.chat(marker, key=token)
     assert response.status_code == 200, response.text
-    identity: Final = _body_id(response)
-    span: Final = v2_rig.tenant_sink.single_span(identity, elsewhere=v2_rig.sink)
-    assert span.ingestion_key is None, f"operator ingestion key leaked to the team collector: {span}"
-    assert v2_rig.sink.landed((identity,)) == {identity: 0}, "operator sink also received the tenant span"
+    _assert_operator_span(v2_rig, _body_id(response), marker)
+    eventually(
+        lambda: v2_rig.process.log.read_text(),
+        lambda text: "Set signoz_ingestion_key alongside it" in text,
+        seconds=30,
+    )
 
 
 def test_team_endpoint_off_the_allowlist_keeps_the_span_at_the_operator_sink(v2_rig: Rig) -> None:

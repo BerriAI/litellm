@@ -60,6 +60,15 @@ def _warn_host_not_allowlisted(endpoint: str) -> None:
     )
 
 
+@lru_cache(maxsize=128)
+def _warn_endpoint_without_key(endpoint: str) -> None:
+    verbose_logger.warning(
+        "SigNoz: not exporting to key/team endpoint '%s'. Set signoz_ingestion_key alongside it; "
+        "a keyless collector needs the global callback",
+        endpoint,
+    )
+
+
 def _tenant_endpoint_is_unusable(params: StandardCallbackDynamicParams) -> bool:
     return bool(params.get("signoz_ingestion_endpoint")) and signoz_dynamic_endpoint(params) is None
 
@@ -67,6 +76,9 @@ def _tenant_endpoint_is_unusable(params: StandardCallbackDynamicParams) -> bool:
 def signoz_dynamic_endpoint(params: StandardCallbackDynamicParams) -> str | None:
     endpoint: Final = params.get("signoz_ingestion_endpoint")
     if not endpoint or not endpoint.startswith(("http://", "https://")):
+        return None
+    if not params.get("signoz_ingestion_key"):
+        _warn_endpoint_without_key(endpoint)
         return None
     if not is_url_destination_allowed_by_host(endpoint, litellm.provider_url_destination_allowed_hosts):
         _warn_host_not_allowlisted(endpoint)

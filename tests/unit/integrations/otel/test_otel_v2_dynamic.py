@@ -693,7 +693,9 @@ def test_signoz_dynamic_endpoint_comes_from_team_config_when_its_host_is_allowli
 
     monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["ingest.eu.signoz.cloud"])
     assert (
-        dynamic_otlp_endpoint("signoz", {"signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443"})
+        dynamic_otlp_endpoint(
+            "signoz", {"signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443", "signoz_ingestion_key": "k"}
+        )
         == "https://ingest.eu.signoz.cloud:443"
     )
     # A team that saved only a key keeps the operator's configured endpoint.
@@ -712,12 +714,14 @@ def test_signoz_team_endpoint_off_the_allowlist_is_dropped_along_with_its_key(mo
     assert dynamic_otlp_headers("signoz", params) is None
 
 
-def test_signoz_keyless_team_endpoint_routes_without_the_operator_ingestion_key(monkeypatch):
+def test_signoz_keyless_team_endpoint_is_ignored_so_the_operator_key_never_reaches_it(monkeypatch):
     import litellm
-    from litellm.integrations.otel.plumbing.providers import build_tracer_provider
-    from litellm.integrations.otel.presets import dynamic_otlp_endpoint
+    from litellm.integrations.otel.presets import dynamic_otlp_endpoint, dynamic_otlp_headers
 
     monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["collector.team.internal"])
+    params = {"signoz_ingestion_endpoint": "http://collector.team.internal:4318"}
+    assert dynamic_otlp_endpoint("signoz", params) is None
+    assert dynamic_otlp_headers("signoz", params) is None
     cache = _cache(
         "signoz",
         exporters=[
@@ -730,10 +734,7 @@ def test_signoz_keyless_team_endpoint_routes_without_the_operator_ingestion_key(
             )
         ],
     )
-    endpoint = dynamic_otlp_endpoint("signoz", {"signoz_ingestion_endpoint": "http://collector.team.internal:4318"})
-    routed = cache._routed_config({}, {}, endpoint, None, True)
+    routed = cache._routed_config({}, {}, dynamic_otlp_endpoint("signoz", params), "team-service")
     owned = next(e for e in routed.exporters if e.owner == "signoz")
-    assert owned.endpoint == "http://collector.team.internal:4318"
-    assert owned.headers is None
-    assert owned.requires_headers is False
-    assert len(build_tracer_provider(routed)._active_span_processor._span_processors) == 2
+    assert owned.endpoint == "https://ingest.us.signoz.cloud:443"
+    assert owned.headers == "signoz-ingestion-key=OPERATOR"
