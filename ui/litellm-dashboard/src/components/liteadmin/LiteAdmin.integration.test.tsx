@@ -7,6 +7,9 @@ import { setGlobalLitellmHeaderName, switchToWorkerUrl } from "@/components/netw
 import { Toaster } from "@/components/ui/sonner";
 import { toast } from "@/lib/toast";
 import userEvent from "@testing-library/user-event";
+import type { ComponentType } from "react";
+import SidebarAccountMenu from "@/components/SidebarAccountMenu/SidebarAccountMenu";
+import UserDropdown from "@/components/Navbar/UserDropdown/UserDropdown";
 import LiteAdmin from "./LiteAdmin";
 import { MAX_INPUT_LENGTH } from "./agent";
 
@@ -18,6 +21,7 @@ const { transport } = vi.hoisted(() => {
 
 vi.unmock("@/app/(dashboard)/hooks/useAuthorized");
 vi.unmock("@/lib/toast");
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
 
 const MANAGEMENT = "https://management.test/proxy";
 const INFERENCE = "https://management.test/inference";
@@ -80,13 +84,14 @@ function SessionReady() {
   return <output>{authLoading ? "Session loading" : "Session ready"}</output>;
 }
 
-function renderWidget() {
+function renderWidget(Menu?: ComponentType<{ onLogout: () => void }>) {
   const client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: 0 } } });
   const tree = () => (
     <QueryClientProvider client={client}>
       <Toaster />
       <AuthProvider>
         <SessionReady />
+        {Menu && <Menu onLogout={() => undefined} />}
         <LiteAdmin />
       </AuthProvider>
     </QueryClientProvider>
@@ -111,6 +116,7 @@ function gateway(replies: (ModelReply | Promise<ModelReply>)[], options: Gateway
     const path = new URL(request.url).pathname;
     if (path.endsWith("/litellm-ui-config"))
       return json({ proxy_base_url: MANAGEMENT, server_root_path: "", admin_ui_disabled: false });
+    if (path.endsWith("/health/readiness/details")) return json({ status: "healthy" });
     if (path.endsWith("/sso/get/ui_settings")) {
       if (typeof settings === "function") return settings(request);
       return json({ PROXY_BASE_URL: MANAGEMENT, LITELLM_UI_API_DOC_BASE_URL: settings.target }, settings.status);
@@ -176,6 +182,79 @@ afterEach(() => {
 });
 
 describe("LiteAdmin in the gateway", () => {
+  it.each([
+    ["sidebar", SidebarAccountMenu],
+    ["navbar", UserDropdown],
+  ] as const)("persists Hide LiteAdmin from the %s account menu", async (_name, Menu) => {
+    gateway([]);
+    const user = userEvent.setup();
+    const view = renderWidget(Menu);
+    await screen.findByRole("button", { name: "LiteAdmin" });
+    await user.click(screen.getByRole("button", { name: /account menu/i }));
+    const toggle = await screen.findByRole("switch", { name: "Toggle hide LiteAdmin" });
+    expect(toggle).not.toBeChecked();
+    await user.click(toggle);
+    expect(toggle).toBeChecked();
+    expect(screen.queryByRole("button", { name: "LiteAdmin" })).not.toBeInTheDocument();
+
+    view.unmount();
+    const restored = renderWidget(Menu);
+    await screen.findByText("Session ready");
+    await waitFor(() => expect(restored.client.isFetching()).toBe(0));
+    expect(screen.queryByRole("button", { name: "LiteAdmin" })).not.toBeInTheDocument();
+    await user.click(screen.getByRole("button", { name: /account menu/i }));
+    const savedToggle = await screen.findByRole("switch", { name: "Toggle hide LiteAdmin" });
+    expect(savedToggle).toBeChecked();
+    await user.click(savedToggle);
+    expect(await screen.findByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
+  });
+
+  it("isolates Hide LiteAdmin by admin and gateway and reacts to another tab clearing it", async () => {
+    gateway([]);
+    const user = userEvent.setup();
+    const view = renderWidget(SidebarAccountMenu);
+    await screen.findByRole("button", { name: "LiteAdmin" });
+    await user.click(screen.getByRole("button", { name: /account menu/i }));
+    await user.click(await screen.findByRole("switch", { name: "Toggle hide LiteAdmin" }));
+
+    session("proxy_admin", "second-admin");
+    view.refresh();
+    expect(await screen.findByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Toggle hide LiteAdmin" })).not.toBeChecked();
+    session();
+    view.refresh();
+    expect(screen.queryByRole("button", { name: "LiteAdmin" })).not.toBeInTheDocument();
+
+    switchToWorkerUrl("https://other-gateway.test");
+    view.refresh();
+    expect(await screen.findByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Toggle hide LiteAdmin" })).not.toBeChecked();
+    switchToWorkerUrl(MANAGEMENT);
+    view.refresh();
+    expect(screen.queryByRole("button", { name: "LiteAdmin" })).not.toBeInTheDocument();
+
+    act(() => {
+      localStorage.clear();
+      window.dispatchEvent(new StorageEvent("storage", { key: null }));
+    });
+    expect(await screen.findByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
+    expect(screen.getByRole("switch", { name: "Toggle hide LiteAdmin" })).not.toBeChecked();
+  });
+
+  it.each([
+    ["sidebar", SidebarAccountMenu],
+    ["navbar", UserDropdown],
+  ] as const)("does not offer Hide LiteAdmin to a view-only admin in the %s menu", async (_name, Menu) => {
+    session("proxy_admin_viewer");
+    gateway([]);
+    renderWidget(Menu);
+    await screen.findByText("Session ready");
+    const user = userEvent.setup();
+    await user.click(screen.getByRole("button", { name: /account menu/i }));
+    expect(await screen.findByRole("switch", { name: "Toggle hide all prompts" })).toBeInTheDocument();
+    expect(screen.queryByRole("switch", { name: "Toggle hide LiteAdmin" })).not.toBeInTheDocument();
+  });
+
   it.each(["proxy_admin_viewer", "internal_user", "internal_user_viewer", "org_admin"])(
     "does not expose operations to %s",
     async (role) => {

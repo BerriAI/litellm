@@ -69,6 +69,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
@@ -153,6 +154,7 @@ from litellm.router_utils.auto_router_tuning_baseline import (
     snapshot_tuning_baselines,
     tuning_limit_violation,
 )
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.router_utils.routing_groups import parse_routing_groups
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.types.utils import (
@@ -293,6 +295,7 @@ from litellm.constants import (
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
+    SPEND_CAPTURE_RATE_CHECK_JOB_ID,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
@@ -400,6 +403,7 @@ from litellm.proxy.common_utils.config_includes import resolve_include_file_path
 from litellm.proxy.common_utils.config_sync_pubsub import ConfigSyncSubscriber
 from litellm.proxy.common_utils.debug_utils import init_verbose_loggers
 from litellm.proxy.common_utils.debug_utils import router as debugging_endpoints_router
+from litellm.proxy.common_utils.discoverable_model_filter import discoverable_rows, undiscoverable_model_names
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_value_helper,
@@ -422,6 +426,9 @@ from litellm.proxy.common_utils.model_deprecation import collect_model_deprecati
 from litellm.proxy.common_utils.model_listing_utils import (
     ClaudeCodeRoutingNames,
     TeamModelNameTranslator,
+    alias_listing_entries,
+    alias_target,
+    caller_alias_maps,
     claude_code_view_ids,
     configured_display_names,
     is_claude_code_client,
@@ -470,6 +477,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     project_spend_counter_key,
     tag_cache_key,
 )
+from litellm.proxy.common_utils.validation_error_body import public_validation_errors
 from litellm.proxy.config_resolvers import (
     FieldSource,
     SettingsStore,
@@ -545,11 +553,10 @@ from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger, run_sp
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.list_api.common import (
     ManagementProblem,
-    ValidationErrorDetail,
     problem_response,
     request_validation_problem,
 )
-from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
 )
@@ -754,6 +761,9 @@ from litellm.proxy.spend_tracking.budget_reservation import (
 from litellm.proxy.spend_tracking.daily_global_spend_rollup import (
     run_scheduled_daily_global_spend_reconcile,
 )
+from litellm.proxy.spend_tracking.spend_capture_rate import (
+    run_scheduled_spend_capture_rate_check,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     PendingSpendIncrement,
     active_spend_counter_batch,
@@ -852,6 +862,7 @@ from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_WARN_DAYS,
     ModelDeprecationResponse,
 )
+from litellm.types.proxy.spend_capture_rate import SpendCaptureProvider, SpendCaptureRateCheckSettings
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
     ClassifierPlugin,
@@ -1113,17 +1124,21 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     if shutdown_billing_metrics_recorder is not None:
         shutdown_billing_metrics_recorder()
 
-    # flush remaining langfuse logs
-    if "langfuse" in litellm.success_callback:
+    if "litellm.integrations.langfuse.langfuse_sdk" in sys.modules:
         try:
-            # flush langfuse logs on shutdow
-            from litellm.utils import langFuseLogger
+            from litellm.integrations.langfuse.langfuse_sdk import flush_langfuse_tracing
 
-            if langFuseLogger is not None:
-                langFuseLogger.Langfuse.flush()
-        except Exception:
-            # [DO NOT BLOCK shutdown events for this]
-            pass
+            flushed: Final = await asyncio.to_thread(flush_langfuse_tracing, LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS)
+            if flushed:
+                verbose_proxy_logger.info("Langfuse export channels flushed")
+            else:
+                verbose_proxy_logger.warning(
+                    "Langfuse shutdown flush incomplete: a channel did not finish within %dms or a batch was rejected "
+                    "(see the export errors above); remaining spans are left to the background exporter",
+                    LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
+                )
+        except Exception as e:  # noqa: BLE001  # shutdown must continue even if the flush fails
+            verbose_proxy_logger.exception("Error flushing Langfuse export channels on shutdown: %s", e)
 
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()
@@ -1969,16 +1984,14 @@ class _ExceptionRow(TypedDict, total=False):
 
 @app.exception_handler(RequestValidationError)
 async def otel_request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    public_errors: Final = public_validation_errors(exc.errors())
+    public_exc: Final = RequestValidationError(public_errors).with_traceback(exc.__traceback__)
     if request.url.path.startswith(MANAGEMENT_V1_PREFIX):
-        validation_errors: Final[Sequence[ValidationErrorDetail]] = exc.errors()
-        problem: Final = request_validation_problem(validation_errors)
-        _close_dangling_otel_server_span(request, problem.status, exc=exc)
+        problem: Final = request_validation_problem(public_errors)
+        _close_dangling_otel_server_span(request, problem.status, exc=public_exc)
         return problem_response(problem)
-    _close_dangling_otel_server_span(request, 422, exc=exc)
-    return JSONResponse(
-        status_code=422,
-        content={"detail": jsonable_encoder(exc.errors())},
-    )
+    _close_dangling_otel_server_span(request, 422, exc=public_exc)
+    return JSONResponse(status_code=422, content={"detail": public_errors})
 
 
 @app.exception_handler(Exception)
@@ -5056,6 +5069,11 @@ def _bind_general_settings_store(settings: SettingsStore) -> None:
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
 
 
+def _current_general_settings() -> Mapping[str, object]:
+    """The live ``general_settings``, whichever object a config reload has bound since the caller was created."""
+    return general_settings
+
+
 @lru_cache(maxsize=4096)
 def _log_ignored_cost_map_copy(model_id: str, fields: tuple[str, ...]) -> None:
     verbose_proxy_logger.warning(
@@ -5262,9 +5280,7 @@ class ProxyConfig:
             return
 
         with open(f"{user_config_file_path}", "w") as config_file:
-            yaml.dump(
-                dict(new_config), config_file, default_flow_style=False
-            )  # mutable-ok: YAML must serialize a plain dict
+            yaml.dump(dict(new_config), config_file, default_flow_style=False)
 
     async def _save_changed_config_section(
         self,
@@ -6325,6 +6341,11 @@ class ProxyConfig:
         if general_settings is None:
             general_settings = {}
 
+        if general_settings.get("mcp_advertised_versions") is not None:
+            from litellm.types.mcp import MCPAdvertisedVersions
+
+            TypeAdapter(MCPAdvertisedVersions).validate_python(general_settings["mcp_advertised_versions"])
+
         if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
             warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
         if declared_proxy_ranges(general_settings) is None:
@@ -6345,10 +6366,12 @@ class ProxyConfig:
 
             ### [DEPRECATED] LOAD FROM GOOGLE KMS ### old way of loading from google kms
             use_google_kms: Final = general_settings.get("use_google_kms", False)
-            load_google_kms(use_google_kms=use_google_kms)
+            if use_google_kms:
+                self.initialize_secret_manager(KeyManagementSystem.GOOGLE_KMS.value)
             ### [DEPRECATED] LOAD FROM AZURE KEY VAULT ### old way of loading from azure secret manager
             use_azure_key_vault: Final = general_settings.get("use_azure_key_vault", False)
-            load_from_azure_key_vault(use_azure_key_vault=use_azure_key_vault)
+            if use_azure_key_vault is not False:
+                self.initialize_secret_manager(KeyManagementSystem.AZURE_KEY_VAULT.value)
             ### ALERTING ###
             self._load_alerting_settings(general_settings=general_settings)
             ### PLUGINS ###
@@ -6849,6 +6872,7 @@ class ProxyConfig:
         """
         Initialize the relevant secret manager if `key_management_system` is provided
         """
+        previous_client: Final[object] = litellm.secret_manager_client
         if key_management_system is not None:
             if key_management_system == KeyManagementSystem.AZURE_KEY_VAULT.value:
                 ### LOAD FROM AZURE KEY VAULT ###
@@ -6896,6 +6920,11 @@ class ProxyConfig:
                 load_custom_secret_manager(config_file_path=config_file_path)
             else:
                 raise ValueError("Invalid Key Management System selected")
+
+            from litellm.rust_bridge.secret_manager import capture_secret_manager
+
+            if litellm.secret_manager_client is not previous_client:
+                capture_secret_manager(litellm.secret_manager_client, key_management_system)
 
     def get_model_info_with_id(self, model, db_model=False) -> RouterModelInfo:
         """
@@ -8691,9 +8720,9 @@ class ProxyConfig:
 
     @staticmethod
     def _merge_config_and_db_search_tools(
-        config_search_tools: list[SearchToolTypedDict],
-        db_search_tools: list[dict[str, Any]],
-    ) -> list[dict[str, Any]]:
+        config_search_tools: Sequence[SearchToolTypedDict],
+        db_search_tools: Sequence[dict[str, object]],
+    ) -> list[dict[str, object]]:
         db_tool_names: Final = {tool.get("search_tool_name") for tool in db_search_tools}
         return [
             *[
@@ -9264,10 +9293,10 @@ _EMPTY_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 async def _iter_with_keepalive(
-    aiter: AsyncIterator[Any],
+    aiter: AsyncIterator[object],
     resolve_keepalive_seconds: Callable[[object], float],
     keepalive_seconds: float,
-) -> AsyncGenerator[Any, None]:
+) -> AsyncGenerator[object, None]:
     """Wrap `aiter` with idle-gap heartbeats, re-resolving the interval after each
     real chunk via `resolve_keepalive_seconds`. A mid-stream router fallback can
     swap in a deployment with a different keepalive policy, including one that
@@ -9278,7 +9307,7 @@ async def _iter_with_keepalive(
     actually produced it, in both directions. While the interval is <= 0, no
     task is created and no timeout is awaited: a chunk is forwarded the moment
     it arrives, at the same cost as a bare `async for`."""
-    pending: asyncio.Task[Any] | None = None  # rebind-ok: rebound each loop iteration
+    pending: asyncio.Task[object] | None = None  # rebind-ok: rebound each loop iteration
     current_keepalive_seconds = keepalive_seconds  # rebind-ok: re-resolved after each chunk
     try:
         while True:
@@ -10130,7 +10159,7 @@ class ProxyStartupEvent:
                         str(identity): str(fingerprint)
                         for identity, fingerprint in (decoded.items() if isinstance(decoded, Mapping) else ())
                     }
-                )  # mutable-ok: MappingProxyType owns the completed immutable baseline
+                )
             snapshot: Final = snapshot_tuning_baselines(deployments)
             try:
                 await config_table.create(
@@ -10156,7 +10185,7 @@ class ProxyStartupEvent:
                             competing_decoded.items() if isinstance(competing_decoded, Mapping) else ()
                         )
                     }
-                )  # mutable-ok: MappingProxyType owns the completed immutable baseline
+                )
         except Exception as e:  # noqa: BLE001  # enforcement is skipped for this boot; refusing every tuned router on a DB blip is the one outcome the gate forbids
             verbose_proxy_logger.warning("Heuristic-v1 tuning baseline unavailable, gate not enforced this boot: %s", e)
             return None
@@ -10192,7 +10221,7 @@ class ProxyStartupEvent:
         proxy_logging_obj: ProxyLogging,
     ) -> ProxyWorkerHeartbeat:
         """Initializes scheduled background jobs"""
-        global heuristic_v1_tuning_baselines, store_model_in_db, scheduler, scheduler_executor  # rebind-ok: startup publishes the one read-only baseline snapshot
+        global heuristic_v1_tuning_baselines, store_model_in_db, scheduler, scheduler_executor
 
         # MEMORY LEAK FIX: Configure scheduler with optimized settings
         # Memray analysis showed APScheduler's normalize() and _apply_jitter() causing
@@ -10436,6 +10465,13 @@ class ProxyStartupEvent:
             scheduler=scheduler,
             proxy_logging_obj=proxy_logging_obj,
             prisma_client=prisma_client,
+        )
+
+        cls._initialize_spend_capture_rate_check_job(
+            scheduler=scheduler,
+            proxy_logging_obj=proxy_logging_obj,
+            prisma_client=prisma_client,
+            read_general_settings=_current_general_settings,
         )
 
         ### PTU DAILY ROLLUP ###
@@ -10813,6 +10849,64 @@ class ProxyStartupEvent:
         )
 
     @classmethod
+    def _initialize_spend_capture_rate_check_job(
+        cls,
+        scheduler: AsyncIOScheduler,
+        proxy_logging_obj: ProxyLogging,
+        prisma_client: PrismaClient,
+        read_general_settings: Callable[[], Mapping[str, object]],
+    ) -> None:
+        """The job always runs and re-reads ``spend_capture_rate_check`` each run; an absent setting clears the gauge."""
+        cls._spend_capture_rate_check_settings(read_general_settings())
+
+        async def alert(message: str) -> None:
+            await proxy_logging_obj.alerting_handler(
+                message=message,
+                level="High",
+                alert_type=AlertType.failed_tracking_spend,
+            )
+
+        def publish(provider: str, capture_rate: float | None) -> None:
+            from litellm.integrations.prometheus import PrometheusLogger
+
+            for logger in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=PrometheusLogger):
+                if isinstance(logger, PrometheusLogger):
+                    logger.set_spend_capture_rate(api_provider=provider, capture_rate=capture_rate)
+
+        async def check() -> None:
+            settings: Final = cls._spend_capture_rate_check_settings(read_general_settings())
+            if settings is None:
+                for provider in get_args(SpendCaptureProvider):
+                    publish(provider, None)
+                return
+            await run_scheduled_spend_capture_rate_check(
+                prisma_client,
+                settings,
+                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+                alert=alert,
+                publish=publish,
+            )
+
+        scheduler.add_job(
+            check,
+            "cron",
+            hour=1,
+            minute=15,
+            timezone="UTC",
+            id=SPEND_CAPTURE_RATE_CHECK_JOB_ID,
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
+        )
+
+    @staticmethod
+    def _spend_capture_rate_check_settings(
+        general_settings: Mapping[str, object],
+    ) -> SpendCaptureRateCheckSettings | None:
+        raw_settings: Final = general_settings.get("spend_capture_rate_check")
+        return None if raw_settings is None else SpendCaptureRateCheckSettings.model_validate(raw_settings)
+
+    @classmethod
     async def _initialize_slack_alerting_jobs(
         cls,
         scheduler: AsyncIOScheduler,
@@ -11095,6 +11189,40 @@ class ProxyStartupEvent:
 
 
 #### API ENDPOINTS ####
+async def _names_hidden_by_listing_callbacks(
+    user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
+) -> frozenset[str]:
+    hidden: Final = await proxy_logging_obj.hidden_by_listing_callbacks(user_api_key_dict, model_names)
+    if not hidden or llm_router is None:
+        return hidden
+    aliases: Final = llm_router.model_group_alias
+    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
+    return hidden | frozenset(
+        alias
+        for alias in aliases
+        if (target := resolve_model_group_alias(aliases, alias)) is not None
+        and internal_to_public.get(target, target) in hidden
+    )
+
+
+async def _entries_kept_by_listing_callbacks(
+    entries: Sequence[tuple[str, str]], user_api_key_dict: UserAPIKeyAuth
+) -> tuple[tuple[str, str], ...]:
+    hidden: Final = await _names_hidden_by_listing_callbacks(
+        user_api_key_dict, tuple(response_id for response_id, _ in entries)
+    )
+    if not hidden:
+        return tuple(entries)
+    return tuple(entry for entry in entries if entry[0] not in hidden)
+
+
+async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_api_key_dict: UserAPIKeyAuth) -> bool:
+    listed_name: Final = _translate_model_name_for_response(deployment.model_dump(exclude_none=True)).get("model_name")
+    if not isinstance(listed_name, str):
+        return False
+    return listed_name in await _names_hidden_by_listing_callbacks(user_api_key_dict, (listed_name,))
+
+
 @router.get("/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"])
 @router.get(
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
@@ -11166,14 +11294,13 @@ async def model_list(
     view_aliases: Final = (
         view_router_settings.get("model_group_alias") if isinstance(view_router_settings, Mapping) else None
     )
+    caller_aliases: Final = caller_alias_maps(
+        user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
+    )
     routing_names: Final = ClaudeCodeRoutingNames(
         llm_router,
         team_id or user_api_key_dict.team_id,
-        (
-            user_api_key_dict.aliases,
-            user_api_key_dict.team_model_aliases,
-            view_aliases,
-        ),
+        (*caller_aliases.rewrite, view_aliases),
     )
 
     # Validate scope parameter if provided
@@ -11236,15 +11363,19 @@ async def model_list(
             only_model_access_groups=only_model_access_groups or False,
         )
 
-        # Hide paused/unhealthy models from the public listing
-        if hidden_names:
-            all_models = [m for m in all_models if m not in hidden_names]
+        expanded_undiscoverable_names: Final = undiscoverable_model_names(
+            all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+        )
+        if hidden_names or expanded_undiscoverable_names:
+            all_models = [m for m in all_models if m not in hidden_names and m not in expanded_undiscoverable_names]
 
         # Surface the public team name by default; legacy internal keys via flag.
         # The internal routing key drives the metadata/fallback lookup, while the
         # public name is what the client sees as the model id.
         model_data = []
-        admin_entries: Final = TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
+        admin_entries: Final = await _entries_kept_by_listing_callbacks(
+            TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), user_api_key_dict
+        )
         for response_id, lookup_id in admin_entries:
             model_info = create_model_info_response(
                 model_id=lookup_id,
@@ -11289,15 +11420,22 @@ async def model_list(
         user_api_key_cache=user_api_key_cache,
     )
 
-    # Hide paused/unhealthy models from the public listing
-    if hidden_names:
-        all_models = [m for m in all_models if m not in hidden_names]
+    undiscoverable_names: Final = undiscoverable_model_names(
+        all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+    )
+    if hidden_names or undiscoverable_names:
+        all_models = [m for m in all_models if m not in hidden_names and m not in undiscoverable_names]
 
     # Surface the public team name by default; legacy internal keys via flag.
     # The internal routing key drives the metadata/fallback lookup, while the
     # public name is what the client sees as the model id.
     model_data = []
-    entries: Final = TeamModelNameTranslator.listing_entries(all_models, llm_router, settings)
+    entries: Final = alias_listing_entries(
+        await _entries_kept_by_listing_callbacks(
+            TeamModelNameTranslator.listing_entries(all_models, llm_router, settings), user_api_key_dict
+        ),
+        caller_aliases,
+    )
     for response_id, lookup_id in entries:
         model_info = create_model_info_response(
             model_id=lookup_id,
@@ -11381,7 +11519,8 @@ async def model_info(
     )
 
     # Mirror /v1/models' visibility filter so first-occurrence resolution
-    # cannot land on a deployment the listing had hidden.
+    # cannot land on a deployment the listing had hidden. Undiscoverable
+    # models stay retrievable by id, they only drop out of the alias guard.
     blocked_names: Final = llm_router.get_fully_blocked_model_names() if llm_router is not None else set()
     unhealthy_names: Final = await get_hidden_unhealthy_model_names(
         healthy_only=healthy_only,
@@ -11389,12 +11528,38 @@ async def model_info(
         llm_router=llm_router,
     )
     hidden_names: Final = blocked_names | unhealthy_names
-    if hidden_names:
-        all_models = [m for m in all_models if m not in hidden_names]
-
     internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, settings)
+    callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
+        user_api_key_dict,
+        tuple(
+            response_id
+            for response_id, _ in TeamModelNameTranslator.listing_entries(
+                tuple(m for m in all_models if m not in hidden_names), llm_router, settings
+            )
+        ),
+    )
+    if hidden_names or callback_hidden_names:
+        all_models = [
+            m for m in all_models if m not in hidden_names and internal_to_public.get(m, m) not in callback_hidden_names
+        ]
+    undiscoverable_names: Final = undiscoverable_model_names(
+        all_models, llm_router, user_api_key_dict, team_id or user_api_key_dict.team_id
+    )
+
+    aliased_model_id: Final = alias_target(
+        model_id,
+        caller_alias_maps(
+            user_api_key_dict.aliases, user_api_key_dict.team_model_aliases, user_api_key_dict.team_id, team_id
+        ),
+        frozenset(
+            response_id
+            for response_id, _ in TeamModelNameTranslator.listing_entries(
+                tuple(m for m in all_models if m not in undiscoverable_names), llm_router, settings
+            )
+        ),
+    )
     resolved_model_id: Final = TeamModelNameTranslator.resolve_public_name(
-        model_id=model_id,
+        model_id=aliased_model_id or model_id,
         available_models=all_models,
         llm_router=llm_router,
         general_settings=settings,
@@ -11424,7 +11589,8 @@ async def model_info(
         fallback_type=None,
         llm_router=llm_router,
     )
-    return {**response, "id": internal_to_public.get(resolved_model_id, model_id)}  # mutable-ok: response id differs
+    response_id: Final = model_id if aliased_model_id else internal_to_public.get(resolved_model_id, model_id)
+    return {**response, "id": response_id}  # mutable-ok: response id differs
 
 
 def _blocked_response_usage(original_response: object | None) -> "litellm.Usage":
@@ -13751,7 +13917,7 @@ async def transform_request(request: TransformRequestBody):
     except ValueError as e:
         raise HTTPException(status_code=400, detail={"error": str(e)})
 
-    return return_raw_request(endpoint=request.call_type, kwargs=request.request_body)
+    return await asyncio.to_thread(return_raw_request, request.call_type, request.request_body)
 
 
 async def _check_if_model_is_user_added(
@@ -15766,7 +15932,7 @@ async def model_info_v1(
     if litellm_model_id is not None:
         # user is trying to get specific model from litellm router
         deployment_info: Final = llm_router.get_deployment(model_id=litellm_model_id)
-        if deployment_info is None:
+        if deployment_info is None or await _deployment_hidden_by_listing_callbacks(deployment_info, user_api_key_dict):
             raise HTTPException(
                 status_code=400,
                 detail={"error": f"Model id = {litellm_model_id} not found on litellm proxy"},
@@ -15855,7 +16021,17 @@ async def model_info_v1(
         general_settings=general_settings,
         llm_router=llm_router,
     )
-    visible_models: Final = [model for model in all_models if model.get("model_name") not in hidden_names]
+    servable_rows: Final = discoverable_rows(
+        (model for model in all_models if model.get("model_name") not in hidden_names),
+        user_api_key_dict,
+    )
+    listed_names: Final = tuple(
+        dict.fromkeys(name for model in servable_rows if isinstance(name := model.get("model_name"), str))
+    )
+    callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(user_api_key_dict, listed_names)
+    visible_models: Final = tuple(
+        model for model in servable_rows if model.get("model_name") not in callback_hidden_names
+    )
 
     verbose_proxy_logger.debug("all_models: %s", visible_models)
     return _model_info_json_response(visible_models)
@@ -15904,7 +16080,7 @@ async def model_deprecations(
 
 
 def _get_model_group_info(
-    llm_router: Router, all_models_str: list[str], model_group: str | None
+    llm_router: Router, all_models_str: Sequence[str], model_group: str | None
 ) -> list[ModelGroupInfoProxy]:
     model_groups: Final[list[ModelGroupInfoProxy]] = []
 
@@ -16134,21 +16310,37 @@ async def model_group_info(
             user_api_key_cache=user_api_key_cache,
         )
     )
-    model_groups: list[ModelGroupInfoProxy] = _get_model_group_info(
-        llm_router=llm_router, all_models_str=all_models_str, model_group=model_group
+    undiscoverable_group_names: Final = undiscoverable_model_names(
+        all_models_str, llm_router, user_api_key_dict, user_api_key_dict.team_id
     )
+    listed_group_names: Final = tuple(name for name in all_models_str if name not in undiscoverable_group_names)
 
     # Append A2A agents to model groups
     from litellm.proxy.agent_endpoints.model_list_helpers import (
         append_agents_to_model_group,
     )
 
-    model_groups = await append_agents_to_model_group(
-        model_groups=model_groups,
+    model_groups: Final = await append_agents_to_model_group(
+        model_groups=_get_model_group_info(
+            llm_router=llm_router, all_models_str=listed_group_names, model_group=model_group
+        ),
         user_api_key_dict=user_api_key_dict,
     )
+    internal_to_public: Final = TeamModelNameTranslator.build_internal_to_public_map(llm_router, general_settings)
+    public_group_names: Final = tuple(
+        internal_to_public.get(group.model_group, group.model_group) for group in model_groups
+    )
+    callback_hidden_names: Final = await _names_hidden_by_listing_callbacks(
+        user_api_key_dict, tuple(dict.fromkeys(public_group_names))
+    )
 
-    return {"data": model_groups}
+    return {
+        "data": [
+            group
+            for group, public_name in zip(model_groups, public_group_names, strict=True)
+            if public_name not in callback_hidden_names
+        ]
+    }
 
 
 @router.get(
@@ -16375,8 +16567,9 @@ async def async_queue_request(
             # Covers both missing and JSON-string metadata (multipart /
             # extra_body); see above for the same guard upstream.
             data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["user_api_key_hash"] = user_api_key_dict.api_key
+        logged_api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
+        data["metadata"]["user_api_key"] = logged_api_key
+        data["metadata"]["user_api_key_hash"] = logged_api_key
         data["metadata"]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
         _headers: Final = _safe_get_request_headers(request).copy()
         _headers.pop("authorization", None)  # do not store the original `sk-..` api key in the db

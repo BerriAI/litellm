@@ -57,6 +57,8 @@ from litellm.proxy.common_utils.openai_error_payload import (
     openai_error_type,
 )
 from litellm.proxy.openai_files_endpoints.batch_file_validation import (
+    BATCH_LINE_SHAPE,
+    PASSTHROUGH_BATCH_LINE_SHAPE,
     check_batch_file_upload,
     raise_batch_file_validation_failure,
 )
@@ -207,10 +209,91 @@ def get_files_provider_config(
     return None
 
 
+def _deployment_provider(llm_router: Router, model_id: str, team_id: str | None) -> str | None:
+    credentials: Final = llm_router.get_deployment_credentials_with_provider(model_id=model_id, team_id=team_id)
+    return None if credentials is None else credentials.get("custom_llm_provider")
+
+
+def _resolves_to_vertex_deployments_only(llm_router: Router | None, model_name: str, team_id: str | None) -> bool:
+    if llm_router is None or _deployment_provider(llm_router, model_name, team_id) != "vertex_ai":
+        return False
+    return all(
+        _deployment_provider(llm_router, str(deployment["model_info"]["id"]), team_id) == "vertex_ai"
+        for deployment in llm_router.get_model_list(model_name=model_name, team_id=team_id) or ()
+        if "id" in deployment.get("model_info", {})
+    )
+
+
+def _validate_passthrough_upload(
+    *,
+    purpose: str,
+    target_model_names: Sequence[str],
+    model: str | None,
+    target_storage: str | None,
+    llm_router: Router | None,
+    team_id: str | None,
+) -> None:
+    if purpose != "batch":
+        raise ProxyException(
+            message=(
+                "`passthrough` uploads the file bytes unchanged for a native Vertex batch, "
+                f"so purpose must be 'batch', got '{purpose}'."
+            ),
+            type="invalid_request_error",
+            param="passthrough",
+            code=400,
+        )
+    if target_storage and target_storage != "default":
+        raise ProxyException(
+            message=(
+                "`passthrough` writes the native batch file to the Vertex AI deployment's GCS bucket, "
+                f"so it cannot be combined with target_storage='{target_storage}'."
+            ),
+            type="invalid_request_error",
+            param="target_storage",
+            code=400,
+        )
+    named_deployments: Final = (
+        *(("target_model_names", name) for name in target_model_names),
+        *((("model", model),) if model else ()),
+    )
+    if not named_deployments:
+        raise ProxyException(
+            message=(
+                "`passthrough` needs the Vertex AI deployment that will run the batch, "
+                "since native rows carry no model: pass `target_model_names` or `model`."
+            ),
+            type="invalid_request_error",
+            param="target_model_names",
+            code=400,
+        )
+    offending: Final = next(
+        (
+            (param, name)
+            for param, name in named_deployments
+            if not _resolves_to_vertex_deployments_only(llm_router, name, team_id)
+        ),
+        None,
+    )
+    if offending is None:
+        return
+    param, name = offending
+    raise ProxyException(
+        message=(
+            f"`passthrough` is only supported for Vertex AI deployments; '{name}' does not resolve "
+            "to vertex_ai deployments only."
+        ),
+        type="invalid_request_error",
+        param=param,
+        code=400,
+    )
+
+
 async def _scan_batch_upload(
     *,
     file_source: bytes | BinaryIO,
     purpose: str,
+    passthrough: bool,
     request_metadata: Mapping[str, object],
     user_api_key_dict: UserAPIKeyAuth,
     proxy_logging_obj: ProxyLogging,
@@ -222,6 +305,17 @@ async def _scan_batch_upload(
         or not proxy_logging_obj.has_pre_call_guardrails(request_metadata)
     ):
         return None
+    if passthrough:
+        raise ProxyException(
+            message=(
+                "Batch guardrails cannot scan native Vertex batch rows, so a `passthrough` upload is refused "
+                "when the key, team, or request has pre-call guardrails configured. "
+                "The file was not forwarded to the provider."
+            ),
+            type="invalid_request_error",
+            param="passthrough",
+            code=400,
+        )
     outcome: Final = await scan_batch_input_file(
         file_source=file_source,
         request_metadata=request_metadata,
@@ -458,6 +552,7 @@ async def create_file(
     custom_llm_provider: str = Form(default="openai"),
     file: UploadFile = File(...),
     litellm_metadata: str | None = Form(default=None),
+    passthrough: bool = Form(default=False),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
     """
@@ -560,17 +655,28 @@ async def create_file(
         if blocked_extension_failure is not None:
             raise_upload_validation_failure(blocked_extension_failure)
 
+        if passthrough:
+            _validate_passthrough_upload(
+                purpose=purpose,
+                target_model_names=target_model_names_list,
+                model=model_param,
+                target_storage=target_storage,
+                llm_router=llm_router,
+                team_id=user_api_key_dict.team_id,
+            )
+
         if purpose == "batch":
             batch_file_failure: Final = await asyncio.to_thread(
                 check_batch_file_upload,
                 file.filename,
                 file_source,
                 _MAX_BATCH_FILE_SIZE_MB_ADAPTER.validate_python(general_settings.get("max_batch_file_size_mb")),
+                PASSTHROUGH_BATCH_LINE_SHAPE if passthrough else BATCH_LINE_SHAPE,
             )
             if batch_file_failure is not None:
                 raise_batch_file_validation_failure(batch_file_failure)
 
-        data = {}
+        data = {"passthrough": True} if passthrough else {}
 
         # Parse expires_after if provided
         expires_after: FileExpiresAfter | None = None
@@ -673,6 +779,7 @@ async def create_file(
         scan_result: Final = await _scan_batch_upload(
             file_source=file_source,
             purpose=purpose,
+            passthrough=passthrough,
             request_metadata=request_metadata,
             user_api_key_dict=user_api_key_dict,
             proxy_logging_obj=proxy_logging_obj,

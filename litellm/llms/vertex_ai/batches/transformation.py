@@ -1,7 +1,11 @@
-from collections.abc import Mapping
-from typing import Any, Final
+from collections.abc import Callable, Mapping
+from dataclasses import dataclass
+from typing import Any, Final, Protocol
 from urllib.parse import unquote
 
+from pydantic import TypeAdapter, ValidationError
+
+from litellm._logging import verbose_logger
 from litellm._uuid import uuid
 from litellm.llms.vertex_ai.common_utils import (
     VertexAIError,
@@ -9,35 +13,128 @@ from litellm.llms.vertex_ai.common_utils import (
 )
 from litellm.types.llms.openai import BatchJobStatus, CreateBatchRequest
 from litellm.types.llms.vertex_ai import *
-from litellm.types.utils import LiteLLMBatch, PromptTokensDetailsWrapper
+from litellm.types.llms.vertex_ai import GenerateContentResponseBody
+from litellm.types.utils import LiteLLMBatch, ModelInfo, Usage
+
+_NATIVE_VERTEX_RESPONSE: Final = TypeAdapter(GenerateContentResponseBody)
 
 
-def vertex_prompt_tokens_details(
-    usage_metadata: Mapping[str, object],
-) -> PromptTokensDetailsWrapper | None:
-    raw_details: Final = usage_metadata.get("promptTokensDetails")
-    if not isinstance(raw_details, list):
-        return None
+def _int_field(mapping: Mapping[str, object], key: str) -> int:
+    value: Final = mapping.get(key)
+    if isinstance(value, int):
+        return value
+    return int(value) if isinstance(value, str) and value.isdigit() else 0
 
-    def _normalize(detail: object) -> tuple[str, int] | None:
-        if not isinstance(detail, Mapping):
+
+def vertex_embedding_prompt_token_count(vertex_response: Mapping[str, object]) -> int:
+    """
+    Prompt tokens billed for one Vertex Gemini Embedding batch row.
+
+    Live rows report usage under `usageMetadata`; the documented `tokenCount` is kept as
+    a fallback.
+    """
+    usage_metadata: Final = vertex_response.get("usageMetadata")
+    if isinstance(usage_metadata, Mapping):
+        return _int_field(usage_metadata, "promptTokenCount")
+    return _int_field(vertex_response, "tokenCount")
+
+
+def is_vertex_embedding_batch_output_response(response_body: Mapping[str, object]) -> bool:
+    return isinstance(response_body.get("embedding"), dict)
+
+
+def is_native_vertex_batch_output_row(row: Mapping[str, object]) -> bool:
+    return isinstance(row.get("request"), dict)
+
+
+class NativeVertexBatchCostCalculator(Protocol):
+    def __call__(
+        self,
+        usage: Usage,
+        model: str,
+        custom_llm_provider: str | None = None,
+        model_info: ModelInfo | None = None,
+    ) -> tuple[float, float]: ...
+
+
+@dataclass(frozen=True, slots=True)
+class NativeVertexBatchRowStats:
+    usage: Usage
+    total_tokens: int
+    model: str | None
+    prompt_cost: float
+    completion_cost: float
+
+
+def _native_vertex_row_usage(
+    response_body: Mapping[str, object],
+    calculate_usage: Callable[[GenerateContentResponseBody], Usage],
+) -> Usage | None:
+    if "usageMetadata" not in response_body:
+        if not is_vertex_embedding_batch_output_response(response_body):
             return None
-        modality: Final = detail.get("modality")
-        token_count: Final = detail.get("tokenCount")
-        if not isinstance(modality, str) or not isinstance(token_count, int):
-            return None
-        return modality.upper(), token_count
-
-    parsed_details: Final = tuple(_normalize(detail) for detail in raw_details)
-    normalized: Final = tuple(detail for detail in parsed_details if detail is not None)
-    if len(normalized) != len(parsed_details):
+        prompt_tokens: Final = vertex_embedding_prompt_token_count(response_body)
+        return Usage(prompt_tokens=prompt_tokens, completion_tokens=0, total_tokens=prompt_tokens)
+    try:
+        completion_response: Final = _NATIVE_VERTEX_RESPONSE.validate_python(response_body)
+    except ValidationError as e:
+        verbose_logger.debug("vertex_ai batch row response is not a GenerateContentResponse: %s", str(e))
         return None
+    return calculate_usage(completion_response)
 
-    return PromptTokensDetailsWrapper(
-        text_tokens=sum(token_count for modality, token_count in normalized if modality in ("TEXT", "DOCUMENT")),
-        audio_tokens=sum(token_count for modality, token_count in normalized if modality == "AUDIO"),
-        image_tokens=sum(token_count for modality, token_count in normalized if modality == "IMAGE"),
-        video_tokens=sum(token_count for modality, token_count in normalized if modality == "VIDEO"),
+
+def native_vertex_batch_row_stats(
+    row: Mapping[str, object],
+    model_name: str | None,
+    *,
+    model_info: ModelInfo | None,
+    calculate_usage: Callable[[GenerateContentResponseBody], Usage],
+    cost_calculator: NativeVertexBatchCostCalculator,
+) -> NativeVertexBatchRowStats | None:
+    """
+    Usage and cost of one native Vertex predictions.jsonl row, a
+    `{"request": ..., "response": {"candidates": [...], "usageMetadata": {...}, "modelVersion": ...}}`
+    generateContent object or a `{"request": ..., "response": {"embedding": {...}, "usageMetadata": {...}}}`
+    embedding object (an embedding row without `usageMetadata` is billed from its documented `tokenCount`).
+    `model_name` (the deployment model) prices the row unless it is a wildcard, else its own `modelVersion`
+    does, else the wildcard name so explicit deployment prices still apply; a row without a response, a
+    generateContent row without `response.usageMetadata`, and a row whose response fails validation are
+    None (failed).
+    """
+    response_body: Final = row.get("response")
+    if not isinstance(response_body, dict):
+        return None
+    usage: Final = _native_vertex_row_usage(response_body, calculate_usage)
+    if usage is None:
+        return None
+    total_tokens: Final = usage.total_tokens or (usage.prompt_tokens + usage.completion_tokens)
+    model_version: Final = response_body.get("modelVersion")
+    deployment_model: Final = model_name if model_name and "*" not in model_name else None
+    model: Final = deployment_model or (model_version if isinstance(model_version, str) else model_name)
+    if model is None:
+        verbose_logger.warning(
+            "vertex_ai batch output row could not be costed, so it is billed at $0 and the rest of the batch "
+            "is still billed: the row has no modelVersion and the batch has no deployment model"
+        )
+        return NativeVertexBatchRowStats(
+            usage=usage, total_tokens=total_tokens, model=None, prompt_cost=0.0, completion_cost=0.0
+        )
+    try:
+        prompt_cost, completion_cost = cost_calculator(
+            usage=usage, model=model, custom_llm_provider="vertex_ai", model_info=model_info
+        )
+    except Exception as e:  # noqa: BLE001  # one unpriceable row must not abort the batch's cost accounting
+        verbose_logger.warning(
+            "vertex_ai batch output row could not be costed, so it is billed at $0 and the rest of the batch "
+            "is still billed. model=%s error=%s",
+            model,
+            str(e),
+        )
+        return NativeVertexBatchRowStats(
+            usage=usage, total_tokens=total_tokens, model=model, prompt_cost=0.0, completion_cost=0.0
+        )
+    return NativeVertexBatchRowStats(
+        usage=usage, total_tokens=total_tokens, model=model, prompt_cost=prompt_cost, completion_cost=completion_cost
     )
 
 
@@ -156,30 +253,15 @@ class VertexAIBatchTransformation:
         return uris[0]
 
     @classmethod
-    def _get_output_file_id_from_vertex_ai_batch_response(cls, response: VertexBatchPredictionResponse) -> str:
+    def _get_output_file_id_from_vertex_ai_batch_response(cls, response: VertexBatchPredictionResponse) -> str | None:
         """
-        Gets the output file id from the Vertex AI Batch response
+        Gets the output file id from the Vertex AI Batch response, None until Vertex reports outputInfo
         """
-
         output_info: Final = response.get("outputInfo") or OutputInfo()
-        output_file_id: str = output_info.get("gcsOutputDirectory", "")
-        if output_file_id:
-            output_file_id = output_file_id.rstrip("/") + "/predictions.jsonl"
-        if output_file_id and output_file_id != "/predictions.jsonl":
-            return output_file_id
-
-        output_config: Final = response.get("outputConfig")
-        if output_config is None:
-            return output_file_id
-
-        gcs_destination: Final = output_config.get("gcsDestination")
-        if gcs_destination is None:
-            return output_file_id
-
-        output_uri_prefix: Final = gcs_destination.get("outputUriPrefix", "")
-        if output_uri_prefix.endswith("/predictions.jsonl"):
-            return output_uri_prefix
-        return output_uri_prefix.rstrip("/") + "/predictions.jsonl"
+        gcs_output_directory: Final = (output_info.get("gcsOutputDirectory") or "").rstrip("/")
+        if not gcs_output_directory:
+            return None
+        return f"{gcs_output_directory}/predictions.jsonl"
 
     @classmethod
     def _get_batch_job_status_from_vertex_ai_batch_response(

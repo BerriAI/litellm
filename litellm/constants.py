@@ -48,6 +48,7 @@ DEFAULT_BATCH_SIZE: Final = int(os.getenv("DEFAULT_BATCH_SIZE", 512))
 DEFAULT_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SECONDS", 5))
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_S3_BATCH_SIZE: Final = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
+DEFAULT_S3_MAX_CONCURRENT_UPLOADS: Final = int(os.getenv("DEFAULT_S3_MAX_CONCURRENT_UPLOADS", "16"))
 # https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 MAX_S3_OBJECT_KEY_BYTES: Final = 1024
 S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
@@ -165,6 +166,9 @@ MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS: Final = int(os.getenv("MCP_OAUTH2_TOKEN_
 MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE: Final = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE", "200"))
 MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL: Final = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL", "3600"))
 MCP_SSO_ASSERTION_CACHE_TTL_SECONDS: Final = int(os.getenv("MCP_SSO_ASSERTION_CACHE_TTL_SECONDS", "60"))
+
+# mcp_tool_permissions entry that grants every current and future tool on a server
+MCP_ALL_TOOLS_WILDCARD: Final = "*"
 
 # Default npm cache directory for STDIO MCP servers.
 # npm/npx needs a writable cache dir; in containers the default (~/.npm)
@@ -326,6 +330,7 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = float(
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
 
 DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
+NADIR_DEFAULT_API_BASE: Final = "https://api.getnadir.com/v1"
 DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
 
 BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_session_update"
@@ -556,6 +561,8 @@ SEMANTIC_CACHE_EMBEDDING_TIMEOUT_SECONDS: Final[float] = float(
 request_timeout: float = float(os.getenv("REQUEST_TIMEOUT", str(int(DEFAULT_REQUEST_TIMEOUT_SECONDS))))
 request_timeout_explicitly_set: bool = "REQUEST_TIMEOUT" in os.environ
 DEFAULT_A2A_AGENT_TIMEOUT: Final[float] = float(os.getenv("DEFAULT_A2A_AGENT_TIMEOUT", 6000))  # 10 minutes
+AGENT_KILL_SWITCH_TIMEOUT_SECONDS: Final = 10.0
+AGENT_KILL_SWITCH_RESPONSE_BODY_MAX_CHARS: Final = 2000
 # Patterns that indicate a localhost/internal URL in A2A agent cards that should be
 # replaced with the original base_url. This is a common misconfiguration where
 # developers deploy agents with development URLs in their agent cards.
@@ -591,6 +598,7 @@ FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO: Final = 0.5
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = int(os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50))
+LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS: Final = 10_000
 # Backpressure + lifetime bounds for the /v1/messages streaming relay (see
 # BaseAnthropicMessagesStreamingIterator.async_sse_wrapper). The relay queue is
 # bounded so a slow client throttles the upstream pump instead of letting it
@@ -705,6 +713,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "gigachat",
     "nvidia_nim",
     "cerebras",
+    "nadir",
     "baseten",
     "ai21_chat",
     "volcengine",
@@ -901,6 +910,7 @@ openai_compatible_endpoints: Final[list] = [
     "codestral.mistral.ai/v1/fim/completions",
     "api.groq.com/openai/v1",
     "https://integrate.api.nvidia.com/v1",
+    NADIR_DEFAULT_API_BASE,
     "api.deepseek.com/v1",
     "api.together.ai/v1",
     "api.together.xyz/v1",
@@ -1521,6 +1531,7 @@ PROMETHEUS_BUDGET_METRICS_REFRESH_INTERVAL_MINUTES: Final = int(
 CLOUDZERO_EXPORT_INTERVAL_MINUTES: Final = int(os.getenv("CLOUDZERO_EXPORT_INTERVAL_MINUTES", 60))
 MCP_TOOL_NAME_PREFIX: Final = "mcp_tool"
 MAXIMUM_TRACEBACK_LINES_TO_LOG: Final = int(os.getenv("MAXIMUM_TRACEBACK_LINES_TO_LOG", 100))
+PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS: Final = 4096
 
 # Headers to control callbacks
 X_LITELLM_DISABLE_CALLBACKS: Final = "x-litellm-disable-callbacks"
@@ -1773,6 +1784,8 @@ RESPONSES_SESSION_LOOKUP_MAX_ATTEMPTS: Final = max(1, int(os.getenv("RESPONSES_S
 RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL: Final = float(os.getenv("RESPONSES_SESSION_LOOKUP_RETRY_INTERVAL", "0.2"))
 SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE: Final = int(os.getenv("SPEND_COUNTER_RESEED_LOCKS_MAX_SIZE", 10000))
 PROXY_DB_LOOKUP_MAX_CONCURRENCY: Final = max(1, int(os.getenv("PROXY_DB_LOOKUP_MAX_CONCURRENCY", "25")))
+PROXY_DB_LOOKUP_DEADLINE_SECONDS: Final = max(0.1, float(os.getenv("PROXY_DB_LOOKUP_DEADLINE_SECONDS", "10")))
+PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS: Final = max(0.0, float(os.getenv("PROXY_DB_LOOKUP_STALL_WINDOW_SECONDS", "30")))
 DEFAULT_CRON_JOB_LOCK_TTL_SECONDS: Final = int(os.getenv("DEFAULT_CRON_JOB_LOCK_TTL_SECONDS", 60))  # 1 minute
 PROXY_BUDGET_RESCHEDULER_MIN_TIME: Final = int(os.getenv("PROXY_BUDGET_RESCHEDULER_MIN_TIME", 597))
 RESET_BUDGET_JOB_BATCH_SIZE: Final = max(1, int(os.getenv("RESET_BUDGET_JOB_BATCH_SIZE", "500")))
@@ -1942,6 +1955,15 @@ SENTRY_DENYLIST: Final = [
     "auth_token",
     "jwt_token",
     "private_key",
+    "authorization",
+    "api-key",
+    "x-api-key",
+    "x-goog-api-key",
+    "ocp-apim-subscription-key",
+    "x-litellm-api-key",
+    "x-mcp-auth",
+    "cookie",
+    "set-cookie",
     "SLACK_WEBHOOK_URL",
     "ALERTING_WEBHOOK_URL",
     "webhook_url",
@@ -1964,6 +1986,12 @@ SENTRY_DENYLIST: Final = [
 ]
 SENTRY_PII_DENYLIST: Final = [
     "user_id",
+    "user_email",
+    "end_user_id",
+    "user_api_key_hash",
+    "user_api_key_user_id",
+    "user_api_key_user_email",
+    "user_api_key_end_user_id",
     "email",
     "phone",
     "address",
@@ -2119,6 +2147,14 @@ PTU_LAPSED_ALERT_LIMIT: Final[int] = 10
 DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID: Final[str] = "daily_global_spend_reconcile_job"
 DAILY_GLOBAL_SPEND_RECONCILE_LOCK_TTL_SECONDS: Final[int] = 3600
 DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM: Final[str] = "daily_global_spend_reconciled_through"
+SPEND_CAPTURE_RATE_CHECK_JOB_ID: Final[str] = "spend_capture_rate_check_job"
+SPEND_CAPTURE_RATE_CHECK_LOCK_TTL_SECONDS: Final[int] = 900
+SPEND_CAPTURE_RATE_MAX_RANGE_DAYS: Final[int] = 180
+SPEND_CAPTURE_RATE_DOCS_URL: Final[str] = "https://docs.litellm.ai/docs/proxy/spend_capture_rate"
+OPENAI_ORGANIZATION_COSTS_URL: Final[str] = "https://api.openai.com/v1/organization/costs"
+# Buckets per page the OpenAI costs endpoint allows (1 to 180, default 7), 2026-09-24
+OPENAI_ORGANIZATION_COSTS_PAGE_LIMIT: Final[int] = 180
+PROVIDER_BILLING_TIMEOUT_SECONDS: Final[float] = 30.0
 # Slack allowed when deciding a sentinel row is stale. The row's updated_at and the
 # run's cutoff are stamped by different hosts, so clock skew between them must not let
 # one run delete a charge another just wrote. A stale row is hours old and a concurrent

@@ -378,6 +378,7 @@ def make_runner(
     general_settings: Mapping[str, object] = MappingProxyType({}),
     heartbeat_seconds: float = 30.0,
     completion_window_seconds: float = 24 * 60 * 60,
+    user: UserAPIKeyAuth | None = None,
 ) -> Harness:
     store = store_factory({INPUT_FILE_ID: managed_input_file()} if files is None else files)
     router = FakeRouter()
@@ -385,7 +386,7 @@ def make_runner(
     storage = FakeStorageBackend({STORAGE_URL: content})
     storage_factory = FakeStorageBackendFactory(storage, storage_error)
     prisma = FakePrismaClient(store.objects)
-    user = UserAPIKeyAuth(
+    user = user or UserAPIKeyAuth(
         api_key="sk-batch-key", user_id="user-1", team_id="team-1", key_alias="alias-1", user_email="user@example.com"
     )
     runner = LiteLLMExecutedBatchRunner(
@@ -666,6 +667,20 @@ async def test_create_dispatches_each_row_with_the_batch_model_and_the_key_metad
         assert metadata["user_api_key_team_id"] == "team-1"
         assert metadata["user_api_key_alias"] == "alias-1"
         assert metadata["user_api_key_user_email"] == "user@example.com"
+
+
+async def test_create_dispatches_cli_session_rows_under_the_per_user_alias_not_the_login_token() -> None:
+    session = UserAPIKeyAuth(
+        api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
+        user_id="alice",
+        key_alias="cli-session-alice",
+        is_session_token=True,
+    )
+    harness = make_runner(user=session)
+    await harness.create_and_finish()
+
+    logged_keys = {call.kwargs["metadata"]["user_api_key"] for call in harness.router.acompletion.await_args_list}
+    assert logged_keys == {"cli-session-alice"}
 
 
 async def test_create_uploads_one_output_line_per_row_with_the_router_response() -> None:

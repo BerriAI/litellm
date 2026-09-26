@@ -3,102 +3,73 @@ use std::sync::{Arc, Mutex};
 use litellm_auth::ResolvedCredential;
 use litellm_host::{
     event::{CallEvent, RequestContext, WireRequest},
-    machine::{HostChannel, HostTokenProvider, MachineFault, RouteMachine, TokenRoute},
-    route::Route,
+    host::Reply,
+    machine::{CallMachine, HostChannel, HostTokenProvider, TokenProtocol},
+    protocol::Protocol,
 };
 use litellm_llms::base_llm::ocr::{
     error::Error, handler::OcrClient, transformation::LiteLLMOcrResponse,
 };
 
 use super::handler::perform_ocr_request;
-use crate::ocr::types::{LiteLLMOcrRequest, OcrDocumentInput, OcrFileContent, ResolvedOcrRequest};
+use crate::ocr::types::{LiteLLMOcrRequest, OcrDocumentInput, ResolvedOcrRequest};
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OcrOp {
-    ProjectRequest,
-    ReadDocument,
-    AcquireAzureAdToken,
+    AcquireAzureAdToken(Reply<ResolvedCredential>),
 }
 
-pub enum OcrOpResult {
-    Request {
-        request: Box<LiteLLMOcrRequest<OcrDocumentInput>>,
-        caller_token: bool,
-    },
-    Document(OcrFileContent),
-    AzureAdToken(ResolvedCredential),
+/// The caller's request as the host projects it.
+pub struct OcrProjection {
+    pub request: LiteLLMOcrRequest<OcrDocumentInput>,
+    /// The caller passed its own Azure AD token provider, which the host keeps.
+    pub caller_token: bool,
 }
 
 pub struct Ocr;
 
-impl Route for Ocr {
+impl Protocol for Ocr {
     type Response = LiteLLMOcrResponse;
     type Error = Error;
+    type Projection = OcrProjection;
     type Op = OcrOp;
-    type OpResult = OcrOpResult;
     type Chunk = std::convert::Infallible;
     type StreamHead = std::convert::Infallible;
 }
 
-impl TokenRoute for Ocr {
-    fn acquire_token_op() -> OcrOp {
-        OcrOp::AcquireAzureAdToken
-    }
-
-    fn token_credential(result: OcrOpResult) -> Option<ResolvedCredential> {
-        match result {
-            OcrOpResult::AzureAdToken(credential) => Some(credential),
-            _ => None,
-        }
+impl TokenProtocol for Ocr {
+    fn acquire_token_op(reply: Reply<ResolvedCredential>) -> OcrOp {
+        OcrOp::AcquireAzureAdToken(reply)
     }
 }
 
 pub type OcrHost = HostChannel<Ocr>;
-pub type OcrMachine = RouteMachine<Ocr>;
+pub type OcrMachine = CallMachine<Ocr>;
 
-/// The OCR call as a machine: projection, document reading and token acquisition are
-/// host operations; everything else runs in Rust.
+/// The OCR call as a machine: projection and token acquisition are host operations;
+/// everything else runs in Rust.
 pub fn ocr_machine(client: OcrClient) -> OcrMachine {
-    RouteMachine::new(move |host| Box::pin(execute(client, host)))
+    CallMachine::new(move |host| Box::pin(execute(client, host)))
 }
 
 async fn execute(client: OcrClient, host: OcrHost) -> Result<LiteLLMOcrResponse, Error> {
-    let OcrOpResult::Request {
+    let OcrProjection {
         request,
         caller_token,
-    } = host.route(OcrOp::ProjectRequest).await?
-    else {
-        return Err(MachineFault::Mismatch.into());
-    };
+    } = host.project().await?;
     let request = LiteLLMOcrRequest {
         azure_ad_token_provider: caller_token
             .then(|| HostTokenProvider::handle(host.clone()))
             .or(request.azure_ad_token_provider),
-        ..*request
+        ..request
     };
     let caller_document = matches!(request.document, OcrDocumentInput::Document(_));
-    let request = prepare_request_document(request, &host).await?;
+    let request = prepare_request_document(request).await?;
     perform_ocr_request(&client, request, &host, caller_document).await
 }
 
 async fn prepare_request_document(
     request: LiteLLMOcrRequest<OcrDocumentInput>,
-    host: &OcrHost,
 ) -> Result<ResolvedOcrRequest, Error> {
-    let request = match &request.document {
-        OcrDocumentInput::HostReader { mime_type } => {
-            let mime_type = mime_type.clone();
-            let OcrOpResult::Document(content) = host.route(OcrOp::ReadDocument).await? else {
-                return Err(MachineFault::Mismatch.into());
-            };
-            request.with_document(OcrDocumentInput::Bytes {
-                bytes: content.bytes,
-                file_name: content.file_name,
-                mime_type,
-            })
-        }
-        _ => request,
-    };
     if let OcrDocumentInput::Document(_) = &request.document {
         return request.map_document(super::document::prepare_document);
     }
@@ -107,7 +78,6 @@ async fn prepare_request_document(
         .map_err(|error| Error::DocumentTask(Arc::new(error)))?
 }
 
-type Reader = Box<dyn Fn() -> Result<OcrFileContent, Error> + Send + Sync>;
 type BeforeSend =
     Box<dyn Fn(WireRequest, &RequestContext) -> Result<WireRequest, Error> + Send + Sync>;
 type Observer = Box<dyn Fn(&CallEvent) + Send + Sync>;
@@ -116,7 +86,6 @@ type Observer = Box<dyn Fn(&CallEvent) + Send + Sync>;
 /// projection, and the optional observer sees and may rewrite the wire request.
 pub struct LocalOcrHost {
     request: Mutex<Option<LiteLLMOcrRequest<OcrDocumentInput>>>,
-    reader: Option<Reader>,
     before_send: Option<BeforeSend>,
     observer: Option<Observer>,
 }
@@ -125,19 +94,8 @@ impl LocalOcrHost {
     pub fn new(request: LiteLLMOcrRequest<OcrDocumentInput>) -> Self {
         Self {
             request: Mutex::new(Some(request)),
-            reader: None,
             before_send: None,
             observer: None,
-        }
-    }
-
-    pub fn with_reader(
-        self,
-        reader: impl Fn() -> Result<OcrFileContent, Error> + Send + Sync + 'static,
-    ) -> Self {
-        Self {
-            reader: Some(Box::new(reader)),
-            ..self
         }
     }
 
@@ -163,25 +121,21 @@ impl LocalOcrHost {
 }
 
 impl litellm_host::host::Host<Ocr> for LocalOcrHost {
-    async fn route(&self, op: OcrOp) -> Result<OcrOpResult, Error> {
+    async fn project(&self) -> Result<OcrProjection, Error> {
+        self.request
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .map(|request| OcrProjection {
+                request,
+                caller_token: false,
+            })
+            .ok_or_else(|| Error::InvalidRequest("OCR request was already projected".into()))
+    }
+
+    async fn custom_op(&self, op: OcrOp) -> Result<(), Error> {
         match op {
-            OcrOp::ProjectRequest => self
-                .request
-                .lock()
-                .unwrap_or_else(|error| error.into_inner())
-                .take()
-                .map(|request| OcrOpResult::Request {
-                    request: Box::new(request),
-                    caller_token: false,
-                })
-                .ok_or_else(|| Error::InvalidRequest("OCR request was already projected".into())),
-            OcrOp::ReadDocument => self
-                .reader
-                .as_ref()
-                .ok_or_else(|| Error::InvalidRequest("OCR host has no document reader".into()))
-                .and_then(|reader| reader())
-                .map(OcrOpResult::Document),
-            OcrOp::AcquireAzureAdToken => {
+            OcrOp::AcquireAzureAdToken(_) => {
                 Err(Error::Auth(litellm_auth::Error::AzureTokenAcquisition(
                     "OCR host has no Azure AD token provider".into(),
                 )))

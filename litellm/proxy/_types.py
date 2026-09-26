@@ -37,6 +37,7 @@ from litellm.types.llms.openai import (
     ResponsesAPIResponse,
 )
 from litellm.types.mcp import (
+    MCPAdvertisedVersions,
     MCPAllowedClient,
     MCPAuth,
     MCPAuthType,
@@ -51,6 +52,7 @@ from litellm.types.proxy.carried_budget_state import (
     UserBudgetSnapshot,
 )
 from litellm.types.proxy.control_plane_endpoints import WorkerRegistryEntry
+from litellm.types.proxy.spend_capture_rate import SpendCaptureRateCheckSettings
 from litellm.types.router import RouterErrors, UpdateRouterConfig
 from litellm.types.router_weights import validate_router_settings_dict
 from litellm.types.secret_managers.main import KeyManagementSystem
@@ -238,6 +240,7 @@ class LitellmTableNames(str, enum.Enum):
     CONFIG_TABLE_NAME = "LiteLLM_Config"
     SSO_CONFIG_TABLE_NAME = "LiteLLM_SSOConfig"
     UI_SETTINGS_TABLE_NAME = "LiteLLM_UISettings"
+    AGENT_TABLE_NAME = "LiteLLM_AgentsTable"
 
 
 class Litellm_EntityType(enum.Enum):
@@ -307,6 +310,8 @@ class KeyManagementRoutes(str, enum.Enum):
     # team usage routes
     TEAM_DAILY_ACTIVITY = "/team/daily/activity"
     TEAM_DAILY_ACTIVITY_AGGREGATED = "/team/daily/activity/aggregated"
+    TEAM_DAILY_ACTIVITY_EXPORT = "/team/daily/activity/export"
+    TEAM_DAILY_ACTIVITY_AGGREGATED_SEARCH = "/team/daily/activity/aggregated/search"
 
     # team spend-log viewing
     SPEND_LOGS = "/spend/logs"
@@ -585,6 +590,7 @@ class LiteLLMRoutes(enum.Enum):
         "/v1/agents/{agent_id}",
         "/v1/agents/make_public",
         "/v1/agents/{agent_id}/make_public",
+        "/v1/agents/{agent_id}/kill_switch",
     )
 
     # Backwards-compat union — virtual keys may be configured with
@@ -682,6 +688,7 @@ class LiteLLMRoutes(enum.Enum):
         KeyManagementRoutes.TEAM_KEY_BULK_UPDATE.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY.value,
         KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED.value,
+        KeyManagementRoutes.TEAM_DAILY_ACTIVITY_AGGREGATED_SEARCH.value,
         KeyManagementRoutes.SPEND_LOGS.value,
         KeyManagementRoutes.SPEND_LOGS_V2.value,
         KeyManagementRoutes.KEY_RESET_SPEND.value,
@@ -708,6 +715,7 @@ class LiteLLMRoutes(enum.Enum):
             "/user/list",
             "/user/daily/activity",
             "/user/daily/activity/aggregated",
+            "/user/daily/activity/aggregated/search",
             # team
             "/team/new",
             "/team/update",
@@ -725,6 +733,8 @@ class LiteLLMRoutes(enum.Enum):
             "/team/permissions_bulk_update",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
+            "/team/daily/activity/export",
+            "/team/daily/activity/aggregated/search",
             "/team/spend/by_user",
             # gateway request counts (SGR); deployment-wide, admin-only
             "/gateway/daily/activity",
@@ -780,6 +790,7 @@ class LiteLLMRoutes(enum.Enum):
         "/global/spend/provider",
         "/global/spend/tags",
         "/global/spend/all_tag_names",
+        "/spend/capture_rate",
     ]
 
     public_routes = frozenset(
@@ -895,6 +906,8 @@ class LiteLLMRoutes(enum.Enum):
         "/team/permissions_update",
         "/team/daily/activity",
         "/team/daily/activity/aggregated",
+        "/team/daily/activity/export",
+        "/team/daily/activity/aggregated/search",
         "/team/spend/by_user",
         "/team/{team_id}/members/me",
         # POST/GET the team's logging callbacks, and DELETE one of them. Every
@@ -910,6 +923,7 @@ class LiteLLMRoutes(enum.Enum):
         "/model/delete",
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
+        "/user/daily/activity/aggregated/search",
         # Endpoint restricts results to organizations the caller is ORG_ADMIN
         # of; a caller who administers none gets an empty result set.
         "/organization/daily/activity",
@@ -993,6 +1007,8 @@ class LiteLLMRoutes(enum.Enum):
             "/user/daily/activity",
             "/team/daily/activity",
             "/team/daily/activity/aggregated",
+            "/team/daily/activity/export",
+            "/team/daily/activity/aggregated/search",
             "/tag/daily/activity",
             "/tag/list",
             "/audit",
@@ -1142,6 +1158,7 @@ class ModelInfo(LiteLLMPydanticObjectBase):
         ]
         | None
     )
+    discoverable: bool | None = None
 
     model_config = ConfigDict(protected_namespaces=(), extra="allow")
 
@@ -2947,6 +2964,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "every replica. On by default; set to tune the window, pin a job, or turn it off."
         ),
     )
+    spend_capture_rate_check: SpendCaptureRateCheckSettings | None = Field(
+        None,
+        description=(
+            "Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). "
+            "Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window "
+            "falls under the threshold (default 0.9). Off unless set."
+        ),
+    )
     maximum_spend_logs_retention_period: str | None = Field(
         None,
         description="Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.",
@@ -2986,6 +3011,11 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     mcp_internal_ip_ranges: list[str] | None = Field(
         None,
         description="Custom CIDR ranges that define internal/private networks for MCP access control. When set, only these ranges are treated as internal. Defaults to RFC 1918 private ranges (10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 127.0.0.0/8).",
+    )
+    mcp_advertised_versions: MCPAdvertisedVersions | None = Field(
+        None,
+        description="MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. "
+        "Modern protocol serving and Apps/Tasks remain disabled.",
     )
     mcp_allowed_clients: list[MCPAllowedClient] | None = Field(
         None,
@@ -3689,7 +3719,7 @@ from litellm.models.spend_logs import (  # noqa: E402
 )
 from litellm.models.tag import LiteLLM_TagTable as LiteLLM_TagTable  # noqa: E402
 
-AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "unblocked", "rotated"]
+AUDIT_ACTIONS = Literal["created", "updated", "deleted", "blocked", "unblocked", "rotated", "kill_switch_fired"]
 
 
 class LiteLLM_AuditLogs(LiteLLMPydanticObjectBase):
@@ -3999,6 +4029,18 @@ class AllCallbacks(LiteLLMPydanticObjectBase):
         litellm_callback_params=[  # mutable-ok: the registry field is typed list
             "POINTFIVE_API_KEY",
             "POINTFIVE_API_URL",
+        ],
+    )
+
+    zerobus: CallbackOnUI = CallbackOnUI(
+        litellm_callback_name="zerobus",
+        ui_callback_name="Databricks Zerobus",
+        litellm_callback_params=[  # mutable-ok: the registry field is typed list
+            "ZEROBUS_WORKSPACE_URL",
+            "ZEROBUS_SERVER_ENDPOINT",
+            "ZEROBUS_CLIENT_ID",
+            "ZEROBUS_CLIENT_SECRET",
+            "ZEROBUS_TABLE_NAME",
         ],
     )
 
@@ -5338,11 +5380,12 @@ class LiteLLM_JWTAuth(LiteLLMPydanticObjectBase):
         default=False,
         description=(
             "When True, users whose JWT contains no team claims are authenticated "
-            "using their database team memberships instead of receiving HTTP 403. "
-            "Usage is attributed to the user's first resolvable DB team, or to the "
-            "team specified via the x-litellm-team-id request header (validated "
-            "against DB membership). Requires user_id_upsert=True so that user "
-            "records exist before the fallback runs."
+            "using their database team memberships instead of receiving HTTP 403, "
+            "with usage attributed to the user's first resolvable DB team. Whether or "
+            "not the JWT carries team claims, the x-litellm-team-id request header may "
+            "select any team the user is a member of in the database (validated against "
+            "DB membership); without the header the JWT team stays the default. Requires "
+            "user_id_upsert=True so that user records exist before the fallback runs."
         ),
     )
     issuers: list[JWTIssuerConfig] | None = Field(
