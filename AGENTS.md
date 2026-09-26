@@ -129,4 +129,10 @@ Before implementing:
 
 Ask yourself: "Would a senior engineer say this is overcomplicated?" If yes, simplify
 
+## Live PR Risk and Audit Before Every Change
+
+Every change to this repo, whatever produced it (a ticket, a review comment, a bot finding, a one-line follow-up), runs both `.agents/skills/live-pr-risk/SKILL.md` and `.agents/skills/audit/SKILL.md` before it is pushed, and again over the final diff after review changes land. Live PR risk builds the dependency graph of every changed symbol, subtracts what tests cover, and A/Bs the untested paths on a real proxy at the merge base and the head with real providers and zero mocks. Audit turns the fix's surface inventory into checked-in `tests/integration/` tests that run red on the merge base and green on the head, with doubles only at the upstream and destination edges. Neither is optional and neither is satisfied by reading the code: a SAFE or PASS reached by tracing rather than running is a hypothesis, not a result
+
+The PR body carries both verdicts from the latest run at the current tip: the live-pr-risk report with its Breaking, Backward incompatible, Regression risk, Dependency graph and Not verified sections, and the audit matrix with its base and head hashes. A PR whose tip moved since those ran is not ready for review. If a leg cannot run (a missing credential, an unreachable environment), name it in Not verified and say so in the wrap-up; never report a change as done with a skipped or inferred leg
+
 Before requesting maintainer review, verify the current PR tip passes required CI and code coverage, meets Greptile confidence of at least 4/5, and has acceptable Veria and Bugbot reviews. Inspect warnings and findings, fix actionable issues, and rerun the affected checks and reviewers after changes. Record evidence for any false positive or unavailable review; never treat a pending or missing bot result as a pass. Do not lower coverage thresholds or lint budgets to satisfy a check
