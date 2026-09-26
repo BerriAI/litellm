@@ -1503,16 +1503,36 @@ def test_litellm_proxy_repeated_response_header_keeps_each_value():
 
 
 def test_is_error_str_context_window_exceeded_anthropic_and_vllm():
-    from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
+    import pytest
+    from litellm.exceptions import ContextWindowExceededError
+    from litellm.litellm_core_utils.exception_mapping_utils import (
+        ExceptionCheckers,
+        exception_type,
+    )
 
-    # Anthropic / Bedrock pattern
     anthropic_err = "prompt is too long: 205000 tokens > 200000 maximum allowed"
-    assert ExceptionCheckers.is_error_str_context_window_exceeded(anthropic_err) is True
+    assert (
+        ExceptionCheckers.is_error_str_context_window_exceeded(anthropic_err) is True
+    ), f"Expected '{anthropic_err}' to be recognized as context window exceeded"
 
-    # vLLM / HuggingFace standard error code
     vllm_err = "Error code 400: context_length_exceeded"
-    assert ExceptionCheckers.is_error_str_context_window_exceeded(vllm_err) is True
+    assert (
+        ExceptionCheckers.is_error_str_context_window_exceeded(vllm_err) is True
+    ), f"Expected '{vllm_err}' to be recognized as context window exceeded"
 
-    # Negative test case: generic parameter errors must remain False
     generic_err = "Invalid parameter 'temperature': must be between 0 and 2"
-    assert ExceptionCheckers.is_error_str_context_window_exceeded(generic_err) is False
+    assert (
+        ExceptionCheckers.is_error_str_context_window_exceeded(generic_err) is False
+    ), f"Expected generic parameter error '{generic_err}' not to match context window exceeded"
+
+    # Verify end-to-end exception mapping raises ContextWindowExceededError
+    with pytest.raises(ContextWindowExceededError) as exc_info:
+        exception_type(
+            model="vllm-model",
+            custom_llm_provider="openai",
+            original_exception=Exception(vllm_err),
+            extra_kwargs={"status_code": 400},
+        )
+    assert (
+        "context_length_exceeded" in str(exc_info.value).lower()
+    ), f"Expected original error message preserved in {exc_info.value}"
