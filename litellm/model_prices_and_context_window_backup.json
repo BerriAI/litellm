@@ -57290,6 +57290,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57324,6 +57325,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57358,6 +57360,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57392,6 +57395,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57426,6 +57430,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57457,6 +57462,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57488,6 +57494,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57519,6 +57526,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57550,6 +57558,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57584,6 +57593,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57733,6 +57743,7 @@
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57768,6 +57779,7 @@
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57803,6 +57815,7 @@
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57838,6 +57851,7 @@
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57905,6 +57919,7 @@
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57972,6 +57987,7 @@
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },

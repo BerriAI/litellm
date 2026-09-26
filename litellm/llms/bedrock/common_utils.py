@@ -849,6 +849,39 @@ def bedrock_supports_openai_responses(model: str | None, model_cost: Mapping[str
     )
 
 
+def bedrock_supports_openai_chat(model: str | None, model_cost: Mapping[str, object]) -> bool:
+    """Whether a Bedrock model is served by bedrock-runtime's OpenAI Chat Completions surface.
+
+    Same shape as ``bedrock_supports_openai_responses``: purely data-driven from the
+    model's ``supported_endpoints`` (``/v1/chat/completions``), overridable via
+    ``register_model`` / proxy ``model_info``, with no model-name match. A model
+    absent from ``model_cost`` returns False, leaving the Converse route in place.
+    """
+    if not model:
+        return False
+    candidates: Final = (model_cost.get(key) for key in (model, f"bedrock/{model}"))
+    return any(
+        isinstance(entry, Mapping) and "/v1/chat/completions" in (entry.get("supported_endpoints") or ())
+        for entry in candidates
+    )
+
+
+def bedrock_uses_native_openai_chat(model: str) -> bool:
+    """Whether ``model`` should use bedrock-runtime's native OpenAI Chat Completions surface.
+
+    True only when the model would otherwise default to Converse, wasn't explicitly
+    pinned to it (``bedrock/converse/<model>`` stays an escape hatch), and advertises
+    ``/v1/chat/completions`` in ``supported_endpoints``. Shared by the chat-config
+    selector and the completion dispatcher so both agree on the route.
+    """
+    if BedrockModelInfo.get_bedrock_route(model) != "converse":
+        return False
+    pinned_to_converse: Final = any(
+        model.startswith(prefix) or f"/{prefix}" in model for prefix in ("converse/", "converse_like/")
+    )
+    return not pinned_to_converse and bedrock_supports_openai_chat(model, litellm.model_cost)
+
+
 def build_mantle_messages_url(
     api_base: str | None,
     aws_bedrock_runtime_endpoint: str | None,
@@ -1384,6 +1417,16 @@ def get_bedrock_chat_config(model: str):
     bedrock_route: Final = BedrockModelInfo.get_bedrock_route(model)
     bedrock_invoke_provider: Final = BaseAWSLLM.get_bedrock_invoke_provider(model=model)
     base_model: Final = BedrockModelInfo.get_base_model(model)
+
+    # Native OpenAI Chat Completions surface on bedrock-runtime (data-driven, no
+    # model-name match). The dispatcher in main.py uses the same predicate to send
+    # these to base_llm_http_handler instead of the Converse handler.
+    if bedrock_uses_native_openai_chat(model):
+        from litellm.llms.bedrock.chat.openai_native.transformation import (
+            BedrockOpenAIChatConfig,
+        )
+
+        return BedrockOpenAIChatConfig()
 
     # Handle explicit routes first
     if bedrock_route == "claude_platform":

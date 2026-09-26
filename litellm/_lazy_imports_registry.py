@@ -246,6 +246,7 @@ LLM_CONFIG_NAMES: Final = (
     "DatabricksResponsesAPIConfig",
     "OpenRouterResponsesAPIConfig",
     "BedrockOpenAIResponsesConfig",
+    "BedrockOpenAIChatConfig",
     "BedrockMantleResponsesAPIConfig",
     "GoogleAIStudioInteractionsConfig",
     "VertexAIInteractionsConfig",
@@ -924,6 +925,10 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     "BedrockOpenAIResponsesConfig": (
         ".llms.bedrock.responses.transformation",
         "BedrockOpenAIResponsesConfig",
+    ),
+    "BedrockOpenAIChatConfig": (
+        ".llms.bedrock.chat.openai_native.transformation",
+        "BedrockOpenAIChatConfig",
     ),
     "BedrockMantleChatConfig": (
         ".llms.bedrock_mantle.chat.transformation",

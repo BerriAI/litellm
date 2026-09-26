@@ -1,0 +1,132 @@
+"""Native OpenAI Chat Completions API on the bedrock-runtime endpoint.
+
+Sibling of the Responses config: when a bedrock model advertises /v1/chat/completions,
+chat requests hit bedrock-runtime's native /openai/v1/chat/completions surface instead
+of the Converse translation.
+"""
+
+import pytest
+
+import litellm
+from litellm.llms.bedrock.chat.openai_native.transformation import BedrockOpenAIChatConfig
+from litellm.llms.bedrock.common_utils import (
+    bedrock_supports_openai_chat,
+    bedrock_uses_native_openai_chat,
+    get_bedrock_chat_config,
+)
+
+MODEL = "global.openai.gpt-6-luna"
+
+
+@pytest.fixture
+def native_model():
+    """Register a runtime model that advertises the native chat surface."""
+    litellm.register_model(
+        {
+            MODEL: {
+                "litellm_provider": "bedrock_converse",
+                "mode": "chat",
+                "supported_endpoints": ["/v1/chat/completions", "/v1/responses"],
+                "supports_reasoning": True,
+            }
+        }
+    )
+    return MODEL
+
+
+def _cfg():
+    return BedrockOpenAIChatConfig()
+
+
+class TestCompleteURL:
+    def test_default_host_and_path(self):
+        url = _cfg().get_complete_url(None, None, MODEL, {"aws_region_name": "us-east-1"}, {})
+        assert url == "https://bedrock-runtime.us-east-1.amazonaws.com/openai/v1/chat/completions"
+
+    def test_region_is_honoured(self):
+        url = _cfg().get_complete_url(None, None, MODEL, {"aws_region_name": "eu-west-1"}, {})
+        assert url == "https://bedrock-runtime.eu-west-1.amazonaws.com/openai/v1/chat/completions"
+
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://proxy.example.com",
+            "https://proxy.example.com/",
+            "https://proxy.example.com/openai/v1",
+            "https://proxy.example.com/openai/v1/chat/completions",
+            "https://proxy.example.com/v1",
+        ],
+    )
+    def test_api_base_override_collapses_to_chat_path(self, api_base):
+        url = _cfg().get_complete_url(api_base, None, MODEL, {"aws_region_name": "us-east-1"}, {})
+        assert url == "https://proxy.example.com/openai/v1/chat/completions"
+
+
+class TestAuth:
+    def test_bearer_token_sets_header_and_skips_sigv4(self):
+        cfg = _cfg()
+        headers = cfg.validate_environment({}, MODEL, [], {}, {}, api_key="bedrock-key")
+        assert headers["Authorization"] == "Bearer bedrock-key"
+        signed, body = cfg.sign_request({}, {}, {"model": MODEL}, "https://x", api_key="bedrock-key")
+        assert body is None  # SigV4 not applied on top of a Bearer credential
+
+    def test_no_bearer_leaves_auth_to_sigv4(self):
+        # No Authorization header without a token; signing is exercised elsewhere.
+        headers = _cfg().validate_environment({}, MODEL, [], {}, {})
+        assert "Authorization" not in headers
+        assert headers["Content-Type"] == "application/json"
+
+
+class TestRequestBody:
+    def test_aws_params_stripped_from_body(self):
+        body = _cfg().transform_request(
+            model=MODEL,
+            messages=[{"role": "user", "content": "hi"}],
+            optional_params={"aws_region_name": "us-east-1", "max_completion_tokens": 10},
+            litellm_params={},
+            headers={},
+        )
+        assert "aws_region_name" not in body
+        assert body["max_completion_tokens"] == 10
+        assert body["model"] == MODEL
+
+    def test_reasoning_temperature_dropped(self):
+        # gpt-6 is a reasoning model; a non-default temperature must be dropped.
+        mapped = _cfg().map_openai_params(
+            non_default_params={"temperature": 0.5, "reasoning_effort": "low"},
+            optional_params={},
+            model=MODEL,
+            drop_params=True,
+        )
+        assert "temperature" not in mapped
+        assert mapped.get("reasoning_effort") == "low"
+
+
+class TestRouting:
+    def test_predicate_true_when_endpoint_advertised(self, native_model):
+        assert bedrock_supports_openai_chat(native_model, litellm.model_cost) is True
+        assert bedrock_uses_native_openai_chat(native_model) is True
+
+    def test_config_selected_by_default(self, native_model):
+        assert isinstance(get_bedrock_chat_config(native_model), BedrockOpenAIChatConfig)
+
+    def test_explicit_converse_is_escape_hatch(self, native_model):
+        assert bedrock_uses_native_openai_chat(f"bedrock/converse/{native_model}") is False
+        cfg = get_bedrock_chat_config(f"bedrock/converse/{native_model}")
+        assert isinstance(cfg, litellm.AmazonConverseConfig)
+
+    def test_model_without_chat_endpoint_stays_converse(self):
+        litellm.register_model(
+            {
+                "us.openai.gpt-6-astra": {
+                    "litellm_provider": "bedrock_converse",
+                    "mode": "chat",
+                    "supported_endpoints": ["/v1/responses"],
+                }
+            }
+        )
+        assert bedrock_uses_native_openai_chat("us.openai.gpt-6-astra") is False
+        assert isinstance(get_bedrock_chat_config("us.openai.gpt-6-astra"), litellm.AmazonConverseConfig)
+
+    def test_claude_unaffected(self):
+        assert bedrock_uses_native_openai_chat("anthropic.claude-3-5-sonnet-20241022-v2:0") is False

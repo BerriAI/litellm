@@ -112,7 +112,10 @@ from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
-from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.bedrock.common_utils import (
+    BedrockModelInfo,
+    bedrock_uses_native_openai_chat,
+)
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -4211,6 +4214,27 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
             logging_obj=logging,
             client=client,
             provider_config=provider_config,
+        )
+    elif bedrock_uses_native_openai_chat(model):
+        # OpenAI models served on bedrock-runtime's native /openai/v1/chat/completions
+        # surface. Bypasses the Converse translation via the generic OpenAI HTTP handler,
+        # which resolves BedrockOpenAIChatConfig for URL/auth/SigV4/transform.
+        response = base_llm_http_handler.completion(
+            model=model,
+            stream=stream,
+            messages=messages,
+            acompletion=acompletion,
+            api_base=api_base,
+            model_response=model_response,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            custom_llm_provider="bedrock",
+            timeout=timeout,
+            headers=headers,
+            encoding=_get_encoding(),
+            api_key=api_key,
+            logging_obj=logging,
+            client=client,
         )
     elif bedrock_route == "converse":
         model = model.replace("converse/", "")
