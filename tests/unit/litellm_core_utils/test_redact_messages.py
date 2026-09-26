@@ -17,6 +17,7 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.redact_messages import (
     _redact_responses_api_output,
+    _redacted_responses_api_response,
     perform_redaction,
     redact_streaming_responses_for_custom_logger,
     redacted_standard_logging_payload,
@@ -25,7 +26,7 @@ from litellm.litellm_core_utils.redact_messages import (
 from litellm.responses.main import mock_responses_api_response
 
 
-@pytest.mark.parametrize("surface", ("typed", "dict", "standard", "callback"))
+@pytest.mark.parametrize("surface", ("typed", "dict", "standard", "callback", "helper"))
 def test_responses_redaction_removes_instructions_without_changing_the_response(surface: str) -> None:
     response: Final = litellm.ResponsesAPIResponse.model_validate(
         {
@@ -56,6 +57,7 @@ def test_responses_redaction_removes_instructions_without_changing_the_response(
     surfaces: Final = {
         "typed": lambda: perform_redaction({}, response).model_dump(),
         "dict": lambda: perform_redaction({}, original),
+        "helper": lambda: _redacted_responses_api_response(original),
         "standard": lambda: redacted_standard_logging_payload(payload)["response"],
         "callback": lambda: logger.redact_standard_logging_payload_from_model_call_details(
             {"standard_logging_object": payload}
@@ -251,7 +253,7 @@ class TestPerformRedaction:
         result = {
             "output": [
                 {"text": "top-level result"},
-                {"content": [{"text": "nested result"}]},
+                {"content": [{"text": "nested result"}, "non-dict content item"]},
                 {"type": "reasoning", "summary": [{"text": "reasoning result"}]},
             ],
             "usage": {"total_tokens": 1},
@@ -278,6 +280,7 @@ class TestPerformRedaction:
         assert redacted["usage"] == {"total_tokens": 1}
         assert redacted["output"][0]["text"] == "redacted-by-litellm"
         assert redacted["output"][1]["content"][0]["text"] == "redacted-by-litellm"
+        assert redacted["output"][1]["content"][1] == "non-dict content item"
         assert redacted["output"][2]["summary"][0]["text"] == "redacted-by-litellm"
         assert result["output"][0]["text"] == "top-level result"
 
@@ -715,12 +718,14 @@ class TestPerformRedaction:
         none_dict = {"type": "output_text", "text": None, "content": [{"text": None}]}
         real_dict = {"type": "output_text", "text": "real answer", "content": [{"text": "real part"}]}
 
-        _redact_responses_api_output_dict([none_dict, real_dict], "redacted-by-litellm")
+        redacted: Final = _redact_responses_api_output_dict([none_dict, real_dict], "redacted-by-litellm")
 
-        assert none_dict["text"] is None
-        assert none_dict["content"][0]["text"] is None
-        assert real_dict["text"] == "redacted-by-litellm"
-        assert real_dict["content"][0]["text"] == "redacted-by-litellm"
+        assert redacted == [
+            {"type": "output_text", "text": None, "content": [{"text": None}]},
+            {"type": "output_text", "text": "redacted-by-litellm", "content": [{"text": "redacted-by-litellm"}]},
+        ]
+        assert none_dict == {"type": "output_text", "text": None, "content": [{"text": None}]}
+        assert real_dict == {"type": "output_text", "text": "real answer", "content": [{"text": "real part"}]}
 
     def test_skips_non_dict_response_output_items(self):
         result = {

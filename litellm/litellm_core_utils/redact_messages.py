@@ -145,40 +145,50 @@ def _redact_responses_api_output(output_items):
             output_item.input = REDACTED_BY_LITELLM
 
 
-def _redact_responses_api_output_dict(output_items, redacted_str: str):
-    """Helper to redact ResponsesAPIResponse output items in dict form."""
-    for output_item in output_items:
-        if not isinstance(output_item, dict):
-            continue
+def _redacted_responses_api_output_part(part: object, fields: tuple[str, ...], redacted_str: str) -> object:
+    if not isinstance(part, dict):
+        return part
+    return {key: redacted_str if key in fields and value is not None else value for key, value in part.items()}
 
-        if output_item.get("text") is not None:
-            output_item["text"] = redacted_str
 
-        if isinstance(output_item.get("content"), list):
-            for content_item in output_item["content"]:
-                if isinstance(content_item, dict) and content_item.get("text") is not None:
-                    content_item["text"] = redacted_str
-                if isinstance(content_item, dict) and content_item.get("refusal") is not None:
-                    content_item["refusal"] = redacted_str
+def _redacted_responses_api_output_item(item: object, redacted_str: str) -> object:
+    if not isinstance(item, dict):
+        return item
+    content: Final = item.get("content")
+    summary: Final = item.get("summary")
+    return {
+        **item,
+        **({"text": redacted_str} if item.get("text") is not None else {}),
+        **(
+            {
+                "content": [
+                    _redacted_responses_api_output_part(part, ("text", "refusal"), redacted_str) for part in content
+                ]
+            }
+            if isinstance(content, list)
+            else {}
+        ),
+        **(
+            {"summary": [_redacted_responses_api_output_part(part, ("text",), redacted_str) for part in summary]}
+            if item.get("type") == "reasoning" and isinstance(summary, list)
+            else {}
+        ),
+        **({"arguments": redacted_str} if item.get("type") == "function_call" and "arguments" in item else {}),
+        **({"input": redacted_str} if item.get("type") == "custom_tool_call" and "input" in item else {}),
+    }
 
-        if output_item.get("type") == "reasoning" and isinstance(output_item.get("summary"), list):
-            for summary_item in output_item["summary"]:
-                if isinstance(summary_item, dict) and summary_item.get("text") is not None:
-                    summary_item["text"] = redacted_str
 
-        if output_item.get("type") == "function_call" and "arguments" in output_item:
-            output_item["arguments"] = redacted_str
-        if output_item.get("type") == "custom_tool_call" and "input" in output_item:
-            output_item["input"] = redacted_str
+def _redact_responses_api_output_dict(output_items: list[object], redacted_str: str) -> list[object]:
+    return [_redacted_responses_api_output_item(item, redacted_str) for item in output_items]
 
 
 def _redacted_responses_api_response(response: Mapping[str, object]) -> dict[str, object]:
     output: Final = response.get("output")
-    if isinstance(output, list):
-        _redact_responses_api_output_dict(output, REDACTED_BY_LITELLM)
     return {
         **response,
-        "output": output,
+        "output": _redact_responses_api_output_dict(output, REDACTED_BY_LITELLM)
+        if isinstance(output, list)
+        else output,
         **({"instructions": REDACTED_BY_LITELLM} if response.get("instructions") is not None else {}),
         **({"reasoning": None} if response.get("reasoning") is not None else {}),
     }
@@ -321,13 +331,14 @@ def perform_redaction(model_call_details: dict, result, redact_streaming_respons
         elif isinstance(_result, dict) and "output" in _result:
             return _redacted_responses_api_response(_result)
         elif isinstance(_result, litellm.ResponsesAPIResponse):
-            if _result.instructions is not None:
-                _result.instructions = REDACTED_BY_LITELLM
             if hasattr(_result, "output"):
                 _redact_responses_api_output(_result.output)
             # Redact reasoning field in ResponsesAPIResponse
             if hasattr(_result, "reasoning") and _result.reasoning is not None:
                 _result.reasoning = None
+            return _result.model_copy(
+                update={"instructions": REDACTED_BY_LITELLM} if _result.instructions is not None else {}
+            )
         elif isinstance(_result, litellm.EmbeddingResponse):
             if hasattr(_result, "data") and _result.data is not None:
                 _result.data = []
