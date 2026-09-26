@@ -9,8 +9,11 @@ gate, and the backward-compatibility guarantees that let legacy XSalsa20-Poly130
 import base64
 import json
 from types import MappingProxyType
+from typing import Final
 
 import pytest
+from pydantic import JsonValue, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy import proxy_server
@@ -260,13 +263,26 @@ _NESTED_PARAMS = {
 }
 
 
-def _nested_string_leaves(stored: dict) -> list:
-    return [
-        stored["model"],
-        stored["extra_headers"]["Authorization"],
-        stored["extra_headers"]["X-Trace"],
-        stored["fallbacks"][0]["gpt-5.5-mini"][0],
-    ]
+class _StoredNestedParams(TypedDict):
+    model: ReadOnly[str]
+    extra_headers: ReadOnly[dict[str, str]]
+    fallbacks: ReadOnly[list[dict[str, list[str]]]]
+    rpm: ReadOnly[int]
+    enabled: ReadOnly[bool]
+    api_base: ReadOnly[None]
+
+
+_STORED_NESTED_PARAMS: Final = TypeAdapter(_StoredNestedParams)
+
+
+def _nested_string_leaves(stored: JsonValue) -> tuple[str, str, str, str]:
+    params: Final = _STORED_NESTED_PARAMS.validate_python(stored)
+    return (
+        params["model"],
+        params["extra_headers"]["Authorization"],
+        params["extra_headers"]["X-Trace"],
+        params["fallbacks"][0]["gpt-5.5-mini"][0],
+    )
 
 
 @pytest.mark.parametrize("use_aes", [False, True])
@@ -279,7 +295,7 @@ def test_encrypt_json_strings_encrypts_every_nested_string_leaf(monkeypatch, use
     assert (stored["rpm"], stored["enabled"], stored["api_base"]) == (10, True, None)
     plaintexts = _nested_string_leaves(_NESTED_PARAMS)
     assert all(leaf != plain for leaf, plain in zip(_nested_string_leaves(stored), plaintexts))
-    assert [decrypt_if_encrypted_with(leaf, SALT_KEY) for leaf in _nested_string_leaves(stored)] == plaintexts
+    assert tuple(decrypt_if_encrypted_with(leaf, SALT_KEY) for leaf in _nested_string_leaves(stored)) == plaintexts
     assert decrypt_json_strings(stored) == _NESTED_PARAMS
 
 

@@ -2292,14 +2292,18 @@ class TestModelRepositoryNestedEncryption:
         assert found.litellm_params == litellm_params
 
     @pytest.mark.asyncio
-    async def test_create_model_keeps_complexity_router_classifier_fields_readable_in_sql(self):
+    async def test_create_model_encrypts_classifier_credentials_and_keeps_classifier_fields_readable_in_sql(self):
         from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
 
         client: Final = MockPrismaClient()
         repo: Final = ModelRepository(client, encryption_key=self.SALT_KEY)
         complexity_router_config: Final = {
             "classifier_type": "jev",
-            "jev_classifier_config": {"api_base": "https://classifier.example", "api_key": "sk-classifier-secret"},
+            "jev_classifier_config": {
+                "api_base": "https://classifier.example",
+                "api_key": "sk-classifier-secret",
+                "instructions": "Rate the question",
+            },
         }
         litellm_params: Final = {"model": "auto_router/tuned", "complexity_router_config": complexity_router_config}
 
@@ -2307,10 +2311,13 @@ class TestModelRepositoryNestedEncryption:
 
         stored_text: Final = client.db.litellm_proxymodeltable._records["ar-1"]["litellm_params"]
         assert "sk-classifier-secret" not in stored_text
+        assert "classifier.example" not in stored_text
         stored_config: Final = json.loads(stored_text)["complexity_router_config"]
         assert stored_config["classifier_type"] == "jev"
-        assert stored_config["jev_classifier_config"]["api_base"] == "https://classifier.example"
-        assert decrypt_if_encrypted_with(stored_config["jev_classifier_config"]["api_key"], self.SALT_KEY) == "sk-classifier-secret"
+        assert stored_config["jev_classifier_config"]["instructions"] == "Rate the question"
+        stored_jev: Final = stored_config["jev_classifier_config"]
+        assert decrypt_if_encrypted_with(stored_jev["api_base"], self.SALT_KEY) == "https://classifier.example"
+        assert decrypt_if_encrypted_with(stored_jev["api_key"], self.SALT_KEY) == "sk-classifier-secret"
         found: Final = await repo.find_by_id("ar-1")
         assert found is not None
         assert found.litellm_params == litellm_params

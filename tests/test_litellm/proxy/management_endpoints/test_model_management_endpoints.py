@@ -23,7 +23,11 @@ from litellm.proxy._types import (
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_json_strings,
+    encrypt_value_helper,
+    json_value,
+)
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
     _get_team_deployments,
@@ -7570,39 +7574,38 @@ class TestTeamMemberAutoRouterWrites:
         assert saved_info["team_id"] == "member-team"
         assert saved_info["access_groups"] == ["retained-admin-group"]
 
-    @staticmethod
-    def _with_decrypted_jev_key(config: Mapping[str, object]) -> dict[str, object]:
-        jev: Final = config.get("jev_classifier_config")
-        if not isinstance(jev, dict) or not isinstance(jev.get("api_key"), str):
-            return dict(config)
-        decrypted_key: Final = decrypt_value_helper(jev["api_key"], key="api_key")
-        return {**config, "jev_classifier_config": {**jev, "api_key": decrypted_key}}
-
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
-    @pytest.mark.parametrize("change", ["save", "rotate", "move", "move-without-key", "reset", "heuristic"])
-    async def test_jev_dashboard_save_preserves_server_transport(self, endpoint: str, change: str) -> None:
+    @pytest.mark.parametrize("stored_as", ["plaintext", "ciphertext"])
+    @pytest.mark.parametrize(
+        "change", ["save", "rotate", "move", "move-without-key", "same-base", "reset", "heuristic"]
+    )
+    async def test_jev_dashboard_save_preserves_server_transport(
+        self, endpoint: str, stored_as: str, change: str
+    ) -> None:
+        from litellm.repositories.model_repository import encrypt_model_litellm_params
+
         original: Final = self._row()
         transport: Final = {"api_key": "synthetic-original-jev-key", "api_base": "https://jev.example.com"}
-        stored_config: Final = {
-            "classifier_type": "jev",
-            "tiers": {"SIMPLE": "allowed"},
-            "jev_classifier_config": {**transport, "instructions": "Old instructions", "timeout_ms": 6100},
+        plaintext_params: Final = {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "jev",
+                "tiers": {"SIMPLE": "allowed"},
+                "jev_classifier_config": {**transport, "instructions": "Old instructions", "timeout_ms": 6100},
+            },
         }
-        row: Final = original.model_copy(
-            update={
-                "litellm_params": {
-                    "model": "auto_router/complexity_router",
-                    "complexity_router_config": stored_config,
-                },
-            }
+        stored_params: Final = (
+            plaintext_params if stored_as == "plaintext" else encrypt_model_litellm_params(plaintext_params)
         )
+        row: Final = original.model_copy(update={"litellm_params": stored_params})
         database: Final = self._database(self._team(), row)
         overrides: Final = {
             "save": {},
             "rotate": {"api_key": "synthetic-replacement-jev-key"},
             "move": {"api_base": "https://new-jev.example.com", "api_key": "synthetic-replacement-jev-key"},
             "move-without-key": {"api_base": "https://new-jev.example.com"},
+            "same-base": {"api_base": "https://jev.example.com"},
             "reset": {"api_key": None, "api_base": None},
             "heuristic": {},
         }[change]
@@ -7634,10 +7637,12 @@ class TestTeamMemberAutoRouterWrites:
             else {**config, "jev_classifier_config": {**transport, "timeout_ms": 8100, **overrides}}
         )
         stored_jev: Final = saved.get("jev_classifier_config")
-        if isinstance(stored_jev, dict) and isinstance(stored_jev.get("api_key"), str):
-            assert stored_jev["api_key"] != expected["jev_classifier_config"]["api_key"]
-        assert self._with_decrypted_jev_key(saved) == expected
-        assert row.litellm_params["complexity_router_config"] == stored_config
+        if isinstance(stored_jev, dict):
+            for field in ("api_key", "api_base"):
+                if isinstance(stored_jev.get(field), str):
+                    assert stored_jev[field] != expected["jev_classifier_config"][field]
+        assert decrypt_json_strings(json_value(saved)) == expected
+        assert row.litellm_params == stored_params
         assert request.litellm_params.complexity_router_config == config
 
     @pytest.mark.asyncio

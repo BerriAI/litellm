@@ -419,7 +419,7 @@ def _effective_complexity_router_config(
     if not isinstance(incoming_jev, Mapping) or not isinstance(existing_jev, Mapping):
         return incoming
     supplied: Final = TypeAdapter(dict[str, object]).validate_python(incoming_jev)
-    stored: Final = TypeAdapter(dict[str, object]).validate_python(existing_jev)
+    stored: Final = TypeAdapter(dict[str, object]).validate_python(decrypt_json_strings(json_value(existing_jev)))
     same_base: Final = "api_base" not in supplied or supplied["api_base"] == stored.get("api_base")
     transport: Final = MappingProxyType(
         {

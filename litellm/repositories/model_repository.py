@@ -26,17 +26,26 @@ class _ProxyModelTableRepository(PrismaTableRepository["prisma_models.LiteLLM_Pr
     table_name = "litellm_proxymodeltable"
 
 
-def _complexity_router_config_with_encrypted_api_key(config: JsonValue, new_encryption_key: str | None) -> JsonValue:
+JEV_CLASSIFIER_CREDENTIAL_FIELDS: Final = frozenset({"api_key", "api_base"})
+
+
+def _complexity_router_config_with_encrypted_classifier_credentials(
+    config: JsonValue, new_encryption_key: str | None
+) -> JsonValue:
     if not isinstance(config, dict):
         return config
     jev: Final = config.get("jev_classifier_config")
     if not isinstance(jev, dict):
         return config
-    api_key: Final = jev.get("api_key")
-    if not isinstance(api_key, str):
-        return config
-    encrypted_api_key: Final = encrypt_json_strings(api_key, new_encryption_key=new_encryption_key)
-    return {**config, "jev_classifier_config": {**jev, "api_key": encrypted_api_key}}
+    encrypted_jev: Final = {
+        key: (
+            encrypt_json_strings(value, new_encryption_key=new_encryption_key)
+            if key in JEV_CLASSIFIER_CREDENTIAL_FIELDS and isinstance(value, str)
+            else value
+        )
+        for key, value in jev.items()
+    }
+    return {**config, "jev_classifier_config": encrypted_jev}
 
 
 def encrypt_model_litellm_params(
@@ -44,7 +53,7 @@ def encrypt_model_litellm_params(
 ) -> dict[str, JsonValue]:
     return {
         key: (
-            _complexity_router_config_with_encrypted_api_key(json_value(value), new_encryption_key)
+            _complexity_router_config_with_encrypted_classifier_credentials(json_value(value), new_encryption_key)
             if key == "complexity_router_config"
             else encrypt_json_strings(json_value(value), new_encryption_key=new_encryption_key)
         )
