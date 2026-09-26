@@ -22,7 +22,6 @@ class PartitionConnection:
     db: Prisma
 
 
-@pytest.mark.covers("other.database.cleanup.lock_wait_outlives_transaction_default")
 async def test_delete_batch_survives_witnessed_lock_past_transaction_default(caplog: pytest.LogCaptureFixture) -> None:
     caplog.set_level(logging.ERROR)
     schema: Final = f"integration_{uuid.uuid4().hex}"
