@@ -720,6 +720,9 @@ async def test_async_upload_access_denied_403_is_retried_and_then_requeued(rotat
 
 
 def test_sync_upload_retries_403_with_fresh_signature(rotating_profile: str, monkeypatch: pytest.MonkeyPatch):
+    monkeypatch.delenv("AWS_ACCESS_KEY_ID", raising=False)
+    monkeypatch.delenv("AWS_SECRET_ACCESS_KEY", raising=False)
+    monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
     monkeypatch.setenv("AWS_PROFILE", rotating_profile)
     logger = S3Logger(s3_bucket_name="test-bucket", s3_region_name="us-east-1", s3_flush_interval=3600)
     test_element = s3BatchLoggingElement(
