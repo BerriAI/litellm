@@ -81,6 +81,7 @@ SLOTS: Final = MappingProxyType(
     {
         MARKER: Slot(MARKER, "Sensitivity marker in message content; must appear where prompts are stored"),
         "B1": Slot("B1", "Deployment api_key declared in the proxy config.yaml model_list"),
+        "G1": Slot("G1", "Logging sink credential read from the proxy environment (DD_API_KEY)"),
     }
 )
 
