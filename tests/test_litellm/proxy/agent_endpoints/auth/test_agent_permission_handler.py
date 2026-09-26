@@ -67,7 +67,7 @@ class TestAgentRequestHandler:
 
         # Case 1: Both key and team have agents - intersection
         with patch.object(
-            AgentRequestHandler, "_get_allowed_agents_for_key"
+            AgentRequestHandler, "get_allowed_agents_for_key"
         ) as mock_key:
             with patch.object(
                 AgentRequestHandler, "_get_allowed_agents_for_team"
@@ -86,7 +86,7 @@ class TestAgentRequestHandler:
 
         # Case 2: Team has agents, key has none - inherit from team
         with patch.object(
-            AgentRequestHandler, "_get_allowed_agents_for_key"
+            AgentRequestHandler, "get_allowed_agents_for_key"
         ) as mock_key:
             with patch.object(
                 AgentRequestHandler, "_get_allowed_agents_for_team"
@@ -105,7 +105,7 @@ class TestAgentRequestHandler:
 
         # Case 3: Key has agents, team has none - key restrictions stand
         with patch.object(
-            AgentRequestHandler, "_get_allowed_agents_for_key"
+            AgentRequestHandler, "get_allowed_agents_for_key"
         ) as mock_key:
             with patch.object(
                 AgentRequestHandler, "_get_allowed_agents_for_team"
@@ -120,7 +120,7 @@ class TestAgentRequestHandler:
 
         # Case 4: No grant anywhere - unrestricted (documented open-by-default)
         with patch.object(
-            AgentRequestHandler, "_get_allowed_agents_for_key"
+            AgentRequestHandler, "get_allowed_agents_for_key"
         ) as mock_key:
             with patch.object(
                 AgentRequestHandler, "_get_allowed_agents_for_team"
@@ -141,7 +141,7 @@ class TestAgentRequestHandler:
             api_key="test-key", user_id="test-user", team_id="test-team"
         )
 
-        with patch.object(AgentRequestHandler, "_get_allowed_agents_for_key") as mock_key:
+        with patch.object(AgentRequestHandler, "get_allowed_agents_for_key") as mock_key:
             with patch.object(AgentRequestHandler, "_get_allowed_agents_for_team") as mock_team:
                 mock_key.return_value = RestrictedAgentAccess(frozenset({"agent-alpha"}))
                 mock_team.return_value = RestrictedAgentAccess(frozenset({"agent-beta"}))
@@ -298,7 +298,7 @@ class TestAgentRequestHandler:
         ) as mock_groups:
             mock_groups.return_value = []
 
-            assert await AgentRequestHandler._get_allowed_agents_for_key(
+            assert await AgentRequestHandler.get_allowed_agents_for_key(
                 user_api_key_auth=mock_user_auth
             ) == RestrictedAgentAccess(frozenset())
 
@@ -314,7 +314,7 @@ class TestAgentRequestHandler:
         ) as mock_groups:
             mock_groups.side_effect = Exception("DB Error")
 
-            assert await AgentRequestHandler._get_allowed_agents_for_key(
+            assert await AgentRequestHandler.get_allowed_agents_for_key(
                 user_api_key_auth=mock_user_auth
             ) == UnrestrictedAgentAccess()
 
@@ -403,7 +403,7 @@ class TestAgentRequestHandler:
         )
 
         with patch.object(
-            AgentRequestHandler, "_get_allowed_agents_for_key"
+            AgentRequestHandler, "get_allowed_agents_for_key"
         ) as mock_key:
             with patch.object(
                 AgentRequestHandler, "_get_allowed_agents_for_team"
@@ -488,9 +488,9 @@ class TestAgentRequestHandler:
         listed: Final = await accessible_agents(session, registry.get_agent_list(), resolve_access, effective_contexts)
         assert {agent.agent_name for agent in listed} == {"alpha", "beta"}
 
-    async def test_get_allowed_agents_for_key_via_access_group_ids(self):
+    async def testget_allowed_agents_for_key_via_access_group_ids(self):
         """
-        Test that _get_allowed_agents_for_key includes agents from key's access_group_ids
+        Test that get_allowed_agents_for_key includes agents from key's access_group_ids
         (unified access groups) when key has no native object_permission.
         """
         mock_user_auth = UserAPIKeyAuth(
@@ -507,16 +507,16 @@ class TestAgentRequestHandler:
                 new_callable=AsyncMock,
                 return_value=["agent-from-ag-1", "agent-from-ag-2"],
             ):
-                result = await AgentRequestHandler._get_allowed_agents_for_key(
+                result = await AgentRequestHandler.get_allowed_agents_for_key(
                     user_api_key_auth=mock_user_auth
                 )
                 assert result == RestrictedAgentAccess(
                     frozenset({"agent-from-ag-1", "agent-from-ag-2"})
                 )
 
-    async def test_get_allowed_agents_for_key_combines_native_and_access_groups(self):
+    async def testget_allowed_agents_for_key_combines_native_and_access_groups(self):
         """
-        Test that _get_allowed_agents_for_key combines agents from native object_permission
+        Test that get_allowed_agents_for_key combines agents from native object_permission
         and key's access_group_ids (unified access groups).
         """
         from litellm.proxy._types import LiteLLM_ObjectPermissionTable
@@ -539,7 +539,7 @@ class TestAgentRequestHandler:
             new_callable=AsyncMock,
             return_value=["agent-from-ag"],
         ):
-            result = await AgentRequestHandler._get_allowed_agents_for_key(
+            result = await AgentRequestHandler.get_allowed_agents_for_key(
                 user_api_key_auth=mock_user_auth
             )
             assert result == RestrictedAgentAccess(
@@ -610,7 +610,7 @@ class TestAgentRequestHandler:
             "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry",
             registry,
         ):
-            with patch.object(AgentRequestHandler, "_get_allowed_agents_for_key") as mock_key:
+            with patch.object(AgentRequestHandler, "get_allowed_agents_for_key") as mock_key:
                 with patch.object(AgentRequestHandler, "_get_allowed_agents_for_team") as mock_team:
                     for key_grant, team_grant in (
                         (
@@ -787,11 +787,11 @@ async def test_strict_legacy_group_grants_ignore_stale_replica(monkeypatch: pyte
             object_permission_id="permission", agent_access_groups=["group"]
         )
     )
-    assert await AgentRequestHandler._get_allowed_agents_for_key(auth, strict=True) == RestrictedAgentAccess(
+    assert await AgentRequestHandler.get_allowed_agents_for_key(auth, strict=True) == RestrictedAgentAccess(
         frozenset({"revoked"})
     )
     database.writer_db.litellm_agentstable.find_many.return_value = []
-    assert await AgentRequestHandler._get_allowed_agents_for_key(auth, strict=True) == RestrictedAgentAccess(
+    assert await AgentRequestHandler.get_allowed_agents_for_key(auth, strict=True) == RestrictedAgentAccess(
         frozenset()
     )
     database.db.litellm_agentstable.find_many.assert_not_awaited()
@@ -823,7 +823,7 @@ async def test_strict_invocation_policy_outage_denies_instead_of_allowing_all(
         ),
     )
     with pytest.raises(HTTPException, match="policy is unavailable") as denied:
-        await AgentRequestHandler._resolve_key_team_agent_access(auth, strict=True)
+        await AgentRequestHandler.resolve_key_team_agent_access(auth, strict=True)
     assert denied.value.status_code == 503
 
 

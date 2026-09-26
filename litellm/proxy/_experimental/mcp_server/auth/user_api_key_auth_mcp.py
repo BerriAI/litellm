@@ -1841,7 +1841,7 @@ class MCPRequestHandler:
         return scoped
 
     @staticmethod
-    async def _admitted_subject_sources(auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
+    async def admitted_subject_sources(auth: UserAPIKeyAuth) -> list[UserAPIKeyAuth]:
         """The independent sources a keyless admitted subject reaches MCP servers through: their own
         direct grants, plus every team they are a live roster member of.
 
@@ -1951,7 +1951,7 @@ class MCPRequestHandler:
         roster instead of by grant charged unrelated teams' buckets)."""
         return [
             (source, set(await MCPRequestHandler.get_allowed_mcp_servers(source, keyless_source=True)))
-            for source in await MCPRequestHandler._admitted_subject_sources(auth)
+            for source in await MCPRequestHandler.admitted_subject_sources(auth)
         ]
 
     @staticmethod
