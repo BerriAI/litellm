@@ -5,7 +5,7 @@ Tests the litellm.interactions.create() and related methods against the Google A
 
 Per OpenAPI spec: https://ai.google.dev/static/api/interactions.openapi.json
 
-Run with: pytest tests/test_litellm/interactions/test_google_interactions_integration.py -v
+Run with: pytest tests/llm_translation/interactions/test_google_interactions_integration.py -v
 """
 
 import asyncio
