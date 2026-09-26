@@ -523,7 +523,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
             )
 
         litellm_params: Final = (deployment or {}).get("litellm_params", {})
-        counted_tools: Final = tools if tools is not None else litellm_params.get("tools")
+        counted_tools: Final = (*(litellm_params.get("tools") or ()), *(tools or ())) or None
         try:
             payload: Final = (
                 build_count_tokens_payload(
@@ -539,8 +539,8 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         if isinstance(payload, InvalidCountTokensRequest):
             return failed(payload.message, 400)
         count_tokens_params_request: Final = {
-            key: value
-            for key, value in copy.deepcopy(litellm_params).items()
+            key: copy.deepcopy(value)
+            for key, value in litellm_params.items()
             if key not in ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS
         } | {"model": model_to_use, "contents": payload.contents}
         try:

@@ -411,7 +411,7 @@ class TestGoogleAIStudioTokenCounter:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "request_tool_names, counted_tool_names",
-        [(None, ["deployment_default_tool"]), (["request_tool"], ["request_tool"])],
+        [(None, ["deployment_default_tool"]), (["request_tool"], ["deployment_default_tool", "request_tool"])],
     )
     async def test_count_tokens_counts_deployment_tools_the_router_would_send(
         self, request_tool_names: list[str] | None, counted_tool_names: list[str]

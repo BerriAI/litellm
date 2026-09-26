@@ -5,9 +5,10 @@ from typing import Final
 import httpx
 import pytest
 
-from litellm import acompletion
+from litellm import Router, acompletion
 from litellm.llms.anthropic.experimental_pass_through.messages import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.llms.gemini.common_utils import GoogleAIStudioTokenCounter
 from litellm.llms.gemini.count_tokens.transformation import (
     GeminiCountTokensPayload,
     InvalidCountTokensRequest,
@@ -409,6 +410,77 @@ async def test_count_payload_is_what_chat_completions_sends_to_gemini(local_mode
 
     assert isinstance(payload, GeminiCountTokensPayload), payload
     assert _as_wire(payload) == _counted_part_of(sent[-1])
+
+
+_DEPLOYMENT_TOOL: Final = {
+    "type": "function",
+    "function": {
+        "name": "lookup_ticket",
+        "description": "Ticket lookup configured on the deployment",
+        "parameters": {"type": "object", "properties": {"ticket_id": {"type": "string"}}},
+    },
+}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_tools", "request_body"),
+    (
+        pytest.param([_DEPLOYMENT_TOOL], {"messages": [_ASK]}, id="deployment-tools-only"),
+        pytest.param(
+            [_DEPLOYMENT_TOOL],
+            {"system": "be terse", "messages": [_ASK], "tools": [_WEATHER]},
+            id="deployment-and-request-tools",
+        ),
+        pytest.param(
+            [{**_WEATHER, "name": "lookup_ticket"}],
+            {"messages": [_ASK], "tools": [_WEATHER, {"type": "web_search_20250305", "name": "web_search"}]},
+            id="anthropic-deployment-tool-with-request-web-search",
+        ),
+    ),
+)
+async def test_count_includes_the_deployment_tools_the_router_sends(
+    local_model_cost_map, deployment_tools, request_body
+):
+    deployment = {
+        "model_name": "gemini-count",
+        "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "fake-gemini-key", "tools": deployment_tools},
+    }
+    routed_request = copy.deepcopy(request_body)
+    Router._merge_tools_from_deployment(deployment=deployment, kwargs=routed_request)
+    sent: list[dict[str, object]] = []  # mutable-ok: the fake upstream appends each captured body
+    await anthropic_messages_handler.anthropic_messages(
+        max_tokens=16,
+        model="gemini/gemini-2.5-flash",
+        custom_llm_provider="gemini",
+        api_key="fake-gemini-key",
+        client=_capturing_client(sent),
+        **routed_request,
+    )
+
+    counted: list[dict[str, object]] = []  # mutable-ok: the fake countTokens endpoint appends each body
+
+    def count_tokens_endpoint(request: httpx.Request) -> httpx.Response:
+        counted.append(json.loads(request.content)["generateContentRequest"])
+        return httpx.Response(200, json={"totalTokens": 7})
+
+    result = await GoogleAIStudioTokenCounter().count_tokens(
+        model_to_use="gemini-2.5-flash",
+        messages=copy.deepcopy(request_body["messages"]),
+        contents=None,
+        deployment=deployment,
+        tools=copy.deepcopy(request_body.get("tools")),
+        system=request_body.get("system"),
+        client=httpx.AsyncClient(transport=httpx.MockTransport(count_tokens_endpoint)),
+    )
+
+    assert result is not None and result.error is not True, result
+    count_body = counted[-1]
+    assert {
+        "contents": count_body["contents"],
+        **({"system_instruction": count_body["systemInstruction"]} if "systemInstruction" in count_body else {}),
+        **({"tools": count_body["tools"]} if "tools" in count_body else {}),
+    } == _counted_part_of(sent[-1])
 
 
 def test_build_count_tokens_payload_maps_openai_web_search_tool():
