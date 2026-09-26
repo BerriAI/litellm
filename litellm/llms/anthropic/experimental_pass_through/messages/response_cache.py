@@ -1,7 +1,7 @@
 import re
 from collections.abc import AsyncIterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, cast
 
 import litellm
 from litellm._logging import verbose_logger
@@ -16,6 +16,8 @@ from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterato
 if TYPE_CHECKING:
     from litellm.caching.caching_handler import LLMCachingHandler
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.types.llms.openai import AllMessageValues
+    from litellm.types.utils import ModelResponseStream
 
 CACHED_STREAM_EVENTS_KEY: Final = "litellm_cached_anthropic_sse_events"
 
@@ -49,6 +51,24 @@ class AnthropicMessagesStreamCacheWriter:
     @property
     def has_buffered_provider_output(self) -> bool:
         return getattr(self.stream, "has_buffered_provider_output", False) is True
+
+    @property
+    def chunks(self) -> "list[ModelResponseStream] | None":
+        return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
+            "list[ModelResponseStream] | None", getattr(self.stream, "chunks", None)
+        )
+
+    @property
+    def messages(self) -> "list[AllMessageValues] | None":
+        return cast(  # cast-ok: messages is a list of AllMessageValues on the inner stream
+            "list[AllMessageValues] | None", getattr(self.stream, "messages", None)
+        )
+
+    @property
+    def model(self) -> str | None:
+        return cast(  # cast-ok: model is a str on the inner stream
+            "str | None", getattr(self.stream, "model", None)
+        )
 
     def __aiter__(self) -> "AnthropicMessagesStreamCacheWriter":
         return self

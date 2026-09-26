@@ -647,6 +647,24 @@ class FallbackAwareAnthropicMessagesStream:
     def has_buffered_provider_output(self) -> bool:
         return getattr(self._source_iterator, "has_buffered_provider_output", False) is True
 
+    @property
+    def chunks(self) -> list[ModelResponseStream] | None:
+        return cast(  # cast-ok: chunks is a list of ModelResponseStream on the inner stream
+            "list[ModelResponseStream] | None", getattr(self._source_iterator, "chunks", None)
+        )
+
+    @property
+    def messages(self) -> list[AllMessageValues] | None:
+        return cast(  # cast-ok: messages is a list of AllMessageValues on the inner stream
+            "list[AllMessageValues] | None", getattr(self._source_iterator, "messages", None)
+        )
+
+    @property
+    def model(self) -> str | None:
+        return cast(  # cast-ok: model is a str on the inner stream
+            "str | None", getattr(self._source_iterator, "model", None)
+        )
+
     def adopt_fallback_source(self, fallback_response: object) -> None:
         self._source_iterator = fallback_response
         self.fallback_headers_adopted = True

@@ -9203,9 +9203,10 @@ def _fast_serialize_simple_model_response_stream(
         "object": getattr(chunk, "object", None),
         "created": getattr(chunk, "created", None),
         "model": model,
+        "service_tier": getattr(chunk, "service_tier", None),
         "choices": [choice_dict],
     }
-    for top_level_key in ("id", "object", "created"):
+    for top_level_key in ("id", "object", "created", "service_tier"):
         if payload[top_level_key] is None:
             payload.pop(top_level_key)
     return orjson.dumps(payload)

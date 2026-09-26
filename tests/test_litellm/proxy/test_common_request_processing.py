@@ -64,6 +64,7 @@ from litellm.proxy._types import ProxyErrorTypes, ProxyException
 from litellm.proxy._types import UserAPIKeyAuth as ProxyUserAPIKeyAuth
 from litellm.proxy.utils import ProxyLogging
 from litellm.router import Router
+from litellm.router_utils.add_retry_fallback_headers import prepare_response_for_header_attachment
 
 
 def test_attach_guardrail_information_copies_recorded_entries_onto_model_response():
@@ -7336,6 +7337,61 @@ class TestStreamingClientDisconnectBilling:
         standard_logging_object = recorder.success_events[0]["kwargs"]["standard_logging_object"]
         assert standard_logging_object["total_tokens"] > 0
         assert standard_logging_object["response_cost"] >= 0.002
+
+    @pytest.mark.asyncio
+    async def test_disconnect_bills_partial_spend_for_anthropic_adapter_stream(self):
+        """
+        The proxy's cleanup gets the FallbackAwareAnthropicMessagesStream the
+        router returns for /v1/messages; its chunks/messages must delegate
+        through the translate_completion_output_params_streaming result to the
+        inner chat stream's collected chunks or a disconnect bills nothing.
+        """
+        from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+            AnthropicSSEStream,
+        )
+        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+            AnthropicAdapter,
+        )
+        from litellm.router import FallbackAwareAnthropicMessagesStream
+
+        async def _sse_frames() -> AsyncGenerator[bytes, None]:
+            yield b"event: message_start\n\n"
+
+        recorder = _RecordingSuccessLogger()
+        original_callbacks = litellm.callbacks
+        litellm.callbacks = [recorder]
+        try:
+            response = await self._start_partial_stream()
+            setattr(response.chunks[-1], "service_tier", "priority")  # noqa: B010  # pydantic extra, not a declared field
+            source_iterator: Final = AnthropicAdapter().translate_completion_output_params_streaming(
+                response,
+                model=response.model or "gpt-4o-mini",
+                is_async=True,
+                litellm_logging_obj=response.logging_obj,
+            )
+            assert isinstance(source_iterator, AnthropicSSEStream)
+            streamed: Final = prepare_response_for_header_attachment(
+                FallbackAwareAnthropicMessagesStream(_sse_frames(), source_iterator)
+            )
+
+            billed: Final = await _bill_partial_streamed_spend_on_disconnect(
+                {"litellm_logging_obj": response.logging_obj},
+                streamed,
+            )
+
+            for _ in range(50):
+                if recorder.success_events:
+                    break
+                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.5)
+        finally:
+            litellm.callbacks = original_callbacks
+
+        assert billed is True
+        assert len(recorder.success_events) == 1
+        partial_response: Final = recorder.success_events[0]["response_obj"]
+        assert getattr(partial_response, "service_tier") == "priority"
+        assert partial_response.usage.total_tokens > 0
 
     @pytest.mark.asyncio
     async def test_completed_stream_does_not_double_bill_on_late_disconnect(self):

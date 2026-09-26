@@ -109,6 +109,7 @@ class _BaseChunk(TypedDict, total=False):
     created: ReadOnly[int]
     model: ReadOnly[str]
     system_fingerprint: ReadOnly[str | None]
+    service_tier: ReadOnly[str | None]
     choices: ReadOnly[Required[Sequence[StreamingChoices]]]
     _hidden_params: ReadOnly[_ChunkHiddenParams]
 
@@ -369,6 +370,13 @@ class ChunkProcessor:
         # Fall back to first chunk's model if no different model found
         return first_chunk_model
 
+    @staticmethod
+    def _get_service_tier_from_chunks(chunks: Sequence["_BaseChunk"]) -> str | None:
+        return next(
+            (tier for chunk in reversed(chunks) if isinstance(tier := chunk.get("service_tier"), str) and tier),
+            None,
+        )
+
     def build_base_response(self, chunks: Sequence["_BaseChunk"]) -> ModelResponse:
         chunk = self.first_chunk
         id: Final = ChunkProcessor._get_chunk_id(chunks)
@@ -378,6 +386,7 @@ class ChunkProcessor:
         # Get the actual model - for Azure Model Router, this finds the real model from later chunks
         model: Final = ChunkProcessor._get_model_from_chunks(chunks, first_chunk_model)
         system_fingerprint: Final = chunk.get("system_fingerprint", None)
+        service_tier: Final = ChunkProcessor._get_service_tier_from_chunks(chunks)
 
         role: Final = ChunkProcessor._get_role_from_chunks(chunks)
         finish_reason = "stop"
@@ -399,6 +408,11 @@ class ChunkProcessor:
                 "created": created,
                 "model": model,
                 "system_fingerprint": system_fingerprint,
+                **(
+                    MappingProxyType({"service_tier": service_tier})
+                    if service_tier is not None
+                    else MappingProxyType({})
+                ),
                 "choices": [
                     {
                         "index": 0,

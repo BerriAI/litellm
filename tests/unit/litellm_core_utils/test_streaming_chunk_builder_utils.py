@@ -1795,3 +1795,34 @@ def test_calculate_usage_keeps_a_reported_count_over_a_later_chunks_zero() -> No
     )
 
     assert (usage.prompt_tokens, usage.completion_tokens, usage.total_tokens) == (5, 17, 22)
+
+
+def _tier_chunk(content: str, service_tier: str | None, finish_reason: str | None = None) -> ModelResponseStream:
+    return ModelResponseStream(
+        id="chatcmpl-tier",
+        created=1,
+        model="gpt-4.1-mini",
+        object="chat.completion.chunk",
+        choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=Delta(content=content, role=None))],
+        **({"service_tier": service_tier} if service_tier is not None else {}),
+    )
+
+
+def test_stream_chunk_builder_records_the_last_service_tier_the_provider_stamped():
+    chunks = [
+        _tier_chunk("Hel", "auto"),
+        _tier_chunk("lo", None),
+        _tier_chunk("", "default", finish_reason="stop"),
+    ]
+
+    response = stream_chunk_builder(chunks=chunks)
+
+    assert response is not None
+    assert response.model_dump()["service_tier"] == "default"
+
+
+def test_stream_chunk_builder_omits_service_tier_when_no_chunk_carried_one():
+    response = stream_chunk_builder(chunks=[_tier_chunk("Hi", None, finish_reason="stop")])
+
+    assert response is not None
+    assert "service_tier" not in response.model_dump()

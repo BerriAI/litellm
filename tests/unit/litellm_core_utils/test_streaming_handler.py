@@ -4942,3 +4942,50 @@ async def test_async_stream_without_usage_counts_tokens_off_the_event_loop():
     assert chunks[-1].usage.prompt_tokens > 100_000
     assert chunks[-1].usage.completion_tokens > 100_000
     assert_loop_stayed_free(took, lags)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_openai_stream_relays_the_served_service_tier_on_every_chunk_including_usage(
+    logging_obj: Logging, sync_mode: bool
+):
+    from litellm.utils import ModelResponseListIterator
+
+    def _chunk(content: str, finish_reason: str | None, usage: Usage | None, choices: bool = True):
+        return ModelResponseStream(
+            id="chatcmpl-tier",
+            created=1742056047,
+            model="gpt-4.1-mini",
+            choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=Delta(content=content))]
+            if choices
+            else [],
+            usage=usage,
+            service_tier="default",
+        )
+
+    logging_obj.update_environment_variables(
+        model="gpt-4.1-mini",
+        optional_params={"stream_options": {"include_usage": True}},
+        litellm_params={},
+        custom_llm_provider="openai",
+    )
+    wrapper = CustomStreamWrapper(
+        completion_stream=ModelResponseListIterator(
+            model_responses=[
+                _chunk("Hi", None, None),
+                _chunk("", "stop", None),
+                _chunk("", None, Usage(prompt_tokens=10, completion_tokens=1, total_tokens=11), choices=False),
+            ]
+        ),
+        model="gpt-4.1-mini",
+        custom_llm_provider="openai",
+        logging_obj=logging_obj,
+        stream_options={"include_usage": True},
+    )
+
+    relayed = (
+        [chunk.model_dump() for chunk in wrapper] if sync_mode else [chunk.model_dump() async for chunk in wrapper]
+    )
+
+    assert [chunk.get("service_tier") for chunk in relayed] == ["default"] * len(relayed), relayed
+    assert relayed[-1]["usage"]["total_tokens"] == 11
