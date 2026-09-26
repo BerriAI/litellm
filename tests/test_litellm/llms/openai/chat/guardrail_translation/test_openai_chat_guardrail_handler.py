@@ -312,3 +312,128 @@ class TestOpenAIChatHandlerToolsAndModelForwarding:
         assert guardrail.calls == 1
         assert guardrail.inputs is not None
         assert guardrail.inputs["model"] == ["gpt-4o"]
+
+
+class _BaseSignatureExtractInputsHandler(OpenAIChatCompletionsHandler):
+    """A subclass written against the pre-attachment-scanning _extract_inputs signature."""
+
+    def _extract_inputs(
+        self,
+        message,
+        msg_idx,
+        texts_to_check,
+        images_to_check,
+        tool_calls_to_check,
+        text_task_mappings,
+        tool_call_task_mappings,
+        skip_system_message=False,
+        skip_tool_message=False,
+        scan_only_tool_results=False,
+    ) -> None:
+        return super()._extract_inputs(
+            message=message,
+            msg_idx=msg_idx,
+            texts_to_check=texts_to_check,
+            images_to_check=images_to_check,
+            tool_calls_to_check=tool_calls_to_check,
+            text_task_mappings=text_task_mappings,
+            tool_call_task_mappings=tool_call_task_mappings,
+            skip_system_message=skip_system_message,
+            skip_tool_message=skip_tool_message,
+            scan_only_tool_results=scan_only_tool_results,
+        )
+
+
+class _HeadSignatureRecordingExtractInputsHandler(OpenAIChatCompletionsHandler):
+    seen_scan_attachments: bool | None = None
+    seen_files_to_check_is_not_none: bool | None = None
+
+    def _extract_inputs(
+        self,
+        message,
+        msg_idx,
+        texts_to_check,
+        images_to_check,
+        tool_calls_to_check,
+        text_task_mappings,
+        tool_call_task_mappings,
+        skip_system_message=False,
+        skip_tool_message=False,
+        scan_only_tool_results=False,
+        scan_attachments=False,
+        files_to_check=None,
+    ) -> None:
+        _HeadSignatureRecordingExtractInputsHandler.seen_scan_attachments = scan_attachments
+        _HeadSignatureRecordingExtractInputsHandler.seen_files_to_check_is_not_none = files_to_check is not None
+        return super()._extract_inputs(
+            message=message,
+            msg_idx=msg_idx,
+            texts_to_check=texts_to_check,
+            images_to_check=images_to_check,
+            tool_calls_to_check=tool_calls_to_check,
+            text_task_mappings=text_task_mappings,
+            tool_call_task_mappings=tool_call_task_mappings,
+            skip_system_message=skip_system_message,
+            skip_tool_message=skip_tool_message,
+            scan_only_tool_results=scan_only_tool_results,
+            scan_attachments=scan_attachments,
+            files_to_check=files_to_check,
+        )
+
+
+class TestExtractInputsBaseSignatureCompatibility:
+    @pytest.mark.asyncio
+    async def test_legacy_signature_subclass_runs_for_plain_guardrail(self):
+        """A non-attachment guardrail must not force files_to_check onto old subclasses."""
+        guardrail = RecordingGuardrail()
+        data = {
+            "model": "gpt-4o",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "summarize this"},
+                        {
+                            "type": "image_url",
+                            "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUg=="},
+                        },
+                    ],
+                }
+            ],
+        }
+
+        await _BaseSignatureExtractInputsHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["texts"] == ["summarize this"]
+
+    @pytest.mark.asyncio
+    async def test_attachment_guardrail_still_passes_the_new_kwargs(self):
+        """With scans_attachments on, the head signature receives scan_attachments and files."""
+        _HeadSignatureRecordingExtractInputsHandler.seen_scan_attachments = None
+        _HeadSignatureRecordingExtractInputsHandler.seen_files_to_check_is_not_none = None
+        guardrail = ScanningGuardrail()
+        data = {
+            "model": "gpt-4o",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "summarize this"},
+                        {
+                            "type": "file",
+                            "file": {"filename": "a.pdf", "file_data": "data:application/pdf;base64,AAAA"},
+                        },
+                    ],
+                }
+            ],
+        }
+
+        await _HeadSignatureRecordingExtractInputsHandler().process_input_messages(
+            data=data, guardrail_to_apply=guardrail
+        )
+
+        assert _HeadSignatureRecordingExtractInputsHandler.seen_scan_attachments is True
+        assert _HeadSignatureRecordingExtractInputsHandler.seen_files_to_check_is_not_none is True
+        assert guardrail.inputs is not None
+        assert guardrail.inputs["files"]

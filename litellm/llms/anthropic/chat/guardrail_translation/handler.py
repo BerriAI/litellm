@@ -972,7 +972,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 content_idx=content_idx,
                 skip_tool_message=skip_tool_message,
                 scan_only_tool_results=scan_only_tool_results,
-                scan_attachments=scan_attachments,
+                **({"scan_attachments": True} if scan_attachments else {}),
             )
             for content_idx, content_item in enumerate(content)
             if isinstance(content_item, dict)
@@ -1016,7 +1016,7 @@ class AnthropicMessagesHandler(BaseTranslation):
                 content_item=content_item,
                 msg_idx=msg_idx,
                 content_idx=content_idx,
-                scan_attachments=scan_attachments,
+                **({"scan_attachments": True} if scan_attachments else {}),
             )
 
         if scan_only_tool_results:
@@ -1027,7 +1027,11 @@ class AnthropicMessagesHandler(BaseTranslation):
             scanned=(
                 () if text_str is None else (ScannedText(text_str, ContentBlockTextTarget(msg_idx, content_idx)),)
             ),
-            images=(cls._image_sources(content_item, scan_attachments) if content_item.get("type") == "image" else ()),
+            images=(
+                cls._image_sources(content_item, **({"scan_attachments": True} if scan_attachments else {}))
+                if content_item.get("type") == "image"
+                else ()
+            ),
             files=(
                 cls._document_sources(content_item)
                 if scan_attachments and content_item.get("type") == "document"
@@ -1064,7 +1068,9 @@ class AnthropicMessagesHandler(BaseTranslation):
             ),
             images=tuple(
                 chain.from_iterable(
-                    cls._image_sources(block, scan_attachments) for _, block in blocks if block.get("type") == "image"
+                    cls._image_sources(block, **({"scan_attachments": True} if scan_attachments else {}))
+                    for _, block in blocks
+                    if block.get("type") == "image"
                 )
             ),
             files=tuple(
@@ -1077,7 +1083,7 @@ class AnthropicMessagesHandler(BaseTranslation):
         )
 
     @staticmethod
-    def _image_sources(block: Mapping[str, object], scan_attachments: bool) -> tuple[str, ...]:
+    def _image_sources(block: Mapping[str, object], scan_attachments: bool = False) -> tuple[str, ...]:
         """Normalize an Anthropic image block into strings a guardrail can read.
 
         base64 becomes a data URI so the format travels with the payload, which is what

@@ -2904,7 +2904,7 @@ class _BaseSignatureExtractHandler(AnthropicMessagesHandler):
 
 
 class _HeadSignatureRecordingHandler(AnthropicMessagesHandler):
-    seen_scan_attachments: Optional[bool] = None
+    seen_scan_attachments: bool | None = None
 
     @classmethod
     def _extract_input_text_and_images(
@@ -2966,3 +2966,102 @@ class TestExtractHookBaseSignatureCompatibility:
         assert _HeadSignatureRecordingHandler.seen_scan_attachments is True
         assert guardrail.inputs is not None
         assert guardrail.inputs["files"]
+
+
+class _LegacyNestedHooksHandler(AnthropicMessagesHandler):
+    """Base-shape overrides of every nested extraction hook (merge-base signatures)."""
+
+    seen_tool_result: Optional[bool] = None
+    seen_image_sources: Optional[bool] = None
+
+    @classmethod
+    def _extract_content_block(
+        cls, content_item, msg_idx, content_idx, skip_tool_message, scan_only_tool_results=False
+    ):
+        return super()._extract_content_block(
+            content_item=content_item,
+            msg_idx=msg_idx,
+            content_idx=content_idx,
+            skip_tool_message=skip_tool_message,
+            scan_only_tool_results=scan_only_tool_results,
+        )
+
+    @classmethod
+    def _extract_tool_result(cls, content_item, msg_idx, content_idx):
+        cls.seen_tool_result = True
+        return super()._extract_tool_result(
+            content_item=content_item, msg_idx=msg_idx, content_idx=content_idx
+        )
+
+    @staticmethod
+    def _image_sources(block):
+        _LegacyNestedHooksHandler.seen_image_sources = True
+        return AnthropicMessagesHandler._image_sources(block, False)
+
+
+class _HeadNestedRecordingHandler(AnthropicMessagesHandler):
+    seen_scan_attachments: bool | None = None
+
+    @classmethod
+    def _extract_tool_result(cls, content_item, msg_idx, content_idx, scan_attachments=False):
+        cls.seen_scan_attachments = scan_attachments
+        return super()._extract_tool_result(
+            content_item=content_item,
+            msg_idx=msg_idx,
+            content_idx=content_idx,
+            scan_attachments=scan_attachments,
+        )
+
+
+class TestNestedHookBaseSignatureCompatibility:
+    @pytest.mark.asyncio
+    async def test_legacy_signature_subclasses_run_for_plain_guardrail(self):
+        """A plain guardrail must not force the attachment kwarg onto old nested hooks."""
+        _LegacyNestedHooksHandler.seen_tool_result = None
+        _LegacyNestedHooksHandler.seen_image_sources = None
+        guardrail = MockMaskingGuardrail()
+        data = {
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "hello"},
+                        {
+                            "type": "image",
+                            "source": {"type": "base64", "media_type": "image/png", "data": "iVBOR"},
+                        },
+                        {"type": "tool_result", "tool_use_id": "t1", "content": "from tool"},
+                    ],
+                }
+            ],
+        }
+
+        await _LegacyNestedHooksHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert _LegacyNestedHooksHandler.seen_tool_result is True
+        assert _LegacyNestedHooksHandler.seen_image_sources is True
+        assert guardrail.inputs is not None
+        assert "from tool" in guardrail.inputs["texts"]
+
+    @pytest.mark.asyncio
+    async def test_attachment_guardrail_still_passes_scan_attachments_to_nested_hooks(self):
+        """With scans_attachments on, the new kwarg reaches nested extraction hooks."""
+        _HeadNestedRecordingHandler.seen_scan_attachments = None
+        guardrail = MockMaskingGuardrail()
+        guardrail.scans_attachments = True
+        data = {
+            "model": "claude-3",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "tool_result", "tool_use_id": "t1", "content": "from tool"},
+                    ],
+                }
+            ],
+        }
+
+        await _HeadNestedRecordingHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert _HeadNestedRecordingHandler.seen_scan_attachments is True

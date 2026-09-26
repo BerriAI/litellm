@@ -184,14 +184,13 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 msg_idx=msg_idx,
                 texts_to_check=texts_to_check,
                 images_to_check=images_to_check,
-                files_to_check=files_to_check,
                 tool_calls_to_check=tool_calls_to_check,
                 text_task_mappings=text_task_mappings,
                 tool_call_task_mappings=tool_call_task_mappings,
                 skip_system_message=skip_system,
                 skip_tool_message=skip_tool,
                 scan_only_tool_results=scan_only_tool_results,
-                scan_attachments=scan_attachments,
+                **({"scan_attachments": True, "files_to_check": files_to_check} if scan_attachments else {}),
             )
 
         # Step 2: Apply guardrail to all texts and tool calls in batch
@@ -335,11 +334,10 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                 msg_idx=msg_idx,
                 texts_to_check=texts,
                 images_to_check=images,
-                files_to_check=files,
                 tool_calls_to_check=tool_calls,
                 text_task_mappings=[],  # mutable-ok: required by _extract_inputs, unused here
                 tool_call_task_mappings=[],  # mutable-ok: required by _extract_inputs, unused here
-                scan_attachments=scan_attachments,
+                **({"scan_attachments": True, "files_to_check": files} if scan_attachments else {}),
             )
         if texts or tool_calls:
             return "no scannable content after message scoping"
@@ -364,7 +362,6 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         msg_idx: int,
         texts_to_check: list[str],
         images_to_check: list[str],
-        files_to_check: list[str],
         tool_calls_to_check: list[ChatCompletionToolParam],
         text_task_mappings: list[tuple[int, int | None]],
         tool_call_task_mappings: list[tuple[int, int]],
@@ -372,6 +369,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         skip_tool_message: bool = False,
         scan_only_tool_results: bool = False,
         scan_attachments: bool = False,
+        files_to_check: list[str] | None = None,
     ) -> None:
         """
         Extract text content, images, and tool calls from a message.
@@ -406,7 +404,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
                     image_ref, file_ref = _attachment_part_refs(content_item, scan_attachments)
                     if image_ref is not None:
                         images_to_check.append(image_ref)
-                    if file_ref is not None:
+                    if file_ref is not None and files_to_check is not None:
                         files_to_check.append(file_ref)
 
         # Extract tool calls (typically in assistant messages)

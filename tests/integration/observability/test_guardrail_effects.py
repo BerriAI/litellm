@@ -1436,3 +1436,50 @@ def test_bedrock_during_call_responses_function_call_output_string_scans_as_text
             assert response.status_code == 200, response.text
             eventually(lambda: policy.drain(), lambda values: len(values) == 1, seconds=10)
             assert len(upstream.drain()) == 1
+
+
+def test_bedrock_during_call_skip_tool_message_flag_drops_tool_result_text(gateway: Gateway, tmp_path: Path) -> None:
+    tool_text: Final = "BLOCKME from tool"
+
+    def guardrail(request: Request) -> Reply:
+        body: Final = json.loads(request.body)
+        texts: Final = [item["text"]["text"] for item in body["content"] if "text" in item]
+        assert texts == ["hello"], body
+        return Reply(body=b'{"action":"NONE","outputs":[],"assessments":[]}')
+
+    with wire_server(guardrail) as policy, wire_server(_anthropic_reply) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        bedrock_params: Final = _bedrock_policy(policy.url)
+        bedrock_params["mode"] = "during_call"
+        bedrock_params["skip_tool_message_in_guardrail"] = True
+        config["guardrails"] = [
+            {"guardrail_name": "bedrock-skip-tool-" + uuid.uuid4().hex, "litellm_params": bedrock_params}
+        ]
+        path: Final = tmp_path / "bedrock-skip-tool.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(
+                model="anthropic/claude-sonnet-4-5-20250929", api_base=upstream.url, api_key="synthetic-anthropic-key"
+            )
+            response: Final = candidate.request(
+                "POST",
+                "/v1/messages",
+                {
+                    "model": model,
+                    "max_tokens": 16,
+                    "messages": [
+                        {"role": "user", "content": "hello"},
+                        {
+                            "role": "assistant",
+                            "content": [{"type": "tool_use", "id": "toolu_01A", "name": "lookup", "input": {}}],
+                        },
+                        {
+                            "role": "user",
+                            "content": [{"type": "tool_result", "tool_use_id": "toolu_01A", "content": tool_text}],
+                        },
+                    ],
+                },
+            )
+            assert response.status_code == 200, response.text
+            eventually(lambda: policy.drain(), lambda values: len(values) == 1, seconds=10)
+            assert len(upstream.drain()) == 1

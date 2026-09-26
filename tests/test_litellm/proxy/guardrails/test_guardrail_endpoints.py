@@ -1,7 +1,7 @@
 import json
 from datetime import datetime
 from typing import Dict, List, Optional
-from unittest.mock import AsyncMock
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
@@ -945,7 +945,7 @@ async def test_bedrock_guardrail_make_api_request_passes_api_key():
         ),
         patch.object(guardrail_hook, "_load_credentials") as mock_load_creds,
         patch.object(
-            guardrail_hook, "convert_to_bedrock_format", new_callable=AsyncMock
+            guardrail_hook, "convert_to_bedrock_format", new_callable=MagicMock
         ) as mock_convert,
         patch.object(
             guardrail_hook, "get_guardrail_dynamic_request_body_params"
