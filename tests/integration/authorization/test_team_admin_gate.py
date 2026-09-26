@@ -25,6 +25,7 @@ from tests.integration._support.client import (
     gateway_from_environment,
     object_value,
     string_value,
+    team_admin_permissions,
 )
 from tests.integration._support.database import read_rows
 
@@ -44,6 +45,10 @@ class Need(enum.Enum):
     MODEL = "model"
     CALLBACK = "callback"
     INVITATION = "invitation"
+    PERMISSIONS = "permissions"
+
+
+PERMITTED_FIELDS: Final = ("max_budget", "projects", "member_key_budgets")
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +176,8 @@ def _dispose_callback(world: World, target: Target, created: dict[str, JsonValue
 
 def prepare(world: World, scenario: Scenario, needs: frozenset[Need]) -> Target:
     gateway: Final = world.gateway
+    if Need.PERMISSIONS in needs:
+        scenario.cleanups.enter_context(team_admin_permissions(gateway, PERMITTED_FIELDS))
     wants_victim: Final = Need.VICTIM in needs or Need.INVITATION in needs
     victim: Final = scenario.user(user_role="internal_user") if wants_victim else ""
     if victim:
@@ -348,6 +355,12 @@ DOORS: Final[tuple[Door, ...]] = (
         needs=frozenset({Need.VICTIM}),
     ),
     Door(
+        "key_update_member_key_permitted",
+        lambda w, t: Call("POST", "/key/update", {"key": t.victim_key, "max_budget": 5}),
+        verdict(team_admin=200, member=403, other_team_admin=403, outsider=403),
+        needs=frozenset({Need.VICTIM, Need.PERMISSIONS}),
+    ),
+    Door(
         "team_key_bulk_update",
         lambda w, t: Call(
             "POST",
@@ -479,9 +492,22 @@ DOORS: Final[tuple[Door, ...]] = (
         verdict(team_admin=403, member=403, other_team_admin=403, outsider=403),
     ),
     Door(
+        "team_update_budget_permitted",
+        lambda w, t: Call("POST", "/team/update", {"team_id": w.team, "max_budget": 7}),
+        verdict(team_admin=200, member=403, other_team_admin=403, outsider=403),
+        needs=frozenset({Need.PERMISSIONS}),
+    ),
+    Door(
         "project_new",
         lambda w, t: Call("POST", "/project/new", {"team_id": w.team, "project_alias": f"matrix-{t.nonce}"}),
         verdict(team_admin=403, member=403, other_team_admin=403, outsider=403),
+        dispose=_dispose_project,
+    ),
+    Door(
+        "project_new_permitted",
+        lambda w, t: Call("POST", "/project/new", {"team_id": w.team, "project_alias": f"matrix-{t.nonce}"}),
+        verdict(team_admin=200, member=403, other_team_admin=403, outsider=403),
+        needs=frozenset({Need.PERMISSIONS}),
         dispose=_dispose_project,
     ),
     Door(

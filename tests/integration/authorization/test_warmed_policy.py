@@ -1,6 +1,5 @@
 import os
-from collections.abc import Iterator
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack
 from hashlib import sha256
 from typing import Final
 
@@ -10,7 +9,7 @@ from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
 from pydantic import JsonValue
 
-from tests.integration._support.client import Gateway, eventually, object_value
+from tests.integration._support.client import Gateway, eventually, object_value, team_admin_permissions
 from tests.integration._support.database import read_rows
 from tests.integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 
@@ -136,24 +135,9 @@ def test_scim_deactivation_blocks_null_and_false_keys_but_preserves_other_owners
                 assert_serving(gateway, model, token, 200)
 
 
-def _set_team_admin_editable_fields(gateway: Gateway, fields: list[JsonValue]) -> None:
-    response: Final = gateway.request("PATCH", "/update/ui_settings", {"team_admin_editable_team_fields": fields})
-    assert response.status_code == 200, response.text
-
-
-@contextmanager
-def _team_admins_may_edit(gateway: Gateway, fields: list[JsonValue]) -> Iterator[None]:
-    original: Final = object_value(gateway.get("/get/ui_settings")["values"]).get("team_admin_editable_team_fields")
-    _set_team_admin_editable_fields(gateway, fields)
-    try:
-        yield
-    finally:
-        _set_team_admin_editable_fields(gateway, original if isinstance(original, list) else [])
-
-
 @pytest.mark.covers("mgmt.team.member_update.demoted_role_cannot_write")
 def test_warmed_team_role_demotion_prevents_later_management_writes(gateway: Gateway) -> None:
-    with gateway.scenario() as scenario, _team_admins_may_edit(gateway, ["tpm_limit"]):
+    with gateway.scenario() as scenario, team_admin_permissions(gateway, ["tpm_limit"]):
         model: Final = scenario.model()
         user: Final = scenario.user(user_role="internal_user")
         team: Final = scenario.team(
@@ -227,11 +211,11 @@ def test_team_admin_changes_member_key_budget_only_when_opted_in(gateway: Gatewa
             user_id=member, team_id=team, models=[model], allowed_routes=["/key/update", "/v1/chat/completions"]
         )
         assert_serving(gateway, model, member_key, 200)
-        with _team_admins_may_edit(gateway, []):
+        with team_admin_permissions(gateway, []):
             denied: Final = gateway.request("POST", "/key/update", {"key": member_key, "max_budget": 0}, key=admin_key)
             assert denied.status_code == 403, denied.text
             assert _key_row(member_key) == {"max_budget": 10.0, "key_alias": "member"}
-        with _team_admins_may_edit(gateway, ["member_key_budgets"]):
+        with team_admin_permissions(gateway, ["member_key_budgets"]):
             for target in (personal_key, foreign_key):
                 out_of_scope: Final = gateway.request(
                     "POST", "/key/update", {"key": target, "max_budget": 0}, key=admin_key
