@@ -710,7 +710,7 @@ def test_s3_v2_two_workers_bound_and_deliver_every_id(gateway: Gateway, tmp_path
             ids: Final = _burst(candidate, model, key, marker)
             payloads: Final = collect_payloads(sink, REQUESTS)
     assert sum(1 for r in provider.drain() if r.method == "POST") == REQUESTS
-    assert sink.peak <= 400, f"peak concurrent PUTs {sink.peak} exceeded two workers at the default ceiling"
+    assert sink.peak <= 32, f"peak concurrent PUTs {sink.peak} exceeded two workers at the default bound"
     assert len(sink.objects()) == REQUESTS
     assert frozenset(payload["id"] for payload in payloads) == ids
 
@@ -876,7 +876,6 @@ def _push(candidate: Gateway, model: str, key: str, marker: str, count: int) -> 
     return returned
 
 
-@pytest.mark.covers("other.observability.s3_v2.adaptive_concurrency_ramps_on_healthy_slow_sink")
 def test_s3_v2_slow_sink_ramps_concurrency_and_drains_the_backlog(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3ramp" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink(delay_seconds=RAMP_PUT_DELAY_SECONDS)
@@ -909,7 +908,6 @@ def test_s3_v2_slow_sink_ramps_concurrency_and_drains_the_backlog(gateway: Gatew
     )
 
 
-@pytest.mark.covers("other.observability.s3_v2.adaptive_concurrency_backs_off_on_slowdown")
 def test_s3_v2_throttled_sink_halves_in_flight_puts(gateway: Gateway, tmp_path: Path) -> None:
     marker: Final = "s3throt" + uuid.uuid4().hex[:8]
     sink: Final = RecordingS3Sink(fail_status=503, fail_code="SlowDown", delay_seconds=0.3)
@@ -928,14 +926,20 @@ def test_s3_v2_throttled_sink_halves_in_flight_puts(gateway: Gateway, tmp_path: 
             healthy_ids: Final = _push(candidate, model, key, f"{marker}-healthy", REQUESTS)
             collect_payloads(sink, REQUESTS)
             healthy_peak: Final = sink.peak
-            throttled_ids: Final = _push(candidate, model, key, f"{marker}-throttled", REQUESTS)
             window_start: Final = time.time()
-            sink.fail_until = window_start + 8
+            sink.fail_until = window_start + 60
+            throttled_ids: Final = _push(candidate, model, key, f"{marker}-throttled", REQUESTS)
+            first_fail_at: Final = eventually(
+                lambda: next((when for when, _ in sink.attempt_log if when >= window_start), None),
+                lambda when: when is not None,
+                seconds=30,
+            )
+            window_end: Final = first_fail_at + 8.0
+            sink.fail_until = window_end
             payloads: Final = collect_payloads(sink, 2 * REQUESTS, seconds=120)
-            first_fail_at: Final = next(when for when, _ in sink.attempt_log if when >= window_start)
-            throttled_peak: Final = sink.peak_between(first_fail_at + 5.0, sink.fail_until)
+            throttled_peak: Final = sink.peak_between(first_fail_at + 5.0, window_end)
             throttled_attempts: Final = sum(
-                1 for when, _ in sink.attempt_log if first_fail_at + 5.0 <= when < sink.fail_until
+                1 for when, _ in sink.attempt_log if first_fail_at + 5.0 <= when < window_end
             )
     assert sum(1 for r in provider.drain() if r.method == "POST") == 2 * REQUESTS
     assert healthy_peak > 4, (
