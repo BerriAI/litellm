@@ -770,7 +770,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         aws_decoder: Final = AmazonAnthropicClaudeMessagesStreamDecoder(
             model=model,
         )
-        completion_stream: Final = aws_decoder.aiter_bytes(httpx_response.aiter_bytes())
+        completion_stream: Final = aws_decoder.aiter_bytes(
+            httpx_response.aiter_bytes(), response_headers=httpx_response.headers
+        )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
         return self.bedrock_sse_wrapper(
             completion_stream=completion_stream,

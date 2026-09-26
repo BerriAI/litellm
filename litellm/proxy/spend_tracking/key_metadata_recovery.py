@@ -215,17 +215,23 @@ def _meta_with_user_details(
     return updated
 
 
+def _user_id_needing_details(api_key: str, meta: KeyMetadataDict) -> str | None:
+    user_id: Final = meta.get("user_id")
+    if not isinstance(user_id, str) or not user_id:
+        return None
+    if meta.get("user_email") and not (_is_cli_session_key(api_key) and not meta.get("team_id")):
+        return None
+    return user_id
+
+
 async def attach_user_details(
     prisma_client: PrismaClient,
     recovered: Mapping[str, KeyMetadataDict],
 ) -> Mapping[str, KeyMetadataDict]:
     needing_details: Final = frozenset(
         user_id
-        for api_key, meta in recovered.items()
-        for user_id in (meta.get("user_id"),)
-        if isinstance(user_id, str)
-        and user_id
-        and (not meta.get("user_email") or (_is_cli_session_key(api_key) and not meta.get("team_id")))
+        for user_id in (_user_id_needing_details(api_key, meta) for api_key, meta in recovered.items())
+        if user_id is not None
     )
     details: Final = await _details_for_user_ids(prisma_client, needing_details)
     if not details:
