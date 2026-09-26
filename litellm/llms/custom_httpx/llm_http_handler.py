@@ -6356,7 +6356,7 @@ class BaseLLMHTTPHandler:
         custom_llm_provider: str | None = None,
         first_message: str | None = None,
         request_defaults: ResponsesWebSocketRequestDefaults | None = None,
-        **kwargs: Any,
+        **kwargs: object,
     ) -> Exception | None:
         """
         Handles Responses API WebSocket mode.
@@ -10359,13 +10359,14 @@ class BaseLLMHTTPHandler:
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url: Final = f"{api_base}/{encoded_vector_store_id}"
 
-        request_body: Final[dict[str, Any]] = dict(vector_store_update_optional_params)
+        request_body: Final[dict[str, object]] = dict(vector_store_update_optional_params)
+        metadata: Final = vector_store_update_optional_params.get("metadata")
 
         # Clean metadata to only include string values (OpenAI requirement)
-        if "metadata" in request_body and request_body["metadata"] is not None:
+        if metadata is not None:
             from litellm.utils import add_openai_metadata
 
-            request_body["metadata"] = add_openai_metadata(request_body["metadata"])
+            request_body["metadata"] = add_openai_metadata(metadata)
 
         if extra_body:
             request_body.update(extra_body)
@@ -10437,13 +10438,14 @@ class BaseLLMHTTPHandler:
         encoded_vector_store_id: Final = encode_url_path_segment(vector_store_id, field_name="vector_store_id")
         url: Final = f"{api_base}/{encoded_vector_store_id}"
 
-        request_body: Final[dict[str, Any]] = dict(vector_store_update_optional_params)
+        request_body: Final[dict[str, object]] = dict(vector_store_update_optional_params)
+        metadata: Final = vector_store_update_optional_params.get("metadata")
 
         # Clean metadata to only include string values (OpenAI requirement)
-        if "metadata" in request_body and request_body["metadata"] is not None:
+        if metadata is not None:
             from litellm.utils import add_openai_metadata
 
-            request_body["metadata"] = add_openai_metadata(request_body["metadata"])
+            request_body["metadata"] = add_openai_metadata(metadata)
 
         if extra_body:
             request_body.update(extra_body)
