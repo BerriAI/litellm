@@ -30,13 +30,14 @@ describe("auto-router tier model replacement", () => {
       models: ["gemma4-12b-it-optiq-4bit"],
     }).value;
     const saved = buildUpdatedComplexityRouterConfig(stored, changed);
-
-    expect(saved.tiers).toEqual({
+    const expectedTiers = {
       SIMPLE: ["gemma4-12b-it-optiq-4bit"],
       MEDIUM: [],
       COMPLEX: [],
       REASONING: [],
-    });
+    };
+
+    expect(saved.tiers).toEqual(expectedTiers);
     expect(saved).not.toHaveProperty("tier_model_configs");
   });
 });
