@@ -72,6 +72,81 @@ def test_human_ownership_email_uses_primary_and_normalizes_case(emails: object, 
     assert human_email(user) == expected
 
 
+def test_missing_human_ownership_identifier_is_rejected() -> None:
+    with pytest.raises(HTTPException) as failure:
+        human_email(SCIMUser(schemas=[]))
+    assert failure.value.status_code == 400
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("missing", ["externalId", "userName"])
+async def test_direct_reservation_requires_complete_directory_identity(missing: str) -> None:
+    service, tx, _, user = human_fixture()
+    with pytest.raises(HTTPException) as failure:
+        await service.reserve(user.model_copy(update={missing: None}))
+    assert failure.value.status_code == 400
+    tx.litellm_scimresource.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_human_create_does_not_hide_storage_failure() -> None:
+    service, tx, _, user = human_fixture()
+    tx.litellm_scimresource.find_unique.side_effect = ConnectionError("unavailable")
+    with pytest.raises(ConnectionError, match="unavailable"):
+        await service.create(user)
+    tx.litellm_usertable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_incomplete_human_record_cannot_be_updated() -> None:
+    service, tx, row, user = human_fixture()
+    with pytest.raises(HTTPException) as failure:
+        await service.update(row.model_copy(update={"local_id": None}), user)
+    assert failure.value.status_code == 409
+    tx.litellm_usertable.find_unique.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "path,value",
+    [
+        ("emails", [{"value": "NEW@example.com"}]),
+        ('emails[type eq "work"].value', "NEW@example.com"),
+        (None, {"emails": [{"value": "NEW@example.com"}]}),
+    ],
+)
+async def test_scoped_email_patch_requires_put_before_mutation(path: str | None, value: object) -> None:
+    service, tx, row, _ = human_fixture()
+    change: Final = SCIMPatchOp(Operations=[{"op": "replace", "path": path, "value": value}])
+    with pytest.raises(HTTPException, match="PUT") as failure:
+        await service.update(row, change)
+    assert failure.value.status_code == 400
+    tx.litellm_usertable.find_unique.assert_not_awaited()
+    tx.litellm_scimresource.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "emails", [None, [{"value": "FIRST@example.com"}, {"value": "PRIMARY@example.com", "primary": True}]]
+)
+async def test_human_put_claims_the_same_email_it_writes(emails: object, monkeypatch: pytest.MonkeyPatch) -> None:
+    service, tx, row, user = human_fixture()
+    tx.litellm_usertable.find_unique.return_value = SimpleNamespace(user_id=row.local_id)
+    change: Final = SCIMUser.model_validate({**user.model_dump(), "emails": emails})
+    expected: Final = human_email(change)
+
+    async def apply_update(*, user_id: str, user: SCIMUser) -> SCIMUser:
+        assert user_id == row.local_id
+        assert user.emails and user.emails[0].value == expected
+        tx.litellm_scimresource.update.assert_awaited_once_with(where={"id": row.id}, data={"human_email": expected})
+        return user
+
+    monkeypatch.setattr(scim_v2, "update_user", apply_update)
+    result: Final = await service.update(row, change)
+    assert result.id == row.id
+    assert result.emails and result.emails[0].value == expected
+
+
 @pytest.mark.asyncio
 async def test_reservation_replay_preserves_identity_before_creating_a_local_user() -> None:
     service, tx, row, user = human_fixture()
@@ -90,10 +165,14 @@ async def test_reservation_claims_email_subject_and_local_identity() -> None:
     assert data["human_email"] == user.userName
     assert data["human_subject_key"] == f"{TENANT}:{SUBJECT}"
     assert data["id"] == data["document"].data["id"]
-    tx.litellm_usertable.create.assert_awaited_once_with(data={
-        "user_id": user.userName, "user_email": user.userName,
-        "user_role": "internal_user_viewer", "teams": [],
-    })
+    tx.litellm_usertable.create.assert_awaited_once_with(
+        data={
+            "user_id": user.userName,
+            "user_email": user.userName,
+            "user_role": "internal_user_viewer",
+            "teams": [],
+        }
+    )
 
 
 @pytest.mark.asyncio
@@ -194,7 +273,7 @@ async def test_ownership_collision_is_a_conflict_before_legacy_user_mutation(
 
 
 @pytest.mark.asyncio
-async def test_human_patch_preserves_scim_id_and_claims_the_changed_email(monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_human_patch_preserves_scim_id_and_updates_activity(monkeypatch: pytest.MonkeyPatch) -> None:
     from litellm.proxy._types import LiteLLM_UserTable
 
     service, tx, row, user = human_fixture()
@@ -291,7 +370,9 @@ async def test_email_update_cannot_claim_an_unrelated_local_human(monkeypatch: p
     update: Final = AsyncMock()
     monkeypatch.setattr(scim_v2, "update_user", update)
     with pytest.raises(HTTPException) as failure:
-        await service.update(row, SCIMUser.model_validate({**user.model_dump(), "emails": [{"value": "ADMIN@example.com"}]}))
+        await service.update(
+            row, SCIMUser.model_validate({**user.model_dump(), "emails": [{"value": "ADMIN@example.com"}]})
+        )
     assert failure.value.status_code == 409
     update.assert_not_awaited()
     tx.litellm_scimresource.update.assert_not_awaited()
@@ -322,3 +403,24 @@ async def test_replayed_human_does_not_consume_another_license_seat(monkeypatch:
     assert await service.reserve(user) == row
     license_check.is_over_limit.assert_not_called()
     tx.litellm_usertable.create.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_existing_native_agent_cannot_be_reclassified_as_human() -> None:
+    from litellm.types.proxy.management_endpoints.scim_v2 import SCIM_AGENT_USER_SCHEMA
+
+    service, tx, row, user = human_fixture()
+    native: Final = SCIMUser.model_validate(
+        {
+            **user.model_dump(),
+            SCIM_AGENT_USER_SCHEMA: {"identityParentId": TENANT},
+        }
+    )
+    tx.litellm_scimresource.find_unique.return_value = row.model_copy(
+        update={"document": native.model_dump(by_alias=True, mode="json")}
+    )
+    with pytest.raises(HTTPException) as failure:
+        await service.create(user)
+    assert failure.value.status_code == 409
+    tx.litellm_usertable.find_unique.assert_not_awaited()
+    tx.litellm_scimresource.update.assert_not_awaited()
