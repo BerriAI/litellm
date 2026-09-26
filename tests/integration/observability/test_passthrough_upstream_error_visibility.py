@@ -1253,3 +1253,51 @@ async def test_passthrough_streamed_error_headers_do_not_carry_failure_hook_stat
             assert header_value == "none", header_value
             error_information: Final = _spend_error_information(call_id)
             assert error_information["error_code"] == "500", error_information
+
+
+def test_gemini_passthrough_streaming_error_with_keepalive_and_slow_headers_logs_failure_once(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    """The keepalive path replays a late response's body_iterator by hand and never
+    runs its background task: the failure report must come from the stream itself."""
+    marker: Final = uuid.uuid4().hex
+
+    def respond(request: Request) -> Reply:
+        return Reply(
+            status=500,
+            body=json.dumps({"error": {"message": f"upstream blew up {marker}"}}).encode(),
+            delay_before_headers_seconds=1,
+        )
+
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["litellm_settings"].update({"sse_keepalive_ping_interval_seconds": 0.2})
+    path: Final = tmp_path / "gemini-keepalive-slow-headers.yaml"
+    with wire_server(respond) as wire:
+        config["environment_variables"] = {"GEMINI_API_BASE": wire.url, "GEMINI_API_KEY": "scripted"}
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy_process(gateway, tmp_path, {}, config=path) as owned:
+            candidate: Final = owned.gateway
+            with candidate.client.stream(
+                "POST",
+                _GEMINI_STREAM_PATH,
+                params={"alt": "sse"},
+                json={**_GENERATE_CONTENT, "stream": True},
+                headers=_gemini_headers(candidate),
+                timeout=httpx.Timeout(15, connect=5),
+            ) as response:
+                body: Final = response.read()
+            assert marker.encode() in body, body
+            rows: Final = eventually(
+                lambda: read_rows(
+                    'SELECT metadata FROM "LiteLLM_SpendLogs" WHERE metadata::text LIKE %s', (f"%{marker}%",)
+                ),
+                lambda values: len(values) == 1,
+                seconds=70,
+            )
+            metadata: Final = rows[0]["metadata"]
+            parsed: Final = json.loads(metadata) if isinstance(metadata, str) else object_value(metadata)
+            error_information: Final = object_value(parsed["error_information"])
+            assert error_information["error_code"] == "500", error_information
+            assert error_information["normalized_error"] == "500_UPSTREAM_PASSTHROUGH", error_information
+            warnings: Final = _upstream_warnings(owned.log, "returned 500")
+            assert len(warnings) == 1, warnings

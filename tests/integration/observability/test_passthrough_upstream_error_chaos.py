@@ -335,3 +335,129 @@ async def _first_frame_then_close(base_url: str, key: str) -> str:
             first: Final = await response.aiter_bytes().__anext__()
             assert first.startswith(b'data: {"error":"rate limited"}'), first
             return response.headers["x-litellm-call-id"]
+
+
+_MARKER_SLEEP_FAILURE_HOOK: Final = """
+import asyncio
+from pathlib import Path
+
+from litellm.integrations.custom_logger import CustomLogger
+
+
+class MarkerSleepFailureHook(CustomLogger):
+    async def async_post_call_failure_hook(
+        self, request_data, original_exception, user_api_key_dict, traceback_str=None
+    ):
+        Path({marker!r}).touch()
+        await asyncio.sleep({sleep})
+        Path({done!r}).touch()
+
+
+instance = MarkerSleepFailureHook()
+"""
+
+
+async def test_passthrough_abort_after_budget_with_disconnect_during_hook_logs_once(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    """Post-budget abort: the report await must be shielded, or a client disconnect
+    cancels the failure hook mid-flight and no spend row lands."""
+    chunks: Final = tuple(b"x" * 512 for _ in range(10))
+
+    def respond(request: Request) -> Reply:
+        if "streamGenerateContent" in request.target:
+            return Reply(status=500, content_type="text/event-stream", chunks=chunks, abort_after=9)
+        return Reply(status=200, body=json.dumps({"ok": True}).encode())
+
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["litellm_settings"].update({"callbacks": ["marker_sleep_hook.instance"]})
+    (tmp_path / "marker_sleep_hook.py").write_text(
+        _MARKER_SLEEP_FAILURE_HOOK.format(
+            marker=str(tmp_path / "hook_started"), sleep=3, done=str(tmp_path / "hook_done")
+        )
+    )
+    path: Final = tmp_path / "chaos-abort-budget-disconnect.yaml"
+    with wire_server(respond) as wire:
+        config["environment_variables"] = {"GEMINI_API_BASE": wire.url, "GEMINI_API_KEY": "scripted"}
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=1) as owned:
+            candidate: Final = owned.gateway
+            received: Final = bytearray()
+            async with httpx.AsyncClient(
+                base_url=str(candidate.client.base_url), timeout=httpx.Timeout(10, connect=5), trust_env=False
+            ) as client:
+                try:
+                    async with client.stream(
+                        "POST",
+                        "/gemini/v1beta/models/nope-9:streamGenerateContent",
+                        params={"alt": "sse"},
+                        json=_GENERATE_CONTENT,
+                        headers={"Authorization": f"Bearer {candidate.key}", "x-goog-api-key": candidate.key},
+                    ) as response:
+                        call_id: Final = response.headers["x-litellm-call-id"]
+                        async for chunk in response.aiter_bytes():
+                            received.extend(chunk)
+                except httpx.TransportError:
+                    pass
+            assert bytes(received) == b"x" * 4608, len(received)
+            await asyncio.to_thread(eventually, lambda: (tmp_path / "hook_started").exists(), bool, 30)
+            await asyncio.to_thread(eventually, lambda: (tmp_path / "hook_done").exists(), bool, 30)
+            _single_spend_row(call_id)
+
+
+@pytest.mark.parametrize(
+    ("asgi_server", "graceful_seconds", "hook_sleep"),
+    [("hypercorn", 3, 4.5), ("uvicorn", 1, 2)],
+    ids=["hypercorn", "uvicorn"],
+)
+async def test_passthrough_error_report_survives_sigterm_after_full_response(
+    gateway: Gateway, tmp_path: Path, asgi_server: str, graceful_seconds: int, hook_sleep: float
+) -> None:
+    """The graceful window cancels the request task, but the report task is shielded
+    and the lifespan shutdown waits for it before the spend flushes."""
+    if asgi_server == "hypercorn":
+        pytest.skip("BUG: a litellm proxy under hypercorn does not exit within 60s of SIGTERM here, drain unreachable")
+
+    def respond(request: Request) -> Reply:
+        if "streamGenerateContent" in request.target:
+            return Reply(status=429, content_type="text/event-stream", chunks=_RATE_LIMITED_FRAMES)
+        return Reply(status=200, body=json.dumps({"ok": True}).encode())
+
+    config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+    config["litellm_settings"].update({"callbacks": ["marker_sleep_hook.instance"]})
+    (tmp_path / "marker_sleep_hook.py").write_text(
+        _MARKER_SLEEP_FAILURE_HOOK.format(
+            marker=str(tmp_path / "hook_started"), sleep=hook_sleep, done=str(tmp_path / "hook_done")
+        )
+    )
+    path: Final = tmp_path / f"chaos-sigterm-{asgi_server}.yaml"
+    with wire_server(respond) as wire:
+        config["environment_variables"] = {"GEMINI_API_BASE": wire.url, "GEMINI_API_KEY": "scripted"}
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy_process(
+            gateway,
+            tmp_path,
+            {},
+            config=path,
+            graceful_shutdown_seconds=graceful_seconds,
+            asgi_server=asgi_server,
+        ) as owned:
+            candidate: Final = owned.gateway
+            async with httpx.AsyncClient(
+                base_url=str(candidate.client.base_url), timeout=httpx.Timeout(15, connect=5), trust_env=False
+            ) as client:
+                async with client.stream(
+                    "POST",
+                    "/gemini/v1beta/models/nope-9:streamGenerateContent",
+                    params={"alt": "sse"},
+                    json=_GENERATE_CONTENT,
+                    headers={"Authorization": f"Bearer {candidate.key}", "x-goog-api-key": candidate.key},
+                ) as response:
+                    call_id: Final = response.headers["x-litellm-call-id"]
+                    body: Final = b"".join([chunk async for chunk in response.aiter_bytes()])
+            assert body == b"".join(_RATE_LIMITED_FRAMES), body
+            await asyncio.to_thread(eventually, lambda: (tmp_path / "hook_started").exists(), bool, 30)
+            owned.process.send_signal(signal.SIGTERM)
+            owned.process.wait(timeout=60)
+    await asyncio.to_thread(eventually, lambda: (tmp_path / "hook_done").exists(), bool, 30)
+    _single_spend_row(call_id)

@@ -1162,6 +1162,11 @@ async def _aclose_late_response(produced: Response) -> None:
             await aclose()
         except BaseException as exc:  # noqa: BLE001  # teardown must not mask why the stream ended
             verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
+    if produced.background is not None:
+        try:
+            await produced.background()
+        except BaseException as exc:  # noqa: BLE001  # teardown must not mask why the stream ended
+            verbose_proxy_logger.debug("error running relayed response background task: %s", exc)
 
 
 async def _relay_late_response(produced: Response) -> AsyncGenerator[bytes, None]:

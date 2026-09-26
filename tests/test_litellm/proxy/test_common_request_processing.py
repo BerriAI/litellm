@@ -10226,3 +10226,22 @@ class TestStreamingContainerOwnershipRecordedBeforeDone:
         assert tuple(chunk for chunk, _ in observed) == self.CHUNKS
         assert tuple(count for _, count in observed) == (0, 0, 0, 0)
         recorder.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_aclose_late_response_runs_background_task():
+    from starlette.background import BackgroundTask
+
+    from litellm.proxy.common_request_processing import _aclose_late_response
+
+    ran: list[bool] = []
+
+    async def body():
+        yield b"x"
+
+    async def mark() -> None:
+        ran.append(True)
+
+    produced: Final = StreamingResponse(body(), background=BackgroundTask(mark))
+    await _aclose_late_response(produced)
+    assert ran == [True]

@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import psutil
@@ -90,6 +90,7 @@ def owned_proxy_process(
     remove_environment: tuple[str, ...] = (),
     workers: int = 1,
     graceful_shutdown_seconds: int | None = None,
+    asgi_server: Literal["uvicorn", "hypercorn"] = "uvicorn",
 ) -> Iterator[OwnedProxy]:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
@@ -114,6 +115,17 @@ def owned_proxy_process(
         process: Final = subprocess.Popen(
             (
                 [
+                    sys.executable,
+                    "-m",
+                    "hypercorn",
+                    "litellm.proxy.proxy_server:app",
+                    "--bind",
+                    f"127.0.0.1:{port}",
+                    "--graceful-timeout",
+                    str(graceful_shutdown_seconds),
+                ]
+                if asgi_server == "hypercorn"
+                else [
                     sys.executable,
                     "-m",
                     "uvicorn",

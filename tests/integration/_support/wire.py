@@ -29,6 +29,7 @@ class Reply:
     abort_after: int | None = None
     gate_after_first: threading.Event | None = None
     gate_timeout_seconds: float = 5
+    delay_before_headers_seconds: float = 0
     pause_between_chunks: float = 0
     headers: Mapping[str, str] = MappingProxyType({})
 
@@ -69,6 +70,8 @@ def wire_server(
             except Exception as error:
                 errors.put(error)
                 reply = Reply(status=500)
+            if reply.delay_before_headers_seconds:
+                time.sleep(reply.delay_before_headers_seconds)
             self.send_response(reply.status)
             self.send_header("content-type", reply.content_type)
             for name, value in reply.headers.items():

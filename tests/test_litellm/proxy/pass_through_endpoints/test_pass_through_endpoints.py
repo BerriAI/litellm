@@ -5056,6 +5056,80 @@ async def test_preview_report_collected_runs_without_disconnect_warning_after_cl
 
 
 @pytest.mark.asyncio
+async def test_preview_stream_reports_once_when_body_iterator_is_replayed_without_background():
+    """A relay path that replays body_iterator and never runs the BackgroundTask
+    still reports: the stream dispatches the report itself when the body ends."""
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "text/event-stream"},
+        stream=_UpstreamErrorBodyStream(b"frame"),
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+    reported: list[bytes] = []
+
+    async def report(preview: bytes) -> None:
+        reported.append(preview)
+
+    relay: Final = _PreviewReportingStream(
+        upstream=upstream_response,
+        report=report,
+        log_warning=MagicMock(),
+    )
+    received: Final = b"".join([chunk async for chunk in relay.__aiter__()])
+    assert received == b"frame"
+
+    for _ in range(5):
+        await asyncio.sleep(0)
+    assert reported == [b"frame"], reported
+
+
+@pytest.mark.asyncio
+async def test_preview_stream_post_budget_abort_report_survives_cancel_of_the_awaiting_consumer():
+    """The post-budget abort path awaits the report through a shield: cancelling the
+    consumer task mid-hook must not cancel the report itself."""
+    chunks: Final = tuple(b"d" * 1000 for _ in range(5))
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "text/event-stream"},
+        stream=_UpstreamErrorBodyStreamAbortingAfter(chunks),
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+    report_started: Final = asyncio.Event()
+    release_report: Final = asyncio.Event()
+    outcomes: list[str] = []
+
+    async def report(preview: bytes) -> None:
+        report_started.set()
+        try:
+            await release_report.wait()
+            outcomes.append("completed")
+        except asyncio.CancelledError:
+            outcomes.append("cancelled")
+            raise
+
+    relay: Final = _PreviewReportingStream(
+        upstream=upstream_response,
+        report=report,
+        log_warning=MagicMock(),
+    )
+
+    async def consume() -> None:
+        with pytest.raises(httpx.RemoteProtocolError):
+            async for _ in relay.__aiter__():
+                pass
+
+    consumer: Final = asyncio.create_task(consume())
+    await asyncio.wait_for(report_started.wait(), timeout=5)
+    consumer.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await consumer
+    release_report.set()
+    for _ in range(10):
+        await asyncio.sleep(0)
+    assert outcomes == ["completed"], outcomes
+
+
+@pytest.mark.asyncio
 async def test_log_passthrough_upstream_failure_returns_background_task_for_unconsumed_error_stream():
     upstream_response: Final = httpx.Response(
         status_code=500,
@@ -5160,9 +5234,7 @@ async def test_streamed_error_runs_failure_hook_as_background_after_response_hea
 
     await response(scope, receive, send)
     assert calls == ["post_call_response_headers_hook", "post_call_failure_hook"], calls
-    body: Final = b"".join(
-        message.get("body", b"") for message in sent if message["type"] == "http.response.body"
-    )
+    body: Final = b"".join(message.get("body", b"") for message in sent if message["type"] == "http.response.body")
     assert body == b"data: one\n\ndata: two\n\n"
 
 

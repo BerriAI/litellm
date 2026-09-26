@@ -43,6 +43,7 @@ from litellm._uuid import uuid
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
+    PASSTHROUGH_UPSTREAM_ERROR_REPORT_TASK_NAME,
     REDACTED_BY_LITELLM,
     SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
@@ -889,18 +890,25 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
         self._budget_crossed = False
         self._completed = False
         self._aborted = False
-        self._reported = False
+        self._report_task: asyncio.Task[None] | None = None
 
-    async def report_collected(self) -> None:
-        if self._reported:
-            return
-        self._reported = True
+    def _dispatch(self) -> asyncio.Task[None]:
+        if self._report_task is None:
+            self._report_task = asyncio.get_running_loop().create_task(
+                self._run_report(), name=PASSTHROUGH_UPSTREAM_ERROR_REPORT_TASK_NAME
+            )
+        return self._report_task
+
+    async def _run_report(self) -> None:
         if not self._completed and not self._budget_crossed and not self._aborted:
             self._log_warning(
                 "pass_through_endpoint: client disconnected after %d preview bytes of the upstream error body",
                 sum(len(part) for part in self._collected),
             )
         await self._report(b"".join(self._collected))
+
+    async def report_collected(self) -> None:
+        await asyncio.shield(self._dispatch())
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
         total = 0  # rebind-ok: running byte count against the preview budget
@@ -923,8 +931,11 @@ class _PreviewReportingStream(httpx.AsyncByteStream):
             if self._budget_crossed:
                 await self.report_collected()
                 raise
+        finally:
+            self._dispatch()
 
     async def aclose(self) -> None:
+        self._dispatch()
         await self._upstream.aclose()
 
 
