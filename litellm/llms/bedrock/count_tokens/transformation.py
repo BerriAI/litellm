@@ -7,17 +7,24 @@ to AWS Bedrock's CountTokens API format and vice versa.
 
 import re
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final, Literal
 
 from pydantic import JsonValue
 
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import get_bedrock_base_model
+from litellm.llms.bedrock.messages.invoke_transformations.unsupported_extensions import (
+    OptIns,
+    Sanitized,
+    sanitize_for_bedrock_invoke,
+)
 
 # Placeholder satisfying the Anthropic InvokeModel schema's required
 # max_tokens field; CountTokens only counts input, so it has no effect
 # on any generation.
 DEFAULT_ANTHROPIC_INVOKE_MODEL_MAX_TOKENS: Final = 1024
+_STRIP_EVERY_EXTENSION: Final = OptIns(drop_params=True, modify_params=True)
 
 
 def _json_dict(value: JsonValue) -> dict[str, JsonValue]:
@@ -26,6 +33,13 @@ def _json_dict(value: JsonValue) -> dict[str, JsonValue]:
 
 def _json_list(value: JsonValue) -> list[JsonValue]:
     return value if isinstance(value, list) else []
+
+
+def _invoke_model_messages(messages: JsonValue) -> JsonValue:
+    outcome: Final = sanitize_for_bedrock_invoke(
+        MappingProxyType({"messages": messages}), _STRIP_EVERY_EXTENSION, supported=frozenset()
+    )
+    return outcome.replacements["messages"] if isinstance(outcome, Sanitized) else messages
 
 
 def _to_converse_content(content: JsonValue) -> list[JsonValue]:
@@ -190,7 +204,9 @@ class BedrockCountTokensConfig(BaseAWSLLM):
 
         # For InvokeModel, we need to provide the raw body that would be sent to the model
         # Remove the 'model' field from the body as it's not part of the model input
-        body_data: Final = {k: v for k, v in request_data.items() if k != "model"}
+        body_data: Final = {
+            k: _invoke_model_messages(v) if k == "messages" else v for k, v in request_data.items() if k != "model"
+        }
 
         if "messages" in body_data:
             # Bedrock validates the body against the model's InvokeModel schema;

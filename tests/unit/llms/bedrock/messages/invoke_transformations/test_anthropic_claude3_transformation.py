@@ -14,6 +14,8 @@ from unittest.mock import Mock
 import httpx
 import pytest
 
+import litellm
+
 # Ensure the project root is on the import path so `litellm` can be imported when
 # tests are executed from any working directory.
 
@@ -35,7 +37,10 @@ from litellm.llms.anthropic.experimental_pass_through.messages.mid_conversation_
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (
     AmazonAnthropicClaudeMessagesConfig,
     AmazonAnthropicClaudeMessagesStreamDecoder,
+    _bedrock_supported_extensions,
 )
+from litellm.llms.bedrock.messages.invoke_transformations.unsupported_extensions import Extension
+from litellm.types.router import GenericLiteLLMParams
 
 
 @pytest.mark.asyncio
@@ -3494,3 +3499,136 @@ async def test_get_async_streaming_response_iterator_yields_small_frame_before_u
     remaining: Final = tuple([chunk async for chunk in iterator])
     assert any(chunk.startswith(b"event: message_stop\n") for chunk in remaining), remaining
     await iterator.aclose()
+
+
+_TOOL_ADDITION = {"type": "tool_addition", "tool": {"type": "tool_reference", "name": "mcp__linear__list_issues"}}
+_HELLO = {"role": "user", "content": "hello"}
+_HI = {"role": "assistant", "content": "Hi!"}
+_GO = {"role": "user", "content": "go"}
+_EFFORT_ONLY = {"role": "system", "content": [], "output_config": {"effort": "low"}}
+_TERSE_WITH_TOOL = {"role": "system", "content": [{"type": "text", "text": "Answer tersely."}, _TOOL_ADDITION]}
+_UPDATES_THINKING = {"type": "adaptive", "display": "updates"}
+_EXTENSION_BETAS = frozenset(extension.beta for extension in Extension)
+_EVERYTHING_MODEL = "global.anthropic.claude-fable-5-1"
+_MIXED_MODEL = "us.anthropic.claude-opus-5"
+_DISPLAY_ONLY_MODEL = "us.anthropic.claude-sonnet-5"
+_NOTHING_MODEL = "us.anthropic.claude-sonnet-4-6"
+
+
+def _invoke_request(model, messages, *, thinking=None, litellm_params=None, headers=None):
+    return AmazonAnthropicClaudeMessagesConfig().transform_anthropic_messages_request(
+        model=model,
+        messages=copy.deepcopy(messages),
+        anthropic_messages_optional_request_params={"max_tokens": 300, **({"thinking": thinking} if thinking else {})},
+        litellm_params=litellm_params or GenericLiteLLMParams(),
+        headers=headers or {},
+    )
+
+
+def test_model_profiles_cover_every_support_combination_the_tests_rely_on():
+    assert _bedrock_supported_extensions(_EVERYTHING_MODEL) == frozenset(Extension)
+    assert _bedrock_supported_extensions(_MIXED_MODEL) == frozenset(
+        {Extension.TOOL_CHANGES, Extension.THINKING_DISPLAY_UPDATES}
+    )
+    assert _bedrock_supported_extensions(_DISPLAY_ONLY_MODEL) == frozenset({Extension.THINKING_DISPLAY_UPDATES})
+    assert _bedrock_supported_extensions(_NOTHING_MODEL) == frozenset()
+
+
+def test_bedrock_invoke_keeps_supported_extensions_and_sends_their_betas(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "modify_params", False)
+    messages = [_HELLO, _HI, _EFFORT_ONLY, _GO, _TERSE_WITH_TOOL]
+
+    result = _invoke_request(_EVERYTHING_MODEL, messages, thinking=_UPDATES_THINKING)
+
+    assert result["messages"] == messages
+    assert result["thinking"] == _UPDATES_THINKING
+    assert _EXTENSION_BETAS <= set(result["anthropic_beta"])
+
+
+def test_bedrock_invoke_sends_only_the_betas_of_extensions_left_in_the_body(monkeypatch):
+    monkeypatch.setattr(litellm, "modify_params", False)
+
+    result = _invoke_request(
+        _MIXED_MODEL,
+        [_HELLO, _HI, _EFFORT_ONLY, _GO, _TERSE_WITH_TOOL],
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={"anthropic-beta": ",".join(sorted(_EXTENSION_BETAS))},
+    )
+
+    assert result["messages"] == [_HELLO, _HI, _GO, _TERSE_WITH_TOOL]
+    assert _EXTENSION_BETAS & set(result["anthropic_beta"]) == {Extension.TOOL_CHANGES.beta}
+
+
+def test_bedrock_invoke_refuses_an_unsupported_param_naming_the_path_model_and_setting(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    with pytest.raises(litellm.UnsupportedParamsError) as exc_info:
+        _invoke_request(_MIXED_MODEL, [_HELLO, _HI, _EFFORT_ONLY, _GO, _TERSE_WITH_TOOL], thinking=_UPDATES_THINKING)
+
+    assert f"Bedrock Invoke does not accept messages[2].output_config on {_MIXED_MODEL}." in str(exc_info.value)
+    assert "`drop_params: true` in this deployment's `litellm_params`" in str(exc_info.value)
+    assert "thinking.display (value 'updates')" not in str(exc_info.value)
+    assert "tool_addition" not in str(exc_info.value)
+
+
+def test_bedrock_invoke_refuses_unsupported_tool_changes_without_modify_params(monkeypatch):
+    monkeypatch.setattr(litellm, "modify_params", False)
+
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        _invoke_request(
+            _NOTHING_MODEL, [_HELLO, _HI, _GO, _TERSE_WITH_TOOL], litellm_params=GenericLiteLLMParams(drop_params=True)
+        )
+
+    assert not isinstance(exc_info.value, litellm.UnsupportedParamsError)
+    assert "messages[3].content[1] (type 'tool_addition')" in str(exc_info.value)
+    assert "`litellm_settings.modify_params: true`" in str(exc_info.value)
+
+
+@pytest.mark.parametrize(
+    ("deployment_drop_params", "global_drop_params"),
+    [(True, False), (None, True)],
+    ids=["deployment-setting", "global-fallback"],
+)
+def test_bedrock_invoke_drop_params_drops_an_unsupported_effort_message(
+    monkeypatch, deployment_drop_params, global_drop_params
+):
+    monkeypatch.setattr(litellm, "drop_params", global_drop_params)
+
+    result = _invoke_request(
+        _MIXED_MODEL,
+        [_HELLO, _HI, _EFFORT_ONLY, _GO],
+        litellm_params=GenericLiteLLMParams(drop_params=deployment_drop_params),
+    )
+
+    assert result["messages"] == [_HELLO, _HI, _GO]
+
+
+def test_bedrock_invoke_deployment_drop_params_false_overrides_global(monkeypatch):
+    monkeypatch.setattr(litellm, "drop_params", True)
+
+    with pytest.raises(litellm.UnsupportedParamsError):
+        _invoke_request(
+            _MIXED_MODEL, [_HELLO, _HI, _EFFORT_ONLY, _GO], litellm_params=GenericLiteLLMParams(drop_params=False)
+        )
+
+
+def test_bedrock_invoke_strips_extensions_before_relocating_system_messages_for_older_models(monkeypatch):
+    monkeypatch.setattr(litellm, "modify_params", True)
+
+    result = _invoke_request(
+        _NOTHING_MODEL,
+        [_HELLO, _HI, _EFFORT_ONLY, _GO, _TERSE_WITH_TOOL],
+        thinking=_UPDATES_THINKING,
+        litellm_params=GenericLiteLLMParams(drop_params=True),
+        headers={"anthropic-beta": ",".join(sorted(_EXTENSION_BETAS))},
+    )
+
+    relocated_texts = [block["text"] for block in result["messages"][3]["content"]]
+    assert result["messages"][:3] == [_HELLO, _HI, _GO]
+    assert len(result["messages"]) == 4
+    assert result["messages"][3]["role"] == "user"
+    assert relocated_texts[-1] == "Answer tersely."
+    assert result["thinking"] == {"type": "adaptive"}
+    assert _EXTENSION_BETAS.isdisjoint(result.get("anthropic_beta", ()))

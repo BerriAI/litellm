@@ -63,6 +63,9 @@ class AmazonMantleMessagesConfig(AmazonAnthropicClaudeMessagesConfig):
     def should_filter_anthropic_beta_headers(self) -> bool:
         return False
 
+    def should_sanitize_unsupported_invoke_extensions(self) -> bool:
+        return False
+
     def get_complete_url(
         self,
         api_base: str | None,

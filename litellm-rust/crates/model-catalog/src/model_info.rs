@@ -453,7 +453,11 @@ pub struct ModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supports_max_reasoning_effort: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_mid_conversation_output_config: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub supports_mid_conversation_system: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_mid_conversation_tool_changes: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supports_minimal_reasoning_effort: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -490,6 +494,8 @@ pub struct ModelInfo {
     pub supports_system_messages: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supports_thinking_cache_preservation: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_thinking_display_updates: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supports_tool_choice: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]

@@ -12,6 +12,7 @@ from unittest.mock import patch
 import httpx
 import pytest
 
+import litellm
 from litellm.llms.bedrock.common_utils import BedrockModelInfo, get_bedrock_chat_config
 from litellm.llms.bedrock.chat.mantle.transformation import AmazonMantleConfig
 from litellm.llms.bedrock.messages.mantle_transformation import (
@@ -322,6 +323,23 @@ def test_mantle_messages_transform_request_omits_stream_when_not_streaming():
         headers={},
     )
     assert "stream" not in request
+
+
+def test_mantle_messages_skips_the_bedrock_invoke_extension_sanitizer(monkeypatch):
+    from litellm.types.router import GenericLiteLLMParams
+
+    monkeypatch.setattr(litellm, "drop_params", False)
+    monkeypatch.setattr(litellm, "modify_params", False)
+
+    request = AmazonMantleMessagesConfig().transform_anthropic_messages_request(
+        model="mantle/anthropic.claude-mythos-preview",
+        messages=[{"role": "user", "content": "hi", "output_config": {"effort": "low"}}],
+        anthropic_messages_optional_request_params={"max_tokens": 100},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+
+    assert request["messages"] == [{"role": "user", "content": "hi", "output_config": {"effort": "low"}}]
 
 
 def test_mantle_chat_streaming_uses_anthropic_sse_iterator():

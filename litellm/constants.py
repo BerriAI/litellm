@@ -523,6 +523,7 @@ BEDROCK_IAM_CACHE_FETCH_LOCK_STRIPES: Final = 64
 # still has a usable credential for the whole call.
 STS_CREDENTIAL_EXPIRY_SAFETY_MARGIN_SECONDS: Final = 60
 BEDROCK_MIN_THINKING_BUDGET_TOKENS: Final = int(os.getenv("BEDROCK_MIN_THINKING_BUDGET_TOKENS", 1024))
+ANTHROPIC_MID_CONVERSATION_TOOL_CHANGE_BLOCK_TYPES: Final = frozenset({"tool_addition", "tool_removal"})
 # Anthropic's Messages API rejects thinking.budget_tokens < 1024.
 ANTHROPIC_MIN_THINKING_BUDGET_TOKENS: Final = 1024
 REPLICATE_POLLING_DELAY_SECONDS: Final = float(os.getenv("REPLICATE_POLLING_DELAY_SECONDS", 0.5))

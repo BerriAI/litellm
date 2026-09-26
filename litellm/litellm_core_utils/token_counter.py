@@ -16,6 +16,7 @@ import litellm
 from litellm import verbose_logger
 from litellm._lazy_imports import _get_default_encoding
 from litellm.constants import (
+    ANTHROPIC_MID_CONVERSATION_TOOL_CHANGE_BLOCK_TYPES,
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
@@ -771,6 +772,14 @@ def _anthropic_image_source_data(
     return ""
 
 
+def _count_referenced_tool_name(reference: object, count_function: TokenCounterFunction) -> int:
+    match reference:
+        case {"tool_name": str(tool_name)} | {"name": str(tool_name)} if tool_name:
+            return count_function(tool_name)
+        case _:
+            return 0
+
+
 def _count_document_tokens(
     document: ChatCompletionDocumentObject | AnthropicMessagesDocumentParam,
     count_function: TokenCounterFunction,
@@ -931,16 +940,16 @@ def _count_content_list(
                 # token_counter raises on tool-search traffic; on the streaming
                 # anthropic_messages path that nulls response_cost and causes the
                 # proxy to drop the SpendLogs row entirely (silent cost undercount).
-                tool_name = str(c.get("tool_name") or "")
-                if tool_name:
-                    num_tokens += count_function(tool_name)
+                num_tokens += _count_referenced_tool_name(c, count_function)
+            elif c["type"] in ANTHROPIC_MID_CONVERSATION_TOOL_CHANGE_BLOCK_TYPES:
+                num_tokens += _count_referenced_tool_name(c.get("tool"), count_function)
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"tool_reference)."
+                    f"tool_reference, tool_addition, tool_removal)."
                 )
         return num_tokens
     except Exception as e:

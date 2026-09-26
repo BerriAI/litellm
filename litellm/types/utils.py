@@ -194,6 +194,9 @@ class ProviderSpecificModelInfo(TypedDict, total=False):
     thinking_always_on: ReadOnly[bool | None]
     supports_tool_search: bool | None
     supports_mid_conversation_system: bool | None
+    supports_mid_conversation_tool_changes: ReadOnly[bool | None]
+    supports_mid_conversation_output_config: ReadOnly[bool | None]
+    supports_thinking_display_updates: ReadOnly[bool | None]
     supports_url_context: bool | None
     supports_none_reasoning_effort: bool | None
     supports_minimal_reasoning_effort: bool | None

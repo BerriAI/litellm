@@ -3,6 +3,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
+from pydantic import JsonValue
 
 import litellm
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
@@ -12,6 +13,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.anthropic.chat.transformation import (
     DROP_UNSUPPORTED_OUTPUT_CONFIG_WARNING,
@@ -41,6 +43,15 @@ from litellm.llms.bedrock.common_utils import (
     strip_unsupported_bedrock_invoke_output_config_keys,
     tools_without_eager_input_streaming,
 )
+from litellm.llms.bedrock.messages.invoke_transformations.unsupported_extensions import (
+    Extension,
+    OptIns,
+    Refused,
+    Unchanged,
+    extension_betas,
+    raise_refusal,
+    sanitize_for_bedrock_invoke,
+)
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     merge_bedrock_invoke_headers,
@@ -55,6 +66,11 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 from litellm.types.utils import GenericStreamingChunk as GChunk
+from litellm.utils import (
+    supports_mid_conversation_output_config,
+    supports_mid_conversation_tool_changes,
+    supports_thinking_display_updates,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
@@ -84,6 +100,9 @@ class AmazonAnthropicClaudeMessagesConfig(
     @property
     def beta_headers_provider(self) -> str:
         return self.custom_llm_provider or "bedrock"
+
+    def should_sanitize_unsupported_invoke_extensions(self) -> bool:
+        return True
 
     BEDROCK_INVOKE_ALLOWED_TOP_LEVEL_FIELDS = frozenset(BedrockInvokeAnthropicMessagesRequest.__annotations__.keys())
 
@@ -557,15 +576,24 @@ class AmazonAnthropicClaudeMessagesConfig(
             beta_set.add("tool-examples-2025-10-29")
 
         beta_provider: Final = self.beta_headers_provider
+        extension_beta_set: Final = (
+            extension_betas(anthropic_messages_request)
+            if self.should_sanitize_unsupported_invoke_extensions()
+            else frozenset()
+        )
         filtered_betas: Final = sorted(
-            filter_and_transform_beta_headers(
-                beta_headers=list(beta_set),
-                provider=beta_provider,
+            extension_beta_set.union(
+                filter_and_transform_beta_headers(
+                    beta_headers=list(beta_set),
+                    provider=beta_provider,
+                )
             )
         )
 
         dropped_user_betas: Final = sorted(
-            b for b in user_beta_set if not filter_and_transform_beta_headers([b], provider=beta_provider)
+            b
+            for b in user_beta_set - extension_beta_set
+            if not filter_and_transform_beta_headers([b], provider=beta_provider)
         )
         if dropped_user_betas:
             verbose_logger.warning(
@@ -615,6 +643,33 @@ class AmazonAnthropicClaudeMessagesConfig(
             model=model,
             llm_provider="bedrock",
         )
+
+    def _unsupported_extension_replacements(
+        self,
+        anthropic_messages_request: Mapping[str, object],
+        model: str,
+        litellm_params: GenericLiteLLMParams | Mapping[str, object],
+    ) -> Mapping[str, JsonValue]:
+        if not self.should_sanitize_unsupported_invoke_extensions():
+            return MappingProxyType({})
+        deployment_drop_params: Final = _deployment_drop_params(litellm_params)
+        opt_ins: Final = OptIns(
+            drop_params=deployment_drop_params if deployment_drop_params is not None else litellm.drop_params is True,
+            modify_params=litellm.modify_params is True,
+        )
+        outcome: Final = sanitize_for_bedrock_invoke(
+            anthropic_messages_request, opt_ins, supported=_bedrock_supported_extensions(model)
+        )
+        if isinstance(outcome, Unchanged):
+            return MappingProxyType({})
+        if isinstance(outcome, Refused):
+            raise_refusal(outcome, model=model)
+        verbose_logger.warning(
+            "Bedrock Invoke: dropping unsupported request parts %s for model=%s",
+            tuple(offender.path for offender in outcome.removed),
+            model,
+        )
+        return outcome.replacements
 
     def _strip_unsupported_bedrock_invoke_fields(
         self,
@@ -668,6 +723,11 @@ class AmazonAnthropicClaudeMessagesConfig(
             anthropic_messages_optional_request_params=anthropic_messages_optional_request_params,
             litellm_params=litellm_params,
             headers=headers,
+        )
+        anthropic_messages_request.update(
+            self._unsupported_extension_replacements(
+                anthropic_messages_request, model=model, litellm_params=litellm_params
+            )
         )
         self._normalize_system_role_messages(anthropic_messages_request, model=model)
         #########################################################
@@ -916,6 +976,32 @@ class AmazonAnthropicClaudeMessagesConfig(
             if delta_usage:
                 pending_delta["usage"] = delta_usage
             yield pending_delta
+
+
+def _deployment_drop_params(litellm_params: GenericLiteLLMParams | Mapping[str, object]) -> bool | None:
+    configured: Final = (
+        litellm_params.drop_params
+        if isinstance(litellm_params, GenericLiteLLMParams)
+        else litellm_params.get("drop_params")
+    )
+    return normalize_drop_params(configured)
+
+
+_BEDROCK_EXTENSION_SUPPORT: Final = MappingProxyType(
+    {
+        Extension.MESSAGE_OUTPUT_CONFIG: supports_mid_conversation_output_config,
+        Extension.THINKING_DISPLAY_UPDATES: supports_thinking_display_updates,
+        Extension.TOOL_CHANGES: supports_mid_conversation_tool_changes,
+    }
+)
+
+
+def _bedrock_supported_extensions(model: str) -> frozenset[Extension]:
+    return frozenset(
+        extension
+        for extension, supports in _BEDROCK_EXTENSION_SUPPORT.items()
+        if supports(model=model, custom_llm_provider="bedrock")
+    )
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
