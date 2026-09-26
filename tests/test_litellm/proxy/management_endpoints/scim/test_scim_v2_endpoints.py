@@ -6280,7 +6280,9 @@ async def test_source_membership_sync_preserves_manually_assigned_global_role(mo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["create", "replace", "patch"])
-async def test_legacy_token_cannot_classify_a_user_as_native_agent(method: str, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_legacy_token_cannot_classify_a_user_as_native_agent(
+    method: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy.management_endpoints.scim import scim_v2
     from litellm.types.proxy.management_endpoints.scim_v2 import SCIM_AGENT_USER_SCHEMA
 
@@ -6288,21 +6290,28 @@ async def test_legacy_token_cannot_classify_a_user_as_native_agent(method: str, 
     database: Final = AsyncMock()
     monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", database)
     extension: Final = {"identityParentId": "11111111-1111-4111-8111-111111111111"}
-    user: Final = SCIMUser.model_validate({"schemas": [], "userName": "agent@example.com", SCIM_AGENT_USER_SCHEMA: extension})
+    user: Final = SCIMUser.model_validate(
+        {"schemas": [], "userName": "agent@example.com", SCIM_AGENT_USER_SCHEMA: extension}
+    )
     with pytest.raises(HTTPException) as failure:
         if method == "create":
             await scim_v2.create_user(user=user)
         elif method == "replace":
             await scim_v2.update_user(user_id="human", user=user)
         else:
-            await scim_v2.patch_user(user_id="human", patch_ops=SCIMPatchOp(Operations=[{"op": "add", "path": SCIM_AGENT_USER_SCHEMA, "value": extension}]))
+            await scim_v2.patch_user(
+                user_id="human",
+                patch_ops=SCIMPatchOp(Operations=[{"op": "add", "path": SCIM_AGENT_USER_SCHEMA, "value": extension}]),
+            )
     assert failure.value.status_code == 400
     database.assert_not_awaited()
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("kind", ["Users", "Groups"])
-async def test_source_delete_returns_no_content_without_legacy_fallback(kind: str, monkeypatch: pytest.MonkeyPatch) -> None:
+async def test_source_delete_returns_no_content_without_legacy_fallback(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
     from litellm.proxy.management_endpoints.scim import scim_v2
     from litellm.proxy.management_endpoints.scim.agent_provisioning import AgentProvisioningService
 
@@ -6310,7 +6319,9 @@ async def test_source_delete_returns_no_content_without_legacy_fallback(kind: st
     monkeypatch.setattr(scim_v2, "_agent_provisioning_service", AsyncMock(return_value=service))
     database: Final = AsyncMock()
     monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", database)
-    result: Final = await scim_v2.delete_user(user_id="owned") if kind == "Users" else await scim_v2.delete_group(group_id="owned")
+    result: Final = (
+        await scim_v2.delete_user(user_id="owned") if kind == "Users" else await scim_v2.delete_group(group_id="owned")
+    )
     assert result.status_code == 204
     service.delete.assert_awaited_once_with(kind, "owned")
     database.assert_not_awaited()
