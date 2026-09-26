@@ -592,6 +592,7 @@ class RequestRateLimiterStash:
     )
     dynamic_reservation_settled: bool = False
     dynamic_reservation_settled_tokens: int = 0
+    dynamic_settlement_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     dynamic_admission_bypassed: bool = False
     fairness_queue_wait_seconds: float = 0.0
 

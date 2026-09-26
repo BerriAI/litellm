@@ -2755,7 +2755,7 @@ async def test_success_racing_an_inflight_settlement_bills_only_the_uncounted_to
     monkeypatch.setattr(handler.v3_limiter, "recovered_partial_usage_tokens", lambda *args, **kwargs: (6, 0, 0))
     data = {"model": model, "litellm_call_id": "racing-settle"}
 
-    async def run_race() -> None:
+    async def run_race() -> tuple[bool, int]:
         stash = get_or_create_request_stash()
         stash.dynamic_reserved_tokens = 40
         stash.dynamic_token_scopes = frozenset({("model_saturation_check", model)})
@@ -2767,28 +2767,35 @@ async def test_success_racing_an_inflight_settlement_bills_only_the_uncounted_to
                 user_api_key_dict=_prod_user(),
             )
         )
-        await asyncio.wait_for(first_call_seen.wait(), timeout=5)
-        await handler.async_log_success_event(
-            kwargs=_success_kwargs(model, "racing-settle", "prod"),
-            response_obj=ModelResponse(
-                model=model, usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)
-            ),
-            start_time=None,
-            end_time=None,
+        success_task = asyncio.create_task(
+            handler.async_log_success_event(
+                kwargs=_success_kwargs(model, "racing-settle", "prod"),
+                response_obj=ModelResponse(
+                    model=model, usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)
+                ),
+                start_time=None,
+                end_time=None,
+            )
         )
+        await asyncio.wait_for(first_call_seen.wait(), timeout=5)
+        for _ in range(3):
+            await asyncio.sleep(0)
         settle_gate.set()
-        await failure_task
+        await asyncio.gather(failure_task, success_task)
+        return stash.dynamic_reservation_settled, stash.dynamic_reservation_settled_tokens
 
-    await asyncio.create_task(run_race())
+    settled, settled_tokens = await asyncio.create_task(run_race())
     assert len(calls) == 2
+    first_ops = calls[0][1]["pipeline_operations"]
+    assert all(op["increment_value"] == -34 for op in first_ops)
     second_ops = calls[1][1]["pipeline_operations"]
-    assert len(second_ops) == 1
-    for op in second_ops:
-        assert op["increment_value"] == 4
+    assert all(op["increment_value"] == 4 for op in second_ops)
+    assert settled
+    assert settled_tokens == 10
 
 
 @pytest.mark.asyncio
-async def test_failed_settlement_write_keeps_the_record_of_a_concurrent_billing(monkeypatch):
+async def test_failed_settlement_write_lets_the_waiting_success_settle_at_actual_usage(monkeypatch):
     from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
     from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
     from litellm.types.utils import ModelResponse, Usage
@@ -2828,20 +2835,26 @@ async def test_failed_settlement_write_keeps_the_record_of_a_concurrent_billing(
                 user_api_key_dict=_prod_user(),
             )
         )
-        await asyncio.wait_for(first_call_seen.wait(), timeout=5)
-        await handler.async_log_success_event(
-            kwargs=_success_kwargs(model, "failed-settle-race", "prod"),
-            response_obj=ModelResponse(
-                model=model, usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)
-            ),
-            start_time=None,
-            end_time=None,
+        success_task = asyncio.create_task(
+            handler.async_log_success_event(
+                kwargs=_success_kwargs(model, "failed-settle-race", "prod"),
+                response_obj=ModelResponse(
+                    model=model, usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)
+                ),
+                start_time=None,
+                end_time=None,
+            )
         )
+        await asyncio.wait_for(first_call_seen.wait(), timeout=5)
+        for _ in range(3):
+            await asyncio.sleep(0)
         settle_gate.set()
-        await failure_task
+        await asyncio.gather(failure_task, success_task)
         return stash.dynamic_reservation_settled, stash.dynamic_reservation_settled_tokens
 
     settled, settled_tokens = await asyncio.create_task(run_race())
     assert len(calls) == 2
+    second_ops = calls[1][1]["pipeline_operations"]
+    assert all(op["increment_value"] == -30 for op in second_ops)
     assert settled
     assert settled_tokens == 10
