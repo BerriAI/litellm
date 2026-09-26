@@ -26,6 +26,35 @@ def test_get_custom_url(monkeypatch):
     assert custom_url == "http://0.0.0.0:4000/litellm/ui/"
 
 
+@pytest.mark.asyncio
+async def test_update_request_status_marker_ttl_outlives_tracker_entry():
+    """The completion marker written by update_request_status must have a
+    ttl >= the hanging-request tracker entry's ttl (alerting_threshold * 1.5
+    + HANGING_ALERT_BUFFER_TIME_SECONDS). Otherwise a completed request's
+    marker can expire before the hanging-request check gets around to
+    scanning it, producing a false "hanging request" alert. See #43285.
+    """
+    from litellm.types.integrations.slack_alerting import (
+        HANGING_ALERT_BUFFER_TIME_SECONDS,
+    )
+
+    proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
+    proxy_logging_obj.alerting = ["slack"]
+    proxy_logging_obj.alerting_threshold = 300
+
+    tracker_entry_ttl = 300 * 1.5 + HANGING_ALERT_BUFFER_TIME_SECONDS
+
+    with patch.object(
+        proxy_logging_obj.internal_usage_cache, "async_set_cache", new=AsyncMock()
+    ) as mock_set_cache:
+        await proxy_logging_obj.update_request_status(
+            litellm_call_id="test_call_id", status="success"
+        )
+
+    used_ttl = mock_set_cache.call_args.kwargs["ttl"]
+    assert used_ttl >= tracker_entry_ttl
+
+
 def test_proxy_only_error_true_for_llm_route():
     proxy_logging_obj = ProxyLogging(user_api_key_cache=DualCache())
     assert proxy_logging_obj._is_proxy_only_llm_api_error(

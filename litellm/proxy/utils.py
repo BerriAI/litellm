@@ -1434,9 +1434,18 @@ class ProxyLogging:
         # current alerting threshold
         alerting_threshold: float = self.alerting_threshold
 
-        # add a 100 second buffer to the alerting threshold
-        # ensures we don't send errant hanging request slack alerts
-        alerting_threshold += 100
+        # This marker's ttl must outlive the hanging-request tracker entry
+        # (alerting_threshold * 1.5 + HANGING_ALERT_BUFFER_TIME_SECONDS, see
+        # HangingRequestCheck._get_metadata) - otherwise a completed request
+        # can have its marker expire before the tracker gets around to
+        # checking it (only the 20 oldest entries are scanned per pass),
+        # producing a false "hanging request" alert for a request that
+        # already finished successfully.
+        from litellm.types.integrations.slack_alerting import (
+            HANGING_ALERT_BUFFER_TIME_SECONDS,
+        )
+
+        alerting_threshold = alerting_threshold * 1.5 + HANGING_ALERT_BUFFER_TIME_SECONDS
 
         await self.internal_usage_cache.async_set_cache(
             key=f"request_status:{litellm_call_id}",
