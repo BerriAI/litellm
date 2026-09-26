@@ -11,6 +11,7 @@ from litellm.llms.bedrock.chat.chat_completions.transformation import (
     AmazonBedrockRuntimeChatCompletionsConfig,
     BedrockRuntimeChatCompletionsStreamingHandler,
     ReasoningTagSplitter,
+    chat_completions_reasoning_efforts_refused_for,
     split_reasoning_tag,
     with_max_completion_tokens,
 )
@@ -331,6 +332,47 @@ def test_map_openai_params_keeps_explicit_max_completion_tokens():
 
 def test_with_max_completion_tokens_leaves_other_params_alone():
     assert with_max_completion_tokens({"temperature": 0.5}) == {"temperature": 0.5}
+
+
+@pytest.mark.parametrize(
+    "model",
+    ["us.xai.grok-4.6", "bedrock/us-gov-west-1/us.xai.grok-4.6"],
+)
+def test_map_openai_params_drops_reasoning_effort_none_for_grok(model):
+    cfg = AmazonBedrockRuntimeChatCompletionsConfig()
+    mapped = cfg.map_openai_params(
+        non_default_params={"reasoning_effort": "none", "max_tokens": 64},
+        optional_params={},
+        model=model,
+        drop_params=False,
+    )
+    assert "reasoning_effort" not in mapped
+
+
+def test_map_openai_params_keeps_reasoning_effort_low_for_grok():
+    cfg = AmazonBedrockRuntimeChatCompletionsConfig()
+    mapped = cfg.map_openai_params(
+        non_default_params={"reasoning_effort": "low", "max_tokens": 64},
+        optional_params={},
+        model="us.xai.grok-4.6",
+        drop_params=False,
+    )
+    assert mapped["reasoning_effort"] == "low"
+
+
+def test_map_openai_params_keeps_reasoning_effort_none_for_gpt56():
+    cfg = AmazonBedrockRuntimeChatCompletionsConfig()
+    mapped = cfg.map_openai_params(
+        non_default_params={"reasoning_effort": "none", "max_tokens": 64},
+        optional_params={},
+        model="global.openai.gpt-5.6-sol",
+        drop_params=False,
+    )
+    assert mapped["reasoning_effort"] == "none"
+
+
+def test_reasoning_efforts_refused_for_is_empty_outside_xai():
+    assert chat_completions_reasoning_efforts_refused_for("openai.gpt-oss-20b-1:0") == frozenset()
 
 
 def test_supported_params_include_reasoning_effort_for_gpt56(local_cost_map):

@@ -60,6 +60,31 @@ def chat_completions_params_refused_for(model: str) -> frozenset[str]:
     )
 
 
+CHAT_COMPLETIONS_REFUSED_REASONING_EFFORTS_BY_FAMILY: Final = MappingProxyType({"xai.": frozenset(("none",))})
+
+
+def chat_completions_reasoning_efforts_refused_for(model: str) -> frozenset[str]:
+    """The ``reasoning_effort`` values AWS's Chat Completions endpoint rejects for this model.
+
+    Grok answers ``"none"`` with a 400 (it takes low, medium, high, and xhigh) where Converse dropped every
+    ``reasoning_effort`` for it, so the native config drops the value and AWS applies its default effort as before.
+    """
+    model_id: Final = split_bedrock_region_path(model)[1]
+    return frozenset().union(
+        *(
+            refused
+            for family, refused in CHAT_COMPLETIONS_REFUSED_REASONING_EFFORTS_BY_FAMILY.items()
+            if family in model_id
+        )
+    )
+
+
+def without_refused_reasoning_effort(model: str, params: Mapping[str, object]) -> Mapping[str, object]:
+    if params.get("reasoning_effort") not in chat_completions_reasoning_efforts_refused_for(model):
+        return params
+    return MappingProxyType({key: value for key, value in params.items() if key != "reasoning_effort"})
+
+
 def _held_close_tag_prefix(text: str) -> int:
     return next(
         (
@@ -277,7 +302,9 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             drop_params=drop_params,
             replace_max_completion_tokens_with_max_tokens=replace_max_completion_tokens_with_max_tokens,
         )
-        return dict(with_max_completion_tokens(mapped))  # mutable-ok: get_optional_params keeps filling this dict
+        return dict(  # mutable-ok: get_optional_params keeps filling this dict
+            without_refused_reasoning_effort(model, with_max_completion_tokens(mapped))
+        )
 
     def _inference_params(
         self, optional_params: Mapping[str, object]
