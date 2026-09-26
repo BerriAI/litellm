@@ -31571,6 +31571,31 @@ export interface components {
              */
             circuit_breaker_enabled: boolean;
             /**
+             * Complexity Confidence Min
+             * @description Minimum confidence (0-1) required on the complexity answer before a route-down is applied. The built-in Jev request asks only the tier question today, so an absent complexity answer counts as confidence 0.0: while this is set above 0.0 every route-down is refused. None disables the gate.
+             */
+            complexity_confidence_min?: number | null;
+            /**
+             * Complexity Max
+             * @description Maximum request complexity (0-1) a route-down verdict may carry. The built-in Jev request asks only the tier question today, so an absent complexity answer counts as the hardest score (1.0): while this is set below 1.0 every route-down is refused until the classifier protocol carries a complexity answer. Wire complexity scores arrive as weighted level indices (0..levels-1), so a future score question must normalize to 0-1 before this gate (routing-spec v1.1). None disables the gate.
+             */
+            complexity_max?: number | null;
+            /**
+             * Confidence Threshold
+             * @description Minimum classifier confidence (0-1) required before a verdict that routes below the strongest tier is applied. None keeps the current behavior of applying every valid verdict. A refused route-down falls back like any other unusable verdict (fallback_tier, classifier_fallback, or the llm_v2 capable tier), so pair a threshold with an expensive fallback to fail expensive. Pick per pool: 0.55-0.65 suits a pool whose cheap tier is nearly as capable as its top tier; 0.85 suits a pool with a large capability gap.
+             */
+            confidence_threshold?: number | null;
+            /**
+             * Confidence Threshold Choice
+             * @description Per-type confidence gate for choice-shaped decisions: a question with three or more options. Takes precedence over confidence_threshold for those questions; None falls back to it. Jev clips scores to 0.01-0.99, so a single number gates a wide choice and a binary decision unequally: confidence spreads across every option of a choice but only two of a yes/no.
+             */
+            confidence_threshold_choice?: number | null;
+            /**
+             * Confidence Threshold Yes No
+             * @description Per-type confidence gate for yes/no-shaped decisions: a question with exactly two options, like the built-in tier question on a two-tier custom tier set. Takes precedence over confidence_threshold for those questions; None falls back to it.
+             */
+            confidence_threshold_yes_no?: number | null;
+            /**
              * Instructions
              * @description Replaces the built-in Jev question instructions
              */
