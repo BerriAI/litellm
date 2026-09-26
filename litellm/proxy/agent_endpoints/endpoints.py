@@ -16,6 +16,7 @@ from types import MappingProxyType
 from typing import Annotated, Final, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import ValidationError
 from typing_extensions import ReadOnly, Required, assert_never
 
 import litellm
@@ -47,6 +48,8 @@ from litellm.proxy.agent_endpoints.agent_search import (
     search_agents,
 )
 from litellm.proxy.agent_endpoints.auth.agent_permission_handler import accessible_agents
+from litellm.proxy.agent_endpoints.identity import reject_legacy_identity
+from litellm.proxy.agent_endpoints.identity_store import AgentIdentityStore
 from litellm.proxy.agent_endpoints.kill_switch import (
     KillSwitchAuditLogWriter,
     KillSwitchHttpClient,
@@ -56,6 +59,7 @@ from litellm.proxy.agent_endpoints.kill_switch import (
     fire_kill_switch,
     redact_kill_switch,
 )
+from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
 from litellm.proxy.management_endpoints.common_daily_activity import get_daily_activity
@@ -72,6 +76,12 @@ from litellm.types.agents import (
     PatchAgentRequest,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
+from litellm.types.proxy.agent_identity import (
+    AgentIdentityBinding,
+    AgentIdentityFailure,
+    EntraIdentityConfig,
+    ManagedAgentIdentityStatus,
+)
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
     DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
@@ -178,9 +188,15 @@ def _redact_sensitive_agent_fields(
     virtual-key, header and kill-switch fields stripped entirely. The original
     objects are not modified.
     """
+    from litellm.proxy.proxy_server import general_settings, jwt_handler
+
     redacted: Final[list[AgentResponse]] = []
     for agent in agents:
         copy = agent.model_copy(deep=True)
+        copy.jwt_auth_configured = bool(
+            general_settings.get("enable_jwt_auth")
+            and (agent.identity is not None or jwt_handler.litellm_jwtauth.agent_id_jwt_field)
+        )
         if not is_admin:
             copy.static_headers = None
             copy.extra_headers = None
@@ -429,6 +445,71 @@ from litellm.proxy.agent_endpoints.agent_registry import (
 )
 
 
+def _trusted_agent_issuers() -> tuple[str, ...]:
+    from litellm.proxy.proxy_server import general_settings, jwt_handler
+
+    if not general_settings.get("enable_jwt_auth"):
+        return ()
+    configured: Final = jwt_handler.litellm_jwtauth.issuers or ()
+    issuer: Final = os.getenv("JWT_ISSUER")
+    global_issuers: Final = (
+        (issuer,)
+        if issuer and os.getenv("JWT_AUDIENCE") and not any(item.issuer == issuer for item in configured)
+        else ()
+    )
+    return (
+        tuple(item.issuer for item in configured if item.audience and not item.disable_audience_validation)
+        + global_issuers
+    )
+
+
+def _validate_managed_identity_request(
+    request: AgentConfig | PatchAgentRequest, existing: AgentResponse | None = None
+) -> None:
+    raw: Final = request.get("identity") if "identity" in request else existing.identity if existing else None
+    if raw is None:
+        return
+    try:
+        identity: Final = raw if isinstance(raw, AgentIdentityBinding) else EntraIdentityConfig.model_validate(raw)
+    except ValidationError as exc:
+        raise HTTPException(400, "Invalid Entra identity configuration") from exc
+    if identity.issuer not in _trusted_agent_issuers():
+        raise HTTPException(400, "Configure trusted JWT issuer and audience validation for this Entra tenant first")
+    if request.get("execution_mode", existing.execution_mode if existing else "autonomous") != "autonomous":
+        if os.getenv("MICROSOFT_TENANT") != identity.tenant_id or not os.getenv("MICROSOFT_CLIENT_ID"):
+            raise HTTPException(400, "Delegated agents require Microsoft SSO for the same trusted tenant")
+
+
+@router.get("/v1/agents/identity/providers", response_model=tuple[str, ...], tags=("[beta] A2A Agents",))
+async def get_agent_identity_providers(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> tuple[str, ...]:
+    _check_agent_management_permission(user_api_key_dict)
+    return _trusted_agent_issuers()
+
+
+@router.get("/v1/agents/{agent_id}/identity", response_model=ManagedAgentIdentityStatus, tags=("[beta] A2A Agents",))
+async def get_agent_identity_status(
+    agent_id: str,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> ManagedAgentIdentityStatus:
+    from litellm.proxy.proxy_server import prisma_client
+
+    _check_agent_management_permission(user_api_key_dict)
+    agent: Final = await AgentIdentityStore.from_client(prisma_client).agent(agent_id)
+    if isinstance(agent, AgentIdentityFailure):
+        raise_identity_failure(agent)
+    if agent is None:
+        raise HTTPException(404, "Agent not found")
+    return ManagedAgentIdentityStatus(
+        identity=agent.identity,
+        identity_managed=agent.identity_managed,
+        enabled=agent.enabled,
+        execution_mode=agent.execution_mode,
+        last_authenticated_at=agent.identity.last_authenticated_at if agent.identity else None,
+    )
+
+
 @router.post(
     "/v1/agents",
     tags=["[beta] A2A Agents"],
@@ -489,6 +570,9 @@ async def create_agent(
     try:
         # Get the user ID from the API key auth
         created_by: Final = user_api_key_dict.user_id or "unknown"
+
+        _validate_managed_identity_request(request)
+        reject_legacy_identity(request.get("litellm_params"))
 
         # check for naming conflicts
         existing_agent: Final = AGENT_REGISTRY.get_agent_by_name(agent_name=request.get("agent_name"))
@@ -680,12 +764,17 @@ async def update_agent(
 
     try:
         # Check if agent exists
-        existing_agent = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+        existing_agent = await agents_table(prisma_client).find_unique(
+            where={"agent_id": agent_id}, include={"identity": True}
+        )
         if existing_agent is not None:
-            existing_agent = dict(existing_agent)
+            existing_agent = existing_agent.model_dump()
 
         if existing_agent is None:
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
+
+        _validate_managed_identity_request(request, AgentResponse.model_validate(existing_agent))
+        reject_legacy_identity(request.get("litellm_params"))
 
         # Get the user ID from the API key auth
         updated_by: Final = user_api_key_dict.user_id or "unknown"
@@ -782,12 +871,17 @@ async def patch_agent(
 
     try:
         # Check if agent exists
-        existing_agent = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+        existing_agent = await agents_table(prisma_client).find_unique(
+            where={"agent_id": agent_id}, include={"identity": True}
+        )
         if existing_agent is not None:
-            existing_agent = dict(existing_agent)
+            existing_agent = existing_agent.model_dump()
 
         if existing_agent is None:
             raise HTTPException(status_code=404, detail=f"Agent with ID {agent_id} not found")
+
+        _validate_managed_identity_request(request, AgentResponse.model_validate(existing_agent))
+        reject_legacy_identity(request.get("litellm_params"))
 
         # Get the user ID from the API key auth
         updated_by: Final = user_api_key_dict.user_id or "unknown"
@@ -869,7 +963,9 @@ async def delete_agent(
 
     try:
         # Check if agent exists
-        existing_agent = await agents_table(prisma_client).find_unique(where={"agent_id": agent_id})
+        existing_agent = await agents_table(prisma_client).find_unique(
+            where={"agent_id": agent_id}, include={"identity": True}
+        )
         if existing_agent is not None:
             existing_agent = dict[str, object](existing_agent)
 
