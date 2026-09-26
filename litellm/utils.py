@@ -8962,6 +8962,12 @@ class ProviderConfigManager:
             )
 
             return AzureSpeechAudioTranscriptionConfig()
+        elif litellm.LlmProviders.DATABRICKS == provider:
+            from litellm.llms.databricks.audio_transcription.transformation import (
+                DatabricksAudioTranscriptionConfig,
+            )
+
+            return DatabricksAudioTranscriptionConfig()
         elif litellm.LlmProviders.DEEPGRAM == provider:
             return litellm.DeepgramAudioTranscriptionConfig()
         elif litellm.LlmProviders.ELEVENLABS == provider:
