@@ -5,7 +5,6 @@ from dataclasses import dataclass
 from datetime import timedelta
 from functools import reduce, wraps
 from itertools import chain
-from types import SimpleNamespace
 from typing import Concatenate, Final, Literal, ParamSpec, TypeVar
 from uuid import UUID, uuid4
 
@@ -510,26 +509,26 @@ class AgentProvisioningService:
         members: Final = tuple(dict.fromkeys(member.value for member in group.members or ()))
         scim_id: Final = str(uuid4())
         document: Final = group.model_copy(update={"id": scim_id, "externalId": external_id})
+        await self._validate_members(members)
+        resource_data: Final[LiteLLM_SCIMResourceCreateInput] = LiteLLM_SCIMResourceCreateInput(
+            id=scim_id,
+            source_id=self.source.source_id,
+            kind="Groups",
+            external_id=external_id,
+            display_name=group.displayName,
+            document=Json(document.model_dump(by_alias=True, mode="json", exclude_none=True)),
+            member_ids=list(members),
+        )
         async with self.client.tx() as tx:
-            await self._validate_members(tx, members)
-            resource_data: Final[LiteLLM_SCIMResourceCreateInput] = LiteLLM_SCIMResourceCreateInput(
-                id=scim_id,
-                source_id=self.source.source_id,
-                kind="Groups",
-                external_id=external_id,
-                display_name=group.displayName,
-                document=Json(document.model_dump(by_alias=True, mode="json", exclude_none=True)),
-                member_ids=list(members),
-            )
             row: Final = await tx.litellm_scimresource.create(data=resource_data)
         await self._sync_human_members(row)
         return group_document(row)
 
-    async def _validate_members(self, tx: Prisma, members: tuple[str, ...]) -> None:
+    async def _validate_members(self, members: tuple[str, ...]) -> None:
         if not members:
             return
         count: Final = await count_in(
-            SCIMResourceRepository(SimpleNamespace(db=tx)).table,
+            SCIMResourceRepository(self.client, use_writer=True).table,
             "id",
             members,
             where={"source_id": self.source.source_id, "kind": "Users", "deleted": False},
@@ -544,22 +543,23 @@ class AgentProvisioningService:
     async def _update_group(self, resource_id: str, change: SCIMGroup | SCIMPatchOp) -> SCIMGroup:
         async with self.client.tx() as tx:
             old: Final = await self._resource(tx, "Groups", resource_id)
-            updated: Final = (
-                group_members_after_patch(group_document(old), change) if isinstance(change, SCIMPatchOp) else change
-            )
-            if isinstance(updated, SCIMProvisioningFailure):
-                raise HTTPException(updated.status, updated.message)
-            if canonical_directory_id(updated.externalId or "") != canonical_directory_id(old.external_id):
-                raise HTTPException(409, "Directory group externalId is immutable")
-            members: Final = tuple(dict.fromkeys(member.value for member in updated.members or ()))
-            await self._validate_members(tx, members)
+        updated: Final = (
+            group_members_after_patch(group_document(old), change) if isinstance(change, SCIMPatchOp) else change
+        )
+        if isinstance(updated, SCIMProvisioningFailure):
+            raise HTTPException(updated.status, updated.message)
+        if canonical_directory_id(updated.externalId or "") != canonical_directory_id(old.external_id):
+            raise HTTPException(409, "Directory group externalId is immutable")
+        members: Final = tuple(dict.fromkeys(member.value for member in updated.members or ()))
+        await self._validate_members(members)
+        data: Final[LiteLLM_SCIMResourceUpdateInput] = {
+            "display_name": updated.displayName,
+            "document": Json(updated.model_dump(by_alias=True, mode="json", exclude_none=True)),
+            "member_ids": list(members),
+        }
+        async with self.client.tx() as tx:
             count: Final = await tx.litellm_scimresource.update_many(
-                where={"id": old.id, "updated_at": old.updated_at},
-                data={
-                    "display_name": updated.displayName,
-                    "document": Json(updated.model_dump(by_alias=True, mode="json", exclude_none=True)),
-                    "member_ids": list(members),
-                },
+                where={"id": old.id, "updated_at": old.updated_at}, data=data
             )
             if count != 1:
                 raise HTTPException(409, "The group changed concurrently; retry")
