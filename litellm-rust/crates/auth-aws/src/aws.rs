@@ -962,7 +962,7 @@ mod tests {
             &no_env,
         )
         .await?;
-        let client = reqwest::Client::new();
+        let client = litellm_http::Client::plain_for_test();
         let mut failures = Vec::new();
 
         for region in ["us-west-2", "us-east-1"] {

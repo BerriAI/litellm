@@ -295,12 +295,17 @@ fn harness(py: Python<'_>) -> Bound<'_, PyModule> {
     HARNESS.get_or_init(|| install_harness(py)).bind(py).clone()
 }
 
+fn no_preflight(_: Python<'_>, _: &Bound<'_, PyDict>) -> PyResult<()> {
+    Ok(())
+}
+
 fn handed(py: Python<'_>, native: Native, payload: &Bytes) -> Py<PyAny> {
     run_call(
         py,
         machine(native, CHUNKS, payload.clone()),
         BytesHost,
         Box::new(Silent),
+        no_preflight,
         PyDict::new(py).unbind(),
         native != Native::Sync,
     )

@@ -17,6 +17,8 @@ pub enum Error {
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
+    Client(#[from] litellm_http::Error),
+    #[error(transparent)]
     Transport(#[from] litellm_http::transport::Error),
     #[error(transparent)]
     Headers(#[from] litellm_http::request::HeaderError),

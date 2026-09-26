@@ -16,7 +16,8 @@ mod inline;
 mod marshal;
 
 pub use adapter::{
-    InvokeError, LifecycleEvent, LifecycleStep, ProtocolHost, PythonLifecycle, missing_state,
+    InvokeError, LifecycleEvent, LifecycleStep, Preflight, ProtocolHost, PythonLifecycle,
+    missing_state,
 };
 pub use argument::lookup;
 pub use callable::wrap_failure;
