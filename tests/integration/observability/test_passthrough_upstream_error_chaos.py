@@ -178,11 +178,11 @@ async def test_passthrough_disconnect_burst_logs_every_failure_once(gateway: Gat
         path.write_text(yaml.safe_dump(config))
         with owned_proxy_process(gateway, tmp_path, {}, config=path, workers=2) as owned:
             candidate: Final = owned.gateway
-            call_ids: Final = await asyncio.gather(
-                *(_first_frame_then_close(str(candidate.client.base_url), candidate.key) for _ in range(20))
-            )
-            assert len(set(call_ids)) == 20, call_ids
             try:
+                call_ids: Final = await asyncio.gather(
+                    *(_first_frame_then_close(str(candidate.client.base_url), candidate.key) for _ in range(20))
+                )
+                assert len(set(call_ids)) == 20, call_ids
                 for call_id in call_ids:
                     _single_spend_row(call_id)
                     error_information: Final = _error_information(call_id)
