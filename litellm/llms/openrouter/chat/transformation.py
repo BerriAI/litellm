@@ -35,6 +35,7 @@ class CacheControlSupportedModels(str, Enum):
     MINIMAX = "minimax"
     GLM = "glm"
     ZAI = "z-ai"
+    QWEN = "qwen"
 
 
 class OpenrouterConfig(OpenAIGPTConfig):
@@ -49,6 +50,11 @@ class OpenrouterConfig(OpenAIGPTConfig):
             ):
                 supported_params.append("reasoning_effort")
                 supported_params.append("thinking")
+
+            if self._supports_cache_control_in_content(model):
+                supported_params.append("cache_control")
+                supported_params.append("cache_control_injection_points")
+
         except Exception:
             pass
         return list(dict.fromkeys(supported_params))
