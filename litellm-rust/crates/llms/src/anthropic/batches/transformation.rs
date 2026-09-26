@@ -5,7 +5,7 @@ use time::OffsetDateTime;
 use url::Url;
 
 use crate::{
-    anthropic::experimental_pass_through::messages::transformation::resolve_anthropic_api_base,
+    anthropic::messages::transformation::resolve_anthropic_api_base,
     base_llm::chat::transformation::Error,
 };
 

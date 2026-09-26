@@ -4,8 +4,7 @@ use litellm_types::llms::anthropic_messages::{
 };
 
 use crate::{
-    anthropic::experimental_pass_through::messages::thinking::ThinkingContext,
-    base_llm::chat::transformation::Error,
+    anthropic::messages::thinking::ThinkingContext, base_llm::chat::transformation::Error,
 };
 
 pub type Headers = Vec<(String, String)>;
