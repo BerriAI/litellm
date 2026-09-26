@@ -1,4 +1,4 @@
-#### What this tests ####
+﻿#### What this tests ####
 #    This tests if prompts are being correctly formatted
 
 import pytest
@@ -2038,6 +2038,85 @@ def test_parse_tool_call_arguments_still_raises_for_unrepairable():
     error_msg = str(exc_info.value)
     assert "test_tool" in error_msg
     assert "test context" in error_msg
+
+
+def test_parse_tool_call_arguments_double_encoded_returns_dict():
+    """parse_tool_call_arguments should unwrap double-encoded JSON to a dict.
+
+    Agent frameworks sometimes store/load tool arguments as json.dumps applied
+    twice.  Anthropic's tool_use.input must be an object; passing through a
+    string triggers: messages.x.content.y.tool_use.input: Input should be an
+    object.  Fixes: https://github.com/BerriAI/litellm/issues/42739
+    """
+    import json
+
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    inner = {"method": "POST", "path": "/studies/test/scenarios", "body": {"title": "SC1"}}
+    # Simulate double-encoding: json.dumps applied twice
+    double_encoded = json.dumps(json.dumps(inner))
+
+    result = parse_tool_call_arguments(double_encoded, tool_name="execute", context="Anthropic tool invoke")
+
+    assert isinstance(result, dict), f"Expected dict, got {type(result)}: {result!r}"
+    assert result == inner
+
+
+def test_parse_tool_call_arguments_double_encoded_warns(caplog):
+    """parse_tool_call_arguments logs a warning on double-encoded JSON."""
+    import json
+    import logging
+
+    from litellm.litellm_core_utils.prompt_templates.common_utils import (
+        parse_tool_call_arguments,
+    )
+
+    inner = {"key": "value"}
+    double_encoded = json.dumps(json.dumps(inner))
+
+    with caplog.at_level(logging.WARNING):
+        result = parse_tool_call_arguments(double_encoded, tool_name="my_tool", context="test")
+
+    assert isinstance(result, dict)
+    assert result == inner
+    assert any("double-encoded" in record.message.lower() for record in caplog.records)
+
+
+def test_anthropic_tool_invoke_with_double_encoded_arguments():
+    """convert_to_anthropic_tool_invoke unwraps double-encoded tool arguments.
+
+    Validates the full path from OpenAI tool_calls (with double-encoded
+    function.arguments) through to Anthropic tool_use.input being an object.
+    """
+    import json
+
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        convert_to_anthropic_tool_invoke,
+    )
+
+    inner_args = {"method": "POST", "path": "/studies/test/scenarios", "body": {"title": "SC1"}}
+    double_encoded = json.dumps(json.dumps(inner_args))
+
+    tool_calls = [
+        {
+            "id": "toolu_test",
+            "type": "function",
+            "function": {"name": "execute", "arguments": double_encoded},
+        }
+    ]
+
+    result = convert_to_anthropic_tool_invoke(tool_calls)
+
+    assert len(result) == 1
+    tool_use = result[0]
+    assert tool_use["type"] == "tool_use"
+    assert tool_use["name"] == "execute"
+    assert isinstance(tool_use["input"], dict), (
+        f"tool_use.input should be a dict, got {type(tool_use['input'])}: {tool_use['input']!r}"
+    )
+    assert tool_use["input"] == inner_args
 
 
 def test_anthropic_messages_pt_interleave_thinking_with_server_tool_calls():
