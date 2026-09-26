@@ -1571,7 +1571,9 @@ def infer_content_type_from_url_and_content(
 
     # Try to infer from URL extension
     if url:
-        extension: Final = url.split(".")[-1].lower().split("?")[0]  # Remove query params
+        from urllib.parse import urlparse
+
+        extension: Final = urlparse(url).path.split(".")[-1].lower()
         inferred_type: Final = extension_to_mime.get(extension)
         if inferred_type:
             return inferred_type
