@@ -213,7 +213,9 @@ def test_langfuse_callback_stored_in_the_db_through_config_update_delivers_the_g
     stock_settings: Final = _SETTINGS.validate_python(
         _PROXY_CONFIG.validate_python(yaml.safe_load(STOCK_CONFIG.read_text()))["litellm_settings"]
     )
-    assert "langfuse" not in json.dumps([stock_settings.get(key) for key in ("callbacks", "success_callback")])
+    assert "langfuse" not in json.dumps(
+        [stock_settings.get(key) for key in ("callbacks", "success_callback", "failure_callback")]
+    )
 
     def upstream(request: Request) -> Reply:
         assert request.headers["authorization"] == f"Bearer {provider_secret}"
