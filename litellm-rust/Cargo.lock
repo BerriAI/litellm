@@ -3261,7 +3261,6 @@ dependencies = [
  "futures-util",
  "litellm-auth",
  "litellm-core",
- "litellm-host",
  "litellm-http",
  "litellm-llms",
  "litellm-router",

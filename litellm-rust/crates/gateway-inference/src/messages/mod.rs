@@ -1,7 +1,5 @@
 //! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it.
 
-mod host;
-
 use std::{convert::Infallible, sync::Arc};
 
 use axum::{
@@ -11,13 +9,12 @@ use axum::{
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use host::ChannelHost;
-use litellm_core::messages::route::{
-    MessagesCall, MessagesOutput, messages_body, messages_machine,
+use futures_util::{StreamExt, stream::BoxStream};
+use litellm_core::messages::{
+    Error as RouteError, MessagesCall, MessagesResponse, messages, messages_body,
 };
 use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
-use tokio::sync::{mpsc, oneshot};
 
 use crate::{Deployment, Error, Gateway};
 
@@ -55,31 +52,16 @@ async fn handle(gateway: &Gateway, headers: &HeaderMap, body: &[u8]) -> Result<R
         .get(model_name)
         .ok_or_else(|| Error::UnknownModel(model_name.to_owned()))?;
     let call = project(deployment, body, headers)?;
-    let machine = messages_machine(&gateway.resources, &gateway.http, gateway.secrets.clone())
-        .map_err(|error| Error::Route(error.into()))?;
-
-    let (head_sender, head) = oneshot::channel();
-    let (chunk_sender, chunks) = mpsc::channel(1);
-    let host = ChannelHost::new(call, head_sender, chunk_sender);
-    let call = tokio::spawn(async move {
-        let outcome = litellm_host::run::run(machine, &host).await;
-        if let Err(error) = &outcome
-            && host.opened()
-        {
-            let _ = host
-                .chunks
-                .send(Bytes::from(Error::Route(error.clone()).sse_frame()))
-                .await;
-        }
-        outcome
-    });
-    tokio::select! {
-        biased;
-        Ok(_) = head => Ok(stream(chunks)),
-        joined = call => match joined.map_err(|error| Error::Internal(error.to_string()))?? {
-            MessagesOutput::Message(message) => Ok(Json(message).into_response()),
-            MessagesOutput::Streamed => Err(Error::Internal("the stream ended before it opened".into())),
-        },
+    match messages(
+        &gateway.resources,
+        &gateway.http,
+        gateway.secrets.as_ref(),
+        call,
+    )
+    .await?
+    {
+        MessagesResponse::Message(message) => Ok(Json(message).into_response()),
+        MessagesResponse::Stream { chunks, .. } => Ok(stream(chunks)),
     }
 }
 
@@ -123,10 +105,13 @@ fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders>
     })
 }
 
-fn stream(chunks: mpsc::Receiver<Bytes>) -> Response {
-    let body = futures_util::stream::unfold(chunks, |mut chunks| async move {
-        let chunk = chunks.recv().await?;
-        Some((Ok::<_, Infallible>(chunk), chunks))
+/// A chunk that fails after the stream opened is delivered as an SSE error frame, since
+/// the status line already went out; the stream ends on it.
+fn stream(chunks: BoxStream<'static, Result<Bytes, RouteError>>) -> Response {
+    let body = chunks.map(|chunk| {
+        Ok::<_, Infallible>(
+            chunk.unwrap_or_else(|error| Bytes::from(Error::Route(error).sse_frame())),
+        )
     });
     (
         StatusCode::OK,

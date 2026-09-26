@@ -50,7 +50,7 @@ async fn main() -> Result<(), Box<dyn Error>> {
         .parse::<u16>()?;
     let listener = tokio::net::TcpListener::bind((host.as_str(), port)).await?;
 
-    tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), "gateway listening");
+    tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), log_level = %level, "gateway listening");
 
     axum::serve(listener, litellm_gateway::router(inference, &config)).await?;
     Ok(())
