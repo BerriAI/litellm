@@ -2,6 +2,7 @@ from typing import TYPE_CHECKING, Final
 
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
+    AGENT_365_DEFAULT_AUTHORITY_HOST,
     AGENT_365_PROD_API_BASE,
     AGENT_365_PROD_RESOURCE_APP_ID,
 )
@@ -23,6 +24,12 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     )
     api_base: Final = litellm_params.api_base or get_secret_str("AGENT365_API_BASE")
     resource_app_id: Final = litellm_params.resource_app_id or get_secret_str("AGENT365_RESOURCE_APP_ID")
+    authority_host: Final = (
+        litellm_params.authority_host
+        or get_secret_str("AGENT365_AUTHORITY_HOST")
+        or get_secret_str("AZURE_AUTHORITY_HOST")
+        or AGENT_365_DEFAULT_AUTHORITY_HOST
+    )
 
     if not tenant_id:
         raise ValueError("Microsoft Agent 365: tenant_id is required")
@@ -45,6 +52,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         api_base=api_base or AGENT_365_PROD_API_BASE,
         resource_app_id=resource_app_id or AGENT_365_PROD_RESOURCE_APP_ID,
         agent_id=litellm_params.agent_id,
+        authority_host=authority_host,
         request_timeout=litellm_params.timeout if litellm_params.timeout is not None else 10.0,
         unreachable_fallback=litellm_params.unreachable_fallback,
         event_hook=litellm_params.mode,

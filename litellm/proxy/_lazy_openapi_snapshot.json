@@ -11579,6 +11579,18 @@
               "description": "Authorization bearer token for IBM Guardrails API. Reads from IBM_GUARDRAILS_AUTH_TOKEN env var if None.",
               "title": "Auth Token"
             },
+            "authority_host": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Microsoft Entra authority host that issues the On-Behalf-Of token, for sovereign clouds. Defaults to https://login.microsoftonline.com. Falls back to the AGENT365_AUTHORITY_HOST, then AZURE_AUTHORITY_HOST environment variables.",
+              "title": "Authority Host"
+            },
             "aws_access_key_id": {
               "anyOf": [
                 {
