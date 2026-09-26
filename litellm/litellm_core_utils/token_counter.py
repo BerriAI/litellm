@@ -868,6 +868,44 @@ def _count_anthropic_content(
     return tokens
 
 
+_ANTHROPIC_SERVER_TOOL_BLOCK_TYPES: Final = frozenset(
+    {
+        "server_tool_use",
+        "web_search_tool_result",
+        "web_fetch_tool_result",
+        "code_execution_tool_result",
+        "mcp_tool_use",
+        "mcp_tool_result",
+        "container_upload",
+    }
+)
+_UNCOUNTED_BLOCK_KEYS: Final = frozenset({"type", "id", "tool_use_id", "cache_control", "signature"})
+_NAMED_BLOCK_TYPES: Final = (
+    frozenset({"thinking", "redacted_thinking", "tool_reference"}) | _ANTHROPIC_SERVER_TOOL_BLOCK_TYPES
+)
+
+
+def _count_named_block(block: Mapping[str, object], count_function: TokenCounterFunction) -> int:
+    if block["type"] in ("thinking", "redacted_thinking"):
+        # Claude extended thinking content block
+        # Count the thinking text and skip the opaque blobs (signature, redacted data)
+        thinking_text: Final = str(block.get("thinking", ""))
+        return count_function(thinking_text) if thinking_text else 0
+    if block["type"] == "tool_reference":
+        # Anthropic tool-search reference block: a lightweight pointer to
+        # a deferred tool, e.g. {"type": "tool_reference", "tool_name": ...}.
+        # The full tool definition is counted via the `tools` param, so we
+        # only count the referenced name here. Without this branch,
+        # token_counter raises on tool-search traffic; on the streaming
+        # anthropic_messages path that nulls response_cost and causes the
+        # proxy to drop the SpendLogs row entirely (silent cost undercount).
+        tool_name: Final = str(block.get("tool_name") or "")
+        return count_function(tool_name) if tool_name else 0
+    return count_function(
+        _serialize_part({key: value for key, value in block.items() if key not in _UNCOUNTED_BLOCK_KEYS})
+    )
+
+
 def _count_content_list(
     count_function: TokenCounterFunction,
     content_list: str
@@ -919,30 +957,15 @@ def _count_content_list(
                     use_default_image_token_count,
                     default_token_count,
                 )
-            elif c["type"] in ("thinking", "redacted_thinking"):
-                # Claude extended thinking content block
-                # Count the thinking text and skip the opaque blobs (signature, redacted data)
-                thinking_text = str(c.get("thinking", ""))
-                if thinking_text:
-                    num_tokens += count_function(thinking_text)
-            elif c["type"] == "tool_reference":
-                # Anthropic tool-search reference block: a lightweight pointer to
-                # a deferred tool, e.g. {"type": "tool_reference", "tool_name": ...}.
-                # The full tool definition is counted via the `tools` param, so we
-                # only count the referenced name here. Without this branch,
-                # token_counter raises on tool-search traffic; on the streaming
-                # anthropic_messages path that nulls response_cost and causes the
-                # proxy to drop the SpendLogs row entirely (silent cost undercount).
-                tool_name = str(c.get("tool_name") or "")
-                if tool_name:
-                    num_tokens += count_function(tool_name)
+            elif c["type"] in _NAMED_BLOCK_TYPES:
+                num_tokens += _count_named_block(c, count_function)
             else:
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
                     f"Expected str or dict with 'type' field "
                     f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"tool_reference)."
+                    f"tool_reference, {', '.join(sorted(_ANTHROPIC_SERVER_TOOL_BLOCK_TYPES))})."
                 )
         return num_tokens
     except Exception as e:
