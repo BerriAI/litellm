@@ -7319,7 +7319,7 @@ class TestConnectedAppViewAnnotation:
 
         flags = {server.server_id: server.connected_app_reachable for server in result}
         assert flags == {"server-1": True, "server-2": False}
-        reload_mock.assert_awaited_once_with("test_user_id")
+        reload_mock.assert_awaited_once_with("test_user_id", requires_fresh_policy=False)
         mock_manager.get_allowed_mcp_servers.assert_awaited_once_with(admitted_auth)
 
     @pytest.mark.asyncio

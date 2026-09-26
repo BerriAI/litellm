@@ -18071,6 +18071,23 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/v1/agents/identity/providers": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Identity Providers */
+        get: operations["get_agent_identity_providers_v1_agents_identity_providers_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/v1/agents/make_public": {
         parameters: {
             query?: never;
@@ -18218,6 +18235,23 @@ export interface paths {
          *     ```
          */
         patch: operations["patch_agent_v1_agents__agent_id__patch"];
+        trace?: never;
+    };
+    "/v1/agents/{agent_id}/identity": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /** Get Agent Identity Status */
+        get: operations["get_agent_identity_status_v1_agents__agent_id__identity_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/agents/{agent_id}/kill_switch": {
@@ -24128,6 +24162,24 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** AgentBudgetConfig */
+        AgentBudgetConfig: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Max Budget */
+            max_budget: number;
+        };
+        /** AgentBudgetState */
+        AgentBudgetState: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Id */
+            budget_id: string;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+        };
         /**
          * AgentCapabilities
          * @description Defines optional capabilities supported by an agent.
@@ -24206,11 +24258,20 @@ export interface components {
         AgentConfig: {
             /** Access Group Ids */
             access_group_ids?: string[] | null;
-            agent_card_params: components["schemas"]["AgentCard"];
+            agent_card_params?: components["schemas"]["AgentCard"];
             /** Agent Name */
             agent_name: string;
+            budget?: components["schemas"]["AgentBudgetConfig"] | null;
+            /** Enabled */
+            enabled?: boolean;
+            /**
+             * Execution Mode
+             * @enum {string}
+             */
+            execution_mode?: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
+            identity?: components["schemas"]["EntraIdentityConfig"] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
@@ -24296,6 +24357,45 @@ export interface components {
             required?: boolean | null;
             /** Uri */
             uri?: string;
+        };
+        /** AgentIdentityBinding */
+        AgentIdentityBinding: {
+            /**
+             * Active
+             * @default true
+             */
+            active: boolean;
+            /** Agent Id */
+            agent_id: string;
+            /** Client Id */
+            client_id: string;
+            /** Issuer */
+            issuer: string;
+            /** Last Authenticated At */
+            last_authenticated_at?: string | null;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "microsoft_entra";
+            /**
+             * Required Roles
+             * @default []
+             */
+            required_roles: string[];
+            /**
+             * Required Scopes
+             * @default [
+             *       "user_impersonation"
+             *     ]
+             */
+            required_scopes: string[];
+            /** Revision */
+            revision: string;
+            /** Service Principal Id */
+            service_principal_id?: string | null;
+            /** Tenant Id */
+            tenant_id: string;
         };
         /**
          * AgentInterface
@@ -24448,15 +24548,40 @@ export interface components {
             agent_id: string;
             /** Agent Name */
             agent_name: string;
+            /** Budget Id */
+            budget_id?: string | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */
             created_by?: string | null;
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Execution Mode
+             * @default autonomous
+             * @enum {string}
+             */
+            execution_mode: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
+            identity?: components["schemas"]["AgentIdentityBinding"] | null;
+            /**
+             * Identity Managed
+             * @default false
+             */
+            identity_managed: boolean;
+            /**
+             * Jwt Auth Configured
+             * @default false
+             */
+            jwt_auth_configured: boolean;
             /** Keys */
             keys?: components["schemas"]["AgentKeySummary"][] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
+            litellm_budget_table?: components["schemas"]["AgentBudgetState"] | null;
             /** Litellm Params */
             litellm_params?: {
                 [key: string]: unknown;
@@ -30127,6 +30252,32 @@ export interface components {
             /** Template Id */
             template_id: string;
         };
+        /** EntraIdentityConfig */
+        EntraIdentityConfig: {
+            /** Client Id */
+            client_id: string;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "microsoft_entra";
+            /**
+             * Required Roles
+             * @default []
+             */
+            required_roles: string[];
+            /**
+             * Required Scopes
+             * @default [
+             *       "user_impersonation"
+             *     ]
+             */
+            required_scopes: string[];
+            /** Service Principal Id */
+            service_principal_id?: string | null;
+            /** Tenant Id */
+            tenant_id: string;
+        };
         /** EnvironmentReport */
         EnvironmentReport: {
             /** Config Lines */
@@ -35528,6 +35679,28 @@ export interface components {
             /** Mcp Server Ids */
             mcp_server_ids: string[];
         };
+        /** ManagedAgentIdentityStatus */
+        ManagedAgentIdentityStatus: {
+            /**
+             * Enabled
+             * @default true
+             */
+            enabled: boolean;
+            /**
+             * Execution Mode
+             * @default autonomous
+             * @enum {string}
+             */
+            execution_mode: "autonomous" | "delegated" | "both";
+            identity?: components["schemas"]["AgentIdentityBinding"] | null;
+            /**
+             * Identity Managed
+             * @default false
+             */
+            identity_managed: boolean;
+            /** Last Authenticated At */
+            last_authenticated_at?: string | null;
+        };
         /**
          * Mcp
          * @description Give the model access to additional tools via remote Model Context Protocol
@@ -37602,8 +37775,17 @@ export interface components {
             agent_card_params?: components["schemas"]["AgentCard"];
             /** Agent Name */
             agent_name?: string;
+            budget?: components["schemas"]["AgentBudgetConfig"] | null;
+            /** Enabled */
+            enabled?: boolean;
+            /**
+             * Execution Mode
+             * @enum {string}
+             */
+            execution_mode?: "autonomous" | "delegated" | "both";
             /** Extra Headers */
             extra_headers?: string[] | null;
+            identity?: components["schemas"]["EntraIdentityConfig"] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
@@ -70055,6 +70237,26 @@ export interface operations {
             };
         };
     };
+    get_agent_identity_providers_v1_agents_identity_providers_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": string[];
+                };
+            };
+        };
+    };
     make_agents_public_v1_agents_make_public_post: {
         parameters: {
             query?: never;
@@ -70207,6 +70409,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_agent_identity_status_v1_agents__agent_id__identity_get: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ManagedAgentIdentityStatus"];
                 };
             };
             /** @description Validation Error */

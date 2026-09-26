@@ -1475,7 +1475,8 @@ async def test_add_spend_log_transaction_to_daily_end_user_transaction_skips_whe
 
 
 @pytest.mark.asyncio
-async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agent_id_and_queues_update():
+@pytest.mark.parametrize("billing_agent", [None, "caller-agent"])
+async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agent_id_and_queues_update(billing_agent):
     """
     Ensure agent_id is injected and queued for daily aggregation.
     """
@@ -1487,6 +1488,7 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agen
     payload = {
         "request_id": "req-123",
         "agent_id": agent_id,
+        "billing_agent_id": billing_agent,
         "user": "test-user",
         "startTime": "2024-01-01T12:00:00",
         "api_key": "test-key",
@@ -1506,14 +1508,19 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agen
         prisma_client=mock_prisma,
     )
 
+    if billing_agent is None:
+        writer.daily_agent_spend_update_queue.add_update.assert_not_awaited()
+        return
     writer.daily_agent_spend_update_queue.add_update.assert_called_once()
 
     call_args = writer.daily_agent_spend_update_queue.add_update.call_args[1]
     update_dict = call_args["update"]
     assert len(update_dict) == 1
+    charged_agent: Final = billing_agent or agent_id
     for key, transaction in update_dict.items():
-        assert key == f"{agent_id}_2024-01-01_test-key_gpt-4_openai_"
-        assert transaction["agent_id"] == agent_id
+        assert key == f"{charged_agent}_2024-01-01_test-key_gpt-4_openai_"
+        assert transaction["agent_id"] == charged_agent
+        assert transaction["spend"] == 0.3
         assert transaction["date"] == "2024-01-01"
         assert transaction["api_key"] == "test-key"
         assert transaction["model"] == "gpt-4"

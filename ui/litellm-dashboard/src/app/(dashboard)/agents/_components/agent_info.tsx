@@ -1,3 +1,6 @@
+import { AgentIdentityFields } from "./AgentIdentityFields";
+import { AgentIdentityDetails } from "./AgentIdentityDetails";
+import { withAgentIdentity } from "./agent_identity";
 import React, { useState, useEffect, useMemo } from "react";
 import { cx } from "@/lib/cva.config";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
@@ -72,6 +75,21 @@ const DetailItem: React.FC<{ label: React.ReactNode; children: React.ReactNode }
       {label}
     </dt>
     <dd className="border-b border-border px-4 py-3 break-words text-foreground last-of-type:border-b-0">{children}</dd>
+  </>
+);
+
+const AgentBudgetDetails = ({ agent }: { agent: Agent }) => (
+  <>
+    <DetailItem label="Agent Budget">
+      {agent.litellm_budget_table?.max_budget != null
+        ? `$${agent.spend ?? 0} / $${agent.litellm_budget_table.max_budget}`
+        : "No aggregate limit"}
+    </DetailItem>
+    <DetailItem label="Budget Reset">
+      {agent.litellm_budget_table?.budget_reset_at
+        ? new Date(agent.litellm_budget_table.budget_reset_at).toLocaleString()
+        : "No scheduled reset"}
+    </DetailItem>
   </>
 );
 
@@ -237,7 +255,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
         : built;
 
       await patchAgentCall(accessToken, agentId, {
-        ...updateData,
+        ...withAgentIdentity(updateData, values, agent),
         object_permission: buildMcpObjectPermission(values),
         access_group_ids: values.access_group_ids ?? [],
       });
@@ -337,9 +355,16 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
         <div>
           {/* Overview Panel */}
           <TabsContent value="overview" keepMounted>
+            <AgentIdentityDetails
+              agentId={agentId}
+              identity={agent.identity}
+              accessToken={accessToken}
+              isAdmin={isAdmin}
+            />
             <DetailList>
               <DetailItem label="Agent ID">{agent.agent_id}</DetailItem>
               <DetailItem label="Agent Name">{agent.agent_name}</DetailItem>
+              <AgentBudgetDetails agent={agent} />
               <DetailItem label="Display Name">{agent.agent_card_params?.name || "-"}</DetailItem>
               <DetailItem label="Description">{agent.agent_card_params?.description || "-"}</DetailItem>
               <DetailItem label="URL">{agent.agent_card_params?.url || "-"}</DetailItem>
@@ -504,6 +529,8 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                         ) : (
                           <AgentFormFields showAgentName={true} panels={panels} />
                         )}
+
+                        <AgentIdentityFields accessToken={accessToken} />
 
                         {discoveryRequest && (
                           <div className="mt-4">

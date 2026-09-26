@@ -2712,3 +2712,67 @@ async def test_track_cost_callback_failure_alert_never_carries_request_metadata_
         assert "headers" in failure_debug_lines[0]
     else:
         assert failure_debug_lines == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("identity_field", ["agent_id", "billing_agent_id"])
+async def test_autonomous_llm_callback_persists_without_human_or_key(identity_field: str) -> None:
+    kwargs: Final = {
+        "call_type": "acompletion",
+        "model": "test-model",
+        "response_cost": 0.01,
+        "litellm_params": {"metadata": {identity_field: "autonomous-agent"}},
+    }
+    with patch(
+        "litellm.proxy.hooks.proxy_track_cost_callback._update_database_and_spend_counters",
+        new_callable=AsyncMock,
+        return_value=False,
+    ) as persist:
+        await _ProxyDBLogger()._PROXY_track_cost_callback(
+            kwargs=kwargs, completion_response=ModelResponse(), start_time=datetime.now(), end_time=datetime.now()
+        )
+    persist.assert_awaited_once()
+    assert persist.call_args.kwargs["response_cost"] == 0.01
+    assert persist.call_args.kwargs["user_id"] is None
+    assert persist.call_args.kwargs["user_api_key"] is None
+    assert persist.call_args.kwargs["kwargs"]["litellm_params"]["metadata"][identity_field] == "autonomous-agent"
+
+
+@pytest.mark.parametrize("agent_id,expected", [(None, False), ("autonomous-agent", True)])
+def test_autonomous_agent_cost_tracking_needs_no_human_or_virtual_key(agent_id: str | None, expected: bool) -> None:
+    assert _should_track_cost_callback(
+        user_api_key=None, user_id=None, team_id=None, end_user_id=None, call_type="acompletion", agent_id=agent_id
+    ) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("billing_agent", [None, "verified-agent"])
+async def test_callback_does_not_charge_a_header_selected_agent(
+    billing_agent: str | None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+
+    cache: Final = DualCache()
+    for key in ("spend:user:human", "spend:agent:header-selected-agent", "spend:agent:verified-agent", "spend:agent_window:20260102T000000.000000Z:verified-agent"):
+        cache.in_memory_cache.set_cache(key=key, value=0.0)
+    logging: Final = MagicMock()
+    logging.db_spend_update_writer.update_database = AsyncMock(return_value=True)
+    logging.slack_alerting_instance.customer_spend_alert = AsyncMock()
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", logging)
+    monkeypatch.setattr(proxy_server, "update_cache", AsyncMock())
+    kwargs: Final = {
+        "call_type": "acompletion", "model": "test-model", "response_cost": 0.01,
+        "litellm_params": {"metadata": {
+            "user_api_key_user_id": "human", "agent_id": "header-selected-agent", "billing_agent_id": billing_agent,
+            "billing_agent_counter_key": "spend:agent_window:20260102T000000.000000Z:verified-agent" if billing_agent else None,
+        }},
+    }
+    await _ProxyDBLogger()._PROXY_track_cost_callback(
+        kwargs=kwargs, completion_response=ModelResponse(), start_time=datetime.now(), end_time=datetime.now()
+    )
+    assert cache.in_memory_cache.get_cache(key="spend:user:human") == 0.01
+    assert cache.in_memory_cache.get_cache(key="spend:agent:header-selected-agent") == 0.0
+    assert cache.in_memory_cache.get_cache(key="spend:agent:verified-agent") == 0.0
+    assert cache.in_memory_cache.get_cache(key="spend:agent_window:20260102T000000.000000Z:verified-agent") == (0.01 if billing_agent else 0.0)

@@ -3631,6 +3631,12 @@ class SSOAuthenticationHandler:
                     },
                 )
 
+        from litellm.proxy.management_endpoints.sso.agent_subject_enrollment import enroll_microsoft_subject
+
+        await enroll_microsoft_subject(
+            request.scope.get("litellm_microsoft_interactive_subject"), user_id, prisma_client
+        )
+
         if isinstance(user_id, str) and user_id:
             await retain_sso_identity_assertion_for_ema(user_id=user_id, assertion=sso_assertion)
             await warn_if_id_jag_assertion_uncaptured(sso_assertion)
@@ -4300,6 +4306,22 @@ class MicrosoftSSOHandler:
             original_msft_result["app_roles"] = app_roles
             return original_msft_result or {}
 
+        from litellm.proxy.management_endpoints.sso.agent_subject_enrollment import microsoft_interactive_subject
+
+        request.scope["litellm_microsoft_interactive_subject"] = microsoft_interactive_subject(
+            microsoft_tenant,
+            original_msft_result,
+            MappingProxyType(
+                {
+                    name: os.getenv(name)
+                    for name in (
+                        "MICROSOFT_AUTHORIZATION_ENDPOINT",
+                        "MICROSOFT_TOKEN_ENDPOINT",
+                        "MICROSOFT_USERINFO_ENDPOINT",
+                    )
+                }
+            ),
+        )
         result: Final = MicrosoftSSOHandler.openid_from_response(
             response=original_msft_result,
             team_ids=user_team_ids,

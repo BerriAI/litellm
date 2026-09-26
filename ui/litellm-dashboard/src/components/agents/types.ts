@@ -11,6 +11,12 @@ export type AgentKillSwitchConfig = components["schemas"]["AgentKillSwitchConfig
 export type AgentKillSwitchResult = components["schemas"]["AgentKillSwitchResult"];
 
 export interface Agent {
+  identity?: components["schemas"]["AgentIdentityBinding"] | null;
+  identity_managed?: boolean;
+  enabled?: boolean;
+  execution_mode?: components["schemas"]["AgentResponse"]["execution_mode"];
+  litellm_budget_table?: components["schemas"]["AgentBudgetState"] | null;
+  jwt_auth_configured?: boolean;
   agent_id: string;
   agent_name: string;
   litellm_params: {
