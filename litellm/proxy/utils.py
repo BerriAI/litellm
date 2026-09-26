@@ -251,7 +251,6 @@ from litellm.utils import (
 )
 
 if TYPE_CHECKING:
-    from litellm_enterprise.enterprise_callbacks.send_emails.base_email import BaseEmailLogger as _BaseEmailLogger
     from mcp.types import CallToolResult
     from opentelemetry.trace import Span as _Span
     from prisma import models as prisma_models
@@ -1216,7 +1215,7 @@ class ProxyLogging:
             alerting=self.alerting,
             internal_usage_cache=self.internal_usage_cache.dual_cache,
         )
-        self.email_logging_instance: _BaseEmailLogger | None = None
+        self.email_logging_instance: BaseEmailLogger | None = None
         if BaseEmailLogger is not None:
             email_logger_class: Final = _get_email_logger_class()
             if email_logger_class is not None:
