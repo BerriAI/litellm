@@ -2728,16 +2728,14 @@ def test_invalid_concurrency_falls_back_to_default(bad: object) -> None:
     logger = _override_logger(s3_max_concurrent_uploads=bad)
 
     assert logger.s3_max_concurrent_uploads == DEFAULT_S3_MAX_CONCURRENT_UPLOADS
-    assert logger._upload_limiter._ceiling == DEFAULT_S3_MAX_CONCURRENT_UPLOADS
-    assert logger._upload_limiter.limit == DEFAULT_S3_MAX_CONCURRENT_UPLOADS
+    assert logger._upload_limiter._value == DEFAULT_S3_MAX_CONCURRENT_UPLOADS
 
 
 def test_env_backed_concurrency_string_is_parsed() -> None:
     logger = _override_logger(s3_max_concurrent_uploads="4")
 
     assert logger.s3_max_concurrent_uploads == 4
-    assert logger._upload_limiter._ceiling == 4
-    assert logger._upload_limiter.limit == 4
+    assert logger._upload_limiter._value == 4
 
 
 @pytest.mark.parametrize("empty", [None, ""])
@@ -2752,8 +2750,7 @@ def test_empty_config_concurrency_falls_back_to_constructor_value(empty: object)
     )
 
     assert logger.s3_max_concurrent_uploads == 4
-    assert logger._upload_limiter._ceiling == 4
-    assert logger._upload_limiter.limit == 4
+    assert logger._upload_limiter._value == 4
 
 
 def _coded_failure_response(status: int, code: str | None, raw_body: str | None = None) -> MagicMock:
@@ -3656,6 +3653,78 @@ def test_upload_semaphore_alias_is_the_limiter() -> None:
     assert logger._upload_semaphore is logger._upload_limiter
 
 
+@pytest.mark.asyncio
+async def test_overridden_upload_stays_bounded_by_the_configured_width() -> None:
+    class _InFlightUploadLogger(S3Logger):
+        def __init__(self, **kwargs: object) -> None:
+            super().__init__(**kwargs)
+            self.in_flight = 0
+            self.peak = 0
+
+        async def async_upload_data_to_s3(self, batch_logging_element: s3BatchLoggingElement) -> bool:
+            self.in_flight += 1
+            self.peak = max(self.peak, self.in_flight)
+            for _ in range(10):
+                await _real_sleep(0)
+            self.in_flight -= 1
+            return True
+
+    logger = _InFlightUploadLogger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_concurrent_uploads=4,
+    )
+    logger.log_queue = [_element({"i": index}, f"{index}") for index in range(40)]
+
+    await logger.flush_queue()
+
+    assert logger.peak <= 4
+    assert logger.log_queue == []
+
+
+@pytest.mark.asyncio
+async def test_holding_the_semaphore_during_a_direct_upload_does_not_deadlock() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+        s3_max_concurrent_uploads=1,
+    )
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = _RecordingPut()
+    element = _element({"id": "x"}, "x")
+
+    async def held_upload() -> bool:
+        async with logger._upload_semaphore:
+            return await logger.async_upload_data_to_s3(element)
+
+    assert await asyncio.wait_for(held_upload(), timeout=5) is True
+
+
+@pytest.mark.asyncio
+async def test_assigning_a_semaphore_changes_the_upload_width() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+    logger._upload_semaphore = asyncio.Semaphore(3)
+
+    put = _CountingPut(width=3)
+    logger.async_httpx_client = AsyncMock()
+    logger.async_httpx_client.put = put
+    logger.log_queue = [_element({"i": index}, f"{index}") for index in range(30)]
+
+    await logger.flush_queue()
+
+    assert put.peak == 3
+    assert logger.log_queue == []
+
+
 def test_bool_config_values_fall_back_to_the_default() -> None:
     from litellm.integrations.s3 import resolve_s3_max_queue_size, resolve_s3_max_retry_age_seconds
 
@@ -3734,7 +3803,8 @@ async def test_peak_serialized_bodies_bounded_by_upload_width() -> None:
 
     assert put.first_completed is not None
     assert put.first_completed <= logger.s3_max_concurrent_uploads
-    assert len(dumps_calls) == len(put.calls) == 128
+    assert len(dumps_calls) == 64
+    assert len(put.calls) == 128
 
 
 @pytest.mark.asyncio
@@ -3762,7 +3832,7 @@ async def test_send_batch_calls_upload_with_one_positional_arg() -> None:
 
 
 @pytest.mark.asyncio
-async def test_retry_rebuilds_the_body_inside_the_slot() -> None:
+async def test_retries_serialize_the_body_once_per_element_per_flush() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
         s3_aws_access_key_id="test-key",
@@ -3778,11 +3848,11 @@ async def test_retry_rebuilds_the_body_inside_the_slot() -> None:
         dumps_calls.append(args)
         return real_safe_dumps(*args, **kwargs)
 
-    put = _FailOncePerKeyPut()
+    put = _FailUntilClearedPut(status=503)
 
     logger.async_httpx_client = AsyncMock()
     logger.async_httpx_client.put = put
-    logger.log_queue = [_element({"i": index}, f"{index}") for index in range(64)]
+    logger.log_queue = [_element({"i": index}, f"{index}") for index in range(8)]
 
     with (
         patch("litellm.integrations.s3_v2.safe_dumps", side_effect=counting_dumps),
@@ -3790,8 +3860,9 @@ async def test_retry_rebuilds_the_body_inside_the_slot() -> None:
     ):
         await logger.flush_queue()
 
-    assert len(dumps_calls) == len(put.calls) == 128
-    assert logger.log_queue == []
+    assert len(dumps_calls) == 8
+    assert len(put.calls) == 24
+    assert len(logger.log_queue) == 8
 
 
 @pytest.mark.asyncio
@@ -4375,15 +4446,13 @@ async def test_configured_concurrency_is_the_fixed_limit_when_adaptive_is_off() 
     logger.async_httpx_client = AsyncMock()
     logger.async_httpx_client.put = _StatusPut([_transient_failure_response(503), _ok_response()])
 
-    assert logger._upload_limiter.limit == 64
-    assert logger._upload_limiter._floor == 64
-    assert logger._upload_limiter._ceiling == 64
+    assert logger._upload_limiter._value == 64
 
     logger.log_queue = [_element({"i": 0}, "0")]
     with patch("asyncio.sleep", new_callable=AsyncMock):
         await logger.flush_queue()
 
-    assert logger._upload_limiter.limit == 64
+    assert logger._upload_limiter._value == 64
 
 
 @pytest.mark.asyncio
@@ -4406,7 +4475,7 @@ def test_default_upload_width_is_16() -> None:
 
     logger = _override_logger()
 
-    assert logger._upload_limiter.limit == DEFAULT_S3_MAX_CONCURRENT_UPLOADS
+    assert logger._upload_semaphore._value == DEFAULT_S3_MAX_CONCURRENT_UPLOADS
     assert DEFAULT_S3_MAX_CONCURRENT_UPLOADS == 16
 
 

@@ -193,18 +193,14 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_max_adaptive_concurrency=s3_max_adaptive_concurrency,
                 s3_batch_file_upload=s3_batch_file_upload,
             )
-            self._upload_limiter = (
+            self._upload_limiter: asyncio.Semaphore | AdaptiveConcurrencyLimiter = (
                 AdaptiveConcurrencyLimiter(
                     initial=self.s3_max_concurrent_uploads,
                     floor=self.s3_max_concurrent_uploads,
                     ceiling=max(self.s3_max_concurrent_uploads, self.s3_max_adaptive_concurrency),
                 )
                 if self.s3_adaptive_concurrency
-                else AdaptiveConcurrencyLimiter(
-                    initial=self.s3_max_concurrent_uploads,
-                    floor=self.s3_max_concurrent_uploads,
-                    ceiling=self.s3_max_concurrent_uploads,
-                )
+                else asyncio.Semaphore(self.s3_max_concurrent_uploads)
             )
             verbose_logger.debug("s3 logger using endpoint url %s", s3_endpoint_url)
 
@@ -521,15 +517,17 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             self.handle_callback_failure(callback_name="S3Logger")
 
     @property
-    def _upload_semaphore(self) -> AdaptiveConcurrencyLimiter:
+    def _upload_semaphore(self) -> asyncio.Semaphore | AdaptiveConcurrencyLimiter:
         return self._upload_limiter
+
+    @_upload_semaphore.setter
+    def _upload_semaphore(self, value: asyncio.Semaphore | AdaptiveConcurrencyLimiter) -> None:
+        self._upload_limiter = value
 
     async def async_upload_data_to_s3(
         self,
         batch_logging_element: s3BatchLoggingElement,
-        slot: AdaptiveConcurrencyLimiter | None = None,
     ) -> bool:
-        limiter: Final = slot if slot is not None else self._upload_limiter
         try:
             from litellm.litellm_core_utils.asyncify import asyncify
 
@@ -561,28 +559,28 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                     return error.response
 
             max_retries: Final = 3
-            async with limiter:
-                for attempt in range(max_retries):
-                    response = await self._recorded_put(partial(signed_put, self._prepare_put(batch_logging_element)))
-                    if (
-                        response.status_code in _RETRYABLE_STATUSES
-                        and not _is_terminal(response)
-                        and attempt < max_retries - 1
-                    ):
-                        wait_time = 2**attempt  # 1s, 2s
-                        verbose_logger.debug(
-                            "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
-                            response.status_code,
-                            wait_time,
-                            attempt + 1,
-                            max_retries,
-                            batch_logging_element.s3_object_key,
-                        )
-                        self._flush_retries += 1
-                        await asyncio.sleep(wait_time)
-                        continue
-                    response.raise_for_status()
-                    break
+            prepared: Final = self._prepare_put(batch_logging_element)
+            for attempt in range(max_retries):
+                response = await self._recorded_put(partial(signed_put, prepared))
+                if (
+                    response.status_code in _RETRYABLE_STATUSES
+                    and not _is_terminal(response)
+                    and attempt < max_retries - 1
+                ):
+                    wait_time = 2**attempt  # 1s, 2s
+                    verbose_logger.debug(
+                        "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
+                        response.status_code,
+                        wait_time,
+                        attempt + 1,
+                        max_retries,
+                        batch_logging_element.s3_object_key,
+                    )
+                    self._flush_retries += 1
+                    await asyncio.sleep(wait_time)
+                    continue
+                response.raise_for_status()
+                break
         except Exception as e:
             verbose_logger.exception("Error uploading to s3: %s", e)
             self.handle_callback_failure(callback_name="S3Logger")
@@ -686,23 +684,28 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         return True
 
     async def _upload_bounded(self, element: s3BatchLoggingElement) -> UploadOutcome:
-        if await self.async_upload_data_to_s3(element):
+        async with self._upload_semaphore:
+            delivered: Final = await self.async_upload_data_to_s3(element)
+        if delivered:
             return "delivered"
         if id(element) in self._flush_dropped:
             return "dropped"
         return "retry"
 
     async def _recorded_put(self, signed_put: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
+        adaptive: Final = self._upload_limiter if isinstance(self._upload_limiter, AdaptiveConcurrencyLimiter) else None
         try:
             response: Final = await signed_put()
         except Exception:
-            self._upload_limiter.record(PutSample(throttled=True))
+            if adaptive is not None:
+                adaptive.record(PutSample(throttled=True))
             raise
-        self._upload_limiter.record(
-            PutSample(
-                throttled=response.status_code in (429, 503) or _s3_error_code(response) == "SlowDown",
+        if adaptive is not None:
+            adaptive.record(
+                PutSample(
+                    throttled=response.status_code in (429, 503) or _s3_error_code(response) == "SlowDown",
+                )
             )
-        )
         return response
 
     def _batch_file_elements(self, batch: tuple[s3BatchLoggingElement, ...]) -> tuple[s3BatchLoggingElement, ...]:
