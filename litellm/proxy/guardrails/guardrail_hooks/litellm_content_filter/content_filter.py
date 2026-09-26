@@ -1029,7 +1029,12 @@ class ContentFilterGuardrail(CustomGuardrail):
                 # Check if sentence contains ANY identifier word
                 identifier_found = None
                 for identifier in identifier_words:
-                    if identifier in sentence_lower:
+                    if category_name == "prompt_injection_sql" and identifier.isalpha():
+                        pattern = r"\b" + re.escape(identifier.lower()) + r"\b"
+                        if re.search(pattern, sentence_lower):
+                            identifier_found = identifier
+                            break
+                    elif identifier in sentence_lower:
                         identifier_found = identifier
                         break
 

@@ -8,8 +8,6 @@ from typing import Final
 from unittest.mock import MagicMock
 
 import pytest
-
-
 from fastapi import HTTPException
 
 from litellm.constants import (
@@ -2460,6 +2458,69 @@ class TestContentFilterGuardrail:
         )
         # Should pass - 'minors' and 'romantic' are in different sentences
         assert len(result["texts"]) == 1
+
+    @pytest.mark.parametrize("keyword", ["SELECT", "DROP", "UNION"])
+    @pytest.mark.asyncio
+    async def test_conditional_category_identifier_requires_word_boundary(self, keyword):
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-sql-identifier-boundary",
+            categories=[
+                {
+                    "category": "prompt_injection_sql",
+                    "enabled": True,
+                    "action": "BLOCK",
+                }
+            ],
+        )
+
+        benign = await guardrail.apply_guardrail(
+            inputs={"texts": ["Can the executive review this for 10 or 15 minutes?"]},
+            request_data={},
+            input_type="request",
+        )
+        assert benign["texts"] == ["Can the executive review this for 10 or 15 minutes?"]
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": [f"{keyword} name FROM users WHERE id = 1 OR 1=1"]},
+                request_data={},
+                input_type="request",
+            )
+        assert exc_info.value.status_code == 400
+        assert "prompt_injection_sql" in str(exc_info.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_custom_sql_identifier_with_punctuation_still_blocks(self, tmp_path, monkeypatch):
+        category_file = tmp_path / "sql.yaml"
+        category_file.write_text(
+            "category_name: prompt_injection_sql\n"
+            "identifier_words:\n"
+            "  - DROP;\n"
+            "additional_block_words:\n"
+            "  - OR 1\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setenv("LITELLM_CONTENT_FILTER_ALLOW_EXTERNAL_PATHS", "true")
+        guardrail = ContentFilterGuardrail(
+            guardrail_name="test-custom-sql-identifier",
+            categories=[
+                {
+                    "category": "prompt_injection_sql",
+                    "enabled": True,
+                    "action": "BLOCK",
+                    "category_file": str(category_file),
+                }
+            ],
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.apply_guardrail(
+                inputs={"texts": ["DROP; OR 1=1"]},
+                request_data={},
+                input_type="request",
+            )
+        assert exc_info.value.status_code == 400
+        assert exc_info.value.detail["matched_phrase"] == "drop; + or 1"
 
     @pytest.mark.asyncio
     async def test_conditional_racial_bias_category(self):
