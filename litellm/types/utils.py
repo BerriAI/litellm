@@ -48,6 +48,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import INTERNAL_KWARG_PREFIX
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
     CachedTokensDetails,
@@ -3929,6 +3930,10 @@ all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-
     *StandardCallbackDynamicParams.__annotations__,
     *CustomPricingLiteLLMParams.model_fields,
 ]
+
+
+def is_litellm_owned_kwarg(name: str) -> bool:
+    return name in all_litellm_params or name.startswith(INTERNAL_KWARG_PREFIX)
 
 
 class KeyGenerationConfig(TypedDict, total=False):

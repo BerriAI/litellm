@@ -257,7 +257,7 @@ from litellm.types.utils import (
     TextCompletionResponse,
     TranscriptionResponse,
     Usage,
-    all_litellm_params,
+    is_litellm_owned_kwarg,
 )
 
 _CALL_TYPE_ENUM_MAP: Final[dict] = {ct.value: ct for ct in CallTypes}
@@ -4161,26 +4161,8 @@ def _remove_unsupported_params(non_default_params: dict, supported_openai_params
     return non_default_params
 
 
-def filter_out_litellm_params(kwargs: dict) -> dict:
-    """
-    Filter out LiteLLM internal parameters from kwargs dict.
-
-    Returns a new dict containing only non-LiteLLM parameters that should be
-    passed to external provider APIs.
-
-    Args:
-        kwargs: Dictionary that may contain LiteLLM internal parameters
-
-    Returns:
-        Dictionary with LiteLLM internal parameters filtered out
-
-    Example:
-        >>> kwargs = {"query": "test", "shared_session": session_obj, "metadata": {}}
-        >>> filtered = filter_out_litellm_params(kwargs)
-        >>> # filtered = {"query": "test"}
-    """
-
-    return {key: value for key, value in kwargs.items() if key not in all_litellm_params}
+def filter_out_litellm_params(kwargs: Mapping[str, object]) -> dict:
+    return {key: value for key, value in kwargs.items() if not is_litellm_owned_kwarg(key)}
 
 
 def _provider_supports_vertex_params(custom_llm_provider: str) -> bool:
@@ -10138,10 +10120,9 @@ def get_standard_openai_params(params: Mapping[str, object]) -> dict:
 
 def get_non_default_completion_params(kwargs: Mapping[str, object]) -> dict:
     openai_params: Final = litellm.OPENAI_CHAT_COMPLETION_PARAMS
-    default_params: Final = openai_params + all_litellm_params
     non_default_params: Final = {
-        k: v for k, v in kwargs.items() if k not in default_params
-    }  # model-specific params - pass them straight to the model/provider
+        k: v for k, v in kwargs.items() if k not in openai_params and not is_litellm_owned_kwarg(k)
+    }
 
     return non_default_params
 
@@ -10189,11 +10170,12 @@ def strip_reasoning_summary_aliases_from_optional_params(
     return op, rs_val
 
 
-def get_non_default_transcription_params(kwargs: dict) -> dict:
+def get_non_default_transcription_params(kwargs: Mapping[str, object]) -> dict:
     from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
 
-    default_params: Final = OPENAI_TRANSCRIPTION_PARAMS + all_litellm_params
-    non_default_params: Final = {k: v for k, v in kwargs.items() if k not in default_params}
+    non_default_params: Final = {
+        k: v for k, v in kwargs.items() if k not in OPENAI_TRANSCRIPTION_PARAMS and not is_litellm_owned_kwarg(k)
+    }
     return non_default_params
 
 
