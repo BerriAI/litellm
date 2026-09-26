@@ -59,7 +59,7 @@ def test_a_bad_span_scope_is_reported_even_when_the_environment_is_fine():
 def test_one_span_scope_per_team(new_vars, stored, rejected):
     """The entries flatten last-wins, so a second scope would export whichever entry
     was stored last. An entry that names no scope leaves the stored one in charge."""
-    error = conflicting_span_scope_error(new_vars, stored)
+    error = conflicting_span_scope_error("langfuse_otel", new_vars, stored)
     assert (error is not None) is rejected
     if rejected:
         assert "langfuse_span_scope" in error and stored[-1]["langfuse_span_scope"] in error
@@ -99,6 +99,89 @@ def test_key_logging_entries_may_not_disagree_on_the_span_scope():
         ]
     }
     assert logging_metadata_config_error(agreeing) is None
+
+
+@pytest.mark.parametrize("callback_name", ["langfuse_otel", "arize", "weave_otel", "newrelic"])
+def test_otel_span_scope_is_accepted_on_every_destination_backend(callback_name):
+    for scope in ("full", "no_internal", "llm_only"):
+        assert callback_config_error(callback_name, {"otel_span_scope": scope}) is None
+
+
+@pytest.mark.parametrize("bad", ["everything", "NO_INTERNAL", "no", "exclude", ""])
+def test_callback_config_error_rejects_an_unknown_otel_span_scope(bad):
+    error = callback_config_error("arize", {"otel_span_scope": bad})
+    assert error is not None and "otel_span_scope" in error and "no_internal" in error
+
+
+@pytest.mark.parametrize("callback_name", ["langfuse", "datadog", "otel", "arize_phoenix", None])
+def test_otel_span_scope_on_a_callback_that_has_no_destination_is_rejected(callback_name):
+    error = callback_config_error(callback_name, {"otel_span_scope": "no_internal"})
+    assert error is not None and "otel_span_scope" in error and "langfuse_otel" in error
+
+
+def test_langfuse_span_scope_and_otel_span_scope_disagreeing_on_one_entry_is_rejected():
+    error = callback_config_error(
+        "langfuse_otel", {"langfuse_span_scope": "llm_only", "otel_span_scope": "no_internal"}
+    )
+    assert error is not None and "langfuse_span_scope" in error and "otel_span_scope" in error
+
+    assert (
+        callback_config_error(
+            "langfuse_otel", {"langfuse_span_scope": "llm_only", "otel_span_scope": "llm_only"}
+        )
+        is None
+    )
+    assert callback_config_error("langfuse_otel", {"otel_span_scope": "no_internal"}) is None
+
+
+def test_otel_span_scope_llm_only_is_accepted_on_newrelic():
+    assert callback_config_error("newrelic", {"otel_span_scope": "llm_only"}) is None
+
+
+def test_key_logging_entries_of_one_backend_may_not_disagree_on_span_scope():
+    def entry(callback_name, callback_type, value):
+        return {
+            "callback_name": callback_name,
+            "callback_type": callback_type,
+            "callback_vars": {"otel_span_scope": value},
+        }
+
+    disagreeing = {"logging": [entry("arize", "success", "no_internal"), entry("arize", "failure", "full")]}
+    error = logging_metadata_config_error(disagreeing)
+    assert error is not None and "otel_span_scope" in error and "'no_internal'" in error
+
+    two_backends = {"logging": [entry("arize", "success", "no_internal"), entry("langfuse_otel", "success", "full")]}
+    assert logging_metadata_config_error(two_backends) is None
+
+
+@pytest.mark.parametrize(
+    "new_vars, stored, rejected",
+    [
+        ({"otel_span_scope": "no_internal"}, [{"otel_span_scope": "full"}], True),
+        ({"otel_span_scope": "no_internal"}, [{"otel_span_scope": "no_internal"}], False),
+        ({"otel_span_scope": "no_internal"}, [{"arize_api_key": "k"}], False),
+        ({"arize_api_key": "k"}, [{"otel_span_scope": "no_internal"}], False),
+        (None, [{"otel_span_scope": "no_internal"}], False),
+    ],
+)
+def test_one_span_scope_value_per_backend(new_vars, stored, rejected):
+    error = conflicting_span_scope_error("arize", new_vars, stored)
+    assert (error is not None) is rejected
+
+
+@pytest.mark.parametrize(
+    "callback_name, new_vars, stored, rejected",
+    [
+        ("langfuse_otel", {"otel_span_scope": "llm_only"}, [{"langfuse_span_scope": "full"}], True),
+        ("newrelic", {"otel_span_scope": "llm_only"}, [{"otel_span_scope": "full"}], True),
+        ("langfuse_otel", {"otel_span_scope": "llm_only"}, [{"langfuse_span_scope": "llm_only"}], False),
+        ("langfuse_otel", {"otel_span_scope": "llm_only"}, [{"otel_span_scope": "llm_only"}], False),
+        ("langfuse_otel", {"langfuse_span_scope": "llm_only"}, [{"otel_span_scope": "llm_only"}], False),
+    ],
+)
+def test_split_span_scope_aliases_conflict_across_entries(callback_name, new_vars, stored, rejected):
+    error = conflicting_span_scope_error(callback_name, new_vars, stored)
+    assert (error is not None) is rejected
 
 
 @pytest.mark.parametrize("var", ["arize_success_sampling_rate", "arize_error_sampling_rate"])

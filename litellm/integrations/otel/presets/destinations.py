@@ -14,6 +14,7 @@ from typing import Final
 import litellm
 from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.destination import OtelDestination
+from litellm.integrations.otel.plumbing.context import tenant_span_scope_default
 from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
 from litellm.types.utils import OtelSpanScope, StandardCallbackDynamicParams
 
@@ -112,9 +113,10 @@ _NO_ATTRS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 def _span_scope(callback_name: str, params: StandardCallbackDynamicParams) -> OtelSpanScope:
-    if callback_name != "langfuse_otel":
-        return "full"
-    return params.get("langfuse_span_scope") or "full"
+    configured: Final = params.get("otel_span_scope") or (
+        params.get("langfuse_span_scope") if callback_name == "langfuse_otel" else None
+    )
+    return tenant_span_scope_default() if configured is None else configured
 
 
 def destination_capable_backends() -> frozenset[str]:

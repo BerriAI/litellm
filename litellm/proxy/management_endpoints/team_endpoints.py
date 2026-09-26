@@ -119,6 +119,7 @@ from litellm.proxy.auth.auth_utils import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
+from litellm.proxy.common_utils.callback_config_validation import raise_on_invalid_logging_metadata
 from litellm.proxy.common_utils.callback_utils import encrypt_callback_vars
 from litellm.proxy.common_utils.json_merge_patch import apply_json_merge_patch
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -1521,6 +1522,7 @@ async def new_team(
         validate_budget_duration(data.budget_duration)
         validate_budget_duration(data.team_member_budget_duration)
         validate_team_model_max_budget(model_max_budget=data.model_max_budget, premium_user=premium_user)
+        raise_on_invalid_logging_metadata(data.metadata)
 
         if data.soft_budget is not None:
             if data.max_budget is not None:
@@ -2255,6 +2257,7 @@ async def update_team(
 
         if data.team_id is None:
             raise HTTPException(status_code=400, detail={"error": "No team id passed in"})
+        raise_on_invalid_logging_metadata(data.metadata)
         verbose_proxy_logger.debug("/team/update - %s", data)
 
         # Validate budget values are not negative

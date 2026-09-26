@@ -3,7 +3,7 @@
 import os
 from collections.abc import Mapping
 from contextvars import ContextVar, Token
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, get_args
 
 from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
@@ -21,7 +21,9 @@ from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
 
+from litellm.constants import OTEL_TENANT_SPAN_SCOPE_ENV
 from litellm.integrations.otel.model.semconv import HTTP
+from litellm.types.utils import OtelSpanScope
 
 if TYPE_CHECKING:
     from litellm.integrations.otel.model.destination import OtelDestination
@@ -421,6 +423,20 @@ def tenant_destinations_are_additive() -> bool:
 
     configured: Final = litellm.otel_tenant_destination_mode or os.environ.get(OTEL_TENANT_DESTINATION_MODE_ENV)
     return isinstance(configured, str) and configured.strip().lower() == ADDITIVE_DESTINATION_MODE
+
+
+_SCOPES: Final[tuple[OtelSpanScope, ...]] = get_args(OtelSpanScope)
+
+
+def tenant_span_scope_default() -> OtelSpanScope:
+    import litellm
+
+    configured: Final = litellm.otel_tenant_span_scope or os.environ.get(OTEL_TENANT_SPAN_SCOPE_ENV)
+    normalized: Final = configured.strip().lower() if isinstance(configured, str) else None
+    for scope in _SCOPES:
+        if scope == normalized:
+            return scope
+    return "full"
 
 
 def destination_backends() -> frozenset[str]:

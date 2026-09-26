@@ -4,7 +4,11 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from typing import Any, Final
 
-from litellm.types.utils import OTEL_SPAN_SCOPES, TRUSTED_CALLBACK_VARS_FIELD, StandardCallbackDynamicParams
+from litellm.types.utils import (
+    OTEL_SPAN_SCOPES,
+    TRUSTED_CALLBACK_VARS_FIELD,
+    StandardCallbackDynamicParams,
+)
 
 _CLIENT_CALLBACK_METADATA_SLOTS: Final[tuple[str, ...]] = ("litellm_metadata", "metadata")
 _inherited_message_logging_disabled: Final[ContextVar[bool]] = ContextVar(
@@ -79,6 +83,11 @@ def validate_langfuse_environment_value(value: str) -> None:
 def validate_langfuse_span_scope_value(value: str) -> None:
     if value not in OTEL_SPAN_SCOPES:
         raise ValueError(f"Invalid langfuse_span_scope {value!r}: must be one of {sorted(OTEL_SPAN_SCOPES)}")
+
+
+def validate_otel_span_scope_value(value: str) -> None:
+    if value not in OTEL_SPAN_SCOPES:
+        raise ValueError(f"Invalid otel_span_scope {value!r}: must be one of {sorted(OTEL_SPAN_SCOPES)}")
 
 
 # Hardcoded list of supported callback params to avoid runtime inspection issues with TypedDict

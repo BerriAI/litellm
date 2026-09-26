@@ -36,6 +36,7 @@ from opentelemetry.sdk.trace.export.in_memory_span_exporter import (
 from opentelemetry.trace import Span, SpanContext, SpanKind, Status, Tracer
 from opentelemetry.util.re import parse_env_headers
 from opentelemetry.util.types import Attributes, AttributeValue
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm._version import version as litellm_version
@@ -435,14 +436,20 @@ def is_llm_call_span(span: ReadableSpan) -> bool:
 
 
 def _in_scope(span: ReadableSpan, scope: "OtelSpanScope") -> bool:
-    return scope == "full" or is_llm_call_span(span)
+    if scope == "full":
+        return True
+    if scope == "no_internal":
+        return span.kind is SpanKind.SERVER or _is_tenant_owned_span(span.attributes or _NO_ATTRIBUTES)
+    if scope == "llm_only":
+        return is_llm_call_span(span)
+    return assert_never(scope)
 
 
 def _scoped(span: ReadableSpan, scope: "OtelSpanScope") -> ReadableSpan:
     """Under ``llm_only`` the model call is the only span the exporter gets, so it goes out as the
     trace's root (its parent is the request span that is held back) and, unless the caller named the
     trace, its own name doubles as ``langfuse.trace.name`` so Langfuse does not show "Unnamed trace"."""
-    if scope == "full":
+    if scope != "llm_only":
         return span
     attributes: Final = span.attributes or _NO_ATTRIBUTES
     named: Final = (
@@ -1216,8 +1223,11 @@ def _operator_scope(config: OpenTelemetryV2Config, spec: ExporterSpec) -> "OtelS
     return config.langfuse_span_scope if spec.owner is ExporterOwner.LANGFUSE_OTEL else "full"
 
 
+_SCOPE_RANK: Final[tuple["OtelSpanScope", ...]] = ("full", "no_internal", "llm_only")
+
+
 def _widest(scopes: "Iterable[OtelSpanScope]") -> "OtelSpanScope":
-    return "full" if any(scope == "full" for scope in scopes) else "llm_only"
+    return min(scopes, key=_SCOPE_RANK.index)
 
 
 def _exports_to_the_wire(spec: ExporterSpec) -> bool:

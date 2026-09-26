@@ -12,7 +12,7 @@ from opentelemetry.sdk.resources import Resource
 from opentelemetry.sdk.trace import TracerProvider
 from opentelemetry.sdk.trace.export import SimpleSpanProcessor
 from opentelemetry.sdk.trace.export.in_memory_span_exporter import InMemorySpanExporter
-from opentelemetry.trace import Status, StatusCode
+from opentelemetry.trace import SpanKind, Status, StatusCode
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -1465,7 +1465,7 @@ TRACE_CONTROLS = MappingProxyType(
 
 def request_tree(provider: TracerProvider) -> None:
     tracer = get_tracer(provider, "litellm")
-    with tracer.start_as_current_span("POST /v1/chat/completions"):
+    with tracer.start_as_current_span("POST /v1/chat/completions", kind=SpanKind.SERVER):
         with tracer.start_as_current_span("auth /v1/chat/completions"):
             with tracer.start_as_current_span("postgres SELECT") as db:
                 db.set_attribute("db.system", "postgresql")
@@ -1884,7 +1884,7 @@ class TestSpanScope:
 
     @pytest.mark.parametrize("scope", ["everything", "LLM_ONLY", ""])
     def test_an_unknown_scope_is_rejected_when_the_callback_is_saved(self, scope):
-        with pytest.raises(ValueError, match=r"Invalid langfuse_span_scope .*must be one of \['full', 'llm_only'\]"):
+        with pytest.raises(ValueError, match=r"Invalid langfuse_span_scope .*must be one of \['full', 'llm_only', 'no_internal'\]"):
             AddTeamCallback(
                 callback_name="langfuse_otel",
                 callback_type="success",
@@ -1899,6 +1899,203 @@ class TestSpanScope:
         )
 
         assert saved.callback_vars["langfuse_span_scope"] == "llm_only"
+
+
+#: The proxy's own work inside the request: auth, the datastore calls, the spend write.
+INTERNAL_SPANS = frozenset({"auth /v1/chat/completions", "postgres SELECT", "redis GET", "cost_tracking"})
+TENANT_TREE = REQUEST_TREE - INTERNAL_SPANS
+NO_INTERNAL_DEST = LANGFUSE_DEST.model_copy(update={"span_scope": "no_internal"})
+LANGFUSE_TEAM_CREDS = MappingProxyType(
+    {"langfuse_public_key": "pk-team", "langfuse_secret_key": "sk-team", "langfuse_host": "http://team.local"}
+)
+COMPLETE_CREDENTIALS = MappingProxyType(
+    {
+        "langfuse_otel": LANGFUSE_TEAM_CREDS,
+        "arize": {"arize_space_id": "s", "arize_api_key": "k"},
+        "weave_otel": {"wandb_api_key": "k", "weave_project_id": "e/p"},
+        "newrelic": {"newrelic_api_key": "k"},
+    }
+)
+
+
+class TestNoInternalScope:
+    @staticmethod
+    def _run(provider, destinations):
+        TestSpanScope._run(provider, destinations)
+
+    @staticmethod
+    def _fan_out(by_backend: Mapping[str, InMemorySpanExporter]) -> TracerProvider:
+        provider = TracerProvider()
+        provider.add_span_processor(
+            TenantFanOutSpanProcessor(processor_factory=lambda d: SimpleSpanProcessor(by_backend[d.callback_name]))
+        )
+        return provider
+
+    @staticmethod
+    def _team_entry(**extra_vars: str) -> Mapping[str, object]:
+        return {
+            "callback_name": "langfuse_otel",
+            "callback_type": "success",
+            "callback_vars": {**LANGFUSE_TEAM_CREDS, **extra_vars},
+        }
+
+    def test_a_no_internal_tenant_gets_the_request_root_and_its_own_calls_but_not_the_proxys_work(self, monkeypatch):
+        TestSpanScope._additive(monkeypatch)
+        operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
+
+        self._run(TestSpanScope._operator_provider(operator, tenant), (NO_INTERNAL_DEST,))
+
+        assert names(tenant) == TENANT_TREE
+        assert names(operator) == REQUEST_TREE, "the tenant's choice must not thin the operator's exporter"
+
+    def test_a_full_tenant_still_gets_the_whole_tree(self, monkeypatch):
+        TestSpanScope._additive(monkeypatch)
+        operator, tenant = InMemorySpanExporter(), InMemorySpanExporter()
+
+        self._run(TestSpanScope._operator_provider(operator, tenant), (LANGFUSE_DEST,))
+
+        assert names(tenant) == REQUEST_TREE
+
+    def test_the_kept_spans_stay_parented_to_the_request_root(self):
+        tenant = InMemorySpanExporter()
+
+        self._run(self._fan_out({"langfuse_otel": tenant}), (NO_INTERNAL_DEST,))
+
+        by_name = {span.name: span for span in tenant.get_finished_spans()}
+        root = by_name["POST /v1/chat/completions"]
+        assert root.parent is None
+        children = TENANT_TREE - {root.name}
+        assert {by_name[name].parent.span_id for name in children} == {root.context.span_id}
+
+    def test_two_destinations_of_one_request_decide_independently(self):
+        by_backend = {"langfuse_otel": InMemorySpanExporter(), "arize": InMemorySpanExporter()}
+        arize = OtelDestination(endpoint="https://otlp.arize.com", headers={"api_key": "k"}, callback_name="arize")
+
+        self._run(self._fan_out(by_backend), (NO_INTERNAL_DEST, arize))
+
+        assert names(by_backend["langfuse_otel"]) == TENANT_TREE
+        assert names(by_backend["arize"]) == REQUEST_TREE
+
+    def test_two_views_of_one_account_share_the_exporter(self):
+        built, tenant = [], InMemorySpanExporter()
+        provider = TracerProvider()
+
+        def factory(destination):
+            built.append(destination)
+            return SimpleSpanProcessor(tenant)
+
+        provider.add_span_processor(TenantFanOutSpanProcessor(processor_factory=factory))
+
+        self._run(provider, (NO_INTERNAL_DEST,))
+        assert names(tenant) == TENANT_TREE
+        tenant.clear()
+
+        self._run(provider, (LANGFUSE_DEST,))
+        assert names(tenant) == REQUEST_TREE
+        assert len(built) == 1, "the same account must not get a second exporter for a second span_scope"
+
+    def test_a_team_callback_var_becomes_the_destinations_span_scope(self, monkeypatch, allow_test_hosts):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        auth = UserAPIKeyAuth(team_metadata={"logging": [self._team_entry(otel_span_scope="no_internal")]})
+
+        assert [d.span_scope for d in resolve_tenant_otel_destinations(auth)] == ["no_internal"]
+
+    def test_the_key_wins_over_the_team(self, monkeypatch, allow_test_hosts):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        auth = UserAPIKeyAuth(
+            metadata={"logging": [self._team_entry(otel_span_scope="full")]},
+            team_metadata={"logging": [self._team_entry(otel_span_scope="no_internal")]},
+        )
+
+        assert [d.span_scope for d in resolve_tenant_otel_destinations(auth)] == ["full"]
+
+    def test_resolving_leaves_the_stored_callback_vars_alone(self, monkeypatch, allow_test_hosts):
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        entry = self._team_entry(otel_span_scope="no_internal")
+        before = dict(entry["callback_vars"])
+        auth = UserAPIKeyAuth(team_metadata={"logging": [entry]})
+
+        resolve_tenant_otel_destinations(auth)
+
+        assert entry["callback_vars"] == before
+
+    @pytest.mark.parametrize("callback_name", sorted(COMPLETE_CREDENTIALS))
+    def test_every_destination_backend_honours_the_var(self, callback_name, monkeypatch, allow_test_hosts):
+        assert callback_name in destination_capable_backends()
+        monkeypatch.setattr(litellm, "otel_tenant_span_scope", None)
+        destination = destination_for(
+            callback_name, {**COMPLETE_CREDENTIALS[callback_name], "otel_span_scope": "no_internal"}
+        )
+
+        assert destination is not None and destination.span_scope == "no_internal"
+
+    def test_a_team_that_named_nothing_gets_the_system_default(self, monkeypatch, allow_test_hosts):
+        monkeypatch.setattr(litellm, "otel_tenant_span_scope", "no_internal")
+
+        assert destination_for("langfuse_otel", LANGFUSE_TEAM_CREDS).span_scope == "no_internal"
+
+    def test_the_env_var_sets_the_system_default(self, monkeypatch, allow_test_hosts):
+        monkeypatch.setattr(litellm, "otel_tenant_span_scope", None)
+        monkeypatch.setenv("LITELLM_OTEL_TENANT_SPAN_SCOPE", " No_Internal\n")
+
+        assert destination_for("langfuse_otel", LANGFUSE_TEAM_CREDS).span_scope == "no_internal"
+
+    def test_a_team_asking_for_full_keeps_it_under_a_system_no_internal(self, monkeypatch, allow_test_hosts):
+        monkeypatch.setattr(litellm, "otel_tenant_span_scope", "no_internal")
+
+        assert (
+            destination_for("langfuse_otel", {**LANGFUSE_TEAM_CREDS, "otel_span_scope": "full"}).span_scope
+            == "full"
+        )
+
+    @pytest.mark.parametrize("configured", [None, "", "everything"])
+    def test_anything_but_a_known_scope_leaves_the_default_on_full(self, monkeypatch, allow_test_hosts, configured):
+        monkeypatch.setattr(litellm, "otel_tenant_span_scope", configured)
+        monkeypatch.delenv("LITELLM_OTEL_TENANT_SPAN_SCOPE", raising=False)
+
+        assert destination_for("langfuse_otel", LANGFUSE_TEAM_CREDS).span_scope == "full"
+
+    @pytest.mark.parametrize("value", ["everything", "NO_INTERNAL", "exclude", ""])
+    def test_an_unknown_value_is_rejected_when_the_callback_is_saved(self, value):
+        with pytest.raises(ValueError, match=r"Invalid otel_span_scope .*must be one of \['full', 'llm_only', 'no_internal'\]"):
+            AddTeamCallback(
+                callback_name="langfuse_otel",
+                callback_type="success",
+                callback_vars={**LANGFUSE_TEAM_CREDS, "otel_span_scope": value},
+            )
+
+    def test_a_known_value_is_accepted_when_the_callback_is_saved(self):
+        saved = AddTeamCallback(
+            callback_name="arize",
+            callback_type="success",
+            callback_vars={"arize_api_key": "k", "arize_space_id": "s", "otel_span_scope": "no_internal"},
+        )
+
+        assert saved.callback_vars["otel_span_scope"] == "no_internal"
+
+    def test_llm_only_on_newrelic_resolves_to_a_llm_only_destination(self, monkeypatch, allow_test_hosts):
+        monkeypatch.setattr(litellm, "otel_tenant_span_scope", None)
+        destination = destination_for(
+            "newrelic", {**COMPLETE_CREDENTIALS["newrelic"], "otel_span_scope": "llm_only"}
+        )
+
+        assert destination is not None and destination.span_scope == "llm_only"
+
+    @pytest.mark.parametrize(
+        "scopes, expected",
+        [
+            (("llm_only", "no_internal", "full"), "full"),
+            (("llm_only", "no_internal"), "no_internal"),
+            (("llm_only",), "llm_only"),
+        ],
+    )
+    def test_the_widest_scope_wins(self, scopes, expected):
+        from litellm.integrations.otel.plumbing.providers import _widest
+
+        assert _widest(scopes) == expected
 
 
 #: Anything that makes ``OpenTelemetryV2Config`` synthesize a real operator destination.

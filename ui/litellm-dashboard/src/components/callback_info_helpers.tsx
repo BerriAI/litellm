@@ -33,6 +33,10 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       arize_space_id: "password",
       arize_success_sampling_rate: "number",
       arize_error_sampling_rate: "number",
+      otel_span_scope: "select",
+    },
+    dynamic_param_options: {
+      otel_span_scope: ["full", "no_internal", "llm_only"],
     },
     description: "Arize Logging Integration",
   },
@@ -91,6 +95,10 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
     dynamic_params: {
       newrelic_api_key: "password",
       newrelic_region: "text",
+      otel_span_scope: "select",
+    },
+    dynamic_param_options: {
+      otel_span_scope: ["full", "no_internal", "llm_only"],
     },
     description: "New Relic Logging Integration",
   },
@@ -131,7 +139,7 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       langfuse_span_scope: "select",
     },
     dynamic_param_options: {
-      langfuse_span_scope: ["full", "llm_only"],
+      langfuse_span_scope: ["full", "no_internal", "llm_only"],
     },
     description: "Langfuse v3 OTEL Logging Integration",
   },

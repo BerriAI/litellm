@@ -29,7 +29,11 @@ class OtelDestination(BaseModel):
     )
     span_scope: OtelSpanScope = Field(
         default="full",
-        description="``llm_only`` keeps just the model-call spans; the rest of the request tree is not forwarded.",
+        description=(
+            "``no_internal`` holds back the proxy's own SERVICE and DB_CALL spans (auth, Redis, "
+            "Postgres, spend writes) while ``llm_only`` keeps just the model-call spans; the request "
+            "root and the tenant's own model, guardrail and MCP spans still go under ``no_internal``."
+        ),
     )
 
     def header_string(self) -> str:
@@ -45,7 +49,7 @@ class OtelDestination(BaseModel):
     def cache_key(self) -> tuple[str, tuple[tuple[str, str], ...], tuple[tuple[str, str], ...], str | None]:
         """Identity for processor reuse, so one destination means one exporter.
 
-        ``span_scope`` is left out on purpose: the scope decides which spans reach the
+        ``span_scope`` is left out on purpose: it decides which spans reach the
         processor, not how the processor exports them, so a full and an ``llm_only``
         view of the same account share one exporter.
         """

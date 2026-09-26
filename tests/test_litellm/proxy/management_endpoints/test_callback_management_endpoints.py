@@ -292,6 +292,19 @@ class TestLangfuseOtelCallbackConfig:
         assert frozenset(scope["options"]) == OTEL_SPAN_SCOPES
         assert scope["required"] is False
 
+    @pytest.mark.parametrize("callback_id", ["arize", "newrelic"])
+    def test_otel_span_scope_is_a_select_over_exactly_the_scopes_the_validator_accepts(self, callback_id):
+        from litellm.types.utils import OTEL_SPAN_SCOPES
+
+        client = TestClient(app)
+        response = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-1234"})
+        assert response.status_code == 200
+        config = next(config for config in response.json() if config.get("id") == callback_id)
+        span_scope = config["dynamic_params"]["otel_span_scope"]
+        assert span_scope["type"] == "select"
+        assert frozenset(span_scope["options"]) == OTEL_SPAN_SCOPES
+        assert span_scope["required"] is False
+
 
 class TestNewRelicTeamCallbackValidation:
     def _data(self, callback_vars):
@@ -371,46 +384,42 @@ class TestNewRelicKeyLoggingValidation:
         from fastapi import HTTPException
 
         from litellm.integrations.otel.model.config import is_otel_v2_enabled
-        from litellm.proxy.management_endpoints.key_management_endpoints import (
-            raise_on_invalid_key_logging_config,
-        )
+        from litellm.proxy.common_utils.callback_config_validation import raise_on_invalid_logging_metadata
 
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
         try:
             with pytest.raises(HTTPException) as exc:
-                raise_on_invalid_key_logging_config(self._metadata({"newrelic_api_key": "k"}))
+                raise_on_invalid_logging_metadata(self._metadata({"newrelic_api_key": "k"}))
             assert "LITELLM_OTEL_V2" in str(exc.value.detail)
 
             monkeypatch.setenv("LITELLM_OTEL_V2", "true")
             is_otel_v2_enabled.cache_clear()
             with pytest.raises(HTTPException) as exc:
-                raise_on_invalid_key_logging_config(
+                raise_on_invalid_logging_metadata(
                     self._metadata({"newrelic_api_key": "k", "newrelic_region": "mars"})
                 )
             assert "Unknown newrelic_region" in str(exc.value.detail)
             with pytest.raises(HTTPException) as exc:
-                raise_on_invalid_key_logging_config(self._metadata({"newrelic_region": "eu"}))
+                raise_on_invalid_logging_metadata(self._metadata({"newrelic_region": "eu"}))
             assert "requires newrelic_api_key" in str(exc.value.detail)
-            raise_on_invalid_key_logging_config(self._metadata({"newrelic_api_key": "k", "newrelic_region": "EU"}))
+            raise_on_invalid_logging_metadata(self._metadata({"newrelic_api_key": "k", "newrelic_region": "EU"}))
         finally:
             is_otel_v2_enabled.cache_clear()
 
     def test_ignores_metadata_without_newrelic_logging(self, monkeypatch):
         from litellm.integrations.otel.model.config import is_otel_v2_enabled
-        from litellm.proxy.management_endpoints.key_management_endpoints import (
-            raise_on_invalid_key_logging_config,
-        )
+        from litellm.proxy.common_utils.callback_config_validation import raise_on_invalid_logging_metadata
 
         monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
         is_otel_v2_enabled.cache_clear()
         try:
-            assert raise_on_invalid_key_logging_config(None) is None
-            assert raise_on_invalid_key_logging_config({"logging": "not-a-list"}) is None
-            assert raise_on_invalid_key_logging_config({"tags": ["a"]}) is None
-            assert raise_on_invalid_key_logging_config(self._metadata({})) is None
+            assert raise_on_invalid_logging_metadata(None) is None
+            assert raise_on_invalid_logging_metadata({"logging": "not-a-list"}) is None
+            assert raise_on_invalid_logging_metadata({"tags": ["a"]}) is None
+            assert raise_on_invalid_logging_metadata(self._metadata({})) is None
             assert (
-                raise_on_invalid_key_logging_config(
+                raise_on_invalid_logging_metadata(
                     {"logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}}]}
                 )
                 is None

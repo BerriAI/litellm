@@ -193,6 +193,46 @@ class Provider:
         self.scripts[name] = deque(int(str(value)) for value in statuses)
         return JSONResponse({"configured": len(statuses)})
 
+    async def responses(self, request: Request) -> Response:
+        body: Final = JSON_OBJECT.validate_json(await request.body())
+        self.observations.put(Observation(request.url.path, request.headers.get("authorization", ""), body))
+        response_id: Final = f"resp-{uuid.uuid4().hex[:24]}"
+        model: Final = body.get("model") if isinstance(body.get("model"), str) else "audit-chat"
+
+        def envelope(with_usage: bool) -> dict[str, JsonValue]:
+            return {
+                "id": response_id,
+                "object": "response",
+                "created_at": 1,
+                "status": "completed",
+                "model": model,
+                "output": [
+                    {
+                        "type": "message",
+                        "id": f"msg-{response_id}",
+                        "status": "completed",
+                        "role": "assistant",
+                        "content": [
+                            {"type": "output_text", "text": "integration upstream response", "annotations": []}
+                        ],
+                    }
+                ],
+                "usage": (
+                    {"input_tokens": 20, "output_tokens": 20, "total_tokens": 40} if with_usage else None
+                ),
+            }
+
+        if body.get("stream") is True:
+            events: Final = (
+                {"type": "response.created", "response": envelope(False)},
+                {"type": "response.output_text.delta", "delta": "integration upstream "},
+                {"type": "response.output_text.delta", "delta": "response"},
+                {"type": "response.completed", "response": envelope(True)},
+            )
+            stream_body: Final = "".join(f"event: {event['type']}\ndata: {json.dumps(event)}\n\n" for event in events)
+            return Response(content=stream_body.encode(), media_type="text/event-stream")
+        return JSONResponse(envelope(True))
+
     async def observed(self, _request: Request) -> Response:
         values: Final = tuple(self.observations.get() for _ in range(self.observations.qsize()))
         return JSONResponse(
@@ -371,6 +411,7 @@ class Provider:
                 Route("/v1/completions", completions, methods=["POST"]),
                 Route("/v1/embeddings", embeddings, methods=["POST"]),
                 Route("/v1/moderations", moderations, methods=["POST"]),
+                Route("/v1/responses", self.responses, methods=["POST"]),
                 Route("/vector_stores/{vector_store_id}/search", self.vector_store_search, methods=["POST"]),
                 Route("/{path:path}", self.scripted, methods=["POST"]),
                 Route("/{path:path}", self.scripted, methods=["GET"]),

@@ -1688,6 +1688,8 @@ LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL: Final = "litellm_no_upstream_llm_call"
 # the key's values after the team metadata merge so a key outranks its team).
 OTEL_SERVICE_NAME_METADATA_KEYS: Final = ("otel_service_name_override", "otel_service_name")
 
+OTEL_TENANT_SPAN_SCOPE_ENV: Final = "LITELLM_OTEL_TENANT_SPAN_SCOPE"
+
 # Key Rotation Constants
 LITELLM_KEY_ROTATION_ENABLED: Final = os.getenv("LITELLM_KEY_ROTATION_ENABLED", "false")
 LITELLM_KEY_ROTATION_CHECK_INTERVAL_SECONDS: Final = int(

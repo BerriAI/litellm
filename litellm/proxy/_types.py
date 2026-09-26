@@ -26,6 +26,7 @@ from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
     validate_langfuse_environment_value,
     validate_langfuse_span_scope_value,
     validate_no_callback_env_reference,
+    validate_otel_span_scope_value,
 )
 from litellm.types.agents import AgentCaller
 from litellm.types.integrations.compression_interception import (
@@ -2281,6 +2282,8 @@ class AddTeamCallback(LiteLLMPydanticObjectBase):
                 validate_langfuse_environment_value(callback_vars[key])
             if key == "langfuse_span_scope":
                 validate_langfuse_span_scope_value(callback_vars[key])
+            if key == "otel_span_scope":
+                validate_otel_span_scope_value(callback_vars[key])
         return values
 
 

@@ -629,6 +629,47 @@ async def test_update_team_rejects_a_duration_that_never_advances(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["new_team", "update_team"])
+async def test_team_endpoints_reject_bogus_logging_metadata(endpoint, mock_db_client, mock_admin_auth):
+    """metadata.logging entries the runtime cannot honor must 400 instead of
+    being persisted, the same contract /key/generate and /key/update enforce."""
+    from fastapi import Request
+
+    from litellm.proxy._types import NewTeamRequest, UpdateTeamRequest
+    from litellm.proxy.management_endpoints.team_endpoints import new_team, update_team
+
+    mock_db_client.db = MagicMock()
+    mock_db_client.db.litellm_teamtable = MagicMock()
+    mock_db_client.db.litellm_teamtable.create = AsyncMock()
+    mock_db_client.db.litellm_teamtable.update = AsyncMock()
+    _wire_team_create_tx(mock_db_client)
+
+    metadata: Final = {
+        "logging": [
+            {"callback_name": "langfuse_otel", "callback_vars": {"otel_span_scope": "sometimes"}}
+        ]
+    }
+    data: Final = (
+        NewTeamRequest(team_alias="my-team", metadata=metadata)
+        if endpoint == "new_team"
+        else UpdateTeamRequest(team_id="team-1", metadata=metadata)
+    )
+    handler: Final = new_team if endpoint == "new_team" else update_team
+
+    with pytest.raises(ProxyException) as exc_info:
+        await handler(
+            data=data,
+            http_request=MagicMock(spec=Request),
+            user_api_key_dict=mock_admin_auth,
+        )
+
+    assert str(exc_info.value.code) == "400"
+    assert "otel_span_scope" in str(exc_info.value.message)
+    mock_db_client.db.litellm_teamtable.create.assert_not_awaited()
+    mock_db_client.db.litellm_teamtable.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
 async def test_new_team_with_object_permission(mock_db_client, mock_admin_auth):
     """
     Test that /team/new correctly handles object_permission by:
