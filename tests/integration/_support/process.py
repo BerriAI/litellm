@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal
 
 import httpx
 import psutil
@@ -89,6 +89,8 @@ def owned_proxy_process(
     config: Path | None = None,
     remove_environment: tuple[str, ...] = (),
     workers: int = 1,
+    graceful_shutdown_seconds: int | None = None,
+    asgi_server: Literal["uvicorn", "hypercorn"] = "uvicorn",
 ) -> Iterator[OwnedProxy]:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
@@ -104,27 +106,55 @@ def owned_proxy_process(
         "LITELLM_SALT_KEY": os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"),
         "STORE_MODEL_IN_DB": "True",
         **overrides,
+        **({"CONFIG_FILE_PATH": str(config)} if graceful_shutdown_seconds is not None and config else {}),
     }
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
     output.mkdir(parents=True, exist_ok=True)
     log_path: Final = output / f"owned-proxy-{uuid.uuid4().hex}.log"
     with log_path.open("w") as log:
         process: Final = subprocess.Popen(
-            [
-                sys.executable,
-                "-m",
-                "integration._support.proxy",
-                "--config",
-                str(config or "tests/integration/proxy_config.yaml"),
-                "--host",
-                "127.0.0.1",
-                "--port",
-                str(port),
-                "--num_workers",
-                str(workers),
-                "--use_prisma_db_push",
-                "--enforce_prisma_migration_check",
-            ],
+            (
+                [
+                    sys.executable,
+                    "litellm/proxy/proxy_cli.py",
+                    "--run_hypercorn",
+                    "--config",
+                    str(config),
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                ]
+                if asgi_server == "hypercorn"
+                else [
+                    sys.executable,
+                    "-m",
+                    "uvicorn",
+                    "litellm.proxy.proxy_server:app",
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                    "--timeout-graceful-shutdown",
+                    str(graceful_shutdown_seconds),
+                ]
+                if graceful_shutdown_seconds is not None
+                else [
+                    sys.executable,
+                    "-m",
+                    "integration._support.proxy",
+                    "--config",
+                    str(config or "tests/integration/proxy_config.yaml"),
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
+                    "--num_workers",
+                    str(workers),
+                    "--use_prisma_db_push",
+                    "--enforce_prisma_migration_check",
+                ]
+            ),
             cwd=root,
             env=environment,
             stdout=log,

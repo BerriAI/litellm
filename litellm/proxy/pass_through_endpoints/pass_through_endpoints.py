@@ -3,9 +3,10 @@ import asyncio
 import copy
 import json
 import posixpath
+import re
 import traceback
 from base64 import b64encode
-from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import count, groupby
@@ -26,6 +27,7 @@ from fastapi import (
     status,
 )
 from fastapi.responses import StreamingResponse
+from starlette.background import BackgroundTask
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.websockets import WebSocketState
 from websockets.asyncio.client import connect
@@ -37,11 +39,14 @@ from websockets.exceptions import (
 from websockets.frames import Close, CloseCode
 
 import litellm
-from litellm._logging import verbose_proxy_logger
+from litellm._logging import redact_secrets, verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
+    PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_SCAN_BYTES,
+    PASSTHROUGH_UPSTREAM_ERROR_REDACT_MARGIN_CHARS,
+    PASSTHROUGH_UPSTREAM_ERROR_REPORT_TASK_NAME,
     REDACTED_BY_LITELLM,
     SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
@@ -60,6 +65,7 @@ from litellm.litellm_core_utils.litellm_logging import _get_masked_values
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.litellm_core_utils.secret_redaction import REDACTED
 from litellm.llms.base_llm.managed_resources.utils import (
     resolve_passthrough_managed_id_provider,
 )
@@ -130,6 +136,7 @@ from .upstream_usage_headers import (
 
 if TYPE_CHECKING:
     from litellm.proxy.proxy_server import ProxyConfig
+    from litellm.proxy.utils import ProxyLogging
 
 router: Final = APIRouter()
 
@@ -857,60 +864,98 @@ def _resolve_team_callback_wiring(
     )
 
 
-def _truncate_upstream_error_body(body: str) -> str:
-    if len(body) <= PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
+def _truncate_upstream_error_body(body: str, *, truncated: bool) -> str:
+    if not truncated:
         return body
-    return (
-        f"{body[:PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS]}... "
-        f"(truncated at {PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS} chars)"
-    )
+    return f"{body}... (truncated at {PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS} chars)"
 
 
 def _sanitize_upstream_error_body(body: str) -> str:
     return " ".join("".join(char if char.isprintable() else " " for char in body).split())
 
 
-class _PrefixReplayStream(httpx.AsyncByteStream):
-    def __init__(self, prefix: bytes, rest: AsyncIterator[bytes], upstream: httpx.Response) -> None:
-        self._prefix: Final = prefix
-        self._rest: Final = rest
+_ReportPreview = Callable[[bytes], Awaitable[None]]  # mutable-ok: Callable arg-list syntax, not a mutable collection
+
+
+class _PreviewReportingStream(httpx.AsyncByteStream):
+    def __init__(
+        self,
+        upstream: httpx.Response,
+        report: _ReportPreview,
+        log_warning: Callable[..., None],
+    ) -> None:
         self._upstream: Final = upstream
+        self._report: Final = report
+        self._log_warning: Final = log_warning
+        self._collected: Final[list[bytes]] = []  # mutable-ok: preview prefix accumulated while relaying
+        self._budget_crossed = False
+        self._completed = False
+        self._aborted = False
+        self._abandoned = False
+        self._report_task: asyncio.Task[None] | None = None
+
+    def dispatch(self) -> asyncio.Task[None]:
+        if self._report_task is None:
+            self._report_task = asyncio.get_running_loop().create_task(
+                self._run_report(), name=PASSTHROUGH_UPSTREAM_ERROR_REPORT_TASK_NAME
+            )
+        return self._report_task
+
+    async def _run_report(self) -> None:
+        if self._abandoned:
+            self._log_warning(
+                "pass_through_endpoint: upstream error response abandoned before reaching the client after %d preview bytes",
+                sum(len(part) for part in self._collected),
+            )
+        elif not self._completed and not self._budget_crossed and not self._aborted:
+            self._log_warning(
+                "pass_through_endpoint: client disconnected after %d preview bytes of the upstream error body",
+                sum(len(part) for part in self._collected),
+            )
+        await self._report(b"".join(self._collected))
+
+    async def report_collected(self) -> None:
+        await asyncio.shield(self.dispatch())
+
+    async def abandon(self) -> None:
+        self._abandoned = True
+        self.dispatch()
+        try:
+            await self._upstream.aclose()
+        except Exception as err:  # noqa: BLE001  # aclose failures must not mask the exception that abandoned the relay
+            self._log_warning(
+                "pass_through_endpoint: closing the abandoned upstream error response failed: %s",
+                type(err).__name__,
+            )
 
     async def __aiter__(self) -> AsyncIterator[bytes]:
-        if self._prefix:
-            yield self._prefix
-        async for chunk in self._rest:
-            yield chunk
+        total = 0  # rebind-ok: running byte count against the preview budget
+        try:
+            async for chunk in self._upstream.aiter_bytes():
+                if not self._budget_crossed:
+                    self._collected.append(chunk)
+                    total += len(chunk)
+                    if total > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
+                        self._budget_crossed = True
+                        self.dispatch()
+                yield chunk
+            self._completed = True
+        except httpx.HTTPError as err:
+            self._aborted = True
+            self._log_warning(
+                "pass_through_endpoint: upstream error body read failed after %d bytes: %s",
+                sum(len(part) for part in self._collected),
+                type(err).__name__,
+            )
+            if self._budget_crossed:
+                await self.report_collected()
+                raise
+        finally:
+            self.dispatch()
 
     async def aclose(self) -> None:
+        self.dispatch()
         await self._upstream.aclose()
-
-
-async def _no_more_chunks() -> AsyncIterator[bytes]:
-    return
-    yield b""
-
-
-async def _read_error_body_preview(
-    stream: AsyncIterator[bytes],
-) -> tuple[bytes, AsyncIterator[bytes]]:
-    collected: Final[list[bytes]] = []  # mutable-ok: accumulated until the preview byte budget, then joined once
-    total = 0  # rebind-ok: running byte count against the preview budget
-    try:
-        async for chunk in stream:
-            collected.append(chunk)
-            total += len(chunk)
-            if total > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS:
-                break
-    except httpx.HTTPError as err:
-        partial: Final = b"".join(collected)
-        verbose_proxy_logger.warning(
-            "pass_through_endpoint: upstream error body read failed after %d bytes: %s",
-            len(partial),
-            type(err).__name__,
-        )
-        return partial, _no_more_chunks()
-    return b"".join(collected), stream
 
 
 def _headers_without_body_framing(headers: httpx.Headers) -> httpx.Headers:
@@ -919,19 +964,97 @@ def _headers_without_body_framing(headers: httpx.Headers) -> httpx.Headers:
     )
 
 
-async def _error_body_preview_and_relay(response: httpx.Response) -> tuple[str, httpx.Response]:
-    if response.is_stream_consumed:
-        return response.text, response
-    body_iter: Final = response.aiter_bytes()
-    prefix, rest = await _read_error_body_preview(body_iter)
-    preview_text: Final = prefix.decode(response.encoding or "utf-8", errors="replace")
-    return preview_text, httpx.Response(
-        status_code=response.status_code,
-        headers=_headers_without_body_framing(response.headers),
-        stream=_PrefixReplayStream(prefix=prefix, rest=rest, upstream=response),
-        request=response.request,
-        extensions=response.extensions,
+_DANGLING_PRIVATE_KEY: Final = re.compile(
+    r"-----BEGIN[A-Z \-]*PRIVATE KEY-----[ \\nr]*"
+    r"(?:[A-Za-z0-9+/=]{40,}|[A-Za-z0-9+/=]{16,}(?:[ \\nr]+[A-Za-z0-9+/=]{16,})+|[A-Za-z0-9+/=]{16,}$|$)"
+)
+
+
+def _mask_dangling_private_key(text: str) -> str:
+    match: Final = _DANGLING_PRIVATE_KEY.search(text)
+    return text if match is None else text[: match.start()] + REDACTED
+
+
+def _redact_preview_head(text: str, redact: Callable[[str], str]) -> str:
+    head: Final = text[:PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS]
+    margin: Final = text[
+        PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS : PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS
+        + PASSTHROUGH_UPSTREAM_ERROR_REDACT_MARGIN_CHARS
+    ]
+    redacted_head: Final = redact(head)
+    if not margin or redact(head + margin) == redacted_head + redact(margin):
+        return redacted_head
+    return redacted_head[: redacted_head.rfind(" ") + 1] + REDACTED
+
+
+def _upstream_error_body_for_log(preview: bytes, encoding: str, redact: Callable[[str], str]) -> str:
+    sanitized: Final = _sanitize_upstream_error_body(
+        preview[:PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_SCAN_BYTES].decode(encoding, errors="replace")
     )
+    return _truncate_upstream_error_body(
+        _mask_dangling_private_key(_redact_preview_head(sanitized, redact)),
+        truncated=len(preview) > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_SCAN_BYTES
+        or len(sanitized) > PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
+    )
+
+
+def _passthrough_upstream_failure_reporter(
+    response: httpx.Response,
+    user_api_key_dict: UserAPIKeyAuth,
+    request_payload: dict,
+    logging_obj: LiteLLMLoggingObj,
+    proxy_logging: "ProxyLogging",
+    log_warning: Callable[..., None],
+    redact: Callable[[str], str] = redact_secrets,
+) -> _ReportPreview:
+    async def report(preview: bytes) -> None:
+        upstream_error_body: Final = (
+            REDACTED_BY_LITELLM
+            if should_redact_message_logging(logging_obj.model_call_details)
+            else _upstream_error_body_for_log(preview, response.encoding or "utf-8", redact)
+        )
+        log_warning(
+            "pass_through_endpoint: upstream %s %s returned %s: %s",
+            response.request.method,
+            response.url.copy_with(query=None, fragment=None),
+            response.status_code,
+            upstream_error_body,
+        )
+        try:
+            response.raise_for_status()
+        except httpx.HTTPStatusError:
+            # Reported as an HTTPException, not the raw httpx error: ProxyLogging's
+            # alerting path only excludes HTTPException/ProxyException from its
+            # "High" severity llm_exceptions alert, treating everything else as an
+            # operational LLM-API failure. An upstream 4xx/5xx returned unchanged
+            # to the client is a user-facing error like any other, not something
+            # ops needs paged for, so it must be excluded the same way auth and
+            # rate-limit errors already are.
+            synthetic_exception: Final = HTTPException(
+                status_code=response.status_code,
+                detail=f"Upstream passthrough request failed with status {response.status_code}: {upstream_error_body}",
+            )
+            try:
+                await proxy_logging.post_call_failure_hook(
+                    user_api_key_dict=user_api_key_dict,
+                    original_exception=synthetic_exception,
+                    request_data=request_payload,
+                    traceback_str=traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG),
+                )
+            except Exception:  # noqa: BLE001 - a failing logging callback must never break the passthrough response
+                log_warning(
+                    "pass_through_endpoint: post_call_failure_hook raised for upstream error",
+                    exc_info=True,
+                )
+
+    return report
+
+
+@dataclass(frozen=True, slots=True)
+class _UpstreamRelay:
+    response: httpx.Response
+    background: BackgroundTask | None
+    abandon: Callable[[], Awaitable[None]] | None
 
 
 async def _log_passthrough_upstream_failure(
@@ -939,51 +1062,34 @@ async def _log_passthrough_upstream_failure(
     user_api_key_dict: UserAPIKeyAuth,
     request_payload: dict,
     logging_obj: LiteLLMLoggingObj,
-) -> httpx.Response:
+) -> _UpstreamRelay:
     if response.status_code < 400:
-        return response
+        return _UpstreamRelay(response=response, background=None, abandon=None)
     from litellm.proxy.proxy_server import proxy_logging_obj
 
-    preview_text, relay_response = await _error_body_preview_and_relay(response)
-    upstream_error_body: Final = (
-        REDACTED_BY_LITELLM
-        if should_redact_message_logging(logging_obj.model_call_details)
-        else _truncate_upstream_error_body(_sanitize_upstream_error_body(preview_text))
+    log_warning: Final = verbose_proxy_logger.warning
+    report: Final = _passthrough_upstream_failure_reporter(
+        response, user_api_key_dict, request_payload, logging_obj, proxy_logging_obj, log_warning
     )
-    verbose_proxy_logger.warning(
-        "pass_through_endpoint: upstream %s %s returned %s: %s",
-        response.request.method,
-        response.url.copy_with(query=None, fragment=None),
-        response.status_code,
-        upstream_error_body,
+    if response.is_stream_consumed:
+        await report(response.content)
+        return _UpstreamRelay(response=response, background=None, abandon=None)
+    stream: Final = _PreviewReportingStream(
+        upstream=response,
+        report=report,
+        log_warning=log_warning,
     )
-    try:
-        response.raise_for_status()
-    except httpx.HTTPStatusError:
-        # Reported as an HTTPException, not the raw httpx error: ProxyLogging's
-        # alerting path only excludes HTTPException/ProxyException from its
-        # "High" severity llm_exceptions alert, treating everything else as an
-        # operational LLM-API failure. An upstream 4xx/5xx returned unchanged
-        # to the client is a user-facing error like any other, not something
-        # ops needs paged for, so it must be excluded the same way auth and
-        # rate-limit errors already are.
-        synthetic_exception: Final = HTTPException(
+    return _UpstreamRelay(
+        response=httpx.Response(
             status_code=response.status_code,
-            detail=f"Upstream passthrough request failed with status {response.status_code}: {upstream_error_body}",
-        )
-        try:
-            await proxy_logging_obj.post_call_failure_hook(
-                user_api_key_dict=user_api_key_dict,
-                original_exception=synthetic_exception,
-                request_data=request_payload,
-                traceback_str=traceback.format_exc(limit=MAXIMUM_TRACEBACK_LINES_TO_LOG),
-            )
-        except Exception:  # noqa: BLE001 - a failing logging callback must never break the passthrough response
-            verbose_proxy_logger.warning(
-                "pass_through_endpoint: post_call_failure_hook raised for upstream error",
-                exc_info=True,
-            )
-    return relay_response
+            headers=_headers_without_body_framing(response.headers),
+            stream=stream,
+            request=response.request,
+            extensions=response.extensions,
+        ),
+        background=BackgroundTask(stream.report_collected),
+        abandon=stream.abandon,
+    )
 
 
 async def _relay_reporting_failures(
@@ -1413,7 +1519,7 @@ async def pass_through_request(
                 headers=response.headers,
             )
 
-            relay_response: Final = await _log_passthrough_upstream_failure(
+            relay: Final = await _log_passthrough_upstream_failure(
                 response=response,
                 user_api_key_dict=user_api_key_dict,
                 request_payload=_build_passthrough_failure_request_payload(
@@ -1426,52 +1532,58 @@ async def pass_through_request(
                 logging_obj=logging_obj,
             )
 
-            # Call response headers hook for streaming pass-through
-            _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
-                headers=relay_response.headers,
-                litellm_call_id=litellm_call_id,
-            )
-            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
-                data=_parsed_body or {},
-                user_api_key_dict=user_api_key_dict,
-                response=relay_response,
-                request_headers=dict(request.headers),
-            )
-            if callback_headers:
-                _response_headers.update(callback_headers)
+            try:
+                # Call response headers hook for streaming pass-through
+                _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
+                    headers=relay.response.headers,
+                    litellm_call_id=litellm_call_id,
+                )
+                callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                    data=_parsed_body or {},
+                    user_api_key_dict=user_api_key_dict,
+                    response=relay.response,
+                    request_headers=dict(request.headers),
+                )
+                if callback_headers:
+                    _response_headers.update(callback_headers)
 
-            return StreamingResponse(
-                wrap_passthrough_sse_bytes_with_keepalive_pings(
-                    stream=_own_streamed_managed_ids(
-                        stream=_relay_reporting_failures(
-                            stream=PassThroughStreamingHandler.chunk_processor(
-                                response=relay_response,
-                                request_body=_parsed_body,
-                                litellm_logging_obj=logging_obj,
-                                endpoint_type=endpoint_type,
-                                start_time=start_time,
-                                passthrough_success_handler_obj=pass_through_endpoint_logging,
-                                url_route=str(url),
+                return StreamingResponse(
+                    wrap_passthrough_sse_bytes_with_keepalive_pings(
+                        stream=_own_streamed_managed_ids(
+                            stream=_relay_reporting_failures(
+                                stream=PassThroughStreamingHandler.chunk_processor(
+                                    response=relay.response,
+                                    request_body=_parsed_body,
+                                    litellm_logging_obj=logging_obj,
+                                    endpoint_type=endpoint_type,
+                                    start_time=start_time,
+                                    passthrough_success_handler_obj=pass_through_endpoint_logging,
+                                    url_route=str(url),
+                                ),
+                                upstream_status=relay.response.status_code,
+                                user_api_key_dict=user_api_key_dict,
+                                request_payload=_build_passthrough_failure_request_payload(
+                                    parsed_body=_parsed_body,
+                                    kwargs=kwargs,
+                                    logging_obj=logging_obj,
+                                    custom_llm_provider=custom_llm_provider,
+                                ),
                             ),
-                            upstream_status=relay_response.status_code,
+                            managed_id_provider=_managed_id_provider,
+                            request=request,
                             user_api_key_dict=user_api_key_dict,
-                            request_payload=_build_passthrough_failure_request_payload(
-                                parsed_body=_parsed_body,
-                                kwargs=kwargs,
-                                logging_obj=logging_obj,
-                                custom_llm_provider=custom_llm_provider,
-                            ),
                         ),
-                        managed_id_provider=_managed_id_provider,
-                        request=request,
-                        user_api_key_dict=user_api_key_dict,
+                        ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
+                        upstream_headers=relay.response.headers,
                     ),
-                    ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
-                    upstream_headers=relay_response.headers,
-                ),
-                headers=_response_headers,
-                status_code=relay_response.status_code,
-            )
+                    headers=_response_headers,
+                    status_code=relay.response.status_code,
+                    background=relay.background,
+                )
+            except BaseException:  # noqa: BLE001  # the relay owns the report until the response takes it over
+                if relay.abandon is not None:
+                    await relay.abandon()
+                raise
 
         if state_raw_body is not None:
             # SigV4-signed callers (Bedrock) require the exact pre-signed bytes
@@ -1505,7 +1617,7 @@ async def pass_through_request(
             logging_obj.stream = True
             logging_obj.model_call_details["stream"] = True
 
-            detected_relay_response: Final = await _log_passthrough_upstream_failure(
+            detected_relay: Final = await _log_passthrough_upstream_failure(
                 response=response,
                 user_api_key_dict=user_api_key_dict,
                 request_payload=_build_passthrough_failure_request_payload(
@@ -1518,52 +1630,58 @@ async def pass_through_request(
                 logging_obj=logging_obj,
             )
 
-            # Call response headers hook for detected streaming pass-through
-            _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
-                headers=detected_relay_response.headers,
-                litellm_call_id=litellm_call_id,
-            )
-            callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
-                data=_parsed_body or {},
-                user_api_key_dict=user_api_key_dict,
-                response=detected_relay_response,
-                request_headers=dict(request.headers),
-            )
-            if callback_headers:
-                _response_headers.update(callback_headers)
+            try:
+                # Call response headers hook for detected streaming pass-through
+                _response_headers = HttpPassThroughEndpointHelpers.get_response_headers(
+                    headers=detected_relay.response.headers,
+                    litellm_call_id=litellm_call_id,
+                )
+                callback_headers = await proxy_logging_obj.post_call_response_headers_hook(
+                    data=_parsed_body or {},
+                    user_api_key_dict=user_api_key_dict,
+                    response=detected_relay.response,
+                    request_headers=dict(request.headers),
+                )
+                if callback_headers:
+                    _response_headers.update(callback_headers)
 
-            return StreamingResponse(
-                wrap_passthrough_sse_bytes_with_keepalive_pings(
-                    stream=_own_streamed_managed_ids(
-                        stream=_relay_reporting_failures(
-                            stream=PassThroughStreamingHandler.chunk_processor(
-                                response=detected_relay_response,
-                                request_body=_parsed_body,
-                                litellm_logging_obj=logging_obj,
-                                endpoint_type=endpoint_type,
-                                start_time=start_time,
-                                passthrough_success_handler_obj=pass_through_endpoint_logging,
-                                url_route=str(url),
+                return StreamingResponse(
+                    wrap_passthrough_sse_bytes_with_keepalive_pings(
+                        stream=_own_streamed_managed_ids(
+                            stream=_relay_reporting_failures(
+                                stream=PassThroughStreamingHandler.chunk_processor(
+                                    response=detected_relay.response,
+                                    request_body=_parsed_body,
+                                    litellm_logging_obj=logging_obj,
+                                    endpoint_type=endpoint_type,
+                                    start_time=start_time,
+                                    passthrough_success_handler_obj=pass_through_endpoint_logging,
+                                    url_route=str(url),
+                                ),
+                                upstream_status=detected_relay.response.status_code,
+                                user_api_key_dict=user_api_key_dict,
+                                request_payload=_build_passthrough_failure_request_payload(
+                                    parsed_body=_parsed_body,
+                                    kwargs=kwargs,
+                                    logging_obj=logging_obj,
+                                    custom_llm_provider=custom_llm_provider,
+                                ),
                             ),
-                            upstream_status=detected_relay_response.status_code,
+                            managed_id_provider=_managed_id_provider,
+                            request=request,
                             user_api_key_dict=user_api_key_dict,
-                            request_payload=_build_passthrough_failure_request_payload(
-                                parsed_body=_parsed_body,
-                                kwargs=kwargs,
-                                logging_obj=logging_obj,
-                                custom_llm_provider=custom_llm_provider,
-                            ),
                         ),
-                        managed_id_provider=_managed_id_provider,
-                        request=request,
-                        user_api_key_dict=user_api_key_dict,
+                        ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
+                        upstream_headers=detected_relay.response.headers,
                     ),
-                    ping_interval_seconds=litellm.sse_keepalive_ping_interval_seconds,
-                    upstream_headers=detected_relay_response.headers,
-                ),
-                headers=_response_headers,
-                status_code=detected_relay_response.status_code,
-            )
+                    headers=_response_headers,
+                    status_code=detected_relay.response.status_code,
+                    background=detected_relay.background,
+                )
+            except BaseException:  # noqa: BLE001  # the relay owns the report until the response takes it over
+                if detected_relay.abandon is not None:
+                    await detected_relay.abandon()
+                raise
 
         if not _should_buffer_passthrough_response(response):
             relay_custom_headers: Final = ProxyBaseLLMRequestProcessing.get_custom_headers(

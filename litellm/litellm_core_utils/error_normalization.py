@@ -59,8 +59,9 @@ class _HasProxyErrorType(Protocol):
     type: str
 
 
+_UPSTREAM_PASSTHROUGH_PATTERN: Final = re.compile(r"upstream passthrough request failed", re.IGNORECASE)
+
 _MESSAGE_PATTERNS: Final[tuple[tuple[re.Pattern[str], str], ...]] = (
-    (re.compile(r"upstream passthrough request failed", re.IGNORECASE), UPSTREAM_PASSTHROUGH),
     (
         re.compile(r"budget has been exceeded|max budget|crossed budget", re.IGNORECASE),
         BUDGET_EXCEEDED,
@@ -192,7 +193,11 @@ def normalize_error(exc: Exception | None, status_code: str, message: str) -> st
     if by_proxy_type is not None:
         return by_proxy_type
     by_message: Final = (
-        BUDGET_EXCEEDED if _exceeded_before_budget(message) else _classify_by_message(message, _MESSAGE_PATTERNS)
+        UPSTREAM_PASSTHROUGH
+        if _UPSTREAM_PASSTHROUGH_PATTERN.search(message)
+        else BUDGET_EXCEEDED
+        if _exceeded_before_budget(message)
+        else _classify_by_message(message, _MESSAGE_PATTERNS)
     )
     if by_message is not None:
         return by_message

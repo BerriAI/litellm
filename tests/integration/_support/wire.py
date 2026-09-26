@@ -28,6 +28,8 @@ class Reply:
     chunks: tuple[bytes, ...] | None = None
     abort_after: int | None = None
     gate_after_first: threading.Event | None = None
+    gate_timeout_seconds: float = 5
+    delay_before_headers_seconds: float = 0
     pause_between_chunks: float = 0
     headers: Mapping[str, str] = MappingProxyType({})
 
@@ -68,6 +70,8 @@ def wire_server(
             except Exception as error:
                 errors.put(error)
                 reply = Reply(status=500)
+            if reply.delay_before_headers_seconds:
+                time.sleep(reply.delay_before_headers_seconds)
             self.send_response(reply.status)
             self.send_header("content-type", reply.content_type)
             for name, value in reply.headers.items():
@@ -88,7 +92,9 @@ def wire_server(
                         self.wfile.write(b"%x\r\n%s\r\n" % (len(chunk), chunk))
                         self.wfile.flush()
                         if index == 0 and reply.gate_after_first is not None:
-                            assert reply.gate_after_first.wait(timeout=5), "Stream barrier was never released"
+                            assert reply.gate_after_first.wait(timeout=reply.gate_timeout_seconds), (
+                                "Stream barrier was never released"
+                            )
                         if reply.pause_between_chunks and index + 1 < len(reply.chunks):
                             time.sleep(reply.pause_between_chunks)
                     else:

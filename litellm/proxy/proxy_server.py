@@ -73,6 +73,8 @@ from litellm.constants import (
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
     LITELLM_UI_SESSION_DURATION,
+    PASSTHROUGH_UPSTREAM_ERROR_REPORT_SHUTDOWN_WAIT_SECONDS,
+    PASSTHROUGH_UPSTREAM_ERROR_REPORT_TASK_NAME,
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
 )
 from litellm.litellm_core_utils.asyncify import asyncify
@@ -1593,6 +1595,8 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         except Exception as e:
             verbose_proxy_logger.error("Error stopping in-flight scheduled jobs: %s", e)
 
+    await _await_passthrough_error_reports_on_shutdown()
+
     await flush_spend_counters_on_shutdown()
 
     await _flush_spend_logs_queue_on_shutdown()
@@ -2699,6 +2703,21 @@ def cost_tracking():
         litellm.logging_callback_manager.add_litellm_callback(_ProxyDBLogger(spend_event_producer))
         litellm.logging_callback_manager.add_litellm_async_success_callback(_ProxyDBLogger(spend_event_producer))
         litellm.logging_callback_manager.add_litellm_callback(ShadowEvalLogger())
+
+
+async def _await_passthrough_error_reports_on_shutdown() -> None:
+    pending: Final = frozenset(
+        task for task in asyncio.all_tasks() if task.get_name() == PASSTHROUGH_UPSTREAM_ERROR_REPORT_TASK_NAME
+    )
+    if not pending:
+        return
+    _, unfinished = await asyncio.wait(pending, timeout=PASSTHROUGH_UPSTREAM_ERROR_REPORT_SHUTDOWN_WAIT_SECONDS)
+    if unfinished:
+        verbose_proxy_logger.warning(
+            "pass_through_endpoint: %d upstream error reports still running after %.0fs shutdown wait",
+            len(unfinished),
+            PASSTHROUGH_UPSTREAM_ERROR_REPORT_SHUTDOWN_WAIT_SECONDS,
+        )
 
 
 async def _drain_spend_event_producer_on_shutdown() -> None:

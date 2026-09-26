@@ -24,7 +24,7 @@ import logging
 import os
 import subprocess
 from collections.abc import Awaitable, Callable
-from typing import List, Optional, Union
+from typing import Final, List, Optional, Union
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -36,6 +36,7 @@ from typing_extensions import TypedDict
 import litellm.proxy.proxy_server as ps
 from litellm.proxy.proxy_server import (
     ProxyStartupEvent,
+    _await_passthrough_error_reports_on_shutdown,
     _initialize_shared_aiohttp_session,
     _resolve_pydantic_type,
     _resolve_typed_dict_type,
@@ -1271,3 +1272,36 @@ async def test_prometheus_fallback_stats_job_runs_when_the_lock_is_free_or_absen
     await jobs["prometheus_fallback_stats_job"]()
 
     assert send_fallback_stats.await_count == 2
+
+
+@pytest.mark.asyncio
+async def test_await_passthrough_error_reports_on_shutdown_waits_for_named_tasks():
+    from litellm.constants import PASSTHROUGH_UPSTREAM_ERROR_REPORT_TASK_NAME
+
+    finished: Final = asyncio.Event()
+
+    async def named_report() -> None:
+        await asyncio.sleep(0.05)
+        finished.set()
+
+    async def unrelated() -> None:
+        await asyncio.Event().wait()
+
+    named_task: Final = asyncio.get_running_loop().create_task(
+        named_report(), name=PASSTHROUGH_UPSTREAM_ERROR_REPORT_TASK_NAME
+    )
+    stray: Final = asyncio.create_task(unrelated())
+    try:
+        await asyncio.wait_for(_await_passthrough_error_reports_on_shutdown(), timeout=10)
+        assert named_task.done()
+        assert finished.is_set()
+        assert not stray.done()
+    finally:
+        stray.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await stray
+
+
+@pytest.mark.asyncio
+async def test_await_passthrough_error_reports_on_shutdown_returns_without_pending_tasks():
+    await asyncio.wait_for(_await_passthrough_error_reports_on_shutdown(), timeout=5)

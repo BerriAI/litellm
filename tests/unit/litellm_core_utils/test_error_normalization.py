@@ -166,15 +166,22 @@ def test_variants_of_one_failure_share_a_normalized_error(messages: tuple[Except
 
 
 def test_normalize_error_passthrough_prefix_wins_over_upstream_body_text() -> None:
-    from fastapi import HTTPException
-
     for detail in (
         'Upstream passthrough request failed with status 400: {"error": {"message": "no deployments available for this model"}}',
         'Upstream passthrough request failed with status 400: {"error": {"message": "max budget reached"}}',
     ):
-        exc = HTTPException(status_code=400, detail=detail)
+        exc = Exception(detail)
         message = f"400: {detail}"
         assert normalize_error(exc, "400", message) == "500_UPSTREAM_PASSTHROUGH", message
+
+
+def test_normalize_error_passthrough_prefix_wins_over_quota_and_budget_wording() -> None:
+    detail = (
+        'Upstream passthrough request failed with status 429: {"error": {"message": '
+        '"You exceeded your current quota, please check your plan and billing details. Budget spent"}}'
+    )
+    exc = Exception(detail)
+    assert normalize_error(exc, "429", f"429: {detail}") == "500_UPSTREAM_PASSTHROUGH"
 
 
 def test_router_no_healthy_deployment_wording_clusters_as_no_healthy_deployments() -> None:

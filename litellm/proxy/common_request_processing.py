@@ -42,6 +42,7 @@ from litellm.constants import (
     MAX_PAYLOAD_SIZE_FOR_DEBUG_LOG,
     NON_INFERENCE_CALL_TYPES,
     RETURN_RAW_MODEL_NAME_METADATA_KEY,
+    SSE_LATE_RELAY_BACKGROUND_WAIT_SECONDS,
     STREAM_SSE_DATA_PREFIX,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
@@ -1141,27 +1142,39 @@ def ttft_keepalive_interval(request_data: Mapping[str, object], llm_router: Rout
     return resolve_ttft_keepalive_interval(deployments, litellm.sse_keepalive_ping_interval_seconds)
 
 
-async def _aclose_late_response(produced: Response) -> None:
+async def _aclose_late_response(
+    produced: Response, *, background_wait_seconds: float = SSE_LATE_RELAY_BACKGROUND_WAIT_SECONDS
+) -> None:
     """Run the cleanup Starlette would have run, for a response it never called.
 
     Closing an already-closed async generator is a no-op, so this is safe to call
     from both the relay's own teardown and the outer one.
     """
-    if not isinstance(produced, StreamingResponse):
-        return
-    targets: Final = (
-        (produced.body_iterator, produced.upstream_generator)
-        if isinstance(produced, _UpstreamClosingStreamingResponse)
-        else (produced.body_iterator,)
-    )
-    for target in targets:
-        aclose = getattr(target, "aclose", None)
-        if aclose is None:
-            continue
-        try:
-            await aclose()
-        except BaseException as exc:  # noqa: BLE001  # teardown must not mask why the stream ended
-            verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
+    if isinstance(produced, StreamingResponse):
+        targets: Final = (
+            (produced.body_iterator, produced.upstream_generator)
+            if isinstance(produced, _UpstreamClosingStreamingResponse)
+            else (produced.body_iterator,)
+        )
+        for target in targets:
+            aclose = getattr(target, "aclose", None)
+            if aclose is None:
+                continue
+            try:
+                await aclose()
+            except BaseException as exc:  # noqa: BLE001  # teardown must not mask why the stream ended
+                verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
+    if produced.background is not None:
+        with anyio.move_on_after(background_wait_seconds) as scope:
+            try:
+                await produced.background()
+            except BaseException as exc:  # noqa: BLE001  # teardown must not mask why the stream ended
+                verbose_proxy_logger.debug("error running relayed response background task: %s", exc)
+        if scope.cancel_called:
+            verbose_proxy_logger.warning(
+                "relayed response background task still running after %.0fs, leaving it to shutdown",
+                background_wait_seconds,
+            )
 
 
 async def _relay_late_response(produced: Response) -> AsyncGenerator[bytes, None]:
