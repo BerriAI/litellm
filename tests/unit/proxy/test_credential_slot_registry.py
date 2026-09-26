@@ -57,6 +57,10 @@ PRICING_FIELDS: Final = frozenset(CustomPricingLiteLLMParams.model_fields)
 class Secret:
     slot: str
 
+    def __post_init__(self) -> None:
+        if self.slot not in CANARY_SLOTS:
+            raise ValueError(f"Secret({self.slot!r}) names no slot in CANARY_SLOTS")
+
 
 @dataclass(frozen=True)
 class NotSecret:
@@ -75,7 +79,7 @@ CALLBACK_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingProx
         "langfuse_span_scope": NotSecret("span scope setting"),
         "langfuse_prompt_version": NotSecret("prompt version number"),
         "gcs_bucket_name": NotSecret("bucket name"),
-        "gcs_path_service_account": NotSecret("filesystem path to a key file, not the key material"),
+        "gcs_path_service_account": Secret("C3"),
         "langsmith_api_key": Secret("C3"),
         "langsmith_project": NotSecret("project name"),
         "langsmith_base_url": NotSecret("sink endpoint URL"),
@@ -205,17 +209,3 @@ def test_every_credential_named_param_a_client_may_send_is_classified():
         REQUEST_BODY_PARAM_CLASSIFICATION,
         "REQUEST_BODY_PARAM_CLASSIFICATION",
     )
-
-
-def test_every_secret_names_a_known_canary_slot():
-    unknown: Final = sorted(
-        (mapping_name, param, classification.slot)
-        for mapping_name, mapping in (
-            ("CALLBACK_PARAM_CLASSIFICATION", CALLBACK_PARAM_CLASSIFICATION),
-            ("DEPLOYMENT_PARAM_CLASSIFICATION", DEPLOYMENT_PARAM_CLASSIFICATION),
-            ("REQUEST_BODY_PARAM_CLASSIFICATION", REQUEST_BODY_PARAM_CLASSIFICATION),
-        )
-        for param, classification in mapping.items()
-        if isinstance(classification, Secret) and classification.slot not in CANARY_SLOTS
-    )
-    assert not unknown, f"Secret entries name slots missing from CANARY_SLOTS: {unknown}"
