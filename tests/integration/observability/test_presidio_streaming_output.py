@@ -335,16 +335,16 @@ def test_native_gemini_first_frame_split_into_transport_fragments_is_still_maske
         assert gemini_texts(b"".join(received.frames)) == (f"fragmented {MASK} whole",)
 
 
-def test_native_gemini_non_json_frame_in_a_stream_without_pii_is_replayed_unchanged(
-    gateway: Gateway, tmp_path: Path
-) -> None:
-    frames: Final = (b"data: not json at all\r\n\r\n", gemini_frame("after"))
+def test_native_gemini_stream_with_an_unreadable_frame_is_withheld(gateway: Gateway, tmp_path: Path) -> None:
+    """A frame the parser cannot read is one the guardrail cannot scan, so nothing around it is replayed either."""
+    frames: Final = (gemini_frame(f"the architect was {PERSON}"), b"data: not json at all\r\n\r\n", gemini_frame("."))
     provider: Final = gemini_provider(Reply(content_type="text/event-stream", chunks=frames))
     with presidio_rig(gateway, tmp_path, provider) as rig:
         received: Final = rig.stream(rig.gemini_path(), rig.gemini_body())
-        assert received.status == 200, received.text
-        assert received.text.replace("\r\n", "\n") == b"".join(frames).decode().replace("\r\n", "\n")
-        assert len(rig.analyzer.drain()) == 1
+        assert received.status == 500, received.text
+        assert PERSON not in received.text, received.text
+        assert "could not read every streamed frame" in received.text, received.text
+        assert rig.analyzer.drain() == ()
 
 
 def test_native_gemini_empty_stream_returns_200_with_no_body(gateway: Gateway, tmp_path: Path) -> None:

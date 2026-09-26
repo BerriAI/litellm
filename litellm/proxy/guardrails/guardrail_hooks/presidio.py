@@ -12,14 +12,14 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, cast
 
 import aiohttp
-from typing_extensions import NotRequired, ReadOnly
+from typing_extensions import NotRequired, ReadOnly, assert_never
 
 import litellm
 from litellm import get_secret
@@ -45,13 +45,16 @@ from litellm.proxy.common_utils.sse_keepalive import split_complete_sse_frames
 from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
+    has_unreadable_sse_frames,
     is_anthropic_sse_stream,
     is_sse_error_stream,
 )
 from litellm.proxy.guardrails.gemini_sse import (
-    assemble_gemini_sse_stream,
-    gemini_sse_chunks_from_response,
+    GeminiStreamMasked,
+    GeminiStreamUnchanged,
+    GeminiStreamUnreadable,
     is_gemini_sse_stream,
+    mask_gemini_sse_stream,
 )
 from litellm.types.guardrails import (
     GuardrailEventHooks,
@@ -168,18 +171,6 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
     yield pending
     async for chunk in stream:
         yield chunk
-
-
-_RawSseReEmit: TypeAlias = Callable[[ModelResponse], tuple[bytes, ...]]
-
-
-def _assemble_raw_sse_stream(chunks: Sequence[object]) -> tuple[ModelResponse | None, _RawSseReEmit] | None:
-    """The stream assembled by its surface, with that surface's re-emitter; None for an unknown surface."""
-    if is_anthropic_sse_stream(chunks):
-        return assemble_anthropic_sse_stream(chunks, restore_identity=True), anthropic_sse_chunks_from_response
-    if is_gemini_sse_stream(chunks):
-        return assemble_gemini_sse_stream(chunks), gemini_sse_chunks_from_response
-    return None
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -1501,36 +1492,60 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """The whole raw SSE stream masked as one response, or a raised refusal when it cannot be read.
 
         Raw frames are buffered to the end because PII can span frames, so no frame is forwarded
-        before the joined text was scanned. A stream whose surface is unknown, or that its surface's
-        assembler cannot rebuild, is withheld rather than forwarded unmasked.
+        before the joined text was scanned. A stream carrying a frame the parser cannot read, whose
+        surface is unknown, or that its surface's assembler cannot rebuild, is withheld rather than
+        forwarded unmasked.
         """
-        rest_chunks: Final = [chunk async for chunk in rest]  # mutable-ok: tuple() cannot consume an async iterator
+        rest_chunks: Final = tuple([chunk async for chunk in rest])
         chunks: Final = (first_chunk, *rest_chunks)
-        surface: Final = _assemble_raw_sse_stream(chunks)
-        if surface is None:
-            raise GuardrailRaisedException(
-                guardrail_name=self.guardrail_name,
-                message=(
-                    "output PII masking cannot read this streaming response shape, "
-                    "so the response was withheld instead of being forwarded unmasked"
-                ),
-                status_code=500,
-            )
-        assembled, re_emit = surface
+        if has_unreadable_sse_frames(chunks):
+            raise self._withheld_stream_error("could not read every streamed frame")
+        if is_anthropic_sse_stream(chunks):
+            return await self._mask_anthropic_sse_stream(chunks, request_data)
+        if is_gemini_sse_stream(chunks):
+            return await self._mask_gemini_sse_stream(chunks, request_data)
+        raise self._withheld_stream_error("cannot read this streaming response shape")
+
+    async def _mask_anthropic_sse_stream(self, chunks: tuple[object, ...], request_data: dict) -> tuple[object, ...]:
+        assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True)
         if assembled is None:
-            raise GuardrailRaisedException(
-                guardrail_name=self.guardrail_name,
-                message=(
-                    "output PII masking could not assemble the streaming response, "
-                    "so the response was withheld instead of being forwarded unmasked"
-                ),
-                status_code=500,
-            )
+            raise self._withheld_stream_error("could not assemble the streaming response")
         before: Final = assembled.model_dump()
         await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
         if assembled.model_dump() == before:
             return chunks
-        return re_emit(assembled)
+        return anthropic_sse_chunks_from_response(assembled)
+
+    async def _mask_gemini_sse_stream(self, chunks: tuple[object, ...], request_data: dict) -> tuple[object, ...]:
+        """Gemini frames masked in place, so thought signatures and function-call ids reach the client.
+
+        The frames are rewritten rather than round-tripped through a chat-completions response
+        because that translation drops the fields a Gemini client has to echo on its next turn.
+        """
+        presidio_config: Final = self.get_presidio_settings_from_request_data(request_data or {})
+
+        async def mask_text(text: str) -> str:
+            return await self.check_pii(
+                text=text, output_parse_pii=False, presidio_config=presidio_config, request_data=request_data
+            )
+
+        result: Final = await mask_gemini_sse_stream(chunks, mask_text)
+        match result:
+            case GeminiStreamUnchanged():
+                return chunks
+            case GeminiStreamMasked(frames=frames):
+                return frames
+            case GeminiStreamUnreadable(reason=reason):
+                raise self._withheld_stream_error(reason)
+            case _:
+                assert_never(result)
+
+    def _withheld_stream_error(self, reason: str) -> GuardrailRaisedException:
+        return GuardrailRaisedException(
+            guardrail_name=self.guardrail_name,
+            message=f"output PII masking {reason}, so the response was withheld instead of being forwarded unmasked",
+            status_code=500,
+        )
 
     @staticmethod
     def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: dict[str, str]) -> bytes:

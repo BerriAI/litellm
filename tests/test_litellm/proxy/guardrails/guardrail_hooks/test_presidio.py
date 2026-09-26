@@ -2545,6 +2545,29 @@ def _gemini_texts(chunks: list[object]) -> list[str]:
     ]
 
 
+def _gemini_frame(*parts: dict, finish_reason: str | None = None, **top_level: object) -> bytes:
+    candidate = {"content": {"parts": list(parts), "role": "model"}, "index": 0}
+    payload = {
+        "candidates": [candidate if finish_reason is None else {**candidate, "finishReason": finish_reason}],
+        **top_level,
+    }
+    return b"data: " + json.dumps(payload).encode() + b"\n\n"
+
+
+def _gemini_frames(chunks: list[object]) -> list[dict]:
+    frames = b"".join(chunk for chunk in chunks if isinstance(chunk, bytes)).decode()
+    return [json.loads(line[6:]) for line in frames.splitlines() if line.startswith("data: ")]
+
+
+def _gemini_fake_masking_guardrail(server: TestServer) -> _OPTIONAL_PresidioPIIMasking:
+    return _OPTIONAL_PresidioPIIMasking(
+        apply_to_output=True,
+        presidio_analyzer_api_base=str(server.make_url("/")),
+        presidio_anonymizer_api_base=str(server.make_url("/")),
+        pii_entities_config={PiiEntityType.PERSON: PiiAction.MASK},
+    )
+
+
 async def _collect_masked_output(guardrail: _OPTIONAL_PresidioPIIMasking, stream, collected: list[object]) -> None:
     async for chunk in guardrail.async_post_call_streaming_iterator_hook(
         user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
@@ -2638,7 +2661,17 @@ async def test_apply_to_output_streaming_anthropic_tool_call_arguments_only_mask
 @pytest.mark.asyncio
 @pytest.mark.parametrize("terminator", [b"\n\n", b"\r\n\r\n"])
 async def test_apply_to_output_streaming_gemini_stream_without_pii_is_replayed_byte_for_byte(terminator):
-    frames = [_gemini_sse("nothing personal ", terminator), _gemini_sse("in here.", terminator)]
+    function_call = {
+        "functionCall": {"id": "call_1", "name": "lookup", "args": {"city": "Paris"}},
+        "thoughtSignature": "sig",
+    }
+    frames = [
+        _gemini_sse("nothing personal ", terminator),
+        _gemini_sse("in here.", terminator),
+        b"data: "
+        + json.dumps({"candidates": [{"content": {"parts": [function_call], "role": "model"}}]}).encode()
+        + terminator,
+    ]
 
     async def mock_stream():
         for frame in frames:
@@ -2656,6 +2689,148 @@ async def test_apply_to_output_streaming_gemini_stream_without_pii_is_replayed_b
         await guardrail._close_http_session()
 
     assert collected == frames
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_function_call_keeps_its_signature_and_id_while_its_arguments_are_masked():
+    """
+    A Gemini client echoes the streamed model turn on its next request, and Gemini 3 rejects
+    a function call whose thought signature is missing, so masking has to rewrite the frames
+    in place rather than rebuild them from a chat-completions response that drops those fields.
+    """
+    frames = [
+        _gemini_frame(
+            {"text": "emailing John"}, usageMetadata={"totalTokenCount": 1}, modelVersion="m", responseId="r1"
+        ),
+        _gemini_frame({"text": " Smith now."}, usageMetadata={"totalTokenCount": 2}, modelVersion="m", responseId="r1"),
+        _gemini_frame(
+            {
+                "functionCall": {"id": "call_1", "name": "send_email", "args": {"to": "John Smith", "urgent": True}},
+                "thoughtSignature": "sig-fc",
+            },
+            usageMetadata={"totalTokenCount": 3},
+            modelVersion="m",
+            responseId="r1",
+        ),
+        _gemini_frame(
+            {"text": ""}, finish_reason="STOP", usageMetadata={"totalTokenCount": 9}, modelVersion="m", responseId="r1"
+        ),
+    ]
+
+    async def mock_stream():
+        for frame in frames:
+            yield frame
+
+    collected: list[object] = []
+    async with TestServer(_fake_presidio_app()) as server:
+        guardrail = _gemini_fake_masking_guardrail(server)
+        await _collect_masked_output(guardrail, mock_stream(), collected)
+        await guardrail._close_http_session()
+
+    assert "John Smith" not in b"".join(collected).decode()
+    (body,) = _gemini_frames(collected)
+    assert body["candidates"] == [
+        {
+            "content": {
+                "parts": [
+                    {"text": "emailing <PERSON> now."},
+                    {
+                        "functionCall": {
+                            "id": "call_1",
+                            "name": "send_email",
+                            "args": {"to": "<PERSON>", "urgent": True},
+                        },
+                        "thoughtSignature": "sig-fc",
+                    },
+                ],
+                "role": "model",
+            },
+            "index": 0,
+            "finishReason": "STOP",
+        }
+    ]
+    assert body["usageMetadata"] == {"totalTokenCount": 9}
+    assert body["modelVersion"] == "m"
+    assert body["responseId"] == "r1"
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_thought_part_and_trailing_signature_survive_the_merge():
+    """
+    A thought part is never merged into the visible text that follows it, and the signature
+    Gemini sends on a trailing empty text part lands on the text it signs.
+    """
+    frames = [
+        _gemini_frame({"text": "thinking about John Smith", "thought": True}),
+        _gemini_frame({"text": "hello John"}),
+        _gemini_frame({"text": " Smith,"}),
+        _gemini_frame({"text": "", "thoughtSignature": "sig-text"}, finish_reason="STOP"),
+    ]
+
+    async def mock_stream():
+        for frame in frames:
+            yield frame
+
+    collected: list[object] = []
+    async with TestServer(_fake_presidio_app()) as server:
+        guardrail = _gemini_fake_masking_guardrail(server)
+        await _collect_masked_output(guardrail, mock_stream(), collected)
+        await guardrail._close_http_session()
+
+    (body,) = _gemini_frames(collected)
+    assert body["candidates"][0]["content"]["parts"] == [
+        {"text": "thinking about <PERSON>", "thought": True},
+        {"text": "hello <PERSON>,", "thoughtSignature": "sig-text"},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_masked_function_call_arguments_that_no_longer_parse_are_withheld():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    frames = [
+        _gemini_frame({"functionCall": {"name": "lookup", "args": {"person": "John Smith"}}}, finish_reason="STOP")
+    ]
+    collected: list[object] = []
+
+    async def mock_stream():
+        for frame in frames:
+            yield frame
+
+    with pytest.raises(GuardrailRaisedException) as raised:
+        await _collect_masked_output(guardrail, mock_stream(), collected)
+
+    assert raised.value.status_code == 500
+    assert collected == []
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_error_frame_mid_stream_is_carried_on_the_masked_frame():
+    """
+    Gemini can end a stream with an error frame after content frames, and the
+    client reads the error off the last frame, so the masked re-emit keeps it.
+    """
+    frames = [
+        _gemini_frame({"text": "The architect was John Smith."}),
+        b'data: {"error": {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}}\n\n',
+    ]
+    collected: list[object] = []
+
+    async def mock_stream():
+        for frame in frames:
+            yield frame
+
+    async with TestServer(_fake_presidio_app()) as server:
+        guardrail = _gemini_fake_masking_guardrail(server)
+        await _collect_masked_output(guardrail, mock_stream(), collected)
+        await guardrail._close_http_session()
+
+    (frame,) = _gemini_frames(collected)
+    assert frame["candidates"][0]["content"]["parts"] == [{"text": "The architect was <PERSON>."}]
+    assert frame["error"] == {"code": 503, "message": "overloaded", "status": "UNAVAILABLE"}
 
 
 @pytest.mark.asyncio
@@ -2925,13 +3100,13 @@ async def test_apply_to_output_streaming_leading_keepalive_is_forwarded_before_u
 
 
 @pytest.mark.asyncio
-async def test_apply_to_output_streaming_leading_comments_over_the_frame_cap_are_still_masked():
+async def test_apply_to_output_streaming_leading_comments_of_any_size_are_still_masked():
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<PERSON>"},
     )
-    keepalives = [b": keepalive\n\n" * 512] * 12  # ~72 KiB of complete comment frames, over the 64 KiB cap
+    keepalives = [b": keepalive\n\n" * 512] * 12  # ~72 KiB of complete comment frames
     byte_chunks = [
         *keepalives[:-1],
         keepalives[-1]
@@ -3011,15 +3186,16 @@ async def test_apply_to_output_streaming_gemini_first_frame_split_across_transpo
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "frame",
+    ("frame", "reason"),
     [
-        b"data: not json at all\n\n",
-        b'data: {"unexpected": true}\n\n',
-        b"data: " + b"x" * (70 * 1024) + b"\n",
+        (b"data: not json at all\n\n", "could not read every streamed frame"),
+        (b"data: 42\n\n", "could not read every streamed frame"),
+        (b'data: {"unexpected": true}\n\n', "cannot read this streaming response shape"),
+        (b"data: " + b"x" * (70 * 1024) + b"\n", "could not read every streamed frame"),
     ],
-    ids=["non-json", "unknown-surface", "unterminated"],
+    ids=["non-json", "json-scalar", "unknown-surface", "unterminated"],
 )
-async def test_apply_to_output_streaming_unrecognized_raw_sse_stream_is_withheld(frame: bytes):
+async def test_apply_to_output_streaming_unrecognized_raw_sse_stream_is_withheld(frame: bytes, reason: str):
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
@@ -3030,7 +3206,71 @@ async def test_apply_to_output_streaming_unrecognized_raw_sse_stream_is_withheld
     async def mock_stream():
         yield frame
 
-    with pytest.raises(GuardrailRaisedException, match="cannot read this streaming response shape"):
+    with pytest.raises(GuardrailRaisedException, match=reason):
+        await _collect_masked_output(guardrail, mock_stream(), collected)
+
+    assert collected == []
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_stream_with_an_unreadable_frame_is_withheld():
+    """
+    The parser skips a frame it cannot read, and replaying the originals around it
+    would forward that frame unscanned, so the whole stream is withheld instead.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    frames = [
+        _gemini_frame({"text": "The architect was"}),
+        b"data: not json at all\n\n",
+        _gemini_frame({"text": " Ada."}, finish_reason="STOP"),
+    ]
+    collected: list[object] = []
+
+    async def mock_stream():
+        for frame in frames:
+            yield frame
+
+    with pytest.raises(GuardrailRaisedException, match="could not read every streamed frame"):
+        await _collect_masked_output(guardrail, mock_stream(), collected)
+
+    assert collected == []
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_stream_with_an_unreadable_frame_is_withheld():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "Hello"},
+    )
+    byte_chunks = [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+        b"event: content_block_delta\ndata: not json at all\n\n",
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "Hello"}},
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+    collected: list[object] = []
+
+    async def mock_stream():
+        for chunk in byte_chunks:
+            yield chunk
+
+    with pytest.raises(GuardrailRaisedException, match="could not read every streamed frame"):
         await _collect_masked_output(guardrail, mock_stream(), collected)
 
     assert collected == []

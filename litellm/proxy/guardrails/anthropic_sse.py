@@ -13,6 +13,8 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import Final
 
+from pydantic import TypeAdapter, ValidationError
+
 from litellm.types.utils import Choices, ModelResponse
 
 _ANTHROPIC_EVENT_TYPES: Final = frozenset(
@@ -27,6 +29,8 @@ _ANTHROPIC_EVENT_TYPES: Final = frozenset(
         "error",
     }
 )
+_CONTENT_FREE_PAYLOADS: Final = frozenset({"", "[DONE]"})
+_JSON_OBJECT: Final = TypeAdapter(Mapping[str, object])
 
 
 def is_raw_sse_stream(all_chunks: Sequence[object]) -> bool:
@@ -55,8 +59,42 @@ def parsed_sse_events(sse_stream: str) -> tuple[Mapping[str, object], ...]:
     return tuple(
         event_data
         for event in AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(sse_stream)  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses
-        if (event_data := AnthropicPassthroughLoggingHandler._extract_sse_data(event)) is not None  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses; a private import beats forking SSE parsing
+        if isinstance(event_data := AnthropicPassthroughLoggingHandler._extract_sse_data(event), Mapping)  # pyright: ignore[reportPrivateUsage]  # same parser the assembler uses; a private import beats forking SSE parsing
     )
+
+
+def _data_payload(event: str) -> str | None:
+    lines: Final = tuple(line.strip() for line in event.splitlines())
+    return next((line[len("data:") :].strip() for line in lines if line.startswith("data:")), None)
+
+
+def _is_unreadable_payload(payload: str) -> bool:
+    if payload in _CONTENT_FREE_PAYLOADS:
+        return False
+    try:
+        _JSON_OBJECT.validate_json(payload)
+    except ValidationError:
+        return True
+    return False
+
+
+def has_unreadable_sse_frames(all_chunks: Sequence[object]) -> bool:
+    """Whether a ``data:`` payload is neither blank, ``[DONE]``, nor a JSON object.
+
+    ``parsed_sse_events`` drops such a frame silently, which suits the assemblers and not a
+    masking hook: a frame it cannot read is one it cannot scan, so the hook withholds the stream
+    instead of replaying it.
+    """
+    from litellm.proxy.pass_through_endpoints.llm_provider_handlers.anthropic_passthrough_logging_handler import (
+        AnthropicPassthroughLoggingHandler,
+    )
+
+    sse_stream: Final = joined_sse_stream(all_chunks)
+    if sse_stream is None:
+        return True
+    events: Final = AnthropicPassthroughLoggingHandler._split_sse_chunk_into_events(sse_stream)  # pyright: ignore[reportPrivateUsage]  # same splitter the assembler uses
+    payloads: Final = tuple(_data_payload(event) for event in events)
+    return any(_is_unreadable_payload(payload) for payload in payloads if payload is not None)
 
 
 def _anthropic_message_start(sse_stream: str) -> Mapping[str, object] | None:
