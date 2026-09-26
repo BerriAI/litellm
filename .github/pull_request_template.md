@@ -6,7 +6,8 @@
 
 ## TLDR
 
-<!-- Fill in the bullets below and keep each one short and concrete: one line per bullet, roughly 10 words max -->
+<!-- Fill in the bullets below and keep each one short and concrete: one line per bullet, roughly 10 words max
+     If the PR intentionally changes what existing users see or how a screen behaves, add a line under the bullets that starts "Intentional product change:" describing what changes, why, and what users lose. Reviewers must never have to infer a deliberate UX change from the diff -->
 
 Problem this solves:
 
@@ -28,7 +29,8 @@ How it solves it:
      No LiteLLM internals: never name functions, files, DB tables, config classes, hooks, callbacks, or code paths. "The upload hands back an ID that looks like OpenAI's own `file-abc123` instead of the scrambled one the gateway returned" is right, "no managed-file row was registered" is wrong
      Keep the two lists step-for-step identical until they diverge, so the changed step is obvious
      If the bug had a security or authorization consequence, end each list with what another user could or could no longer do
-     Regenerate this section whenever new commits change the PR's behavior, so it never describes an older revision
+     Regenerate this section, screenshots included, whenever new commits change the PR's behavior, so it never describes an older revision
+     If the PR changes what an Admin UI page shows, embed a before and an after screenshot of that page right after its list, taken at the same URL on the same data, with the rows, fields, or controls that changed boxed in red so a reader spots the difference without reading the steps. These are the UI screenshots for Screenshots / Proof of Fix too: embed them once here and have that section's Before and After steps point back to them instead of repeating the images
 
 Example:
 
@@ -63,7 +65,7 @@ After: the same request comes back with real token counts, so the dashboard show
 **Please complete all items before asking a LiteLLM maintainer to review your PR**
 
 - [ ] I have added meaningful tests
-- [ ] The handful of test files covering my change pass locally, e.g. `uv run pytest tests/test_litellm/<your_test_file>.py -v`. Leave the suites (`make test-unit-*`, `make test-unit`) to CI: it finishes in ~15 minutes where a laptop takes an hour or more
+- [ ] The handful of test files covering my change pass locally, e.g. `uv run pytest tests/unit/<your_test_file>.py -v`. Leave the suites (`make test-unit-*`, `make test-unit`) to CI: it finishes in ~15 minutes where a laptop takes an hour or more
 - [ ] My PR passes all required CI/CD checks (e.g., lint, schema.d.ts sync check, etc.)
 - [ ] My PR's scope is as isolated as possible; it only solves 1 specific problem
 - [ ] I have received a Greptile **Confidence Score of at least 4/5** before requesting a maintainer review (Greptile reviews automatically once the PR is opened; only comment `@greptileai` to re-request a review after pushing changes)

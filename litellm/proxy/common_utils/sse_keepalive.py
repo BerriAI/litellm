@@ -15,7 +15,7 @@ SSE_COMMENT_PING_BYTES: Final = SSE_COMMENT_PING.encode()
 # terminates a line with CRLF, LF or CR, so a blank line is any of these three.
 _SSE_FRAME_DELIMITERS: Final = (b"\r\n\r\n", b"\n\n", b"\r\r")
 _SSE_DELIMITER_LOOKBACK: Final = max(len(delimiter) for delimiter in _SSE_FRAME_DELIMITERS)
-_STREAM_START_TAIL: Final = b"\n\n"
+SSE_STREAM_START_TAIL: Final = b"\n\n"
 _SSE_MEDIA_TYPE: Final = "text/event-stream"
 
 
@@ -128,7 +128,7 @@ async def _keepalive_ping_byte_stream(
     # Seeded as a delimiter because a stream starts at a frame boundary, and kept
     # across chunks because a delimiter can be split between two transport reads,
     # which testing only the latest chunk would miss for the rest of the stream.
-    recent_tail = _STREAM_START_TAIL  # rebind-ok: rolling window over the relayed bytes
+    recent_tail = SSE_STREAM_START_TAIL  # rebind-ok: rolling window over the relayed bytes
     try:
         while True:
             await asyncio.wait((pending,), timeout=ping_interval_seconds)
@@ -153,6 +153,28 @@ async def _keepalive_ping_byte_stream(
             with contextlib.suppress(BaseException):
                 await pending
             await stream.aclose()
+
+
+def advance_sse_tail(recent_tail: bytes, chunk: object) -> bytes:
+    written: Final = _sse_tail_bytes(chunk)
+    if not written:
+        return recent_tail
+    return (recent_tail + written)[-_SSE_DELIMITER_LOOKBACK:]
+
+
+def _sse_tail_bytes(chunk: object) -> bytes:
+    if isinstance(chunk, bytes):
+        return chunk[-_SSE_DELIMITER_LOOKBACK:]
+    if isinstance(chunk, str):
+        return chunk[-_SSE_DELIMITER_LOOKBACK:].encode()
+    return b""
+
+
+def seal_open_sse_frame(recent_tail: bytes) -> str:
+    if recent_tail.endswith(_SSE_FRAME_DELIMITERS):
+        return ""
+    line_break: Final = "" if recent_tail.endswith((b"\n", b"\r")) else "\n"
+    return f"{line_break}{ANTHROPIC_PING_SSE_CHUNK}"
 
 
 def resolve_ttft_keepalive_interval(

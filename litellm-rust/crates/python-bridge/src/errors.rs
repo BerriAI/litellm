@@ -1,6 +1,5 @@
-use litellm_core::{Error, audio_transcription, chat_completions, messages, responses};
+use litellm_core::{Phase, RouteError};
 use litellm_http::transport::Error as TransportError;
-use litellm_llms::base_llm::ocr::error::Error as OcrError;
 use pyo3::{
     exceptions::{PyRuntimeError, PyValueError},
     prelude::*,
@@ -20,73 +19,16 @@ pyo3::create_exception!(
     "The provider call was already issued and failed. Args are (status, message); status is 0 when there was no HTTP response."
 );
 
-fn auth_is_value_error(error: &litellm_auth::Error) -> bool {
-    !matches!(error, litellm_auth::Error::MissingApiKey { .. })
+pub(crate) fn route_error_to_pyerr(error: RouteError) -> PyErr {
+    by_fault(error.is_request(), error.to_string())
 }
 
-pub(crate) fn messages_error_to_pyerr(error: messages::Error) -> PyErr {
-    core_error_to_pyerr(error.into())
-}
-
-pub(crate) fn audio_transcription_error_to_pyerr(error: audio_transcription::Error) -> PyErr {
-    core_error_to_pyerr(error.into())
-}
-
-pub(crate) fn responses_error_to_pyerr(error: responses::Error) -> PyErr {
-    core_error_to_pyerr(error.into())
-}
-
-pub(crate) fn core_error_to_pyerr(error: Error) -> PyErr {
-    let value_error = match &error {
-        Error::Ocr(error) => {
-            error.is_request()
-                || matches!(
-                    error,
-                    OcrError::Auth(_)
-                        | OcrError::InvalidProvider(_)
-                        | OcrError::InvalidRequest(_)
-                        | OcrError::MissingField(_)
-                        | OcrError::MissingDocumentUrl
-                )
-        }
-        Error::Messages(error) => match error {
-            messages::Error::Auth(source) => auth_is_value_error(source),
-            _ => error.is_request(),
-        },
-        Error::AudioTranscription(error) => match error {
-            audio_transcription::Error::Auth(source) => auth_is_value_error(source),
-            audio_transcription::Error::InvalidProvider(_)
-            | audio_transcription::Error::InvalidRequest(_)
-            | audio_transcription::Error::Headers(_)
-            | audio_transcription::Error::Http(_)
-            | audio_transcription::Error::InvalidType { .. }
-            | audio_transcription::Error::MissingField(_)
-            | audio_transcription::Error::Aws(_) => true,
-            _ => false,
-        },
-        Error::ChatCompletions(error) => match error {
-            chat_completions::Error::Auth(source) => auth_is_value_error(source),
-            chat_completions::Error::InvalidProvider(_)
-            | chat_completions::Error::InvalidRequest(_)
-            | chat_completions::Error::Headers(_)
-            | chat_completions::Error::Http(_)
-            | chat_completions::Error::InvalidType { .. }
-            | chat_completions::Error::MissingField(_)
-            | chat_completions::Error::Aws(_) => true,
-            _ => false,
-        },
-        Error::Responses(error) => match error {
-            responses::Error::Auth(source) => auth_is_value_error(source),
-            responses::Error::InvalidProvider(_)
-            | responses::Error::InvalidRequest(_)
-            | responses::Error::Headers(_) => true,
-            _ => false,
-        },
-    };
-    if value_error {
-        PyValueError::new_err(error.to_string())
+/// A request the caller got wrong is a `ValueError`; anything else is a `RuntimeError`.
+pub(crate) fn by_fault(is_request: bool, message: String) -> PyErr {
+    if is_request {
+        PyValueError::new_err(message)
     } else {
-        PyRuntimeError::new_err(error.to_string())
+        PyRuntimeError::new_err(message)
     }
 }
 
@@ -96,27 +38,15 @@ pub(crate) fn core_error_to_pyerr(error: Error) -> PyErr {
 /// Everything raised before the request goes out is safe for the host to retry
 /// on its own path; anything after it is not, because the provider has already
 /// done the work and billed for it.
-pub(crate) fn chat_completions_error_to_pyerr(error: chat_completions::Error) -> PyErr {
-    use chat_completions::Error;
-    match error {
-        Error::Unsupported(_)
-        | Error::Auth(_)
-        | Error::Aws(_)
-        | Error::InvalidProvider(_)
-        | Error::InvalidRequest(_)
-        | Error::InvalidType { .. }
-        | Error::MissingField(_)
-        | Error::Headers(_)
-        | Error::Http(_)
-        | Error::Transport(TransportError::Connect(_)) => {
-            RustBridgeDeclined::new_err(error.to_string())
-        }
-        Error::Transport(TransportError::Http { status, body }) => {
-            RustUpstreamError::new_err((status, body))
-        }
-        Error::Transport(TransportError::Network(message)) | Error::InvalidResponse(message) => {
-            RustUpstreamError::new_err((0u16, message))
-        }
+pub(crate) fn chat_completions_error_to_pyerr(error: RouteError) -> PyErr {
+    match error.phase() {
+        Phase::BeforeSend => RustBridgeDeclined::new_err(error.to_string()),
+        Phase::AfterSend => RustUpstreamError::new_err(match error {
+            RouteError::Transport(TransportError::Http { status, body }) => (status, body),
+            RouteError::Transport(TransportError::Network(message))
+            | RouteError::InvalidResponse(message) => (0u16, message),
+            other => (0u16, other.to_string()),
+        }),
     }
 }
 
@@ -158,15 +88,14 @@ mod tests {
     fn missing_api_key_stays_a_runtime_error_while_other_auth_failures_are_value_errors() {
         Python::initialize();
         Python::attach(|py| {
-            let missing = messages_error_to_pyerr(messages::Error::Auth(
-                litellm_auth::Error::MissingApiKey {
+            let missing =
+                route_error_to_pyerr(RouteError::Auth(litellm_auth::Error::MissingApiKey {
                     provider: "Anthropic",
                     environment_variable: "ANTHROPIC_API_KEY",
-                },
-            ));
+                }));
             assert!(missing.is_instance_of::<PyRuntimeError>(py));
             let invalid =
-                messages_error_to_pyerr(messages::Error::Auth(litellm_auth::Error::InvalidHeader));
+                route_error_to_pyerr(RouteError::Auth(litellm_auth::Error::InvalidHeader));
             assert!(invalid.is_instance_of::<PyValueError>(py));
         });
     }
