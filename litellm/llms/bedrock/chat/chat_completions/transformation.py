@@ -394,30 +394,6 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             choice.message.content = content
         return response
 
-    def validate_environment(
-        self,
-        headers: dict,  # mutable-ok: BaseConfig signature
-        model: str,
-        messages: list[AllMessageValues],  # mutable-ok: BaseConfig signature
-        optional_params: dict,  # mutable-ok: BaseConfig signature
-        litellm_params: dict,  # mutable-ok: BaseConfig signature
-        api_key: str | None = None,
-        api_base: str | None = None,
-    ) -> dict:  # mutable-ok: BaseConfig signature
-        validated: Final = super().validate_environment(
-            headers=headers,
-            model=model,
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-            api_key=api_key,
-            api_base=api_base,
-        )
-        project_id: Final = litellm_params.get("aws_bedrock_project_id")
-        if not project_id:
-            return validated
-        return {**validated, "OpenAI-Project": project_id}  # mutable-ok: BaseConfig signature returns a dict
-
     def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseConfig signature
         refused: Final = frozenset(("n", *chat_completions_params_refused_for(model)))
         base_params: Final = tuple(

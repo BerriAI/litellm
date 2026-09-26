@@ -109,6 +109,19 @@ def test_complete_url_appends_to_openai_v1_base():
     assert url == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
 
 
+def test_project_id_is_not_sent_as_openai_project_header():
+    cfg = AmazonBedrockRuntimeChatCompletionsConfig()
+    headers = cfg.validate_environment(
+        headers={},
+        model="bedrock/openai.gpt-oss-20b-1:0",
+        messages=[{"role": "user", "content": "hello"}],
+        optional_params={},
+        litellm_params={"aws_bedrock_project_id": "proj_from_config"},
+    )
+    assert "OpenAI-Project" not in headers
+    assert headers["Content-Type"] == "application/json"
+
+
 def test_transform_request_is_openai_chat_body_not_converse():
     cfg = AmazonBedrockRuntimeChatCompletionsConfig()
     body = cfg.transform_request(
