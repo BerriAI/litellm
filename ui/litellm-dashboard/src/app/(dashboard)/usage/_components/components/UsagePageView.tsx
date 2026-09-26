@@ -31,6 +31,7 @@ import CloudZeroExportModal from "@/components/cloudzero_export_modal";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
 import { getApiKeyTruncation, getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
+import type { ServerExport } from "@/components/EntityUsageExport/types";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
@@ -39,6 +40,7 @@ import {
   tagListCall,
   userDailyActivityAggregatedCall,
   userDailyActivityCall,
+  userDailyActivityExportCall,
   userDailyActivityKeySearchCall,
 } from "@/components/networking";
 import AdvancedDatePicker from "@/components/shared/advanced_date_picker";
@@ -257,13 +259,19 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     userSpendData.metadata?.api_key_limit,
     userSpendData.metadata?.total_api_keys,
   );
+  const serverExportArgs =
+    accessToken && startTime && endTime ? { accessToken, startTime, endTime, userId: effectiveUserId } : null;
+  const serverExport: ServerExport | undefined =
+    apiKeyTruncation !== undefined && serverExportArgs !== null
+      ? (scope, format) => userDailyActivityExportCall({ ...serverExportArgs, exportType: scope, format })
+      : undefined;
   const spendFetchState = {
     coversRange: activeAggregated !== null || paginatedResult.coversRange,
     cancelled: paginatedResult.cancelled,
     failed: paginatedResult.failed,
-    apiKeyTruncation,
+    apiKeyTruncation: serverExport ? null : apiKeyTruncation,
   };
-  const exportBlockedReason = getExportBlockedReason(spendFetchState);
+  const exportBlockedReason = getExportBlockedReason(spendFetchState, "the export");
 
   // Clear isDateChanging when paginated data starts arriving
   useEffect(() => {
@@ -1023,7 +1031,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
       <EntityUsageExportModal
         isOpen={isGlobalExportModalOpen}
         onClose={() => setIsGlobalExportModalOpen(false)}
-        entityType="team"
+        entityType="user"
         spendData={{
           results: userSpendData.results,
           metadata: userSpendData.metadata,
@@ -1031,6 +1039,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
         dateRange={dateValue}
         selectedFilters={[]}
         customTitle="Export Usage Data"
+        serverExport={serverExport}
       />
 
       {/* AI Chat Panel */}

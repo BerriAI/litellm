@@ -17424,6 +17424,32 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/user/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get User Daily Activity Export
+         * @description Server-side Usage export for the user table, not subject to USAGE_TOP_API_KEYS_LIMIT.
+         *
+         *     Same scoping as /user/daily/activity/aggregated, answered by one unbounded
+         *     rollup query, returned as CSV or JSON. For daily_with_keys and
+         *     daily_with_models the PTU sentinel flat-cost rows are excluded, so metadata
+         *     totals under those export types cover request spend only; the plain daily
+         *     export includes them.
+         */
+        get: operations["get_user_daily_activity_export_user_daily_activity_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/user/delete": {
         parameters: {
             query?: never;
@@ -31612,7 +31638,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/team/daily/activity/export" | "/team/daily/activity/aggregated/search" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/team/daily/activity/export" | "/team/daily/activity/aggregated/search" | "/user/daily/activity/export" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -45948,6 +45974,83 @@ export interface components {
             user_email?: string | null;
             /** User Id */
             user_id?: string | null;
+        };
+        /** UserDailyActivityExportMetadata */
+        UserDailyActivityExportMetadata: {
+            /** End Date */
+            end_date: string;
+            /** Export Date */
+            export_date: string;
+            /**
+             * Export Type
+             * @enum {string}
+             */
+            export_type: "daily" | "daily_with_keys" | "daily_with_models";
+            /** Start Date */
+            start_date: string;
+            /** Total Api Requests */
+            total_api_requests: number;
+            /** Total Failed Requests */
+            total_failed_requests: number;
+            /**
+             * Total Flat Cost
+             * @default 0
+             */
+            total_flat_cost: number;
+            /** Total Spend */
+            total_spend: number;
+            /** Total Successful Requests */
+            total_successful_requests: number;
+            /** Total Tokens */
+            total_tokens: number;
+            /** User Id */
+            user_id: string | null;
+        };
+        /** UserDailyActivityExportResponse */
+        UserDailyActivityExportResponse: {
+            /** Data */
+            data: components["schemas"]["UserDailyActivityExportRow"][];
+            metadata: components["schemas"]["UserDailyActivityExportMetadata"];
+        };
+        /** UserDailyActivityExportRow */
+        UserDailyActivityExportRow: {
+            /** Api Key */
+            api_key?: string | null;
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Creation Input Tokens */
+            cache_creation_input_tokens: number;
+            /** Cache Read Input Tokens */
+            cache_read_input_tokens: number;
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Date */
+            date: string;
+            /** Failed Requests */
+            failed_requests: number;
+            /**
+             * Flat Cost
+             * @default 0
+             */
+            flat_cost: number;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Model */
+            model?: string | null;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Spend */
+            spend: number;
+            /** Successful Requests */
+            successful_requests: number;
+            /** Total Tokens */
+            total_tokens: number;
+            /** User Alias */
+            user_alias?: string | null;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id: string;
         };
         /**
          * UserDeleteResult
@@ -69263,6 +69366,44 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_user_daily_activity_export_user_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                start_date?: string | null;
+                end_date?: string | null;
+                export_type?: "daily" | "daily_with_keys" | "daily_with_models";
+                format?: "csv" | "json";
+                user_id?: string | null;
+                api_key?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["UserDailyActivityExportResponse"];
+                    "text/csv": unknown;
                 };
             };
             /** @description Validation Error */

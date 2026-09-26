@@ -168,3 +168,45 @@ class BulkNewUserResponse(BaseModel):
 
     data: tuple[UserCreateResult, ...]
     meta: BulkNewUserMeta
+
+
+UserDailyActivityExportType = Literal["daily", "daily_with_keys", "daily_with_models"]
+
+
+class UserDailyActivityExportRow(BaseModel):
+    date: str
+    user_id: str
+    user_email: str | None = None
+    user_alias: str | None = None
+    api_key: str | None = None
+    key_alias: str | None = None
+    model: str | None = None
+    spend: float
+    flat_cost: float = 0.0
+    api_requests: int
+    successful_requests: int
+    failed_requests: int
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+
+
+class UserDailyActivityExportMetadata(BaseModel):
+    export_date: str
+    export_type: UserDailyActivityExportType
+    start_date: str
+    end_date: str
+    user_id: str | None
+    total_spend: float
+    total_flat_cost: float = 0.0
+    total_api_requests: int
+    total_successful_requests: int
+    total_failed_requests: int
+    total_tokens: int
+
+
+class UserDailyActivityExportResponse(BaseModel):
+    metadata: UserDailyActivityExportMetadata
+    data: list[UserDailyActivityExportRow]
