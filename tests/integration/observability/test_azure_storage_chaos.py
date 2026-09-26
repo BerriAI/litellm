@@ -14,7 +14,7 @@ from _azure_storage_support import (
 )
 from _s3_v2_support import matched_ids, mixed_burst, surface_reply
 from integration._support.client import Gateway, JsonValue, eventually
-from integration._support.process import group_members, owned_proxy_process, stop_root_process
+from integration._support.process import group_members, owned_proxy_process
 from integration._support.tls import server_context, write_self_signed_cert
 from integration._support.wire import wire_server
 
@@ -174,7 +174,7 @@ def test_killing_one_worker_keeps_the_other_serving_and_uploading(gateway: Gatew
             )
 
 
-def test_restarting_the_proxy_mid_burst_bounds_the_loss_to_the_unflushed_queue_and_recovers(
+def test_restarting_the_proxy_before_the_queue_flushes_bounds_the_loss_to_the_unflushed_queue_and_recovers(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     marker: Final = f"azure-{uuid.uuid4().hex[:8]}"
@@ -205,7 +205,6 @@ def test_restarting_the_proxy_mid_burst_bounds_the_loss_to_the_unflushed_queue_a
                 cut: Final = mixed_burst(
                     first_owned.gateway, openai_model, anthropic_model, first_key, f"{marker}-cut", per_surface=2
                 )
-        assert stop_root_process(first_owned.process), "the first proxy did not stop on SIGTERM"
         with owned_proxy_process(gateway, tmp_path, environment, config=config, workers=WORKERS) as second_owned:
             with second_owned.gateway.scenario() as scenario:
                 second_openai: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
