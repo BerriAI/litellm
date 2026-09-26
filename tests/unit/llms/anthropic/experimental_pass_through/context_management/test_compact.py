@@ -18,6 +18,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+from fastapi import HTTPException
 
 import litellm
 from litellm.llms.anthropic.experimental_pass_through.context_management import (
@@ -36,6 +37,7 @@ from litellm.llms.anthropic.experimental_pass_through.context_management.editors
 from litellm.llms.anthropic.experimental_pass_through.context_management.result import (
     PolyfillResult,
 )
+from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
 
 MODEL = "openai/gpt-4o"
 
@@ -1765,12 +1767,25 @@ async def test_summary_model_allowed_when_within_model_budget():
     assert not result.applied_edits[0].get("error")
 
 
+class _LegacyLimiter:
+    async def async_pre_call_hook(self, **kwargs):
+        return None
+
+
+def _proxy_logging_like_the_live_proxy(active_limiter: object) -> MagicMock:
+    proxy_logging = MagicMock()
+    proxy_logging.max_parallel_request_limiter = _LegacyLimiter()
+    proxy_logging.get_proxy_hook = lambda hook: active_limiter if hook == "parallel_request_limiter" else None
+    return proxy_logging
+
+
 class _FakeRateLimiter:
     """Minimal stand-in for ``_PROXY_MaxParallelRequestsHandler_v3`` exposing
     just the descriptor-build + read-only check surface the editor consults."""
 
-    def __init__(self, overall_code: str):
+    def __init__(self, overall_code: str, raises: Exception | None = None):
         self._overall_code = overall_code
+        self._raises = raises
         self.read_only_checked = False
 
     def _create_rate_limit_descriptors(self, **kwargs):
@@ -1793,7 +1808,60 @@ class _FakeRateLimiter:
 
     async def should_rate_limit(self, **kwargs):
         self.read_only_checked = kwargs.get("read_only") is True
+        if self._raises is not None:
+            raise self._raises
         return {"overall_code": self._overall_code}
+
+
+@pytest.mark.parametrize(
+    "limiter_error, summary_called",
+    [
+        (RateLimitUnverifiableError(), False),
+        (HTTPException(status_code=500, detail="unrelated proxy error"), True),
+        (RuntimeError("descriptor build exploded"), True),
+    ],
+    ids=["fail_closed_rejection_denies", "other_http_error_allows", "internal_error_allows"],
+)
+async def test_summary_model_rate_limit_check_errors(limiter_error, summary_called):
+    """The limiter's fail-closed 503 is a verdict and skips the summary call the
+    way OVER_LIMIT does; any other error keeps failing open."""
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>ok</summary>"))
+
+    auth = _fake_user_api_key_auth(key_models=["all-proxy-models"])
+    limiter = _FakeRateLimiter("OK", raises=limiter_error)
+    proxy_logging = _proxy_logging_like_the_live_proxy(limiter)
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    assert limiter.read_only_checked is True
+    if summary_called:
+        mock_call.assert_awaited_once()
+        assert result.compaction_block is not None
+        assert not result.applied_edits[0].get("error")
+        return
+    mock_call.assert_not_awaited()
+    assert result.compaction_block is None
+    assert result.applied_edits[0].get("error") == "summary_model_rate_limit_exceeded"
 
 
 async def test_summary_model_denied_when_over_rate_limit():
@@ -1804,8 +1872,7 @@ async def test_summary_model_denied_when_over_rate_limit():
 
     auth = _fake_user_api_key_auth(key_models=["all-proxy-models"])
     limiter = _FakeRateLimiter("OVER_LIMIT")
-    proxy_logging = MagicMock()
-    proxy_logging.max_parallel_request_limiter = limiter
+    proxy_logging = _proxy_logging_like_the_live_proxy(limiter)
 
     with (
         patch(
@@ -1841,8 +1908,7 @@ async def test_summary_model_allowed_when_within_rate_limit():
 
     auth = _fake_user_api_key_auth(key_models=["all-proxy-models"])
     limiter = _FakeRateLimiter("OK")
-    proxy_logging = MagicMock()
-    proxy_logging.max_parallel_request_limiter = limiter
+    proxy_logging = _proxy_logging_like_the_live_proxy(limiter)
 
     with (
         patch(
@@ -1871,6 +1937,53 @@ async def test_summary_model_allowed_when_within_rate_limit():
     assert not result.applied_edits[0].get("error")
 
 
+async def test_summary_model_allowed_while_the_caller_holds_the_keys_only_parallel_slot():
+    """The summary call runs inside a request the limiter already admitted, so the
+    caller's own in-flight slot must not trip a ``max_parallel_requests`` gauge."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.utils import InternalUsageCache, hash_token
+
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>ok</summary>"))
+    limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-compact-parallel-slot"), max_parallel_requests=1, models=["all-proxy-models"]
+    )
+    await limiter.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=limiter.internal_usage_cache.dual_cache,
+        data={"model": MODEL, "messages": messages},
+        call_type="acompletion",
+    )
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", _proxy_logging_like_the_live_proxy(limiter)),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    mock_call.assert_awaited_once()
+    assert result.compaction_block is not None
+    assert not result.applied_edits[0].get("error")
+
+
 async def test_summary_model_rate_limit_skipped_for_legacy_limiter():
     """A limiter without the v3 read-only check surface fails open so the summary
     call still proceeds (its usage is still charged post-call)."""
@@ -1879,12 +1992,7 @@ async def test_summary_model_rate_limit_skipped_for_legacy_limiter():
 
     auth = _fake_user_api_key_auth(key_models=["all-proxy-models"])
 
-    class _LegacyLimiter:
-        async def async_pre_call_hook(self, **kwargs):
-            return None
-
-    proxy_logging = MagicMock()
-    proxy_logging.max_parallel_request_limiter = _LegacyLimiter()
+    proxy_logging = _proxy_logging_like_the_live_proxy(_LegacyLimiter())
 
     with (
         patch(
