@@ -123,6 +123,12 @@
       "max_completion_tokens": "max_tokens"
     }
   },
+  "demonroute": {
+    "base_url": "https://api.demonroute.com/v1",
+    "api_key_env": "DEMONROUTE_API_KEY",
+    "api_base_env": "DEMONROUTE_API_BASE",
+    "base_class": "openai_gpt"
+  },
   "neosantara": {
     "base_url": "https://api.neosantara.xyz/v1",
     "api_key_env": "NEOSANTARA_API_KEY",
