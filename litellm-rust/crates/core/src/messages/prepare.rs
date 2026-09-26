@@ -5,7 +5,7 @@ use litellm_core_utils::{
     settings::Lookup,
 };
 use litellm_llms::{
-    anthropic::experimental_pass_through::messages::handler::shape_anthropic_messages_request,
+    anthropic::messages::handler::shape_anthropic_messages_request,
     base_llm::anthropic_messages::transformation::{
         BaseAnthropicMessagesConfig, MessagesTransformContext,
     },
