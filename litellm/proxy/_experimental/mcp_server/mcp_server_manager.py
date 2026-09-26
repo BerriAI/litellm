@@ -7034,7 +7034,8 @@ class MCPServerManager:
 
     def get_mcp_server_answering_to(self, name: str, client_ip: str | None = None) -> MCPServer | None:
         """The server a scoped ``/mcp/{name}`` connect resolves to, matched the way the router matches
-        it: case-insensitive over server_id, name and every published prefix form."""
+        it: case-insensitive over server_id, name and every published prefix form, then the exact
+        name lookup as the fallback."""
         return next(
             (
                 server
@@ -7042,7 +7043,7 @@ class MCPServerManager:
                 if server_answers_to_name(server, name)
             ),
             None,
-        )
+        ) or self.get_mcp_server_by_name(name, client_ip=client_ip)
 
     def get_filtered_registry(self, client_ip: str | None = None) -> dict[str, MCPServer]:
         """

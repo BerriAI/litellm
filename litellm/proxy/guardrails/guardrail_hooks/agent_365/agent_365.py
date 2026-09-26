@@ -452,9 +452,12 @@ class Agent365Guardrail(CustomGuardrail):
                     "user_api_key_team_metadata": user_api_key_auth.team_metadata,  # pyright: ignore[reportUnknownMemberType]  # UserAPIKeyAuth.team_metadata is a raw dict
                 }
             }
-            if self.should_run_guardrail(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # should_run_guardrail takes an untyped data dict
-                data=probe, event_type=GuardrailEventHooks.pre_mcp_call
-            ) is not True:
+            if (
+                self.should_run_guardrail(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # should_run_guardrail takes an untyped data dict
+                    data=probe, event_type=GuardrailEventHooks.pre_mcp_call
+                )
+                is not True
+            ):
                 return None
         return CallerSignIn(
             issuers=(ENTRA_ISSUER_TEMPLATE.format(tenant_id=self.tenant_id),),
