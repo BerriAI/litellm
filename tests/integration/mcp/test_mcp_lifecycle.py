@@ -53,7 +53,7 @@ def test_tool_error_remains_error_and_healthy_sibling_returns_value(gateway: Gat
         failure: Final = call_tool(gateway, key, identity, names["fail"], {})
         assert failure.status_code == 200, failure.text
         assert failure.json()["isError"] is True
-        assert "synthetic tool failure" in failure.json()["content"][0]["text"]
+        assert failure.json()["content"][0]["text"] == "Error executing tool fail"
         healthy: Final = call_tool(gateway, key, identity, names["multiply"], {"a": 3, "b": 5})
         assert healthy.status_code == 200, healthy.text
         assert healthy.json()["isError"] is False

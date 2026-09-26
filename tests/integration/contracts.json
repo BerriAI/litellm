@@ -1380,6 +1380,9 @@
     ],
     "tests/integration/observability/test_otel_conversation_id.py::test_terminating_the_proxy_right_after_a_burst_flushes_every_span_before_exit": [
       "other.observability.otel.conversation_id_flushes_on_shutdown"
+    ],
+    "tests/integration/spend/test_team_member_spend_flush.py::test_fractional_member_spend_lands_after_a_whole_number_flush_on_the_same_connection": [
+      "quota_management.spend_tracking.team_member_spend_lands_after_zero_cost_flush"
     ]
   },
   "browser": {
