@@ -4942,3 +4942,108 @@ async def test_async_stream_without_usage_counts_tokens_off_the_event_loop():
     assert chunks[-1].usage.prompt_tokens > 100_000
     assert chunks[-1].usage.completion_tokens > 100_000
     assert_loop_stayed_free(took, lags)
+
+
+def _strict_wrapper(strict=None, received_finish_reason=None):
+    logging_obj = MagicMock()
+    logging_obj.model_call_details = {
+        "litellm_params": {} if strict is None else {"strict_stream_completion": strict}
+    }
+    wrapper = CustomStreamWrapper(
+        completion_stream=None,
+        model="gpt-4o",
+        logging_obj=logging_obj,
+        custom_llm_provider="openai",
+    )
+    wrapper.received_finish_reason = received_finish_reason
+    return wrapper
+
+
+def test_truncated_stream_raises_under_strict_stream_completion():
+    wrapper = _strict_wrapper(strict=True)
+
+    with pytest.raises(litellm.exceptions.IncompleteStreamError) as exc_info:
+        wrapper.finish_reason_handler()
+
+    assert exc_info.value.model == "gpt-4o"
+    assert exc_info.value.llm_provider == "openai"
+    assert "incomplete" in str(exc_info.value).lower()
+
+
+def test_truncated_stream_still_reports_stop_by_default():
+    wrapper = _strict_wrapper()
+
+    assert wrapper.strict_stream_completion is False
+    assert wrapper.finish_reason_handler().choices[0].finish_reason == "stop"
+
+
+def test_a_finished_stream_is_unaffected_by_strict_stream_completion():
+    wrapper = _strict_wrapper(strict=True, received_finish_reason="length")
+
+    assert wrapper.finish_reason_handler().choices[0].finish_reason == "length"
+
+
+def test_strict_stream_completion_reads_an_intermittent_finish_reason():
+    wrapper = _strict_wrapper(strict=True)
+    wrapper.intermittent_finish_reason = "stop"
+
+    assert wrapper.finish_reason_handler().choices[0].finish_reason == "stop"
+
+
+def test_strict_stream_completion_falls_back_to_the_module_setting(monkeypatch):
+    monkeypatch.setattr(litellm, "strict_stream_completion", True)
+    assert _strict_wrapper().strict_stream_completion is True
+
+    with pytest.raises(litellm.exceptions.IncompleteStreamError):
+        _strict_wrapper().finish_reason_handler()
+
+
+def test_the_request_parameter_overrides_the_module_setting(monkeypatch):
+    monkeypatch.setattr(litellm, "strict_stream_completion", True)
+
+    wrapper = _strict_wrapper(strict=False)
+
+    assert wrapper.strict_stream_completion is False
+    assert wrapper.finish_reason_handler().choices[0].finish_reason == "stop"
+
+
+def test_incomplete_stream_error_is_retryable_shaped():
+    """A 500 is what makes a caller's existing retry policy pick this up"""
+    error = litellm.exceptions.IncompleteStreamError("cut", llm_provider="openai", model="gpt-4o")
+
+    assert error.status_code == 500
+    assert isinstance(error, litellm.exceptions.APIError)
+
+
+def test_a_clean_terminator_with_no_finish_reason_is_not_treated_as_truncation():
+    """A provider can report the stream finished while leaving finish_reason empty"""
+    wrapper = _strict_wrapper(strict=True)
+    wrapper.stream_reported_finished = True
+
+    assert wrapper.finish_reason_handler().choices[0].finish_reason == "stop"
+
+
+def test_incomplete_stream_error_is_reachable_from_the_package_root():
+    """A caller writes `except litellm.IncompleteStreamError`, not the submodule path"""
+    assert litellm.IncompleteStreamError is litellm.exceptions.IncompleteStreamError
+
+
+def test_an_ordinary_content_chunk_does_not_mark_the_stream_finished():
+    """The nlp_cloud branch set the flag for every parsed chunk, not only a terminal one"""
+    wrapper = _strict_wrapper(strict=True)
+    wrapper.custom_llm_provider = "nlp_cloud"
+
+    assert wrapper.stream_reported_finished is False
+    wrapper.received_finish_reason = None
+    assert wrapper.stream_reported_finished is False
+
+    with pytest.raises(litellm.exceptions.IncompleteStreamError):
+        wrapper.finish_reason_handler()
+
+
+def test_an_empty_finish_reason_still_marks_the_stream_finished():
+    wrapper = _strict_wrapper(strict=True)
+    wrapper.received_finish_reason = ""
+
+    assert wrapper.stream_reported_finished is True
+    assert wrapper.finish_reason_handler().choices[0].finish_reason == "stop"

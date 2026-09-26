@@ -226,13 +226,18 @@ class CustomStreamWrapper:
             dict(**self.logging_obj.model_call_details.get("litellm_params", {}))
         )
         self.merge_reasoning_content_in_choices: bool = litellm_params.merge_reasoning_content_in_choices or False
+        request_strict: Final = getattr(litellm_params, "strict_stream_completion", None)
+        self.strict_stream_completion: bool = (
+            bool(litellm.strict_stream_completion) if request_strict is None else bool(request_strict)
+        )
         self.sent_first_thinking_block = False
         self.sent_last_thinking_block = False
         self.thinking_content = ""
 
         self.system_fingerprint: str | None = None
         self._provider_response_model: str | None = None
-        self.received_finish_reason: str | None = None
+        self.stream_reported_finished: bool = False
+        self.received_finish_reason = None
         self.intermittent_finish_reason: str | None = None  # finish reasons that show up mid-stream
         self.special_tokens = [
             "<|assistant|>",
@@ -1705,11 +1710,35 @@ class CustomStreamWrapper:
         if self.logging_obj._is_sync_litellm_request(litellm_params):
             self.logging_obj.success_handler(processed_chunk, None, None, cache_hit)
 
+    @property
+    def received_finish_reason(self) -> str | None:
+        return self._received_finish_reason
+
+    @received_finish_reason.setter
+    def received_finish_reason(self, value: str | None) -> None:
+        # A provider assigning this at all is the provider saying the stream
+        # ended, even when the reason it gives is empty. Recording that here
+        # rather than beside each of the dozen assignments keeps the two from
+        # drifting apart.
+        self._received_finish_reason = value
+        if value is not None:
+            self.stream_reported_finished = True
+
     def finish_reason_handler(self):
         model_response: Final = self.model_response_creator()
         _finish_reason: Final = self.received_finish_reason or self.intermittent_finish_reason
         if _finish_reason is not None:
             model_response.choices[0].finish_reason = _finish_reason
+        elif self.strict_stream_completion and not self.stream_reported_finished:
+            raise litellm.exceptions.IncompleteStreamError(
+                message=(
+                    "Stream ended before a terminal finish_reason or [DONE] delimiter was received. "
+                    "The response is incomplete. Set strict_stream_completion=False to accept it as "
+                    "finished instead."
+                ),
+                llm_provider=self.custom_llm_provider or "",
+                model=self.model or "",
+            )
         else:
             model_response.choices[0].finish_reason = "stop"
 
