@@ -15368,3 +15368,56 @@ async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is
         call(api_provider="openai", capture_rate=0.97),
         call(api_provider="openai", capture_rate=None),
     ]
+
+
+ROUTER_SETTINGS_SALT_KEY = "sk-router-settings-salt-1234"
+
+
+def test_update_config_router_settings_encrypted_before_write(_update_config_setup, monkeypatch):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        decrypt_if_encrypted_with,
+        encrypt_json_strings,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", ROUTER_SETTINGS_SALT_KEY)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    client, prisma, restore = _update_config_setup(
+        initial_rows={"router_settings": encrypt_json_strings({"redis_host": "redis.internal"})}
+    )
+    try:
+        resp = client.post("/config/update", json={"router_settings": {"redis_password": "redis-canary-password"}})
+        assert resp.status_code == 200, resp.text
+        stored = prisma.db.litellm_config.rows["router_settings"]
+        assert "redis-canary-password" not in json.dumps(stored)
+        assert "redis.internal" not in json.dumps(stored)
+        assert decrypt_if_encrypted_with(stored["redis_password"], ROUTER_SETTINGS_SALT_KEY) == "redis-canary-password"
+        assert decrypt_if_encrypted_with(stored["redis_host"], ROUTER_SETTINGS_SALT_KEY) == "redis.internal"
+    finally:
+        restore()
+
+
+@pytest.mark.asyncio
+async def test_add_router_settings_from_db_config_decrypts_the_stored_row(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_json_strings
+    from litellm.proxy.proxy_server import ProxyConfig
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", ROUTER_SETTINGS_SALT_KEY)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    proxy_config = ProxyConfig()
+    mock_router = MagicMock()
+    mock_router.update_settings = MagicMock()
+    stored_row = MagicMock()
+    stored_row.param_value = encrypt_json_strings({"redis_password": "redis-canary-password", "num_retries": 3})
+    assert stored_row.param_value["redis_password"] != "redis-canary-password"
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=stored_row)
+    proxy_config.router_settings.load_yaml({"routing_strategy": "simple-shuffle"})
+
+    await proxy_config._add_router_settings_from_db_config(llm_router=mock_router, prisma_client=mock_prisma_client)
+
+    combined_settings = mock_router.update_settings.call_args[1]
+    assert combined_settings["redis_password"] == "redis-canary-password"
+    assert combined_settings["num_retries"] == 3
+    assert combined_settings["routing_strategy"] == "simple-shuffle"

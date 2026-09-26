@@ -1112,6 +1112,25 @@ async def test_ProxyConfig_save_config_writes_only_changed_router_settings(monke
 
 
 @pytest.mark.asyncio
+async def test_ProxyConfig_save_config_encrypts_router_settings_and_reencrypts_the_legacy_row(monkeypatch):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_json_strings
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-save-config-salt-1234")
+    proxy_config, table = _db_backed_proxy_config(monkeypatch, {"router_settings": {"redis_host": "redis.internal"}})
+    baseline: Final = {"model_list": [], "router_settings": {"num_retries": 1}}
+    proxy_config.update_config_state(config=baseline)
+    changed: Final = {**baseline, "router_settings": {"num_retries": 1, "redis_password": "redis-canary-password"}}
+
+    await proxy_config.save_config(changed)
+
+    stored: Final = table.rows["router_settings"]
+    assert "redis-canary-password" not in json.dumps(stored)
+    assert "redis.internal" not in json.dumps(stored)
+    assert decrypt_json_strings(stored) == {"redis_host": "redis.internal", "redis_password": "redis-canary-password"}
+    assert table.upserted_param_names == ["router_settings"]
+
+
+@pytest.mark.asyncio
 async def test_ProxyConfig_save_config_removes_a_key_only_when_the_db_has_it(monkeypatch):
     proxy_config, table = _db_backed_proxy_config(
         monkeypatch, {"general_settings": {"removed_key": "db", "db_only": "stored"}}

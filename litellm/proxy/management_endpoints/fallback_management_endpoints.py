@@ -17,6 +17,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.model_checks import get_all_fallbacks
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_config_section
 
 if TYPE_CHECKING:
     from fastapi import APIRouter, Depends, HTTPException, status
@@ -153,7 +154,7 @@ async def create_fallback(
         router_settings[fallback_key] = existing_fallbacks
 
         # Save to database - convert router_settings to JSON string
-        router_settings_json: Final = json.dumps(router_settings)
+        router_settings_json: Final = json.dumps(encrypt_config_section("router_settings", router_settings))
         await ConfigRepository(prisma_client).table.upsert(
             where={"param_name": "router_settings"},
             data={
@@ -324,7 +325,7 @@ async def delete_fallback(
         router_settings[fallback_key] = updated_fallbacks
 
         # Save to database - convert router_settings to JSON string
-        router_settings_json: Final = json.dumps(router_settings)
+        router_settings_json: Final = json.dumps(encrypt_config_section("router_settings", router_settings))
         await ConfigRepository(prisma_client).table.upsert(
             where={"param_name": "router_settings"},
             data={

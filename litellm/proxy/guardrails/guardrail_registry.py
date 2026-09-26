@@ -2,6 +2,7 @@
 
 import asyncio
 import importlib
+import json
 import os
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
@@ -19,6 +20,11 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_tool_message_for_guardrail,
+)
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_stored_json_object,
+    encrypt_json_strings,
+    json_value,
 )
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
@@ -75,6 +81,18 @@ class _GuardrailRowLike(Protocol):
 def _guardrail_table(prisma_client: PrismaClient) -> "TableActions[prisma_models.LiteLLM_GuardrailsTable]":
     """Typed view of the guardrails table actions exposed by the Prisma repository."""
     return GuardrailsRepository(prisma_client).table
+
+
+def encrypted_guardrail_litellm_params(litellm_params: Mapping[str, object]) -> str:
+    return json.dumps(encrypt_json_strings(json_value(litellm_params)))
+
+
+def guardrail_from_row(row: _GuardrailRowLike) -> Guardrail:
+    fields: Final = dict(row)
+    stored_params: Final = fields.get("litellm_params")
+    if stored_params is None:
+        return Guardrail(**fields)
+    return Guardrail(**{**fields, "litellm_params": decrypt_stored_json_object(stored_params)})
 
 
 guardrail_initializer_registry: Final = {
@@ -295,7 +313,7 @@ class GuardrailRegistry:
                 litellm_params_dict = litellm_params_obj.model_dump()
             else:
                 litellm_params_dict = dict(litellm_params_obj) if litellm_params_obj else {}
-            litellm_params: Final[str] = safe_dumps(litellm_params_dict)
+            litellm_params: Final[str] = encrypted_guardrail_litellm_params(litellm_params_dict)
             guardrail_info: Final[str] = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Create guardrail in DB
@@ -341,7 +359,7 @@ class GuardrailRegistry:
                 litellm_params_dict = litellm_params_obj.model_dump()
             else:
                 litellm_params_dict = dict(litellm_params_obj) if litellm_params_obj else {}
-            litellm_params: Final[str] = safe_dumps(litellm_params_dict)
+            litellm_params: Final[str] = encrypted_guardrail_litellm_params(litellm_params_dict)
             guardrail_info: Final[str] = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Update in DB
@@ -357,8 +375,7 @@ class GuardrailRegistry:
             if updated_guardrail is None:
                 raise ValueError(f"Guardrail not found, passed guardrail_id={guardrail_id}")
 
-            # Convert to dict and return
-            return dict(updated_guardrail)
+            return dict(guardrail_from_row(updated_guardrail))
         except Exception as e:
             raise Exception(f"Error updating guardrail in DB: {e}")
 
@@ -378,7 +395,7 @@ class GuardrailRegistry:
 
             guardrails: Final[list[Guardrail]] = []
             for guardrail in guardrails_from_db:
-                guardrails.append(Guardrail(**(dict(guardrail))))
+                guardrails.append(guardrail_from_row(guardrail))
 
             return guardrails
         except Exception as e:
@@ -394,7 +411,7 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))
+            return guardrail_from_row(guardrail)
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
@@ -410,7 +427,7 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))
+            return guardrail_from_row(guardrail)
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
@@ -514,7 +531,6 @@ class InMemoryGuardrailHandler:
             return self.IN_MEMORY_GUARDRAILS[guardrail_id]
 
         litellm_params_data: Final = guardrail["litellm_params"]
-        verbose_proxy_logger.debug("litellm_params= %s", litellm_params_data)
 
         if isinstance(litellm_params_data, dict):
             litellm_params = LitellmParams(**litellm_params_data)
@@ -803,7 +819,7 @@ class InMemoryGuardrailHandler:
 
         # Log differences if any found
         if changed_fields:
-            verbose_proxy_logger.debug("Guardrail params changed. Differences: %s", changed_fields)
+            verbose_proxy_logger.debug("Guardrail params changed: %s", sorted(changed_fields))
 
         # Return True if any fields changed
         return len(changed_fields) > 0

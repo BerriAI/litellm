@@ -7,17 +7,32 @@ gate, and the backward-compatibility guarantees that let legacy XSalsa20-Poly130
 """
 
 import base64
+import json
+from types import MappingProxyType
+from typing import Final
 
 import pytest
+from pydantic import JsonValue, TypeAdapter
+from typing_extensions import ReadOnly, TypedDict
 
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.proxy import proxy_server
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     _V2_GCM_PREFIX,
+    decrypt_config_section,
     decrypt_if_encrypted_with,
+    decrypt_json_strings,
+    decrypt_stored_json_object,
     decrypt_value_helper,
+    encrypt_config_section,
+    encrypt_json_strings,
+    encrypt_stored_json_object,
     encrypt_value,
     encrypt_value_helper,
+    json_value,
 )
+
+SALT_KEY = "sk-salt-aes-1234"
 
 
 def _use_aes(monkeypatch):
@@ -28,7 +43,7 @@ def _use_aes(monkeypatch):
 @pytest.fixture(autouse=True)
 def _salt_key(monkeypatch):
     # Dominant convention in the test_litellm/ tree: set the key via env.
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-aes-1234")
+    monkeypatch.setenv("LITELLM_SALT_KEY", SALT_KEY)
     # Ensure the legacy default is in force unless a test opts into AES.
     monkeypatch.setattr(proxy_server, "general_settings", {})
     yield
@@ -236,3 +251,182 @@ def test_explicit_key_decrypt_supports_the_empty_master_key():
     written_with_empty_key = encrypt_value(value="stored-secret", signing_key="")
 
     assert decrypt_if_encrypted_with(base64.urlsafe_b64encode(written_with_empty_key).decode(), "") == "stored-secret"
+
+
+_NESTED_PARAMS = {
+    "model": "openai/gpt-5.4-mini",
+    "extra_headers": {"Authorization": "Bearer gateway-secret", "X-Trace": "trace-1"},
+    "fallbacks": [{"gpt-5.5-mini": ["gpt-5.4-mini"]}],
+    "rpm": 10,
+    "enabled": True,
+    "api_base": None,
+}
+
+
+class _StoredNestedParams(TypedDict):
+    model: ReadOnly[str]
+    extra_headers: ReadOnly[dict[str, str]]
+    fallbacks: ReadOnly[list[dict[str, list[str]]]]
+    rpm: ReadOnly[int]
+    enabled: ReadOnly[bool]
+    api_base: ReadOnly[None]
+
+
+_STORED_NESTED_PARAMS: Final = TypeAdapter(_StoredNestedParams)
+
+
+def _nested_string_leaves(stored: JsonValue) -> tuple[str, str, str, str]:
+    params: Final = _STORED_NESTED_PARAMS.validate_python(stored)
+    return (
+        params["model"],
+        params["extra_headers"]["Authorization"],
+        params["extra_headers"]["X-Trace"],
+        params["fallbacks"][0]["gpt-5.5-mini"][0],
+    )
+
+
+@pytest.mark.parametrize("use_aes", [False, True])
+def test_encrypt_json_strings_encrypts_every_nested_string_leaf(monkeypatch, use_aes: bool):
+    if use_aes:
+        _use_aes(monkeypatch)
+
+    stored = encrypt_json_strings(_NESTED_PARAMS)
+
+    assert (stored["rpm"], stored["enabled"], stored["api_base"]) == (10, True, None)
+    plaintexts = _nested_string_leaves(_NESTED_PARAMS)
+    assert all(leaf != plain for leaf, plain in zip(_nested_string_leaves(stored), plaintexts))
+    assert tuple(decrypt_if_encrypted_with(leaf, SALT_KEY) for leaf in _nested_string_leaves(stored)) == plaintexts
+    assert decrypt_json_strings(stored) == _NESTED_PARAMS
+
+
+def test_encrypt_json_strings_reencrypts_ciphertext_under_the_new_key_without_double_wrapping():
+    stored = encrypt_json_strings({"api_key": "top-secret", "nested": {"token": encrypt_value_helper("nested-secret")}})
+
+    rotated = encrypt_json_strings(stored, new_encryption_key="sk-rotated")
+
+    assert decrypt_if_encrypted_with(rotated["api_key"], "sk-rotated") == "top-secret"
+    assert decrypt_if_encrypted_with(rotated["nested"]["token"], "sk-rotated") == "nested-secret"
+    assert decrypt_if_encrypted_with(rotated["api_key"], SALT_KEY) is None
+
+
+def test_encrypt_json_strings_treats_a_legacy_plaintext_row_as_plaintext():
+    legacy_row = {"api_key": "plain-secret", "extra_headers": {"Authorization": "Bearer plain"}}
+
+    assert decrypt_json_strings(legacy_row) == legacy_row
+    assert decrypt_json_strings(encrypt_json_strings(legacy_row)) == legacy_row
+
+
+def test_encrypt_json_strings_without_any_key_stores_the_value_as_sent(monkeypatch):
+    monkeypatch.delenv("LITELLM_SALT_KEY")
+    monkeypatch.setattr(proxy_server, "master_key", None)
+
+    assert encrypt_json_strings(_NESTED_PARAMS) == _NESTED_PARAMS
+    assert decrypt_json_strings(_NESTED_PARAMS) == _NESTED_PARAMS
+
+
+def test_encrypt_json_strings_refuses_a_value_nested_past_the_recursion_cap():
+    value = {"secret": "deep-secret"}
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH + 1):
+        value = {"child": value}
+
+    with pytest.raises(ValueError, match=f"nested deeper than {DEFAULT_MAX_RECURSE_DEPTH} levels"):
+        encrypt_json_strings(value)
+    assert decrypt_json_strings(value) == value
+
+
+def test_encrypt_json_strings_encrypts_a_value_nested_at_the_recursion_cap():
+    value = "deep-secret"
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH):
+        value = {"child": value}
+
+    stored = encrypt_json_strings(value)
+
+    deepest = stored
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH):
+        deepest = deepest["child"]
+    assert deepest != "deep-secret"
+    assert decrypt_json_strings(stored) == value
+
+
+def test_json_value_coerces_non_json_containers():
+    assert json_value(MappingProxyType({"headers": ("a", "b")})) == {"headers": ["a", "b"]}
+
+
+@pytest.mark.parametrize("stored", ["not json", "[1]", ["a"], None, 3])
+def test_decrypt_stored_json_object_returns_an_empty_object_for_a_non_object_row(stored: object):
+    assert decrypt_stored_json_object(stored) == {}
+
+
+def test_decrypt_stored_json_object_reads_json_text_and_parsed_rows_alike():
+    stored = encrypt_json_strings(_NESTED_PARAMS)
+
+    assert decrypt_stored_json_object(json.dumps(stored)) == _NESTED_PARAMS
+    assert decrypt_stored_json_object(stored) == _NESTED_PARAMS
+
+
+def test_encrypt_config_section_encrypts_router_settings_string_leaves_only():
+    router_settings = {
+        "redis_password": "redis-pw",
+        "num_retries": 2,
+        "fallbacks": [{"gpt-5.5-mini": ["gpt-5.4-mini"]}],
+    }
+
+    stored = encrypt_config_section("router_settings", router_settings)
+
+    assert stored["num_retries"] == 2
+    assert stored["redis_password"] != "redis-pw"
+    assert decrypt_if_encrypted_with(stored["redis_password"], SALT_KEY) == "redis-pw"
+    assert decrypt_if_encrypted_with(stored["fallbacks"][0]["gpt-5.5-mini"][0], SALT_KEY) == "gpt-5.4-mini"
+    assert decrypt_config_section("router_settings", json.dumps(stored)) == router_settings
+
+
+def test_encrypt_config_section_leaves_other_sections_readable():
+    general_settings = {"alerting": ["slack"], "proxy_batch_write_at": 60}
+
+    assert encrypt_config_section("general_settings", general_settings) == general_settings
+    assert decrypt_config_section("general_settings", json.dumps(general_settings)) == general_settings
+
+
+def test_encrypt_config_section_rekeys_router_settings_for_master_key_rotation():
+    stored = encrypt_config_section("router_settings", {"redis_password": "redis-pw"})
+
+    rotated = encrypt_config_section("router_settings", stored, new_encryption_key="sk-rotated")
+
+    assert decrypt_if_encrypted_with(rotated["redis_password"], "sk-rotated") == "redis-pw"
+
+
+def test_decrypt_json_strings_reads_values_encrypted_under_the_given_key():
+    stored = encrypt_json_strings(_NESTED_PARAMS, new_encryption_key="sk-other-key")
+
+    assert decrypt_json_strings(stored, signing_key="sk-other-key") == _NESTED_PARAMS
+    assert decrypt_json_strings(stored)["extra_headers"]["Authorization"] != "Bearer gateway-secret"
+
+
+def test_encrypt_stored_json_object_rekeys_a_row_stored_as_a_json_string():
+    stored_row = json.dumps(encrypt_json_strings({"api_key": "vendor-secret", "default_on": False}))
+
+    rotated = encrypt_stored_json_object(stored_row, new_encryption_key="sk-rotated")
+
+    assert rotated is not None
+    assert decrypt_if_encrypted_with(rotated["api_key"], "sk-rotated") == "vendor-secret"
+    assert rotated["default_on"] is False
+
+
+@pytest.mark.parametrize("stored_row", ("not json", json.dumps(["api_key"]), 7, None))
+def test_encrypt_stored_json_object_returns_none_for_a_row_that_is_not_a_json_object(stored_row):
+    assert encrypt_stored_json_object(stored_row, new_encryption_key="sk-rotated") is None
+
+
+def test_decrypt_stored_json_object_reports_a_malformed_row_without_its_contents(caplog, monkeypatch):
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    caplog.set_level(logging.ERROR, logger=verbose_proxy_logger.name)
+
+    assert decrypt_stored_json_object("leaked-secret-text") == {}
+    assert decrypt_stored_json_object(None) == {}
+
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+    assert "leaked-secret-text" not in caplog.text

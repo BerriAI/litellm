@@ -23,7 +23,11 @@ from litellm.proxy._types import (
     ReconcileOutcome,
     UserAPIKeyAuth,
 )
-from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_json_strings,
+    encrypt_value_helper,
+    json_value,
+)
 from litellm.proxy.management_endpoints.model_management_endpoints import (
     ModelManagementAuthChecks,
     _get_team_deployments,
@@ -506,6 +510,32 @@ class TestModelManagementAuthChecks:
                 ),
             )
         assert exc_info.value.code == "403"
+
+    def test_can_user_set_aws_session_tags_compares_against_the_decrypted_stored_tags(self, monkeypatch):
+        from litellm.repositories.model_repository import encrypt_model_litellm_params
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-session-tags-salt-8627")
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        stored: Final = encrypt_model_litellm_params({"aws_session_tags": [{"Key": "team", "Value": "genai"}]})
+        assert stored["aws_session_tags"] != [{"Key": "team", "Value": "genai"}]
+        existing: Final = LiteLLM_Params(model="bedrock/test_model", aws_session_tags=stored["aws_session_tags"])
+
+        result = ModelManagementAuthChecks.can_user_set_aws_session_tags(
+            litellm_params=LiteLLM_Params(
+                model="bedrock/test_model", aws_session_tags=[{"Key": "team", "Value": "genai"}]
+            ),
+            user_api_key_dict=self.team_admin_user,
+            existing_litellm_params=existing,
+        )
+        assert result is True
+        with pytest.raises(Exception, match="Only a proxy admin can set aws_session_tags"):
+            ModelManagementAuthChecks.can_user_set_aws_session_tags(
+                litellm_params=LiteLLM_Params(
+                    model="bedrock/test_model", aws_session_tags=[{"Key": "team", "Value": "platform"}]
+                ),
+                user_api_key_dict=self.team_admin_user,
+                existing_litellm_params=existing,
+            )
 
     @pytest.mark.asyncio
     async def test_add_new_model_rejects_aws_session_tags_for_non_admin(self):
@@ -1397,8 +1427,8 @@ class TestUpdateModel:
                 new=AsyncMock(return_value=None),
             ),
             patch(  # test-quality-ok: [TQ008] isolate persistence from encryption implementation
-                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
-                side_effect=lambda value: value,
+                "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
+                side_effect=lambda value, **kwargs: value,
             ),
             patch(  # test-quality-ok: [TQ008] isolate persistence from router reload implementation
                 "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
@@ -1450,8 +1480,8 @@ class TestUpdateModel:
                 new=AsyncMock(return_value=None),
             ),
             patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
-                side_effect=lambda value: value,
+                "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
+                side_effect=lambda value, **kwargs: value,
             ),
             patch(
                 "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
@@ -2547,7 +2577,7 @@ class TestAddAndDeleteModelLifecycle:
         mock_router.get_model_ids.return_value = [model_id]
 
         _PS = "litellm.proxy.proxy_server"
-        _ENCRYPT = "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper"
+        _ENCRYPT = "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper"
         with (
             patch(f"{_PS}.prisma_client", mock_prisma),
             patch(f"{_PS}.store_model_in_db", True),
@@ -4145,7 +4175,7 @@ class TestModelInfoServerDerivedPricingFilter:
         mock_router.get_model_ids.return_value = [model_id]
 
         _PS = "litellm.proxy.proxy_server"
-        _ENCRYPT = "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper"
+        _ENCRYPT = "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper"
         with (
             patch(f"{_PS}.prisma_client", mock_prisma),
             patch(f"{_PS}.store_model_in_db", True),
@@ -4530,7 +4560,7 @@ class TestUpdateDBModelClearCredentialName:
             litellm_params=updateLiteLLMParams(litellm_credential_name=None)
         )
 
-        with patch("litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
+        with patch("litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
             result: Final = update_db_model(db_model=db_model, updated_patch=update_patch)
 
         params: Final = json.loads(result["litellm_params"])
@@ -4559,7 +4589,7 @@ class TestUpdateDBModelClearCredentialName:
         )
         update_patch: Final = updateDeployment(litellm_params=updateLiteLLMParams(tpm=10))
 
-        with patch("litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
+        with patch("litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
             result: Final = update_db_model(db_model=db_model, updated_patch=update_patch)
 
         params: Final = json.loads(result["litellm_params"])
@@ -4578,7 +4608,7 @@ class TestUpdateDBModelClearCredentialName:
             litellm_params=updateLiteLLMParams(litellm_credential_name=None)
         )
 
-        with patch("litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
+        with patch("litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
             result: Final = update_db_model(db_model=db_model, updated_patch=update_patch)
 
         params: Final = json.loads(result["litellm_params"])
@@ -4606,7 +4636,7 @@ class TestUpdateDBModelClearCredentialName:
             )
         )
 
-        with patch("litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
+        with patch("litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
             result: Final = update_db_model(db_model=db_model, updated_patch=update_patch)
 
         params: Final = json.loads(result["litellm_params"])
@@ -4633,7 +4663,7 @@ class TestUpdateDBModelClearCredentialName:
             litellm_params=updateLiteLLMParams(litellm_credential_name="other-credential")
         )
 
-        with patch("litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
+        with patch("litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper", side_effect=lambda value, **kwargs: value):
             result: Final = update_db_model(db_model=db_model, updated_patch=update_patch)
 
         params: Final = json.loads(result["litellm_params"])
@@ -4709,7 +4739,7 @@ class TestPatchModelCredentialName:
                 new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
             ),
             patch(
-                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
                 side_effect=lambda value, **kwargs: value,
             ),
             patch(
@@ -6358,7 +6388,7 @@ class TestStrategyRouterWriteValidation:
                 new=AsyncMock(return_value=None),
             ),
             patch(  # test-quality-ok: params are encrypted before the slot is entered; no master key in this test
-                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
                 lambda value, new_encryption_key=None: value,
             ),
         ):
@@ -6424,7 +6454,7 @@ class TestStrategyRouterWriteValidation:
         )
         with (
             patch(  # test-quality-ok: params are encrypted with the proxy master key, which this test does not configure
-                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
                 lambda value, new_encryption_key=None: value,
             ),
             patch(  # test-quality-ok: the team list write is the collaborator whose ordering is asserted
@@ -6464,7 +6494,7 @@ class TestStrategyRouterWriteValidation:
                 new=AsyncMock(return_value=None),
             ),
             patch(  # test-quality-ok: params are encrypted before the slot is entered; no master key in this test
-                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
+                "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
                 lambda value, new_encryption_key=None: value,
             ),
         ):
@@ -7221,7 +7251,7 @@ class TestAccessGroupModelSync:
                     f"{self._MOD}.clear_cache",
                     new=AsyncMock(return_value=ReconcileOutcome(still_desired=None, live_after=None)),
                 ),
-                patch(f"{self._MOD}.encrypt_value_helper", side_effect=lambda value, **kwargs: value),
+                patch("litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper", side_effect=lambda value, **kwargs: value),
             ):
                 stack.enter_context(target)
             yield stack.enter_context(patch(self._INVALIDATE, new=AsyncMock()))
@@ -7546,29 +7576,36 @@ class TestTeamMemberAutoRouterWrites:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
-    @pytest.mark.parametrize("change", ["save", "rotate", "move", "move-without-key", "reset", "heuristic"])
-    async def test_jev_dashboard_save_preserves_server_transport(self, endpoint: str, change: str) -> None:
+    @pytest.mark.parametrize("stored_as", ["plaintext", "ciphertext"])
+    @pytest.mark.parametrize(
+        "change", ["save", "rotate", "move", "move-without-key", "same-base", "reset", "heuristic"]
+    )
+    async def test_jev_dashboard_save_preserves_server_transport(
+        self, endpoint: str, stored_as: str, change: str
+    ) -> None:
+        from litellm.repositories.model_repository import encrypt_model_litellm_params
+
         original: Final = self._row()
         transport: Final = {"api_key": "synthetic-original-jev-key", "api_base": "https://jev.example.com"}
-        stored_config: Final = {
-            "classifier_type": "jev",
-            "tiers": {"SIMPLE": "allowed"},
-            "jev_classifier_config": {**transport, "instructions": "Old instructions", "timeout_ms": 6100},
+        plaintext_params: Final = {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "jev",
+                "tiers": {"SIMPLE": "allowed"},
+                "jev_classifier_config": {**transport, "instructions": "Old instructions", "timeout_ms": 6100},
+            },
         }
-        row: Final = original.model_copy(
-            update={
-                "litellm_params": {
-                    "model": "auto_router/complexity_router",
-                    "complexity_router_config": stored_config,
-                },
-            }
+        stored_params: Final = (
+            plaintext_params if stored_as == "plaintext" else encrypt_model_litellm_params(plaintext_params)
         )
+        row: Final = original.model_copy(update={"litellm_params": stored_params})
         database: Final = self._database(self._team(), row)
         overrides: Final = {
             "save": {},
             "rotate": {"api_key": "synthetic-replacement-jev-key"},
             "move": {"api_base": "https://new-jev.example.com", "api_key": "synthetic-replacement-jev-key"},
             "move-without-key": {"api_base": "https://new-jev.example.com"},
+            "same-base": {"api_base": "https://jev.example.com"},
             "reset": {"api_key": None, "api_base": None},
             "heuristic": {},
         }[change]
@@ -7599,8 +7636,13 @@ class TestTeamMemberAutoRouterWrites:
             if change == "heuristic"
             else {**config, "jev_classifier_config": {**transport, "timeout_ms": 8100, **overrides}}
         )
-        assert saved == expected
-        assert row.litellm_params["complexity_router_config"] == stored_config
+        stored_jev: Final = saved.get("jev_classifier_config")
+        if isinstance(stored_jev, dict):
+            for field in ("api_key", "api_base"):
+                if isinstance(stored_jev.get(field), str):
+                    assert stored_jev[field] != expected["jev_classifier_config"][field]
+        assert decrypt_json_strings(json_value(saved)) == expected
+        assert row.litellm_params == stored_params
         assert request.litellm_params.complexity_router_config == config
 
     @pytest.mark.asyncio
@@ -7824,8 +7866,8 @@ class TestModelManagementActorEdges:
             patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: [TQ008] update endpoint reads proxy-server state through its only test seam
             patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: [TQ008] update endpoint reads proxy-server state through its only test seam
             patch(  # test-quality-ok: [TQ008] isolate persistence from encryption implementation
-                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
-                side_effect=lambda value: value,
+                "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
+                side_effect=lambda value, **kwargs: value,
             ),
             patch(  # test-quality-ok: [TQ008] isolate persistence from router reload implementation
                 "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
@@ -7873,8 +7915,8 @@ class TestModelManagementActorEdges:
             patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: [TQ008] update endpoint reads proxy-server state through its only test seam
             patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: [TQ008] update endpoint reads proxy-server state through its only test seam
             patch(  # test-quality-ok: [TQ008] isolate persistence from encryption implementation
-                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
-                side_effect=lambda value: value,
+                "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
+                side_effect=lambda value, **kwargs: value,
             ),
             patch(  # test-quality-ok: [TQ008] isolate persistence from router reload implementation
                 "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
@@ -7994,8 +8036,8 @@ class TestModelManagementActorEdges:
             patch("litellm.proxy.proxy_server.store_model_in_db", True),  # test-quality-ok: [TQ008] route reads proxy-server state through its only test seam
             patch("litellm.proxy.proxy_server.premium_user", True),  # test-quality-ok: [TQ008] route reads proxy-server state through its only test seam
             patch(  # test-quality-ok: [TQ008] isolate persistence from encryption implementation
-                "litellm.proxy.management_endpoints.model_management_endpoints.encrypt_value_helper",
-                side_effect=lambda value: value,
+                "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
+                side_effect=lambda value, **kwargs: value,
             ),
             patch(  # test-quality-ok: [TQ008] isolate persistence from router reload implementation
                 "litellm.proxy.management_endpoints.model_management_endpoints.clear_cache",
@@ -8051,3 +8093,122 @@ class TestModelManagementActorEdges:
         assert response.status_code == 400
         assert "Cannot edit config-based model" in response.text
         prisma.db.litellm_proxymodeltable.update.assert_not_awaited()
+
+
+class TestNestedLitellmParamsEncryption:
+    SALT_KEY: Final = "sk-nested-salt-1234"
+
+    @pytest.fixture(autouse=True)
+    def _salt_key(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", self.SALT_KEY)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_encrypts_nested_extra_headers(self):
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
+        from litellm.proxy.management_endpoints.model_management_endpoints import add_new_model
+
+        model_id: Final = "nested-headers-model"
+        db_row: Final = LiteLLM_ProxyModelTable(
+            model_id=model_id,
+            model_name="gateway-model",
+            litellm_params={"model": "openai/gpt-5.4-mini"},
+            model_info={"id": model_id},
+            created_by="test-admin",
+            updated_by="test-admin",
+        )
+        mock_prisma: Final = MagicMock()
+        mock_prisma.db = MagicMock()
+        mock_prisma.db.litellm_proxymodeltable = AsyncMock()
+        mock_prisma.db.query_raw = AsyncMock(return_value=[])
+        mock_prisma.db.litellm_proxymodeltable.create = AsyncMock(return_value=db_row)
+        mock_proxy_config: Final = MagicMock()
+        mock_proxy_config._add_deployment_locked = AsyncMock(
+            return_value=ReconcileOutcome(still_desired=frozenset(), live_after=frozenset())
+        )
+        mock_router: Final = MagicMock()
+        mock_router.get_model_ids.return_value = [model_id]
+        _PS: Final = "litellm.proxy.proxy_server"
+        with (
+            patch(f"{_PS}.prisma_client", mock_prisma),
+            patch(f"{_PS}.store_model_in_db", True),
+            patch(f"{_PS}.proxy_config", mock_proxy_config),
+            patch(f"{_PS}.proxy_logging_obj", MagicMock()),
+            patch(f"{_PS}.premium_user", True),
+            patch(f"{_PS}.llm_router", mock_router),
+        ):
+            await add_new_model(
+                model_params=Deployment(
+                    model_name="gateway-model",
+                    litellm_params=LiteLLM_Params(
+                        model="openai/gpt-5.4-mini",
+                        api_key="sk-placeholder",
+                        extra_headers={"Authorization": "Bearer gateway-secret", "X-Gateway-Token": "gw-token"},
+                        rpm=10,
+                    ),
+                    model_info={"id": model_id},
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_id="test-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            )
+
+        create_call: Final = mock_prisma.db.litellm_proxymodeltable.create.call_args
+        stored_text: Final = (create_call.kwargs["data"] if "data" in create_call.kwargs else create_call.args[0])[
+            "litellm_params"
+        ]
+        assert "gateway-secret" not in stored_text
+        assert "gw-token" not in stored_text
+        stored: Final = json.loads(stored_text)
+        assert decrypt_if_encrypted_with(stored["extra_headers"]["Authorization"], self.SALT_KEY) == "Bearer gateway-secret"
+        assert decrypt_if_encrypted_with(stored["extra_headers"]["X-Gateway-Token"], self.SALT_KEY) == "gw-token"
+        assert decrypt_if_encrypted_with(stored["api_key"], self.SALT_KEY) == "sk-placeholder"
+        assert stored["rpm"] == 10
+
+    def test_update_db_model_encrypts_nested_extra_headers_and_reencrypts_a_legacy_plaintext_row(self):
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        db_model: Final = Deployment(
+            model_name="gateway-model",
+            litellm_params=LiteLLM_Params(model="openai/gpt-5.4-mini", api_key="legacy-plaintext-key"),
+            model_info={"id": "legacy-model"},
+        )
+        update_patch: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(extra_headers={"Authorization": "Bearer gateway-secret"})
+        )
+
+        result: Final = update_db_model(db_model=db_model, updated_patch=update_patch)
+
+        assert "gateway-secret" not in result["litellm_params"]
+        assert "legacy-plaintext-key" not in result["litellm_params"]
+        stored: Final = json.loads(result["litellm_params"])
+        assert decrypt_if_encrypted_with(stored["extra_headers"]["Authorization"], self.SALT_KEY) == "Bearer gateway-secret"
+        assert decrypt_if_encrypted_with(stored["api_key"], self.SALT_KEY) == "legacy-plaintext-key"
+        assert decrypt_if_encrypted_with(stored["model"], self.SALT_KEY) == "openai/gpt-5.4-mini"
+
+    def test_update_db_model_keeps_an_already_encrypted_value_decryptable_after_a_second_write(self):
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
+        from litellm.proxy.management_endpoints.model_management_endpoints import update_db_model
+
+        first: Final = update_db_model(
+            db_model=Deployment(
+                model_name="gateway-model",
+                litellm_params=LiteLLM_Params(model="openai/gpt-5.4-mini", api_key="sk-first"),
+                model_info={"id": "twice-written"},
+            ),
+            updated_patch=updateDeployment(
+                litellm_params=updateLiteLLMParams(extra_headers={"Authorization": "Bearer gateway-secret"})
+            ),
+        )
+        second: Final = update_db_model(
+            db_model=Deployment(
+                model_name="gateway-model",
+                litellm_params=LiteLLM_Params(**json.loads(first["litellm_params"])),
+                model_info={"id": "twice-written"},
+            ),
+            updated_patch=updateDeployment(litellm_params=updateLiteLLMParams(rpm=5)),
+        )
+
+        stored: Final = json.loads(second["litellm_params"])
+        assert decrypt_if_encrypted_with(stored["extra_headers"]["Authorization"], self.SALT_KEY) == "Bearer gateway-secret"
+        assert decrypt_if_encrypted_with(stored["api_key"], self.SALT_KEY) == "sk-first"
+        assert stored["rpm"] == 5

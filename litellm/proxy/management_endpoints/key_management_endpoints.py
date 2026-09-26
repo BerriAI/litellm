@@ -80,6 +80,12 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     coordination_redis_cache,
     publish_config_change,
 )
+from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    ENCRYPTED_CONFIG_SECTIONS,
+    encrypt_config_section,
+    encrypt_stored_json_object,
+    parse_stored_json_object,
+)
 from litellm.proxy.common_utils.rbac_utils import check_org_admin_can_generate_keys
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -142,6 +148,7 @@ from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
     DeletedVerificationTokenRepository,
     DeprecatedVerificationTokenRepository,
+    GuardrailsRepository,
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
@@ -5216,6 +5223,56 @@ async def delete_key_aliases(
     )
 
 
+async def _guardrail_rows(prisma_client: PrismaClient) -> "Sequence[prisma_models.LiteLLM_GuardrailsTable]":
+    from prisma.errors import TableNotFoundError
+
+    try:
+        return await GuardrailsRepository(prisma_client).table.find_many()
+    except TableNotFoundError:
+        return ()
+
+
+async def _rekey_config_section(
+    prisma_client: PrismaClient, param_name: str, param_value: object, new_master_key: str
+) -> None:
+    import prisma
+
+    section: Final = parse_stored_json_object(param_value)
+    if section is None:
+        verbose_proxy_logger.error(
+            "Master key rotation skipped config %s: stored value is not a JSON object", param_name
+        )
+        return
+    try:
+        rekeyed: Final = encrypt_config_section(param_name, section, new_encryption_key=new_master_key)
+    except ValueError as too_deep:
+        verbose_proxy_logger.error("Master key rotation skipped config %s: %s", param_name, too_deep)
+        return
+    await _config_table(prisma_client).update(
+        where={"param_name": param_name}, data={"param_value": prisma.Json(rekeyed)}
+    )
+
+
+async def _rekey_guardrail_row(
+    prisma_client: PrismaClient, guardrail_row: "prisma_models.LiteLLM_GuardrailsTable", new_master_key: str
+) -> None:
+    import prisma
+
+    try:
+        rekeyed: Final = encrypt_stored_json_object(guardrail_row.litellm_params, new_encryption_key=new_master_key)
+    except ValueError as too_deep:
+        verbose_proxy_logger.error("Master key rotation skipped guardrail %s: %s", guardrail_row.guardrail_id, too_deep)
+        return
+    if rekeyed is None:
+        verbose_proxy_logger.error(
+            "Master key rotation skipped guardrail %s: litellm_params is not a JSON object", guardrail_row.guardrail_id
+        )
+        return
+    await GuardrailsRepository(prisma_client).table.update(
+        where={"guardrail_id": guardrail_row.guardrail_id}, data={"litellm_params": prisma.Json(rekeyed)}
+    )
+
+
 async def _rotate_master_key(
     prisma_client: PrismaClient,
     user_api_key_dict: UserAPIKeyAuth,
@@ -5300,6 +5357,16 @@ async def _rotate_master_key(
                     where={"param_name": "environment_variables"},
                     data={"param_value": prisma.Json(encrypted_env_vars)},
                 )
+
+        for c in config:
+            if c.param_name in ENCRYPTED_CONFIG_SECTIONS and c.param_value is not None:
+                await _rekey_config_section(prisma_client, c.param_name, c.param_value, new_master_key)
+
+    # 3b. process guardrails table
+    for guardrail_row in await _guardrail_rows(prisma_client):
+        if guardrail_row.litellm_params is None:
+            continue
+        await _rekey_guardrail_row(prisma_client, guardrail_row, new_master_key)
 
     # 4. process MCP server table
     try:

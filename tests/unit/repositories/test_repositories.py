@@ -328,14 +328,11 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
-    @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    async def test_create_model_encrypts_params(self, mock_decrypt, mock_encrypt, repo):
+    async def test_create_model_encrypts_params(self, mock_encrypt):
+        repo = ModelRepository(MockPrismaClient(), encryption_key="unit-test-key")
         model = await repo.create_model(
             model_name="gpt-4",
             litellm_params={"api_key": "sk-secret"},
@@ -346,14 +343,10 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
-    @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    async def test_create_model_all_fields(self, mock_decrypt, mock_encrypt, repo):
+    async def test_create_model_all_fields(self, mock_encrypt, repo):
         model = await repo.create_model(
             model_name="gpt-4-turbo",
             litellm_params={
@@ -370,14 +363,10 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: f"encrypted_{v}",
     )
-    @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    async def test_update_model_all_fields(self, mock_decrypt, mock_encrypt, repo):
+    async def test_update_model_all_fields(self, mock_encrypt, repo):
         repo._prisma_client.db.litellm_proxymodeltable._records["model-full"] = {
             "model_id": "model-full",
             "model_name": "old-name",
@@ -395,11 +384,7 @@ class TestModelRepository:
         assert updated.model_name == "new-name"
 
     @pytest.mark.asyncio
-    @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    async def test_find_all(self, mock_decrypt, repo):
+    async def test_find_all(self, repo):
         repo._prisma_client.db.litellm_proxymodeltable._records = {
             "m1": {
                 "model_id": "m1",
@@ -418,11 +403,7 @@ class TestModelRepository:
         assert len(models) == 2
 
     @pytest.mark.asyncio
-    @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    async def test_find_unblocked(self, mock_decrypt, repo):
+    async def test_find_unblocked(self, repo):
         repo._prisma_client.db.litellm_proxymodeltable._records = {
             "m1": {
                 "model_id": "m1",
@@ -435,11 +416,7 @@ class TestModelRepository:
         assert len(models) == 1
 
     @pytest.mark.asyncio
-    @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    async def test_find_by_name(self, mock_decrypt, repo):
+    async def test_find_by_name(self, repo):
         repo._prisma_client.db.litellm_proxymodeltable._records = {
             "m1": {
                 "model_id": "m1",
@@ -452,14 +429,10 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
-    @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    async def test_update_model(self, mock_decrypt, mock_encrypt, repo):
+    async def test_update_model(self, mock_encrypt, repo):
         repo._prisma_client.db.litellm_proxymodeltable._records["m1"] = {
             "model_id": "m1",
             "model_name": "gpt-4",
@@ -474,11 +447,7 @@ class TestModelRepository:
         assert updated.blocked is True
 
     @pytest.mark.asyncio
-    @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    async def test_delete_model(self, mock_decrypt, repo):
+    async def test_delete_model(self, repo):
         repo._prisma_client.db.litellm_proxymodeltable._records["m1"] = {
             "model_id": "m1",
             "model_name": "gpt-4",
@@ -489,14 +458,10 @@ class TestModelRepository:
 
     @pytest.mark.asyncio
     @patch(
-        "litellm.repositories.model_repository.encrypt_value_helper",
+        "litellm.proxy.common_utils.encrypt_decrypt_utils.encrypt_value_helper",
         side_effect=lambda v, **kw: v,
     )
-    @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
-        side_effect=lambda v, **kw: v,
-    )
-    async def test_block_unblock_model(self, mock_decrypt, mock_encrypt, repo):
+    async def test_block_unblock_model(self, mock_encrypt, repo):
         repo._prisma_client.db.litellm_proxymodeltable._records["m1"] = {
             "model_id": "m1",
             "model_name": "gpt-4",
@@ -1894,11 +1859,7 @@ class TestModelRepositoryExtended:
         return ModelRepository(client)
 
     @pytest.mark.asyncio
-    @patch(
-        "litellm.repositories.model_repository.decrypt_value_helper",
-        side_effect=lambda value, **kw: value,
-    )
-    async def test_find_by_team_id(self, mock_decrypt, repo):
+    async def test_find_by_team_id(self, repo):
         repo._prisma_client.db.litellm_proxymodeltable._records["model-1"] = {
             "model_id": "model-1",
             "model_name": "gpt-4",
@@ -2290,3 +2251,88 @@ class TestAutoRouterSessionRepository:
         assert AutoRouterSessionRepository(client).table is client.db.litellm_autoroutersession
         with pytest.raises(RuntimeError, match="No DB Connected"):
             _ = AutoRouterSessionRepository(None).table
+
+
+class TestModelRepositoryNestedEncryption:
+    SALT_KEY: Final = "sk-repository-salt-1234"
+
+    @pytest.fixture(autouse=True)
+    def _salt_key(self, monkeypatch):
+        monkeypatch.setenv("LITELLM_SALT_KEY", self.SALT_KEY)
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+
+    @pytest.mark.asyncio
+    async def test_create_model_encrypts_nested_strings_and_find_by_id_decrypts_them(self):
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
+
+        client: Final = MockPrismaClient()
+        repo: Final = ModelRepository(client, encryption_key=self.SALT_KEY)
+        litellm_params: Final = {
+            "model": "openai/gpt-5.4-mini",
+            "api_key": "sk-placeholder",
+            "extra_headers": {"Authorization": "Bearer gateway-secret", "X-Gateway-Token": "gw-token"},
+            "rpm": 10,
+        }
+
+        created: Final = await repo.create_model(
+            model_name="gateway-model", litellm_params=litellm_params, created_by="admin", model_id="gw-1"
+        )
+
+        stored_text: Final = client.db.litellm_proxymodeltable._records["gw-1"]["litellm_params"]
+        assert "gateway-secret" not in stored_text
+        assert "gw-token" not in stored_text
+        stored: Final = json.loads(stored_text)
+        assert decrypt_if_encrypted_with(stored["extra_headers"]["Authorization"], self.SALT_KEY) == "Bearer gateway-secret"
+        assert decrypt_if_encrypted_with(stored["api_key"], self.SALT_KEY) == "sk-placeholder"
+        assert stored["rpm"] == 10
+        assert created is not None
+        assert created.litellm_params == litellm_params
+        found: Final = await repo.find_by_id("gw-1")
+        assert found is not None
+        assert found.litellm_params == litellm_params
+
+    @pytest.mark.asyncio
+    async def test_create_model_encrypts_classifier_credentials_and_keeps_classifier_fields_readable_in_sql(self):
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
+
+        client: Final = MockPrismaClient()
+        repo: Final = ModelRepository(client, encryption_key=self.SALT_KEY)
+        complexity_router_config: Final = {
+            "classifier_type": "jev",
+            "jev_classifier_config": {
+                "api_base": "https://classifier.example",
+                "api_key": "sk-classifier-secret",
+                "instructions": "Rate the question",
+            },
+        }
+        litellm_params: Final = {"model": "auto_router/tuned", "complexity_router_config": complexity_router_config}
+
+        await repo.create_model(model_name="auto-router", litellm_params=litellm_params, created_by="admin", model_id="ar-1")
+
+        stored_text: Final = client.db.litellm_proxymodeltable._records["ar-1"]["litellm_params"]
+        assert "sk-classifier-secret" not in stored_text
+        assert "classifier.example" not in stored_text
+        stored_config: Final = json.loads(stored_text)["complexity_router_config"]
+        assert stored_config["classifier_type"] == "jev"
+        assert stored_config["jev_classifier_config"]["instructions"] == "Rate the question"
+        stored_jev: Final = stored_config["jev_classifier_config"]
+        assert decrypt_if_encrypted_with(stored_jev["api_base"], self.SALT_KEY) == "https://classifier.example"
+        assert decrypt_if_encrypted_with(stored_jev["api_key"], self.SALT_KEY) == "sk-classifier-secret"
+        found: Final = await repo.find_by_id("ar-1")
+        assert found is not None
+        assert found.litellm_params == litellm_params
+
+    @pytest.mark.asyncio
+    async def test_reads_use_the_same_injected_key_as_writes(self):
+        client: Final = MockPrismaClient()
+        repo: Final = ModelRepository(client, encryption_key="sk-injected-key-5678")
+        litellm_params: Final = {"model": "openai/gpt-5.4-mini", "extra_headers": {"Authorization": "Bearer gw"}}
+
+        await repo.create_model(model_name="gateway-model", litellm_params=litellm_params, created_by="admin", model_id="gw-2")
+
+        found: Final = await repo.find_by_id("gw-2")
+        assert found is not None
+        assert found.litellm_params == litellm_params
+        env_key_read: Final = await ModelRepository(client).find_by_id("gw-2")
+        assert env_key_read is not None
+        assert env_key_read.litellm_params["extra_headers"]["Authorization"] != "Bearer gw"

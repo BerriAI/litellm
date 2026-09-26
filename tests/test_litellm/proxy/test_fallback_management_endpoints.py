@@ -346,6 +346,39 @@ class TestCreateFallback:
             # Verify the correct attribute was updated
             assert hasattr(mock_router, "context_window_fallbacks")
 
+    async def test_create_fallback_encrypts_the_router_settings_row(
+        self, mock_router, mock_prisma_client, mock_proxy_config, mock_user_api_key_dict, monkeypatch
+    ):
+        import json
+
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_json_strings
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-fallback-salt-1234")
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        mock_proxy_config.get_config = AsyncMock(
+            return_value={"router_settings": {"redis_password": "redis-canary-password"}}
+        )
+        request = FallbackCreateRequest(
+            model="gpt-3.5-turbo", fallback_models=["gpt-4", "claude-3-haiku"], fallback_type="general"
+        )
+
+        with (
+            patch("litellm.proxy.proxy_server.llm_router", mock_router),
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+        ):
+            await create_fallback(request, mock_user_api_key_dict)
+
+        upsert_data = mock_prisma_client.db.litellm_config.upsert.call_args.kwargs["data"]
+        stored_text = upsert_data["create"]["param_value"]
+        assert stored_text == upsert_data["update"]["param_value"]
+        assert "redis-canary-password" not in stored_text
+        assert decrypt_json_strings(json.loads(stored_text)) == {
+            "redis_password": "redis-canary-password",
+            "fallbacks": [{"gpt-3.5-turbo": ["gpt-4", "claude-3-haiku"]}],
+        }
+
 
 @pytest.mark.asyncio
 class TestGetFallback:

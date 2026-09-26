@@ -6,10 +6,13 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import JsonValue
+
 from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
-    decrypt_value_helper,
-    encrypt_value_helper,
+    decrypt_json_strings,
+    encrypt_json_strings,
+    json_value,
 )
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -21,6 +24,41 @@ if TYPE_CHECKING:
 
 class _ProxyModelTableRepository(PrismaTableRepository["prisma_models.LiteLLM_ProxyModelTable"]):
     table_name = "litellm_proxymodeltable"
+
+
+JEV_CLASSIFIER_CREDENTIAL_FIELDS: Final = frozenset({"api_key", "api_base"})
+
+
+def _complexity_router_config_with_encrypted_classifier_credentials(
+    config: JsonValue, new_encryption_key: str | None
+) -> JsonValue:
+    if not isinstance(config, dict):
+        return config
+    jev: Final = config.get("jev_classifier_config")
+    if not isinstance(jev, dict):
+        return config
+    encrypted_jev: Final = {
+        key: (
+            encrypt_json_strings(value, new_encryption_key=new_encryption_key)
+            if key in JEV_CLASSIFIER_CREDENTIAL_FIELDS and isinstance(value, str)
+            else value
+        )
+        for key, value in jev.items()
+    }
+    return {**config, "jev_classifier_config": encrypted_jev}
+
+
+def encrypt_model_litellm_params(
+    litellm_params: Mapping[str, object], new_encryption_key: str | None = None
+) -> dict[str, JsonValue]:
+    return {
+        key: (
+            _complexity_router_config_with_encrypted_classifier_credentials(json_value(value), new_encryption_key)
+            if key == "complexity_router_config"
+            else encrypt_json_strings(json_value(value), new_encryption_key=new_encryption_key)
+        )
+        for key, value in litellm_params.items()
+    }
 
 
 class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
@@ -39,26 +77,13 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         return LiteLLM_ProxyModelTable
 
     def _encrypt_litellm_params(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-        """Encrypt sensitive values in litellm_params."""
-        encrypted: Final = {}
-        for key, value in litellm_params.items():
-            if isinstance(value, str):
-                encrypted[key] = encrypt_value_helper(value, new_encryption_key=self._encryption_key)
-            else:
-                encrypted[key] = value
-        return encrypted
+        return encrypt_model_litellm_params(litellm_params, new_encryption_key=self._encryption_key)
 
     def _decrypt_litellm_params(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-        """Decrypt sensitive values in litellm_params."""
-        decrypted: Final = {}
-        for key, value in litellm_params.items():
-            if isinstance(value, str):
-                decrypted[key] = decrypt_value_helper(
-                    value, key=key, exception_type="debug", return_original_value=True
-                )
-            else:
-                decrypted[key] = value
-        return decrypted
+        return {
+            key: decrypt_json_strings(json_value(value), signing_key=self._encryption_key)
+            for key, value in litellm_params.items()
+        }
 
     def _to_model(self, record: Any) -> LiteLLM_ProxyModelTable | None:
         """Convert a database record to a Model with decryption."""

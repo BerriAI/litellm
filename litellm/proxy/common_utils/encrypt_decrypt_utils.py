@@ -3,9 +3,11 @@ import os
 from collections.abc import Mapping
 from typing import Final, Literal, cast
 
-from pydantic import TypeAdapter, ValidationError
+from pydantic import JsonValue, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 # Versioned ciphertext marker for AES-256-GCM values.
 # Format: "v2:gcm:" + base64url(nonce(12) || ciphertext || tag(16)).
@@ -258,3 +260,100 @@ def decode_secret_map(value: object, *, key: str) -> Mapping[str, str] | None:
         return _SECRET_MAP.validate_json(decrypted, strict=True)
     except ValidationError:
         raise SecretMapDecodeError(f"Cannot decode encrypted MCP {key}; check LITELLM_SALT_KEY") from None
+
+
+_JSON_VALUE: Final = TypeAdapter(JsonValue)
+_JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+
+
+def json_value(value: object) -> JsonValue:
+    plain: Final = dict(value) if isinstance(value, Mapping) else value
+    try:
+        return _JSON_VALUE.validate_python(plain)
+    except ValidationError:
+        return _JSON_VALUE.validate_json(safe_dumps(plain))
+
+
+def _plaintext_of(value: str, signing_key: str | None = None) -> str:
+    key: Final = signing_key or _get_salt_key()
+    if key is None:
+        return value
+    decrypted: Final = decrypt_if_encrypted_with(value, key)
+    return value if decrypted is None else decrypted
+
+
+def _encrypted_string(value: str, new_encryption_key: str | None) -> str:
+    if (new_encryption_key or _get_salt_key()) is None:
+        return value
+    return _SECRET_STRING.validate_python(
+        encrypt_value_helper(_plaintext_of(value), new_encryption_key=new_encryption_key), strict=True
+    )
+
+
+def encrypt_json_strings(value: JsonValue, new_encryption_key: str | None = None, depth: int = 0) -> JsonValue:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        raise ValueError(f"cannot encrypt a value nested deeper than {DEFAULT_MAX_RECURSE_DEPTH} levels")
+    if isinstance(value, str):
+        return _encrypted_string(value, new_encryption_key)
+    if isinstance(value, list):
+        return [encrypt_json_strings(item, new_encryption_key, depth + 1) for item in value]
+    if isinstance(value, dict):
+        return {key: encrypt_json_strings(item, new_encryption_key, depth + 1) for key, item in value.items()}
+    return value
+
+
+def decrypt_json_strings(value: JsonValue, signing_key: str | None = None, depth: int = 0) -> JsonValue:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return value
+    if isinstance(value, str):
+        return _plaintext_of(value, signing_key)
+    if isinstance(value, list):
+        return [decrypt_json_strings(item, signing_key, depth + 1) for item in value]
+    if isinstance(value, dict):
+        return {key: decrypt_json_strings(item, signing_key, depth + 1) for key, item in value.items()}
+    return value
+
+
+def parse_stored_json_object(value: object) -> dict[str, JsonValue] | None:
+    try:
+        return _JSON_OBJECT.validate_json(value) if isinstance(value, str) else _JSON_OBJECT.validate_python(value)
+    except ValidationError:
+        return None
+
+
+def _stored_json_object(value: object) -> dict[str, JsonValue]:
+    parsed: Final = parse_stored_json_object(value)
+    if parsed is not None:
+        return parsed
+    if value is not None:
+        verbose_proxy_logger.error("Stored value is not a JSON object (%s); reading it as empty", type(value).__name__)
+    return {}
+
+
+def encrypt_stored_json_object(value: object, new_encryption_key: str | None = None) -> dict[str, JsonValue] | None:
+    parsed: Final = parse_stored_json_object(value)
+    if parsed is None:
+        return None
+    return {key: encrypt_json_strings(item, new_encryption_key=new_encryption_key) for key, item in parsed.items()}
+
+
+def decrypt_stored_json_object(value: object) -> dict[str, JsonValue]:
+    return {key: decrypt_json_strings(item) for key, item in _stored_json_object(value).items()}
+
+
+ENCRYPTED_CONFIG_SECTIONS: Final = frozenset({"router_settings"})
+
+
+def encrypt_config_section(
+    section_name: str, section: object, new_encryption_key: str | None = None
+) -> dict[str, JsonValue]:
+    values: Final = _stored_json_object(section)
+    if section_name not in ENCRYPTED_CONFIG_SECTIONS:
+        return values
+    return {key: encrypt_json_strings(item, new_encryption_key=new_encryption_key) for key, item in values.items()}
+
+
+def decrypt_config_section(section_name: str, value: object) -> dict[str, JsonValue]:
+    if section_name in ENCRYPTED_CONFIG_SECTIONS:
+        return decrypt_stored_json_object(value)
+    return _stored_json_object(value)
