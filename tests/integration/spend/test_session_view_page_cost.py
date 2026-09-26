@@ -304,8 +304,10 @@ def _small_rows(marker: str) -> tuple[_SeedRow, ...]:
         _SeedRow(f"{marker}-shared-b", f"{marker}-shared", at(60), api_key=f"{marker}-key-b"),
         _SeedRow(f"{marker}-tie-1", f"{marker}-tie", at(70)),
         _SeedRow(f"{marker}-tie-2", f"{marker}-tie", at(70)),
+        _SeedRow(f"{marker}-mcp-old", f"{marker}-mcp", at(45)),
         _SeedRow(f"{marker}-mcp-llm", f"{marker}-mcp", at(80)),
         _SeedRow(f"{marker}-mcp-tool", f"{marker}-mcp", at(90), call_type="call_mcp_tool"),
+        _SeedRow(f"{marker}-shared", f"{marker}-other", at(95), api_key=f"{marker}-key-b"),
     )
 
 
@@ -346,6 +348,7 @@ def _tie_as_one(request_id: str) -> str:
 
 def _newest_first(marker: str) -> list[tuple[str, str]]:
     return [
+        (f"{marker}-shared", f"{marker}-key-b"),
         (f"{marker}-mcp-llm", "K"),
         (f"{marker}-tie", "K"),
         (f"{marker}-shared-b", f"{marker}-key-b"),
@@ -360,10 +363,10 @@ def test_session_view_lists_each_session_once(gateway: Gateway, small_seed: str)
 
     assert _sessions(page) == _newest_first(small_seed), (
         "each session once, represented by its newest non-MCP row: a row without a session_id newer than the rows "
-        "adopting its request_id joins them, two rows at one startTime are one session, and one session_id under two "
-        "api_keys is two sessions"
+        "adopting its request_id joins them, two rows at one startTime are one session, one session_id under two "
+        "api_keys is two sessions, and a row whose request_id equals another session's key stays in its own session"
     )
-    assert page["total"] == 6
+    assert page["total"] == 7
     assert page["has_more"] is False
 
 
@@ -382,9 +385,11 @@ def test_session_view_cursor_walk_counts_sessions_per_api_key(gateway: Gateway, 
         )
     walked: Final = [session for page in cursor_pages for session in _sessions(page)]
 
-    assert first["total"] == 6, "the capped count must count one session_id under two api_keys as two sessions"
-    assert walked == _newest_first(small_seed)
-    assert [page["has_more"] for page in cursor_pages] == [True, True, False]
+    assert first["total"] == 7, "the capped count must count one session_id under two api_keys as two sessions"
+    assert walked == _newest_first(small_seed), (
+        "a session whose older rows fall below the cursor was already shown and must not come back on a later page"
+    )
+    assert [page["has_more"] for page in cursor_pages] == [True, True, True, False]
 
 
 def test_session_view_ascending_and_offset_pages_match_the_newest_first_order(
@@ -394,6 +399,16 @@ def test_session_view_ascending_and_offset_pages_match_the_newest_first_order(
     offset_page: Final = _small_page(gateway, sort_order="desc", page_size="2", page="2")
 
     assert _sessions(ascending) == _newest_first(small_seed)[::-1]
-    assert ascending["total"] == 6
+    assert ascending["total"] == 7
     assert _sessions(offset_page) == _newest_first(small_seed)[2:4]
     assert offset_page["has_more"] is True
+
+
+def test_session_view_filtered_page_only_lists_matching_sessions(gateway: Gateway, small_seed: str) -> None:
+    page: Final = _small_page(gateway, sort_order="desc", page_size="50", page="1", api_key=f"{small_seed}-key-b")
+
+    assert _sessions(page) == [
+        (f"{small_seed}-shared", f"{small_seed}-key-b"),
+        (f"{small_seed}-shared-b", f"{small_seed}-key-b"),
+    ]
+    assert page["total"] == 2

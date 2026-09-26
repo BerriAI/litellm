@@ -535,6 +535,12 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
     ]
 
     async def mock_query_raw(sql_query, *params):
+        if "WITH batch AS MATERIALIZED" in sql_query:
+            first_rows = [
+                {**row, "sort_time": row["last_activity"], "request_id": row["session_key"], "is_edge": False}
+                for row in session_rows
+            ]
+            return [*first_rows, {**first_rows[-1], "is_edge": True, "batch_rows": 0}]
         if "COUNT(*) AS total_count" in sql_query:
             return [{"total_count": 60}]
         if "CROSS JOIN LATERAL" in sql_query or "DISTINCT ON" in sql_query:
@@ -570,7 +576,6 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
     emitted = [call[0] for call in mock_prisma.db.query_raw.call_args_list]
     page_sql = emitted[0][0]
     assert "OFFSET" not in page_sql, "the startTime page must be keyset-selected, not offset-selected"
-    assert emitted[0][-1] == 51, "the page query fetches page_size + 1 sessions to detect has_more"
 
     count_call = emitted[1]
     count_sql = count_call[0]
