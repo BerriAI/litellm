@@ -229,6 +229,11 @@ class AutoRouterBenchmarkTotals(BaseModel):
     savings_estimated_actual_spend: float = Field(
         description="Actual spend, including classifier cost, for covered turns only"
     )
+    savings_estimated_classifier_cost: float | None = Field(
+        default=None,
+        description="Classifier cost included in the matching historical and newer savings comparison; "
+        "null when classification costs for those requests are unavailable",
+    )
     saved_spend: float | None = Field(
         description="Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates"
     )

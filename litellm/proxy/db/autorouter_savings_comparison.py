@@ -24,6 +24,7 @@ class SessionSavingsComparison(BaseModel):
     turns: int
     estimated_turns: int
     actual_spend: float
+    classifier_cost: float | None
     saved_spend: float
     complete: bool
 
@@ -81,6 +82,7 @@ WITH {AUTOROUTER_SESSION_WINDOW_SQL}, scoped AS MATERIALIZED (
     SELECT * FROM windowed WHERE $5::text IS NULL OR session_id = $5::text
 ), limited_logs AS MATERIALIZED (
     SELECT session.api_key, session.session_id, session.router_name, session.router_type, session.comparison_user_id,
+        session.classifier_cost_recorded_turns = session.turns AS classifier_cost_tracked,
         logs.spend, logs.prompt_tokens + logs.completion_tokens AS tokens,
         logs.metadata::jsonb -> 'routing_decision' AS decision,
         logs.metadata::jsonb -> 'autorouter_savings' AS savings,
@@ -100,7 +102,8 @@ WITH {AUTOROUTER_SESSION_WINDOW_SQL}, scoped AS MATERIALIZED (
 ), facts AS (
     SELECT *,
         CASE WHEN jsonb_typeof(decision -> 'classifier_cost') = 'number'
-            THEN (decision ->> 'classifier_cost')::float8 ELSE 0 END AS classifier,
+            THEN (decision ->> 'classifier_cost')::float8
+            WHEN classifier_cost_tracked THEN 0 END AS classifier,
         CASE WHEN jsonb_typeof(savings) = 'number' AND (
             estimate IS NULL OR estimate = 'null'::jsonb OR (
                 jsonb_typeof(estimate -> 'version') = 'number' AND estimate ->> 'version' IN ('1', '2', '3')
@@ -110,13 +113,16 @@ WITH {AUTOROUTER_SESSION_WINDOW_SQL}, scoped AS MATERIALIZED (
     FROM limited_logs
 ), compared AS (
     SELECT api_key, session_id, router_name, router_type, comparison_user_id,
-        COUNT(*) AS turns, SUM(spend + classifier) AS spend, SUM(tokens) AS total_tokens,
+        COUNT(*) AS turns, SUM(spend + COALESCE(classifier, 0)) AS spend, SUM(tokens) AS total_tokens,
         COUNT(saved) AS estimated_turns,
-        COALESCE(SUM(spend + classifier) FILTER (WHERE saved IS NOT NULL), 0)::float8 AS actual_spend,
+        COALESCE(SUM(spend + COALESCE(classifier, 0)) FILTER (WHERE saved IS NOT NULL), 0)::float8 AS actual_spend,
+        CASE WHEN COUNT(saved) = COUNT(classifier) FILTER (WHERE saved IS NOT NULL)
+            THEN COALESCE(SUM(classifier) FILTER (WHERE saved IS NOT NULL), 0)::float8
+        END AS estimated_classifier_cost,
         COALESCE(SUM(saved), 0)::float8 AS saved_spend
     FROM facts GROUP BY 1, 2, 3, 4, 5
 ), reconciled AS (
-    SELECT session.*, logs.estimated_turns, logs.actual_spend,
+    SELECT session.*, logs.estimated_turns, logs.actual_spend, logs.estimated_classifier_cost,
         COALESCE((SELECT COUNT(*) FROM limited_logs) <= {MAX_SPENDLOG_ROWS_TO_QUERY}
             AND logs.turns = session.turns AND logs.total_tokens = session.total_tokens
             AND ABS(logs.spend - session.spend) <= GREATEST(1e-9, ABS(session.spend) * 1e-9)
@@ -131,6 +137,10 @@ SELECT router_name, router_type,
     SUM(turns)::bigint AS turns,
     SUM(CASE WHEN recovered THEN estimated_turns ELSE savings_estimated_turns END)::bigint AS estimated_turns,
     SUM(CASE WHEN recovered THEN actual_spend ELSE savings_estimated_actual_spend END)::float8 AS actual_spend,
+    CASE WHEN BOOL_AND(CASE WHEN recovered THEN estimated_classifier_cost IS NOT NULL
+        ELSE savings_estimated_turns = turns AND classifier_cost_recorded_turns = turns END)
+        THEN SUM(CASE WHEN recovered THEN estimated_classifier_cost ELSE classifier_cost END)::float8
+    END AS classifier_cost,
     SUM(saved_spend)::float8 AS saved_spend,
     BOOL_AND(recovered OR savings_estimated_turns = turns) AS complete
 FROM reconciled GROUP BY router_name, router_type

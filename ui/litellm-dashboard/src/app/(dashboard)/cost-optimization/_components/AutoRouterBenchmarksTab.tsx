@@ -77,6 +77,9 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
   const stats = view.stats;
   const cheaper = stats.saved_pct != null && stats.saved_pct >= 0;
   const completeCoverage = stats.savings_estimated_turns === stats.turns;
+  const coveredClassifierCost =
+    stats.savings_estimated_classifier_cost ?? (completeCoverage ? stats.classifier_cost : null);
+  const classifierCost = stats.baseline_spend == null ? null : coveredClassifierCost;
   return (
     <Card className="overflow-hidden py-0">
       <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
@@ -117,26 +120,26 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
             value={stats.baseline_spend == null ? "Unavailable" : usd(stats.savings_estimated_actual_spend)}
             tooltip="Savings, actual spend, and baseline include historical and newer requests with recorded savings estimates. Requests without estimates are excluded. Actual spend includes classification costs."
           />
-          {completeCoverage && stats.baseline_spend != null && (
-            <div className="mb-3 border-l-2 pl-4">
-              <SpendRow
-                subdued
-                label="LLM spend"
-                value={stats.classifier_cost == null ? "Unavailable" : usd(stats.spend - stats.classifier_cost)}
-              />
-              <SpendRow
-                subdued
-                label="Classification cost"
-                value={stats.classifier_cost == null ? "Unavailable" : usd(stats.classifier_cost)}
-                hint={
-                  stats.classifier_cost == null
-                    ? undefined
-                    : classificationRatePer1kTurns(stats.classifier_cost, stats.turns)
-                }
-              />
-            </div>
-          )}
-          {completeCoverage && stats.classifier_cost == null && (
+          <div className="mb-3 border-l-2 pl-4">
+            <SpendRow
+              subdued
+              label="LLM spend"
+              value={
+                classifierCost == null ? "Unavailable" : usd(stats.savings_estimated_actual_spend - classifierCost)
+              }
+            />
+            <SpendRow
+              subdued
+              label="Classification cost"
+              value={classifierCost == null ? "Unavailable" : usd(classifierCost)}
+              hint={
+                classifierCost == null
+                  ? undefined
+                  : classificationRatePer1kTurns(classifierCost, stats.savings_estimated_turns)
+              }
+            />
+          </div>
+          {stats.baseline_spend != null && classifierCost == null && (
             <p className="mb-3 text-xs text-muted-foreground">
               Breakdown unavailable because some usage predates classification-cost tracking.
             </p>

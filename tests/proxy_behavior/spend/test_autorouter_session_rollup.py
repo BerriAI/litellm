@@ -96,27 +96,28 @@ async def _row(db, key: str, session_id: str = "s1", router: str = "auto-1") -> 
     return rows[0]
 
 
-@pytest.mark.parametrize("historical_saved, damaged, user_id, split_sessions", [
-    (29.5, None, None, False), (29.5, None, "owner", False), (0.0, None, None, False),
-    (-3.0, None, None, False), (29.5, "missing", None, False), (29.5, "cost", None, False),
-    (0.0, "missing", None, False), (29.5, None, None, True),
+@pytest.mark.parametrize("historical_saved, damaged, user_id, split_sessions, current_classifier", [
+    (29.5, None, None, False, 0.2), (29.5, None, "owner", False, 0.2), (0.0, None, None, False, 0.2),
+    (-3.0, None, None, False, 0.2), (29.5, "missing", None, False, 0.2), (29.5, "cost", None, False, 0.2),
+    (0.0, "missing", None, False, 0.2), (29.5, None, None, True, 0.2), (29.5, None, None, False, 0.0),
 ])
 async def test_historical_and_new_savings_compare_matching_costs_and_exclude_unknown_requests(
     db: Prisma, historical_saved: float, damaged: str | None, user_id: str | None, split_sessions: bool,
+    current_classifier: float,
 ) -> None:
     async with db.tx() as tx:
         for table in ("LiteLLM_AutoRouterSession", "LiteLLM_AutoRouterUserSession", "LiteLLM_SpendLogs"):
             await tx.execute_raw(f'CREATE TEMP TABLE "{table}" (LIKE public."{table}" INCLUDING ALL) ON COMMIT DROP')
         for name, spend, saved, classifier, estimated in (
             ("historical", 9.0, historical_saved, 0.1, False),
-            ("current", 1.0, 0.5, 0.0, True),
-            ("unknown", 99.0, 0.0, 0.0, False),
+            ("current", 1.0, 0.5, current_classifier, True),
+            ("unknown", 99.0, 0.0, 3.0, False),
         ):
             session_id: Final = "s2" if split_sessions and name == "current" else "s1"
             await _turn(tx, "key", "model", T0, spend=spend, saved=saved, classifier_cost=classifier,
                         estimated=estimated, session_id=session_id)
             metadata: Final = {
-                "routing_decision": {"router_model_name": "auto-1", "classifier_cost": classifier},
+                "routing_decision": {"router_model_name": "auto-1", **({"classifier_cost": classifier} if classifier else {})},
                 "autorouter_savings": saved if name != "unknown" else None,
                 **({"autorouter_savings_estimate": {
                     "version": 3, "status": "estimated" if estimated else "unknown",
@@ -146,6 +147,7 @@ async def test_historical_and_new_savings_compare_matching_costs_and_exclude_unk
         comparison: Final = SessionSavingsComparison.model_validate(rows[0])
         assert comparison.saved_spend == historical_saved + 0.5
         assert comparison.complete is (damaged is None)
+        assert comparison.classifier_cost == (pytest.approx(0.1 + current_classifier) if damaged is None else None)
         assert comparison.coverage_fields(historical_saved + 0.5, 4) == {}
         assert comparison.coverage_fields(historical_saved + 0.5, 3) == ({
             "savings_estimated_turns": 2,

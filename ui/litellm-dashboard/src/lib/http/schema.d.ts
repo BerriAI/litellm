@@ -24930,6 +24930,11 @@ export interface components {
              */
             savings_estimated_actual_spend: number;
             /**
+             * Savings Estimated Classifier Cost
+             * @description Classifier cost included in the matching historical and newer savings comparison; null when classification costs for those requests are unavailable
+             */
+            savings_estimated_classifier_cost?: number | null;
+            /**
              * Savings Estimated Turns
              * @description Requests with a matching savings comparison, including historical recorded estimates
              */
@@ -24993,6 +24998,11 @@ export interface components {
              * @description Actual spend, including classifier cost, for covered turns only
              */
             savings_estimated_actual_spend: number;
+            /**
+             * Savings Estimated Classifier Cost
+             * @description Classifier cost included in the matching historical and newer savings comparison; null when classification costs for those requests are unavailable
+             */
+            savings_estimated_classifier_cost?: number | null;
             /**
              * Savings Estimated Turns
              * @description Requests with a matching savings comparison, including historical recorded estimates

@@ -99,6 +99,8 @@ SELECT
     COALESCE(SUM(saved_spend), 0)::float8 AS saved_spend,
     COALESCE(SUM(savings_estimated_turns), 0)::int AS savings_estimated_turns,
     COALESCE(SUM(savings_estimated_actual_spend), 0)::float8 AS savings_estimated_actual_spend,
+    CASE WHEN BOOL_AND(savings_estimated_turns = turns AND classifier_cost_recorded_turns = turns)
+        THEN SUM(classifier_cost)::float8 END AS savings_estimated_classifier_cost,
     COALESCE(SUM(savings_estimated_saved_spend), 0)::float8 AS savings_estimated_saved_spend,
     COALESCE(SUM(classifier_cost), 0)::float8 AS classifier_cost,
     COALESCE(SUM(classifier_cost_recorded_turns), 0)::int AS classifier_cost_recorded_turns,

@@ -653,6 +653,7 @@ class _SessionAggRow(BaseModel):
     saved_spend: float
     savings_estimated_turns: int = 0
     savings_estimated_actual_spend: float = 0.0
+    savings_estimated_classifier_cost: float | None = None
     savings_estimated_saved_spend: float = 0.0
     savings_comparison_complete: bool = True
     classifier_cost: float
@@ -711,6 +712,7 @@ def _benchmark_totals(row: _SessionAggRow) -> AutoRouterBenchmarkTotals:
         spend=row.spend,
         savings_estimated_turns=row.savings_estimated_turns,
         savings_estimated_actual_spend=row.savings_estimated_actual_spend,
+        savings_estimated_classifier_cost=row.savings_estimated_classifier_cost if baseline_spend is not None else None,
         saved_spend=saved_spend,
         classifier_cost=row.classifier_cost if row.classifier_cost_recorded_turns == row.turns else None,
         baseline_spend=baseline_spend,
@@ -747,6 +749,7 @@ def _benchmark_group(row: _SessionAggRow) -> AutoRouterBenchmarkGroup:
         saved_spend=totals.saved_spend,
         savings_estimated_turns=totals.savings_estimated_turns,
         savings_estimated_actual_spend=totals.savings_estimated_actual_spend,
+        savings_estimated_classifier_cost=totals.savings_estimated_classifier_cost,
         classifier_cost=totals.classifier_cost,
         baseline_spend=totals.baseline_spend,
         saved_pct=totals.saved_pct,
@@ -780,6 +783,11 @@ def _summed_agg_row(rows: Sequence[_SessionAggRow]) -> _SessionAggRow:
         saved_spend=sum(row.saved_spend for row in rows),
         savings_estimated_turns=sum(row.savings_estimated_turns for row in rows),
         savings_estimated_actual_spend=sum(row.savings_estimated_actual_spend for row in rows),
+        savings_estimated_classifier_cost=(
+            sum(row.savings_estimated_classifier_cost or 0.0 for row in rows)
+            if all(row.savings_estimated_classifier_cost is not None for row in rows)
+            else None
+        ),
         savings_estimated_saved_spend=sum(row.savings_estimated_saved_spend for row in rows),
         savings_comparison_complete=all(row.savings_comparison_complete for row in rows),
         classifier_cost=sum(row.classifier_cost for row in rows),
@@ -907,6 +915,7 @@ async def get_auto_router_benchmarks(
         row.model_copy(
             update={
                 **comparison.coverage_fields(row.saved_spend, row.turns),
+                "savings_estimated_classifier_cost": comparison.classifier_cost,
                 "savings_comparison_complete": comparison.complete and comparison.turns == row.turns,
             }
         )
