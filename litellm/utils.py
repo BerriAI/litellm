@@ -4694,7 +4694,21 @@ def get_optional_params(
         bedrock_model_info: Final[type[BedrockModelInfo]] = getattr(sys.modules[__name__], "BedrockModelInfo")
         bedrock_route: Final = bedrock_model_info.get_bedrock_route(model)
         bedrock_base_model: Final = bedrock_model_info.get_base_model(model)
-        if bedrock_route == "converse" or bedrock_route == "converse_like":
+        from litellm.llms.bedrock.common_utils import bedrock_uses_native_openai_chat
+
+        if bedrock_uses_native_openai_chat(model):
+            # Native /openai/v1/chat/completions surface: OpenAI param names, not Converse's.
+            from litellm.llms.bedrock.chat.openai_native.transformation import (
+                BedrockOpenAIChatConfig,
+            )
+
+            optional_params = BedrockOpenAIChatConfig().map_openai_params(
+                model=model,
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                drop_params=bool(drop_params),
+            )
+        elif bedrock_route == "converse" or bedrock_route == "converse_like":
             optional_params = litellm.AmazonConverseConfig().map_openai_params(
                 model=model,
                 non_default_params=non_default_params,

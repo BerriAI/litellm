@@ -112,7 +112,12 @@ from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
-from litellm.llms.bedrock.common_utils import BedrockModelInfo
+from litellm.llms.bedrock.common_utils import (
+    BedrockModelInfo,
+    bedrock_chat_rejects_function_tools_while_reasoning,
+    bedrock_supports_openai_responses,
+    bedrock_uses_native_openai_chat,
+)
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -1143,6 +1148,12 @@ def responses_api_bridge_check(
     on_foundry_openai_endpoint: Final = custom_llm_provider == "azure_ai" and azure_ai_supports_native_responses(
         model, api_base
     )
+    # bedrock-runtime serves the OpenAI models on a native /v1/responses surface, so the
+    # function-tools-with-reasoning requests its chat surface rejects can bridge there
+    # rather than falling back to the lossy Converse translation.
+    on_bedrock_native_responses: Final = custom_llm_provider == "bedrock" and bedrock_supports_openai_responses(
+        model, litellm.model_cost
+    )
     on_constraint_enforcing_endpoint: Final = (
         custom_llm_provider == "azure" or resolved_api_base == "" or _is_openai_backed_api_base(resolved_api_base)
     )
@@ -1152,6 +1163,8 @@ def responses_api_bridge_check(
         and (
             foundry_chat_rejects_function_tools_while_reasoning(model, reasoning_effort)
             if on_foundry_openai_endpoint
+            else bedrock_chat_rejects_function_tools_while_reasoning(model)
+            if on_bedrock_native_responses
             else (
                 OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
                 and (reasoning_effort is not None or on_constraint_enforcing_endpoint)
@@ -1159,7 +1172,7 @@ def responses_api_bridge_check(
         )
     )
     if (
-        (custom_llm_provider in ("openai", "azure") or on_foundry_openai_endpoint)
+        (custom_llm_provider in ("openai", "azure") or on_foundry_openai_endpoint or on_bedrock_native_responses)
         and model_info.get("mode") != "responses"
         and OpenAIGPT5Config.is_model_gpt_5_model(model)
         and not OpenAIGPT5Config.is_model_gpt_5_search_model(model)
@@ -4211,6 +4224,24 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
             logging_obj=logging,
             client=client,
             provider_config=provider_config,
+        )
+    elif bedrock_uses_native_openai_chat(model):
+        response = base_llm_http_handler.completion(
+            model=model,
+            stream=stream,
+            messages=messages,
+            acompletion=acompletion,
+            api_base=api_base,
+            model_response=model_response,
+            optional_params=optional_params,
+            litellm_params=litellm_params,
+            custom_llm_provider="bedrock",
+            timeout=timeout,
+            headers=headers,
+            encoding=_get_encoding(),
+            api_key=api_key,
+            logging_obj=logging,
+            client=client,
         )
     elif bedrock_route == "converse":
         model = model.replace("converse/", "")

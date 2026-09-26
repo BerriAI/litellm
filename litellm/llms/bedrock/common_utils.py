@@ -849,6 +849,60 @@ def bedrock_supports_openai_responses(model: str | None, model_cost: Mapping[str
     )
 
 
+def bedrock_supports_openai_chat(model: str | None, model_cost: Mapping[str, object]) -> bool:
+    """Whether a Bedrock model is served by bedrock-runtime's OpenAI Chat Completions surface.
+
+    Same shape as ``bedrock_supports_openai_responses``: purely data-driven from the
+    model's ``supported_endpoints`` (``/v1/chat/completions``), overridable via
+    ``register_model`` / proxy ``model_info``, with no model-name match. A model
+    absent from ``model_cost`` returns False, leaving the Converse route in place.
+    """
+    if not model:
+        return False
+    candidates: Final = (model_cost.get(key) for key in (model, f"bedrock/{model}"))
+    return any(
+        isinstance(entry, Mapping) and "/v1/chat/completions" in (entry.get("supported_endpoints") or ())
+        for entry in candidates
+    )
+
+
+def bedrock_chat_rejects_function_tools_while_reasoning(model: str) -> bool:
+    """Whether bedrock-runtime's native chat surface rejects function tools while reasoning is active.
+
+    Measured against bedrock-runtime: gpt-5.6 and gpt-6 reject function tools whenever reasoning
+    is on (the default) -- "Function tools with reasoning_effort are not supported ... use
+    /v1/responses or set reasoning_effort to 'none'" -- while gpt-5.4/5.5 serve tools with
+    reasoning natively. Callers bridge the rejected requests to /v1/responses. This mirrors the
+    version-gated openai/azure arms in the same bridge (``is_model_gpt_5_4_plus_model``,
+    ``foundry_chat_rejects_function_tools_while_reasoning``); a price-map flag was ruled out
+    because the cost-map guard runs the base branch's schema generator, which can't classify a
+    key a PR introduces. The Bedrock ``[region.]openai.<model>`` id is normalised to its
+    trailing OpenAI name so the gpt-version helper matches.
+    """
+    if not model:
+        return False
+    from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
+
+    openai_name: Final = model.split("openai.")[-1]
+    return OpenAIGPT5Config.is_model_gpt_5_6_plus_model(openai_name)
+
+
+def bedrock_uses_native_openai_chat(model: str) -> bool:
+    """Whether ``model`` should use bedrock-runtime's native OpenAI Chat Completions surface.
+
+    True only when the model would otherwise default to Converse, wasn't explicitly
+    pinned to it (``bedrock/converse/<model>`` stays an escape hatch), and advertises
+    ``/v1/chat/completions`` in ``supported_endpoints``. Shared by the chat-config
+    selector and the completion dispatcher so both agree on the route.
+    """
+    if BedrockModelInfo.get_bedrock_route(model) != "converse":
+        return False
+    pinned_to_converse: Final = any(
+        model.startswith(prefix) or f"/{prefix}" in model for prefix in ("converse/", "converse_like/")
+    )
+    return not pinned_to_converse and bedrock_supports_openai_chat(model, litellm.model_cost)
+
+
 def build_mantle_messages_url(
     api_base: str | None,
     aws_bedrock_runtime_endpoint: str | None,
@@ -1384,6 +1438,16 @@ def get_bedrock_chat_config(model: str):
     bedrock_route: Final = BedrockModelInfo.get_bedrock_route(model)
     bedrock_invoke_provider: Final = BaseAWSLLM.get_bedrock_invoke_provider(model=model)
     base_model: Final = BedrockModelInfo.get_base_model(model)
+
+    # Native OpenAI Chat Completions surface on bedrock-runtime (data-driven, no
+    # model-name match). The dispatcher in main.py uses the same predicate to send
+    # these to base_llm_http_handler instead of the Converse handler.
+    if bedrock_uses_native_openai_chat(model):
+        from litellm.llms.bedrock.chat.openai_native.transformation import (
+            BedrockOpenAIChatConfig,
+        )
+
+        return BedrockOpenAIChatConfig()
 
     # Handle explicit routes first
     if bedrock_route == "claude_platform":
