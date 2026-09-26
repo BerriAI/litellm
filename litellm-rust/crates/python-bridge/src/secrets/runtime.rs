@@ -10,6 +10,7 @@ use litellm_secrets_types::PythonSecretRead;
 use pyo3::{
     exceptions::{PyAttributeError, PyRuntimeError, PyValueError},
     prelude::*,
+    types::PyDict,
 };
 
 #[derive(Clone, PartialEq)]
@@ -44,10 +45,18 @@ impl NativeSecretManager {
         let system = configuration.system;
         let settings = configuration.settings.clone();
         let enterprise_enabled = configuration.enterprise_enabled;
+        let http_config = crate::http::call_config(py, &PyDict::new(py), false)?;
         let backend = run_sync_value(py, async move {
-            load_native_manager(system, settings, environment, enterprise_enabled)
-                .await
-                .map_err(|error| PyValueError::new_err(error.to_string()))
+            load_native_manager(
+                crate::http::pool(),
+                &http_config,
+                system,
+                settings,
+                environment,
+                enterprise_enabled,
+            )
+            .await
+            .map_err(|error| PyValueError::new_err(error.to_string()))
         })?;
         Ok(Self {
             backend,

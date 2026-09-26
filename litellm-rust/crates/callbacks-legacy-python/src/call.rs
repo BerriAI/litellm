@@ -4,7 +4,7 @@
 //! this crate holds them.
 
 use litellm_host::{machine::Machine, protocol::Protocol};
-use litellm_host_python::{ProtocolHost, lookup, run_call};
+use litellm_host_python::{Preflight, ProtocolHost, lookup, run_call};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -39,7 +39,8 @@ impl PublicCall {
     }
 
     /// The keyword view the legacy path currently reads: the caller's copy until
-    /// `function_setup`, then each rewrite (setup, deployment hook, prepare) in turn.
+    /// `function_setup`, then each rewrite (setup, deployment hook, the driver's preflight)
+    /// in turn.
     pub(crate) fn kwargs(&self) -> &Py<PyDict> {
         &self.kwargs
     }
@@ -64,13 +65,15 @@ impl PublicCall {
 }
 
 /// Runs one native call under the legacy `Logging` contract: the protocol host projects from
-/// the keyword view the contract prepares, and the contract observes the call.
+/// the keyword view the contract prepares and `preflight` rewrites, and the contract
+/// observes the call.
 pub fn run_legacy_call<H, M>(
     py: Python<'_>,
     surface: LegacySurface,
     call: PublicCall,
     machine: M,
     host: H,
+    preflight: Preflight,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>>
 where
@@ -83,6 +86,7 @@ where
         machine,
         host,
         Box::new(LegacyLogging::new(py, surface, call, asynchronous)),
+        preflight,
         arguments,
         asynchronous,
     )

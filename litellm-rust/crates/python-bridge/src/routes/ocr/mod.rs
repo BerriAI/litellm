@@ -3,15 +3,12 @@ mod errors;
 mod host;
 mod project;
 
-use std::sync::LazyLock;
-
 use host::OcrPythonHost;
-use litellm_auth_gcp::VertexAuth;
 use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
 use litellm_core::ocr::{provider_config, route::ocr_machine};
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::to_py;
-use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
+use litellm_llms::base_llm::ocr::settings::OcrSettings;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
@@ -44,8 +41,6 @@ const ASYNC_SURFACE: LegacySurface = LegacySurface {
     ..SURFACE
 };
 
-static VERTEX_AUTH: LazyLock<VertexAuth> = LazyLock::new(VertexAuth::default);
-
 fn run_ocr(
     py: Python<'_>,
     request: Bound<'_, PyAny>,
@@ -55,21 +50,16 @@ fn run_ocr(
 ) -> PyResult<Py<PyAny>> {
     let secrets = secrets::source(py)?;
     let config = http::call_config(py, &kwargs, asynchronous)?;
-    let client = OcrClient::new(
-        http::pool(),
-        &config,
-        http::url_policy(py)?,
-        VERTEX_AUTH.clone(),
-        ocr_settings(py)?,
-        secrets,
-    )
-    .map_err(http::client_error)?;
+    let client = http::resources()
+        .ocr_client(&config, http::url_policy(py)?, ocr_settings(py)?, secrets)
+        .map_err(http::client_error)?;
     run_legacy_call(
         py,
         if asynchronous { ASYNC_SURFACE } else { SURFACE },
         PublicCall::capture(&request, &args, &kwargs)?,
         crate::logger::LoggedMachine::new(ocr_machine(client)),
         OcrPythonHost::new(request.unbind()),
+        crate::preflight::sdk_preflight,
         asynchronous,
     )
 }
