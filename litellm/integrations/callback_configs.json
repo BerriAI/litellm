@@ -407,6 +407,45 @@
     "description": "PointFive Logging Integration"
   },
   {
+    "id": "zerobus",
+    "displayName": "Databricks Zerobus",
+    "logo": "databricks.svg",
+    "supports_key_team_logging": false,
+    "dynamic_params": {
+      "ZEROBUS_WORKSPACE_URL": {
+        "type": "text",
+        "ui_name": "Workspace URL",
+        "description": "Databricks workspace URL, e.g. https://dbc-a1b2c3d4-e5f6.cloud.databricks.com",
+        "required": true
+      },
+      "ZEROBUS_SERVER_ENDPOINT": {
+        "type": "text",
+        "ui_name": "Zerobus Endpoint",
+        "description": "Zerobus ingest endpoint, e.g. https://<workspace-id>.zerobus.<region>.cloud.databricks.com",
+        "required": true
+      },
+      "ZEROBUS_CLIENT_ID": {
+        "type": "text",
+        "ui_name": "Service Principal Client ID",
+        "description": "OAuth client id of a service principal with USE CATALOG, USE SCHEMA, SELECT and MODIFY on the table",
+        "required": true
+      },
+      "ZEROBUS_CLIENT_SECRET": {
+        "type": "password",
+        "ui_name": "Service Principal Client Secret",
+        "description": "OAuth client secret of the service principal",
+        "required": true
+      },
+      "ZEROBUS_TABLE_NAME": {
+        "type": "text",
+        "ui_name": "Table",
+        "description": "Fully qualified Unity Catalog table, catalog.schema.table, created with the LiteLLM trace schema",
+        "required": true
+      }
+    },
+    "description": "Databricks Zerobus Ingest Logging Integration"
+  },
+  {
     "id": "s3",
     "displayName": "S3",
     "logo": "aws.svg",

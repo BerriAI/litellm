@@ -17,6 +17,7 @@ import respx
 
 import urllib.parse
 from importlib import import_module
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 import litellm
@@ -54,6 +55,9 @@ def add_api_keys_to_env(monkeypatch):
     monkeypatch.delenv("AWS_SESSION_TOKEN", raising=False)
     monkeypatch.delenv("AWS_ROLE_ARN", raising=False)
     monkeypatch.delenv("AWS_WEB_IDENTITY_TOKEN_FILE", raising=False)
+
+
+WHITE_PNG: Final = (Path(__file__).parents[1] / "white_100x100.png").read_bytes()
 
 
 @pytest.fixture
@@ -211,6 +215,102 @@ async def test_url_with_format_param_openai(model, sync_mode):
         json_str = json.dumps(mock_client.call_args.kwargs)
 
         assert "format" not in json_str
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "gemini/gemini-1.5-flash",
+        "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0",
+        "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+        "anthropic/claude-3-5-sonnet",
+    ],
+)
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_url_with_format_param(model, sync_mode, monkeypatch):
+    from litellm import acompletion, completion
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
+
+    if sync_mode:
+        client = HTTPHandler()
+    else:
+        client = AsyncHTTPHandler()
+
+    image_url: Final = (
+        "https://awsmp-logos.s3.amazonaws.com/seller-xw5kijmvmzasy/c233c9ade2ccb5491072ae232c814942.png"
+        f"?case={sync_mode}-{model}"
+    )
+    args = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {
+                        "type": "image_url",
+                        "image_url": {
+                            "url": image_url,
+                            "format": "image/png",
+                        },
+                    },
+                    {"type": "text", "text": "Describe this image"},
+                ],
+            }
+        ],
+    }
+    if model.startswith("gemini/"):
+        args["api_key"] = "test-api-key"
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "module_level_aclient", AsyncHTTPHandler(transport=httpx.AsyncHTTPTransport()))
+    with (
+        respx.mock(assert_all_called=False) as image_host,
+        patch.object(client, "post", new=MagicMock()) as mock_client,
+    ):
+        image_route = image_host.get(image_url).mock(
+            return_value=httpx.Response(200, content=WHITE_PNG, headers={"content-type": "image/png"})
+        )
+        try:
+            if sync_mode:
+                response = completion(**args, client=client)
+            else:
+                response = await acompletion(**args, client=client)
+            print(response)
+        except Exception as e:
+            pass
+
+        mock_client.assert_called()
+
+        print(mock_client.call_args.kwargs)
+
+        if "data" in mock_client.call_args.kwargs:
+            json_str = mock_client.call_args.kwargs["data"]
+        else:
+            json_str = json.dumps(mock_client.call_args.kwargs["json"])
+
+        if isinstance(json_str, bytes):
+            json_str = json_str.decode("utf-8")
+
+        print(f"type of json_str: {type(json_str)}")
+
+        if model.startswith("bedrock/invoke/"):
+            assert "https://awsmp-logos.s3.amazonaws.com" not in json_str
+            assert '"type":"base64"' in json_str or '"type": "base64"' in json_str
+            assert '"data"' in json_str
+        elif model.startswith("bedrock/"):
+            assert "https://awsmp-logos.s3.amazonaws.com" not in json_str
+            assert '"bytes"' in json_str or '"bytes":' in json_str
+        elif model.startswith("anthropic/"):
+            assert "https://awsmp-logos.s3.amazonaws.com" in json_str
+            assert '"type":"url"' in json_str or '"type": "url"' in json_str
+        else:
+            assert "png" in json_str
+            assert "jpeg" not in json_str
+
+        fetches_image: Final = not model.startswith("anthropic/")
+        assert image_route.called is fetches_image
+        assert (base64.b64encode(WHITE_PNG).decode() in json_str) is fetches_image
 
 
 def test_bedrock_latency_optimized_inference():
@@ -624,6 +724,29 @@ def test_return_raw_request_does_not_call_provider(respx_mock: respx.MockRouter)
     assert request["raw_request_body"]["messages"] == [
         {"role": "user", "content": "hi"}
     ]
+
+
+def test_return_raw_request_ignores_turn_off_message_logging(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+):
+    from litellm.types.utils import CallTypes
+    from litellm.utils import return_raw_request
+
+    model: Final = "gpt-4o"
+    messages: Final = [{"role": "user", "content": "PRIVATE-PHRASE"}]
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=_mocked_openai_chat_response(model)
+    )
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+
+    request: Final = return_raw_request(
+        endpoint=CallTypes.completion,
+        kwargs={"model": model, "messages": messages},
+    )
+
+    assert route.call_count == 0
+    assert request.get("error") is None
+    assert request["raw_request_body"]["messages"] == messages
 
 
 def test_completion_forwards_verbosity_in_raw_request(respx_mock: respx.MockRouter):

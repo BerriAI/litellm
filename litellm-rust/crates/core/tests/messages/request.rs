@@ -1,7 +1,5 @@
-use litellm_llms::anthropic::common_utils::{
-    ANTHROPIC_ADVISOR_TOOL_TYPE, ANTHROPIC_OAUTH_BETA_HEADER, AnthropicModelCapabilities,
-    SupportedEffortTiers, beta,
-};
+use litellm_llms::anthropic::common_utils::{AnthropicModelCapabilities, SupportedEffortTiers};
+use litellm_types::llms::anthropic::{AnthropicBeta, BetaSet};
 use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use rstest::rstest;
 
@@ -124,11 +122,10 @@ async fn each_provider_posts_to_its_messages_endpoint(
     let upstream = upstream([message_response()]).await;
 
     run_message(MessagesCall {
-        model: model.into(),
         custom_llm_provider: provider.map(Into::into),
         api_key: Some("sk".into()),
         api_base: Some(format!("{}{base_suffix}", upstream.uri())),
-        ..call
+        ..with_model(call, model)
     })
     .await;
 
@@ -155,11 +152,10 @@ async fn unsupported_providers_are_rejected_before_sending(
     #[case] reported: &str,
 ) {
     let error = run(MessagesCall {
-        model: model.into(),
         custom_llm_provider: provider.map(Into::into),
         api_key: Some("sk".into()),
         api_base: Some(UNREACHABLE_BASE.into()),
-        ..call
+        ..with_model(call, model)
     })
     .await
     .err()
@@ -206,7 +202,7 @@ async fn azure_strips_the_cache_control_scope_anthropic_rejects(call: MessagesCa
         custom_llm_provider: Some("azure_ai".into()),
         api_key: Some("sk-azure".into()),
         api_base: Some(upstream.uri()),
-        body: object(json!({
+        body: body(json!({
             "model": MODEL,
             "max_tokens": 16,
             "messages": [{
@@ -232,19 +228,15 @@ async fn azure_strips_the_cache_control_scope_anthropic_rejects(call: MessagesCa
 #[tokio::test]
 async fn additional_drop_params_remove_fields_before_sending(call: MessagesCall) {
     let upstream = upstream([message_response()]).await;
-    let mut body = call.body.clone();
-    body.insert("temperature".into(), json!(0.5));
-    body.insert("top_k".into(), json!(3));
 
     run_message(MessagesCall {
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
-        body,
         shaping: MessagesShaping {
             additional_drop_params: vec!["temperature".into()],
             ..MessagesShaping::default()
         },
-        ..call
+        ..with_fields(call, json!({"temperature": 0.5, "top_k": 3}))
     })
     .await;
 
@@ -253,46 +245,37 @@ async fn additional_drop_params_remove_fields_before_sending(call: MessagesCall)
     assert_eq!(sent["top_k"], 3);
 }
 
-fn with_fields(call: MessagesCall, fields: Value) -> MessagesCall {
-    let body: Map<String, Value> = call.body.into_iter().chain(object(fields)).collect();
-    MessagesCall { body, ..call }
-}
-
-fn sent_betas(request: &wiremock::Request) -> Vec<String> {
+fn sent_betas(request: &wiremock::Request) -> BetaSet {
     let [header] = <[&str; 1]>::try_from(request.header_values("anthropic-beta"))
         .unwrap_or_else(|values| panic!("expected one anthropic-beta header, got {values:?}"));
-    header
-        .split(',')
-        .map(str::trim)
-        .map(str::to_string)
-        .collect()
+    header.parse().unwrap()
 }
 
 #[rstest]
-#[case::structured_output(json!({"output_format": {"type": "json_schema"}}), &[beta::STRUCTURED_OUTPUT])]
-#[case::fast_mode(json!({"speed": "fast"}), &[beta::FAST_MODE_2026_02_01])]
-#[case::compaction(json!({"compaction": {"enabled": true}}), &[beta::COMPACT_2026_09_04])]
+#[case::structured_output(json!({"output_format": {"type": "json_schema"}}), &[AnthropicBeta::StructuredOutputs20251113])]
+#[case::fast_mode(json!({"speed": "fast"}), &[AnthropicBeta::FastMode20260201])]
+#[case::compaction(json!({"compaction": {"enabled": true}}), &[AnthropicBeta::Compact20260904])]
 #[case::context_management_edits(
     json!({"context_management": {"edits": [{"type": "clear_tool_uses_20250919"}]}}),
-    &[beta::CONTEXT_MANAGEMENT_2025_06_27]
+    &[AnthropicBeta::ContextManagement20250627]
 )]
 #[case::per_message_output_config(
     json!({"messages": [{"role": "user", "content": "hi", "output_config": {"effort": "low"}}]}),
-    &[beta::PER_TURN_CONTROL_2026_07_01]
+    &[AnthropicBeta::PerTurnControl20260701]
 )]
 #[case::advisor_tool(
-    json!({"tools": [{"type": ANTHROPIC_ADVISOR_TOOL_TYPE, "name": "advisor", "model": MODEL}]}),
-    &[beta::ADVISOR_TOOL_2026_03_01]
+    json!({"tools": [{"type": "advisor_20260301", "name": "advisor", "model": MODEL}]}),
+    &[AnthropicBeta::AdvisorTool20260301]
 )]
 #[case::several_features_at_once(
     json!({"speed": "fast", "output_format": {"type": "json_schema"}}),
-    &[beta::STRUCTURED_OUTPUT, beta::FAST_MODE_2026_02_01]
+    &[AnthropicBeta::StructuredOutputs20251113, AnthropicBeta::FastMode20260201]
 )]
 #[tokio::test]
 async fn feature_betas_join_the_callers_betas_in_one_sorted_header(
     call: MessagesCall,
     #[case] fields: Value,
-    #[case] features: &[&str],
+    #[case] features: &[AnthropicBeta],
 ) {
     let upstream = upstream([message_response()]).await;
     let capabilities = AnthropicModelCapabilities {
@@ -316,12 +299,11 @@ async fn feature_betas_join_the_callers_betas_in_one_sorted_header(
     .await;
 
     let sent = sent_betas(&only_request(&upstream).await);
-    let mut expected: Vec<String> = features
+    let expected: BetaSet = features
         .iter()
-        .map(|feature| feature.to_string())
-        .chain(["caller-beta-2025-01-01".to_string()])
+        .cloned()
+        .chain([AnthropicBeta::Other("caller-beta-2025-01-01".to_string())])
         .collect();
-    expected.sort();
     assert_eq!(sent, expected);
 }
 
@@ -342,7 +324,10 @@ async fn an_oauth_key_sends_the_browser_access_header_and_the_oauth_beta(call: M
         request.header("anthropic-dangerous-direct-browser-access"),
         Some("true")
     );
-    assert_eq!(sent_betas(&request), [ANTHROPIC_OAUTH_BETA_HEADER]);
+    assert_eq!(
+        sent_betas(&request),
+        BetaSet::from_iter([AnthropicBeta::Oauth20250420])
+    );
     assert_eq!(request.header("x-api-key"), None);
 }
 
@@ -398,7 +383,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
                 api_key: Some("sk".into()),
                 api_base: Some(upstream.uri()),
                 shaping: MessagesShaping {
-                    capabilities: capabilities.clone(),
+                    capabilities,
                     drop_params,
                     ..MessagesShaping::default()
                 },
@@ -406,7 +391,6 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
                 custom_llm_provider: call.custom_llm_provider.clone(),
                 extra_headers: None,
                 provider_specific_header: None,
-                model: call.model.clone(),
                 timeout: call.timeout,
             },
             fields.clone(),
@@ -664,10 +648,9 @@ async fn the_provider_prefix_is_stripped_exactly_once(
     let upstream = upstream([message_response()]).await;
 
     run_message(MessagesCall {
-        model: model.into(),
         api_key: Some("sk".into()),
         api_base: Some(upstream.uri()),
-        ..call
+        ..with_model(call, model)
     })
     .await;
 

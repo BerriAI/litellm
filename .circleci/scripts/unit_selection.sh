@@ -5,8 +5,12 @@ flag="${1:?usage: unit_selection.sh <codecov flag>}"
 
 legacy_flags=(
   caching-local
+  core-utils
   enterprise-package
   enterprise-routing
+  integrations
+  llm-other-providers
+  llm-vertex-ai
   mcp-integration
   misc
   proxy-db-auth-checks
@@ -29,6 +33,7 @@ legacy_flags=(
 legacy_paths() {
   case "$1" in
     caching-local) echo tests/unit/caching ;;
+    core-utils) echo tests/unit/litellm_core_utils ;;
     enterprise-package)
       echo tests/unit/enterprise/integrations
       echo tests/unit/enterprise/proxy/auth
@@ -39,6 +44,8 @@ legacy_paths() {
       echo tests/unit/enterprise/enterprise_callbacks/test_prometheus_logging_callbacks.py ;;
     enterprise-routing)
       echo tests/unit/google_genai
+      echo tests/unit/router_strategy
+      echo tests/unit/router_utils
       echo tests/unit/enterprise/enterprise_callbacks/send_emails
       echo tests/unit/enterprise/proxy/test_afile_retrieve_returns_unified_id.py
       echo tests/unit/enterprise/proxy/test_batch_retrieve_input_file_id.py
@@ -50,6 +57,9 @@ legacy_paths() {
       echo tests/unit/enterprise/proxy/test_file_deletion_blocking.py
       echo tests/unit/enterprise/proxy/test_managed_files_access_check.py
       echo tests/unit/enterprise/proxy/test_managed_files_hook.py ;;
+    integrations) echo tests/unit/integrations ;;
+    llm-other-providers) find tests/unit/llms -name 'test_*.py' -not -path 'tests/unit/llms/vertex_ai/*' ;;
+    llm-vertex-ai) echo tests/unit/llms/vertex_ai ;;
     mcp-integration)
       echo tests/unit/experimental_mcp_client
       echo tests/unit/proxy/_experimental/mcp_server
@@ -71,6 +81,8 @@ legacy_paths() {
       echo tests/unit/messages
       echo tests/unit/rag
       echo tests/unit/rerank_api
+      echo tests/unit/rust_bridge
+      echo tests/unit/secret_managers
       echo tests/unit/vector_stores
       echo tests/unit/videos ;;
     proxy-db-auth-checks)
@@ -135,7 +147,9 @@ legacy_paths() {
     proxy-db-proxy-utils) echo tests/unit/proxy/test_proxy_utils.py ;;
     proxy-extras) echo tests/unit/litellm_proxy_extras ;;
     proxy-infra) echo tests/unit/gateway ;;
-    responses-caching-types) echo tests/unit/types ;;
+    responses-caching-types)
+      find tests/unit/responses -name 'test_*.py' -not -path 'tests/unit/responses/mcp/*'
+      echo tests/unit/types ;;
     *) echo "unit_selection.sh: unknown flag $1" >&2; exit 1 ;;
   esac
 }

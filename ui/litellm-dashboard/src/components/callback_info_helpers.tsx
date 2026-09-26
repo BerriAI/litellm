@@ -11,6 +11,7 @@ import openmeterLogo from "../../public/assets/logos/openmeter.png";
 import otelLogo from "../../public/assets/logos/otel.png";
 import pointfiveLogo from "../../public/assets/logos/pointfive.png";
 import signozLogo from "../../public/assets/logos/signoz.svg";
+import databricksLogo from "../../public/assets/logos/databricks.svg";
 
 interface CallbackConfig {
   id: string;
@@ -181,6 +182,20 @@ export const CALLBACK_CONFIGS: CallbackConfig[] = [
       POINTFIVE_API_URL: "text",
     },
     description: "PointFive Logging Integration",
+  },
+  {
+    id: "zerobus",
+    displayName: "Databricks Zerobus",
+    logo: databricksLogo.src,
+    supports_key_team_logging: false,
+    dynamic_params: {
+      ZEROBUS_WORKSPACE_URL: "text",
+      ZEROBUS_SERVER_ENDPOINT: "text",
+      ZEROBUS_CLIENT_ID: "text",
+      ZEROBUS_CLIENT_SECRET: "password",
+      ZEROBUS_TABLE_NAME: "text",
+    },
+    description: "Databricks Zerobus Ingest Logging Integration",
   },
   {
     id: "s3",

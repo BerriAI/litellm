@@ -8,7 +8,7 @@ import os
 import sys
 import threading
 import warnings
-from collections.abc import Awaitable, Callable, Mapping
+from collections.abc import AsyncIterable, AsyncIterator, Awaitable, Callable, Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final, Literal
@@ -37,6 +37,7 @@ from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, ProxyException, UserAPIKeyAuth
 from litellm.router import (
     MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS,
+    MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS,
     FallbackAwareAnthropicMessagesStream,
     _anthropic_stream_commits_now,
     _anthropic_stream_error_is_gateway_verdict,
@@ -46,6 +47,7 @@ from litellm.router import (
     _anthropic_stream_should_decline_fallback,
     _anthropic_stream_should_drop_pre_content_ping,
     _is_retriable_anthropic_status,
+    _responses_stream_holds_event,
 )
 from litellm.router_strategy import simple_shuffle
 from litellm.router_utils.client_initalization_utils import MaxParallelRequestsLimit
@@ -4213,6 +4215,7 @@ async def test_aresponses_streaming_iterator_fallback():
         hidden_params={"model_id": "src-deployment-1"},
     )
     fallback_chunks = [
+        MagicMock(type="response.created"),
         MagicMock(type="response.output_text.delta"),
         MagicMock(type="response.completed"),
     ]
@@ -4235,7 +4238,7 @@ async def test_aresponses_streaming_iterator_fallback():
         assert wrapped._hidden_params.get("model_id") == "src-deployment-1"
         collected = [c async for c in wrapped]
 
-    assert len(collected) == 3  # 1 primary chunk + 2 fallback chunks
+    assert collected == fallback_chunks
     call_kwargs = mock_fallback_utils.call_args.kwargs
     fbk = call_kwargs["kwargs"]
     # Bound methods compare equal when they share the same instance + __func__.
@@ -4484,6 +4487,303 @@ async def test_aresponses_streaming_iterator_pre_first_chunk_skips_continuation(
 
     fbk = mock_fallback_utils.call_args.kwargs["kwargs"]
     assert fbk["input"] == "Hello"  # original input, no continuation messages
+
+
+def _make_native_responses_iterator(*, sse_payloads: tuple[dict[str, str], ...], trailing_error: Exception | None):
+    """A real ResponsesAPIStreamingIterator over canned SSE bytes, so the router test covers the
+    iterator's own transport-error classification instead of a hand-built MidStreamFallbackError."""
+    from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+    from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+    async def aiter_bytes():
+        for payload in sse_payloads:
+            yield f"data: {json.dumps(payload)}\n\n".encode()
+        if trailing_error is not None:
+            raise trailing_error
+
+    def transform(model, parsed_chunk, logging_obj):
+        return MagicMock(type=parsed_chunk["type"])
+
+    response: Final = MagicMock()
+    response.headers = {}
+    response.aiter_bytes = aiter_bytes
+    config: Final = MagicMock(spec=BaseResponsesAPIConfig)
+    config.transform_streaming_response.side_effect = transform
+    logging_obj: Final = MagicMock(spec=LiteLLMLogging)
+    logging_obj.completion_start_time = None
+    logging_obj.model_call_details = {"litellm_params": {}}
+    return ResponsesAPIStreamingIterator(
+        response=response,
+        model="gpt-4",
+        responses_api_provider_config=config,
+        logging_obj=logging_obj,
+        litellm_metadata={},
+        custom_llm_provider="openai",
+    )
+
+
+_RESPONSES_LIFECYCLE_PAYLOADS: Final = ({"type": "response.created"}, {"type": "response.in_progress"})
+
+
+async def _events_until_error(stream: AsyncIterable[object]) -> AsyncIterator[object]:
+    try:
+        async for chunk in stream:
+            yield chunk
+    except Exception as error:
+        yield error
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_falls_back_on_transport_drop_before_output():
+    """A connection lost after response.created but before any output item is re-routed to the
+    fallback with the original input, the same as a provider error event would be, and the client
+    sees one response lifecycle: the fallback's, whose id the completed event carries."""
+    router: Final = _make_router_with_fallback()
+    src: Final = _make_native_responses_iterator(
+        sse_payloads=_RESPONSES_LIFECYCLE_PAYLOADS,
+        trailing_error=httpx.ReadError("Response payload is not completed"),
+    )
+    fallback_chunks: Final = [
+        MagicMock(type="response.created", response=MagicMock(id="resp_fallback")),
+        MagicMock(type="response.in_progress", response=MagicMock(id="resp_fallback")),
+        MagicMock(type="response.output_text.delta"),
+        MagicMock(type="response.completed", response=MagicMock(id="resp_fallback")),
+    ]
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=_AsyncList(fallback_chunks),
+    ) as mock_fallback_utils:
+        wrapped: Final = await router._aresponses_streaming_iterator(
+            response=src,
+            initial_kwargs={
+                "model": "gpt-4",
+                "stream": True,
+                "input": "Hello",
+                "original_generic_function": litellm.aresponses,
+            },
+        )
+        collected: Final = [chunk async for chunk in wrapped]
+
+    assert collected == fallback_chunks
+    assert [chunk.response.id for chunk in collected if chunk.type == "response.created"] == ["resp_fallback"]
+    assert isinstance(mock_fallback_utils.call_args.kwargs["e"], MidStreamFallbackError)
+    assert mock_fallback_utils.call_args.kwargs["kwargs"]["input"] == "Hello"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_surfaces_transport_drop_when_no_fallback_lands():
+    transport_error: Final = httpx.ReadError("Response payload is not completed")
+    router: Final = _make_router_with_fallback()
+    src: Final = _make_native_responses_iterator(
+        sse_payloads=_RESPONSES_LIFECYCLE_PAYLOADS, trailing_error=transport_error
+    )
+
+    async def reraise_trigger(**kwargs):
+        raise kwargs["e"]
+
+    with patch.object(
+        router, "async_function_with_fallbacks_common_utils", new=AsyncMock(side_effect=reraise_trigger)
+    ) as mock_fallback_utils:
+        wrapped: Final = await router._aresponses_streaming_iterator(
+            response=src,
+            initial_kwargs={
+                "model": "gpt-4",
+                "stream": True,
+                "input": "Hello",
+                "original_generic_function": litellm.aresponses,
+            },
+        )
+        outcome: Final = [item async for item in _events_until_error(wrapped)]
+
+    assert [item.type for item in outcome[:-1]] == ["response.created", "response.in_progress"]
+    assert outcome[-1] is transport_error
+    assert mock_fallback_utils.await_count == 1
+    trigger: Final = mock_fallback_utils.await_args.kwargs["e"]
+    assert isinstance(trigger, MidStreamFallbackError)
+    assert trigger.original_exception is transport_error
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_forwards_lifecycle_events_in_order_once_output_starts():
+    router: Final = _make_router_with_fallback()
+    chunks: Final = [
+        MagicMock(type="response.created"),
+        MagicMock(type="response.in_progress"),
+        MagicMock(type="response.output_text.delta"),
+        MagicMock(type="response.completed"),
+    ]
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=_make_responses_iterator(chunks=chunks),
+        initial_kwargs={"model": "gpt-4", "stream": True, "input": "Hello"},
+    )
+
+    assert [chunk async for chunk in wrapped] == chunks
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_flushes_held_lifecycle_events_when_the_stream_ends_without_output():
+    router: Final = _make_router_with_fallback()
+    chunks: Final = [MagicMock(type="response.created"), MagicMock(type="response.in_progress")]
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=_make_responses_iterator(chunks=chunks),
+        initial_kwargs={"model": "gpt-4", "stream": True, "input": "Hello"},
+    )
+
+    assert [chunk async for chunk in wrapped] == chunks
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_forwards_held_lifecycle_events_before_a_non_fallback_error():
+    router: Final = _make_router_with_fallback()
+    chunks: Final = [MagicMock(type="response.created"), MagicMock(type="response.in_progress")]
+    client_error: Final = litellm.BadRequestError(message="bad input", model="gpt-4", llm_provider="openai")
+    wrapped: Final = await router._aresponses_streaming_iterator(
+        response=_make_responses_iterator(chunks=chunks, error=client_error),
+        initial_kwargs={"model": "gpt-4", "stream": True, "input": "Hello"},
+    )
+    outcome: Final = [item async for item in _events_until_error(wrapped)]
+
+    assert outcome[:-1] == chunks
+    assert outcome[-1] is client_error
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_commits_held_lifecycle_events_at_the_hold_cap():
+    router: Final = _make_router_with_fallback()
+    chunks: Final = [MagicMock(type="response.in_progress") for _ in range(MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS + 1)]
+    src: Final = _make_responses_iterator(
+        chunks=chunks,
+        error=MidStreamFallbackError(
+            message="dropped before output", model="gpt-4", llm_provider="openai", is_pre_first_chunk=True
+        ),
+    )
+    fallback_chunks: Final = [MagicMock(type="response.created"), MagicMock(type="response.completed")]
+
+    with patch.object(router, "async_function_with_fallbacks_common_utils", return_value=_AsyncList(fallback_chunks)):
+        wrapped: Final = await router._aresponses_streaming_iterator(
+            response=src,
+            initial_kwargs={"model": "gpt-4", "stream": True, "input": "Hello"},
+        )
+        collected: Final = [chunk async for chunk in wrapped]
+
+    assert collected == [*chunks, *fallback_chunks]
+
+
+@pytest.mark.parametrize(
+    ("event_type", "held_event_count", "expected"),
+    [
+        ("response.created", 0, True),
+        ("response.in_progress", 1, True),
+        ("response.queued", MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS - 1, True),
+        ("response.in_progress", MAX_HELD_PRE_OUTPUT_RESPONSES_EVENTS, False),
+        ("response.output_item.added", 0, False),
+        ("response.output_text.delta", 0, False),
+        ("response.completed", 0, False),
+    ],
+)
+def test_responses_stream_holds_event_holds_only_pre_output_lifecycle_events_under_the_cap(
+    event_type: str, held_event_count: int, expected: bool
+):
+    assert _responses_stream_holds_event(MagicMock(type=event_type), held_event_count) is expected
+
+
+@pytest.mark.asyncio
+async def test_aresponses_fallback_attempt_drops_held_lifecycle_events_when_a_fallback_lands():
+    router: Final = _make_router_with_fallback()
+    trigger: Final = MidStreamFallbackError(
+        message="dropped before output", model="gpt-4", llm_provider="openai", is_pre_first_chunk=True
+    )
+    held: Final = (MagicMock(type="response.created"), MagicMock(type="response.in_progress"))
+    fallback_chunks: Final = [MagicMock(type="response.created"), MagicMock(type="response.completed")]
+    adopt_headers: Final = MagicMock(return_value=({}, {}))
+
+    with patch.object(
+        router, "async_function_with_fallbacks_common_utils", return_value=_AsyncList(fallback_chunks)
+    ) as mock_fallback_utils:
+        collected: Final = [
+            chunk
+            async for chunk in router._aresponses_fallback_attempt(
+                trigger,
+                _make_responses_iterator(),
+                {"model": "gpt-4", "stream": True, "input": "Hello"},
+                adopt_headers,
+                held,
+            )
+        ]
+
+    assert collected == fallback_chunks
+    adopt_headers.assert_called_once()
+    assert mock_fallback_utils.await_args.kwargs["e"] is trigger
+
+
+@pytest.mark.asyncio
+async def test_aresponses_fallback_attempt_replays_held_lifecycle_events_when_the_fallback_dies_before_its_first_event():
+    """A fallback stream that raises before yielding anything announced no response of its own, so the
+    primary's held created/in_progress pair is replayed ahead of the error and the client sees the
+    announcement the failure belongs to, the same as when no fallback was attempted at all."""
+    router: Final = _make_router_with_fallback()
+    trigger: Final = MidStreamFallbackError(
+        message="dropped before output", model="gpt-4", llm_provider="openai", is_pre_first_chunk=True
+    )
+    held: Final = (MagicMock(type="response.created"), MagicMock(type="response.in_progress"))
+    fallback_error: Final = RuntimeError("fallback closed before its first event")
+    adopt_headers: Final = MagicMock(return_value=({}, {}))
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=_make_responses_iterator(error=fallback_error),
+    ):
+        outcome: Final = [
+            item
+            async for item in _events_until_error(
+                router._aresponses_fallback_attempt(
+                    trigger,
+                    _make_responses_iterator(),
+                    {"model": "gpt-4", "stream": True, "input": "Hello"},
+                    adopt_headers,
+                    held,
+                )
+            )
+        ]
+
+    assert outcome == [*held, fallback_error]
+
+
+@pytest.mark.asyncio
+async def test_aresponses_fallback_attempt_does_not_replay_held_lifecycle_events_once_the_fallback_announced_itself():
+    """Once the fallback has yielded its own created event, a later failure must not replay the
+    primary's held pair on top of it, or the client would again see two announced response ids."""
+    router: Final = _make_router_with_fallback()
+    trigger: Final = MidStreamFallbackError(
+        message="dropped before output", model="gpt-4", llm_provider="openai", is_pre_first_chunk=True
+    )
+    held: Final = (MagicMock(type="response.created"), MagicMock(type="response.in_progress"))
+    fallback_created: Final = MagicMock(type="response.created")
+    fallback_error: Final = RuntimeError("fallback dropped after announcing itself")
+    adopt_headers: Final = MagicMock(return_value=({}, {}))
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=_make_responses_iterator(chunks=(fallback_created,), error=fallback_error),
+    ):
+        outcome: Final = [
+            item
+            async for item in _events_until_error(
+                router._aresponses_fallback_attempt(
+                    trigger,
+                    _make_responses_iterator(),
+                    {"model": "gpt-4", "stream": True, "input": "Hello"},
+                    adopt_headers,
+                    held,
+                )
+            )
+        ]
+
+    assert outcome == [fallback_created, fallback_error]
 
 
 @pytest.mark.asyncio
@@ -6090,6 +6390,32 @@ def test_update_kwargs_with_deployment_passthrough_router_stream_timeout_sources
     assert _passthrough_timeout(default_router, default_router.model_list[0], stream=False) == 120.0
 
 
+def test_update_kwargs_with_deployment_passthrough_honors_global_request_timeout(monkeypatch: pytest.MonkeyPatch):
+    """litellm_settings.request_timeout must bound the native responses route when neither the
+    deployment nor the router carries a timeout, while a deployment timeout keeps winning."""
+    monkeypatch.setattr("litellm.request_timeout", 44.0, raising=False)
+    monkeypatch.setattr("litellm.request_timeout_explicitly_set", True, raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "responses-global-timeout",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake-key"},
+            },
+            {
+                "model_name": "responses-deployment-timeout",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake-key", "timeout": 3},
+            },
+        ],
+    )
+    global_only, per_deployment = router.model_list
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"pass_through_request_timeout": 6}):
+        assert _passthrough_timeout(router, global_only, stream=True) == 44.0
+        assert _passthrough_timeout(router, global_only, stream=False) == 44.0
+        assert _passthrough_timeout(router, per_deployment, stream=True) == 3.0
+        assert _passthrough_timeout(router, per_deployment, stream=False) == 3.0
+
+
 @pytest.mark.asyncio
 async def test_router_acompletion_with_unknown_model_and_default_fallback():
     """
@@ -6341,6 +6667,51 @@ def test_get_deployment_credentials_with_provider_includes_bucket_name():
     assert credentials["gcs_bucket_name"] == "my-batch-bucket"
     assert credentials["vertex_project"] == "my-project"
     assert credentials["custom_llm_provider"] == "vertex_ai"
+
+
+def test_get_deployment_credentials_with_provider_keeps_legacy_bucket_name():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.5-flash",
+                    "vertex_project": "my-project",
+                    "vertex_location": "global",
+                    "bucket_name": "my-legacy-bucket",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(model_id="vertex-gemini")
+
+    assert credentials is not None
+    assert credentials["bucket_name"] == "my-legacy-bucket"
+    assert "gcs_bucket_name" not in credentials
+
+
+def test_get_deployment_credentials_with_provider_keeps_both_bucket_keys():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.5-flash",
+                    "vertex_project": "my-project",
+                    "vertex_location": "global",
+                    "gcs_bucket_name": "new-bucket",
+                    "bucket_name": "legacy-bucket",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(model_id="vertex-gemini")
+
+    assert credentials is not None
+    assert credentials["gcs_bucket_name"] == "new-bucket"
+    assert credentials["bucket_name"] == "legacy-bucket"
 
 
 def test_get_deployment_credentials_with_provider_resolves_credential_name():

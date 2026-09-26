@@ -266,6 +266,61 @@ def test_openai_reasoning_family_entries_carry_supports_reasoning(prices: dict):
     )
 
 
+_ABSENT: Final = object()
+
+REASONING_ANNOTATION_KEYS: Final = (
+    "supports_reasoning",
+    "supports_minimal_reasoning_effort",
+    "supports_none_reasoning_effort",
+    "supports_xhigh_reasoning_effort",
+    "default_reasoning_effort",
+)
+
+
+def chatgpt_openai_twins(prices: dict) -> list[tuple[str, str]]:
+    """`chatgpt/<model>` rows paired with the bare `<model>` row served by the openai provider.
+
+    Scoped to openai twins on purpose. `ChatGPTConfig` and `ChatGPTResponsesAPIConfig` subclass
+    their openai counterparts, so a chatgpt row's reasoning behaviour is whatever the openai row
+    describes. The azure rows are a separate registry that already diverges from openai here, and
+    pinning them to each other would assert something this repository does not control.
+    """
+    pairs = []
+    for name, entry in prices.items():
+        if not isinstance(entry, dict) or not name.startswith("chatgpt/"):
+            continue
+        bare = name.split("/", 1)[1]
+        twin = prices.get(bare)
+        if isinstance(twin, dict) and twin.get("litellm_provider") == "openai":
+            pairs.append((name, bare))
+    return pairs
+
+
+def test_chatgpt_rows_carry_their_openai_twin_reasoning_annotations(prices: dict):
+    """A chatgpt row must not silently drop the reasoning annotations of the model it proxies.
+
+    `litellm.utils._get_model_info_from_generalization` refuses to fall back when an exact cost-map
+    key exists, so an unannotated `chatgpt/<model>` row wins over its annotated twin and
+    `/model/info` reports the model as non-reasoning.
+    """
+    twins = chatgpt_openai_twins(prices)
+    assert twins, "no chatgpt/* row has an openai twin any more; this guard has stopped guarding"
+
+    mismatched = []
+    for name, bare in twins:
+        for key in REASONING_ANNOTATION_KEYS:
+            if prices[name].get(key, _ABSENT) != prices[bare].get(key, _ABSENT):
+                mismatched.append(
+                    f"{name}.{key} is {prices[name].get(key)!r}, {bare}.{key} is {prices[bare].get(key)!r}"
+                )
+
+    assert mismatched == [], (
+        "chatgpt/* entries proxy their openai twin through ChatGPTConfig, so they must carry the "
+        "same reasoning annotations; an exact cost-map key blocks the generalization fallback, so "
+        "a missing flag here is reported to callers as 'not a reasoning model':\n" + "\n".join(mismatched)
+    )
+
+
 def test_chat_latest_declares_the_one_effort_openai_accepts(prices: dict):
     """OpenAI rejects every reasoning.effort on chat-latest except medium, and a reasoning entry
     with no declared levels resolves to None, which lets /model_group/info and the dashboard offer

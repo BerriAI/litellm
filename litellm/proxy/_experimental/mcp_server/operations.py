@@ -14,6 +14,8 @@ from mcp.types import (
     CallToolRequest,
     CallToolRequestParams,
     CallToolResult,
+    DiscoverRequest,
+    DiscoverResult,
     GetPromptRequest,
     GetPromptRequestParams,
     GetPromptResult,
@@ -28,10 +30,14 @@ from mcp.types import (
     ListToolsResult,
     PaginatedRequestParams,
     Prompt,
+    PromptsCapability,
     ReadResourceRequest,
     ReadResourceRequestParams,
+    ResourcesCapability,
     ResourceTemplate,
+    ServerCapabilities,
     TextContent,
+    ToolsCapability,
 )
 from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, ConfigDict, Field, TypeAdapter
@@ -50,6 +56,11 @@ from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
     byok_credential_cache_key,
     cache_byok_credential,
     get_cached_byok_credential,
+)
+from litellm.proxy._experimental.mcp_server.capabilities import (
+    GATEWAY_OPERATIONS,
+    build_discovery,
+    configured_versions,
 )
 from litellm.proxy._experimental.mcp_server.contracts import (
     AuthorizedToolCall,
@@ -122,7 +133,9 @@ from litellm.proxy.litellm_pre_call_utils import (
 )
 from litellm.types.mcp import (
     DEFAULT_CREDENTIAL_HEADER,
+    MCP_LEGACY_VERSIONS,
     MCPAuth,
+    MCPTransport,
     without_header,
 )
 from litellm.types.mcp_server.mcp_server_manager import MCPInfo, MCPServer
@@ -2657,7 +2670,11 @@ class _McpDeniedDetail(TypedDict):
 
 
 async def _execute_handle_list_tools(
-    context: OperationContext, params: PaginatedRequestParams, host_progress_callback: ProgressCallback | None = None
+    context: OperationContext,
+    params: PaginatedRequestParams,
+    host_progress_callback: ProgressCallback | None = None,
+    *,
+    log_list_tools_to_spendlogs: bool = True,
 ) -> ListToolsResult:
     try:
         (
@@ -2700,7 +2717,7 @@ async def _execute_handle_list_tools(
             mcp_server_auth_headers=mcp_server_auth_headers,
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
-            log_list_tools_to_spendlogs=True,
+            log_list_tools_to_spendlogs=log_list_tools_to_spendlogs,
             list_tools_log_source="mcp_protocol",
             client_ip=_client_ip,
         )
@@ -3065,6 +3082,7 @@ def prepare_context(
     client_ip: str | None = None,
     mcp_proxy_mode: bool = False,
     wire_compat: WireCompat = WireCompat.LEGACY,
+    protocol_version: str | None = None,
 ) -> OperationContext:
     return OperationContext(
         _caller=user_api_key_auth,
@@ -3076,11 +3094,13 @@ def prepare_context(
         client_ip=client_ip,
         mcp_proxy_mode=mcp_proxy_mode,
         wire_compat=wire_compat,
+        protocol_version=protocol_version,
     )
 
 
 GatewayOperation: TypeAlias = (
     AuthorizedToolCall
+    | DiscoverRequest
     | ListToolsRequest
     | CallToolRequest
     | ListPromptsRequest
@@ -3090,7 +3110,8 @@ GatewayOperation: TypeAlias = (
     | ReadResourceRequest
 )
 GatewayResult: TypeAlias = (
-    ListToolsResult
+    DiscoverResult
+    | ListToolsResult
     | CallToolResult
     | InputRequiredResult
     | ListPromptsResult
@@ -3104,6 +3125,9 @@ GatewayResult: TypeAlias = (
 class GatewayOperations:
     def __init__(self, host_progress_callback: ProgressCallback | None = None) -> None:
         self._host_progress_callback = host_progress_callback
+
+    @overload
+    async def execute(self, operation: DiscoverRequest, context: OperationContext) -> DiscoverResult: ...
 
     @overload
     async def execute(
@@ -3137,6 +3161,51 @@ class GatewayOperations:
 
     async def execute(self, operation: GatewayOperation, context: OperationContext) -> GatewayResult:
         match operation:
+            case DiscoverRequest():
+                listings: Final = (
+                    ()
+                    if context.mcp_proxy_mode
+                    else (ListPromptsRequest(), ListResourcesRequest(), ListResourceTemplatesRequest())
+                )
+                tasks: Final = (
+                    asyncio.create_task(
+                        _execute_handle_list_tools(
+                            context,
+                            PaginatedRequestParams(),
+                            self._host_progress_callback,
+                            log_list_tools_to_spendlogs=False,
+                        )
+                    ),
+                    *(asyncio.create_task(self.execute(listing, context)) for listing in listings),
+                )
+                try:
+                    results: Final = await asyncio.gather(*tasks)
+                finally:
+                    for task in tasks:
+                        task.cancel()
+                    await asyncio.gather(*tasks, return_exceptions=True)
+                return build_discovery(
+                    configured=configured_versions(),
+                    revision=context.protocol_version or "2025-11-25",
+                    transport=MCPTransport.http,
+                    authorized_operations=GATEWAY_OPERATIONS,
+                    upstream_versions=frozenset(MCP_LEGACY_VERSIONS),
+                    capabilities=ServerCapabilities(
+                        tools=ToolsCapability()
+                        if any(isinstance(result, ListToolsResult) and result.tools for result in results)
+                        else None,
+                        prompts=PromptsCapability()
+                        if any(isinstance(result, ListPromptsResult) and result.prompts for result in results)
+                        else None,
+                        resources=ResourcesCapability()
+                        if any(
+                            (isinstance(result, ListResourcesResult) and result.resources)
+                            or (isinstance(result, ListResourceTemplatesResult) and result.resource_templates)
+                            for result in results
+                        )
+                        else None,
+                    ),
+                )
             case AuthorizedToolCall():
                 auth, token, _servers, server_headers, oauth_headers, headers, _client_ip = context.legacy_auth()
                 return await _execute_mcp_tool(
