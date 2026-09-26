@@ -33027,6 +33027,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
+            /** Forward Reasoning Content */
+            forward_reasoning_content?: boolean | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -33224,6 +33226,11 @@ export interface components {
             } | null;
             /** Quality Router Default Model */
             quality_router_default_model?: string | null;
+            /**
+             * Reasoning Content Field
+             * @description Historical assistant reasoning field: reasoning_content (default) or reasoning.
+             */
+            reasoning_content_field?: string | null;
             /** Region Name */
             region_name?: string | null;
             /** Regional Endpoint Uplift Multiplier */
@@ -46822,6 +46829,8 @@ export interface components {
             default_api_key_tpm_limit?: number | null;
             /** Drop Params */
             drop_params?: boolean | string | null;
+            /** Forward Reasoning Content */
+            forward_reasoning_content?: boolean | null;
             /** Gcs Bucket Name */
             gcs_bucket_name?: string | null;
             /** Google Maps Grounding Cost Per Query */
@@ -47019,6 +47028,11 @@ export interface components {
             } | null;
             /** Quality Router Default Model */
             quality_router_default_model?: string | null;
+            /**
+             * Reasoning Content Field
+             * @description Historical assistant reasoning field: reasoning_content (default) or reasoning.
+             */
+            reasoning_content_field?: string | null;
             /** Region Name */
             region_name?: string | null;
             /** Regional Endpoint Uplift Multiplier */

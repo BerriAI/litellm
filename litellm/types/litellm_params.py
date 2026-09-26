@@ -232,6 +232,8 @@ class PromptOptions:
 @dataclass(frozen=True, slots=True, kw_only=True)
 class ResponseOptions:
     merge_reasoning_content_in_choices: bool | None = None
+    forward_reasoning_content: bool | None = None
+    reasoning_content_field: str | None = None
     enable_json_schema_validation: bool | None = None
     complete_response: bool | None = None
     stream_chunk_size: int | None = None

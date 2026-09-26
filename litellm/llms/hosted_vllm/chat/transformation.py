@@ -4,12 +4,17 @@ Translate from OpenAI's `/v1/chat/completions` to VLLM's `/v1/chat/completions`
 
 import json
 from collections.abc import Coroutine
+from copy import deepcopy
 from typing import Final, Literal, cast, overload
 
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import _parse_mime_type
+from litellm.litellm_core_utils.reasoning_content_utils import (
+    normalize_reasoning_content,
+    should_normalize_reasoning_content,
+)
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
@@ -142,6 +147,35 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
             return ChatCompletionVideoObject(type="video_url", video_url=ChatCompletionVideoUrlObject(url=file_data))
         raise ValueError("file_id or file_data is required")
 
+    def transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: provider request contract
+        optional_params: dict[str, object],  # mutable-ok: provider request contract
+        litellm_params: dict[str, object],  # mutable-ok: provider request contract
+        headers: dict[str, str],  # mutable-ok: provider request contract
+    ) -> dict[str, object]:  # mutable-ok: provider request contract
+        request_messages: Final = normalize_reasoning_content(
+            messages,
+            forward=litellm_params.get("forward_reasoning_content") is True,
+            normalize=should_normalize_reasoning_content(
+                litellm_params.get("reasoning_content_field"), model=model, provider="hosted_vllm"
+            ),
+        )
+        return super().transform_request(model, request_messages, optional_params, litellm_params, headers)
+
+    async def async_transform_request(
+        self,
+        model: str,
+        messages: list[AllMessageValues],  # mutable-ok: provider request contract
+        optional_params: dict[str, object],  # mutable-ok: provider request contract
+        litellm_params: dict[str, object],  # mutable-ok: provider request contract
+        headers: dict[str, str],  # mutable-ok: provider request contract
+    ) -> dict[str, object]:  # mutable-ok: provider request contract
+        return await super().async_transform_request(
+            model, deepcopy(messages), optional_params, litellm_params, headers
+        )
+
     @overload
     def _transform_messages(
         self, messages: list[AllMessageValues], model: str, is_async: Literal[True]
@@ -161,13 +195,12 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         """
         Support translating:
         - video files from file_id or file_data to video_url
-        - thinking_blocks and reasoning_content on assistant messages are removed,
+        - thinking_blocks on assistant messages are removed,
           and content lists are converted to strings for vLLM compatibility
         """
         for message in messages:
             if message["role"] == "assistant":
                 message.pop("thinking_blocks", None)
-                message.pop("reasoning_content", None)
                 existing_content = message.get("content")
                 if isinstance(existing_content, list):
                     text_parts = []

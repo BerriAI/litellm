@@ -4,6 +4,7 @@ Tests for OpenAI GPT transformation (litellm/llms/openai/chat/gpt_transformation
 
 
 import pytest
+from copy import deepcopy
 from typing import Final
 
 
@@ -1178,6 +1179,34 @@ class TestSystemMessagesFirst:
             headers={},
         )
         assert tuple(m["content"] for m in messages) == self.ORIGINAL_ORDER
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("is_async", [False, True])
+    @pytest.mark.parametrize("enabled", [False, True])
+    async def test_reasoning_normalization_preserves_prompt_cache_ordering(
+        self, monkeypatch: pytest.MonkeyPatch, is_async: bool, enabled: bool
+    ) -> None:
+        monkeypatch.setattr(litellm, "openai_system_messages_first", enabled)
+        messages: Final = [
+            {**message, **({"reasoning_content": "thinking"} if message["role"] == "assistant" else {})}
+            for message in self.MESSAGES
+        ]
+        original: Final = deepcopy(messages)
+        kwargs: Final = {
+            "model": "reasoning-test",
+            "messages": messages,
+            "optional_params": {},
+            "litellm_params": {"custom_llm_provider": "openai", "reasoning_content_field": "reasoning"},
+            "headers": {},
+        }
+        request: Final = (
+            await self.config.async_transform_request(**kwargs) if is_async else self.config.transform_request(**kwargs)
+        )
+        assert tuple(m["content"] for m in request["messages"]) == (self.ORDERED if enabled else self.ORIGINAL_ORDER)
+        assert next(m for m in request["messages"] if m["role"] == "assistant") == {
+            "role": "assistant", "content": "reply", "reasoning": "thinking"
+        }
+        assert messages == original
 
     @pytest.mark.asyncio
     async def test_async_transform_request_moves_system_messages_first(self, monkeypatch):

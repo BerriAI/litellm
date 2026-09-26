@@ -83,6 +83,7 @@ from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+    REASONING_TRANSPORT_KWARGS_KEYS,
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -5679,7 +5680,11 @@ def completion(
             gigachat_access_token=kwargs.get("gigachat_access_token"),
             **{
                 key: kwargs[key]
-                for key in (*AWS_CREDENTIAL_KWARGS_KEYS, PROVIDER_AFFINITY_HEADER_KWARG_KEY)
+                for key in (
+                    *AWS_CREDENTIAL_KWARGS_KEYS,
+                    PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+                    *REASONING_TRANSPORT_KWARGS_KEYS,
+                )
                 if key in kwargs
             },
         )
