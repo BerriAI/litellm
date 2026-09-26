@@ -592,7 +592,7 @@ async def get_agent_by_id(
         if agent is None:
             agent_row: Final = await agents_table(prisma_client).find_unique(
                 where={"agent_id": agent_id},
-                include={"object_permission": True},
+                include={"object_permission": True, "identity": True},
             )
             if agent_row is not None:
                 agent_dict: Final = agent_row.model_dump()

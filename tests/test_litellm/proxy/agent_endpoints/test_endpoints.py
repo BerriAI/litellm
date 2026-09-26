@@ -1389,3 +1389,31 @@ def test_agent_identity_configuration_is_only_returned_to_admins(role, path, mon
     payload = response.json()[0] if path == "/v1/agents" else response.json()
     assert payload["identity"] == (binding.model_dump(mode="json") if role == LitellmUserRoles.PROXY_ADMIN else None)
     assert agent.identity == binding
+
+
+@pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.INTERNAL_USER])
+def test_agent_detail_cache_miss_preserves_admin_identity_visibility(role, monkeypatch):
+    binding = AgentIdentityBinding(
+        agent_id="agent-123", provider="microsoft_entra", tenant_id="tenant", client_id="client",
+        issuer="https://login.microsoftonline.com/tenant/v2.0", revision="revision",
+    )
+    agent = _sample_agent_response()
+    registry = MagicMock()
+    registry.get_agent_by_id.return_value = None
+    registry.ids_for_agent.return_value = frozenset({agent.agent_id})
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", registry)
+    monkeypatch.setattr(
+        "litellm.proxy.agent_endpoints.auth.agent_permission_handler.AgentRequestHandler.is_agent_allowed",
+        AsyncMock(return_value=True),
+    )
+
+    async def load_row(*, where, include):
+        assert where == {"agent_id": agent.agent_id}
+        return agent.model_copy(update={"identity": binding if include.get("identity") else None})
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as prisma:
+        prisma.db.litellm_agentstable.find_unique = AsyncMock(side_effect=load_row)
+        prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+        response = _make_app_with_role(role).get("/v1/agents/agent-123")
+    assert response.status_code == 200
+    assert response.json()["identity"] == (binding.model_dump(mode="json") if role == LitellmUserRoles.PROXY_ADMIN else None)
