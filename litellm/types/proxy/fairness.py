@@ -5,6 +5,7 @@ from typing import Final, Literal
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 DEFAULT_POOL_NAME: Final = "default"
+RESERVED_WORKLOAD_CLASS_NAMES: Final = frozenset({DEFAULT_POOL_NAME, "default_pool"})
 FAIRNESS_SETTINGS_KEY: Final = "fairness_settings"
 MAX_QUEUE_WAIT_HEADER: Final = "x-litellm-max-queue-wait"
 MAX_QUEUE_WAIT_SECONDS: Final = 600.0
@@ -44,8 +45,11 @@ class FairnessSettings(BaseModel):
         names: Final = tuple(workload_class.name for workload_class in self.workload_classes)
         if len(names) != len(frozenset(names)):
             raise ValueError("workload class names must be unique")
-        if DEFAULT_POOL_NAME in names:
-            raise ValueError(f"{DEFAULT_POOL_NAME!r} is reserved for keys and teams without a workload class")
+        if RESERVED_WORKLOAD_CLASS_NAMES & frozenset(names):
+            raise ValueError(
+                f"workload class names {sorted(RESERVED_WORKLOAD_CLASS_NAMES)!r} are reserved for keys and teams "
+                "without a workload class"
+            )
         total_share: Final = (
             sum(workload_class.reserved_share for workload_class in self.workload_classes) + self.default_reserved_share
         )

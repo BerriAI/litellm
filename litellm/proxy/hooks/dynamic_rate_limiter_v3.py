@@ -44,6 +44,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     call_id_from_callback_kwargs,
     claim_request_stash_for_data,
     get_or_create_request_stash,
+    get_request_stash,
     get_request_stash_for_call,
 )
 from litellm.proxy.hooks.rate_limiter_utils import (
@@ -986,7 +987,8 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             )
 
             stash: Final = get_request_stash_for_call(call_id_from_callback_kwargs(kwargs))
-            if stash is not None and await self._settle_reservation(stash, total_tokens, litellm_parent_otel_span):
+            if stash is not None and stash.dynamic_reserved_tokens > 0:
+                await self._settle_reservation(stash, total_tokens, litellm_parent_otel_span)
                 return
 
             bypassed: Final = stash.dynamic_admission_bypassed if stash is not None else not self.enforcing
@@ -1069,6 +1071,22 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
         recovered_tokens: Final = self.v3_limiter.recovered_partial_usage_tokens(kwargs)[0]
         try:
             await self._settle_reservation(stash, recovered_tokens, None)
+        except Exception as e:
+            verbose_proxy_logger.exception("Error refunding dynamic rate limiter reservation: %s", e)
+
+    async def async_post_call_failure_hook(
+        self,
+        request_data: dict,
+        original_exception: Exception,
+        user_api_key_dict: UserAPIKeyAuth,
+        traceback_str: str | None = None,
+    ) -> None:
+        stash: Final = get_request_stash()
+        if stash is None:
+            return
+        recovered_tokens: Final = self.v3_limiter.recovered_partial_usage_tokens(request_data)[0]
+        try:
+            await self._settle_reservation(stash, recovered_tokens, user_api_key_dict.parent_otel_span)
         except Exception as e:
             verbose_proxy_logger.exception("Error refunding dynamic rate limiter reservation: %s", e)
 

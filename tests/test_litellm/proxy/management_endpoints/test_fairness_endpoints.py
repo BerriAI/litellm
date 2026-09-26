@@ -265,6 +265,14 @@ def test_settings_reject_duplicate_and_reserved_class_names() -> None:
         FairnessSettings(workload_classes=(WorkloadClass(name="default", reserved_share=0.1),))
 
 
+def test_default_pool_is_a_reserved_workload_class_name() -> None:
+    with pytest.raises(ValidationError, match="reserved"):
+        FairnessSettings(
+            enabled=True,
+            workload_classes=(WorkloadClass(name="default_pool", reserved_share=0.1),),
+        )
+
+
 def test_settings_reject_shares_that_exceed_full_capacity_including_default_pool() -> None:
     classes: Final = (
         WorkloadClass(name="production", reserved_share=0.6),

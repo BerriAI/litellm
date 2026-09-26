@@ -2519,3 +2519,79 @@ async def test_failed_settlement_write_leaves_reservation_open_for_refund(monkey
     assert still_open
     assert writes == ["attempt", "attempt"]
     assert await _model_tokens(handler, dual_cache, model) == 0
+
+
+@pytest.mark.asyncio
+async def test_post_call_failure_hook_refunds_reservation_taken_at_admission(monkeypatch):
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+    from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
+
+    model = "fairness-proxy-reject-model"
+    _enable_fairness(
+        monkeypatch,
+        FairnessSettings(enabled=True, workload_classes=(WorkloadClass(name="prod", reserved_share=0.5),)),
+    )
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler.update_variables(llm_router=_fairness_router(model, tpm=100_000))
+    data = {
+        "model": model,
+        "litellm_call_id": "proxy-reject",
+        "messages": [{"role": "user", "content": "a downstream hook rejects this after admission"}],
+        "max_tokens": 100,
+    }
+    settle_mock = AsyncMock()
+    monkeypatch.setattr(handler.v3_limiter, "async_increment_reservation_aware_tokens", settle_mock)
+    monkeypatch.setattr(handler.v3_limiter, "recovered_partial_usage_tokens", lambda *args, **kwargs: (0, 0, 0))
+
+    async def reserve_then_reject() -> tuple[int, bool]:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=_prod_user(), cache=dual_cache, data=data, call_type="completion"
+        )
+        reserved = get_or_create_request_stash().dynamic_reserved_tokens
+        await handler.async_post_call_failure_hook(
+            request_data=data,
+            original_exception=Exception("rejected by a later hook"),
+            user_api_key_dict=_prod_user(),
+        )
+        return reserved, get_or_create_request_stash().dynamic_reservation_settled
+
+    reserved, settled = await asyncio.create_task(reserve_then_reject())
+    assert reserved > 0
+    assert settled
+    settle_mock.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_success_event_never_bills_an_already_settled_reservation(monkeypatch):
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import get_or_create_request_stash
+    from litellm.types.proxy.fairness import FairnessSettings, WorkloadClass
+    from litellm.types.utils import ModelResponse, Usage
+
+    model = "fairness-double-bill-model"
+    _enable_fairness(
+        monkeypatch,
+        FairnessSettings(enabled=True, workload_classes=(WorkloadClass(name="prod", reserved_share=0.5),)),
+    )
+    dual_cache = DualCache()
+    handler = DynamicRateLimitHandler(internal_usage_cache=dual_cache)
+    handler.update_variables(llm_router=_fairness_router(model, tpm=100_000))
+    legacy_increment = AsyncMock()
+    monkeypatch.setattr(handler.v3_limiter, "async_increment_tokens_with_ttl_preservation", legacy_increment)
+
+    async def already_settled_then_success() -> None:
+        stash = get_or_create_request_stash()
+        stash.dynamic_reserved_tokens = 40
+        stash.dynamic_token_scopes = frozenset({("model_saturation_check", model)})
+        stash.dynamic_reservation_settled = True
+        await handler.async_log_success_event(
+            kwargs=_success_kwargs(model, "double-bill", "prod"),
+            response_obj=ModelResponse(
+                model=model, usage=Usage(prompt_tokens=5, completion_tokens=5, total_tokens=10)
+            ),
+            start_time=None,
+            end_time=None,
+        )
+
+    await asyncio.create_task(already_settled_then_success())
+    legacy_increment.assert_not_awaited()
