@@ -596,3 +596,101 @@ class TestOutputToolCallAliasing:
 
         tool_calls = result.choices[0].message.tool_calls
         assert tool_calls[0]["function"]["arguments"] == "MASKED_ARGS"
+
+
+def _two_tool_call_response():
+    import litellm
+
+    return litellm.ModelResponse(
+        choices=[
+            {
+                "index": 0,
+                "message": {
+                    "role": "assistant",
+                    "content": "calling tools",
+                    "tool_calls": [
+                        {"id": "call_A", "type": "function", "function": {"name": "first", "arguments": "args_A"}},
+                        {"id": "call_B", "type": "function", "function": {"name": "second", "arguments": "args_B"}},
+                    ],
+                },
+                "finish_reason": "tool_calls",
+            }
+        ]
+    )
+
+
+class _PostCallToolCallGuardrail(CustomGuardrail):
+    """Returns a scripted tool_calls payload, optionally replacing inputs['tool_calls'] first."""
+
+    def __init__(self, *, returned_tool_calls=None, replace_inputs_with=None):
+        super().__init__()
+        self._returned = returned_tool_calls
+        self._replace_with = replace_inputs_with
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Any | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        if self._replace_with is not None:
+            inputs["tool_calls"] = self._replace_with
+        payload: GenericGuardrailAPIInputs = GenericGuardrailAPIInputs(texts=list(inputs.get("texts") or []))
+        if self._returned is not None:
+            payload["tool_calls"] = self._returned
+        return payload
+
+
+class TestPostCallToolCallFallback:
+    @pytest.mark.asyncio
+    async def test_same_length_returned_tool_calls_are_applied(self):
+        masked = [{"id": "call_A", "type": "function", "function": {"name": "first", "arguments": "MASKED"}}]
+
+        result = await OpenAIChatCompletionsHandler().process_output_response(
+            response=_two_tool_call_response(),
+            guardrail_to_apply=_PostCallToolCallGuardrail(
+                returned_tool_calls=masked
+                + [{"id": "call_B", "type": "function", "function": {"name": "second", "arguments": "args_B"}}]
+            ),
+        )
+
+        tool_calls = result.choices[0].message.tool_calls
+        assert tool_calls[0]["function"]["arguments"] == "MASKED"
+
+    @pytest.mark.asyncio
+    async def test_shorter_returned_tool_calls_fall_back_to_originals(self):
+        returned = [{"id": "call_B", "type": "function", "function": {"name": "second", "arguments": "args_B"}}]
+
+        result = await OpenAIChatCompletionsHandler().process_output_response(
+            response=_two_tool_call_response(),
+            guardrail_to_apply=_PostCallToolCallGuardrail(returned_tool_calls=returned),
+        )
+
+        tool_calls = result.choices[0].message.tool_calls
+        assert tool_calls[0]["id"] == "call_A"
+        assert tool_calls[0]["function"]["arguments"] == "args_A"
+        assert tool_calls[1]["id"] == "call_B"
+        assert tool_calls[1]["function"]["arguments"] == "args_B"
+
+    @pytest.mark.asyncio
+    async def test_non_list_tool_calls_mutation_leaves_response_unchanged(self):
+        result = await OpenAIChatCompletionsHandler().process_output_response(
+            response=_two_tool_call_response(),
+            guardrail_to_apply=_PostCallToolCallGuardrail(replace_inputs_with={"some": "object"}),
+        )
+
+        tool_calls = result.choices[0].message.tool_calls
+        assert tool_calls[0]["id"] == "call_A"
+        assert tool_calls[1]["id"] == "call_B"
+
+    @pytest.mark.asyncio
+    async def test_no_tool_calls_returned_leaves_response_unchanged(self):
+        result = await OpenAIChatCompletionsHandler().process_output_response(
+            response=_two_tool_call_response(),
+            guardrail_to_apply=_PostCallToolCallGuardrail(),
+        )
+
+        tool_calls = result.choices[0].message.tool_calls
+        assert tool_calls[0]["id"] == "call_A"
+        assert tool_calls[1]["id"] == "call_B"

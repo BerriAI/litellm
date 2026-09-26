@@ -622,7 +622,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         guardrailed_tool_calls: Final[Sequence[dict[str, object]]] = (
             cast(list[dict[str, object]], returned_tool_calls)
             if isinstance(returned_tool_calls, list) and len(returned_tool_calls) == len(tool_calls_to_check)
-            else inputs.get("tool_calls") or tool_calls_to_check
+            else tool_calls_to_check
         )
 
         # Step 3: Map guardrail responses back to original response structure
