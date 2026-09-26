@@ -187,7 +187,12 @@ def _sink_rejection_keeps_the_caller_and_proxy_healthy(gateway: Gateway, tmp_pat
             model: Final = scenario.model(api_base=provider.url + "/v1", api_key="synthetic-provider-key")
             key: Final = scenario.key(models=[model])
             _chat_completion(candidate, model, key, f"{marker}-a")
-            eventually(sink.attempts, lambda count: count >= 1, seconds=30)
+            upload_rejected: Final = (
+                (lambda methods: bool(methods))
+                if status == 403
+                else (lambda methods: any(method != "HEAD" for method in methods))
+            )
+            eventually(sink.rejected_methods, upload_rejected, seconds=30)
             assert not sink.stored(), tuple(sink.stored())
             other_key: Final = scenario.key(models=[model])
             _chat_completion(candidate, model, other_key, f"{marker}-other")

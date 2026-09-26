@@ -32,6 +32,7 @@ class RecordingDataLakeSink:
     pending: dict[str, bytearray] = field(default_factory=dict)  # mutable-ok: append lands before flush
     files: dict[str, bytes] = field(default_factory=dict)  # mutable-ok: flushed files must be readable later
     flush_count: dict[str, int] = field(default_factory=dict)  # mutable-ok: re-flush of one path means double upload
+    rejected: list[str] = field(default_factory=list)  # mutable-ok: rejected request methods seen while failing
     in_flight: int = 0
     peak: int = 0
     attempt_count: int = 0
@@ -43,6 +44,7 @@ class RecordingDataLakeSink:
         with self.lock:
             self.attempt_count += 1
             if self.fail_status:
+                self.rejected.append(request.method)
                 return Reply(status=self.fail_status, body=b'{"error":{"code":"SinkFailure"}}')
             if path != f"/{FILE_SYSTEM}" and not path.startswith(f"/{FILE_SYSTEM}/"):
                 return Reply(status=400, body=b'{"error":{"code":"InvalidUri"}}')
@@ -97,6 +99,10 @@ class RecordingDataLakeSink:
     def attempts(self) -> int:
         with self.lock:
             return self.attempt_count
+
+    def rejected_methods(self) -> tuple[str, ...]:
+        with self.lock:
+            return tuple(self.rejected)
 
     def duplicated(self) -> tuple[str, ...]:
         with self.lock:
