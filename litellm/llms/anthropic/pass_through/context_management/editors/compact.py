@@ -30,7 +30,11 @@ from litellm.types.llms.anthropic import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitDescriptor, RateLimitResponse
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        RateLimitDescriptor,
+        RateLimitDescriptorRateLimitObject,
+        RateLimitResponse,
+    )
     from litellm.router import Router
     from litellm.types.llms.anthropic import (
         AllAnthropicPassThroughMessageValues,
@@ -147,6 +151,10 @@ class _CreateOrgRateLimitDescriptors(Protocol):
     def __call__(
         self, user_api_key_dict: "UserAPIKeyAuth", requested_model: str | None = None
     ) -> "Sequence[RateLimitDescriptor]": ...
+
+
+class _GetProxyHook(Protocol):
+    def __call__(self, hook: str) -> object: ...
 
 
 class _ShouldRateLimit(Protocol):
@@ -492,6 +500,24 @@ async def _check_summary_model_budget(
     return True
 
 
+def _without_parallel_request_gauges(
+    descriptors: "Sequence[RateLimitDescriptor]",
+) -> "tuple[RateLimitDescriptor, ...]":
+    return tuple(_without_parallel_request_gauge(descriptor) for descriptor in descriptors)
+
+
+def _without_parallel_request_gauge(descriptor: "RateLimitDescriptor") -> "RateLimitDescriptor":
+    rate_limit: Final = descriptor.get("rate_limit")
+    if rate_limit is None or rate_limit.get("max_parallel_requests") is None:
+        return descriptor
+    windowed_limits: Final[RateLimitDescriptorRateLimitObject] = {
+        "requests_per_unit": rate_limit.get("requests_per_unit"),
+        "tokens_per_unit": rate_limit.get("tokens_per_unit"),
+        "window_size": rate_limit.get("window_size"),
+    }
+    return {**descriptor, "rate_limit": windowed_limits}
+
+
 async def _check_summary_model_rate_limit(
     user_api_key_auth: Optional["UserAPIKeyAuth"],
     summary_model: str,
@@ -508,21 +534,28 @@ async def _check_summary_model_rate_limit(
     ``read_only`` mode so no counter is reserved or incremented — the summary
     call's actual usage is still charged exactly once by the limiter's
     post-call success hook (via the propagated ``litellm_metadata``).
+    ``max_parallel_requests`` gauges are left out of the check: the summary
+    call runs inside the caller's already admitted request, whose own slot
+    would otherwise count against it.
 
     Returns True (allow) outside the proxy, when the active limiter does not
     expose the read-only descriptor check (legacy limiter), or when the
-    descriptor set cannot be built — the only deny signal is a definitive
-    ``OVER_LIMIT`` response, so an internal error here forwards the request
-    uncompacted rather than blocking every summary.
+    descriptor set cannot be built — the deny signals are a definitive
+    ``OVER_LIMIT`` response and the limiter's own fail-closed rejection
+    (``RateLimitUnverifiableError``, raised when ``fail_closed_rate_limit_enforcement``
+    is on and the counters could not be verified), so any other internal error here
+    forwards the request uncompacted rather than blocking every summary.
     """
     if user_api_key_auth is None:
         return True
     try:
+        from litellm.proxy.hooks.parallel_request_limiter_v3 import RateLimitUnverifiableError
         from litellm.proxy.proxy_server import proxy_logging_obj
     except Exception:
         return True
 
-    limiter: Final[object] = getattr(proxy_logging_obj, "max_parallel_request_limiter", None)
+    get_proxy_hook: Final[_GetProxyHook | None] = getattr(proxy_logging_obj, "get_proxy_hook", None)
+    limiter: Final[object] = get_proxy_hook("parallel_request_limiter") if get_proxy_hook is not None else None
     should_rate_limit_check: Final[_ShouldRateLimit | None] = getattr(limiter, "should_rate_limit", None)
     create_descriptors: Final[_CreateRateLimitDescriptors | None] = getattr(
         limiter, "_create_rate_limit_descriptors", None
@@ -566,7 +599,9 @@ async def _check_summary_model_rate_limit(
             requested_model=summary_model,
             descriptors=base_descriptors,
         )
-        descriptors: Final = (*base_descriptors, *create_org_descriptors(user_api_key_auth, summary_model))
+        descriptors: Final = _without_parallel_request_gauges(
+            (*base_descriptors, *create_org_descriptors(user_api_key_auth, summary_model))
+        )
         if not descriptors:
             return True
         parent_otel_span: Final[object] = getattr(user_api_key_auth, "parent_otel_span", None)
@@ -575,6 +610,13 @@ async def _check_summary_model_rate_limit(
             parent_otel_span=parent_otel_span,
             read_only=True,
         )
+    except RateLimitUnverifiableError as e:
+        verbose_logger.warning(
+            "compact_20260112: rate-limit counters for summary_model=%s could not be verified; denying: %s",
+            summary_model,
+            e.detail,
+        )
+        return False
     except Exception as e:
         verbose_logger.warning(
             "compact_20260112: unexpected error during rate-limit check for summary_model=%s; allowing: %s",

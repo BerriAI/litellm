@@ -28215,6 +28215,11 @@ export interface components {
              */
             enforce_fallback_model_access?: boolean | null;
             /**
+             * Fail Closed Rate Limit Enforcement
+             * @description reject requests with a 503 while the rate limit counters in Redis are unreachable, instead of enforcing tpm/rpm/max_parallel_requests limits per pod from memory (which admits up to N times the limit across N pods)
+             */
+            fail_closed_rate_limit_enforcement?: boolean | null;
+            /**
              * Failed Login Block Seconds
              * @description How long a blocked source address, or source address and username, stays blocked. Every attempt from a blocked key, right or wrong, is refused with 429 before the password is checked; the block is not extended by refused attempts. Set under `general_settings` in config.yaml. Defaults to 300
              */
