@@ -476,6 +476,8 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if messages is None:
             return bedrock_request
 
+        self._refuse_unscannable_leaf_parts(messages=messages)
+
         image_count: Final = self._image_count_in(messages)
         if image_count > _MAX_IMAGES_PER_APPLY_GUARDRAIL_CALL:
             raise HTTPException(
@@ -505,36 +507,26 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         content: Final = message.get("content")
         if content is None:
             return ()
-        if isinstance(content, str):
-            return (BedrockContentItem(text=BedrockTextContent(text=content)),)
+        text_items: Final = tuple(
+            BedrockContentItem(text=BedrockTextContent(text=block.text))
+            for block in self.get_content_items_for_message(message=message) or ()
+        )
         if not isinstance(content, list):
-            return ()
-        parts: Final = _content_leaf_parts(content)
-        items: Final = tuple(self._build_input_content_item(item=item) for item in parts)
-        return tuple(item for item in items if item is not None)
+            return text_items
+        image_items: Final = (self._build_input_image_item(part=part) for part in _content_leaf_parts(content))
+        return text_items + tuple(item for item in image_items if item is not None)
 
-    def _build_input_content_item(self, item: object) -> BedrockContentItem | None:
-        if isinstance(item, str):
-            return BedrockContentItem(text=BedrockTextContent(text=item))
-        if not isinstance(item, dict):
+    def _build_input_image_item(self, part: object) -> BedrockContentItem | None:
+        if not isinstance(part, dict):
             return None
-        part: Final = cast(Mapping[str, object], item)  # cast-ok: narrowed to dict on the line above
-        # Provider transformations branch on `type`, so an image_url part reaches the
-        # model as an image even when it also carries `text`. Reading `text` first would
-        # scan that decoy and forward the image unscanned
-        if part.get("type") == "image_url":
-            image_url: Final = self._get_image_url(item=part)
+        part_map: Final = cast(Mapping[str, object], part)  # cast-ok: narrowed to dict on the line above
+        if part_map.get("type") == "image_url":
+            image_url: Final = self._get_image_url(item=part_map)
             if image_url is None:
                 self._handle_unscannable_attachment(reason="image part carries no inline url")
             return self._build_image_content_item(image_url=image_url)
-        payload_key: Final = _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS.get(str(part.get("type")))
-        if payload_key is not None and (part.get(payload_key) or part.get("file_id")):
-            self._handle_unscannable_attachment(reason="a document, file, video or audio attachment cannot be scanned")
-        if part.get("type") == "image":
-            return self._build_anthropic_image_content_item(part=part)
-        text: Final = part.get("text")
-        if isinstance(text, str):
-            return BedrockContentItem(text=BedrockTextContent(text=text))
+        if part_map.get("type") == "image":
+            return self._build_anthropic_image_content_item(part=part_map)
         return None
 
     def _build_anthropic_image_content_item(self, part: Mapping[str, object]) -> BedrockContentItem:

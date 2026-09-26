@@ -22,6 +22,7 @@ from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentChunkResult,
     BedrockGuardrail,
+    QualifiedTextBlock,
     _decoded_base64_length,
     _redact_pii_matches,
 )
@@ -5671,12 +5672,10 @@ class TestBedrockGuardrailImageInput:
         ]
 
     @pytest.mark.asyncio
-    async def test_image_part_carrying_a_text_field_is_still_scanned_as_an_image(self):
-        """A part tagged image_url reaches the model as an image, text field or not.
-
-        Provider transformations branch on `type`, so reading `text` first would scan
-        the decoy and forward the image unscanned - the exact bypass this change closes.
-        """
+    async def test_image_part_carrying_a_text_field_is_scanned_as_text_and_image(self):
+        """A part tagged image_url reaches the model as an image; its text field is
+        scanned as text like every other dict carrying `text`, and the image itself is
+        scanned as an image."""
         messages = [
             {
                 "role": "user",
@@ -5693,7 +5692,8 @@ class TestBedrockGuardrailImageInput:
         request = self._guardrail().convert_to_bedrock_format(source="INPUT", messages=messages)
 
         assert request["content"] == [
-            {"image": {"format": "png", "source": {"bytes": self._PNG_DATA_URI.split(",")[1]}}}
+            {"text": {"text": "just a friendly note"}},
+            {"image": {"format": "png", "source": {"bytes": self._PNG_DATA_URI.split(",")[1]}}},
         ]
 
     @pytest.mark.asyncio
@@ -8083,7 +8083,7 @@ async def test_during_call_hook_scans_tool_result_nested_image_but_not_its_text(
     _, mock_post = await _run_anthropic_during_call(guardrail, messages)
 
     mock_post.assert_called_once()
-    assert _sent_apply_guardrail_items(mock_post) == [_PNG_IMAGE_ITEM, {"text": {"text": "hi"}}]
+    assert _sent_apply_guardrail_items(mock_post) == [{"text": {"text": "hi"}}, _PNG_IMAGE_ITEM]
 
 
 @pytest.mark.asyncio
@@ -8146,5 +8146,63 @@ async def test_during_call_hook_masked_writeback_pairs_masked_text_when_tool_res
         response_json={"action": "GUARDRAIL_INTERVENED", "outputs": [{"text": "M1"}]},
     )
 
-    assert _sent_apply_guardrail_items(mock_post) == [_PNG_IMAGE_ITEM, {"text": {"text": "hi"}}]
+    assert _sent_apply_guardrail_items(mock_post) == [{"text": {"text": "hi"}}, _PNG_IMAGE_ITEM]
     assert data["messages"][0]["content"] == [{"type": "text", "text": "M1"}]
+
+
+class _SecretRewritingGuardrail(BedrockGuardrail):
+    def __init__(self, **kwargs):
+        self.content_item_calls = 0
+        super().__init__(**kwargs)
+
+    def get_content_items_for_message(self, message):
+        self.content_item_calls += 1
+        blocks = super().get_content_items_for_message(message)
+        if not blocks:
+            return blocks
+        return [
+            QualifiedTextBlock(text=block.text.replace("SECRET", "[X]"), qualifier=block.qualifier) for block in blocks
+        ]
+
+
+def _secret_guardrail(**kwargs):
+    return _SecretRewritingGuardrail(
+        guardrail_name="bedrock-secret-rewrite",
+        guardrailIdentifier="test-guardrail",
+        guardrailVersion="DRAFT",
+        event_hook=GuardrailEventHooks.during_call,
+        default_on=True,
+        **kwargs,
+    )
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_input_text_runs_through_get_content_items_for_message():
+    guardrail = _secret_guardrail()
+    messages = [
+        {"role": "user", "content": "hi SECRET"},
+        {"role": "user", "content": [{"type": "text", "text": "a SECRET"}]},
+    ]
+
+    _, mock_post = await _run_anthropic_during_call(guardrail, messages)
+
+    mock_post.assert_called_once()
+    assert _sent_apply_guardrail_texts(mock_post) == ["hi [X]", "a [X]"]
+    assert guardrail.content_item_calls == 2
+
+
+@pytest.mark.asyncio
+async def test_during_call_hook_input_text_then_image_per_message():
+    guardrail = _secret_guardrail()
+    messages = [
+        {"role": "user", "content": "hi SECRET"},
+        {
+            "role": "user",
+            "content": [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{_PNG_B64}"}}],
+        },
+    ]
+
+    _, mock_post = await _run_anthropic_during_call(guardrail, messages)
+
+    mock_post.assert_called_once()
+    assert _sent_apply_guardrail_items(mock_post) == [{"text": {"text": "hi [X]"}}, _PNG_IMAGE_ITEM]
