@@ -1,3 +1,4 @@
+import asyncio
 import json
 from datetime import datetime
 from unittest.mock import MagicMock
@@ -8,8 +9,10 @@ import pytest
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.azure_ai.passthrough.transformation import AzureAIPassthroughConfig
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.rerank import RerankResponse
 from litellm.types.utils import EmbeddingResponse, ImageResponse, LlmProviders, ModelResponse
 from litellm.utils import ProviderConfigManager
@@ -517,6 +520,40 @@ def test_cohere_rerank_relay_is_costed_per_search_unit():
     assert logging_obj.call_type == "arerank"
     assert per_query > 0
     assert logging_obj._response_cost_calculator(result=result) == pytest.approx(2 * per_query)
+
+
+async def _sdk_rerank_relay(body) -> tuple[_SpendProbe, Logging]:
+    probe = _SpendProbe()
+    logging_obj = _relay_logging_obj("cohere-rerank-v4.0-fast", FOUNDRY_BASE, callbacks=[probe])
+    client = AsyncHTTPHandler()
+    client.client = httpx.AsyncClient(transport=httpx.MockTransport(lambda _: httpx.Response(200, json=RERANK_BODY)))
+    await litellm.allm_passthrough_route(
+        model="azure_ai/cohere-rerank-v4.0-fast",
+        method="POST",
+        endpoint="providers/cohere/v2/rerank",
+        api_base=FOUNDRY_BASE,
+        api_key="foundry-key",
+        json=body,
+        client=client,
+        litellm_logging_obj=logging_obj,
+    )
+    await asyncio.sleep(0)
+    GLOBAL_LOGGING_WORKER.start()
+    await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
+    return probe, logging_obj
+
+
+async def test_sdk_relay_of_a_list_body_is_logged_like_the_same_dict_body():
+    rerank_request = {"query": "q", "documents": ["a", "b"], "top_n": 1}
+
+    list_probe, list_logging_obj = await _sdk_rerank_relay([rerank_request])
+    dict_probe, dict_logging_obj = await _sdk_rerank_relay(rerank_request)
+
+    assert dict_logging_obj.call_type == "arerank"
+    assert dict_probe.logged_cost is not None and dict_probe.logged_cost > 0
+    assert list_logging_obj.call_type == dict_logging_obj.call_type
+    assert list_probe.logged_call_type == dict_probe.logged_call_type
+    assert list_probe.logged_cost == pytest.approx(dict_probe.logged_cost)
 
 
 def test_image_generation_relay_is_costed_per_image():

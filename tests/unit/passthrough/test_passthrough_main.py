@@ -6,7 +6,7 @@ import pytest
 
 import litellm
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.passthrough.main import allm_passthrough_route, llm_passthrough_route
+from litellm.passthrough.main import PassthroughStreamingResponse, allm_passthrough_route, llm_passthrough_route
 
 
 def test_llm_passthrough_route():
@@ -872,6 +872,27 @@ def test_azure_ai_relay_reaches_the_deployment_with_its_own_credential():
     assert sent.headers["api-key"] == "deployment-key"
     assert json.loads(sent.content)["model"] == "Cohere-parse-v5"
     assert response.status_code == 200
+
+
+@pytest.mark.parametrize(
+    ("body", "streams"),
+    [({"stream": True, "input": "hi"}, True), ([{"stream": True, "input": "hi"}], False)],
+)
+def test_relay_streams_only_when_the_json_object_body_asks_for_it(body, streams):
+    client = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(lambda _: httpx.Response(200, json={}))))
+
+    response = llm_passthrough_route(
+        model="azure_ai/gpt-5.4-mini",
+        endpoint="openai/v1/responses",
+        method="POST",
+        api_base=FOUNDRY_BASE,
+        api_key="deployment-key",
+        json=body,
+        client=client,
+        litellm_logging_obj=MagicMock(),
+    )
+
+    assert isinstance(response, PassthroughStreamingResponse) is streams
 
 
 @pytest.mark.asyncio

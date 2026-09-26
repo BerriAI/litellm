@@ -20,7 +20,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig, PassthroughStreamCollector
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
-from litellm.passthrough.utils import CommonUtils
+from litellm.passthrough.utils import CommonUtils, relayed_json_fields
 from litellm.utils import client
 
 base_llm_http_handler = BaseLLMHTTPHandler()
@@ -463,13 +463,14 @@ def llm_passthrough_route(
     if "model_id" in kwargs:
         litellm_params_dict["model_id"] = kwargs["model_id"]
 
+    request_fields: Final = relayed_json_fields(data, json)
     litellm_logging_obj.update_environment_variables(
         model=model,
         litellm_params=litellm_params_dict,
         optional_params={},
         endpoint=endpoint,
         custom_llm_provider=custom_llm_provider,
-        request_data=data if data else json,
+        request_data=request_fields,
     )
 
     provider_config: Final = cast(
@@ -540,12 +541,9 @@ def llm_passthrough_route(
     )
 
     ## IS STREAMING REQUEST
-    _streaming_request_data: Final[dict[str, object]] = (
-        data if isinstance(data, dict) else (json if isinstance(json, dict) else {})
-    )
     is_streaming_request: Final = provider_config.is_streaming_request(
         endpoint=endpoint,
-        request_data=_streaming_request_data,
+        request_data=request_fields,
     )
 
     # Update logging object with streaming status

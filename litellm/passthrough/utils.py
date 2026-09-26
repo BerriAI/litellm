@@ -3,6 +3,7 @@ from typing import Final
 from urllib.parse import parse_qs
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_logger
 from litellm.constants import PASS_THROUGH_HEADER_PREFIX
@@ -26,6 +27,15 @@ _PASS_THROUGH_PROTECTED_HEADERS: Final[frozenset] = frozenset(
 
 # Header name prefix used to block AWS SigV4 signing headers from being overridden.
 _PASS_THROUGH_PROTECTED_HEADER_PREFIXES: Final[tuple] = ("x-amz-",)
+
+JSON_OBJECT: Final = TypeAdapter(dict[str, object])
+
+
+def relayed_json_fields(data: Mapping[str, object] | None, json: object) -> dict[str, object]:
+    try:
+        return JSON_OBJECT.validate_python(data if data else json)
+    except ValidationError:
+        return {}  # mutable-ok: the passthrough hooks read request fields from a plain dict
 
 
 class BasePassthroughUtils:
