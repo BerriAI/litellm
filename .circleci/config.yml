@@ -3241,6 +3241,17 @@ jobs:
             - run:
                 name: Build the candidate dashboard
                 command: cd ui/litellm-dashboard && NEXT_TELEMETRY_DISABLED=1 npm run build
+      - when:
+          condition:
+            equal: [mcp, << parameters.suite >>]
+          steps:
+            - install_node
+            - run:
+                name: Install pinned official MCP conformance runner and reference
+                command: |
+                  export MCP_CONFORMANCE_ROOT="/tmp/litellm-mcp-conformance"
+                  bash .circleci/scripts/install_mcp_conformance.sh
+                  echo 'export MCP_CONFORMANCE_ROOT="/tmp/litellm-mcp-conformance"' >> "$BASH_ENV"
       - start_postgres:
           image: postgres:16@sha256:e17e86066e5ef83e0952a9347f5c792b7ece00972e2aa787a6986f471b3dd3d5
           server_args: "-c shared_preload_libraries=pg_stat_statements -c pg_stat_statements.track=all -c pg_stat_statements.max=20000"
