@@ -62,13 +62,13 @@ async def test_directory_documents_use_authoritative_activity_and_membership() -
         user_document,
     )
 
-    row: Final = SimpleNamespace(id="row", active=False, document={"userName": "subject", "active": True})
+    row: Final = SimpleNamespace(id="row", active=False, document={"schemas": [], "userName": "subject", "active": True})
     assert user_document(row).active is False
     assert user_document(row).id == "row"
     group: Final = SimpleNamespace(
         id="group",
         member_ids=["keep", "remove"],
-        document={"displayName": "Directory", "members": [{"value": "stale"}]},
+        document={"schemas": [], "displayName": "Directory", "members": [{"value": "stale"}]},
     )
     assert [member.value for member in group_document(group).members] == ["keep", "remove"]
     client: Final = MagicMock()
