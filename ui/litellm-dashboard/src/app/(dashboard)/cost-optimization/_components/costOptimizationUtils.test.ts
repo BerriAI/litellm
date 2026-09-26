@@ -58,10 +58,10 @@ const modelDay = (date: string, models: Record<string, Partial<SpendMetrics>>): 
   date,
   metrics: metrics({}),
   breakdown: {
-    models: Object.fromEntries(
+    models: {},
+    model_groups: Object.fromEntries(
       Object.entries(models).map(([name, m]) => [name, { metrics: metrics(m), metadata: {}, api_key_breakdown: {} }]),
     ),
-    model_groups: {},
     mcp_servers: {},
     providers: {},
     entities: {},
@@ -245,6 +245,54 @@ describe("computeCacheLeakage by model", () => {
     expect(netSavingsPerCachedToken).toBeCloseTo(0.002, 6);
     expect(rows.map((r) => r.id)).toEqual(["gemini-2.5-flash"]);
     expect(rows[0].potentialSavings).toBeCloseTo(1.0, 6);
+  });
+
+  it("merges rows logged under a deployment's resolved and requested names into one model group row", () => {
+    const day: DailyData = {
+      date: "2026-07-01",
+      metrics: metrics({}),
+      breakdown: {
+        models: {
+          "bedrock/global.anthropic.claude-sonnet-4-6": {
+            metrics: metrics({ prompt_tokens: 270000 }),
+            metadata: {},
+            api_key_breakdown: {},
+          },
+          "bedrock/claude-sonnet-4-6": {
+            metrics: metrics({ prompt_tokens: 5000 }),
+            metadata: {},
+            api_key_breakdown: {},
+          },
+        },
+        model_groups: {
+          "bedrock/claude-sonnet-4-6": {
+            metrics: metrics({ prompt_tokens: 275000 }),
+            metadata: {},
+            api_key_breakdown: {},
+          },
+        },
+        mcp_servers: {},
+        providers: {},
+        entities: {},
+        api_keys: {},
+      },
+    };
+    const { rows } = computeCacheLeakage([day], "model");
+    expect(rows.map((r) => r.id)).toEqual(["bedrock/claude-sonnet-4-6"]);
+    expect(rows[0].uncachedPromptTokens).toBe(275000);
+  });
+
+  it("sums a model group across days", () => {
+    const results = [
+      modelDay("2026-07-01", { "bedrock/claude-sonnet-4-6": { prompt_tokens: 1000 } }),
+      modelDay("2026-07-02", {
+        "bedrock/claude-sonnet-4-6": { prompt_tokens: 2500, cache_read_input_tokens: 500 },
+      }),
+    ];
+    const { rows } = computeCacheLeakage(results, "model");
+    expect(rows).toHaveLength(1);
+    expect(rows[0].uncachedPromptTokens).toBe(3000);
+    expect(rows[0].cacheHitRatio).toBeCloseTo(500 / 3500, 6);
   });
 });
 

@@ -1,7 +1,7 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
-use crate::base_llm::chat::transformation::Error;
+use crate::Error;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AudioTranscriptionRequestData {
@@ -21,7 +21,7 @@ impl AudioTranscriptionResponseData {
     }
 }
 
-pub use litellm_auth::RequestAuth;
+pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 
 pub trait BaseAudioTranscriptionConfig: Sync {
     fn get_supported_openai_params(&self) -> &'static [&'static str];
@@ -58,10 +58,11 @@ pub trait BaseAudioTranscriptionConfig: Sync {
         response_json: Value,
     ) -> Result<AudioTranscriptionResponseData, Error>;
 
-    fn auth_strategy(
+    fn validate_environment(
         &self,
+        headers: Headers,
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<RequestAuth, Error>;
+    ) -> Result<ValidatedEnvironment, Error>;
 }

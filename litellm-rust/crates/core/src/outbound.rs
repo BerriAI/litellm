@@ -1,30 +1,20 @@
 use std::time::Duration;
 
-use litellm_auth::RequestAuth;
-use litellm_auth_aws::SigV4Signer;
 use litellm_http::outbound::OutboundRequest;
-use serde_json::{Map, Value};
+use litellm_llms::base_llm::auth::Authenticated;
+use serde_json::Value;
 
 /// Header credentials are already in `headers`; SigV4 is applied here, over the
 /// bytes that are sent.
-pub(crate) async fn outbound_request<E>(
-    auth: &RequestAuth,
+pub(crate) fn outbound_request(
+    authenticated: Authenticated,
     url: String,
-    headers: Vec<(String, String)>,
     body: &Value,
     timeout: Option<Duration>,
-    optional_params: &Map<String, Value>,
-) -> Result<OutboundRequest, E>
-where
-    E: From<litellm_http::Error> + From<litellm_auth_aws::Error>,
-{
-    let RequestAuth::AwsSigV4 { region, service } = auth else {
-        return Ok(OutboundRequest::json(url, headers, body, timeout)?);
-    };
-    let env_lookup = |key: &str| std::env::var(key).ok();
-    let signer =
-        SigV4Signer::resolve(region.clone(), service, optional_params, &env_lookup).await?;
-    Ok(OutboundRequest::signed_json(
-        url, headers, body, timeout, &signer,
-    )?)
+) -> Result<OutboundRequest, litellm_http::Error> {
+    let Authenticated { headers, signer } = authenticated;
+    match signer {
+        None => OutboundRequest::json(url, headers, body, timeout),
+        Some(signer) => OutboundRequest::signed_json(url, headers, body, timeout, &signer),
+    }
 }

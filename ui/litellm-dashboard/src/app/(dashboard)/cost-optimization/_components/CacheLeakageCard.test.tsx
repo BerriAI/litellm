@@ -80,13 +80,13 @@ const dayWithModels = (date: string, models: Record<string, Partial<SpendMetrics
   date,
   metrics: baseMetrics({}),
   breakdown: {
-    models: Object.fromEntries(
+    models: {},
+    model_groups: Object.fromEntries(
       Object.entries(models).map(([name, m]) => [
         name,
         { metrics: baseMetrics(m), metadata: {}, api_key_breakdown: {} },
       ]),
     ),
-    model_groups: {},
     mcp_servers: {},
     providers: {},
     api_keys: {},
