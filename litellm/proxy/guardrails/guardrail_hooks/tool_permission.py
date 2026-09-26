@@ -14,6 +14,7 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import anthropic_tool_names
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_to_applied_guardrails_header,
@@ -40,6 +41,7 @@ from litellm.types.utils import (
 )
 
 GUARDRAIL_NAME: Final = "tool_permission"
+_RESPONSES_CALL_TYPES: Final = frozenset({"responses", "aresponses", "_aresponses_websocket"})
 
 
 def _object_mapping(value: object) -> Mapping[str, object] | None:
@@ -605,27 +607,33 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if not any(_is_tool_use_block(block) for block in kept_blocks):
             response["stop_reason"] = "end_turn"  # rebind-ok: dropping every tool_use ends the turn
 
-    def _get_request_tool_name(self, tool: object) -> tuple[str | None, str | None]:
+    def _get_request_tool_targets(
+        self, tool: object, call_type: CallTypesLiteral
+    ) -> tuple[tuple[str, str | None], ...]:
         tool_type: Final = self._get_mapping_value(tool, "type")
-        if tool_type != "function":
-            return None, tool_type
-
-        function: Final = self._get_mapping_value(tool, "function")
-        tool_name: Final = self._get_mapping_value(function, "name")
-        return tool_name, tool_type
+        normalized_type: Final = (
+            tool_type if call_type in _RESPONSES_CALL_TYPES or tool_type not in (None, "custom") else "function"
+        )
+        return tuple((name, normalized_type) for name in anthropic_tool_names(tool))
 
     def _get_legacy_function_name(self, function: object) -> str | None:
         return self._get_mapping_value(function, "name")
 
-    def _get_named_tool_choice(self, data: dict) -> str | None:
+    def _get_named_tool_choice(self, data: Mapping[str, object]) -> str | None:
         tool_choice: Final = data.get("tool_choice")
         if not tool_choice or tool_choice in ("auto", "none", "required"):
             return None
         if isinstance(tool_choice, str):
             return tool_choice
-        if self._get_mapping_value(tool_choice, "type") != "function":
+        if self._get_mapping_value(tool_choice, "type") not in ("tool", "function"):
             return None
-        return self._get_mapping_value(self._get_mapping_value(tool_choice, "function"), "name")
+        function_name: Final = self._get_mapping_value(self._get_mapping_value(tool_choice, "function"), "name")
+        return function_name or self._get_mapping_value(tool_choice, "name")
+
+    @staticmethod
+    def _is_anthropic_tool_choice(data: Mapping[str, object]) -> bool:
+        tool_choice: Final = _object_mapping(data.get("tool_choice"))
+        return tool_choice is not None and tool_choice.get("type") == "tool"
 
     def _get_named_function_call(self, data: dict) -> str | None:
         function_call: Final = data.get("function_call")
@@ -635,13 +643,11 @@ class ToolPermissionGuardrail(CustomGuardrail):
             return function_call
         return self._get_mapping_value(function_call, "name")
 
-    def _collect_request_tools(self, data: dict) -> list[tuple[str, str | None]]:
+    def _collect_request_tools(self, data: dict, call_type: CallTypesLiteral) -> list[tuple[str, str | None]]:
         request_tools: Final[list[tuple[str, str | None]]] = []
 
         for tool in data.get("tools") or []:
-            tool_name, tool_type = self._get_request_tool_name(tool)
-            if tool_name is not None:
-                request_tools.append((tool_name, tool_type))
+            request_tools.extend(self._get_request_tool_targets(tool, call_type))
 
         for function in data.get("functions") or []:
             function_name = self._get_legacy_function_name(function)
@@ -681,13 +687,9 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         tools: Final[list[ChatCompletionToolParam] | None] = data.get("tools")
         if tools is not None:
-            new_tools: Final = []
-            for tool in tools:
-                tool_name, tool_type = self._get_request_tool_name(tool)
-                if tool_type == "function" and tool_name in error_tool_names:
-                    continue
-                new_tools.append(tool)
-            data["tools"] = new_tools
+            data["tools"] = [
+                tool for tool in tools if not any(name in error_tool_names for name in anthropic_tool_names(tool))
+            ]
 
         functions: Final = data.get("functions")
         if functions is not None:
@@ -697,7 +699,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
 
         named_tool_choice: Final = self._get_named_tool_choice(data)
         if named_tool_choice in error_tool_names:
-            data["tool_choice"] = "none"
+            data["tool_choice"] = {"type": "none"} if self._is_anthropic_tool_choice(data) else "none"
 
         named_function_call: Final = self._get_named_function_call(data)
         if named_function_call in error_tool_names:
@@ -807,7 +809,7 @@ class ToolPermissionGuardrail(CustomGuardrail):
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
 
-        new_tools: Final = self._collect_request_tools(data)
+        new_tools: Final = self._collect_request_tools(data, call_type)
         if not new_tools:
             verbose_proxy_logger.debug(
                 "Tool Permission Guardrail: not running guardrail. No tools or functions in data"
