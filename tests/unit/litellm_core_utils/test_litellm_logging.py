@@ -19,6 +19,7 @@ from openai import AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
 
 import litellm
+from litellm._internal_context import in_post_response_phase
 from litellm._logging import session_id_var, trace_id_var
 from litellm.constants import REDACTED_BY_LITELLM, SENTRY_PII_DENYLIST
 from litellm.cost_calculator import ocr_batch_cost
@@ -1968,6 +1969,62 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
 
     dummy_logger.log_success_event.assert_called_once()
     dummy_logger.log_stream_event.assert_not_called()
+
+
+class _PhaseRecordingLogger(CustomLogger):
+    """Records whether each success callback ran inside the post-response phase."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.phases: list[bool] = []
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.phases.append(in_post_response_phase())
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.phases.append(in_post_response_phase())
+
+
+def _success_response() -> ModelResponse:
+    return ModelResponse(
+        id="resp-123",
+        model="gpt-4o-mini",
+        choices=[{"message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop", "index": 0}],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+
+def test_success_handler_runs_sync_callbacks_in_the_post_response_phase(logging_obj):
+    """Service spans logged by success callbacks must detach from the request trace even
+    while the server span is still open, so the callbacks run inside the phase marker."""
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+    recorder = _PhaseRecordingLogger()
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[recorder]):
+        logging_obj.success_handler(result=_success_response())
+
+    assert recorder.phases == [True], "log_success_event must observe the post-response phase"
+    assert in_post_response_phase() is False, "the phase must end with the handler"
+
+
+@pytest.mark.asyncio
+async def test_async_success_handler_runs_async_callbacks_in_the_post_response_phase(logging_obj):
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {"acompletion": True}
+    logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+    recorder = _PhaseRecordingLogger()
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[recorder]):
+        await logging_obj.async_success_handler(
+            result=_success_response(),
+            start_time=datetime.datetime.now(datetime.timezone.utc),
+            end_time=datetime.datetime.now(datetime.timezone.utc),
+        )
+
+    assert recorder.phases == [True], "async_log_success_event must observe the post-response phase"
+    assert in_post_response_phase() is False, "the phase must not leak into the request task"
 
 
 def test_is_sync_litellm_request():
