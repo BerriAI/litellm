@@ -5253,6 +5253,7 @@ def completion(
     # Responses API config (get_provider_responses_api_config -> None).
     skip_responses_api_bridge: Final = kwargs.pop("_skip_responses_api_bridge", False)
 
+    control_options: Final = _resolve_control_options(kwargs, model)
     skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
         from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
@@ -5392,7 +5393,6 @@ def completion(
         assistant_continue_message=assistant_continue_message,
     )
     ######## end of unpacking kwargs ###########
-    control_options: Final = _resolve_control_options(kwargs, model)
     non_default_params: Final = get_non_default_completion_params(kwargs=kwargs)
     ## PROMPT MANAGEMENT HOOKS ##
 
