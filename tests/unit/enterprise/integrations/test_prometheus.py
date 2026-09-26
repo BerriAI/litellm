@@ -477,7 +477,7 @@ def test_valid_configuration_passes_validation():
 # ==============================================================================
 
 
-@pytest.fixture
+@pytest.fixture(autouse=True)
 def reset_prometheus_exclude_settings():
     """Restore the global exclude settings after each test so they don't leak."""
     prev_metrics = litellm.prometheus_exclude_metrics

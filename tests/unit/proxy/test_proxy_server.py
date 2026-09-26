@@ -1,5 +1,6 @@
 import os
 import traceback
+from typing import Final
 from unittest import mock
 
 from dotenv import load_dotenv
@@ -35,6 +36,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.proxy_server import (  # Replace with the actual module where your FastAPI router is defined
     app,
     initialize,
@@ -418,7 +420,7 @@ def test_chat_completion_forward_llm_provider_auth_headers(
 
 @mock_patch_acompletion()
 @pytest.mark.asyncio
-async def test_team_disable_guardrails(mock_acompletion, client_no_auth):
+async def test_team_disable_guardrails(mock_acompletion, client_no_auth, monkeypatch):
     """
     If team not allowed to turn on/off guardrails
 
@@ -438,8 +440,9 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth):
         UserAPIKeyAuth,
     )
     from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+    from litellm.proxy.proxy_server import hash_token
 
+    user_api_key_cache: Final = UserApiKeyCache()
     _team_id = "1234"
     user_key = "sk-12345678"
 
@@ -459,7 +462,7 @@ async def test_team_disable_guardrails(mock_acompletion, client_no_auth):
     user_api_key_cache.set_cache(key=hash_token(user_key), value=valid_token)
     user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
 
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm.proxy.proxy_server, "prisma_client", "hello-world")
 
@@ -481,10 +484,11 @@ from tests.unit.proxy.test_custom_callback_input import CompletionCustomHandler
 
 
 @mock_patch_acompletion()
-def test_custom_logger_failure_handler(mock_acompletion, client_no_auth):
+def test_custom_logger_failure_handler(mock_acompletion, client_no_auth, monkeypatch):
     from litellm.proxy._types import UserAPIKeyAuth
-    from litellm.proxy.proxy_server import hash_token, user_api_key_cache
+    from litellm.proxy.proxy_server import hash_token
 
+    user_api_key_cache: Final = UserApiKeyCache()
     rpm_limit = 0
 
     mock_api_key = "sk-my-test-key"
@@ -501,7 +505,7 @@ def test_custom_logger_failure_handler(mock_acompletion, client_no_auth):
     litellm.callbacks = [mock_logger, mock_logger_unit_tests]
     proxy_logging_obj._init_litellm_callbacks(llm_router=None)
 
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
     setattr(litellm.proxy.proxy_server, "prisma_client", "FAKE-VAR")
     setattr(litellm.proxy.proxy_server, "proxy_logging_obj", proxy_logging_obj)
@@ -1296,7 +1300,7 @@ async def test_create_team_member_add(prisma_client, new_member_method):  # noqa
 @pytest.mark.parametrize("team_route", ["/team/member_add", "/team/member_delete"])
 @pytest.mark.asyncio
 async def test_create_team_member_add_team_admin_user_api_key_auth(
-    prisma_client, team_member_role, team_route  # noqa: F811  # pytest fixture, not a redefinition
+    prisma_client, team_member_role, team_route, monkeypatch  # noqa: F811  # pytest fixture, not a redefinition
 ):
     import time
 
@@ -1307,8 +1311,9 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
         ProxyException,
         hash_token,
         user_api_key_auth,
-        user_api_key_cache,
     )
+
+    user_api_key_cache: Final = UserApiKeyCache()
 
     setattr(litellm.proxy.proxy_server, "prisma_client", prisma_client)
     setattr(litellm.proxy.proxy_server, "master_key", "sk-1234")
@@ -1335,7 +1340,7 @@ async def test_create_team_member_add_team_admin_user_api_key_auth(
 
     user_api_key_cache.set_cache(key="team_id:{}".format(_team_id), value=team_obj)
 
-    setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", user_api_key_cache)
 
     ## TEST IF TEAM ADMIN ALLOWED TO CALL /MEMBER_ADD ENDPOINT
     import json
@@ -2349,7 +2354,7 @@ async def test_proxy_server_prisma_setup():
         mock_client.db = mock_db
 
         prisma_client = await ProxyStartupEvent._setup_prisma_client(
-            database_url=os.getenv("DATABASE_URL"),
+            database_url="postgresql://user:pass@localhost:5432/litellm",
             proxy_logging_obj=ProxyLogging(user_api_key_cache=user_api_key_cache),
             user_api_key_cache=user_api_key_cache,
         )
