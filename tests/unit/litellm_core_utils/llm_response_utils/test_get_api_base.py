@@ -53,7 +53,7 @@ class TestDeclaredAuthenticatingProvider:
         assert resolution_lookups == []
         assert api_base == expected
 
-    def test_copilot_keeps_the_enterprise_endpoint_from_disk(self, isolated_token_dirs, resolution_lookups):
+    def test_copilot_ignores_the_legacy_endpoint_on_disk(self, isolated_token_dirs, resolution_lookups):
         token_dir = isolated_token_dirs / "github_copilot"
         token_dir.mkdir()
         (token_dir / "api-key.json").write_text(
@@ -63,7 +63,7 @@ class TestDeclaredAuthenticatingProvider:
         api_base = litellm.get_api_base(model="github_copilot/gpt-4o", optional_params={})
 
         assert resolution_lookups == []
-        assert api_base == "https://api.enterprise.githubcopilot.com"
+        assert api_base == DEFAULT_GITHUB_COPILOT_API_BASE
 
     def test_explicit_api_base_still_wins(self, isolated_token_dirs, resolution_lookups):
         api_base = litellm.get_api_base(
