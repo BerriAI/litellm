@@ -1715,8 +1715,9 @@ async def test_mcp_server_tool_call_renders_denial_message_not_detail_dict(_mcp_
 
 
 @pytest.mark.asyncio
-async def test_mcp_server_tool_call_body_with_none_arguments(_mcp_request_ctx):
-    """Test that proxy_server_request body handles None arguments correctly"""
+@pytest.mark.parametrize("tool_arguments,expected", ((None, {}), ({}, {}), ({"value": 7}, {"value": 7})))
+async def test_mcp_server_tool_call_body_with_optional_arguments(_mcp_request_ctx, tool_arguments, expected):
+    """Omitted MCP arguments are an empty object; explicit inputs remain intact."""
     try:
         from litellm.proxy._experimental.mcp_server.server import (
             mcp_server_tool_call,
@@ -1727,7 +1728,6 @@ async def test_mcp_server_tool_call_body_with_none_arguments(_mcp_request_ctx):
 
     # Setup test data
     tool_name = "test_tool_no_args"
-    tool_arguments = None
 
     # Mock user auth
     user_api_key_auth = UserAPIKeyAuth(api_key="test_key", user_id="test_user")
@@ -1771,7 +1771,7 @@ async def test_mcp_server_tool_call_body_with_none_arguments(_mcp_request_ctx):
 
     body = captured_data["proxy_server_request"]["body"]
     assert body["name"] == tool_name
-    assert body["arguments"] == tool_arguments  # Should be None
+    assert body["arguments"] == expected
 
 
 @pytest.mark.asyncio
