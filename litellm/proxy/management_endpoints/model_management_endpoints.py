@@ -56,6 +56,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
+from litellm.proxy.auth.team_access import is_team_admin
 from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.config_sync_pubsub import (
@@ -68,7 +69,6 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
-from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,
     append_team_models,
@@ -2004,7 +2004,7 @@ class ModelManagementAuthChecks:
             )
         if user_api_key_dict.user_role and user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return True
-        elif team_obj is None or not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        elif team_obj is None or not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
             raise HTTPException(
                 status_code=403,
                 detail={
@@ -2136,7 +2136,7 @@ class ModelManagementAuthChecks:
             if (
                 member_operation is not None
                 and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-                and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
+                and not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
             ):
                 from litellm.proxy.proxy_server import llm_router
 

@@ -70,7 +70,7 @@ async def test_team_info_authz_matrix(
         assert body["team_info"]["team_id"] == target_team_id
 
 
-# Phase 4 F6 — explicit pin on the `_verify_team_access` 403 message string.
+# Phase 4 F6 — explicit pin on the `require_team_access` 403 message string.
 # alpha/org_b_admin already covers the branch in the matrix; this guard
 # turns a silent rename of the exception detail into a CI red, which is the
 # behavior tripwire that the matrix's status-only assertion cannot catch.

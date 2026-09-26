@@ -30,6 +30,7 @@ from litellm.proxy.auth.auth_checks import (
     _virtual_key_max_budget_check,
     can_key_call_resolved_model,
 )
+from litellm.proxy.auth.team_access import is_team_admin
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.autorouter_session_rollup import (
     AUTOROUTER_BENCHMARKS_SQL,
@@ -38,9 +39,6 @@ from litellm.proxy.db.autorouter_session_rollup import (
 from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     refresh_proxy_server_request_body_snapshot,
-)
-from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # shared owner of team-admin membership
 )
 from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_dependencies,
@@ -247,7 +245,7 @@ async def _authorize_router_dry_run(user_api_key_dict: UserAPIKeyAuth, team_id: 
         )
 
     team: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team):
+    if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team):
         ModelManagementAuthChecks.can_user_make_team_model_call(
             team_id=team_id,
             user_api_key_dict=user_api_key_dict,

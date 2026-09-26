@@ -66,6 +66,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_batch_enqueued_token_limit_is_admin_only,
     enforce_output_token_estimates_are_admin_only,
 )
+from litellm.proxy.auth.team_access import is_team_admin, require_key_access
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
@@ -88,8 +89,6 @@ from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_
 from litellm.proxy.management_endpoints.common_utils import (
     _check_disable_global_guardrails_caller_permission,
     _check_passthrough_routes_caller_permission,
-    _is_user_org_admin_for_team,
-    _is_user_team_admin,
     _set_object_metadata_field,
     _team_member_has_permission,
     _user_has_admin_view,
@@ -3051,7 +3050,7 @@ async def _acting_as_team_admin_for_key_update(
         user_api_key_cache=user_api_key_cache,
         check_db_only=True,
     )
-    if not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_for_grant):
+    if not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_for_grant):
         return False
     team_admin_key_request_or_raise(
         team_admin_key_edit_verdict(
@@ -3157,7 +3156,7 @@ async def _validate_update_key_data(
     #   cross-org attack (an outside org admin is not a member of the
     #   victim team and gets rejected at the earlier check).
     # - Anyone else (non-PROXY_ADMIN, not the owner, not a team member
-    #   on a team key): must pass _check_key_admin_access (PROXY_ADMIN
+    #   on a team key): must pass require_key_access (PROXY_ADMIN
     #   / key-owner / team-admin / org-admin of the key).
     # - max_budget / spend / budget_limits: always require the admin
     #   check, even for the key owner or a team member (matches the
@@ -3221,14 +3220,14 @@ async def _validate_update_key_data(
     # already validated team membership + /key/update permission and would have
     # raised if the caller lacked it.  Reaching this point on a team key for a
     # non-budget change means the caller was authorized — skip the redundant
-    # _check_key_admin_access that would otherwise require team/org admin status.
+    # require_key_access that would otherwise require team/org admin status.
     _key_is_team_key: Final = getattr(existing_key_row, "team_id", None) is not None
     can_skip_admin_check: Final = (caller_is_creator or _key_is_team_key) and not (
         _is_budget_change or is_project_change
     )
     if (not _is_proxy_admin) and not can_skip_admin_check:
         hashed_key: Final = existing_key_row.token
-        await _check_key_admin_access(
+        await require_key_access(
             user_api_key_dict=user_api_key_dict,
             hashed_token=hashed_key,
             prisma_client=checked_prisma_client,
@@ -4056,7 +4055,7 @@ async def validate_key_team_change(
     # Check if the person initiating the change is a Proxy Admin or Team Admin
     if (
         change_initiated_by.user_role == LitellmUserRoles.PROXY_ADMIN.value
-        or _is_user_team_admin(
+        or is_team_admin(
             user_api_key_dict=change_initiated_by,
             team_obj=team,
         )
@@ -4950,7 +4949,7 @@ async def can_modify_verification_token(
             return False
 
         # Check if user is team admin
-        if _is_user_team_admin(
+        if is_team_admin(
             user_api_key_dict=user_api_key_dict,
             team_obj=team_table,
         ):
@@ -6011,7 +6010,7 @@ async def _check_proxy_or_team_admin_for_key(
             check_db_only=True,
         )
         if team_table is not None:
-            if _is_user_team_admin(
+            if is_team_admin(
                 user_api_key_dict=user_api_key_dict,
                 team_obj=team_table,
             ):
@@ -6407,9 +6406,7 @@ def _get_admin_team_ids_from_objects(
     team_objects: list[LiteLLM_TeamTable],
 ) -> list[str]:
     """Filter team objects to those where the user is an admin."""
-    return [
-        team.team_id for team in team_objects if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
-    ]
+    return [team.team_id for team in team_objects if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)]
 
 
 def _get_team_ids_with_key_list_permission_from_objects(
@@ -6423,7 +6420,7 @@ def _get_team_ids_with_key_list_permission_from_objects(
     return [
         team.team_id
         for team in team_objects
-        if not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
+        if not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
         and _team_member_has_permission(
             user_api_key_dict=user_api_key_dict,
             team_obj=team,
@@ -7244,60 +7241,6 @@ def _get_condition_to_filter_out_ui_session_tokens() -> Mapping[str, object]:
     }
 
 
-async def _check_key_admin_access(
-    user_api_key_dict: UserAPIKeyAuth,
-    hashed_token: str | None,
-    prisma_client: PrismaClient | None,
-    user_api_key_cache: UserApiKeyCache,
-    route: str,
-) -> None:
-    """
-    Check that the caller has admin privileges for the target key.
-
-    Allowed callers:
-    - Proxy admin
-    - Team admin for the key's team
-    - Org admin for the key's team's organization
-
-    Raises HTTPException(403) if the caller is not authorized.
-    """
-
-    if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
-        return
-
-    # Look up the target key to find its team
-    target_key_row: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).find_unique(
-        where={"token": hashed_token}
-    )
-    if target_key_row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": f"Key not found: {hashed_token}"},
-        )
-
-    # If the key belongs to a team, check team admin / org admin
-    if target_key_row.team_id:
-        team_obj: Final = await get_team_object(
-            team_id=target_key_row.team_id,
-            prisma_client=prisma_client,
-            user_api_key_cache=user_api_key_cache,
-            check_db_only=True,
-        )
-        if team_obj is not None:
-            if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-                return
-            if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
-                return
-
-    raise HTTPException(
-        status_code=403,
-        detail={
-            "error": f"Only proxy admins, team admins, or org admins can call {route}. "
-            f"user_role={user_api_key_dict.user_role}, user_id={user_api_key_dict.user_id}"
-        },
-    )
-
-
 @router.post("/key/block", tags=["key management"], dependencies=[Depends(user_api_key_auth)])
 @management_endpoint_wrapper
 async def block_key(
@@ -7356,7 +7299,7 @@ async def block_key(
         hashed_token = data.key
 
     # Admin-only: only proxy admins, team admins, or org admins can block keys
-    await _check_key_admin_access(
+    await require_key_access(
         user_api_key_dict=user_api_key_dict,
         hashed_token=hashed_token,
         prisma_client=prisma_client,
@@ -7470,7 +7413,7 @@ async def unblock_key(
         hashed_token = data.key
 
     # Admin-only: only proxy admins, team admins, or org admins can unblock keys
-    await _check_key_admin_access(
+    await require_key_access(
         user_api_key_dict=user_api_key_dict,
         hashed_token=hashed_token,
         prisma_client=prisma_client,

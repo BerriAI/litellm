@@ -902,7 +902,7 @@ class LiteLLMRoutes(enum.Enum):
         "/team/spend/by_user",
         "/team/{team_id}/members/me",
         # POST/GET the team's logging callbacks, and DELETE one of them. Every
-        # handler calls _verify_team_access, which admits only a proxy admin, an
+        # handler calls require_team_access, which admits only a proxy admin, an
         # org admin for the team, or an admin of this team.
         #
         # team_id is a free-form string, so it spells these with the same path

@@ -28,6 +28,7 @@ from litellm.proxy._types import (
     TeamCallbackMetadata,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth.team_access import require_team_access
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.callback_config_validation import (
     callback_config_error,
@@ -44,10 +45,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_validated_callback_metadata,
     convert_key_logging_metadata_to_callback,
 )
-from litellm.proxy.management_endpoints.team_endpoints import (
-    _refresh_cached_team,
-    _verify_team_access,
-)
+from litellm.proxy.management_endpoints.team_endpoints import _refresh_cached_team
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.repositories.team_repository import TeamRepository
 
@@ -239,9 +237,9 @@ def _unknown_team_error(team_id: str, user_api_key_dict: UserAPIKeyAuth, status_
     """Report an unknown team without telling an unauthorized caller that it is unknown.
 
     These routes are reachable by any authenticated caller so that a team admin can
-    get as far as _verify_team_access. A distinct "does not exist" would therefore let
+    get as far as require_team_access. A distinct "does not exist" would therefore let
     any valid key probe which team ids exist, so a caller who could not have managed
-    the team either way gets the same 403 body _verify_team_access raises.
+    the team either way gets the same 403 body require_team_access raises.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
         return _callback_error(status_code, f"Team id = {team_id} does not exist.")
@@ -332,7 +330,7 @@ async def add_team_callbacks(
         # team may write callback credentials. Without this, any
         # authenticated key holder could overwrite another team's logging
         # config (and read back the credentials they wrote).
-        await _verify_team_access(
+        await require_team_access(
             team_obj=LiteLLM_TeamTable(**_existing_team.model_dump()),
             user_api_key_dict=user_api_key_dict,
         )
@@ -501,7 +499,7 @@ async def delete_team_callback(
         # IDOR guard: only proxy admins / org admins / team admins of THIS team may
         # deregister its callbacks, otherwise any authenticated key holder could
         # silence another team's observability integration.
-        await _verify_team_access(
+        await require_team_access(
             team_obj=LiteLLM_TeamTable(**_existing_team.model_dump()),
             user_api_key_dict=user_api_key_dict,
         )
@@ -634,7 +632,7 @@ async def disable_team_logging(
         # IDOR guard: only proxy admins / org admins / team admins of THIS
         # team may disable its logging — otherwise any authenticated key
         # holder can silence audit logging for any team.
-        await _verify_team_access(
+        await require_team_access(
             team_obj=LiteLLM_TeamTable(**_existing_team.model_dump()),
             user_api_key_dict=user_api_key_dict,
         )
@@ -775,7 +773,7 @@ async def get_team_callbacks(
         # IDOR guard: callback metadata holds third-party API credentials
         # (Langfuse / Langsmith / GCS). Only proxy admins / org admins /
         # team admins of THIS team may read them.
-        await _verify_team_access(
+        await require_team_access(
             team_obj=LiteLLM_TeamTable(**_existing_team.model_dump()),
             user_api_key_dict=user_api_key_dict,
         )

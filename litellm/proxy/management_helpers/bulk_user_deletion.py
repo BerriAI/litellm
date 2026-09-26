@@ -29,15 +29,12 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import delete_cache_key_objects, get_jwt_key_mapping_cache_keys_for_tokens
+from litellm.proxy.auth.team_access import is_org_admin_for_team, is_team_admin
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
-from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_org_admin_for_team,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_delete uses
-    _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_delete uses
-)
 from litellm.proxy.management_endpoints.key_management_endpoints import (
     _persist_deleted_verification_tokens,  # pyright: ignore[reportPrivateUsage]  # same audit path /key/delete uses
 )
@@ -326,8 +323,8 @@ async def bulk_remove_team_members(
 
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team)
+        and not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
+        and not await is_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team)
     ):
         raise _forbidden(
             "Call not allowed. User not proxy admin OR team admin OR org admin for this team. "

@@ -201,15 +201,12 @@ async def _is_team_admin_for(prisma_client: "PrismaClient", user_api_key_dict: U
     """
     True if the caller is a team admin of `team_id`, or an org admin for the
     team's organization. Mirrors the auth pattern used by team-management
-    endpoints (`_is_user_team_admin` + `_is_user_org_admin_for_team`).
+    endpoints (`is_team_admin` + `is_org_admin_for_team`).
 
     Imported lazily to avoid a circular import with proxy_server during the
     memory router's module load.
     """
-    from litellm.proxy.management_endpoints.common_utils import (
-        _is_user_org_admin_for_team,
-        _is_user_team_admin,
-    )
+    from litellm.proxy.auth.team_access import is_org_admin_for_team, is_team_admin
 
     try:
         team_obj: Final = await TeamRepository(prisma_client).find_by_id(team_id, id_field="team_id")
@@ -219,7 +216,7 @@ async def _is_team_admin_for(prisma_client: "PrismaClient", user_api_key_dict: U
     if team_obj is None:
         return False
 
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+    if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
         return True
 
     # Org-admin path is best-effort: it pulls from the user cache via
@@ -227,7 +224,7 @@ async def _is_team_admin_for(prisma_client: "PrismaClient", user_api_key_dict: U
     # initialized. In tests / non-proxy contexts that import path may fail —
     # treat any error as "not an org admin" rather than crashing the request.
     try:
-        if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+        if await is_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
             return True
     except Exception as e:
         verbose_proxy_logger.debug("Org-admin check skipped during write-auth (team_id=%s): %s", team_id, e)

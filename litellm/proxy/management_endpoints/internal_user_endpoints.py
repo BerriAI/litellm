@@ -42,6 +42,7 @@ from litellm.proxy.auth.password_policy import (
     validate_password_policy,
     validate_passwords_bulk,
 )
+from litellm.proxy.auth.team_access import is_team_admin
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.user_api_key_cache import (
@@ -58,7 +59,6 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_aggregated,
 )
 from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_team_admin,
     _user_has_admin_view,
     require_caller_user_id_for_non_admin,
     validate_budget_duration,
@@ -1055,7 +1055,7 @@ async def _check_user_info_v2_access(
             teams: Final = await _team_table(prisma_client).find_many(where={"team_id": {"in": caller_user.teams}})
             for team in teams:
                 team_obj = LiteLLM_TeamTable.model_validate(team.model_dump())
-                if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+                if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
                     # Check if target user is in this team
                     if team.team_id in (target_user.teams or []):
                         return target_user
@@ -2717,8 +2717,6 @@ async def _resolve_team_org_filter(
     proxy_logging_obj: "ProxyLogging | None",
 ) -> list[str]:
     """Look up the team and return its org as a filter list, or raise 403."""
-    from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
-
     try:
         team_obj: Final = await get_team_object(
             team_id=team_id,
@@ -2732,7 +2730,7 @@ async def _resolve_team_org_filter(
             detail={"error": f"scope_user_search_to_org is enabled but team '{team_id}' was not found."},
         )
 
-    if not _is_user_team_admin(user_api_key_dict, team_obj):
+    if not is_team_admin(user_api_key_dict, team_obj):
         raise HTTPException(
             status_code=403,
             detail={"error": "scope_user_search_to_org is enabled. You must be an admin of this team to search users."},

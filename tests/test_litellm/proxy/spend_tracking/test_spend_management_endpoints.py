@@ -262,8 +262,8 @@ from litellm.proxy._types import (
     SpendLogsPayload,
     UserAPIKeyAuth,
 )
+from litellm.proxy.auth import team_access
 from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger
-from litellm.proxy.management_endpoints import common_utils
 from litellm.proxy.proxy_server import app
 from litellm.proxy.spend_tracking import spend_management_endpoints
 from litellm.router import Router
@@ -334,8 +334,8 @@ async def test_can_team_member_view_log_team_not_found(monkeypatch):
     prisma = MockPrisma()
     # Even if admin check would return True, no team means False
     monkeypatch.setattr(
-        common_utils,
-        "_is_user_team_admin",
+        team_access,
+        "is_team_admin",
         lambda user_api_key_dict, team_obj: True,
     )
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")
@@ -372,8 +372,8 @@ async def test_can_team_member_view_log_not_admin(monkeypatch):
 
     prisma = MockPrisma()
     monkeypatch.setattr(
-        common_utils,
-        "_is_user_team_admin",
+        team_access,
+        "is_team_admin",
         lambda user_api_key_dict, team_obj: False,
     )
     auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="user_1")

@@ -30,15 +30,12 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import invalidate_team_member_spend_state
 from litellm.proxy.auth.litellm_license import LicenseCheck
+from litellm.proxy.auth.team_access import is_org_admin_for_team, is_team_admin
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.list_api.common import PROBLEM_TYPE_BASE, ManagementProblem
-from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_org_admin_for_team,  # pyright: ignore[reportPrivateUsage]  # same team-admin check /user/new uses
-    _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # same team-admin check /user/new uses
-    validate_budget_duration,
-)
+from litellm.proxy.management_endpoints.common_utils import validate_budget_duration
 from litellm.proxy.management_endpoints.internal_user_endpoints import (
     _update_internal_new_user_params,  # pyright: ignore[reportPrivateUsage, reportUnknownVariableType]  # /user/new defaults; result validated below
     check_if_default_team_set,
@@ -294,9 +291,9 @@ async def _load_teams(prisma_client: PrismaClient, team_ids: frozenset[str]) -> 
 async def _team_permission_error(team: LiteLLM_TeamTable, user_api_key_dict: UserAPIKeyAuth) -> str | None:
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return None
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team):
+    if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team):
         return None
-    if await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team):
+    if await is_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team):
         return None
     return f"Call not allowed. User not proxy admin OR team admin. team_id={team.team_id}"
 

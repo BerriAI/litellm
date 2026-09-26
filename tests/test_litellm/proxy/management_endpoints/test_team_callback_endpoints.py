@@ -99,7 +99,7 @@ def patched_prisma():
     with (
         patch("litellm.proxy.proxy_server.prisma_client") as mock_client,
         patch(
-            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+            "litellm.proxy.auth.team_access.is_org_admin_for_team",
             new_callable=AsyncMock,
             return_value=False,
         ),
@@ -1488,8 +1488,8 @@ async def test_unknown_team_is_indistinguishable_from_no_access(call_handler, un
     ):  # test-quality-ok: the handler imports prisma_client from proxy_server at call time, so there is no seam to inject through
         mock_client.get_data = AsyncMock(return_value=_team_row())
         mock_client.db.litellm_teamtable.update = AsyncMock()
-        with patch(  # test-quality-ok: _verify_team_access calls this module-level helper directly, so there is no seam to inject through
-            "litellm.proxy.management_endpoints.team_endpoints._is_user_org_admin_for_team",
+        with patch(  # test-quality-ok: require_team_access calls this module-level helper directly, so there is no seam to inject through
+            "litellm.proxy.auth.team_access.is_org_admin_for_team",
             new_callable=AsyncMock,
             return_value=False,
         ):

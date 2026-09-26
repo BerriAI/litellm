@@ -22,11 +22,10 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import invalidate_team_member_spend_state
+from litellm.proxy.auth.team_access import is_org_admin_for_team, is_team_admin
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
 from litellm.proxy.management_endpoints.common_utils import (
-    _is_user_org_admin_for_team,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_update uses
-    _is_user_team_admin,  # pyright: ignore[reportPrivateUsage]  # same check /team/member_update uses
     _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage]  # the single-member write, shared so the two surfaces cannot drift
     member_budget_patch,
 )
@@ -182,8 +181,8 @@ async def bulk_update_team_member_budgets(
 
     if (
         user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
-        and not await _is_user_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team)
+        and not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
+        and not await is_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team)
     ):
         raise _forbidden(
             "Call not allowed. User not proxy admin OR team admin OR org admin for this team. "

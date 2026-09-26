@@ -4826,10 +4826,8 @@ async def _can_team_member_view_log(
     Returns True if the team exists and the user is either a team admin or
     a team member with the ``/spend/logs`` permission.
     """
-    from litellm.proxy.management_endpoints.common_utils import (
-        _is_user_team_admin,
-        _team_member_has_permission,
-    )
+    from litellm.proxy.auth.team_access import is_team_admin
+    from litellm.proxy.management_endpoints.common_utils import _team_member_has_permission
 
     if team_id is None:
         return False
@@ -4837,7 +4835,7 @@ async def _can_team_member_view_log(
     if team_row is None:
         return False
     team_obj: Final = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-    if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+    if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
         return True
     return _team_member_has_permission(
         user_api_key_dict=user_api_key_dict,
@@ -5056,10 +5054,8 @@ async def _get_permitted_team_ids_for_spend_logs(
     """
     # Imported here to avoid circular import: proxy_server imports this module.
     from litellm.proxy.auth.auth_checks import get_user_object
-    from litellm.proxy.management_endpoints.common_utils import (
-        _is_user_team_admin,
-        _team_member_has_permission,
-    )
+    from litellm.proxy.auth.team_access import is_team_admin
+    from litellm.proxy.management_endpoints.common_utils import _team_member_has_permission
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 
     user_obj: Final = await get_user_object(
@@ -5077,7 +5073,7 @@ async def _get_permitted_team_ids_for_spend_logs(
     permitted: Final[list[str]] = []
     for team_row in team_rows:
         team_obj = LiteLLM_TeamTable.model_validate(team_row.model_dump())
-        if _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj) or _team_member_has_permission(
+        if is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj) or _team_member_has_permission(
             user_api_key_dict=user_api_key_dict,
             team_obj=team_obj,
             permission=KeyManagementRoutes.SPEND_LOGS.value,
