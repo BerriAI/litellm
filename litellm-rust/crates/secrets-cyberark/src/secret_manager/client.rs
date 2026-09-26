@@ -54,11 +54,7 @@ impl CyberArkSecretManager {
             );
         }
         let config = HttpClientConfig {
-            verify: if verify {
-                config.verify.clone()
-            } else {
-                Verify::Disabled
-            },
+            verify: effective_verify(verify, &config.verify),
             client_certificate: (!cert.is_empty() && !key.is_empty()).then(|| {
                 ClientIdentity::Split {
                     certificate: cert.into(),
@@ -158,9 +154,35 @@ impl CyberArkSecretManager {
     }
 }
 
+fn effective_verify(cyberark_verify: bool, host: &Verify) -> Verify {
+    match (cyberark_verify, host) {
+        (false, _) => Verify::Disabled,
+        (true, Verify::Disabled) => Verify::BuiltInRoots,
+        (true, host) => host.clone(),
+    }
+}
+
 fn normalize_endpoint(mut endpoint: reqwest::Url) -> reqwest::Url {
     if !endpoint.path().ends_with('/') {
         endpoint.set_path(&format!("{}/", endpoint.path()));
     }
     endpoint
+}
+
+#[cfg(test)]
+mod tests {
+    use std::path::PathBuf;
+
+    use super::*;
+
+    #[test]
+    fn cyberark_verification_does_not_follow_a_host_that_disabled_it() {
+        let bundle = Verify::CaBundle(PathBuf::from("/ca.pem"));
+        assert_eq!(
+            effective_verify(true, &Verify::Disabled),
+            Verify::BuiltInRoots
+        );
+        assert_eq!(effective_verify(true, &bundle), bundle);
+        assert_eq!(effective_verify(false, &bundle), Verify::Disabled);
+    }
 }
