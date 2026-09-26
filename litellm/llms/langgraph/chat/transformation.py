@@ -286,7 +286,8 @@ class LangGraphConfig(BaseConfig):
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
-        litellm_params: Mapping[str, object] | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> CustomStreamWrapper:
         """
         Get a CustomStreamWrapper for synchronous streaming.
@@ -346,7 +347,8 @@ class LangGraphConfig(BaseConfig):
         client: Optional["AsyncHTTPHandler"] = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
-        litellm_params: Mapping[str, object] | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> CustomStreamWrapper:
         """
         Get a CustomStreamWrapper for asynchronous streaming.

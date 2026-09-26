@@ -1,19 +1,18 @@
-from litellm.llms.openai.responses.transformation import OpenAIResponsesAPIConfig
-from litellm.responses.main import _bridge_kwargs
+import pytest
+
+import litellm
 
 
-def test_bridge_kwargs_forward_litellm_owned_kwargs_and_drop_unknown_ones() -> None:
-    control = object()
-    kwargs = {
-        "temperature": 0.2,
-        "litellm_trace_id": "trace-1",
-        "_litellm_control": control,
-        "client_metadata": {"a": "b"},
-        "not_a_known_param": 1,
-    }
+def test_responses_bridged_to_chat_still_rejects_an_invalid_stream_chunk_size() -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.responses(
+            model="openai/gpt-4.1-mini",
+            input="hi",
+            use_chat_completions_api=True,
+            stream_chunk_size="sixty-four",
+            api_key="fake-key",
+            api_base="http://127.0.0.1:9/v1",
+            num_retries=0,
+        )
 
-    assert dict(_bridge_kwargs(kwargs, OpenAIResponsesAPIConfig(), None)) == {
-        "temperature": 0.2,
-        "litellm_trace_id": "trace-1",
-        "_litellm_control": control,
-    }
+    assert exc_info.value.param == "stream_chunk_size"

@@ -43,7 +43,9 @@ class TestGetBaseModelFromLitellmCallMetadata:
         assert _get_base_model_from_litellm_call_metadata({"model_info": {}}) is None
 
     def test_returns_base_model(self):
-        result = _get_base_model_from_litellm_call_metadata({"model_info": {"base_model": "gpt-4"}})
+        result = _get_base_model_from_litellm_call_metadata(
+            {"model_info": {"base_model": "gpt-4"}}
+        )
         assert result == "gpt-4"
 
 
@@ -146,9 +148,10 @@ def test_control_options_are_read_from_the_request_kwargs(kwargs: dict[str, obje
         (" 64", "' 64'"),
         ("-1", "'-1'"),
         ("\uff16\uff14", "'\uff16\uff14'"),
-        ("9" * 19, repr("9" * 19)),
         ("x" * 500, "'xxxxxxxxxxxx...xxxxxxxxxxxxx'"),
         pytest.param(-(10**5000), "<int of 16610 bits>", id="huge_negative_int"),
+        pytest.param(-(2**64 - 1), "-18446744073709551615", id="64_bit_negative_int"),
+        pytest.param(-(2**64), "<int of 65 bits>", id="65_bit_negative_int"),
         (64.0, "64.0"),
         (True, "True"),
         (0, "0"),
@@ -159,13 +162,22 @@ def test_control_options_are_read_from_the_request_kwargs(kwargs: dict[str, obje
 def test_control_options_reject_a_stream_chunk_size_that_is_not_a_positive_int(raw: object, shown: str) -> None:
     assert parse_control_options({"stream_chunk_size": raw}) == InvalidControlOption(
         param="stream_chunk_size",
-        message=f"Invalid stream_chunk_size={shown}: expected a positive integer",
+        message=f"Invalid stream_chunk_size={shown}: expected a positive integer of at most 18 digits",
         valid=ControlOptions(),
     )
 
 
-def test_control_options_accept_the_longest_digit_string() -> None:
-    assert parse_control_options({"stream_chunk_size": "9" * 18}) == ControlOptions(stream_chunk_size=int("9" * 18))
+@pytest.mark.parametrize("raw", [10**18 - 1, "9" * 18], ids=["int", "digit_string"])
+def test_control_options_accept_the_largest_18_digit_value(raw: object) -> None:
+    assert parse_control_options({"stream_chunk_size": raw}) == ControlOptions(stream_chunk_size=10**18 - 1)
+
+
+@pytest.mark.parametrize("raw", [10**18, "1" + "0" * 18], ids=["int", "digit_string"])
+def test_control_options_reject_a_19_digit_value_whether_int_or_string(raw: object) -> None:
+    rejected = parse_control_options({"stream_chunk_size": raw})
+
+    assert isinstance(rejected, InvalidControlOption)
+    assert rejected.message.endswith("expected a positive integer of at most 18 digits")
 
 
 @pytest.mark.parametrize("raw", [0, -1, "sixty-four", 64.0, True])
@@ -210,7 +222,9 @@ class TestGetLitellmParamsBaseModel:
         assert result["base_model"] == "explicit"
 
     def test_falls_back_to_metadata(self):
-        result = get_litellm_params(metadata={"model_info": {"base_model": "from-metadata"}})
+        result = get_litellm_params(
+            metadata={"model_info": {"base_model": "from-metadata"}}
+        )
         assert result["base_model"] == "from-metadata"
 
     def test_none_when_no_source(self):
@@ -344,5 +358,7 @@ class TestMetadataFallsBackToLitellmMetadata:
     "value, expected",
     [("true", True), ("false", False), (" TRUE ", True), (True, True), (None, None), ("os.environ/DROP_PARAMS", None)],
 )
-def test_drop_params_strings_reach_litellm_params_as_flags(value: str | bool | None, expected: bool | None) -> None:
+def test_drop_params_strings_reach_litellm_params_as_flags(
+    value: str | bool | None, expected: bool | None
+) -> None:
     assert get_litellm_params(drop_params=value)["drop_params"] is expected

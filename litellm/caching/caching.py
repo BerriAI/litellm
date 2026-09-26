@@ -386,7 +386,7 @@ class Cache:
                 param_value: str | None = self._get_param_value(param, kwargs)
                 if param_value is not None:
                     cache_key += f"{param}: {param_value}"
-            elif not is_litellm_owned_kwarg(param):  # check if user passed in optional param - e.g. top_k
+            elif not is_litellm_owned_kwarg(param):
                 if litellm.enable_caching_on_provider_specific_optional_params is True:  # feature flagged for now
                     if kwargs[param] is None:
                         continue  # ignore None params

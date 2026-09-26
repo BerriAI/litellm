@@ -250,7 +250,14 @@ def _int_from_decimal_string(value: object) -> object:
 
 @pydantic_dataclass(frozen=True, slots=True, kw_only=True)
 class ControlOptions:
-    stream_chunk_size: Annotated[int, BeforeValidator(_int_from_decimal_string), Field(strict=True, gt=0)] | None = None
+    stream_chunk_size: (
+        Annotated[
+            int,
+            BeforeValidator(_int_from_decimal_string),
+            Field(strict=True, gt=0, lt=10**MAX_DECIMAL_STRING_DIGITS),
+        ]
+        | None
+    ) = None
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)

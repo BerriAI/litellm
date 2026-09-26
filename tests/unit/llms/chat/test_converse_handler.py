@@ -1,5 +1,5 @@
 import json
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Mapping
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -7,13 +7,11 @@ import httpx
 import pytest
 
 import litellm
-from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.llms.bedrock.chat import BedrockConverseLLM
 from litellm.llms.bedrock.chat.converse_handler import make_sync_call
 from litellm.llms.bedrock.common_utils import _get_all_bedrock_regions
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.litellm_params import ControlOptions
-from tests._support.stream_chunk_size import keys_at_every_depth
+from tests._support.stream_chunk_size import DEFAULT_CHUNKING_REQUESTS, keys_at_every_depth
 
 
 def test_encode_model_id_with_inference_profile():
@@ -105,10 +103,12 @@ class TestBedrockRegionInModelPath:
         if _region_from_model is not None and "aws_region_name" not in optional_params:
             optional_params["aws_region_name"] = _region_from_model
 
-        assert model_id == expected_model_id, (
-            f"modelId mismatch for {model!r}: got {model_id!r}, expected {expected_model_id!r}"
-        )
-        assert optional_params.get("aws_region_name") == expected_region, (
+        assert (
+            model_id == expected_model_id
+        ), f"modelId mismatch for {model!r}: got {model_id!r}, expected {expected_model_id!r}"
+        assert (
+            optional_params.get("aws_region_name") == expected_region
+        ), (
             f"region mismatch for {model!r}: "
             f"got {optional_params.get('aws_region_name')!r}, expected {expected_region!r}"
         )
@@ -303,7 +303,9 @@ async def test_async_converse_streaming_forwards_bedrock_response_headers():
 
 
 def test_completion_plumbs_stream_chunk_size_through_converse() -> None:
-    iter_bytes_spy = _stream_completion_with_spied_iter_bytes(model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0")
+    iter_bytes_spy = _stream_completion_with_spied_iter_bytes(
+        model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
+    )
     iter_bytes_spy.assert_called_once_with(chunk_size=None)
 
     iter_bytes_spy = _stream_completion_with_spied_iter_bytes(
@@ -341,18 +343,9 @@ def test_completion_stream_chunk_size_reaches_iter_bytes_but_not_converse_body()
     assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
 
 
-@pytest.mark.parametrize(
-    "request_kwargs",
-    [
-        {},
-        {"stream_chunk_size": "sixty-four", "drop_params": True},
-        {CONTROL_OPTIONS_KEY: ControlOptions(stream_chunk_size=1)},
-        {CONTROL_OPTIONS_KEY: {"stream_chunk_size": 1}},
-    ],
-    ids=["unset", "dropped", "forged_options", "forged_mapping"],
-)
+@pytest.mark.parametrize("request_kwargs", DEFAULT_CHUNKING_REQUESTS)
 def test_completion_uses_default_chunking_unless_a_valid_size_is_requested(
-    request_kwargs: dict[str, object],
+    request_kwargs: Mapping[str, object],
 ) -> None:
     iter_bytes_spy, _ = _stream_converse_completion_with_spied_client(**request_kwargs)
 
@@ -394,13 +387,9 @@ async def test_acompletion_stream_chunk_size_reaches_aiter_bytes_but_not_convers
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "request_kwargs",
-    [{}, {"stream_chunk_size": 0, "drop_params": True}, {CONTROL_OPTIONS_KEY: ControlOptions(stream_chunk_size=1)}],
-    ids=["unset", "dropped", "forged_options"],
-)
+@pytest.mark.parametrize("request_kwargs", DEFAULT_CHUNKING_REQUESTS)
 async def test_acompletion_uses_default_chunking_unless_a_valid_size_is_requested(
-    request_kwargs: dict[str, object],
+    request_kwargs: Mapping[str, object],
 ) -> None:
     aiter_bytes_spy, _ = await _astream_converse_completion_with_spied_client(**request_kwargs)
 

@@ -199,7 +199,9 @@ async def test_url_with_format_param_openai(model, sync_mode):
             }
         ],
     }
-    with patch.object(client.chat.completions.with_raw_response, "create") as mock_client:
+    with patch.object(
+        client.chat.completions.with_raw_response, "create"
+    ) as mock_client:
         try:
             if sync_mode:
                 response = completion(**args, client=client)
@@ -426,7 +428,9 @@ def test_embedding_keeps_an_internal_prefixed_kwarg_out_of_the_provider_request(
 
 def test_custom_provider_with_extra_headers():
 
-    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
+    with patch.object(
+        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
+    ) as mock_post:
         response = litellm.completion(
             model="custom/custom",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -440,7 +444,9 @@ def test_custom_provider_with_extra_headers():
 
 def test_custom_provider_with_extra_body():
 
-    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
+    with patch.object(
+        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
+    ) as mock_post:
         response = litellm.completion(
             model="custom/custom",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -467,7 +473,9 @@ def test_custom_provider_with_extra_body():
         }
 
     # test that extra_body is not passed if not provided
-    with patch.object(litellm.llms.custom_httpx.http_handler.HTTPHandler, "post") as mock_post:
+    with patch.object(
+        litellm.llms.custom_httpx.http_handler.HTTPHandler, "post"
+    ) as mock_post:
         response = litellm.completion(
             model="custom/custom",
             messages=[{"role": "user", "content": "Hello, how are you?"}],
@@ -498,7 +506,9 @@ def set_openrouter_api_key():
 
 
 @pytest.mark.asyncio
-async def test_extra_body_with_fallback(respx_mock: respx.MockRouter, set_openrouter_api_key, monkeypatch):
+async def test_extra_body_with_fallback(
+    respx_mock: respx.MockRouter, set_openrouter_api_key, monkeypatch
+):
     """
     test regression for https://github.com/BerriAI/litellm/issues/8425.
 
@@ -566,7 +576,9 @@ async def test_extra_body_with_fallback(respx_mock: respx.MockRouter, set_openro
 
         # Verify the response
         assert response is not None
-        assert len(respx_mock.calls) > 0, "Mock was not called - check if aiohttp transport is properly disabled"
+        assert (
+            len(respx_mock.calls) > 0
+        ), "Mock was not called - check if aiohttp transport is properly disabled"
 
         # Get the request from the mock
         request: httpx.Request = respx_mock.calls[0].request
@@ -590,7 +602,9 @@ async def test_extra_body_with_fallback(respx_mock: respx.MockRouter, set_openro
 @pytest.mark.parametrize("env_base", ["OPENAI_BASE_URL", "OPENAI_API_BASE"])
 @pytest.mark.asyncio
 @pytest.mark.flaky(retries=3, delay=1)
-async def test_openai_env_base(respx_mock: respx.MockRouter, env_base, openai_api_response, monkeypatch):
+async def test_openai_env_base(
+    respx_mock: respx.MockRouter, env_base, openai_api_response, monkeypatch
+):
     "This tests OpenAI env variables are honored, including legacy OPENAI_API_BASE"
     # Ensure aiohttp transport is disabled to use httpx which respx can mock
     litellm.disable_aiohttp_transport = True
@@ -605,7 +619,9 @@ async def test_openai_env_base(respx_mock: respx.MockRouter, env_base, openai_ap
     messages = [{"role": "user", "content": "Hello, how are you?"}]
 
     # Configure respx mock to intercept the request
-    mock_route = respx_mock.post(url__regex=r"http://localhost:12345/v1/chat/completions.*").mock(
+    mock_route = respx_mock.post(
+        url__regex=r"http://localhost:12345/v1/chat/completions.*"
+    ).mock(
         return_value=httpx.Response(
             status_code=200,
             json={
@@ -639,7 +655,9 @@ async def test_openai_env_base(respx_mock: respx.MockRouter, env_base, openai_ap
         assert response.choices[0].message.content == "Hello from mocked response!"
 
         # Verify the mock was called
-        assert mock_route.called, "Mock route was not called - request may have bypassed respx"
+        assert (
+            mock_route.called
+        ), "Mock route was not called - request may have bypassed respx"
     finally:
         # Clean up to avoid affecting other tests
         litellm.disable_aiohttp_transport = False
@@ -734,7 +752,9 @@ def test_return_raw_request_does_not_call_provider(respx_mock: respx.MockRouter)
     assert route.call_count == 0
     assert request.get("error") is None
     assert request["raw_request_body"]["model"] == model
-    assert request["raw_request_body"]["messages"] == [{"role": "user", "content": "hi"}]
+    assert request["raw_request_body"]["messages"] == [
+        {"role": "user", "content": "hi"}
+    ]
 
 
 def test_return_raw_request_ignores_turn_off_message_logging(
@@ -767,7 +787,9 @@ def test_completion_forwards_verbosity_in_raw_request(respx_mock: respx.MockRout
 
     model = "gpt-5.2"
     messages = [{"role": "user", "content": "hi"}]
-    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(return_value=_mocked_openai_chat_response(model))
+    respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=_mocked_openai_chat_response(model)
+    )
 
     request = return_raw_request(
         endpoint=CallTypes.completion,
@@ -784,7 +806,9 @@ def test_completion_forwards_verbosity_in_raw_request(respx_mock: respx.MockRout
 
 
 @pytest.mark.asyncio
-async def test_acompletion_forwards_verbosity_to_provider_request(respx_mock: respx.MockRouter, monkeypatch):
+async def test_acompletion_forwards_verbosity_to_provider_request(
+    respx_mock: respx.MockRouter, monkeypatch
+):
     """Regression test: acompletion() must forward the verbosity param to the provider request body."""
     original_disable_aiohttp = litellm.disable_aiohttp_transport
     try:
@@ -845,9 +869,9 @@ def test_responses_api_bridge_check_gpt_5_4_pro():
             model=model_name,
             custom_llm_provider="openai",
         )
-        assert model_info.get("mode") == "responses", (
-            f"{model_name} should have mode='responses', got '{model_info.get('mode')}'"
-        )
+        assert (
+            model_info.get("mode") == "responses"
+        ), f"{model_name} should have mode='responses', got '{model_info.get('mode')}'"
 
 
 def test_responses_api_bridge_check_gpt_5_4_tools_plus_reasoning_routes_to_responses():
@@ -1293,7 +1317,7 @@ def test_responses_api_bridge_check_openai_backed_custom_api_base_with_unset_eff
         tools=[{"type": "function", "function": {"name": "get_capital"}}],
         reasoning_effort=None,
         api_base=api_base,
-    )
+        )
 
     assert model == "gpt-5.6"
     assert model_info.get("mode") == "responses"
@@ -1318,7 +1342,7 @@ def test_responses_api_bridge_check_lookalike_custom_api_base_with_unset_effort_
         tools=[{"type": "function", "function": {"name": "get_capital"}}],
         reasoning_effort=None,
         api_base=api_base,
-    )
+        )
 
     assert model == "gpt-5.6"
     assert model_info.get("mode") != "responses"
@@ -1338,7 +1362,7 @@ def test_responses_api_bridge_check_privatelink_api_base_via_env_with_unset_effo
         tools=[{"type": "function", "function": {"name": "get_capital"}}],
         reasoning_effort=None,
         api_base=None,
-    )
+        )
 
     assert model == "gpt-5.6"
     assert model_info.get("mode") == "responses"
@@ -1836,7 +1860,9 @@ def test_responses_api_bridge_check_handles_exception():
     with patch("litellm.main._get_model_info_helper") as mock_get_model_info:
         mock_get_model_info.side_effect = Exception("Model not found")
 
-        model_info, model = responses_api_bridge_check(model="responses/custom-model", custom_llm_provider="custom")
+        model_info, model = responses_api_bridge_check(
+            model="responses/custom-model", custom_llm_provider="custom"
+        )
 
         assert model == "custom-model"
         assert model_info["mode"] == "responses"
@@ -2679,7 +2705,9 @@ def test_image_edit_merges_headers_and_extra_headers():
 
     mock_image_edit_config = MagicMock()
     mock_image_edit_config.get_supported_openai_params.return_value = set()
-    mock_image_edit_config.map_openai_params.side_effect = lambda **kwargs: dict(kwargs["image_edit_optional_params"])
+    mock_image_edit_config.map_openai_params.side_effect = lambda **kwargs: dict(
+        kwargs["image_edit_optional_params"]
+    )
 
     with (
         patch(
@@ -3090,7 +3118,10 @@ def test_mock_completion_stream_with_model_response():
     # Verify the content is streamed correctly
     accumulated_content = ""
     for chunk in chunks:
-        if hasattr(chunk.choices[0].delta, "content") and chunk.choices[0].delta.content:
+        if (
+            hasattr(chunk.choices[0].delta, "content")
+            and chunk.choices[0].delta.content
+        ):
             accumulated_content += chunk.choices[0].delta.content
 
     assert "This is a test response" in accumulated_content or len(chunks) > 0
@@ -3148,7 +3179,10 @@ async def test_async_mock_completion_stream_with_model_response():
     # Verify the content is streamed correctly
     accumulated_content = ""
     for chunk in chunks:
-        if hasattr(chunk.choices[0].delta, "content") and chunk.choices[0].delta.content:
+        if (
+            hasattr(chunk.choices[0].delta, "content")
+            and chunk.choices[0].delta.content
+        ):
             accumulated_content += chunk.choices[0].delta.content
 
     assert "This is an async test response" in accumulated_content or len(chunks) > 0
@@ -3215,7 +3249,9 @@ def test_stream_chunk_builder_text_completion_combines_text_and_usage():
         ),
     ]
 
-    response = stream_chunk_builder_text_completion(chunks=chunks, messages=[{"role": "user", "content": "say hello"}])
+    response = stream_chunk_builder_text_completion(
+        chunks=chunks, messages=[{"role": "user", "content": "say hello"}]
+    )
 
     assert response.choices[0].text == "Hello world"
     assert response.choices[0].finish_reason == "stop"
@@ -3663,7 +3699,10 @@ def _text_chunk(content, finish_reason=None, usage=None):
 
 def _priced_at(prompt_tokens, completion_tokens):
     prices = litellm.model_cost[STREAM_COST_MODEL]
-    return prompt_tokens * prices["input_cost_per_token"] + completion_tokens * prices["output_cost_per_token"]
+    return (
+        prompt_tokens * prices["input_cost_per_token"]
+        + completion_tokens * prices["output_cost_per_token"]
+    )
 
 
 @pytest.fixture
@@ -3729,9 +3768,9 @@ def test_streaming_and_not_streaming_bill_the_same_usage_the_same(local_cost_map
         usage=STREAMED_USAGE,
     )
 
-    assert litellm.completion_cost(completion_response=rebuilt, model=STREAM_COST_MODEL) == pytest.approx(
-        litellm.completion_cost(completion_response=whole, model=STREAM_COST_MODEL)
-    )
+    assert litellm.completion_cost(
+        completion_response=rebuilt, model=STREAM_COST_MODEL
+    ) == pytest.approx(litellm.completion_cost(completion_response=whole, model=STREAM_COST_MODEL))
 
 
 def test_a_stream_that_reported_no_usage_is_still_billed(local_cost_map):
@@ -3750,7 +3789,9 @@ def test_a_stream_that_reported_no_usage_is_still_billed(local_cost_map):
     cost = litellm.completion_cost(completion_response=rebuilt, model=STREAM_COST_MODEL)
 
     assert cost > 0
-    assert cost == pytest.approx(_priced_at(rebuilt.usage.prompt_tokens, rebuilt.usage.completion_tokens))
+    assert cost == pytest.approx(
+        _priced_at(rebuilt.usage.prompt_tokens, rebuilt.usage.completion_tokens)
+    )
 
 
 @pytest.mark.asyncio
@@ -3878,9 +3919,7 @@ def _stream_builder_text_chunk(model: str, content: str, finish_reason: str | No
         created=1724900000,
         model=model,
         object="chat.completion.chunk",
-        choices=[
-            StreamingChoices(finish_reason=finish_reason, index=0, delta=Delta(content=content, role="assistant"))
-        ],
+        choices=[StreamingChoices(finish_reason=finish_reason, index=0, delta=Delta(content=content, role="assistant"))],
     )
 
 
@@ -4251,7 +4290,7 @@ def test_completion_rejects_an_invalid_stream_chunk_size_with_a_400_naming_the_p
         )
     assert exc_info.value.status_code == 400
     assert exc_info.value.param == "stream_chunk_size"
-    assert f"Invalid stream_chunk_size={raw!r}: expected a positive integer" in str(exc_info.value)
+    assert f"Invalid stream_chunk_size={raw!r}: expected a positive integer of at most 18 digits" in str(exc_info.value)
 
 
 class _PromptHookRecorder(CustomPromptManagement):
@@ -4305,7 +4344,7 @@ async def _call_completion(is_async: bool, **kwargs: object) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("is_async,hook", [(False, "sync"), (True, "async")], ids=["completion", "acompletion"])
-async def test_a_valid_stream_chunk_size_reaches_the_prompt_hook(
+async def test_the_prompt_hook_runs_when_stream_chunk_size_is_valid(
     monkeypatch: pytest.MonkeyPatch, is_async: bool, hook: str
 ) -> None:
     on_prompt: Final = MagicMock()

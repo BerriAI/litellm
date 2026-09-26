@@ -9,7 +9,7 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
-from litellm.types.litellm_params import ControlOptions
+from litellm.types.litellm_params import MAX_DECIMAL_STRING_DIGITS, ControlOptions
 from litellm.types.router import CustomPricingLiteLLMParams
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
@@ -79,6 +79,7 @@ _OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
 _CONTROL_OPTIONS: Final = TypeAdapter(ControlOptions)
 _CONTROL_OPTION_NAMES: Final = tuple(field.name for field in fields(ControlOptions))
 _MAX_SHOWN_INT_BITS: Final = 64
+_EXPECTED: Final = f"expected a positive integer of at most {MAX_DECIMAL_STRING_DIGITS} digits"
 
 
 def _bounded_repr(value: object) -> str:
@@ -103,7 +104,7 @@ def parse_control_options(kwargs: Mapping[str, object]) -> ControlOptions | Inva
         param: Final = invalid[0]
         return InvalidControlOption(
             param=param,
-            message=f"Invalid {param}={_bounded_repr(given[param])}: expected a positive integer",
+            message=f"Invalid {param}={_bounded_repr(given[param])}: {_EXPECTED}",
             valid=_CONTROL_OPTIONS.validate_python({k: v for k, v in given.items() if k not in invalid}),
         )
 

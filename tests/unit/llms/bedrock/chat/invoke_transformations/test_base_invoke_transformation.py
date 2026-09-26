@@ -1,4 +1,6 @@
 import json
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -6,14 +8,12 @@ import httpx
 import pytest
 
 import litellm
-from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.llms.bedrock.chat.invoke_transformations.base_invoke_transformation import (
     AmazonInvokeConfig,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from litellm.types.litellm_params import ControlOptions
-from tests._support.stream_chunk_size import keys_at_every_depth
+from tests._support.stream_chunk_size import DEFAULT_CHUNKING_REQUESTS, keys_at_every_depth
 
 
 @pytest.mark.parametrize(
@@ -269,17 +269,10 @@ def test_completion_stream_chunk_size_reaches_iter_bytes_but_not_invoke_body() -
     assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
 
 
-@pytest.mark.parametrize(
-    "request_kwargs",
-    [
-        {},
-        {"stream_chunk_size": "sixty-four", "drop_params": True},
-        {CONTROL_OPTIONS_KEY: ControlOptions(stream_chunk_size=1)},
-        {CONTROL_OPTIONS_KEY: {"stream_chunk_size": 1}},
-    ],
-    ids=["unset", "dropped", "forged_options", "forged_mapping"],
-)
-def test_completion_uses_default_chunking_unless_a_valid_size_is_requested(request_kwargs: dict[str, object]) -> None:
+@pytest.mark.parametrize("request_kwargs", DEFAULT_CHUNKING_REQUESTS)
+def test_completion_uses_default_chunking_unless_a_valid_size_is_requested(
+    request_kwargs: Mapping[str, object],
+) -> None:
     iter_bytes_spy, _ = _stream_invoke_completion_with_spied_client(**request_kwargs)
 
     iter_bytes_spy.assert_called_once_with(chunk_size=None)
@@ -320,45 +313,44 @@ async def test_acompletion_stream_chunk_size_reaches_aiter_bytes_but_not_invoke_
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize(
-    "request_kwargs",
-    [
-        {},
-        {"stream_chunk_size": "sixty-four", "drop_params": True},
-        {CONTROL_OPTIONS_KEY: ControlOptions(stream_chunk_size=1)},
-        {CONTROL_OPTIONS_KEY: {"stream_chunk_size": 1}},
-    ],
-    ids=["unset", "dropped", "forged_options", "forged_mapping"],
-)
+@pytest.mark.parametrize("request_kwargs", DEFAULT_CHUNKING_REQUESTS)
 async def test_acompletion_uses_default_chunking_unless_a_valid_size_is_requested(
-    request_kwargs: dict[str, object],
+    request_kwargs: Mapping[str, object],
 ) -> None:
     aiter_bytes_spy, _ = await _astream_invoke_completion_with_spied_client(**request_kwargs)
 
     aiter_bytes_spy.assert_called_once_with(chunk_size=None)
 
 
-@pytest.mark.parametrize("stream_chunk_size,expected_chunk_size", [(64, 64), ("64", 64), (None, None)])
-def test_router_deployment_stream_chunk_size_reaches_iter_bytes(stream_chunk_size, expected_chunk_size):
-    mock_response = MagicMock()
-    mock_response.status_code = 200
-    mock_response.iter_bytes = MagicMock(return_value=iter([]))
-    client = HTTPHandler()
-    client.post = MagicMock(return_value=mock_response)
-    deployment_params = {
+INVOKE_DEPLOYMENT: Final = MappingProxyType(
+    {
         "model": "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
         "aws_access_key_id": "fake",
         "aws_secret_access_key": "fake",
         "aws_region_name": "us-east-1",
     }
-    router = litellm.Router(
-        model_list=[
-            {
-                "model_name": "invoke-chunked",
-                "litellm_params": deployment_params
-                | ({} if stream_chunk_size is None else {"stream_chunk_size": stream_chunk_size}),
-            }
-        ]
+)
+
+
+@pytest.mark.parametrize(
+    "deployment_extras,expected_chunk_size",
+    [
+        pytest.param(MappingProxyType({"stream_chunk_size": 64}), 64, id="int"),
+        pytest.param(MappingProxyType({"stream_chunk_size": "64"}), 64, id="digit_string"),
+        pytest.param(MappingProxyType({}), None, id="unset"),
+        pytest.param(MappingProxyType({"stream_chunk_size": "sixty-four", "drop_params": True}), None, id="dropped"),
+    ],
+)
+def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
+    deployment_extras: Mapping[str, object], expected_chunk_size: int | None
+) -> None:
+    mock_response: Final = MagicMock()
+    mock_response.status_code = 200
+    mock_response.iter_bytes = MagicMock(return_value=iter([]))
+    client: Final = HTTPHandler()
+    client.post = MagicMock(return_value=mock_response)
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "invoke-chunked", "litellm_params": {**INVOKE_DEPLOYMENT, **deployment_extras}}]
     )
 
     router.completion(
@@ -371,33 +363,6 @@ def test_router_deployment_stream_chunk_size_reaches_iter_bytes(stream_chunk_siz
     mock_response.iter_bytes.assert_called_once_with(chunk_size=expected_chunk_size)
     data: Final = client.post.call_args.kwargs["data"]
     assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
-
-
-def test_router_deployment_with_drop_params_streams_with_default_chunking_for_a_bad_stream_chunk_size() -> None:
-    mock_response: Final = MagicMock()
-    mock_response.status_code = 200
-    mock_response.iter_bytes = MagicMock(return_value=iter([]))
-    client: Final = HTTPHandler()
-    client.post = MagicMock(return_value=mock_response)
-    router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": "invoke-chunked",
-                "litellm_params": {
-                    "model": "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
-                    "aws_access_key_id": "fake",
-                    "aws_secret_access_key": "fake",
-                    "aws_region_name": "us-east-1",
-                    "stream_chunk_size": "sixty-four",
-                    "drop_params": True,
-                },
-            }
-        ]
-    )
-
-    router.completion(model="invoke-chunked", messages=[{"role": "user", "content": "hi"}], stream=True, client=client)
-
-    mock_response.iter_bytes.assert_called_once_with(chunk_size=None)
 
 
 def test_invoke_stream_rejects_non_int_stream_chunk_size_before_calling_bedrock() -> None:
@@ -426,13 +391,7 @@ def test_router_deployment_with_a_non_numeric_stream_chunk_size_gets_a_400_befor
         model_list=[
             {
                 "model_name": "invoke-chunked",
-                "litellm_params": {
-                    "model": "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
-                    "aws_access_key_id": "fake",
-                    "aws_secret_access_key": "fake",
-                    "aws_region_name": "us-east-1",
-                    "stream_chunk_size": "sixty-four",
-                },
+                "litellm_params": {**INVOKE_DEPLOYMENT, "stream_chunk_size": "sixty-four"},
             }
         ]
     )

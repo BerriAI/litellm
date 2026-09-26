@@ -643,7 +643,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
-        litellm_params: Mapping[str, object] | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> "CustomStreamWrapper":
         """
         Simplified sync streaming - returns a generator that yields ModelResponse chunks.
@@ -863,7 +864,8 @@ class AmazonAgentCoreConfig(BaseConfig, BaseAWSLLM):
         client: Optional["AsyncHTTPHandler"] = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
-        litellm_params: Mapping[str, object] | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> "CustomStreamWrapper":
         """
         Simplified async streaming - returns an async generator that yields ModelResponse chunks.

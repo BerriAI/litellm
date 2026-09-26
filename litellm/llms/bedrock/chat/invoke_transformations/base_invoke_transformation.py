@@ -453,9 +453,10 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
-        litellm_params: Mapping[str, object] | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> CustomStreamWrapper:
-        chunk_size: Final = stored_control_options(litellm_params or {}).stream_chunk_size
+        chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size
         completion_stream, response_headers = await make_call(
             client=client,
             api_base=api_base,
@@ -491,12 +492,13 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
-        litellm_params: Mapping[str, object] | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> CustomStreamWrapper:
         sync_client: Final = (
             _get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client
         )
-        chunk_size: Final = stored_control_options(litellm_params or {}).stream_chunk_size
+        chunk_size: Final = stored_control_options(litellm_params).stream_chunk_size
         completion_stream, response_headers = make_sync_call(
             client=sync_client,
             api_base=api_base,

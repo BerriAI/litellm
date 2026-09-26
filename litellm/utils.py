@@ -10120,7 +10120,7 @@ def get_standard_openai_params(params: Mapping[str, object]) -> dict:
     return {k: v for k, v in params.items() if k in litellm.OPENAI_CHAT_COMPLETION_PARAMS and v is not None}
 
 
-def get_non_default_completion_params(kwargs: Mapping[str, object]) -> dict:
+def get_non_default_completion_params(kwargs: Mapping[str, object]) -> dict[str, object]:
     return filter_out_litellm_params(kwargs, excluding=litellm.OPENAI_CHAT_COMPLETION_PARAMS)
 
 
@@ -10167,7 +10167,7 @@ def strip_reasoning_summary_aliases_from_optional_params(
     return op, rs_val
 
 
-def get_non_default_transcription_params(kwargs: Mapping[str, object]) -> dict:
+def get_non_default_transcription_params(kwargs: Mapping[str, object]) -> dict[str, object]:
     from litellm.constants import OPENAI_TRANSCRIPTION_PARAMS
 
     return filter_out_litellm_params(kwargs, excluding=OPENAI_TRANSCRIPTION_PARAMS)
