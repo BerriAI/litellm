@@ -9,6 +9,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.get_litellm_params import control_params_in
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
@@ -18,7 +19,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
-from litellm.llms.bedrock.common_utils import BedrockError, stream_chunk_size_from
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     merge_bedrock_invoke_headers,
@@ -453,7 +454,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
     ) -> CustomStreamWrapper:
-        chunk_size: Final = stream_chunk_size_from(logging_obj.litellm_params)
+        chunk_size: Final = control_params_in(logging_obj.litellm_params).stream_chunk_size
         completion_stream, response_headers = await make_call(
             client=client,
             api_base=api_base,
@@ -493,7 +494,7 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         sync_client: Final = (
             _get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client
         )
-        chunk_size: Final = stream_chunk_size_from(logging_obj.litellm_params)
+        chunk_size: Final = control_params_in(logging_obj.litellm_params).stream_chunk_size
         completion_stream, response_headers = make_sync_call(
             client=sync_client,
             api_base=api_base,
