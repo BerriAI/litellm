@@ -8473,9 +8473,6 @@ async def test_mcp_credentials_only_removed_from_logging_copies(path: str, custo
 
 
 def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
-    """``signoz_*`` vars reach the tracer through the trusted overlay with no
-    callback-name check, so a team that saved them under a different callback
-    never asked for SigNoz and must not export to it."""
     from litellm.proxy._types import AddTeamCallback
     from litellm.proxy.litellm_pre_call_utils import convert_key_logging_metadata_to_callback
 

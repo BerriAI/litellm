@@ -8836,8 +8836,6 @@ async def test_prompt_management_with_unchanged_variables_replays_a_byte_identic
 
 
 def test_signoz_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
-    """With LITELLM_OTEL_V2 on, the "signoz" callback builds the OTel v2 logger
-    carrying the preset's exporter; the same name must resolve to one instance."""
     from litellm.integrations.otel.logger import OpenTelemetryV2
     from litellm.integrations.otel.model.config import ExporterOwner, is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
@@ -8873,9 +8871,6 @@ def test_signoz_dispatch_prefers_otel_v2_when_flag_on(monkeypatch):
 
 
 def test_signoz_dispatch_keeps_legacy_otel_when_flag_off(monkeypatch):
-    """With the flag off the callback still works, through the generic OTel
-    logger. The signal path is resolved and the key rides on the config rather
-    than OTEL_EXPORTER_OTLP_TRACES_HEADERS, which any other exporter would read."""
     from litellm.integrations.opentelemetry import OpenTelemetry
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
@@ -8912,9 +8907,6 @@ def test_signoz_dispatch_keeps_legacy_otel_when_flag_off(monkeypatch):
 
 
 def test_signoz_dispatch_requires_an_endpoint(monkeypatch):
-    """There is no default host, so an unset endpoint has nowhere to export. The
-    branch rejects it before constructing anything, and the caller's non-blocking
-    handler turns that into no logger at all rather than a silent console exporter."""
     from litellm.integrations.otel.model.config import is_otel_v2_enabled
     from litellm.litellm_core_utils import litellm_logging as logging_module
 
