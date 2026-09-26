@@ -379,6 +379,7 @@ const teamUpdateFieldsSchema = z.object({
   tpm_limit: numericInputSchema,
   rpm_limit: numericInputSchema,
   tpd_limit: numericInputSchema,
+  max_parallel_requests: numericInputSchema,
   modelLimits: z
     .array(
       z.object({
@@ -463,6 +464,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   tpm_limit: undefined,
   rpm_limit: undefined,
   tpd_limit: undefined,
+  max_parallel_requests: undefined,
   modelLimits: [],
   default_estimated_output_tokens: undefined,
   default_estimated_output_tokens_per_model: "",
@@ -514,6 +516,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
   tpm_limit: info.tpm_limit,
   rpm_limit: info.rpm_limit,
   tpd_limit: info.tpd_limit,
+  max_parallel_requests: info.max_parallel_requests,
   modelLimits: Array.from(
     new Set([
       ...Object.keys(info.metadata?.model_tpm_limit ?? {}),
@@ -1038,6 +1041,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         tpm_limit: sanitizeNumeric(values.tpm_limit),
         rpm_limit: sanitizeNumeric(values.rpm_limit),
         tpd_limit: sanitizeNumeric(values.tpd_limit),
+        max_parallel_requests: sanitizeNumeric(values.max_parallel_requests),
         model_tpm_limit: modelTpmLimit,
         model_rpm_limit: modelRpmLimit,
         max_budget: values.max_budget,
@@ -1324,7 +1328,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
               <p>TPM: {info.tpm_limit ?? "Unlimited"}</p>
               <p>RPM: {info.rpm_limit ?? "Unlimited"}</p>
               <p>TPD (batch): {info.tpd_limit ?? "Unlimited"}</p>
-              {info.max_parallel_requests && <p>Max Parallel Requests: {info.max_parallel_requests}</p>}
+              <p>Max Parallel Requests: {info.max_parallel_requests ?? "Unlimited"}</p>
               {(() => {
                 const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
                 const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;
@@ -1775,6 +1779,10 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                       "Daily token budget for batch submissions (/v1/batches). When set, batch input files are charged against this 24h window instead of the team's TPM/RPM limits. Online requests keep using TPM/RPM.",
                     )}
                   >
+                    {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
+                  </FormField>
+
+                  <FormField control={form.control} name="max_parallel_requests" label="Max Parallel Requests">
                     {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
                   </FormField>
 
@@ -2240,6 +2248,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                 <div>TPM: {info.tpm_limit ?? "Unlimited"}</div>
                 <div>RPM: {info.rpm_limit ?? "Unlimited"}</div>
                 <div>TPD (batch): {info.tpd_limit ?? "Unlimited"}</div>
+                <div>Max Parallel Requests: {info.max_parallel_requests ?? "Unlimited"}</div>
                 {(() => {
                   const modelTpm = (info.metadata?.model_tpm_limit ?? {}) as Record<string, number>;
                   const modelRpm = (info.metadata?.model_rpm_limit ?? {}) as Record<string, number>;

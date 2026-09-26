@@ -16061,6 +16061,7 @@ export interface paths {
          *     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
          *     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
          *     - tpd_limit: Optional[int] - The TPD (Tokens Per Day) limit for this team. Batch submissions are charged against it instead of tpm_limit/rpm_limit
+         *     - max_parallel_requests: Optional[int] - Max in-flight requests for this team at once, shared by all of its keys
          *     - rpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of RPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating RPM, or "best_effort_throughput" for best effort enforcement.
          *     - tpm_limit_type: Optional[Literal["guaranteed_throughput", "best_effort_throughput"]] - The type of TPM limit enforcement. Use "guaranteed_throughput" to raise an error if overallocating TPM, or "best_effort_throughput" for best effort enforcement.
          *     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
@@ -16291,6 +16292,7 @@ export interface paths {
          *     - tpm_limit: Optional[int] - The TPM (Tokens Per Minute) limit for this team - all keys with this team_id will have at max this TPM limit
          *     - rpm_limit: Optional[int] - The RPM (Requests Per Minute) limit for this team - all keys associated with this team_id will have at max this RPM limit
          *     - tpd_limit: Optional[int] - The TPD (Tokens Per Day) limit for this team. Batch submissions are charged against it instead of tpm_limit/rpm_limit
+         *     - max_parallel_requests: Optional[int] - Max in-flight requests for this team at once, shared by all of its keys
          *     - max_budget: Optional[float] - The maximum budget allocated to the team - all keys for this team_id will have at max this max_budget
          *     - soft_budget: Optional[float] - The soft budget threshold for the team. If max_budget is set (either in the request or existing), soft_budget must be strictly lower than max_budget. Can be set independently if max_budget is not set.
          *     - budget_duration: Optional[str] - The duration of the budget for the team. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
@@ -36638,6 +36640,8 @@ export interface components {
             guardrails?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
             /** Mcp Rpm Limit */
             mcp_rpm_limit?: {
                 [key: string]: number;
@@ -37680,6 +37684,8 @@ export interface components {
             guardrails?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
             /** Mcp Rpm Limit */
             mcp_rpm_limit?: {
                 [key: string]: number;
@@ -45047,6 +45053,7 @@ export interface components {
          *     metadata: Optional[dict] = None
          *     tpm_limit: Optional[int] = None
          *     rpm_limit: Optional[int] = None
+         *     max_parallel_requests: Optional[int] = None
          *     max_budget: Optional[float] = None
          *     models: Optional[list] = None
          *     blocked: Optional[bool] = None
@@ -45089,6 +45096,8 @@ export interface components {
             guardrails?: string[] | null;
             /** Max Budget */
             max_budget?: number | null;
+            /** Max Parallel Requests */
+            max_parallel_requests?: number | null;
             /** Mcp Rpm Limit */
             mcp_rpm_limit?: {
                 [key: string]: number;
@@ -45804,6 +45813,8 @@ export interface components {
             team_id?: string | null;
             /** Team Max Budget */
             team_max_budget?: number | null;
+            /** Team Max Parallel Requests */
+            team_max_parallel_requests?: number | null;
             team_member?: components["schemas"]["Member"] | null;
             /** Team Member Rpm Limit */
             team_member_rpm_limit?: number | null;

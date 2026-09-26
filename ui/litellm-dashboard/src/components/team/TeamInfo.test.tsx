@@ -2174,6 +2174,7 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     tpm_limit: 1000,
     rpm_limit: 1000,
     tpd_limit: null,
+    max_parallel_requests: null,
     model_tpm_limit: {},
     model_rpm_limit: {},
     max_budget: 100,
@@ -2455,11 +2456,16 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     await user.clear(tpm);
     await user.type(tpm, "555");
 
+    const maxParallel = screen.getByLabelText("Max Parallel Requests");
+    await user.clear(maxParallel);
+    await user.type(maxParallel, "4");
+
     const payload = await save(user);
 
     expect(payload.team_alias).toBe("Renamed Team");
     expect(payload.soft_budget).toBe("9.5");
     expect(payload.tpm_limit).toBe("555");
+    expect(payload.max_parallel_requests).toBe("4");
     expect((payload.metadata as Record<string, unknown>).soft_budget_alerting_emails).toStrictEqual([
       "a@test.com",
       "b@test.com",

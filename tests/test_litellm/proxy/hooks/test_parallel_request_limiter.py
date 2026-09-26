@@ -12,7 +12,12 @@ from litellm.proxy.hooks.parallel_request_limiter import (
     _PROXY_MaxParallelRequestsHandler,
 )
 from litellm.proxy.utils import InternalUsageCache, hash_token
-from litellm.types.utils import EmbeddingResponse, TextCompletionResponse, Usage
+from litellm.types.utils import (
+    EmbeddingResponse,
+    ModelResponse,
+    TextCompletionResponse,
+    Usage,
+)
 
 
 @pytest.mark.asyncio
@@ -107,3 +112,176 @@ async def test_async_log_success_event_counts_non_chat_response_tokens(response_
             f"expected 50 tokens counted for {scope_id}, "
             f"got {current['current_tpm']}"
         )
+
+
+@pytest.mark.asyncio
+async def test_team_max_parallel_requests_is_enforced_across_keys_in_the_team():
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache)
+    )
+    team_id = "legacy-team"
+
+    def team_key(raw: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            api_key=hash_token(raw), team_id=team_id, team_max_parallel_requests=2
+        )
+
+    for raw in ("sk-a", "sk-b"):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=team_key(raw),
+            cache=cache,
+            data={"model": "gpt-4o-mini"},
+            call_type="",
+        )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=team_key("sk-a"),
+            cache=cache,
+            data={"model": "gpt-4o-mini"},
+            call_type="",
+        )
+    assert exc_info.value.status_code == 429
+    assert "rate limit type = team" in exc_info.value.detail
+    assert "max_parallel_requests: 2" in exc_info.value.detail
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=UserAPIKeyAuth(
+            api_key=hash_token("sk-c"),
+            team_id="other-team",
+            team_max_parallel_requests=2,
+        ),
+        cache=cache,
+        data={"model": "gpt-4o-mini"},
+        call_type="",
+    )
+
+
+@pytest.mark.asyncio
+async def test_failed_request_releases_team_parallel_slot():
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache)
+    )
+    key = UserAPIKeyAuth(
+        api_key=hash_token("sk-a"), team_id="legacy-team", team_max_parallel_requests=1
+    )
+    data = {"model": "gpt-4o-mini"}
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=key, cache=cache, data=data, call_type=""
+    )
+    with pytest.raises(HTTPException):
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key, cache=cache, data=data, call_type=""
+        )
+
+    await handler.async_log_failure_event(
+        kwargs={
+            "litellm_params": {
+                "metadata": {
+                    "user_api_key": key.api_key,
+                    "user_api_key_team_id": "legacy-team",
+                }
+            },
+            "exception": Exception("upstream 500"),
+        },
+        response_obj=None,
+        start_time=None,
+        end_time=None,
+    )
+
+    await handler.async_pre_call_hook(
+        user_api_key_dict=key, cache=cache, data=data, call_type=""
+    )
+
+
+@pytest.mark.asyncio
+async def test_team_rejection_rolls_back_key_slot_acquired_in_same_call():
+    from fastapi import HTTPException
+
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache)
+    )
+    key = UserAPIKeyAuth(
+        api_key=hash_token("sk-a"),
+        max_parallel_requests=2,
+        team_id="legacy-team",
+        team_max_parallel_requests=1,
+    )
+    data = {"model": "gpt-4o-mini"}
+
+    async def admit() -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=key, cache=cache, data=data, call_type=""
+        )
+
+    async def finish() -> None:
+        await handler.async_log_success_event(
+            kwargs={
+                "litellm_params": {
+                    "metadata": {
+                        "user_api_key": key.api_key,
+                        "user_api_key_team_id": "legacy-team",
+                        "user_api_key_model_max_budget": {},
+                    }
+                }
+            },
+            response_obj=ModelResponse(
+                usage=Usage(prompt_tokens=1, completion_tokens=1, total_tokens=2)
+            ),
+            start_time=datetime.now(),
+            end_time=datetime.now(),
+        )
+
+    await admit()
+    with pytest.raises(HTTPException) as team_reject:
+        await admit()
+    assert "rate limit type = team" in team_reject.value.detail
+
+    await finish()
+    await admit()
+    with pytest.raises(HTTPException) as second_reject:
+        await admit()
+    assert "rate limit type = team" in second_reject.value.detail
+
+
+@pytest.mark.asyncio
+async def test_rollback_decrements_live_bucket_instead_of_restoring_snapshot():
+    from litellm.proxy._types import CurrentItemRateLimit
+
+    cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(cache)
+    )
+    bucket = "legacy-team::2026-09-18-19-00::request_count"
+    snapshot_after_own_increment = CurrentItemRateLimit(
+        current_requests=2, current_tpm=0, current_rpm=2
+    )
+    await cache.async_set_cache(
+        key=bucket,
+        value=CurrentItemRateLimit(current_requests=3, current_tpm=0, current_rpm=3),
+        local_only=True,
+    )
+
+    await handler._rollback_acquired_slots(
+        [(bucket, snapshot_after_own_increment)], parent_otel_span=None
+    )
+
+    assert await cache.async_get_cache(key=bucket) == {
+        "current_requests": 2,
+        "current_tpm": 0,
+        "current_rpm": 2,
+    }
