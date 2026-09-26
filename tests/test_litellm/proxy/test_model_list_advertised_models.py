@@ -10,8 +10,11 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy import proxy_server
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.utils import ProxyLogging
 
 CATALOG_SETTINGS: Final = {"advertised_models": [{"id": "catalog-only-model", "owned_by": "example-provider"}]}
 
@@ -130,3 +133,69 @@ async def test_catalog_entry_is_listed_for_scope_expand(patched_model_list, monk
         "routed-model",
         "catalog-only-model",
     ], f"the admin listing should carry catalog entries too, got {rows}"
+
+
+@pytest.mark.asyncio
+async def test_catalog_entry_cannot_resurrect_a_model_this_caller_may_not_see(patched_model_list, monkeypatch):
+    """A deployment filtered out of this caller's listing stays out.
+
+    The router knows `restricted-model`, but this key cannot see it, so it never
+    reaches `model_data`. Advertising that id must not put it back.
+    """
+    patched_model_list.get_model_names = MagicMock(return_value=["routed-model", "restricted-model"])
+    monkeypatch.setattr(
+        proxy_server,
+        "general_settings",
+        {"advertised_models": [{"id": "restricted-model", "owned_by": "impostor"}]},
+    )
+
+    rows: Final = await _listing()
+
+    assert [row["id"] for row in rows] == ["routed-model"], (
+        f"a deployment hidden from this caller must not reappear as a catalog entry, got {rows}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_catalog_rows_are_marked_and_routed_rows_are_not(patched_model_list, monkeypatch):
+    monkeypatch.setattr(proxy_server, "general_settings", CATALOG_SETTINGS)
+
+    rows: Final = await _listing()
+
+    assert [(row["id"], row.get("catalog_only")) for row in rows] == [
+        ("routed-model", None),
+        ("catalog-only-model", True),
+    ], f"only catalog rows carry the marker, so a client can tell them apart, got {rows}"
+
+
+class _HidingGate(CustomLogger):
+    """A listing callback that hides whichever names it was given."""
+
+    def __init__(self, hidden: frozenset[str]) -> None:
+        super().__init__()
+        self.hidden = hidden
+        self.seen: list[tuple[str, ...]] = []
+
+    async def async_filter_listed_models(self, user_api_key_dict, model_names):
+        self.seen.append(tuple(model_names))
+        return [name for name in model_names if name not in self.hidden]
+
+
+@pytest.mark.asyncio
+async def test_listing_callbacks_can_hide_a_catalog_entry(patched_model_list, monkeypatch):
+    """Catalog rows go through the same per-caller callbacks as routed rows.
+
+    Appending them afterwards would let an entry past a callback that was meant
+    to hide it.
+    """
+    gate: Final = _HidingGate(frozenset({"catalog-only-model"}))
+    monkeypatch.setattr(litellm, "callbacks", [gate])
+    ProxyLogging._callback_capabilities_cache.clear()
+    monkeypatch.setattr(proxy_server, "general_settings", CATALOG_SETTINGS)
+
+    rows: Final = await _listing()
+
+    assert [row["id"] for row in rows] == ["routed-model"], (
+        f"a callback that hides a catalog id must keep it out of the listing, got {rows}"
+    )
+    assert ("catalog-only-model",) in gate.seen, f"the catalog id must be offered to the callback, saw {gate.seen}"

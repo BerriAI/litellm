@@ -27,6 +27,7 @@ def test_entry_becomes_a_row_carrying_its_configured_id_and_owner():
             "object": "model",
             "created": DEFAULT_MODEL_CREATED_AT_TIME,
             "owned_by": "example-provider",
+            "catalog_only": True,
         },
     ), f"expected one row carrying exactly the configured id and owner, got {rows}"
 
@@ -78,6 +79,7 @@ def test_row_carries_only_declared_fields_even_for_a_model_the_cost_map_knows():
             "object": "model",
             "created": DEFAULT_MODEL_CREATED_AT_TIME,
             "owned_by": "example-provider",
+            "catalog_only": True,
         },
     ), f"a catalog row must not pick up cost map details for {known_model}, got {rows}"
 
@@ -91,3 +93,64 @@ def test_configured_entries_are_typed_and_keep_their_order():
         ("catalog-only-model", "example-provider"),
         ("second", "other-provider"),
     ], f"entries should be parsed in configured order, got {entries}"
+
+
+class _RouterStub:
+    """Minimal stand-in for the bits of Router this module reads."""
+
+    def __init__(self, names: tuple[str, ...], groups: tuple[str, ...] = ()) -> None:
+        self._names: Final = names
+        self._groups: Final = groups
+
+    def get_model_names(self) -> list[str]:
+        return list(self._names)
+
+    def get_model_access_groups(self) -> dict[str, list[str]]:
+        return {group: [] for group in self._groups}
+
+
+def test_entry_naming_a_routed_model_hidden_from_this_caller_is_dropped():
+    """A catalog entry must not re-expose a deployment the listing filtered out.
+
+    `listed_ids` carries only what this caller may see, so an id that was scoped
+    away, paused or health-filtered would otherwise reappear under any owner the
+    config names.
+    """
+    rows: Final = advertised_model_rows(
+        _settings({"id": "hidden-deployment", "owned_by": "impostor"}),
+        [],
+        _RouterStub(("hidden-deployment",)),
+    )
+
+    assert rows == (), f"a routed model absent from this caller's listing must stay absent, got {rows}"
+
+
+def test_entry_naming_an_access_group_is_dropped():
+    rows: Final = advertised_model_rows(
+        _settings({"id": "beta-models", "owned_by": "impostor"}),
+        [],
+        _RouterStub((), ("beta-models",)),
+    )
+
+    assert rows == (), f"a catalog entry must not shadow an access group name, got {rows}"
+
+
+def test_entry_is_listed_when_the_router_knows_nothing_about_it():
+    rows: Final = advertised_model_rows(
+        _settings(CATALOG_ENTRY),
+        ["routed-model"],
+        _RouterStub(("routed-model", "another-model")),
+    )
+
+    assert [row["id"] for row in rows] == ["catalog-only-model"], (
+        f"an id no deployment claims should still be listed, got {rows}"
+    )
+
+
+def test_every_row_is_marked_catalog_only():
+    rows: Final = advertised_model_rows(_settings(CATALOG_ENTRY, {"id": "second", "owned_by": "other"}), [])
+
+    assert [row.get("catalog_only") for row in rows] == [
+        True,
+        True,
+    ], f"every catalog row must be marked so clients can tell it from a routable model, got {rows}"

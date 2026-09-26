@@ -177,6 +177,7 @@ if TYPE_CHECKING:
 
     from litellm.integrations.opentelemetry import OpenTelemetry
     from litellm.proxy.health_check_utils.shared_health_check_manager import SharedHealthCheckManager
+    from litellm.types.proxy.model_listing import ModelInfoResponse
 
     Span = _Span | Any
 else:
@@ -11213,6 +11214,20 @@ async def _entries_kept_by_listing_callbacks(
     return tuple(entry for entry in entries if entry[0] not in hidden)
 
 
+async def _catalog_listing_rows(
+    settings: Mapping[str, object],
+    listed_ids: Sequence[str],
+    user_api_key_dict: UserAPIKeyAuth,
+) -> tuple["ModelInfoResponse", ...]:
+    """Catalog-only rows for this caller, filtered by the same listing callbacks
+    the routed rows went through, so an operator's callback can hide them too."""
+    rows: Final = advertised_model_rows(settings, listed_ids, llm_router)
+    if not rows:
+        return ()
+    hidden: Final = await _names_hidden_by_listing_callbacks(user_api_key_dict, tuple(row["id"] for row in rows))
+    return tuple(row for row in rows if row["id"] not in hidden)
+
+
 async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_api_key_dict: UserAPIKeyAuth) -> bool:
     listed_name: Final = _translate_model_name_for_response(deployment.model_dump(exclude_none=True)).get("model_name")
     if not isinstance(listed_name, str):
@@ -11391,11 +11406,10 @@ async def model_list(
             model_info["id"] = response_id
             model_data.append(model_info)
 
-        # Catalog-only entries are advertised to every caller: they name no deployment,
-        # so the per-caller filters above have nothing to scope them by. A listing asked
-        # for access groups alone gets none of them, since a catalog entry is not a group.
         if not only_model_access_groups:
-            model_data.extend(advertised_model_rows(settings, tuple(row["id"] for row in model_data)))
+            model_data.extend(
+                await _catalog_listing_rows(settings, [row["id"] for row in model_data], user_api_key_dict)
+            )
 
         if wants_anthropic_format:
             admin_listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
@@ -11457,9 +11471,8 @@ async def model_list(
         model_info["id"] = response_id
         model_data.append(model_info)
 
-    # Same catalog merge as the scope=expand branch above.
     if not only_model_access_groups:
-        model_data.extend(advertised_model_rows(settings, tuple(row["id"] for row in model_data)))
+        model_data.extend(await _catalog_listing_rows(settings, [row["id"] for row in model_data], user_api_key_dict))
 
     if wants_anthropic_format:
         listing: Final = cast(Sequence[ModelInfoResponse], model_data)  # cast-ok: rows built above
