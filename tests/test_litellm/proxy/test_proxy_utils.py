@@ -313,41 +313,41 @@ def test_get_projected_spend_over_limit_includes_current_spend(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# L2: _enrich_http_exception_with_guardrail_context
+# L2: enrich_http_exception_with_guardrail_context
 # Regression coverage for case 2026-04-10-internal-bedrock-guardrail-streaming-error.
 # ---------------------------------------------------------------------------
 
 
 def test_enrich_http_exception_with_guardrail_context_dict_detail():
     """L2: dict-detail HTTPException is enriched with guardrail_name and mode."""
-    from litellm.proxy.utils import _enrich_http_exception_with_guardrail_context
+    from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
 
     class StubCallback:
         guardrail_name = "bedrock-pii-guard"
         event_hook = "post_call"
 
     exc = HTTPException(status_code=400, detail={"error": "Violated guardrail policy"})
-    _enrich_http_exception_with_guardrail_context(exc, StubCallback())
+    enrich_http_exception_with_guardrail_context(exc, StubCallback())
     assert exc.detail["guardrail_name"] == "bedrock-pii-guard"
     assert exc.detail["guardrail_mode"] == "post_call"
 
 
 def test_enrich_http_exception_string_detail_noop():
     """L2: string-detail HTTPException is not mutated (can't add fields to a str)."""
-    from litellm.proxy.utils import _enrich_http_exception_with_guardrail_context
+    from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
 
     class StubCallback:
         guardrail_name = "x"
         event_hook = "pre_call"
 
     exc = HTTPException(status_code=400, detail="Content blocked")
-    _enrich_http_exception_with_guardrail_context(exc, StubCallback())
+    enrich_http_exception_with_guardrail_context(exc, StubCallback())
     assert exc.detail == "Content blocked"
 
 
 def test_enrich_http_exception_setdefault_does_not_overwrite():
     """L2: a guardrail that already populates guardrail_name explicitly wins."""
-    from litellm.proxy.utils import _enrich_http_exception_with_guardrail_context
+    from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
 
     class StubCallback:
         guardrail_name = "inferred-name"
@@ -357,32 +357,32 @@ def test_enrich_http_exception_setdefault_does_not_overwrite():
         status_code=400,
         detail={"error": "x", "guardrail_name": "explicit-name"},
     )
-    _enrich_http_exception_with_guardrail_context(exc, StubCallback())
+    enrich_http_exception_with_guardrail_context(exc, StubCallback())
     assert exc.detail["guardrail_name"] == "explicit-name"
 
 
 def test_enrich_http_exception_non_http_exception_noop():
     """L2: non-HTTPException is left alone and the helper does not raise."""
-    from litellm.proxy.utils import _enrich_http_exception_with_guardrail_context
+    from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
 
     class StubCallback:
         guardrail_name = "x"
         event_hook = "pre_call"
 
     exc = ValueError("not an HTTPException")
-    _enrich_http_exception_with_guardrail_context(exc, StubCallback())
+    enrich_http_exception_with_guardrail_context(exc, StubCallback())
     assert str(exc) == "not an HTTPException"
 
 
 def test_enrich_http_exception_callback_without_guardrail_name_noop():
     """L2: callback without guardrail_name attribute leaves detail alone."""
-    from litellm.proxy.utils import _enrich_http_exception_with_guardrail_context
+    from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
 
     class StubCallback:
         pass
 
     exc = HTTPException(status_code=400, detail={"error": "x"})
-    _enrich_http_exception_with_guardrail_context(exc, StubCallback())
+    enrich_http_exception_with_guardrail_context(exc, StubCallback())
     assert exc.detail == {"error": "x"}
 
 
