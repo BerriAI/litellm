@@ -2,7 +2,7 @@ from datetime import datetime
 from typing import Literal, TypeAlias
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 AgentExecutionMode: TypeAlias = Literal["autonomous", "delegated", "both"]
 
@@ -15,7 +15,10 @@ class EntraIdentityConfig(BaseModel):
     client_id: str
     service_principal_id: str | None = None
     required_roles: tuple[str, ...] = ()
-    required_scopes: tuple[str, ...] = ("user_impersonation",)
+    required_scopes: tuple[str, ...] = Field(
+        default=("user_impersonation",),
+        description="Required delegated scopes. An empty list accepts any nonempty scope granted for this gateway.",
+    )
 
     @field_validator("tenant_id", "client_id", "service_principal_id")
     @classmethod
