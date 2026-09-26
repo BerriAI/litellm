@@ -173,7 +173,7 @@ def _redact_responses_api_output_dict(output_items, redacted_str: str):
 
 
 def _redacted_responses_api_response(response: Mapping[str, object]) -> dict[str, object]:
-    output: Final = copy.deepcopy(response.get("output"))
+    output: Final = response.get("output")
     if isinstance(output, list):
         _redact_responses_api_output_dict(output, REDACTED_BY_LITELLM)
     return {
