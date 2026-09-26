@@ -68,8 +68,7 @@ try:
 except ImportError:
     _BrotliInflater = None
 
-    class _BrotliError(Exception):
-        """Stand-in so the except clause below type-checks; unreachable without brotli."""
+    class _BrotliError(Exception): ...
 
 
 # aiohttp 3.10+ exposes a `socket_factory` kwarg on TCPConnector. Older
@@ -703,8 +702,8 @@ class _BrotliDecoder:
                     piece: bytes = self._inflate.process(pending, output_buffer_limit=max_output - produced)
                 except _BrotliError as exc:
                     raise httpx.DecodingError(str(exc)) from exc
-                produced += len(piece)  # rebind-ok: see above
-                pending = b""  # rebind-ok: see above
+                produced += len(piece)
+                pending = b""
                 yield piece
                 if self._inflate.can_accept_more_data():
                     return
@@ -717,13 +716,14 @@ class _BrotliDecoder:
 
 
 def _bounded_decoder(headers: httpx.Headers) -> _BoundedDecoder:
+    brotli_inflater: Final = _BrotliInflater
     factories: Final[Mapping[str, Callable[[], _BoundedDecoder]]] = MappingProxyType(
         {
             "identity": _IdentityDecoder,
             "gzip": lambda: _ZlibDecoder(zlib.MAX_WBITS | 16),
             "x-gzip": lambda: _ZlibDecoder(zlib.MAX_WBITS | 16),
             "deflate": lambda: _ZlibDecoder(zlib.MAX_WBITS),
-            **({} if _BrotliInflater is None else {"br": lambda: _BrotliDecoder(_BrotliInflater())}),
+            **({} if brotli_inflater is None else {"br": lambda: _BrotliDecoder(brotli_inflater())}),
         }
     )
     factory: Final = factories.get(headers.get("content-encoding", "identity").strip().lower())
