@@ -118,7 +118,7 @@ pub(super) fn as_response_error(err: Error) -> Error {
     }
 }
 
-fn outbound_request(
+pub(super) fn outbound_request(
     authenticated: Authenticated,
     url: String,
     body: &Value,
@@ -261,8 +261,7 @@ mod tests {
             &hooks,
         )
         .await
-        .err()
-        .expect("the upstream failure fails the call");
+        .expect_err("the upstream failure fails the call");
 
         assert!(matches!(
             error,

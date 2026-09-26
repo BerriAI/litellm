@@ -61,18 +61,21 @@ mod tests {
 
     struct Unit;
 
+    #[derive(Clone, Debug)]
+    struct Fault;
+
     impl Protocol for Unit {
         type Response = (WireRequest, ());
-        type Error = &'static str;
+        type Error = Fault;
         type Projection = ();
         type Op = Infallible;
         type Chunk = Infallible;
         type StreamHead = Infallible;
     }
 
-    impl From<MachineFault> for &'static str {
+    impl From<MachineFault> for Fault {
         fn from(_: MachineFault) -> Self {
-            "machine fault"
+            Fault
         }
     }
 
@@ -99,14 +102,14 @@ mod tests {
         let mut machine = CallMachine::<Unit>::new(|channel| {
             Box::pin(async move {
                 let sent = RouteHooks::before_send(&channel, wire("prepared"), context()).await?;
-                let emitted = RouteHooks::emit(
+                RouteHooks::emit(
                     &channel,
                     MachineEvent::ResponseReceived {
                         raw: RawResponse { body: "raw".into() },
                     },
                 )
                 .await?;
-                Ok((sent, emitted))
+                Ok((sent, ()))
             })
         });
 
@@ -134,7 +137,7 @@ mod tests {
 
     #[tokio::test]
     async fn no_hooks_pass_the_wire_request_through() {
-        let sent = RouteHooks::<&str>::before_send(&(), wire("prepared"), context())
+        let sent = RouteHooks::<Fault>::before_send(&(), wire("prepared"), context())
             .await
             .unwrap();
         assert_eq!(sent.url, "prepared");

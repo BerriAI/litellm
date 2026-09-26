@@ -468,11 +468,19 @@ mod tests {
             json!("abc-123"),
         )]));
         let prepared = prepare_chat_completions_call(call).expect("prepares");
-        let signed = crate::chat_completions::handler::outbound_request(
+        let authenticated = resolve_auth(
             &litellm_auth::AuthServices::default(),
-            &prepared,
+            prepared.environment,
+            &|_| None,
         )
         .await
+        .expect("resolves");
+        let signed = crate::chat_completions::handler::outbound_request(
+            authenticated,
+            prepared.url,
+            &prepared.body,
+            prepared.timeout,
+        )
         .expect("signs");
 
         let authorization = signed
@@ -521,11 +529,19 @@ mod tests {
             call.api_key = None;
             call.extra_headers = Some(Map::from_iter([(forwarded.to_string(), json!("forged"))]));
             let prepared = prepare_chat_completions_call(call).expect("prepares");
-            let error = crate::chat_completions::handler::outbound_request(
+            let authenticated = resolve_auth(
                 &litellm_auth::AuthServices::default(),
-                &prepared,
+                prepared.environment,
+                &|_| None,
             )
             .await
+            .expect("resolves");
+            let error = crate::chat_completions::handler::outbound_request(
+                authenticated,
+                prepared.url,
+                &prepared.body,
+                prepared.timeout,
+            )
             .expect_err("{forwarded} should decline instead of being signed");
             assert!(
                 matches!(error, Error::Unsupported(_)),
