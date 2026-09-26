@@ -23,6 +23,7 @@ import { useCustomers } from "@/app/(dashboard)/hooks/customers/useCustomers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import useIsOrgAdmin from "@/app/(dashboard)/hooks/useIsOrgAdmin";
 import { useCurrentUser } from "@/app/(dashboard)/hooks/users/useCurrentUser";
+import { useUserInfo } from "@/app/(dashboard)/hooks/users/useUserInfo";
 import { hasCapability } from "@/utils/capabilities";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
@@ -140,6 +141,16 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   // For non-admins or "my-usage" view, always pass their own user_id
   const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : selectedUserId;
+
+  const {
+    data: selectedUserInfo,
+    isLoading: isSelectedUserLoading,
+    isError: isSelectedUserError,
+  } = useUserInfo(effectiveUserId);
+  const isSelectedUserResolved = effectiveUserId === null || (!isSelectedUserLoading && !isSelectedUserError);
+  const effectiveMaxBudget =
+    effectiveUserId !== null ? selectedUserInfo?.max_budget ?? null : currentUser?.max_budget ?? null;
+  const effectiveBudgetDuration = effectiveUserId !== null ? selectedUserInfo?.budget_duration ?? null : null;
 
   const startTime = useMemo(() => (dateValue.from ? new Date(dateValue.from) : null), [dateValue.from]);
   const endTime = useMemo(() => (dateValue.to ? new Date(dateValue.to) : null), [dateValue.to]);
@@ -550,7 +561,9 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                       <ViewUserSpend
                         userSpend={totalSpend}
                         selectedTeam={null}
-                        userMaxBudget={currentUser?.max_budget || null}
+                        userMaxBudget={effectiveMaxBudget}
+                        budgetDuration={effectiveBudgetDuration}
+                        budgetLoading={!isSelectedUserResolved}
                       />
                     </div>
 
