@@ -60,7 +60,10 @@ traceable units of work:
   instead (see below).
 
 Spans are named `"{service} {call_type}"` (e.g. `"redis set"`) so repeated calls
-to one service stay distinguishable. Like every other span they parent to the
+to one service stay distinguishable. `call_type` is the operation only; the
+litellm call chain that issued it (`async_set_cache <- async_add_cache`) travels
+as `ServiceLoggerPayload.caller` and lands on the `litellm.service.caller`
+attribute, so one operation is one span name. Like every other span they parent to the
 **ambient** context, falling back to the threaded `litellm_parent_otel_span` only
 when ambient has no live span; a background job with neither starts its own root
 trace.
@@ -69,16 +72,21 @@ trace.
 and the spend-counter increment all run after the response is on the wire, so they
 add nothing to the request's latency. Parenting them under the (already ended)
 server span stretched the request trace past the request itself, which is what a
-viewer shows as trace duration. `context.resolve_service_span_context` compares
-the call's end time with the resolved parent's end time: a call that finished
-after its parent ended starts a **new root trace** carrying a **span link** back
-to the request span (the `FollowsFrom` relationship of OpenTracing; the default
-`:link` propagation style of the OTel Ruby ActiveJob and Sidekiq
-instrumentations). Identity Baggage still rides along, so the detached span keeps
-its team / key / user attributes. Only an SDK span that has really ended detaches:
-a sampled-out or remote `NonRecordingSpan` is never recording but is still the
-right parent. A call that ended before the server span did stays a child even when
-its `asyncio.create_task`-dispatched hook runs after the response.
+viewer shows as trace duration. `context.resolve_service_span_context` detaches
+a call in two cases: it was logged from the post-response phase
+(`litellm._internal_context.post_response_phase`, entered by the success
+handlers and by the response-cache write task, inherited by every task spawned
+inside), or it finished after the resolved parent ended. Either way it starts a
+**new root trace** carrying a **span link** back to the request span (the
+`FollowsFrom` relationship of OpenTracing; the default `:link` propagation style
+of the OTel Ruby ActiveJob and Sidekiq instrumentations). The phase check matters
+for streaming: the stream-finished callbacks run before the ASGI server span
+closes, so by end time alone the cache write would look like request latency.
+Identity Baggage still rides along, so the detached span keeps its team / key /
+user attributes. Only an SDK span detaches: a sampled-out or remote
+`NonRecordingSpan` is never recording but is still the right parent. A call that
+ended before the server span did stays a child even when its
+`asyncio.create_task`-dispatched hook runs after the response.
 
 Caller-supplied `event_metadata` is **sanitized** before it reaches a span
 (primitives only, no live objects, no secrets/headers, bounded) — see
