@@ -12,6 +12,7 @@ from litellm._logging import verbose_logger
 from litellm.caching.caching import DualCache
 from litellm.exceptions import SensitiveDataRouteException
 from litellm.integrations.custom_guardrail import CustomGuardrail, log_guardrail_information
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.integrations.vector_store_integrations.vector_store_pre_call_hook import (
     ProxyServerRuntime,
     VectorStorePreCallHook,
@@ -21,8 +22,10 @@ from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ResponsesAPIResponse
 from litellm.types.utils import (
     CallTypes,
+    CallTypesLiteral,
     Choices,
     Delta,
+    GenericGuardrailAPIInputs,
     Message,
     ModelResponse,
     ModelResponseStream,
@@ -603,7 +606,7 @@ class ScanningGuardrail(CustomGuardrail):
         user_api_key_dict: UserAPIKeyAuth,
         cache: DualCache,
         data: dict,
-        call_type: str,
+        call_type: CallTypesLiteral,
     ) -> Exception | str | dict | None:
         messages = list(data["messages"])
         self.seen_messages.append(messages)
@@ -639,7 +642,13 @@ class ApplyStyleGuardrail(CustomGuardrail):
         )
         self.seen_texts: list[list[str]] = []
 
-    async def apply_guardrail(self, inputs, request_data, input_type, logging_obj=None):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: Mapping[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
         texts = list(inputs.get("texts") or [])
         self.seen_texts.append(texts)
         if any(INJECTION in text for text in texts):
