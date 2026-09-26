@@ -906,8 +906,8 @@ async def get_auto_router_benchmarks(
     covered_rows: Final = tuple(
         row.model_copy(
             update={
-                **comparison.coverage_fields(row.saved_spend),
-                "savings_comparison_complete": comparison.complete,
+                **comparison.coverage_fields(row.saved_spend, row.turns),
+                "savings_comparison_complete": comparison.complete and comparison.turns == row.turns,
             }
         )
         if (comparison := comparisons.get((row.router_name, row.router_type)))
@@ -986,7 +986,9 @@ async def get_auto_router_session(
     )
     comparison: Final = comparisons.get((recorded.router_name, recorded.router_type))
     row: Final = (
-        recorded.model_copy(update=comparison.coverage_fields(recorded.saved_spend)) if comparison else recorded
+        recorded.model_copy(update=comparison.coverage_fields(recorded.saved_spend, recorded.turns))
+        if comparison
+        else recorded
     )
     saved_spend, compared_baseline = _savings_cohort(
         row.turns,
@@ -996,7 +998,10 @@ async def get_auto_router_session(
         row.saved_spend,
     )
     baseline_spend: Final = (
-        compared_baseline if row.savings_estimated_turns == row.turns or (comparison and comparison.complete) else None
+        compared_baseline
+        if row.savings_estimated_turns == row.turns
+        or (comparison and comparison.complete and comparison.turns == row.turns)
+        else None
     )
     return AutoRouterSessionResponse(
         session_id=session_id,

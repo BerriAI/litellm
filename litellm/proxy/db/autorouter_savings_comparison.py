@@ -21,13 +21,16 @@ class SessionSavingsComparison(BaseModel):
 
     router_name: str
     router_type: str
+    turns: int
     estimated_turns: int
     actual_spend: float
     saved_spend: float
     complete: bool
 
-    def coverage_fields(self, recorded_savings: float) -> Mapping[str, float | int]:
-        if not self.complete or not isclose(self.saved_spend, recorded_savings, rel_tol=1e-9, abs_tol=1e-9):
+    def coverage_fields(self, recorded_savings: float, recorded_turns: int) -> Mapping[str, float | int]:
+        if self.turns != recorded_turns or not self.complete:
+            return MappingProxyType({})
+        if not isclose(self.saved_spend, recorded_savings, rel_tol=1e-9, abs_tol=1e-9):
             return MappingProxyType({})
         return MappingProxyType(
             {
@@ -125,6 +128,7 @@ WITH {AUTOROUTER_SESSION_WINDOW_SQL}, scoped AS MATERIALIZED (
         AND logs.comparison_user_id IS NOT DISTINCT FROM session.comparison_user_id
 )
 SELECT router_name, router_type,
+    SUM(turns)::bigint AS turns,
     SUM(CASE WHEN recovered THEN estimated_turns ELSE savings_estimated_turns END)::bigint AS estimated_turns,
     SUM(CASE WHEN recovered THEN actual_spend ELSE savings_estimated_actual_spend END)::float8 AS actual_spend,
     SUM(saved_spend)::float8 AS saved_spend,

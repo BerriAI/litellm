@@ -146,7 +146,8 @@ async def test_historical_and_new_savings_compare_matching_costs_and_exclude_unk
         comparison: Final = SessionSavingsComparison.model_validate(rows[0])
         assert comparison.saved_spend == historical_saved + 0.5
         assert comparison.complete is (damaged is None)
-        assert comparison.coverage_fields(historical_saved + 0.5) == ({
+        assert comparison.coverage_fields(historical_saved + 0.5, 4) == {}
+        assert comparison.coverage_fields(historical_saved + 0.5, 3) == ({
             "savings_estimated_turns": 2,
             "savings_estimated_actual_spend": 10.0,
             "savings_estimated_saved_spend": historical_saved + 0.5,
