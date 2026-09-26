@@ -9373,7 +9373,7 @@ class ProviderConfigManager:
 
     @staticmethod
     def get_provider_batches_config(
-        model: str,
+        model: str | None,
         provider: LlmProviders,
     ) -> BaseBatchesConfig | None:
         if LlmProviders.BEDROCK == provider:

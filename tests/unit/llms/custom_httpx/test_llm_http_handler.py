@@ -2887,6 +2887,168 @@ async def test_async_retrieve_batch_masks_presigned_auth_header_in_raw_request_l
     assert provider_key not in json.dumps(raw_request_body)
 
 
+def _mistral_batch_logging_obj(call_type: str):
+    from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+
+    logging_obj = LitellmLogging(
+        model="mistral/mistral-ocr-latest",
+        messages=[],
+        stream=False,
+        call_type=call_type,
+        start_time=time.time(),
+        litellm_call_id=f"{call_type}-call-id",
+        function_id=f"{call_type}-function-id",
+        log_raw_request_response=True,
+    )
+    logging_obj.update_environment_variables(
+        model="mistral/mistral-ocr-latest",
+        optional_params={},
+        litellm_params={"litellm_call_id": f"{call_type}-call-id", "metadata": {}},
+    )
+    return logging_obj
+
+
+def _mistral_job(job_id: str, status: str) -> dict:
+    return {
+        "id": job_id,
+        "input_files": ["file-1"],
+        "endpoint": "/v1/ocr",
+        "model": "mistral-ocr-latest",
+        "status": status,
+        "created_at": 1_757_400_000,
+    }
+
+
+def _mock_batch_client(handler, is_async: bool):
+    sent_requests = []
+
+    def _respond(request: httpx.Request) -> httpx.Response:
+        sent_requests.append(request)
+        return handler(request)
+
+    if is_async:
+        client = AsyncHTTPHandler()
+        client.client = httpx.AsyncClient(transport=httpx.MockTransport(_respond))
+    else:
+        client = HTTPHandler()
+        client.client = httpx.Client(transport=httpx.MockTransport(_respond))
+    return client, sent_requests
+
+
+async def _maybe_await(value):
+    return await value if asyncio.iscoroutine(value) else value
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_list_batches_sends_provider_list_request_and_maps_page(is_async):
+    """The generic handler sends the provider config's fully-formed list request (GET,
+    query, auth) and hands the raw page back to the config, whose result is returned as-is.
+    The provider key travels on the wire but never into the raw request log."""
+    from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
+
+    provider_key = "mistral-s3cret-provider-key-123456"
+    client, sent_requests = _mock_batch_client(
+        lambda request: httpx.Response(
+            200,
+            json={
+                "object": "list",
+                "total": 5,
+                "data": [_mistral_job("job-c", "RUNNING"), _mistral_job("job-d", "SUCCESS")],
+            },
+            request=request,
+        ),
+        is_async,
+    )
+    logging_obj = _mistral_batch_logging_obj("batch_list")
+
+    result = await _maybe_await(
+        BaseLLMHTTPHandler().list_batches(
+            after="1",
+            limit=2,
+            litellm_params={"api_key": provider_key},
+            provider_config=MistralBatchesConfig(),
+            logging_obj=logging_obj,
+            _is_async=is_async,
+            client=client,
+            model="mistral/mistral-ocr-latest",
+        )
+    )
+
+    assert sent_requests[0].method == "GET"
+    assert str(sent_requests[0].url) == "https://api.mistral.ai/v1/batch/jobs?page=1&page_size=2"
+    assert sent_requests[0].headers["Authorization"] == f"Bearer {provider_key}"
+    assert [b.id for b in result.data] == ["job-c", "job-d"]
+    assert result.has_more is True
+    assert result.next_page_token == "2"
+    raw_request_body = logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_body"]
+    assert provider_key not in json.dumps(raw_request_body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+async def test_cancel_batch_posts_provider_cancel_request_and_maps_job(is_async):
+    from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
+
+    provider_key = "mistral-s3cret-provider-key-123456"
+    client, sent_requests = _mock_batch_client(
+        lambda request: httpx.Response(200, json=_mistral_job("job-1", "CANCELLATION_REQUESTED"), request=request),
+        is_async,
+    )
+    logging_obj = _mistral_batch_logging_obj("batch_cancel")
+
+    result = await _maybe_await(
+        BaseLLMHTTPHandler().cancel_batch(
+            batch_id="job-1",
+            litellm_params={"api_key": provider_key},
+            provider_config=MistralBatchesConfig(),
+            logging_obj=logging_obj,
+            _is_async=is_async,
+            client=client,
+            model="mistral/mistral-ocr-latest",
+        )
+    )
+
+    assert sent_requests[0].method == "POST"
+    assert str(sent_requests[0].url) == "https://api.mistral.ai/v1/batch/jobs/job-1/cancel"
+    assert sent_requests[0].headers["Authorization"] == f"Bearer {provider_key}"
+    assert result.id == "job-1"
+    assert result.status == "cancelling"
+    raw_request_body = logging_obj.model_call_details["raw_request_typed_dict"]["raw_request_body"]
+    assert provider_key not in json.dumps(raw_request_body)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.parametrize("operation", ["list_batches", "cancel_batch"])
+async def test_batch_list_and_cancel_map_provider_errors_through_config(is_async, operation):
+    """A non-2xx provider reply (a GET never raises on its own in HTTPHandler) becomes the
+    config's error class with the provider's status and body, not a parse failure."""
+    from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
+    from litellm.llms.mistral.common_utils import MistralError
+
+    client, _ = _mock_batch_client(
+        lambda request: httpx.Response(404, json={"detail": "job not found"}, request=request), is_async
+    )
+    call_kwargs = {"after": None, "limit": None} if operation == "list_batches" else {"batch_id": "job-missing"}
+
+    with pytest.raises(MistralError) as excinfo:
+        await _maybe_await(
+            getattr(BaseLLMHTTPHandler(), operation)(
+                **call_kwargs,
+                litellm_params={"api_key": "sk-test"},
+                provider_config=MistralBatchesConfig(),
+                logging_obj=_mistral_batch_logging_obj("batch_error"),
+                _is_async=is_async,
+                client=client,
+                model="mistral/mistral-ocr-latest",
+            )
+        )
+
+    assert excinfo.value.status_code == 404
+    assert "job not found" in excinfo.value.message
+
+
 @pytest.mark.asyncio
 async def test_async_anthropic_messages_handler_carries_deployment_vertex_location_for_pricing(monkeypatch):
     """

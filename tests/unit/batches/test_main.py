@@ -34,6 +34,8 @@ import pytest
 
 import litellm
 import litellm.batches.main as bm
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.mistral.batches.transformation import MistralBatchesConfig
 
 
 # --------------------------------------------------------------------------- #
@@ -336,6 +338,47 @@ def test_list__unsupported_provider_raises_badrequest(seams):
         m.assert_not_called()
 
 
+def test_list__unknown_provider_string_raises_badrequest_not_valueerror(seams):
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        bm.list_batches(custom_llm_provider="not-a-provider")  # type: ignore[arg-type]
+
+    for m in _all_seam_methods(seams, "list_batches"):
+        m.assert_not_called()
+
+
+def test_list__provider_config_with_list_capability_routes_to_base_http_handler(seams):
+    """mistral has no per-provider batches instance: its config implements the list
+    capability, so list_batches hands it to the generic base_llm_http_handler."""
+    result = bm.list_batches(custom_llm_provider="mistral", after="1", limit=5)
+
+    assert result is seams.base_http.list_batches.return_value
+    _assert_only(seams.base_http.list_batches, seams, "list_batches")
+
+    kw = seams.base_http.list_batches.call_args.kwargs
+    assert isinstance(kw["provider_config"], MistralBatchesConfig)
+    assert kw["after"] == "1"
+    assert kw["limit"] == 5
+    assert kw["_is_async"] is False
+    assert isinstance(kw["logging_obj"], LiteLLMLoggingObj)
+    assert kw["logging_obj"].model_call_details["custom_llm_provider"] == "mistral"
+
+
+def test_list__provider_config_async_flag_propagates_is_async(seams):
+    bm.list_batches(custom_llm_provider="mistral", alist_batches=True)
+
+    assert seams.base_http.list_batches.call_args.kwargs["_is_async"] is True
+
+
+def test_list__provider_config_without_list_capability_keeps_legacy_dispatch(seams):
+    """bedrock has a batches config too, but one that cannot list, so the config-first
+    lookup must fall through to the legacy switch (which rejects bedrock for list)."""
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        bm.list_batches(custom_llm_provider="bedrock")  # type: ignore[arg-type]
+
+    for m in _all_seam_methods(seams, "list_batches"):
+        m.assert_not_called()
+
+
 # =========================================================================== #
 # cancel_batch  (supported: openai, hosted_vllm, azure, vertex_ai; no @client)
 # =========================================================================== #
@@ -382,6 +425,45 @@ def test_cancel__async_flag_propagates_is_async(seams):
     bm.cancel_batch(batch_id="batch-1", custom_llm_provider="openai", acancel_batch=True)
 
     assert seams.openai.cancel_batch.call_args.kwargs["_is_async"] is True
+
+
+def test_cancel__unknown_provider_string_raises_badrequest_not_valueerror(seams):
+    with pytest.raises(litellm.exceptions.BadRequestError):
+        bm.cancel_batch(batch_id="batch-1", custom_llm_provider="not-a-provider")
+
+    for m in _all_seam_methods(seams, "cancel_batch"):
+        m.assert_not_called()
+
+
+def test_cancel__provider_config_with_cancel_capability_routes_to_base_http_handler(seams):
+    result = bm.cancel_batch(batch_id="batch-1", custom_llm_provider="mistral")
+
+    assert result is seams.base_http.cancel_batch.return_value
+    _assert_only(seams.base_http.cancel_batch, seams, "cancel_batch")
+    seams.bedrock_arn.cancel_batch.assert_not_called()
+
+    kw = seams.base_http.cancel_batch.call_args.kwargs
+    assert isinstance(kw["provider_config"], MistralBatchesConfig)
+    assert kw["batch_id"] == "batch-1"
+    assert kw["_is_async"] is False
+    assert kw["logging_obj"].call_type == "batch_cancel"
+
+
+def test_cancel__provider_config_async_flag_propagates_is_async(seams):
+    bm.cancel_batch(batch_id="batch-1", custom_llm_provider="mistral", acancel_batch=True)
+
+    assert seams.base_http.cancel_batch.call_args.kwargs["_is_async"] is True
+
+
+def test_cancel__provider_config_without_cancel_capability_keeps_legacy_dispatch(seams):
+    """bedrock's batches config cannot cancel, so cancel_batch still lands on the
+    Bedrock ARN handler rather than the generic HTTP handler."""
+    result = bm.cancel_batch(batch_id="batch-1", custom_llm_provider="bedrock")
+
+    assert result is seams.bedrock_arn.cancel_batch.return_value
+    seams.bedrock_arn.cancel_batch.assert_called_once()
+    for m in _all_seam_methods(seams, "cancel_batch"):
+        m.assert_not_called()
 
 
 # =========================================================================== #
@@ -650,7 +732,23 @@ def test_list__vertex_credentials_passthrough(seams):
     }
 
 
+def test_list__mistral_credentials_passthrough(seams):
+    bm.list_batches(custom_llm_provider="mistral", api_key="sk-user-mistral", api_base="https://mistral.user.test")
+
+    litellm_params = seams.base_http.list_batches.call_args.kwargs["litellm_params"]
+    assert (litellm_params["api_key"], litellm_params["api_base"]) == ("sk-user-mistral", "https://mistral.user.test")
+
+
 # ---- cancel_batch ---------------------------------------------------------- #
+
+
+def test_cancel__mistral_credentials_passthrough(seams):
+    bm.cancel_batch(
+        batch_id="b1", custom_llm_provider="mistral", api_key="sk-user-mistral", api_base="https://mistral.user.test"
+    )
+
+    litellm_params = seams.base_http.cancel_batch.call_args.kwargs["litellm_params"]
+    assert (litellm_params["api_key"], litellm_params["api_base"]) == ("sk-user-mistral", "https://mistral.user.test")
 
 
 def test_cancel__openai_credentials_passthrough(seams):

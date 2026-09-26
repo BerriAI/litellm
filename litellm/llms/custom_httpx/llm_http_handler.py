@@ -65,7 +65,12 @@ from litellm.llms.base_llm.base_model_iterator import (
     BaseModelResponseIterator,
     MockResponseIterator,
 )
-from litellm.llms.base_llm.batches.transformation import BaseBatchesConfig
+from litellm.llms.base_llm.batches.transformation import (
+    BaseBatchesCancelConfig,
+    BaseBatchesConfig,
+    BaseBatchesListConfig,
+    BatchHttpRequest,
+)
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.base_llm.containers.transformation import BaseContainerConfig
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
@@ -158,6 +163,7 @@ from litellm.types.utils import (
     EmbeddingResponse,
     FileTypes,
     LiteLLMBatch,
+    OpenAIBatchListResponse,
     TranscriptionResponse,
 )
 from litellm.types.vector_store_files import (
@@ -327,14 +333,16 @@ def _has_pre_call_deployment_hook(logging_obj: LiteLLMLoggingObj) -> bool:
     return False
 
 
-def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> bytes | str | dict:
+def _mask_presigned_request_headers(
+    transformed_request: bytes | str | Mapping[str, object],
+) -> bytes | str | Mapping[str, object]:
     """A pre-signed request carries its auth inside its own ``headers`` key, which
     logging treats as request body (only the top-level headers channel gets masked),
     so mask it here before the request is handed to ``pre_call``."""
-    if not isinstance(transformed_request, dict):
+    if not isinstance(transformed_request, Mapping):
         return transformed_request
     request_headers: Final = transformed_request.get("headers")
-    if not isinstance(request_headers, dict):
+    if not isinstance(request_headers, Mapping):
         return transformed_request
 
     from litellm.litellm_core_utils.litellm_logging import (
@@ -343,8 +351,19 @@ def _mask_presigned_request_headers(transformed_request: bytes | str | dict) -> 
 
     return {  # mutable-ok: logging's curl and raw-request builders take dict
         **transformed_request,
-        "headers": _get_masked_values(request_headers),
+        "headers": _get_masked_values(dict(request_headers)),  # mutable-ok: the masking helper takes dict
     }
+
+
+def _log_batch_http_request(logging_obj: "LiteLLMLoggingObj", request: BatchHttpRequest) -> None:
+    logging_obj.pre_call(
+        input="",
+        api_key="",
+        additional_args={
+            "complete_input_dict": _mask_presigned_request_headers(request),
+            "api_base": request["url"],
+        },
+    )
 
 
 def _aws_signing_overrides(
@@ -4047,6 +4066,167 @@ class BaseLLMHTTPHandler:
             logging_obj=logging_obj,
             litellm_params=litellm_params,
         )
+
+    def list_batches(
+        self,
+        after: str | None,
+        limit: int | None,
+        litellm_params: Mapping[str, object],
+        provider_config: BaseBatchesListConfig,
+        logging_obj: "LiteLLMLoggingObj",
+        _is_async: bool = False,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        model: str | None = None,
+    ) -> OpenAIBatchListResponse | Coroutine[object, object, OpenAIBatchListResponse]:
+        request: Final = provider_config.transform_list_batches_request(
+            after=after, limit=limit, litellm_params=litellm_params
+        )
+        if _is_async:
+            return self.async_list_batches(
+                request=request,
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+                model=model,
+            )
+        raw_response: Final = self._send_batch_http_request(
+            request=request, provider_config=provider_config, logging_obj=logging_obj, client=client, timeout=timeout
+        )
+        return provider_config.transform_list_batches_response(
+            model=model, raw_response=raw_response, logging_obj=logging_obj, litellm_params=litellm_params
+        )
+
+    async def async_list_batches(
+        self,
+        request: BatchHttpRequest,
+        litellm_params: Mapping[str, object],
+        provider_config: BaseBatchesListConfig,
+        logging_obj: "LiteLLMLoggingObj",
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        model: str | None = None,
+    ) -> OpenAIBatchListResponse:
+        raw_response: Final = await self._async_send_batch_http_request(
+            request=request, provider_config=provider_config, logging_obj=logging_obj, client=client, timeout=timeout
+        )
+        return provider_config.transform_list_batches_response(
+            model=model, raw_response=raw_response, logging_obj=logging_obj, litellm_params=litellm_params
+        )
+
+    def cancel_batch(
+        self,
+        batch_id: str,
+        litellm_params: Mapping[str, object],
+        provider_config: BaseBatchesCancelConfig,
+        logging_obj: "LiteLLMLoggingObj",
+        _is_async: bool = False,
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        model: str | None = None,
+    ) -> LiteLLMBatch | Coroutine[object, object, LiteLLMBatch]:
+        request: Final = provider_config.transform_cancel_batch_request(
+            batch_id=batch_id, litellm_params=litellm_params
+        )
+        if _is_async:
+            return self.async_cancel_batch(
+                request=request,
+                litellm_params=litellm_params,
+                provider_config=provider_config,
+                logging_obj=logging_obj,
+                client=client,
+                timeout=timeout,
+                model=model,
+            )
+        raw_response: Final = self._send_batch_http_request(
+            request=request, provider_config=provider_config, logging_obj=logging_obj, client=client, timeout=timeout
+        )
+        return provider_config.transform_cancel_batch_response(
+            model=model, raw_response=raw_response, logging_obj=logging_obj, litellm_params=litellm_params
+        )
+
+    async def async_cancel_batch(
+        self,
+        request: BatchHttpRequest,
+        litellm_params: Mapping[str, object],
+        provider_config: BaseBatchesCancelConfig,
+        logging_obj: "LiteLLMLoggingObj",
+        client: HTTPHandler | AsyncHTTPHandler | None = None,
+        timeout: float | httpx.Timeout | None = None,
+        model: str | None = None,
+    ) -> LiteLLMBatch:
+        raw_response: Final = await self._async_send_batch_http_request(
+            request=request, provider_config=provider_config, logging_obj=logging_obj, client=client, timeout=timeout
+        )
+        return provider_config.transform_cancel_batch_response(
+            model=model, raw_response=raw_response, logging_obj=logging_obj, litellm_params=litellm_params
+        )
+
+    def _send_batch_http_request(
+        self,
+        request: BatchHttpRequest,
+        provider_config: BaseBatchesConfig,
+        logging_obj: "LiteLLMLoggingObj",
+        client: HTTPHandler | AsyncHTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
+    ) -> httpx.Response:
+        sync_httpx_client: Final = client if isinstance(client, HTTPHandler) else _get_httpx_client()
+        _log_batch_http_request(logging_obj, request)
+        try:
+            response: Final = (
+                sync_httpx_client.get(
+                    url=request["url"],
+                    headers=dict(request["headers"]),  # mutable-ok: HTTPHandler takes dict
+                    timeout=timeout,
+                )
+                if request["method"] == "GET"
+                else sync_httpx_client.post(
+                    url=request["url"],
+                    headers=dict(request["headers"]),  # mutable-ok: HTTPHandler takes dict
+                    timeout=timeout,
+                )
+            )
+            response.raise_for_status()
+            return response
+        except Exception as e:
+            verbose_logger.exception("Error on batch request %s %s: %s", request["method"], request["url"], e)
+            raise self._handle_error(e=e, provider_config=provider_config)
+
+    async def _async_send_batch_http_request(
+        self,
+        request: BatchHttpRequest,
+        provider_config: BaseBatchesConfig,
+        logging_obj: "LiteLLMLoggingObj",
+        client: HTTPHandler | AsyncHTTPHandler | None,
+        timeout: float | httpx.Timeout | None,
+    ) -> httpx.Response:
+        async_httpx_client: Final = (
+            client
+            if isinstance(client, AsyncHTTPHandler)
+            else get_async_httpx_client(llm_provider=provider_config.custom_llm_provider)
+        )
+        _log_batch_http_request(logging_obj, request)
+        try:
+            response: Final = (
+                await async_httpx_client.get(
+                    url=request["url"],
+                    headers=dict(request["headers"]),  # mutable-ok: AsyncHTTPHandler takes dict
+                    timeout=timeout,
+                )
+                if request["method"] == "GET"
+                else await async_httpx_client.post(
+                    url=request["url"],
+                    headers=dict(request["headers"]),  # mutable-ok: AsyncHTTPHandler takes dict
+                    timeout=timeout,
+                )
+            )
+            response.raise_for_status()
+            return response
+        except Exception as e:
+            verbose_logger.exception("Error on batch request %s %s: %s", request["method"], request["url"], e)
+            raise self._handle_error(e=e, provider_config=provider_config)
 
     def cancel_response_api_handler(
         self,

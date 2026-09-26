@@ -4160,7 +4160,7 @@ FILE_CONTENT_STREAMING_PROVIDERS: Final[frozenset[str]] = frozenset(
 
 LITELLM_EXECUTED_BATCH_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.HOSTED_VLLM.value})
 
-ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai", "xai"]
+ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai", "xai", "mistral"]
 
 LIST_BATCHES_SUPPORTED_PROVIDERS: Final[frozenset[str]] = frozenset(get_args(ListBatchesSupportedProvider))
 
@@ -4305,6 +4305,17 @@ class LiteLLMBatch(Batch):
         except Exception:
             # if using pydantic v1
             return self.dict()
+
+
+class OpenAIBatchListResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    object: Literal["list"] = "list"
+    data: tuple[LiteLLMBatch, ...]
+    first_id: str | None
+    last_id: str | None
+    has_more: bool
+    next_page_token: str | None = None
 
 
 class LiteLLMRealtimeStreamLoggingObject(LiteLLMPydanticObjectBase):
