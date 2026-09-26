@@ -95,11 +95,18 @@ def test_added_per_turn_control_beta_survives_the_anthropic_allowlist():
     assert PER_TURN_CONTROL in _betas(filtered)
 
 
-@pytest.mark.parametrize("provider", ["bedrock", "bedrock_converse", "vertex_ai", "azure_ai", "databricks"])
+@pytest.mark.parametrize("provider", ["bedrock", "bedrock_converse", "vertex_ai", "databricks"])
 def test_per_turn_control_beta_is_dropped_for_providers_without_it(provider):
     filtered = update_headers_with_filtered_beta(headers={"anthropic-beta": PER_TURN_CONTROL}, provider=provider)
 
     assert "anthropic-beta" not in filtered
+
+
+def test_per_turn_control_beta_is_forwarded_for_azure_ai():
+    # Azure AI Foundry supports the per-turn-control beta, see #42959.
+    filtered = update_headers_with_filtered_beta(headers={"anthropic-beta": PER_TURN_CONTROL}, provider="azure_ai")
+
+    assert PER_TURN_CONTROL in _betas(filtered)
 
 
 def test_json_provider_passthrough_adds_per_turn_control_beta():
