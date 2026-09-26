@@ -22,6 +22,8 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 from litellm.types.integrations.s3_v2 import s3BatchLoggingElement
 from litellm.types.utils import StandardLoggingPayload
 
+_real_sleep: Final = asyncio.sleep
+
 
 class TestS3V2UnitTests:
     """Test that S3 v2 integration only uses safe_dumps and not json.dumps"""
@@ -2533,7 +2535,8 @@ def _ok_response() -> MagicMock:
 
 
 class _CountingPut:
-    def __init__(self) -> None:
+    def __init__(self, width: int) -> None:
+        self.width = width
         self.in_flight = 0
         self.peak = 0
         self.calls = 0
@@ -2542,7 +2545,10 @@ class _CountingPut:
         self.in_flight += 1
         self.peak = max(self.peak, self.in_flight)
         self.calls += 1
-        await asyncio.sleep(0.01)
+        for _ in range(50):
+            if self.in_flight >= self.width:
+                break
+            await _real_sleep(0)
         self.in_flight -= 1
         return _ok_response()
 
@@ -2625,7 +2631,7 @@ async def test_async_send_batch_bounds_concurrent_uploads() -> None:
         s3_max_concurrent_uploads=4,
     )
 
-    put = _CountingPut()
+    put = _CountingPut(logger.s3_max_concurrent_uploads)
     logger.async_httpx_client = AsyncMock()
     logger.async_httpx_client.put = put
 
@@ -3480,8 +3486,7 @@ async def test_backoff_releases_the_limiter_slot_to_the_next_upload() -> None:
     logger.async_httpx_client.put = put
     logger.log_queue = [_element({"id": "a"}, "a"), _element({"id": "b"}, "b")]
 
-    real_sleep: Final = asyncio.sleep
-    with patch("asyncio.sleep", new=AsyncMock(side_effect=lambda delay: real_sleep(0.01))):
+    with patch("asyncio.sleep", new=AsyncMock(side_effect=lambda delay: _real_sleep(0))):
         await logger.flush_queue()
 
     assert [call_url.rsplit("/", 1)[-1] for call_url in put.calls] == ["test-a.json", "test-b.json", "test-a.json"]
@@ -3502,14 +3507,13 @@ class _FailOncePerKeyPut:
 
 
 class _SlowFailOncePerKeyPut:
-    def __init__(self, delay: float, dumps_count) -> None:
+    def __init__(self, dumps_count) -> None:
         self.failed: set[str] = set()
-        self.delay = delay
         self.dumps_count = dumps_count
         self.first_completed: int | None = None
 
     async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
-        await asyncio.sleep(self.delay)
+        await _real_sleep(0)
         if self.first_completed is None:
             self.first_completed = self.dumps_count()
         if url not in self.failed:
@@ -3535,13 +3539,16 @@ async def test_peak_serialized_bodies_bounded_by_upload_width() -> None:
         dumps_calls.append(args)
         return real_safe_dumps(*args, **kwargs)
 
-    put = _SlowFailOncePerKeyPut(0.05, lambda: len(dumps_calls))
+    put = _SlowFailOncePerKeyPut(lambda: len(dumps_calls))
 
     logger.async_httpx_client = AsyncMock()
     logger.async_httpx_client.put = put
     logger.log_queue = [_element({"i": index}, f"{index}") for index in range(64)]
 
-    with patch("litellm.integrations.s3_v2.safe_dumps", side_effect=counting_dumps):
+    with (
+        patch("litellm.integrations.s3_v2.safe_dumps", side_effect=counting_dumps),
+        patch("asyncio.sleep", new=AsyncMock(side_effect=lambda delay: _real_sleep(0))),
+    ):
         await logger.flush_queue()
 
     assert put.first_completed is not None
@@ -4171,7 +4178,7 @@ async def test_a_slow_put_does_not_lower_the_adaptive_limit() -> None:
     logger.async_httpx_client = AsyncMock()
 
     async def slow_put(url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
-        await asyncio.sleep(0.05)
+        await _real_sleep(0)
         return _ok_response()
 
     logger.async_httpx_client.put = slow_put
@@ -4189,7 +4196,7 @@ class _FastOkPut:
 
     async def __call__(self, url: str, data: str | None = None, headers: dict[str, str] | None = None) -> MagicMock:
         self.calls += 1
-        await asyncio.sleep(0)
+        await _real_sleep(0)
         return _ok_response()
 
 

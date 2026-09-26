@@ -5,6 +5,8 @@ import pytest
 
 from litellm.integrations.adaptive_concurrency import AdaptiveConcurrencyLimiter, PutSample
 
+_real_sleep: Final = asyncio.sleep
+
 
 def _limiter(initial: int = 4, floor: int = 1, ceiling: int = 16) -> AdaptiveConcurrencyLimiter:
     return AdaptiveConcurrencyLimiter(initial=initial, floor=floor, ceiling=ceiling)
@@ -75,7 +77,7 @@ async def test_growing_the_limit_wakes_a_waiting_acquirer() -> None:
             acquired.append("waiter")
 
     pending: Final = asyncio.create_task(waiter())
-    await asyncio.sleep(0.05)
+    await _real_sleep(0)
     assert not acquired
 
     limiter.record(PutSample(throttled=False))
@@ -93,7 +95,7 @@ async def test_releasing_a_slot_wakes_exactly_one_waiter() -> None:
 
     async def hold() -> None:
         async with limiter:
-            await asyncio.sleep(0.05)
+            await _real_sleep(0)
 
     async def waiter(name: str) -> None:
         async with limiter:
@@ -102,14 +104,14 @@ async def test_releasing_a_slot_wakes_exactly_one_waiter() -> None:
 
     holder: Final = asyncio.create_task(hold())
     waiters: Final = tuple(asyncio.create_task(waiter(f"w{i}")) for i in range(3))
-    await asyncio.sleep(0.02)
+    await _real_sleep(0)
     await asyncio.wait_for(holder, timeout=5)
-    await asyncio.sleep(0.05)
+    await _real_sleep(0)
     assert len(acquired) == 1
 
     for _ in range(3):
         limiter.record(PutSample(throttled=False))
-        await asyncio.sleep(0.05)
+        await _real_sleep(0)
     assert len(acquired) == 3
     release.set()
     await asyncio.gather(*waiters)
@@ -130,7 +132,7 @@ async def test_double_cancel_during_release_leaves_in_flight_at_zero() -> None:
     await entered.wait()
 
     waiter: Final = asyncio.create_task(hold())
-    await asyncio.sleep(0.02)
+    await _real_sleep(0)
     waiter.cancel()
     with pytest.raises(asyncio.CancelledError):
         await waiter
@@ -164,7 +166,7 @@ async def test_a_cancelled_waiter_is_skipped_when_a_slot_frees() -> None:
     await first_entered.wait()
     doomed: Final = asyncio.create_task(hold("doomed"))
     next_waiter: Final = asyncio.create_task(hold("next"))
-    await asyncio.sleep(0.02)
+    await _real_sleep(0)
     doomed.cancel()
     with pytest.raises(asyncio.CancelledError):
         await doomed
