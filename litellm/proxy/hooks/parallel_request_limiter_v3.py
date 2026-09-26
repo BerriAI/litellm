@@ -591,6 +591,7 @@ class RequestRateLimiterStash:
         default_factory=frozenset
     )
     dynamic_reservation_settled: bool = False
+    dynamic_reservation_settled_tokens: int = 0
     dynamic_admission_bypassed: bool = False
     fairness_queue_wait_seconds: float = 0.0
 
