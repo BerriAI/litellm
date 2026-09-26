@@ -1,6 +1,4 @@
 import json
-from unittest.mock import MagicMock, patch
-
 
 from litellm.constants import (
     DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
@@ -112,7 +110,7 @@ def test_hosted_vllm_supports_thinking():
     assert optional_params["reasoning_effort"] == "low"
 
 
-def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
+def test_hosted_vllm_replayed_reasoning_reaches_assistant_message():
     """
     Test that thinking_blocks on assistant messages are removed and content
     stays a string for vLLM compatibility.
@@ -152,7 +150,7 @@ def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
     assert isinstance(assistant_msg["content"], str)
     assert assistant_msg["content"] == "Here is my answer."
     assert "thinking_blocks" not in assistant_msg
-    assert "reasoning_content" not in assistant_msg
+    assert assistant_msg["reasoning_content"] == "Let me reason about this..."
 
 
 def test_hosted_vllm_thinking_blocks_with_list_content():
