@@ -446,7 +446,10 @@ jobs:
       - run:
           name: Force a rebuild of the workspace crates restored from the cargo cache
           command: |
-            Remove-Item -Recurse -Force -ErrorAction SilentlyContinue litellm-rust/target/release/.fingerprint/litellm-*
+            $fingerprints = "litellm-rust/target/release/.fingerprint"
+            if (Test-Path $fingerprints) {
+              Get-ChildItem -Path $fingerprints -Filter "litellm-*" | Remove-Item -Recurse -Force
+            }
       - run:
           name: Build the release wheel and install it under a worst-case MAX_PATH prefix
           no_output_timeout: 30m
