@@ -87,8 +87,6 @@ def _configuration_failure(
         return AgentIdentityFailure(
             message="Autonomous mode requires the Enterprise application service-principal object ID"
         )
-    if identity is not None and mode != "autonomous" and not identity.required_scopes:
-        return AgentIdentityFailure(message="Delegated mode requires at least one delegated scope")
     if enabling_without_binding and (
         identity is None or isinstance(identity, AgentIdentityBinding) and not identity.active
     ):
