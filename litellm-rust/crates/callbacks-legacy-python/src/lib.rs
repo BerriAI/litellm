@@ -1,9 +1,10 @@
 //! The legacy `@client` wrapper as the native call sees it: litellm's `Logging` object, the
-//! sync and async callback registries it fans out to, the deployment hooks, the deferred
-//! proxy release, and the kwargs rewrites the wrapper makes on the way in (credential-name
-//! inheritance, budget and retry-count limits). All of it sits behind one
+//! sync and async callback registries it fans out to, the deployment hooks and the deferred
+//! proxy release. All of it sits behind one
 //! [`PythonLifecycle`](litellm_host_python::PythonLifecycle), so the driver, the routes and
-//! core never learn which Python object is on the other end.
+//! core never learn which Python object is on the other end. The SDK's own request policy
+//! (credential inheritance, the budget and retry limits) is the driver's preflight, not this
+//! crate's.
 //!
 //! Legacy callbacks receive the caller's own objects and may mutate them. [`PublicCall`]
 //! is where those objects live, and [`run_legacy_call`] is how a route hands them over
@@ -14,14 +15,12 @@ mod call;
 mod callbacks;
 mod deferred;
 mod logger;
-mod preparation;
 mod python;
 pub(crate) use adapter::LegacyLogging;
 pub use adapter::{LegacySurface, PassThroughStream};
 pub use call::{PublicCall, run_legacy_call};
 pub(crate) use callbacks::{LegacyCallbacks, is_internal_call};
 pub(crate) use logger::{DeploymentHooks, PythonLogger, finalize, setup};
-pub(crate) use preparation::prepare;
 
 #[cfg(test)]
 mod test_support {
@@ -77,7 +76,6 @@ FAKES = {
         logger=kwargs['logger_factory'](kwargs) if 'logger_factory' in kwargs else kwargs['logger'],
         kwargs=kwargs,
     ),
-    'check_limits': lambda arguments: arguments['logger'].check_limits(arguments),
     'finalize': lambda response, logger, kwargs, start, end: logger.record('finalize', response),
     'update_logging': lambda logger, kwargs, model, optional_params, litellm_params, provider: logger.update_from_kwargs(
         kwargs=kwargs,
@@ -104,8 +102,6 @@ FAKES = {
     'restore_context': lambda logger: logger.record('restore', None),
     'custom_pricing_fields': lambda: ('ocr_cost_per_page',),
     'is_internal_call': lambda: legacy.is_internal.get(),
-    'credential_list': lambda: [],
-    'warn_unknown_credential': lambda name, loaded: None,
     'before_deployment_call': lambda kwargs, call_type: kwargs['logger'].hook('pre', kwargs, call_type),
     'after_deployment_success': lambda kwargs, response, call_type: kwargs['logger'].hook(
         'success', response, call_type
@@ -161,9 +157,6 @@ class StubLogger:
     def hook(self, phase, value, call_type):
         self.record(phase + '_hook', call_type)
         return self.hooks.get(phase, lambda value: 'awaitable')(value)
-
-    def check_limits(self, arguments):
-        self.record('check_limits', arguments)
 
     def failure_handler(self, error, trace, start, end):
         self.record('failure_handler', error)

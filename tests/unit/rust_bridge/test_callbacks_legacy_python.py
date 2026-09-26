@@ -8,11 +8,10 @@ from typing import Final
 import pytest
 from pydantic import TypeAdapter
 
-import litellm
 from litellm._internal_context import is_internal_call
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.rust_bridge import callbacks_legacy_python as legacy
-from litellm.rust_bridge.callbacks_legacy_python import check_limits, failure_handler, setup
+from litellm.rust_bridge.callbacks_legacy_python import failure_handler, setup
 
 _OCR_KWARGS: Final = MappingProxyType(
     {
@@ -20,33 +19,6 @@ _OCR_KWARGS: Final = MappingProxyType(
         "document": {"type": "document_url", "document_url": "data:application/pdf;base64,YWJj"},
     }
 )
-
-
-@pytest.mark.parametrize("metadata_key", ["metadata", "litellm_metadata"])
-@pytest.mark.parametrize(
-    "cap, request_retry_count, refused",
-    [(5, 5, True), (5, 4, False), (0, 0, False), (0, 1, True)],
-    ids=[
-        "cap-above-four-reached",
-        "cap-above-four-not-reached",
-        "first-attempt-passes-cap-of-zero",
-        "cap-of-zero-refuses-first-retry",
-    ],
-)
-def test_check_limits_reads_request_retry_count(
-    monkeypatch: pytest.MonkeyPatch, metadata_key: str, cap: int, request_retry_count: int, refused: bool
-) -> None:
-    monkeypatch.setattr(litellm, "num_retries_per_request", cap)
-    monkeypatch.setattr(litellm, "max_budget", None)
-    kwargs: Final = {
-        "model": "mistral/mistral-ocr-latest",
-        metadata_key: {"request_retry_count": request_retry_count},
-    }
-    if refused:
-        with pytest.raises(RuntimeError, match="Max retries per request hit!"):
-            check_limits(kwargs)
-    else:
-        check_limits(kwargs)
 
 
 def _supplied_logger() -> Logging:

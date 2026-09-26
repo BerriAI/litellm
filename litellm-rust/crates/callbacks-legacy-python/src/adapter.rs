@@ -19,7 +19,7 @@ use serde_json::Value;
 use crate::{
     DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
     deferred::{PendingLogging, PendingSuccess},
-    finalize, is_internal_call, prepare,
+    finalize, is_internal_call,
     python::Streaming,
     setup,
 };
@@ -117,9 +117,13 @@ impl LegacyLogging {
         })
     }
 
+    /// The keyword view the rest of the call reads: a copy, so the deployment hook's own
+    /// dict is left as the hook returned it, carrying the logger as `@client` injects it.
+    /// The driver's preflight rewrites this same dict before the host projects from it.
     fn prepare(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
-        let prepared = prepare(py, self.call.kwargs().bind(py), self.logger()?)?.unbind();
-        self.call.set_kwargs(prepared);
+        let prepared = self.call.kwargs().bind(py).copy()?;
+        prepared.set_item("litellm_logging_obj", self.logger()?.object(py))?;
+        self.call.set_kwargs(prepared.unbind());
         Ok(LifecycleStep::Arguments(self.call.kwargs().clone_ref(py)))
     }
 
@@ -580,8 +584,6 @@ assert prepared['document'] is replacement
 assert prepared['pages'] is replaced_kwargs['pages']
 assert prepared['litellm_logging_obj'] is logger
 assert 'litellm_logging_obj' not in replaced_kwargs
-[checked] = [value for name, value in logger.calls if name == 'check_limits']
-assert checked is prepared
 ",
             );
         });
@@ -616,8 +618,6 @@ kwargs = {'logger': logger, 'vendor_extension': opaque}
                 &locals,
                 c"
 assert prepared['vendor_extension'] is opaque
-[checked] = [value for name, value in logger.calls if name == 'check_limits']
-assert checked['vendor_extension'] is opaque
 assert hooked == ([opaque] if asynchronous else []), hooked
 ",
             );
@@ -731,45 +731,6 @@ assert logger.names()[-3:] == ['failure_hook', 'failure_handler', 'async_failure
 assert all(value is failure for name, value in logger.calls if name.endswith('_handler'))
 ",
             );
-        });
-    }
-
-    #[rstest]
-    #[case::synchronous(false)]
-    #[case::asynchronous(true)]
-    fn a_limit_rejected_before_the_call_surfaces_as_the_callers_error(#[case] asynchronous: bool) {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = namespace(
-                py,
-                c"
-class BudgetExceeded(Exception):
-    pass
-
-rejection = BudgetExceeded('over budget')
-
-class LimitedLogger(StubLogger):
-    def check_limits(self, arguments):
-        raise rejection
-
-logger = LimitedLogger()
-logger.hooks = {'pre': lambda kwargs: kwargs}
-kwargs = {'logger': logger}
-",
-            );
-            let mut logging = legacy_call(py, &locals, asynchronous);
-            let kwargs = local(&locals, "kwargs")
-                .cast_into::<PyDict>()
-                .unwrap()
-                .unbind();
-            let result = logging.begin(py, kwargs, 0.0).and_then(|step| match step {
-                LifecycleStep::Await(_) => {
-                    logging.resume(py, Ok(local(&locals, "kwargs").unbind()))
-                }
-                step => Ok(step),
-            });
-            let error = result.err().unwrap();
-            assert!(error.value(py).is(local(&locals, "rejection")));
         });
     }
 }
