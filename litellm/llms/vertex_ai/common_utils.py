@@ -1240,12 +1240,19 @@ class VertexAITokenCounter(BaseTokenCounter):
     ) -> TokenCountResponse | None:
         import copy
 
+        from litellm.llms.gemini.count_tokens.handler import (
+            ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS,
+        )
         from litellm.llms.vertex_ai.vertex_ai_partner_models.main import (
             VertexAIPartnerModels,
         )
 
         deployment = deployment or {}
-        count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
+        count_tokens_params_request: Final = {
+            key: value
+            for key, value in copy.deepcopy(deployment.get("litellm_params", {})).items()
+            if key not in ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS
+        }
 
         # Check if this is a partner model (Claude, Mistral, etc.)
         if VertexAIPartnerModels.is_vertex_partner_model(model_to_use):

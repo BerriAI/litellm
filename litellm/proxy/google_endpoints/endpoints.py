@@ -1,7 +1,8 @@
 from typing import Final
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
+from pydantic import ValidationError
 
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
@@ -166,22 +167,25 @@ async def google_count_tokens(request: Request, model_name: str):
     ```
     """
     from litellm.google_genai.adapters.transformation import GoogleGenAIAdapter
+    from litellm.llms.gemini.count_tokens.transformation import parse_native_count_tokens_body
+    from litellm.proxy._types import TokenCountRequest
     from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
     from litellm.proxy.proxy_server import token_counter as internal_token_counter
 
     data: Final = await _read_request_body(request=request)
-    contents: Final = data.get("contents", [])
-    # Create TokenCountRequest for the internal endpoint
-    from litellm.proxy._types import TokenCountRequest
-
-    # Translate contents to openai format messages using the adapter
-    messages = GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
-
-    token_request: Final = TokenCountRequest(
-        model=model_name,
-        contents=contents,
-        messages=messages,  # compatibility when use openai-like endpoint
-    )
+    try:
+        body: Final = parse_native_count_tokens_body(data)
+        token_request: Final = TokenCountRequest(
+            model=model_name,
+            contents=body.contents,
+            messages=GoogleGenAIAdapter()
+            .translate_generate_content_to_completion(model_name, body.contents)
+            .get("messages", []),
+            tools=body.tools,
+            system=body.system_instruction,
+        )
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail={"error": f"Invalid count_tokens request: {e}"}) from e
 
     # Call the internal token counter function with direct request flag set to False
     token_response: Final = await internal_token_counter(

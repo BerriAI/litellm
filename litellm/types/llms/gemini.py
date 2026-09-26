@@ -1,15 +1,36 @@
+from collections.abc import Sequence
 from enum import Enum
 from typing import Any, Literal
 
-from typing_extensions import Required, TypedDict
+from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from .vertex_ai import (
+    ContentType,
     GenerationConfig,
     HttpxBlobType,
     HttpxContentType,
+    SystemInstructions,
     Tools,
     UsageMetadata,
 )
+
+
+class GeminiGenerateContentRequest(TypedDict):
+    model: ReadOnly[str]
+    contents: ReadOnly[Sequence[ContentType]]
+    systemInstruction: ReadOnly[NotRequired[SystemInstructions]]
+    tools: ReadOnly[NotRequired[Sequence[Tools]]]
+
+
+class GeminiCountContentsRequest(TypedDict):
+    contents: ReadOnly[Sequence[ContentType]]
+
+
+class GeminiCountGenerateContentRequest(TypedDict):
+    generateContentRequest: ReadOnly[GeminiGenerateContentRequest]
+
+
+GeminiCountTokensRequest = GeminiCountContentsRequest | GeminiCountGenerateContentRequest
 
 
 class GeminiFilesState(Enum):

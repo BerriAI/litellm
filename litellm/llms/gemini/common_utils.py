@@ -491,29 +491,78 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
+        client: httpx.AsyncClient | None = None,
     ) -> TokenCountResponse | None:
         import copy
 
-        from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
-
-        deployment = deployment or {}
-        count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
-        count_tokens_params: Final = {
-            "model": model_to_use,
-            "contents": contents,
-        }
-        count_tokens_params_request.update(count_tokens_params)
-        result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
-            **count_tokens_params_request,
+        from litellm.llms.gemini.count_tokens.handler import (
+            ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS,
+            GoogleAIStudioTokenCounter,
+        )
+        from litellm.llms.gemini.count_tokens.transformation import (
+            InvalidCountTokensRequest,
+            build_count_tokens_payload,
+            native_count_tokens_payload,
         )
 
-        if result is not None:
+        if contents is None and not messages:
+            return None
+
+        def failed(
+            message: str, status_code: int, original_response: dict[str, Any] | None = None
+        ) -> TokenCountResponse:
             return TokenCountResponse(
-                total_tokens=result.get("totalTokens", 0),
+                total_tokens=0,
                 request_model=request_model,
                 model_used=model_to_use,
-                tokenizer_type=result.get("tokenizer_used", ""),
-                original_response=result,
+                tokenizer_type="gemini_api",
+                error=True,
+                error_message=message,
+                status_code=status_code,
+                original_response=original_response,
             )
 
-        return None
+        litellm_params: Final = (deployment or {}).get("litellm_params", {})
+        counted_tools: Final = (*(litellm_params.get("tools") or ()), *(tools or ())) or None
+        try:
+            payload: Final = (
+                build_count_tokens_payload(
+                    model=model_to_use, messages=messages or (), system=system, tools=counted_tools
+                )
+                if contents is None
+                else native_count_tokens_payload(
+                    model=model_to_use, contents=contents, system=system, tools=counted_tools
+                )
+            )
+        except Exception as e:  # noqa: BLE001  # native-path translation failures are untranslatable input like build_count_tokens_payload's
+            return failed(f"Invalid token count request: {e!r}", 400)
+        if isinstance(payload, InvalidCountTokensRequest):
+            return failed(payload.message, 400)
+        count_tokens_params_request: Final = {
+            key: copy.deepcopy(value)
+            for key, value in litellm_params.items()
+            if key not in ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS
+        } | {"model": model_to_use, "contents": payload.contents}
+        try:
+            result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
+                system_instruction=payload.system_instruction,
+                tools=payload.tools,
+                client=client,
+                **count_tokens_params_request,
+            )
+        except (litellm.APIError, litellm.APIConnectionError) as e:
+            return failed(e.message, e.status_code)
+        total_tokens: Final = result.get("totalTokens") if isinstance(result, dict) else None
+        if not isinstance(total_tokens, int) or isinstance(total_tokens, bool):
+            return failed(
+                "Google Gen AI Studio countTokens response has no totalTokens",
+                502,
+                result if isinstance(result, dict) else None,
+            )
+        return TokenCountResponse(
+            total_tokens=total_tokens,
+            request_model=request_model,
+            model_used=model_to_use,
+            tokenizer_type="gemini_api",
+            original_response=result,
+        )

@@ -1230,6 +1230,50 @@ async def test_vertex_ai_token_counter_routes_partner_models():
 
 
 @pytest.mark.asyncio
+async def test_vertex_ai_token_counter_drops_reserved_litellm_params_keys():
+    """
+    A deployment carrying self/tools/client/system_instruction in litellm_params must
+    not collide with acount_tokens' bound parameters (TypeError) or hijack the
+    request (a stray tools or client).
+    """
+    from unittest.mock import AsyncMock, patch
+
+    from litellm.llms.vertex_ai.common_utils import VertexAITokenCounter
+    from litellm.types.utils import TokenCountResponse
+
+    token_counter = VertexAITokenCounter()
+
+    with patch(
+        "litellm.llms.vertex_ai.count_tokens.handler.VertexAITokenCounter.acount_tokens",
+        new_callable=AsyncMock,
+        return_value={"totalTokens": 7},
+    ) as mock_acount_tokens:
+        result = await token_counter.count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "user", "content": "Hello"}],
+            contents=None,
+            deployment={
+                "litellm_params": {
+                    "vertex_project": "test-project",
+                    "vertex_location": "us-east5",
+                    "self": "bogus",
+                    "tools": [{"name": "deployment_default_tool"}],
+                    "client": object(),
+                    "system_instruction": {"parts": [{"text": "deployment default"}]},
+                }
+            },
+            request_model="vertex_ai/gemini-2.5-flash",
+        )
+
+    assert mock_acount_tokens.called
+    forwarded_kwargs = mock_acount_tokens.call_args.kwargs
+    for reserved in ("self", "tools", "client", "system_instruction"):
+        assert reserved not in forwarded_kwargs
+    assert isinstance(result, TokenCountResponse)
+    assert result.total_tokens == 7
+
+
+@pytest.mark.asyncio
 async def test_vertex_ai_token_counter_uses_count_tokens_location():
     """
     Test that VertexAITokenCounter uses vertex_count_tokens_location to override

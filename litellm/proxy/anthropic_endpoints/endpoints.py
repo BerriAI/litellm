@@ -6,6 +6,7 @@ from typing import Final
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import JSONResponse
+from pydantic import ValidationError
 
 import litellm
 from litellm.anthropic_interface.exceptions import (
@@ -335,12 +336,15 @@ async def count_tokens(
         # Create TokenCountRequest for the internal endpoint
         from litellm.proxy._types import TokenCountRequest
 
-        token_request: Final = TokenCountRequest(
-            model=model_name,
-            messages=messages,
-            tools=data.get("tools"),
-            system=data.get("system"),
-        )
+        try:
+            token_request: Final = TokenCountRequest(
+                model=model_name,
+                messages=messages,
+                tools=data.get("tools"),
+                system=data.get("system"),
+            )
+        except ValidationError as e:
+            raise HTTPException(status_code=400, detail={"error": f"Invalid count_tokens request: {e}"}) from e
 
         # Call the internal token counter function with direct request flag set to False
         token_response: Final = await internal_token_counter(
