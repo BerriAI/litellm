@@ -1132,7 +1132,7 @@ class _CallbackCapabilities:
     # Tuple[(resolved_callback, "override" | "apply_guardrail"), ...]
     # Ordered the same as ``litellm.callbacks``; used to build the streaming
     # iterator chain without re-scanning per request.
-    iterator_overrides: tuple[tuple[CustomLogger, str], ...] = field(default_factory=tuple)
+    iterator_overrides: tuple[tuple[Any, str], ...] = field(default_factory=tuple)
     # Resolved CustomLogger callbacks in original order. Pre-resolving once
     # avoids the per-request ``get_custom_logger_compatible_class`` walk for
     # every string entry in ``litellm.callbacks``.
@@ -2782,7 +2782,7 @@ class ProxyLogging:
         has_pre_call_override = False
         has_content_enforcer = False
         has_moderation_override = False
-        iterator_overrides: Final[list[tuple[CustomLogger, str]]] = []  # (callback, kind)
+        iterator_overrides: Final[list[tuple[Any, str]]] = []  # (callback, kind)
         resolved_callbacks: Final[list[CustomLogger]] = []
 
         for callback in callbacks:
