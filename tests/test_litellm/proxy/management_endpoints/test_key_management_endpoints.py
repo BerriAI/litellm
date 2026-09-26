@@ -9367,6 +9367,7 @@ async def test_rotate_master_key_reencrypts_model_params_in_place(
 
     # Mock config table — no env vars
     mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
 
     # Mock credentials table — no credentials
     mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(
@@ -18537,6 +18538,7 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
         )
     )
     mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(
         return_value=[]
     )
@@ -21095,23 +21097,7 @@ class TestTeamAdminMemberKeyBudgetUpdate:
         assert "member_key_budgets" not in str(exc.value.detail)
 
 
-@pytest.mark.asyncio
-@patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key")
-async def test_rotate_master_key_rekeys_router_settings_and_guardrail_params(mock_rotate_mcp, monkeypatch):
-    import prisma
-
-    from litellm.proxy import proxy_server
-    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_json_strings
-    from litellm.proxy.management_endpoints.key_management_endpoints import _rotate_master_key
-
-    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
-    monkeypatch.setattr(proxy_server, "general_settings", {})
-    stored_router_settings = encrypt_json_strings({"redis_password": "redis-pw", "num_retries": 2})
-    stored_guardrail_params = encrypt_json_strings(
-        {"guardrail": "openai_moderation", "api_key": "vendor-secret", "default_on": False}
-    )
-
+def _rotation_prisma_client(stored_router_settings: object, stored_guardrail_params: object) -> AsyncMock:
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db = MagicMock()
     mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
@@ -21127,10 +21113,18 @@ async def test_rotate_master_key_rekeys_router_settings_and_guardrail_params(moc
     )
     mock_prisma_client.db.litellm_guardrailstable.update = AsyncMock()
     mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
-    mock_rotate_mcp.return_value = None
+    return mock_prisma_client
+
+
+async def _rotate_to_new_master_key(mock_prisma_client: AsyncMock, monkeypatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import _rotate_master_key
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
     mock_proxy_config = MagicMock()
     mock_proxy_config.decrypt_model_list_from_db.return_value = []
-
     with patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config):
         await _rotate_master_key(
             prisma_client=mock_prisma_client,
@@ -21140,6 +21134,26 @@ async def test_rotate_master_key_rekeys_router_settings_and_guardrail_params(moc
             current_master_key="sk-old-master-key",
             new_master_key="sk-new-master-key",
         )
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key")
+async def test_rotate_master_key_rekeys_router_settings_and_guardrail_params(mock_rotate_mcp, monkeypatch):
+    import prisma
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_json_strings
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    stored_router_settings = encrypt_json_strings({"redis_password": "redis-pw", "num_retries": 2})
+    stored_guardrail_params = encrypt_json_strings(
+        {"guardrail": "openai_moderation", "api_key": "vendor-secret", "default_on": False}
+    )
+    mock_prisma_client = _rotation_prisma_client(stored_router_settings, stored_guardrail_params)
+    mock_rotate_mcp.return_value = None
+
+    await _rotate_to_new_master_key(mock_prisma_client, monkeypatch)
 
     router_update = mock_prisma_client.db.litellm_config.update.call_args
     assert router_update.kwargs["where"] == {"param_name": "router_settings"}
@@ -21156,3 +21170,76 @@ async def test_rotate_master_key_rekeys_router_settings_and_guardrail_params(moc
     assert decrypt_if_encrypted_with(rotated_guardrail_params["api_key"], "sk-new-master-key") == "vendor-secret"
     assert decrypt_if_encrypted_with(rotated_guardrail_params["guardrail"], "sk-new-master-key") == "openai_moderation"
     assert rotated_guardrail_params["default_on"] is False
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key")
+async def test_rotate_master_key_rekeys_rows_stored_as_json_strings(mock_rotate_mcp, monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with, encrypt_json_strings
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
+    monkeypatch.setattr(proxy_server, "general_settings", {})
+    stored_router_settings = json.dumps(encrypt_json_strings({"redis_password": "redis-pw"}))
+    stored_guardrail_params = json.dumps(encrypt_json_strings({"api_key": "vendor-secret", "default_on": False}))
+    mock_prisma_client = _rotation_prisma_client(stored_router_settings, stored_guardrail_params)
+    mock_rotate_mcp.return_value = None
+
+    await _rotate_to_new_master_key(mock_prisma_client, monkeypatch)
+
+    rotated_router_settings = mock_prisma_client.db.litellm_config.update.call_args.kwargs["data"]["param_value"].data
+    assert decrypt_if_encrypted_with(rotated_router_settings["redis_password"], "sk-new-master-key") == "redis-pw"
+    rotated_guardrail_params = mock_prisma_client.db.litellm_guardrailstable.update.call_args.kwargs["data"][
+        "litellm_params"
+    ].data
+    assert decrypt_if_encrypted_with(rotated_guardrail_params["api_key"], "sk-new-master-key") == "vendor-secret"
+    assert rotated_guardrail_params["default_on"] is False
+
+
+@pytest.mark.asyncio
+@patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key")
+async def test_rotate_master_key_reports_rows_that_are_not_json_objects_without_their_contents(
+    mock_rotate_mcp, monkeypatch, caplog
+):
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    caplog.set_level(logging.ERROR, logger=verbose_proxy_logger.name)
+    mock_prisma_client = _rotation_prisma_client("plaintext-router-secret", json.dumps(["vendor-secret"]))
+    mock_rotate_mcp.return_value = None
+
+    await _rotate_to_new_master_key(mock_prisma_client, monkeypatch)
+
+    skipped: Final = sorted(
+        record.getMessage() for record in caplog.records if record.getMessage().startswith("Master key rotation skipped")
+    )
+    assert skipped == [
+        "Master key rotation skipped config router_settings: stored value is not a JSON object",
+        "Master key rotation skipped guardrail guardrail-1: litellm_params is not a JSON object",
+    ]
+    assert "plaintext-router-secret" not in caplog.text
+    assert "vendor-secret" not in caplog.text
+    mock_prisma_client.db.litellm_config.update.assert_not_called()
+    mock_prisma_client.db.litellm_guardrailstable.update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_guardrail_rows_treats_only_a_missing_table_as_empty():
+    from prisma.errors import TableNotFoundError
+
+    from litellm.proxy.management_endpoints.key_management_endpoints import _guardrail_rows
+
+    missing_table = MagicMock()
+    missing_table.db.litellm_guardrailstable.find_many = AsyncMock(
+        side_effect=TableNotFoundError(
+            {"user_facing_error": {"error_code": "P2021", "meta": {"table": "LiteLLM_GuardrailsTable"}}}
+        )
+    )
+    assert await _guardrail_rows(missing_table) == ()
+
+    broken_connection = MagicMock()
+    broken_connection.db.litellm_guardrailstable.find_many = AsyncMock(side_effect=RuntimeError("connection lost"))
+    with pytest.raises(RuntimeError, match="connection lost"):
+        await _guardrail_rows(broken_connection)

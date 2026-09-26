@@ -46,7 +46,10 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         }
 
     def _decrypt_litellm_params(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-        return {key: decrypt_json_strings(json_value(value)) for key, value in litellm_params.items()}
+        return {
+            key: decrypt_json_strings(json_value(value), signing_key=self._encryption_key)
+            for key, value in litellm_params.items()
+        }
 
     def _to_model(self, record: Any) -> LiteLLM_ProxyModelTable | None:
         """Convert a database record to a Model with decryption."""

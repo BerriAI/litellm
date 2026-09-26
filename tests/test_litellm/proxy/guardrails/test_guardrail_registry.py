@@ -1200,3 +1200,48 @@ def test_guardrail_from_row_keeps_a_row_without_litellm_params(guardrail_salt_ke
     row = _StoredGuardrailRow(guardrail_id="g-empty", guardrail_name="empty", litellm_params=None, guardrail_info=None)
 
     assert guardrail_from_row(row)["litellm_params"] is None
+
+
+@pytest.fixture
+def proxy_debug_log(caplog, monkeypatch):
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    caplog.set_level(logging.DEBUG, logger=verbose_proxy_logger.name)
+    return caplog
+
+
+def test_initialize_guardrail_keeps_the_vendor_api_key_out_of_the_logs(proxy_debug_log):
+    registry_module = _register_noop_initializer("quiet_init_test")
+    guardrail = {
+        "guardrail_name": "quiet-init",
+        "litellm_params": {"guardrail": "quiet_init_test", "mode": "pre_call", "api_key": "vendor-secret-init"},
+    }
+    try:
+        assert InMemoryGuardrailHandler().initialize_guardrail(guardrail=guardrail) is not None
+    finally:
+        registry_module.guardrail_initializer_registry.pop("quiet_init_test", None)
+
+    assert "vendor-secret-init" not in proxy_debug_log.text
+
+
+def test_has_guardrail_params_changed_logs_only_the_changed_field_names(proxy_debug_log):
+    handler = InMemoryGuardrailHandler()
+    handler.IN_MEMORY_GUARDRAILS["g-1"] = {
+        "guardrail_id": "g-1",
+        "guardrail_name": "moderation",
+        "litellm_params": {"guardrail": "openai_moderation", "mode": "pre_call", "api_key": "old-vendor-secret"},
+    }
+    changed = {
+        "guardrail_id": "g-1",
+        "guardrail_name": "moderation",
+        "litellm_params": {"guardrail": "openai_moderation", "mode": "pre_call", "api_key": "new-vendor-secret"},
+    }
+
+    assert handler._has_guardrail_params_changed("g-1", changed) is True
+
+    assert "api_key" in proxy_debug_log.text
+    assert "old-vendor-secret" not in proxy_debug_log.text
+    assert "new-vendor-secret" not in proxy_debug_log.text

@@ -2290,3 +2290,18 @@ class TestModelRepositoryNestedEncryption:
         found: Final = await repo.find_by_id("gw-1")
         assert found is not None
         assert found.litellm_params == litellm_params
+
+    @pytest.mark.asyncio
+    async def test_reads_use_the_same_injected_key_as_writes(self):
+        client: Final = MockPrismaClient()
+        repo: Final = ModelRepository(client, encryption_key="sk-injected-key-5678")
+        litellm_params: Final = {"model": "openai/gpt-5.4-mini", "extra_headers": {"Authorization": "Bearer gw"}}
+
+        await repo.create_model(model_name="gateway-model", litellm_params=litellm_params, created_by="admin", model_id="gw-2")
+
+        found: Final = await repo.find_by_id("gw-2")
+        assert found is not None
+        assert found.litellm_params == litellm_params
+        env_key_read: Final = await ModelRepository(client).find_by_id("gw-2")
+        assert env_key_read is not None
+        assert env_key_read.litellm_params["extra_headers"]["Authorization"] != "Bearer gw"

@@ -23,6 +23,7 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_value_helper,
     encrypt_config_section,
     encrypt_json_strings,
+    encrypt_stored_json_object,
     encrypt_value,
     encrypt_value_helper,
     json_value,
@@ -362,3 +363,40 @@ def test_encrypt_config_section_rekeys_router_settings_for_master_key_rotation()
     rotated = encrypt_config_section("router_settings", stored, new_encryption_key="sk-rotated")
 
     assert decrypt_if_encrypted_with(rotated["redis_password"], "sk-rotated") == "redis-pw"
+
+
+def test_decrypt_json_strings_reads_values_encrypted_under_the_given_key():
+    stored = encrypt_json_strings(_NESTED_PARAMS, new_encryption_key="sk-other-key")
+
+    assert decrypt_json_strings(stored, signing_key="sk-other-key") == _NESTED_PARAMS
+    assert decrypt_json_strings(stored)["extra_headers"]["Authorization"] != "Bearer gateway-secret"
+
+
+def test_encrypt_stored_json_object_rekeys_a_row_stored_as_a_json_string():
+    stored_row = json.dumps(encrypt_json_strings({"api_key": "vendor-secret", "default_on": False}))
+
+    rotated = encrypt_stored_json_object(stored_row, new_encryption_key="sk-rotated")
+
+    assert rotated is not None
+    assert decrypt_if_encrypted_with(rotated["api_key"], "sk-rotated") == "vendor-secret"
+    assert rotated["default_on"] is False
+
+
+@pytest.mark.parametrize("stored_row", ("not json", json.dumps(["api_key"]), 7, None))
+def test_encrypt_stored_json_object_returns_none_for_a_row_that_is_not_a_json_object(stored_row):
+    assert encrypt_stored_json_object(stored_row, new_encryption_key="sk-rotated") is None
+
+
+def test_decrypt_stored_json_object_reports_a_malformed_row_without_its_contents(caplog, monkeypatch):
+    import logging
+
+    from litellm._logging import verbose_proxy_logger
+
+    monkeypatch.setattr(verbose_proxy_logger, "propagate", True)
+    caplog.set_level(logging.ERROR, logger=verbose_proxy_logger.name)
+
+    assert decrypt_stored_json_object("leaked-secret-text") == {}
+    assert decrypt_stored_json_object(None) == {}
+
+    assert [record.levelno for record in caplog.records] == [logging.ERROR]
+    assert "leaked-secret-text" not in caplog.text

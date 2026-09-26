@@ -274,11 +274,11 @@ def json_value(value: object) -> JsonValue:
         return _JSON_VALUE.validate_json(safe_dumps(plain))
 
 
-def _plaintext_of(value: str) -> str:
-    signing_key: Final = _get_salt_key()
-    if signing_key is None:
+def _plaintext_of(value: str, signing_key: str | None = None) -> str:
+    key: Final = signing_key or _get_salt_key()
+    if key is None:
         return value
-    decrypted: Final = decrypt_if_encrypted_with(value, signing_key)
+    decrypted: Final = decrypt_if_encrypted_with(value, key)
     return value if decrypted is None else decrypted
 
 
@@ -304,25 +304,41 @@ def encrypt_json_strings(value: JsonValue, new_encryption_key: str | None = None
             return value
 
 
-def decrypt_json_strings(value: JsonValue, depth: int = 0) -> JsonValue:
+def decrypt_json_strings(value: JsonValue, signing_key: str | None = None, depth: int = 0) -> JsonValue:
     if depth > DEFAULT_MAX_RECURSE_DEPTH:
         return value
     match value:
         case str():
-            return _plaintext_of(value)
+            return _plaintext_of(value, signing_key)
         case list():
-            return [decrypt_json_strings(item, depth + 1) for item in value]
+            return [decrypt_json_strings(item, signing_key, depth + 1) for item in value]
         case dict():
-            return {key: decrypt_json_strings(item, depth + 1) for key, item in value.items()}
+            return {key: decrypt_json_strings(item, signing_key, depth + 1) for key, item in value.items()}
         case _:
             return value
 
 
-def _stored_json_object(value: object) -> dict[str, JsonValue]:
+def parse_stored_json_object(value: object) -> dict[str, JsonValue] | None:
     try:
         return _JSON_OBJECT.validate_json(value) if isinstance(value, str) else _JSON_OBJECT.validate_python(value)
     except ValidationError:
-        return {}
+        return None
+
+
+def _stored_json_object(value: object) -> dict[str, JsonValue]:
+    parsed: Final = parse_stored_json_object(value)
+    if parsed is not None:
+        return parsed
+    if value is not None:
+        verbose_proxy_logger.error("Stored value is not a JSON object (%s); reading it as empty", type(value).__name__)
+    return {}
+
+
+def encrypt_stored_json_object(value: object, new_encryption_key: str | None = None) -> dict[str, JsonValue] | None:
+    parsed: Final = parse_stored_json_object(value)
+    if parsed is None:
+        return None
+    return {key: encrypt_json_strings(item, new_encryption_key=new_encryption_key) for key, item in parsed.items()}
 
 
 def decrypt_stored_json_object(value: object) -> dict[str, JsonValue]:
