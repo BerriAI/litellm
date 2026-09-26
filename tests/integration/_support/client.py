@@ -174,6 +174,12 @@ class Scenario:
         assert response.status_code == 200 and response.json() == 1, response.text
         assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (identity,)) == []
 
+    def member(self, team_id: str, role: str = "user") -> str:
+        """Create an internal user and add them to ``team_id``; deleting the user later removes the membership."""
+        user_id: Final = self.user(user_role="internal_user")
+        self.gateway.post("/team/member_add", {"team_id": team_id, "member": {"role": role, "user_id": user_id}})
+        return user_id
+
     def delete_key(self, token: str) -> None:
         self.gateway.post("/key/delete", {"keys": [token]})
         hashed: Final = sha256(token.encode()).hexdigest()
