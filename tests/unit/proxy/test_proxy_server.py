@@ -2979,7 +2979,7 @@ async def test_get_config_callbacks_environment_variables(client_no_auth):
 
 
 @pytest.mark.asyncio
-async def test_update_config_success_callback_normalization():
+async def test_update_config_success_callback_normalization(monkeypatch):
     """
     Ensure success_callback values are normalized to lowercase when updating config.
     This prevents delete_callback (which searches lowercase) from failing on mixed case inputs like 'SQS'.
@@ -2987,7 +2987,7 @@ async def test_update_config_success_callback_normalization():
     import litellm.proxy.proxy_server as proxy_server
     from litellm.proxy._types import ConfigYAML
 
-    setattr(proxy_server, "proxy_logging_obj", MagicMock())
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", MagicMock())
 
     existing_litellm_settings = {"success_callback": ["langfuse"]}
 
@@ -3013,7 +3013,7 @@ async def test_update_config_success_callback_normalization():
             self.db.litellm_config.find_first = AsyncMock(side_effect=fake_find_first)
             self.db.litellm_config.upsert = AsyncMock(side_effect=fake_upsert)
 
-    setattr(proxy_server, "prisma_client", MockPrisma())
+    monkeypatch.setattr(proxy_server, "prisma_client", MockPrisma())
 
     class MockProxyConfig:
         async def add_deployment(self, prisma_client=None, proxy_logging_obj=None):  # noqa: F811  # pytest fixture, not a redefinition
@@ -3022,7 +3022,7 @@ async def test_update_config_success_callback_normalization():
         def reject_config_owned_writes(self, *, section_name, changed_keys):
             return None
 
-    setattr(proxy_server, "proxy_config", MockProxyConfig())
+    monkeypatch.setattr(proxy_server, "proxy_config", MockProxyConfig())
 
     config_update = ConfigYAML(litellm_settings={"success_callback": ["SQS", "sQs"]})
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth

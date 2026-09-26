@@ -323,6 +323,7 @@ jobs:
             CHOCOLATEY_CONFIRM_ALL: "true"
       - run:
           name: Install Dependencies
+          no_output_timeout: 30m
           environment:
             UV_HTTP_TIMEOUT: "300"
           command: |
@@ -381,6 +382,7 @@ jobs:
             uv run --no-sync python -m pytest tests/windows_tests/ -v
       - run:
           name: Guard against MAX_PATH-busting packaged wheel paths
+          no_output_timeout: 30m
           environment:
             UV_HTTP_TIMEOUT: "300"
           command: |

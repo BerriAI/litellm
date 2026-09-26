@@ -9,6 +9,7 @@ import pytest
 
 import litellm
 from litellm import get_model_info
+from litellm.utils import _invalidate_model_cost_lowercase_map
 from unittest.mock import MagicMock, patch
 
 
@@ -74,15 +75,15 @@ def test_get_model_info_ollama_chat():
         assert mock_client.call_args.kwargs["json"]["name"] == "unknown-model"
 
 
-def test_get_model_info_bedrock_region():
-    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
-    litellm.model_cost = litellm.get_model_cost_map(url="")
-    args = {
-        "model": "us.anthropic.claude-haiku-4-5-20251001-v1:0",
-        "custom_llm_provider": "bedrock",
+def test_get_model_info_bedrock_region(monkeypatch):
+    regional_model = "us.anthropic.claude-haiku-4-5-20251001-v1:0"
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    model_cost_without_regional_entry = {
+        key: value for key, value in litellm.get_model_cost_map(url="").items() if key != regional_model
     }
-    litellm.model_cost.pop("us.anthropic.claude-haiku-4-5-20251001-v1:0", None)
-    info = litellm.get_model_info(**args)
+    monkeypatch.setattr(litellm, "model_cost", model_cost_without_regional_entry)
+    _invalidate_model_cost_lowercase_map()
+    info = litellm.get_model_info(model=regional_model, custom_llm_provider="bedrock")
     print("info", info)
     assert info["key"] == "anthropic.claude-haiku-4-5-20251001-v1:0"
     assert info["litellm_provider"] == "bedrock_converse"
