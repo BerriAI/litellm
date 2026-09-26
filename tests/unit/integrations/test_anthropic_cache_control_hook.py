@@ -16,6 +16,7 @@ from litellm.integrations.anthropic_cache_control_hook import (
     supports_openai_prompt_cache_breakpoint,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+from litellm.types.integrations.anthropic_cache_control_hook import CacheControlMessageInjectionPoint
 from litellm.types.llms.openai import AllMessageValues
 
 
@@ -3606,3 +3607,529 @@ class TestRecordGatewayInjection:
             custom_llm_provider="anthropic",
         )
         assert self.KEY not in kwargs["litellm_metadata"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_skips_a_thinking_block(monkeypatch: pytest.MonkeyPatch):
+    """
+    A cache_control marker on a thinking block is spent on a block Anthropic does not
+    accept one on, so the turn it was meant to cache is not cached. The marker goes on
+    the last block of the message that accepts one instead.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake_anthropic_key")
+    anthropic_cache_control_hook = AnthropicCacheControlHook()
+    monkeypatch.setattr(litellm, "callbacks", [anthropic_cache_control_hook])
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [{"type": "text", "text": "Because two plus two is four."}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    mock_response.status_code = 200
+
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        await litellm.acompletion(
+            model="anthropic/claude-sonnet-4-5",
+            messages=[
+                {"role": "user", "content": "What is 2 + 2?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "The answer is 4."},
+                        {"type": "thinking", "thinking": "Adding two and two.", "signature": "sig"},
+                        {"type": "redacted_thinking", "data": "redacted"},
+                    ],
+                },
+                {"role": "user", "content": "Why?"},
+            ],
+            cache_control_injection_points=[{"location": "message", "index": 1}],
+            client=client,
+        )
+
+        request_body = mock_post.call_args.kwargs["json"]
+
+    assert request_body["messages"][1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "The answer is 4.", "cache_control": {"type": "ephemeral"}},
+            {"type": "thinking", "thinking": "Adding two and two.", "signature": "sig"},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_skips_an_empty_text_block(monkeypatch: pytest.MonkeyPatch):
+    """
+    An empty text block is replaced by a placeholder before the request goes out, and a
+    cache_control marker written on it is replaced with it. The marker goes on the last
+    block that survives instead.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake_anthropic_key")
+    monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [{"type": "text", "text": "Because two plus two is four."}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    mock_response.status_code = 200
+
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        await litellm.acompletion(
+            model="anthropic/claude-sonnet-4-5",
+            messages=[
+                {"role": "user", "content": "What is 2 + 2?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "text", "text": "The answer is 4."},
+                        {"type": "text", "text": ""},
+                    ],
+                },
+                {"role": "user", "content": "Why?"},
+            ],
+            cache_control_injection_points=[{"location": "message", "index": 1}],
+            client=client,
+        )
+
+        request_body = mock_post.call_args.kwargs["json"]
+
+    assert request_body["messages"][1] == {
+        "role": "assistant",
+        "content": [
+            {"type": "text", "text": "The answer is 4.", "cache_control": {"type": "ephemeral"}},
+            {"type": "text", "text": "[System: Empty message content sanitised to satisfy protocol]"},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_marks_an_empty_tool_result(monkeypatch: pytest.MonkeyPatch):
+    """
+    A tool message keeps its empty text block - it goes out nested in the tool_result the
+    conversion builds - so the marker stays on it rather than walking off the message.
+    """
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake_anthropic_key")
+    monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
+
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [{"type": "text", "text": "Nothing came back."}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    mock_response.status_code = 200
+
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=mock_response) as mock_post:
+        await litellm.acompletion(
+            model="anthropic/claude-sonnet-4-5",
+            messages=[
+                {"role": "user", "content": "Search for it."},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"id": "call_1", "type": "function", "function": {"name": "search", "arguments": "{}"}}
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": [{"type": "text", "text": ""}]},
+            ],
+            cache_control_injection_points=[{"location": "message", "index": 2}],
+            client=client,
+        )
+
+        request_body = mock_post.call_args.kwargs["json"]
+
+    assert request_body["messages"][-1] == {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "call_1",
+                "content": [{"type": "text", "text": "", "cache_control": {"type": "ephemeral"}}],
+            }
+        ],
+    }
+
+
+def _anthropic_response_mock() -> MagicMock:
+    mock_response = MagicMock()
+    mock_response.json.return_value = {
+        "id": "msg_01",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-sonnet-4-5",
+        "content": [{"type": "text", "text": "Sure."}],
+        "stop_reason": "end_turn",
+        "usage": {"input_tokens": 10, "output_tokens": 20},
+    }
+    mock_response.status_code = 200
+    return mock_response
+
+
+async def _marked_messages(
+    messages: list[AllMessageValues],
+    points: list[CacheControlMessageInjectionPoint],
+    monkeypatch: pytest.MonkeyPatch,
+) -> list[AllMessageValues]:
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake_anthropic_key")
+    monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=_anthropic_response_mock()) as mock_post:
+        await litellm.acompletion(
+            model="anthropic/claude-sonnet-4-5",
+            messages=messages,
+            cache_control_injection_points=points,
+            client=client,
+        )
+        return mock_post.call_args.kwargs["json"]["messages"]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_counts_the_index_within_the_role(monkeypatch: pytest.MonkeyPatch):
+    """
+    {"role": "assistant", "index": -1} means the last assistant turn. Counting the index
+    over every message instead marks whatever message happens to be last, so the turn the
+    point named is not cached.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "What is 2 + 2?"},
+            {"role": "assistant", "content": "The answer is 4."},
+            {"role": "user", "content": "Why?"},
+        ],
+        [{"location": "message", "role": "assistant", "index": -1}],
+        monkeypatch,
+    )
+
+    assert marked == [
+        {"role": "user", "content": [{"type": "text", "text": "What is 2 + 2?"}]},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "The answer is 4.", "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "user", "content": [{"type": "text", "text": "Why?"}]},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_walks_back_off_a_tool_call_turn(monkeypatch: pytest.MonkeyPatch):
+    """
+    An assistant turn that said everything through tool_calls has no content to mark, and
+    it is the newest assistant turn at every step of an agent loop. Stopping there spends
+    the point and writes nothing, so the walk goes back to the turn before it.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "Open the file."},
+            {"role": "assistant", "content": "Opening it now."},
+            {"role": "user", "content": "Thanks."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "open_file", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": "file contents"},
+        ],
+        [{"location": "message", "role": "assistant", "index": -1}],
+        monkeypatch,
+    )
+
+    assert marked[1] == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "Opening it now.", "cache_control": {"type": "ephemeral"}}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_walk_back_stays_in_the_role(monkeypatch: pytest.MonkeyPatch):
+    """
+    The walk stays inside the role the point named, so an empty last user turn marks an
+    earlier user turn rather than the assistant turn between them.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "first question"},
+            {"role": "assistant", "content": "first answer"},
+            {"role": "user", "content": ""},
+        ],
+        [{"location": "message", "role": "user", "index": -1}],
+        monkeypatch,
+    )
+
+    assert marked[0] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "first question", "cache_control": {"type": "ephemeral"}}],
+    }
+    assert marked[1] == {"role": "assistant", "content": [{"type": "text", "text": "first answer"}]}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_bounds_the_index_by_the_role(monkeypatch: pytest.MonkeyPatch):
+    """
+    An index is in bounds when the role has that many turns, not when the message list
+    does. -3 against two assistant turns names no turn, so the point marks nothing.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "u2"},
+            {"role": "assistant", "content": "a2"},
+        ],
+        [{"location": "message", "role": "assistant", "index": -3}],
+        monkeypatch,
+    )
+
+    assert marked == [
+        {"role": "user", "content": [{"type": "text", "text": "u1"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "a1"}]},
+        {"role": "user", "content": [{"type": "text", "text": "u2"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "a2"}]},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_bounds_a_positive_index_by_the_role(monkeypatch: pytest.MonkeyPatch):
+    """
+    Index 3 names a fourth turn of the role. Two assistant turns among five messages is
+    out of bounds, and bounding it by the message list instead reads past the end of the
+    role's turns.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "u2"},
+            {"role": "assistant", "content": "a2"},
+            {"role": "user", "content": "u3"},
+        ],
+        [{"location": "message", "role": "assistant", "index": 3}],
+        monkeypatch,
+    )
+
+    assert marked == [
+        {"role": "user", "content": [{"type": "text", "text": "u1"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "a1"}]},
+        {"role": "user", "content": [{"type": "text", "text": "u2"}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "a2"}]},
+        {"role": "user", "content": [{"type": "text", "text": "u3"}]},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_role_alone_skips_a_turn_with_nowhere_to_write(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    A point naming a role and no index marks every turn of that role that accepts a
+    marker. An empty turn would spend a breakpoint on a block the conversion replaces.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "u1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": ""},
+            {"role": "assistant", "content": "a2"},
+            {"role": "user", "content": "u3"},
+        ],
+        [{"location": "message", "role": "user"}],
+        monkeypatch,
+    )
+
+    assert marked[0] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "u1", "cache_control": {"type": "ephemeral"}}],
+    }
+    assert marked[2] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "[System: Empty message content sanitised to satisfy protocol]"}],
+    }
+    assert marked[4] == {
+        "role": "user",
+        "content": [{"type": "text", "text": "u3", "cache_control": {"type": "ephemeral"}}],
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_marks_a_tool_turn_that_returned_nothing(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """
+    A tool that returned nothing is the newest turn of an agent loop. Its empty content
+    reaches the provider inside the tool_result, so the marker goes on it rather than
+    walking back and leaving the tool_use outside the cached prefix.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "Search for it."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "search", "arguments": "{}"}}
+                ],
+            },
+            {"role": "tool", "tool_call_id": "call_1", "content": ""},
+        ],
+        [{"location": "message", "index": 2}],
+        monkeypatch,
+    )
+
+    assert marked[-1] == {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "call_1",
+                "content": "",
+                "cache_control": {"type": "ephemeral"},
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_walks_back_off_a_thinking_only_turn(monkeypatch: pytest.MonkeyPatch):
+    """
+    A turn whose only block is a thinking block has no block that accepts a marker, so
+    the walk goes back to the turn before it rather than spending the point there.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "q1"},
+            {"role": "assistant", "content": "a1"},
+            {"role": "user", "content": "q2"},
+            {"role": "assistant", "content": [{"type": "thinking", "thinking": "t", "signature": "s"}]},
+        ],
+        [{"location": "message", "role": "assistant", "index": -1}],
+        monkeypatch,
+    )
+
+    assert marked[1] == {
+        "role": "assistant",
+        "content": [{"type": "text", "text": "a1", "cache_control": {"type": "ephemeral"}}],
+    }
+    assert marked[3] == {"role": "assistant", "content": [{"type": "thinking", "thinking": "t", "signature": "s"}]}
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_two_points_stay_two_breakpoints(monkeypatch: pytest.MonkeyPatch):
+    """
+    The second point walks past the message the first one marked. Arriving on it,
+    finding it marked and dropping the point turns two configured breakpoints into one,
+    and the four exist so a prefix that stops matching at one can match at an earlier one.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "open"},
+            {"role": "assistant", "content": "ack"},
+            {"role": "user", "content": ""},
+        ],
+        [{"location": "message", "index": -1}, {"location": "message", "index": -2}],
+        monkeypatch,
+    )
+
+    assert marked == [
+        {"role": "user", "content": [{"type": "text", "text": "open", "cache_control": {"type": "ephemeral"}}]},
+        {"role": "assistant", "content": [{"type": "text", "text": "ack", "cache_control": {"type": "ephemeral"}}]},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "[System: Empty message content sanitised to satisfy protocol]"}],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_skips_a_tool_reference_block(monkeypatch: pytest.MonkeyPatch):
+    """
+    The tool_result conversion rebuilds a tool_reference from its type and tool_name
+    alone, so a marker written on one never reaches the provider.
+    """
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "find a tool"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"id": "call_1", "type": "function", "function": {"name": "tool_search", "arguments": "{}"}}
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "content": [
+                    {"type": "text", "text": "found"},
+                    {"type": "tool_reference", "tool_name": "get_weather"},
+                ],
+            },
+        ],
+        [{"location": "message", "index": 2}],
+        monkeypatch,
+    )
+
+    assert marked[-1] == {
+        "role": "user",
+        "content": [
+            {
+                "type": "tool_result",
+                "tool_use_id": "call_1",
+                "content": [
+                    {"type": "text", "text": "found", "cache_control": {"type": "ephemeral"}},
+                    {"type": "tool_reference", "tool_name": "get_weather"},
+                ],
+            }
+        ],
+    }
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_skips_a_block_that_is_not_an_object(monkeypatch: pytest.MonkeyPatch):
+    """A caller can put a bare string in a content list; reading .type off it raises."""
+    marked = await _marked_messages(
+        [
+            {"role": "user", "content": "What is 2 + 2?"},
+            {"role": "assistant", "content": ["The answer is 4."]},
+        ],
+        [{"location": "message", "role": "assistant", "index": -1}],
+        monkeypatch,
+    )
+    assert marked == [{"role": "user", "content": [{"type": "text", "text": "What is 2 + 2?"}]}]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_cache_control_hook_leaves_a_message_that_is_not_an_object_to_litellm(
+    monkeypatch: pytest.MonkeyPatch,
+):
+    """A bare string in the message list belongs to litellm's own validation, not to this hook."""
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "fake_anthropic_key")
+    monkeypatch.setattr(litellm, "callbacks", [AnthropicCacheControlHook()])
+    client = AsyncHTTPHandler()
+    with patch.object(client, "post", return_value=_anthropic_response_mock()):
+        with pytest.raises(litellm.APIConnectionError):
+            await litellm.acompletion(
+                model="anthropic/claude-sonnet-4-5",
+                messages=[{"role": "user", "content": "What is 2 + 2?"}, "The answer is 4."],
+                cache_control_injection_points=[{"location": "message", "index": -1}],
+                client=client,
+            )

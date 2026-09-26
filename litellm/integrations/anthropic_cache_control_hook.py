@@ -67,6 +67,12 @@ _GPT_VERSION_PATTERN: Final = re.compile(r"^gpt-(\d+)(?:\.(\d+))?")
 OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES: Final = frozenset(
     {"text", "image", "image_url", "file", "input_audio", "input_text", "input_image", "input_file"}
 )
+# Block types a marker never reaches the provider on. Anthropic accepts one on text,
+# image, tool_use, tool_result and document, so a thinking block is refused there; a
+# tool_reference is rebuilt from its type and tool_name alone by the tool_result
+# conversion, which drops everything else. A list of refused types rather than
+# accepted ones, so a block type this code has not been told about still takes one.
+ANTHROPIC_BLOCK_TYPES_WITHOUT_CACHE_CONTROL: Final = frozenset({"thinking", "redacted_thinking", "tool_reference"})
 OPENAI_API_HOST: Final = "api.openai.com"
 OPENAI_API_BASE_ENV_VARS: Final = ("OPENAI_BASE_URL", "OPENAI_API_BASE")
 _OBJECT_MAPPING_ADAPTER: Final = TypeAdapter(dict[object, object])
@@ -137,6 +143,37 @@ def _chat_transform_drops_tool_cache_control(tool: object) -> bool:
 
 def _accepts_prompt_cache_breakpoint(block: object) -> bool:
     return isinstance(block, dict) and block.get("type") in OPENAI_PROMPT_CACHE_BREAKPOINT_BLOCK_TYPES
+
+
+def _index_of_block_accepting_cache_control(content: list[object], on_a_tool_message: bool) -> int | None:
+    """Last block a marker written here reaches the provider on, searched from the end.
+
+    An empty text block is replaced by a placeholder unless it sits on a tool message,
+    where it goes out inside the tool_result.
+    """
+    for index in range(len(content) - 1, -1, -1):
+        block = content[index]
+        if not isinstance(block, dict):
+            continue
+        if block.get("type") in ANTHROPIC_BLOCK_TYPES_WITHOUT_CACHE_CONTROL:
+            continue
+        if block.get("type") == "text" and not block.get("text") and not on_a_tool_message:
+            continue
+        return index
+    return None
+
+
+def _message_accepts_cache_control(message: object) -> bool:
+    """Whether a marker written on this message reaches the provider."""
+    if not isinstance(message, dict):
+        return False
+    on_a_tool_message: Final = message.get("role") == "tool"
+    content: Final = message.get("content")
+    if isinstance(content, str):
+        return content != "" or on_a_tool_message
+    if isinstance(content, list):
+        return _index_of_block_accepting_cache_control(content, on_a_tool_message) is not None
+    return False
 
 
 # Set by a caller whose message list is not the one that goes upstream -- today the
@@ -445,29 +482,36 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         else:
             targetted_index = _targetted_index
 
-        # Case 1: Target by specific index
-        if targetted_index is not None:
-            original_index: Final = targetted_index
-            if targetted_index < 0:
-                targetted_index += len(messages)
+        targetted_role: Final = point.get("role", None)
+        candidates: Final = tuple(
+            index
+            for index, message in enumerate(messages)
+            if targetted_role is None or message.get("role") == targetted_role
+        )
+        free: Final = frozenset(
+            index
+            for index in candidates
+            if not AnthropicCacheControlHook._message_has_cache_control(messages[index])
+            and _message_accepts_cache_control(messages[index])
+        )
 
-            if 0 <= targetted_index < len(messages):
-                return [targetted_index]
+        # Case 1: Target by role alone
+        if targetted_index is None:
+            return [] if targetted_role is None else [index for index in candidates if index in free]
 
+        # Case 2: Target by index, counted within the role the point named
+        position: Final = targetted_index + len(candidates) if targetted_index < 0 else targetted_index
+        if not 0 <= position < len(candidates):
             verbose_logger.warning(
                 "AnthropicCacheControlHook: Provided index %s is out of bounds for message list of length %s. Targeted index was %s. Skipping cache control injection for this point.",
-                original_index,
-                len(messages),
                 targetted_index,
+                len(candidates),
+                position,
             )
             return []
 
-        # Case 2: Target by role
-        targetted_role: Final = point.get("role", None)
-        if targetted_role is not None:
-            return [idx for idx, msg in enumerate(messages) if msg.get("role") == targetted_role]
-
-        return []
+        landing: Final = next((candidates[step] for step in range(position, -1, -1) if candidates[step] in free), None)
+        return [] if landing is None else [landing]
 
     @staticmethod
     def _count_cache_control_blocks(message: object) -> int:
@@ -507,10 +551,13 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         # 1. if string, insert cache control in the message
         if isinstance(message_content, str):
             message["cache_control"] = control
-        # 2. list of objects - only apply to last item per Anthropic spec
+        # 2. list of objects - the last block that accepts a marker, per Anthropic spec
         elif isinstance(message_content, list):
-            if len(message_content) > 0 and isinstance(message_content[-1], dict):
-                message_content[-1]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
+            target_index: Final = _index_of_block_accepting_cache_control(
+                message_content, on_a_tool_message=message.get("role") == "tool"
+            )
+            if target_index is not None:
+                message_content[target_index]["cache_control"] = control  # pyright: ignore[reportGeneralTypeIssues]  # loose runtime dict
         return message
 
     @staticmethod
