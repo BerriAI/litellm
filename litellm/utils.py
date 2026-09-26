@@ -722,6 +722,63 @@ def _is_gemini_model(model: str | None, custom_llm_provider: str | None) -> bool
     return model is not None and "gemini" in model.lower()
 
 
+def is_gemini_tts_model(model: str, custom_llm_provider: str | None = None) -> bool:
+    try:
+        runtime_model_info: Final = get_model_info(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+        )
+    except Exception:  # noqa: BLE001  # model lookup failures intentionally fall back to the bundled registry
+        provider_model: Final = (
+            f"{custom_llm_provider}/{model}"
+            if custom_llm_provider is not None and not model.startswith(f"{custom_llm_provider}/")
+            else model
+        )
+        bundled_model_cost: Final = _get_bundled_model_cost_map()
+        bundled_model_info: Final = (
+            bundled_model_cost.get(provider_model)
+            or bundled_model_cost.get(model)
+            or (bundled_model_cost.get(f"vertex_ai/{model}") if custom_llm_provider is None else None)
+        )
+        bundled_entry: Final = (
+            bundled_model_info.get("provider_specific_entry") if bundled_model_info is not None else None
+        )
+        return (
+            bundled_model_info is not None
+            and bundled_model_info.get("litellm_provider")
+            in (
+                "gemini",
+                "vertex_ai-language-models",
+            )
+            and (
+                bundled_model_info.get("mode") == "audio_speech"
+                or (isinstance(bundled_entry, dict) and bundled_entry.get("gemini_tts") == 1)
+            )
+        )
+
+    provider_entry: Final = runtime_model_info.get("provider_specific_entry")
+    if runtime_model_info.get("litellm_provider") in ("gemini", "vertex_ai-language-models") and (
+        runtime_model_info.get("mode") == "audio_speech"
+        or (isinstance(provider_entry, dict) and provider_entry.get("gemini_tts") == 1)
+    ):
+        return True
+    if runtime_model_info.get("litellm_provider") != "vertex_ai" or runtime_model_info.get("mode") != "audio_speech":
+        return False
+    bundled_model_name: Final = model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
+    vertex_model_info: Final = _get_bundled_model_cost_map().get(bundled_model_name)
+    return (
+        vertex_model_info is not None
+        and vertex_model_info.get("litellm_provider") == "vertex_ai-language-models"
+        and (
+            vertex_model_info.get("mode") == "audio_speech"
+            or (
+                isinstance(vertex_model_info.get("provider_specific_entry"), dict)
+                and vertex_model_info["provider_specific_entry"].get("gemini_tts") == 1
+            )
+        )
+    )
+
+
 def _remove_thought_signature_from_id(tool_call_id: str, separator: str) -> str:
     """
     Remove thought signature from a tool call ID.

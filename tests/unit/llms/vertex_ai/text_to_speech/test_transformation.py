@@ -1,4 +1,9 @@
 import base64
+import io
+import math
+import struct
+import wave
+from pathlib import Path
 from typing import Final
 from unittest.mock import MagicMock, Mock, patch
 
@@ -9,9 +14,14 @@ import litellm
 from litellm.llms.vertex_ai.text_to_speech.transformation import (
     VertexAILyriaTextToSpeechConfig,
     VertexAITextToSpeechConfig,
+    _fallback_gemini_tts_audio_duration,
 )
+from litellm.cost_calculator import response_cost_calculator
+from litellm.litellm_core_utils.audio_utils.utils import calculate_request_duration
 from litellm.types.utils import LlmProviders
 from litellm.utils import ProviderConfigManager
+
+pytestmark = pytest.mark.usefixtures("local_model_cost_map")
 
 
 class TestVertexAITextToSpeechConfig:
@@ -42,8 +52,12 @@ class TestVertexAITextToSpeechConfig:
 
         assert url == custom_url
 
-    @patch.object(VertexAITextToSpeechConfig, "_ensure_access_token")
-    @patch.object(VertexAITextToSpeechConfig, "_get_token_and_url")
+    @patch.object(  # test-quality-ok: isolates provider credentials while testing request serialization
+        VertexAITextToSpeechConfig, "_ensure_access_token"
+    )
+    @patch.object(  # test-quality-ok: fixes the provider URL at the authentication boundary
+        VertexAITextToSpeechConfig, "_get_token_and_url"
+    )
     def test_transform_text_to_speech_request_body(self, mock_get_token, mock_ensure_token):
         """Test that transform_text_to_speech_request generates correct request body"""
         # Mock authentication
@@ -88,6 +102,20 @@ class TestVertexAITextToSpeechConfig:
         assert "headers" in result
         assert "Authorization" in result["headers"]
 
+        raw_voice_request: Final = config.transform_text_to_speech_request(
+            model="vertex_ai/chirp",
+            input="Hello",
+            voice="en-US-Chirp3-HD-Charon",
+            optional_params={},
+            litellm_params={
+                "vertex_credentials": None,
+                "vertex_project": "test-project",
+                "vertex_location": "us-central1",
+            },
+            headers={},
+        )
+        assert raw_voice_request["dict_body"]["voice"]["name"] == "en-US-Chirp3-HD-Charon"
+
     def test_voice_mapping_openai_to_vertex(self):
         """Test that OpenAI voice names are correctly mapped to Vertex AI voices"""
         config = VertexAITextToSpeechConfig()
@@ -124,6 +152,318 @@ class TestVertexAITextToSpeechConfig:
 
         assert voice_str is None
         assert voice_dict == voice_input
+
+    def test_gemini_tts_multi_speaker_voice_mapping(self):
+        config = VertexAITextToSpeechConfig()
+
+        voice = {
+            "multi_speaker_voice_config": {
+                "speaker_voice_configs": [
+                    {
+                        "speaker": "Ryan",
+                        "voice_config": {
+                            "prebuilt_voice_config": {
+                                "voice_name": "Umbriel",
+                            },
+                        },
+                    },
+                    {
+                        "speaker": "Katie",
+                        "voice_config": {
+                            "prebuilt_voice_config": {
+                                "voice_name": "Leda",
+                            },
+                        },
+                    },
+                ],
+            },
+        }
+
+        expected_voice = {
+            "languageCode": "en-US",
+            "modelName": "gemini-3.1-flash-tts-preview",
+            "multiSpeakerVoiceConfig": {
+                "speakerVoiceConfigs": [
+                    {
+                        "speakerAlias": "Ryan",
+                        "speakerId": "Umbriel",
+                    },
+                    {
+                        "speakerAlias": "Katie",
+                        "speakerId": "Leda",
+                    },
+                ],
+            },
+        }
+
+        voice_str, optional_params = config.map_openai_params(
+            model="gemini-3.1-flash-tts-preview",
+            optional_params={"response_format": "mp3"},
+            voice=voice,
+        )
+        assert voice_str is None
+        assert optional_params["audioEncoding"] == "MP3"
+        assert optional_params["vertex_voice_dict"] == expected_voice
+
+        voice_str, optional_params = config.map_openai_params(
+            model="gemini-3.1-flash-tts-preview",
+            optional_params={"response_format": "pcm16"},
+            voice=voice,
+        )
+        assert voice_str is None
+        assert optional_params["audioEncoding"] == "LINEAR16"
+        assert optional_params["vertex_voice_dict"] == expected_voice
+
+    def test_gemini_tts_nested_language_and_voice_alias_reach_cloud_tts(self):
+        config: Final = VertexAITextToSpeechConfig()
+        voice: Final = {"speech_config": {"language_code": "fr-FR"}, "voice": "Kore"}
+
+        voice_name, optional_params = config.map_openai_params(
+            model="gemini-3.1-flash-tts-preview",
+            optional_params={"response_format": "mp3"},
+            voice=voice,
+        )
+
+        assert voice_name is None
+        assert optional_params["vertex_voice_dict"] == {
+            "languageCode": "fr-FR",
+            "modelName": "gemini-3.1-flash-tts-preview",
+            "name": "Kore",
+        }
+
+    def test_gemini_tts_string_voice_reaches_cloud_tts(self):
+        config: Final = VertexAITextToSpeechConfig()
+
+        voice_name, optional_params = config.map_openai_params(
+            model="gemini-3.1-flash-tts-preview",
+            optional_params={"response_format": "mp3"},
+            voice="Kore",
+        )
+
+        assert voice_name == "Kore"
+        assert optional_params["vertex_voice_dict"] == {
+            "languageCode": "en-US",
+            "modelName": "gemini-3.1-flash-tts-preview",
+            "name": "Kore",
+        }
+
+    def test_gemini_tts_ignores_incomplete_speaker_entries(self):
+        config: Final = VertexAITextToSpeechConfig()
+        voice: Final = {
+            "multiSpeakerVoiceConfig": {
+                "speakerVoiceConfigs": [
+                    None,
+                    {"speakerAlias": "Ryan"},
+                    {"speakerAlias": "Katie", "speakerId": "Leda"},
+                ]
+            }
+        }
+
+        _, optional_params = config.map_openai_params(
+            model="gemini-3.1-flash-tts-preview",
+            optional_params={"response_format": "mp3"},
+            voice=voice,
+        )
+
+        assert optional_params["vertex_voice_dict"]["multiSpeakerVoiceConfig"] == {
+            "speakerVoiceConfigs": [{"speakerAlias": "Katie", "speakerId": "Leda"}]
+        }
+
+    def test_gemini_tts_ignores_non_list_speaker_entries(self):
+        config: Final = VertexAITextToSpeechConfig()
+
+        assert config._extract_gemini_tts_speaker_configs(
+            {"multiSpeakerVoiceConfig": {"speakerVoiceConfigs": "invalid"}}
+        ) == []
+
+    @pytest.mark.parametrize(
+        ("voice", "expected_name"),
+        [
+            ({"speechConfig": {"voice": "Kore"}}, "Kore"),
+            ({"speechConfig": {"voiceConfig": {"prebuiltVoiceConfig": {"voiceName": "Kore"}}}}, "Kore"),
+            ({"speechConfig": {"voiceConfig": {}}}, None),
+        ],
+    )
+    def test_gemini_tts_nested_voice_mapping(self, voice: dict[str, object], expected_name: str | None):
+        config: Final = VertexAITextToSpeechConfig()
+
+        _, optional_params = config.map_openai_params(
+            model="gemini-3.1-flash-tts-preview",
+            optional_params={"response_format": "mp3"},
+            voice=voice,
+        )
+
+        mapped_voice: Final = optional_params["vertex_voice_dict"]
+        if expected_name is None:
+            assert mapped_voice["speechConfig"]["voiceConfig"] == {}
+            assert "name" not in mapped_voice
+        else:
+            assert mapped_voice["name"] == expected_name
+
+    @pytest.mark.parametrize(
+        "voice",
+        [
+            {"name": "Umbriel", "modelName": "gemini-2.5-flash-tts"},
+            {"name": "Umbriel", "model_name": "gemini-2.5-flash-tts"},
+            {"modelName": "gemini-2.5-flash-tts", "model_name": "chirp-3"},
+            {
+                "modelName": "gemini-2.5-flash-tts",
+                "model_name": "chirp-3",
+                "multi_speaker_voice_config": {
+                    "speaker_voice_configs": [
+                        {
+                            "speaker": "Ryan",
+                            "voice_config": {
+                                "prebuilt_voice_config": {
+                                    "voice_name": "Umbriel",
+                                },
+                            },
+                        },
+                    ],
+                },
+            },
+        ],
+    )
+    def test_gemini_tts_ignores_voice_model_name_override(self, voice):
+        config = VertexAITextToSpeechConfig()
+        routed_model = "gemini-3.1-flash-tts-preview"
+
+        _, optional_params = config.map_openai_params(
+            model=routed_model,
+            optional_params={"response_format": "mp3"},
+            voice=voice,
+        )
+        assert optional_params["vertex_voice_dict"]["modelName"] == routed_model
+
+    def test_dispatch_maps_gemini_cloud_tts_params_when_provider_config_skipped(self):
+        config = VertexAITextToSpeechConfig()
+        handler = MagicMock()
+        handler.text_to_speech_handler.return_value = "ok"
+
+        result = config.dispatch_text_to_speech(
+            model="gemini-3.1-flash-tts-preview",
+            input="Hi",
+            voice={
+                "name": "Umbriel",
+                "modelName": "gemini-2.5-flash-tts",
+            },
+            optional_params={"response_format": "mp3"},
+            litellm_params_dict={},
+            logging_obj=MagicMock(),
+            timeout=10,
+            extra_headers=None,
+            base_llm_http_handler=handler,
+            aspeech=False,
+            api_base=None,
+            api_key=None,
+        )
+
+        assert result == "ok"
+        mapped_params = handler.text_to_speech_handler.call_args.kwargs["text_to_speech_optional_params"]
+        assert mapped_params["audioEncoding"] == "MP3"
+        assert mapped_params["vertex_voice_dict"]["name"] == "Umbriel"
+        assert mapped_params["vertex_voice_dict"]["modelName"] == "gemini-3.1-flash-tts-preview"
+
+    @pytest.mark.parametrize(
+        ("voice", "expected_name"),
+        [
+            ("en-US-Chirp3-HD-Charon", "en-US-Chirp3-HD-Charon"),
+            ({"name": "en-US-Chirp3-HD-Charon"}, "en-US-Chirp3-HD-Charon"),
+            (None, None),
+        ],
+    )
+    def test_dispatch_keeps_pre_mapped_cloud_tts_params(
+        self, voice: str | dict[str, str] | None, expected_name: str | None
+    ):
+        config = VertexAITextToSpeechConfig()
+        handler = MagicMock()
+        handler.text_to_speech_handler.return_value = "ok"
+        optional_params = {
+            "audioEncoding": "OGG_OPUS",
+            "vertex_voice_dict": {"languageCode": "en-US", "name": "en-US-Chirp3-HD-Charon"},
+        }
+
+        config.dispatch_text_to_speech(
+            model="chirp",
+            input="Hi",
+            voice=voice,
+            optional_params=optional_params,
+            litellm_params_dict={},
+            logging_obj=MagicMock(),
+            timeout=10,
+            extra_headers=None,
+            base_llm_http_handler=handler,
+            aspeech=False,
+            api_base=None,
+            api_key=None,
+        )
+
+        call_kwargs = handler.text_to_speech_handler.call_args.kwargs
+        assert call_kwargs["voice"] == expected_name
+        assert call_kwargs["text_to_speech_optional_params"] is optional_params
+        assert call_kwargs["text_to_speech_optional_params"]["audioEncoding"] == "OGG_OPUS"
+
+    @patch.object(  # test-quality-ok: isolates provider credentials while testing Gemini request serialization
+        VertexAITextToSpeechConfig, "_ensure_access_token"
+    )
+    @patch.object(  # test-quality-ok: fixes the Gemini provider URL at the authentication boundary
+        VertexAITextToSpeechConfig, "_get_token_and_url"
+    )
+    def test_gemini_tts_mp3_request_body(self, mock_get_token, mock_ensure_token):
+        mock_ensure_token.return_value = ("mock-token", "test-project")
+        mock_get_token.return_value = ("mock-token", "mock-url")
+        config = VertexAITextToSpeechConfig()
+
+        result = config.transform_text_to_speech_request(
+            model="gemini-3.1-flash-tts-preview",
+            input="Ryan: Hi.\nKatie: Hello.",
+            voice=None,
+            optional_params={
+                "audioEncoding": "MP3",
+                "vertex_voice_dict": {
+                    "languageCode": "en-US",
+                    "modelName": "gemini-3.1-flash-tts-preview",
+                    "multiSpeakerVoiceConfig": {
+                        "speakerVoiceConfigs": [
+                            {
+                                "speakerAlias": "Ryan",
+                                "speakerId": "Umbriel",
+                            },
+                            {
+                                "speakerAlias": "Katie",
+                                "speakerId": "Leda",
+                            },
+                        ],
+                    },
+                },
+            },
+            litellm_params={
+                "vertex_credentials": None,
+                "vertex_project": "test-project",
+                "vertex_location": "global",
+            },
+            headers={},
+        )
+
+        request_body = result["dict_body"]
+        assert request_body["input"] == {"text": "Ryan: Hi.\nKatie: Hello."}
+        assert request_body["voice"] == {
+            "languageCode": "en-US",
+            "modelName": "gemini-3.1-flash-tts-preview",
+            "multiSpeakerVoiceConfig": {
+                "speakerVoiceConfigs": [
+                    {
+                        "speakerAlias": "Ryan",
+                        "speakerId": "Umbriel",
+                    },
+                    {
+                        "speakerAlias": "Katie",
+                        "speakerId": "Leda",
+                    },
+                ],
+            },
+        }
+        assert request_body["audioConfig"]["audioEncoding"] == "MP3"
 
 
 @pytest.mark.parametrize(
@@ -166,6 +506,147 @@ def test_transform_text_to_speech_response_leaves_unknown_bytes_unlabeled():
 
     assert "content-type" not in result.response.headers
     assert result.response.content == raw_pcm
+
+
+@pytest.mark.parametrize("encoding", ["LINEAR16", "PCM", "MP3", "OGG_OPUS", "ALAW", "MULAW"])
+def test_gemini_cloud_tts_response_bills_text_and_audio(encoding: str):
+    model: Final = "gemini-3.1-flash-tts-preview"
+    input_text: Final = "Hello from Gemini text to speech"
+    pcm_audio: Final = b"\x00\x00" * 24000
+    wav_buffer: Final = io.BytesIO()
+    with wave.open(wav_buffer, "wb") as wav_file:
+        wav_file.setnchannels(1)
+        wav_file.setsampwidth(2)
+        wav_file.setframerate(24000)
+        wav_file.writeframes(pcm_audio)
+    g711_audio: Final = (
+        struct.pack(
+            "<4sI4s4sIHHIIHH4sI",
+            b"RIFF",
+            36 + 24000,
+            b"WAVE",
+            b"fmt ",
+            16,
+            6 if encoding == "ALAW" else 7,
+            1,
+            24000,
+            24000,
+            1,
+            8,
+            b"data",
+            24000,
+        )
+        + b"\x00" * 24000
+    )
+    fixture_dir: Final = Path(__file__).resolve().parents[4] / "audio_tests"
+    audio_by_encoding: Final = {
+        "PCM": pcm_audio,
+        "LINEAR16": wav_buffer.getvalue(),
+        "MP3": (fixture_dir / "gemini_tts_speech.mp3").read_bytes(),
+        "OGG_OPUS": (fixture_dir / "gemini_tts_speech.ogg").read_bytes(),
+        "ALAW": g711_audio,
+        "MULAW": g711_audio,
+    }
+    audio_bytes: Final = audio_by_encoding[encoding]
+    logger: Final = MagicMock()
+    logger.model_call_details = {
+        "additional_args": {
+            "complete_input_dict": {
+                "dict_body": {
+                    "input": {"text": input_text},
+                    "audioConfig": {"audioEncoding": encoding, "sampleRateHertz": 24000},
+                }
+            }
+        }
+    }
+    raw_response: Final = httpx.Response(200, json={"audioContent": base64.b64encode(audio_bytes).decode()})
+
+    result: Final = VertexAITextToSpeechConfig().transform_text_to_speech_response(model, raw_response, logger)
+    usage: Final = result.usage
+    assert usage is not None
+    duration: Final = len(audio_bytes) / 48000 if encoding == "PCM" else calculate_request_duration(audio_bytes)
+    assert duration is not None
+    assert _fallback_gemini_tts_audio_duration(audio_bytes, encoding, 24000) == pytest.approx(duration), (
+        "Google Cloud AudioEncoding and RFC 7845, checked 2026-09-23: "
+        "https://cloud.google.com/text-to-speech/docs/reference/rest/v1/AudioEncoding "
+        "https://www.rfc-editor.org/rfc/rfc7845.html"
+    )
+    assert usage.completion_tokens == math.ceil(duration * 25), (
+        "Google Cloud TTS pricing, 2026-09-23: https://cloud.google.com/text-to-speech/pricing"
+    )
+    assert usage.prompt_tokens == litellm.token_counter(model=model, text=input_text)
+    assert usage.total_tokens == usage.prompt_tokens + usage.completion_tokens
+    assert usage.completion_tokens_details is not None
+    assert usage.completion_tokens_details.audio_tokens == usage.completion_tokens
+    with patch("litellm.llms.vertex_ai.text_to_speech.transformation.calculate_request_duration", return_value=None):
+        sdk_result: Final = VertexAITextToSpeechConfig().transform_text_to_speech_response(model, raw_response, logger)
+    assert sdk_result.usage == usage
+
+    model_info: Final = litellm.get_model_info(model, custom_llm_provider="vertex_ai")
+    cost: Final = response_cost_calculator(
+        response_object=result,
+        model=model,
+        custom_llm_provider="vertex_ai",
+        call_type="speech",
+        optional_params={},
+        prompt=input_text,
+    )
+    expected_cost: Final = (
+        usage.prompt_tokens * model_info["input_cost_per_token"]
+        + usage.completion_tokens * model_info["output_cost_per_audio_token"]
+    )
+    assert cost == pytest.approx(expected_cost)
+    assert cost > usage.prompt_tokens * model_info["input_cost_per_token"]
+
+
+@pytest.mark.parametrize("encoding", ["ALAW", "MULAW"])
+@pytest.mark.parametrize("audio", [b"\x12" * 24000, b"RIFF" + b"\x12" * 23996])
+def test_gemini_cloud_tts_returns_raw_g711_audio_when_duration_decoder_is_unavailable(encoding: str, audio: bytes):
+    raw_response: Final = httpx.Response(200, json={"audioContent": base64.b64encode(audio).decode()})
+    logger: Final = MagicMock()
+    logger.model_call_details = {
+        "additional_args": {
+            "complete_input_dict": {
+                "dict_body": {
+                    "input": {"text": "Hello"},
+                    "audioConfig": {"audioEncoding": encoding, "sampleRateHertz": 24000},
+                }
+            }
+        }
+    }
+
+    with patch("litellm.llms.vertex_ai.text_to_speech.transformation.calculate_request_duration", return_value=None):
+        result: Final = VertexAITextToSpeechConfig().transform_text_to_speech_response(
+            "gemini-3.1-flash-tts-preview", raw_response, logger
+        )
+
+    assert result.response.content == audio
+    assert result.usage is not None
+    assert result.usage.prompt_tokens > 0
+    assert result.usage.completion_tokens == 25, (
+        "Google Cloud TTS pricing, 2026-09-23: https://cloud.google.com/text-to-speech/pricing"
+    )
+
+
+def test_gemini_cloud_tts_rejects_audio_without_measurable_duration():
+    raw_response: Final = httpx.Response(200, json={"audioContent": base64.b64encode(b"invalid").decode()})
+    logger: Final = MagicMock()
+    logger.model_call_details = {
+        "additional_args": {
+            "complete_input_dict": {
+                "dict_body": {
+                    "input": {"text": "Hello"},
+                    "audioConfig": {"audioEncoding": "MP3", "sampleRateHertz": 24000},
+                }
+            }
+        }
+    }
+
+    with patch("litellm.llms.vertex_ai.text_to_speech.transformation.calculate_request_duration", return_value=None):
+        with pytest.raises(ValueError, match="Cannot determine Gemini TTS output duration"):
+            VertexAITextToSpeechConfig().transform_text_to_speech_response(
+                "gemini-3.1-flash-tts-preview", raw_response, logger
+            )
 
 
 class TestVertexAILyriaTextToSpeechConfig:
@@ -261,9 +742,7 @@ class TestVertexAILyriaTextToSpeechConfig:
         )
 
     def test_get_complete_url_encodes_injected_predict_path_segments(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        injected: Final = (
-            "victim-project/locations/us-central1/publishers/google/models/other-model:predict?ignored="
-        )
+        injected: Final = "victim-project/locations/us-central1/publishers/google/models/other-model:predict?ignored="
         encoded: Final = (
             "victim-project%2Flocations%2Fus-central1%2Fpublishers%2Fgoogle"
             "%2Fmodels%2Fother-model%3Apredict%3Fignored%3D"
@@ -554,9 +1033,15 @@ class TestVertexAILyriaTextToSpeechConfig:
         assert mock_post.call_args.kwargs["json"] == expected_body
 
 
-@patch("litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post")
-@patch.object(VertexAITextToSpeechConfig, "_ensure_access_token")
-@patch.object(VertexAITextToSpeechConfig, "_get_token_and_url")
+@patch(  # test-quality-ok: exercises public speech dispatch up to the outbound HTTP boundary
+    "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
+)
+@patch.object(  # test-quality-ok: isolates provider credentials in the public API test
+    VertexAITextToSpeechConfig, "_ensure_access_token"
+)
+@patch.object(  # test-quality-ok: fixes the provider URL for deterministic dispatch assertions
+    VertexAITextToSpeechConfig, "_get_token_and_url"
+)
 def test_litellm_speech_vertex_ai_chirp(mock_get_token, mock_ensure_token, mock_post):
     """
     Test that litellm.speech(model="vertex_ai/chirp") sends the correct URL and request body
@@ -608,3 +1093,80 @@ def test_litellm_speech_vertex_ai_chirp(mock_get_token, mock_ensure_token, mock_
     assert "headers" in call_kwargs
     assert "Authorization" in call_kwargs["headers"]
     assert call_kwargs["headers"]["Authorization"] == "Bearer mock-token"
+
+
+@patch(  # test-quality-ok: exercises public Gemini speech dispatch up to the outbound HTTP boundary
+    "litellm.llms.custom_httpx.llm_http_handler.HTTPHandler.post"
+)
+@patch.object(  # test-quality-ok: isolates provider credentials in the public Gemini API test
+    VertexAITextToSpeechConfig, "_ensure_access_token"
+)
+@patch.object(  # test-quality-ok: fixes the Gemini provider URL for deterministic dispatch assertions
+    VertexAITextToSpeechConfig, "_get_token_and_url"
+)
+def test_litellm_speech_vertex_ai_gemini_tts_mp3_uses_cloud_tts(mock_get_token, mock_ensure_token, mock_post):
+    mock_ensure_token.return_value = ("mock-token", "test-project")
+    mock_get_token.return_value = ("mock-token", "mock-url")
+    mock_response = Mock(spec=httpx.Response)
+    mock_response.status_code = 200
+    mock_response.headers = {"content-type": "application/json"}
+    audio_bytes: Final = (Path(__file__).resolve().parents[4] / "audio_tests/gemini_tts_speech.mp3").read_bytes()
+    mock_response.json.return_value = {"audioContent": base64.b64encode(audio_bytes).decode()}
+    mock_post.return_value = mock_response
+
+    result: Final = litellm.speech(
+        model="vertex_ai/gemini-3.1-flash-tts-preview",
+        input="Ryan: Hi.\nKatie: Hello.",
+        voice={
+            "multi_speaker_voice_config": {
+                "speaker_voice_configs": [
+                    {
+                        "speaker": "Ryan",
+                        "voice_config": {
+                            "prebuilt_voice_config": {
+                                "voice_name": "Umbriel",
+                            },
+                        },
+                    },
+                    {
+                        "speaker": "Katie",
+                        "voice_config": {
+                            "prebuilt_voice_config": {
+                                "voice_name": "Leda",
+                            },
+                        },
+                    },
+                ],
+            },
+        },
+        response_format="mp3",
+        vertex_project="test-project",
+        vertex_location="global",
+    )
+
+    assert result.response.content == audio_bytes
+    assert result.usage is not None
+    assert result.usage.prompt_tokens > 0
+    assert result.usage.completion_tokens > 0
+
+    mock_post.assert_called_once()
+    call_kwargs = mock_post.call_args.kwargs
+    assert call_kwargs["url"] == "https://texttospeech.googleapis.com/v1/text:synthesize"
+    request_body = call_kwargs["json"]
+    assert request_body["audioConfig"]["audioEncoding"] == "MP3"
+    assert request_body["voice"] == {
+        "languageCode": "en-US",
+        "modelName": "gemini-3.1-flash-tts-preview",
+        "multiSpeakerVoiceConfig": {
+            "speakerVoiceConfigs": [
+                {
+                    "speakerAlias": "Ryan",
+                    "speakerId": "Umbriel",
+                },
+                {
+                    "speakerAlias": "Katie",
+                    "speakerId": "Leda",
+                },
+            ],
+        },
+    }

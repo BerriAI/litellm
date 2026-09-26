@@ -977,7 +977,11 @@ def get_usage_object(
         (
             completion_response.get("usage")
             if isinstance(completion_response, dict)
-            else getattr(completion_response, "get", lambda x: None)("usage")
+            else (
+                completion_response.usage
+                if isinstance(completion_response, HttpxBinaryResponseContent)
+                else getattr(completion_response, "get", lambda x: None)("usage")
+            )
         ),
     )
 
@@ -1420,8 +1424,10 @@ def completion_cost(
                     verbose_logger.debug("selected model name for cost calculation: %s", model)
 
                 if completion_response is not None and (
-                    isinstance(completion_response, BaseModel) or isinstance(completion_response, dict)
-                ):  # tts returns a custom class
+                    isinstance(completion_response, (BaseModel, dict))
+                    or isinstance(completion_response, HttpxBinaryResponseContent)
+                    and completion_response.usage is not None
+                ):
                     if isinstance(completion_response, dict):
                         usage_obj: dict | Usage | None = completion_response.get("usage", {})
                     else:
