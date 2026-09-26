@@ -1,1 +1,2 @@
 litellm==1.83.14
+openai>=1.0.0
