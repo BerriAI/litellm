@@ -49,6 +49,10 @@ interface ModelHubTableProps {
   userRole: string | null;
 }
 
+function isMCPHubVisibilityDisabled(isLoading: boolean, servers: readonly MCPServerData[] | null): boolean {
+  return isLoading || servers === null;
+}
+
 function HubEmptyState({ title, body }: { title: string; body: string }) {
   return (
     <div className="flex flex-col items-center gap-1 py-6">
@@ -571,7 +575,10 @@ const ModelHubTable: React.FC<ModelHubTableProps> = ({ accessToken, publicPage, 
                   {/* Header with Make Public Button */}
                   {publicPage == false && canModify && (
                     <div className="flex justify-end mb-4">
-                      <Button onClick={() => handleMakeMcpPublicPage()} disabled={mcpLoading || mcpHubData === null}>
+                      <Button
+                        onClick={() => handleMakeMcpPublicPage()}
+                        disabled={isMCPHubVisibilityDisabled(mcpLoading, mcpHubData)}
+                      >
                         Manage MCP Hub Visibility
                       </Button>
                     </div>
