@@ -2657,6 +2657,18 @@ class TestConfiguredInjectionPointsSurviveClientMarks:
         )
         assert ("litellm_gateway_injected_cache" in request_kwargs["litellm_metadata"]) is injected
 
+    def test_chat_automatic_defaults_apply_when_extra_body_drops_the_only_client_mark(self, monkeypatch):
+        monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)
+        params = {"extra_body": {"tools": [self.UNMARKED_TOOL]}}
+
+        self._seed(params, copy.deepcopy(self.CLEAN_MESSAGES), tools=[self.MARKED_TOOL_TOP_LEVEL])
+        affinity = AnthropicCacheControlHook.messages_with_default_injections(
+            copy.deepcopy(self.CLEAN_MESSAGES), ["claude-sonnet-4-5"], tools=[self.MARKED_TOOL_TOP_LEVEL], request_kwargs=params
+        )
+
+        assert [p["index"] for p in params["cache_control_injection_points"]] == [None, -1]
+        assert AnthropicCacheControlHook.count_request_cache_breakpoints(affinity) == 2
+
     @pytest.mark.parametrize(
         "marked_turns,expected_system",
         [(2, [{"type": "text", "text": "sys", "cache_control": {"type": "ephemeral"}}]), (3, "sys")],
