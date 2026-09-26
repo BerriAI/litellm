@@ -79,6 +79,38 @@ class TestAuth:
         assert headers["Content-Type"] == "application/json"
 
 
+class TestRequestAttribution:
+    """The X-Amzn-Bedrock-Request-Metadata header is signed into AWS billing/CloudTrail, so a
+    caller must not be able to forge it; the proxy owns it when request-metadata is enabled."""
+
+    HEADER = "X-Amzn-Bedrock-Request-Metadata"
+
+    @pytest.fixture(autouse=True)
+    def _enable_metadata(self, monkeypatch):
+        monkeypatch.setattr(litellm, "bedrock_request_metadata_fields", ["user_api_key_hash"], raising=False)
+
+    def _validate(self, caller_headers):
+        return _cfg().validate_environment(
+            headers=caller_headers,
+            model=MODEL,
+            messages=[],
+            optional_params={},
+            litellm_params={"metadata": {"user_api_key_hash": "trusted-proxy-id"}},
+        )
+
+    def test_caller_supplied_attribution_is_replaced_with_trusted(self):
+        out = self._validate({self.HEADER: '{"user_api_key_hash": "FORGED"}'})
+        assert "FORGED" not in out[self.HEADER]
+        assert "trusted-proxy-id" in out[self.HEADER]
+
+    def test_caller_attribution_dropped_case_insensitively(self):
+        # A lowercase spelling must not survive alongside the proxy's header.
+        out = self._validate({"x-amzn-bedrock-request-metadata": '{"user_api_key_hash": "FORGED"}'})
+        names = [n for n in out if n.lower() == self.HEADER.lower()]
+        assert len(names) == 1
+        assert "FORGED" not in out[names[0]]
+
+
 class TestRequestBody:
     def test_aws_params_stripped_from_body(self):
         body = _cfg().transform_request(

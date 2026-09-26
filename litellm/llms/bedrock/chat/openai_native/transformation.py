@@ -35,6 +35,10 @@ import httpx
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.bedrock.request_metadata import (
+    bedrock_request_metadata_headers,
+    merge_bedrock_invoke_headers,
+)
 from litellm.llms.bedrock.responses.transformation import resolve_bedrock_bearer_token
 from litellm.llms.openai.chat.gpt_5_transformation import (
     OpenAIGPT5Config,
@@ -150,7 +154,11 @@ class BedrockOpenAIChatConfig(OpenAIGPT5Config, BaseAWSLLM):
         bearer: Final = resolve_bedrock_bearer_token(api_key)
         if bearer:
             headers["Authorization"] = f"Bearer {bearer}"
-        return headers
+        # The X-Amzn-Bedrock-Request-Metadata header lands in AWS billing/CloudTrail records,
+        # so the proxy owns it: caller-supplied copies are dropped and only the trusted pairs
+        # derived from litellm_params are signed, exactly as the Invoke OpenAI path does.
+        owned_names, metadata_headers = bedrock_request_metadata_headers(litellm_params)
+        return merge_bedrock_invoke_headers(headers, (), metadata_headers, owned_names)
 
     def sign_request(
         self,
