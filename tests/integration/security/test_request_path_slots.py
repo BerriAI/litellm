@@ -16,7 +16,9 @@ provider answers, one it rejects with a 4xx and one it fails with a 5xx, because
 takes a different path. Positive control: every provider request of every outcome must carry the
 canary where the slot delivers it. Sensitivity control: the marker sent in the same requests must
 be in the spend-log row of every outcome and in a sink event of every outcome, and each sweep must
-report it where stored prompts belong. Then no sweep may find the slot's canary anywhere.
+report it where stored prompts belong. The route sweep fills its request-id routes with the
+successful row, so the Logs drawer and the spend-log filter are also read for each failed row,
+where the marker must show too. Then no sweep may find the slot's canary anywhere.
 
 The requests go one at a time, and each waits for its sink event before the next is sent. The
 ``generic_api`` logger clears its whole queue after a batch POST, so an event queued while a POST
@@ -44,9 +46,9 @@ import pytest
 from integration._support.client import Scenario, eventually, string_value
 from integration._support.database import read_rows
 from integration._support.wire import Reply, Request
-from integration.security._canary import MARKER, Canary, canary
+from integration.security._canary import MARKER, Canary, canary, find_canary
 from integration.security._sinks import GENERIC_SINK, PROVIDER_4XX, Caller, Rig, canary_rig
-from integration.security._sweeps import assert_marker_seen, assert_no_hits, record_route_sweep, sweep_all
+from integration.security._sweeps import Hit, assert_marker_seen, assert_no_hits, record_route_sweep, sweep_all
 
 PROVIDER_5XX: Final = "canary-provider-5xx"
 OPENAI_MODEL: Final = "canary-request-openai"
@@ -376,6 +378,25 @@ def _spend_rows(marker: Canary) -> list[dict[str, object]]:
     ]
 
 
+def _request_row_hits(
+    rig: Rig, callers: Mapping[str, str], request_ids: tuple[str, ...], canaries: tuple[Canary, ...]
+) -> tuple[Hit, ...]:
+    """S2 for the rows the route sweep does not fill in: the Logs drawer and the spend-log filter per row."""
+    found: Final[list[Hit]] = []  # mutable-ok: accumulated across rows and callers
+    for request_id in request_ids:
+        for path in (
+            f"/spend/logs/ui/{quote(request_id, safe='')}",
+            f"/spend/logs?{urlencode({'request_id': request_id})}",
+        ):
+            for label, key in callers.items():
+                response = rig.proxy.client.get(path, headers={"Authorization": f"Bearer {key}"})
+                where = f"GET {path} as {label} -> {response.status_code}"
+                found.extend(
+                    Hit("S2", where, match.slot, match.encoding) for match in find_canary(response.content, canaries)
+                )
+    return tuple(found)
+
+
 CASES: Final = tuple(
     pytest.param(slot_id, slot_id, route, id=f"{slot_id}-{route}")
     for slot_id, slot in REQUEST_SLOTS.items()
@@ -425,6 +446,7 @@ def test_request_credential_reaches_only_the_provider(
         rows: Final = eventually(lambda: _spend_rows(marker), lambda found: len(found) == len(OUTCOMES), seconds=70)
         assert sorted(string_value(row["status"]) for row in rows) == ["failure", "failure", "success"], rows
         request_id: Final = next(string_value(row["request_id"]) for row in rows if row["status"] == "success")
+        failed_ids: Final = tuple(string_value(row["request_id"]) for row in rows if row["status"] == "failure")
 
         report: Final = sweep_all(
             rig.proxy,
@@ -452,4 +474,13 @@ def test_request_credential_reaches_only_the_provider(
             },
         )
         assert_marker_seen(report, {"S2": f"GET /spend/logs?{urlencode({'request_id': request_id})} as admin -> 200"})
-        assert_no_hits(report.credential_hits(), f"slot {slot_id}, {endpoint.path} ({route})")
+        failure_rows: Final = _request_row_hits(rig, caller.callers(rig), failed_ids, (marker, credential))
+        for failed_id in failed_ids:
+            drawer = f"GET /spend/logs/ui/{quote(failed_id, safe='')} as admin -> 200"
+            assert any(hit.slot == MARKER and hit.location == drawer for hit in failure_rows), (
+                f"Sensitivity control: the marker is missing from {drawer}"
+            )
+        assert_no_hits(
+            (*report.credential_hits(), *(hit for hit in failure_rows if hit.slot != MARKER)),
+            f"slot {slot_id}, {endpoint.path} ({route})",
+        )
