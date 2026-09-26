@@ -350,7 +350,7 @@ def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> Contro
                 return control.valid
             raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
         case _:
-            assert_never(control)
+            return assert_never(control)
 
 
 def _reject_invalid_control_options(kwargs: Mapping[str, object], model: str) -> None:
