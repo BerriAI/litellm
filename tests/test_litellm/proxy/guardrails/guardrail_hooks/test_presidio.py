@@ -2834,6 +2834,39 @@ async def test_apply_to_output_streaming_gemini_error_frame_mid_stream_is_carrie
 
 
 @pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_every_candidate_is_merged_by_index_and_masked():
+    """
+    Gemini interleaves every candidate's fragments across frames, so each candidate
+    is joined on its own index and scanned, not only the first one.
+    """
+
+    def frame(*texts: tuple[int, str]) -> bytes:
+        candidates = [{"content": {"parts": [{"text": text}], "role": "model"}, "index": index} for index, text in texts]
+        return b"data: " + json.dumps({"candidates": candidates}).encode() + b"\n\n"
+
+    frames = [
+        frame((0, "The architect was John"), (1, "The engineer was Ada")),
+        frame((0, " Smith."), (1, " Lovelace.")),
+    ]
+    collected: list[object] = []
+
+    async def mock_stream():
+        for chunk in frames:
+            yield chunk
+
+    async with TestServer(_fake_presidio_app()) as server:
+        guardrail = _gemini_fake_masking_guardrail(server)
+        await _collect_masked_output(guardrail, mock_stream(), collected)
+        await guardrail._close_http_session()
+
+    (masked,) = _gemini_frames(collected)
+    assert [candidate["content"]["parts"] for candidate in masked["candidates"]] == [
+        [{"text": "The architect was <PERSON>."}],
+        [{"text": "The engineer was <PERSON>."}],
+    ]
+
+
+@pytest.mark.asyncio
 async def test_apply_to_output_streaming_gemini_upstream_abort_mid_stream_forwards_no_frame():
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
