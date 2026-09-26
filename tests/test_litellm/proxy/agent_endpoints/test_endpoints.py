@@ -351,6 +351,7 @@ class TestAgentByIdKeyRedaction:
 
         test_client = _make_app_with_role(role)
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.writer_db = mock_prisma.db
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
                 return_value=None
             )
@@ -413,6 +414,7 @@ class TestAgentRBACInternalUser:
             return_value=_sample_agent_response()
         )
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.writer_db = mock_prisma.db
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(
                 return_value=None
             )
@@ -1343,6 +1345,7 @@ def test_get_agent_redacts_kill_switch_secret_for_admins_and_hides_it_from_other
 
     def _get_as(role: LitellmUserRoles):
         with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+            mock_prisma.writer_db = mock_prisma.db
             mock_prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
             mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
             return _make_app_with_role(role).get("/v1/agents/agent-123", headers={"Authorization": "Bearer k"})
@@ -1384,6 +1387,7 @@ def test_agent_identity_configuration_is_only_returned_to_admins(role, path, mon
         prisma.db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
         prisma.db.litellm_agentstable.find_many = AsyncMock(return_value=[])
         prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+        prisma.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=None)
         response = _make_app_with_role(role).get(path, headers={"Authorization": "Bearer k"})
     assert response.status_code == 200
     payload = response.json()[0] if path == "/v1/agents" else response.json()
