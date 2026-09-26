@@ -7,6 +7,7 @@ import { coy } from "react-syntax-highlighter/dist/esm/styles/prism";
 import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import ChatImageRenderer from "../../chat_ui/ChatImageRenderer";
 import ReasoningContent from "@/components/chat_ui/ReasoningContent";
+import { MarkdownImage } from "@/components/chat_ui/MarkdownImage";
 import ResponseMetrics from "@/components/chat_ui/ResponseMetrics";
 import { SearchResultsDisplay } from "../../chat_ui/SearchResultsDisplay";
 import type { MessageType } from "@/components/chat_ui/types";
@@ -93,6 +94,7 @@ export function MessageDisplay({ messages, isLoading }: MessageDisplayProps) {
             );
           },
           pre: ({ node, ...props }) => <pre style={{ overflowX: "auto", maxWidth: "100%" }} {...props} />,
+          img: MarkdownImage,
         }}
       >
         {typeof message.content === "string" ? message.content : ""}

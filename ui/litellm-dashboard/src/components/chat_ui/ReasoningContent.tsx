@@ -7,6 +7,7 @@ import { useSyntaxTheme } from "@/hooks/useSyntaxTheme";
 import { ChevronDown, ChevronRight, Lightbulb } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from "@/components/ui/collapsible";
+import { MarkdownImage } from "./MarkdownImage";
 
 interface ReasoningContentProps {
   reasoningContent: string;
@@ -77,6 +78,7 @@ const ReasoningContent: React.FC<ReasoningContentProps> = ({ reasoningContent })
                   );
                 },
                 pre: ({ node, ...props }) => <pre style={{ overflowX: "auto", maxWidth: "100%" }} {...props} />,
+                img: MarkdownImage,
               }}
             >
               {reasoningContent}
