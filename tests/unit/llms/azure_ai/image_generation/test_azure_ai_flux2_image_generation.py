@@ -13,6 +13,7 @@ from litellm.litellm_core_utils.llm_cost_calc.utils import CostCalculatorUtils
 from litellm.llms.azure.azure import AzureChatCompletion
 from litellm.llms.azure.image_generation import get_azure_image_generation_config
 from litellm.llms.azure.image_generation.http_utils import azure_deployment_image_generation_json_body
+from litellm.llms.azure_ai.image_generation.cost_calculator import cost_calculator as azure_ai_image_cost_calculator
 from litellm.llms.azure_ai.image_generation.flux_transformation import (
     AzureFoundryFluxImageGenerationConfig,
 )
@@ -427,6 +428,20 @@ def test_flux2_pro_bills_one_megapixel_for_a_size_it_cannot_measure(size: str):
     assert cost == pytest.approx(first)
 
 
+def test_flux2_pro_bills_the_requested_size_when_the_returned_image_is_not_valid_base64():
+    first, additional, _reference = _pro_megapixel_rates()
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="flux.2-pro",
+        completion_response=ImageResponse(data=[ImageObject(b64_json="abc")]),
+        custom_llm_provider="azure_ai",
+        size="2048x1024",
+        call_type="image_generation",
+    )
+
+    assert cost == pytest.approx(first + additional)
+
+
 @pytest.mark.parametrize(("n", "billed_images"), ((2, 2), (None, 0)))
 def test_flux2_pro_bills_the_requested_image_count_when_the_response_lists_none(n: int | None, billed_images: int):
     first, _additional, _reference = _pro_megapixel_rates()
@@ -629,6 +644,24 @@ def test_custom_named_flux2_deployment_bills_its_own_megapixel_and_reference_rat
     assert cost == pytest.approx(1e-07 * 1024 * 1024 * 2 + 2e-07 * 1024 * 1024 * 2)
 
 
+def test_custom_named_flux2_deployment_with_only_a_reference_rate_bills_only_its_references() -> None:
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="my-flux2-prod",
+        completion_response=_edit_response((1024 * 1280,)),
+        custom_llm_provider="azure_ai",
+        size="1024x1280",
+        call_type="image_edit",
+        model_info={"input_cost_per_reference_pixel": 2e-07},
+    )
+
+    assert cost == pytest.approx(2e-07 * 1024 * 1024 * 2)
+
+
+def test_azure_ai_image_cost_calculator_rejects_a_response_that_is_not_an_image_response() -> None:
+    with pytest.raises(ValueError, match="must be of type ImageResponse"):
+        azure_ai_image_cost_calculator(model="flux.2-pro", image_response={"data": []})
+
+
 @pytest.mark.parametrize("model", ("FLUX-1.1-pro", "FLUX.1-Kontext-pro"))
 def test_flat_priced_flux_edit_ignores_reference_pixels(model: str):
     cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
@@ -670,6 +703,19 @@ def test_unlisted_azure_ai_model_bills_deployment_input_cost_per_pixel() -> None
     )
 
     assert cost == pytest.approx(1e-07 * 1024 * 1024 * 2)
+
+
+def test_unlisted_azure_ai_deployment_without_a_generated_image_price_bills_nothing() -> None:
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="unlisted-flux-deployment",
+        completion_response=ImageResponse(data=[ImageObject(b64_json="aW1n")]),
+        custom_llm_provider="azure_ai",
+        size="1024x1024",
+        call_type="image_generation",
+        model_info={"input_cost_per_reference_pixel": 1e-07},
+    )
+
+    assert cost == 0.0
 
 
 def test_flux2_response_preserves_mapped_dimensions():

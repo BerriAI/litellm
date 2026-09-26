@@ -1667,6 +1667,7 @@ def test_image_dimensions_from_bytes_reads_each_header_format(image: bytes, expe
     [
         pytest.param(b"", id="empty"),
         pytest.param(b"BM" + b"\x00" * 30, id="unknown-format"),
+        pytest.param(_webp_bytes(b"ALPH", b"\x00" * 16), id="webp-without-an-image-chunk"),
         pytest.param(b"\x89PNG\r\n\x1a\n\x00\x00", id="png-truncated-before-ihdr"),
         pytest.param(b"\xff\xd8\xff\xe0\x00\x10JFIF", id="jpeg-truncated-inside-app0"),
         pytest.param(b"\xff\xd8\xff\xe0\x00\x04\x00\x00", id="jpeg-ends-before-sof"),
@@ -1708,3 +1709,17 @@ def test_image_dimensions_from_bytes_still_reads_a_jpeg_with_many_real_segments(
 def test_get_image_dimensions_still_raises_for_a_truncated_header(header: bytes) -> None:
     with pytest.raises((struct.error, TypeError)):
         get_image_dimensions(data="data:image/png;base64," + base64.b64encode(header).decode())
+
+
+@pytest.mark.parametrize(
+    "image",
+    [
+        pytest.param(b"BM" + b"\x00" * 30, id="unknown-format"),
+        pytest.param(b"\xff\xd8" + b"\xff\xe0\x00\x02" * 1025 + _jpeg_sof(800, 600), id="pathological-jpeg"),
+    ],
+)
+def test_get_image_dimensions_falls_back_to_the_default_size_for_a_header_it_cannot_read(image: bytes) -> None:
+    assert get_image_dimensions(data="data:image/png;base64," + base64.b64encode(image).decode()) == (
+        litellm.constants.DEFAULT_IMAGE_WIDTH,
+        litellm.constants.DEFAULT_IMAGE_HEIGHT,
+    )

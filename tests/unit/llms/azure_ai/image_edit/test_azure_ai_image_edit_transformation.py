@@ -397,6 +397,18 @@ def test_flux2_image_edit_rejects_a_text_mode_upload_with_a_clear_error(tmp_path
         )
 
 
+def test_flux2_image_edit_rejects_a_reference_it_cannot_read():
+    with pytest.raises(ValueError, match="Unsupported image type"):
+        AzureFoundryFlux2ImageEditConfig().transform_image_edit_request(
+            model="FLUX.2-flex",
+            prompt="Make it a watercolor",
+            image="reference.png",
+            image_edit_optional_request_params={},
+            litellm_params={},
+            headers={},
+        )
+
+
 def test_flux2_image_edit_measures_a_stream_reference():
     uploaded: Final = io.BytesIO(_png(2048, 2048))
     response: Final = litellm.image_edit(
@@ -609,6 +621,23 @@ async def test_flux2_router_image_edit_bills_the_deployment_rates_with_a_logger_
     response: Final = await router.aimage_edit(**routed_request, litellm_logging_obj=logging_obj)
 
     assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
+
+
+def test_flux2_image_edit_surfaces_a_response_that_is_not_json():
+    with pytest.raises(litellm.APIError, match="gateway timeout page"):
+        litellm.image_edit(
+            model="azure_ai/flux.2-pro",
+            image=_png(1024, 1024),
+            prompt="Make it a watercolor",
+            api_key="test-key",
+            api_base="https://example.services.ai.azure.com",
+            client=HTTPHandler(
+                client=httpx.Client(
+                    transport=httpx.MockTransport(lambda _request: httpx.Response(200, text="gateway timeout page"))
+                )
+            ),
+            size="1024x1024",
+        )
 
 
 def _edit_returning(image: bytes) -> Callable[[httpx.Request], httpx.Response]:
