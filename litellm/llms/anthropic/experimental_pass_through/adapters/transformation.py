@@ -125,6 +125,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    drop_mid_conversation_system,
+    drops_mid_conversation_system,
+)
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
@@ -462,7 +466,12 @@ class LiteLLMAnthropicMessagesAdapter:
         preserve_midturn_system: bool = False,
     ) -> list:
         new_messages: Final[list[AllMessageValues]] = []
-        replayable_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        stripped_messages: Final = strip_encrypted_reasoning_blocks_from_anthropic_messages(messages)
+        replayable_messages: Final = (
+            stripped_messages
+            if preserve_midturn_system or not drops_mid_conversation_system()
+            else drop_mid_conversation_system(stripped_messages)
+        )
         leading_count: Final = next(
             (i for i, m in enumerate(replayable_messages) if not is_system_role_message(m)),
             len(replayable_messages),

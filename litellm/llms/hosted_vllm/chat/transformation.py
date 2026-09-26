@@ -10,6 +10,10 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     _get_image_mime_type_from_url,
 )
 from litellm.litellm_core_utils.prompt_templates.factory import _parse_mime_type
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    drop_mid_conversation_system,
+    drops_mid_conversation_system,
+)
 from litellm.litellm_core_utils.reasoning_effort_utils import (
     reasoning_effort_from_thinking_budget,
 )
@@ -163,8 +167,15 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
         - video files from file_id or file_data to video_url
         - thinking_blocks and reasoning_content on assistant messages are removed,
           and content lists are converted to strings for vLLM compatibility
+        - system messages after the leading run are removed when
+          LITELLM_DROP_MIDTURN_SYSTEM=true, for chat templates that reject them
         """
-        for message in messages:
+        kept_messages: Final = (
+            list(drop_mid_conversation_system(messages))  # mutable-ok: super()._transform_messages takes a list
+            if drops_mid_conversation_system()
+            else messages
+        )
+        for message in kept_messages:
             if message["role"] == "assistant":
                 message.pop("thinking_blocks", None)
                 message.pop("reasoning_content", None)
@@ -233,6 +244,6 @@ class HostedVLLMChatConfig(OpenAIGPTConfig):
                         message_content[idx] = self._convert_file_to_video_url(content_item)
 
         if is_async:
-            return super()._transform_messages(messages, model, is_async=cast(Literal[True], True))
+            return super()._transform_messages(kept_messages, model, is_async=cast(Literal[True], True))
         else:
-            return super()._transform_messages(messages, model, is_async=cast(Literal[False], False))
+            return super()._transform_messages(kept_messages, model, is_async=cast(Literal[False], False))

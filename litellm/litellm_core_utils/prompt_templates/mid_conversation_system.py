@@ -29,9 +29,10 @@ prompt cache readable across turns. Messages are handled in OpenAI format; the
 Anthropic wire shape is built later by ``anthropic_messages_pt``.
 """
 
+import os
 from collections.abc import Iterator, Mapping, Sequence
 from itertools import chain, groupby
-from typing import Final, Literal, TypeAlias
+from typing import Final, Literal, TypeAlias, TypeVar
 
 from litellm.types.llms.anthropic import AnthropicMessagesSystemMessageParam, AnthropicSystemMessageContent
 from litellm.types.llms.openai import (
@@ -48,6 +49,8 @@ CONVERTED_SYSTEM_NOTE: Final = (
     "Operator note (not from the user): the following was originally a mid-conversation system-role reminder."
 )
 
+DROP_MID_CONVERSATION_SYSTEM_ENV: Final = "LITELLM_DROP_MIDTURN_SYSTEM"
+
 _USER_TYPE_ROLES: Final = frozenset({"user", "tool", "function"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
 _RENDERED_PART_TYPES: Final = frozenset({"text", "image_url", "document", "file"})
@@ -55,6 +58,7 @@ _RENDERED_ASSISTANT_PART_TYPES: Final = frozenset({"text", "server_tool_use"})
 _THINKING_BLOCK_TYPES: Final = frozenset({"thinking", "redacted_thinking"})
 
 _MessageKind: TypeAlias = Literal["system", "tool", "user", "other"]
+_MessageT = TypeVar("_MessageT")
 _TextPart: TypeAlias = tuple[str, ChatCompletionCachedContent | None]
 
 
@@ -93,6 +97,22 @@ def _kind(message: object) -> _MessageKind:
     if role == "user":
         return "user"
     return "other"
+
+
+def drops_mid_conversation_system() -> bool:
+    """``LITELLM_DROP_MIDTURN_SYSTEM=true`` removes every system message after the leading run
+    before any placement runs, for operators whose backend must never see one (a strict chat
+    template) and who would rather lose the reminder than deliver it as a user turn."""
+    return os.getenv(DROP_MID_CONVERSATION_SYSTEM_ENV, "").strip().lower() == "true"
+
+
+def drop_mid_conversation_system(messages: Sequence[_MessageT]) -> tuple[_MessageT, ...]:
+    """``messages`` without the system messages that follow the leading run."""
+    leading_count: Final = next(
+        (index for index, message in enumerate(messages) if not is_system_message(message)),
+        len(messages),
+    )
+    return (*messages[:leading_count], *(m for m in messages[leading_count:] if not is_system_message(m)))
 
 
 def split_leading_system_run(
