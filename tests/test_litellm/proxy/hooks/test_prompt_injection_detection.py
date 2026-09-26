@@ -381,6 +381,83 @@ async def test_llm_check_scans_text_attachments(monkeypatch: pytest.MonkeyPatch)
     assert router.seen_prompts == (f"{SAFE}\nattached text",)
 
 
+def _moderation(text: str | list[str]) -> dict[str, object]:
+    return {"model": "omni-moderation-latest", "input": text}
+
+
+def _responses_with_tool_output(text: str) -> dict[str, object]:
+    return {
+        "model": "test-model",
+        "input": [
+            {"role": "user", "content": [{"type": "input_text", "text": SAFE}]},
+            {"type": "function_call", "call_id": "call_1", "name": "read_email", "arguments": "{}"},
+            {"type": "function_call_output", "call_id": "call_1", "output": text},
+        ],
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("moderation_input", [INJECTION, [SAFE, INJECTION]])
+async def test_moderation_requests_reject_prompt_injection(
+    monkeypatch: pytest.MonkeyPatch, moderation_input: str | list[str]
+):
+    with pytest.raises(HTTPException) as exc_info:
+        await _proxy_pre_call(
+            monkeypatch, _OPTIONAL_PromptInjectionDetection(), _moderation(moderation_input), "moderation"
+        )
+
+    assert exc_info.value.status_code == 400
+    assert _error(exc_info.value)["error"] == REJECTION_MESSAGE
+
+
+@pytest.mark.asyncio
+async def test_moderation_requests_allow_a_safe_input(monkeypatch: pytest.MonkeyPatch):
+    data = _moderation(SAFE)
+
+    assert await _proxy_pre_call(monkeypatch, _OPTIONAL_PromptInjectionDetection(), data, "moderation") == data
+
+
+@pytest.mark.asyncio
+async def test_llm_check_judges_moderation_input(monkeypatch: pytest.MonkeyPatch):
+    with pytest.raises(HTTPException) as exc_info:
+        await _proxy_during_call(monkeypatch, _moderation_detector(verdict="UNSAFE"), _moderation(SAFE), "moderation")
+
+    assert exc_info.value.status_code == 400
+    assert _error(exc_info.value)["error"] == REJECTION_MESSAGE
+
+
+@pytest.mark.asyncio
+async def test_responses_tool_outputs_are_scanned(monkeypatch: pytest.MonkeyPatch):
+    with pytest.raises(HTTPException) as exc_info:
+        await _proxy_pre_call(
+            monkeypatch, _OPTIONAL_PromptInjectionDetection(), _responses_with_tool_output(INJECTION), "aresponses"
+        )
+
+    assert exc_info.value.status_code == 400
+    assert _error(exc_info.value)["error"] == REJECTION_MESSAGE
+
+
+@pytest.mark.asyncio
+async def test_llm_check_judges_responses_tool_outputs(monkeypatch: pytest.MonkeyPatch):
+    router = _RecordingRouter(
+        model_list=[
+            {
+                "model_name": "moderation-model",
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake", "mock_response": "SAFE"},
+            }
+        ]
+    )
+
+    await _proxy_during_call(
+        monkeypatch,
+        _moderation_detector(verdict="SAFE", router=router),
+        _responses_with_tool_output("tool output text"),
+        "aresponses",
+    )
+
+    assert router.seen_prompts == (f"{SAFE}\ntool output text",)
+
+
 @pytest.mark.asyncio
 async def test_heuristics_check_keeps_event_loop_responsive():
     detector = _OPTIONAL_PromptInjectionDetection(

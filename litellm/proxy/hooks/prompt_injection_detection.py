@@ -2,10 +2,11 @@ import asyncio
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from difflib import SequenceMatcher
+from itertools import chain
 from typing import ClassVar, Final, Literal
 
 from fastapi import HTTPException
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.caching import DualCache
@@ -29,6 +30,8 @@ from litellm.types.utils import CallTypes, CallTypesLiteral, GenericGuardrailAPI
 GUARDRAIL_NAME: Final = "detect_prompt_injection"
 REJECTION_MESSAGE: Final = "Rejected message. This is a prompt injection attack."
 SCANNED_REQUEST: Final = TypeAdapter(dict[str, object])
+REQUEST_ITEMS: Final = TypeAdapter(tuple[object, ...])
+PLAIN_TEXT_REQUEST_FIELDS: Final = ("input", "prompt")
 HEURISTICS_EXECUTOR: Final = ThreadPoolExecutor(
     max_workers=PROMPT_INJECTION_HEURISTICS_MAX_THREADS, thread_name_prefix="prompt-injection-heuristics"
 )
@@ -90,6 +93,20 @@ def _logging_obj(data: Mapping[str, object]) -> LiteLLMLoggingObj | None:
 
 def _attachment_texts(request_data: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(attachment.text for attachment in request_attachments(request_data).texts)
+
+
+def _strings(value: object) -> tuple[str, ...]:
+    if isinstance(value, str):
+        return (value,)
+    try:
+        items: Final = REQUEST_ITEMS.validate_python(value)
+    except ValidationError:
+        return ()
+    return tuple(item for item in items if isinstance(item, str))
+
+
+def _plain_request_texts(request_data: Mapping[str, object]) -> tuple[str, ...]:
+    return tuple(chain.from_iterable(_strings(request_data.get(field)) for field in PLAIN_TEXT_REQUEST_FIELDS))
 
 
 class _PromptInjectionLLMJudge(CustomGuardrail):
@@ -222,16 +239,14 @@ class _OPTIONAL_PromptInjectionDetection(CustomGuardrail):
                 raise _rejection()
 
     async def _scan_request(self, data: dict[str, object], call_type: str) -> dict[str, object]:
-        handler: Final = _translation_handler(call_type)
-        if handler is None:
-            verbose_proxy_logger.debug(
-                "Prompt injection detection has no translation handler for %s; skipping", call_type
-            )
-            return data
         attachments: Final = request_attachments(data)
         if attachments.unscannable and not self._skips_unscannable_attachments():
             raise _unscannable_rejection(attachments.unscannable)
         await self._reject_injected_texts(attachment.text for attachment in attachments.texts)
+        handler: Final = _translation_handler(call_type)
+        if handler is None:
+            await self._reject_injected_texts(_plain_request_texts(data))
+            return data
         return SCANNED_REQUEST.validate_python(
             await handler.process_input_messages(
                 data=data, guardrail_to_apply=self, litellm_logging_obj=_logging_obj(data)
@@ -270,6 +285,19 @@ class _OPTIONAL_PromptInjectionDetection(CustomGuardrail):
             await self._reject_injected_texts(inputs.get("texts", ()))
         return inputs
 
+    async def _judge_request(self, judge: _PromptInjectionLLMJudge, data: dict[str, object], call_type: str) -> None:
+        handler: Final = _translation_handler(call_type)
+        if handler is not None:
+            await handler.process_input_messages(
+                data=data, guardrail_to_apply=judge, litellm_logging_obj=_logging_obj(data)
+            )
+            return
+        await judge.apply_guardrail(
+            inputs=GenericGuardrailAPIInputs(texts=list(_plain_request_texts(data))),
+            request_data=data,
+            input_type="request",
+        )
+
     async def async_moderation_hook(
         self,
         data: dict[str, object],
@@ -279,16 +307,8 @@ class _OPTIONAL_PromptInjectionDetection(CustomGuardrail):
         judge: Final = self.llm_judge
         if judge is None:
             return
-        handler: Final = _translation_handler(call_type)
-        if handler is None:
-            verbose_proxy_logger.debug(
-                "Prompt injection LLM check has no translation handler for %s; skipping", call_type
-            )
-            return
         try:
-            await handler.process_input_messages(
-                data=data, guardrail_to_apply=judge, litellm_logging_obj=_logging_obj(data)
-            )
+            await self._judge_request(judge, data, call_type)
         except HTTPException:
             raise
         except Exception as exc:

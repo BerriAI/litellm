@@ -926,6 +926,27 @@ async def test_pre_call_hook_splits_an_oversized_document_by_words():
 
 
 @pytest.mark.asyncio
+async def test_pre_call_hook_keeps_prompt_and_documents_within_the_combined_azure_limit():
+    prompt = "ask " * (AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH * 9 // 40)
+    tool_output = "fact " * (AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH * 3 // 50)
+    assert len(prompt) <= AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH < len(prompt) + len(tool_output)
+    bodies, _ = await _run_pre_call_hook(
+        _shield_guardrail(),
+        [
+            {"role": "user", "content": prompt},
+            _tool_call_message(),
+            {"role": "tool", "tool_call_id": "call_1", "content": tool_output},
+        ],
+    )
+
+    for body in bodies:
+        submitted = len(body.get("userPrompt", "")) + sum(len(document) for document in body["documents"])
+        assert submitted <= AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH
+    assert "".join(body.get("userPrompt", "") for body in bodies) == prompt
+    assert [document for body in bodies for document in body["documents"]] == [tool_output]
+
+
+@pytest.mark.asyncio
 async def test_billing_counts_document_characters_and_text_records():
     import math as _math
 
@@ -996,6 +1017,21 @@ async def test_pre_call_hook_fails_closed_when_a_submitted_document_is_not_analy
                         {"role": "tool", "tool_call_id": "call_1", "content": "Meeting moved to 3pm."},
                     ]
                 },
+                call_type="completion",
+            )
+
+
+@pytest.mark.asyncio
+async def test_pre_call_hook_fails_closed_when_an_analysis_carries_no_verdict():
+    guardrail = _shield_guardrail()
+    response = Mock()
+    response.json.return_value = {"userPromptAnalysis": {}, "documentsAnalysis": []}
+    with patch.object(guardrail.async_handler, "post", return_value=response):
+        with pytest.raises(ValueError, match="attackDetected"):
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(api_key="k"),
+                cache=None,
+                data={"messages": [{"role": "user", "content": "Summarize my email."}]},
                 call_type="completion",
             )
 

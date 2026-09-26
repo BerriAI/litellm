@@ -151,16 +151,21 @@ def _document_batches(documents: Sequence[str]) -> tuple[tuple[str, ...], ...]:
     return reduce(_with_piece, pieces, empty)
 
 
+def _paired_requests(chunk: str | None, batch: tuple[str, ...] | None) -> tuple[_ShieldRequest, ...]:
+    documents: Final = batch or ()
+    if len(chunk or "") + sum(map(len, documents)) <= AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH:
+        return (_ShieldRequest(user_prompt=chunk, documents=documents),)
+    return (_ShieldRequest(user_prompt=chunk, documents=()), _ShieldRequest(user_prompt=None, documents=documents))
+
+
 def _shield_requests(user_prompt: str, documents: Sequence[str]) -> tuple[_ShieldRequest, ...]:
     prompt_chunks: Final = (
         tuple(AzureGuardrailBase.split_text_by_words(user_prompt, AZURE_CONTENT_SAFETY_MAX_TEXT_LENGTH))
         if user_prompt
         else ()
     )
-    return tuple(
-        _ShieldRequest(user_prompt=chunk, documents=batch or ())
-        for chunk, batch in zip_longest(prompt_chunks, _document_batches(documents), fillvalue=None)
-    )
+    pairs: Final = zip_longest(prompt_chunks, _document_batches(documents), fillvalue=None)
+    return tuple(chain.from_iterable(_paired_requests(chunk, batch) for chunk, batch in pairs))
 
 
 def _add_usage(usage_accumulator: MutableMapping[str, int], texts: Sequence[str]) -> None:  # mutable-ok: accumulator

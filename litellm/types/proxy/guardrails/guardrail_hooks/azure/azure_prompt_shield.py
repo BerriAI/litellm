@@ -19,7 +19,7 @@ class AzurePromptShieldGuardrailRequestBody(TypedDict):
 class AzurePromptShieldAnalysis(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    attackDetected: bool = False
+    attackDetected: bool
 
 
 class AzurePromptShieldGuardrailResponse(BaseModel):

@@ -249,6 +249,56 @@ class TestOpenAIResponsesHandlerInputProcessing:
         assert result["input"][1]["content"] == " [GUARDRAILED]"
 
 
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("call_item", "output_item"),
+        [
+            (
+                {"type": "function_call", "call_id": "call_1", "name": "read_email", "arguments": "{}"},
+                {"type": "function_call_output", "call_id": "call_1", "output": "memo memo"},
+            ),
+            (
+                {"type": "custom_tool_call", "call_id": "call_1", "name": "run_script", "input": "ls"},
+                {"type": "custom_tool_call_output", "call_id": "call_1", "output": "memo memo"},
+            ),
+        ],
+    )
+    async def test_process_input_scans_tool_outputs(self, call_item, output_item):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+
+        data = {
+            "input": [{"role": "user", "content": "Read my email", "type": "message"}, call_item, output_item],
+            "model": "gpt-4",
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert result["input"][0]["content"] == "Read my email [GUARDRAILED]"
+        assert result["input"][2]["output"] == "memo memo [GUARDRAILED]"
+
+    @pytest.mark.asyncio
+    async def test_process_input_scans_a_custom_tool_output_content_list(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = MockGuardrail(guardrail_name="test")
+
+        data = {
+            "input": [
+                {"type": "custom_tool_call", "call_id": "call_1", "name": "run_script", "input": "ls"},
+                {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call_1",
+                    "output": [{"type": "input_text", "text": "memo memo"}],
+                },
+            ],
+            "model": "gpt-4",
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert result["input"][1]["output"][0]["text"] == "memo memo [GUARDRAILED]"
+
+
 class TestOpenAIResponsesHandlerOutputProcessing:
     """Test output processing functionality"""
 

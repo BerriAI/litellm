@@ -241,7 +241,22 @@ _PATCHABLE_ITEM_FIELDS: Final[Mapping[str, str]] = MappingProxyType(
     {"function_call_output": "output", "custom_tool_call_output": "output", "message": "content"}
 )
 
+_TOOL_OUTPUT_ITEM_TYPES: Final = frozenset({"function_call_output", "custom_tool_call_output"})
+
 _EMPTY_RESPONSES_REQUEST: Final[ResponsesAPIOptionalRequestParams] = {}
+
+
+def _scanned_text_field(item: Mapping[str, object]) -> str:
+    return "output" if item.get("type") in _TOOL_OUTPUT_ITEM_TYPES else "content"
+
+
+def _write_scanned_text(item: dict[str, Any], content_idx: int | None, guardrail_response: str) -> None:
+    field: Final = _scanned_text_field(item)
+    content: Final = item.get(field)
+    if isinstance(content, str) and content_idx is None:
+        item[field] = guardrail_response
+    elif isinstance(content, list) and content_idx is not None and isinstance(content[content_idx], dict):
+        content[content_idx]["text"] = guardrail_response
 
 
 def _item_rewrite_field(item: Mapping[str, object]) -> str | None:
@@ -634,7 +649,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Override this method to customize text/image extraction logic.
         """
-        content: Final = message.get("content", None)
+        content: Final = message.get(_scanned_text_field(message))
         if content is None:
             return
 
@@ -675,22 +690,8 @@ class OpenAIResponsesHandler(BaseTranslation):
 
         Override this method to customize how responses are applied.
         """
-        for guardrail_response, mapping in zip(responses, task_mappings):
-            msg_idx = cast(int, mapping[0])
-            content_idx_optional = cast(int | None, mapping[1])
-
-            content = messages[msg_idx].get("content", None)
-            if content is None:
-                continue
-
-            if isinstance(content, str) and content_idx_optional is None:
-                # Replace string content with guardrail response
-                messages[msg_idx]["content"] = guardrail_response
-
-            elif isinstance(content, list) and content_idx_optional is not None:
-                # Replace specific text item in list content
-                if isinstance(messages[msg_idx]["content"][content_idx_optional], dict):
-                    messages[msg_idx]["content"][content_idx_optional]["text"] = guardrail_response
+        for guardrail_response, (msg_idx, content_idx) in zip(responses, task_mappings):
+            _write_scanned_text(messages[msg_idx], content_idx, guardrail_response)
 
     async def process_output_response(
         self,
