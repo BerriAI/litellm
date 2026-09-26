@@ -1,7 +1,8 @@
 import { z } from "zod";
 
 const jevClassifierConfigFields = {
-  model: z.string().trim().min(1).default("jev-latest"),
+  provider: z.enum(["typesafe", "laya"]).optional(),
+  model: z.string().trim().min(1).optional(),
   timeout_ms: z.number().int().positive().default(3000),
   instructions: z
     .string()
@@ -11,7 +12,10 @@ const jevClassifierConfigFields = {
   circuit_breaker_cooldown_seconds: z.number().finite().positive().optional(),
 };
 
-export const jevClassifierConfigSchema = z.object(jevClassifierConfigFields);
+export const jevClassifierConfigSchema = z.object(jevClassifierConfigFields).transform((config) => ({
+  ...config,
+  model: config.model ?? (config.provider === "laya" ? "multilingual" : "jev-latest"),
+}));
 
 export type JevClassifierConfig = z.infer<typeof jevClassifierConfigSchema>;
 
@@ -20,6 +24,7 @@ export const defaultJevClassifierConfig = (): JevClassifierConfig => jevClassifi
 export const normalizeJevClassifierConfig = (
   config: JevClassifierConfig = defaultJevClassifierConfig(),
 ): JevClassifierConfig => ({
+  ...(config.provider && { provider: config.provider }),
   model: config.model.trim(),
   timeout_ms: config.timeout_ms,
   ...(config.instructions?.trim() && { instructions: config.instructions.trim() }),

@@ -642,7 +642,7 @@ const ClassificationMethodConfig: React.FC<ClassificationMethodConfigProps> = ({
             />
             <span className="text-xs text-muted-foreground">
               Number of prior user turns sent to the classifier provider, excluding tool output and harness reminders.
-              LLM and Jev default to 3 turns; Jev sends them to the configured TypeSafe endpoint. Set to 0 to omit
+              LLM and decision model classifiers default to 3 turns, sent to the selected classifier. Set to 0 to omit
               conversation history. The current message and selected system text are still sent.
             </span>
           </div>

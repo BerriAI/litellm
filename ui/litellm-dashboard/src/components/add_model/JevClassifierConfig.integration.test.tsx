@@ -1,4 +1,5 @@
 import React, { useState } from "react";
+import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { fireEvent, renderWithProviders, screen } from "../../../tests/test-utils";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
@@ -96,14 +97,39 @@ function Form() {
 
 describe("JEV classifier editor", () => {
   afterEach(() => vi.mocked(useAuthorized).mockReset());
+  it("selects Laya, preserves it through reload, and resets the checkpoint when switching back to Jev", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<Form />);
+    await user.click(screen.getByRole("radio", { name: "Decision Model" }));
+    await user.click(screen.getByRole("combobox", { name: "Decision model" }));
+    await user.click(screen.getByRole("option", { name: "Laya (self-hosted)" }));
+    expect(screen.getByLabelText("Laya Model")).toHaveValue("multilingual");
+    fireEvent.change(screen.getByLabelText("Laya Model"), { target: { value: "typed-decisions" } });
+    await user.click(screen.getByRole("button", { name: "Save and reload" }));
+    expect(screen.getByRole("radio", { name: "Decision Model" })).toBeChecked();
+    expect(screen.getByLabelText("Laya Model")).toHaveValue("typed-decisions");
+    await user.click(screen.getByRole("button", { name: "Probe current config" }));
+    expect(testAutoRouterRouting).toHaveBeenLastCalledWith(
+      "token",
+      expect.objectContaining({
+        complexity_router_config: expect.objectContaining({
+          jev_classifier_config: expect.objectContaining({ provider: "laya", model: "typed-decisions" }),
+        }),
+      }),
+    );
+    await user.click(screen.getByRole("combobox", { name: "Decision model" }));
+    await user.click(await screen.findByRole("option", { name: "Jev (TypeSafe)" }));
+    expect(screen.getByLabelText("Jev Model")).toHaveValue("jev-latest");
+  });
+
   it("uses built-in JEV without a license and preserves custom tiers and context through reload", () => {
     renderWithProviders(<Form />);
     expect(screen.getByLabelText("Judge model")).toBeInTheDocument();
     expect(screen.getByText("Reasoning Effort")).toBeInTheDocument();
     expect(screen.getByText("Classifier Prompt")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Use images for classification" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("radio", { name: /Jev Classifier/ }));
-    expect(screen.getByRole("radio", { name: /^Jev Classifier/ })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: /Decision Model uses/ }));
+    expect(screen.getByRole("radio", { name: /^Decision Model uses/ })).toBeChecked();
     expect(screen.getByLabelText("Jev Model")).toHaveValue("jev-latest");
     expect(screen.getByLabelText("Jev Instructions")).toBeEnabled();
     expect(screen.queryByLabelText("Judge model")).not.toBeInTheDocument();
@@ -117,7 +143,7 @@ describe("JEV classifier editor", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Classifier circuit breaker" }));
     fireEvent.click(screen.getByRole("button", { name: "Customize tiers" }));
     fireEvent.click(screen.getByRole("button", { name: "Save and reload" }));
-    expect(screen.getByRole("radio", { name: /Jev Classifier/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: /Decision Model uses/ })).toBeChecked();
     expect(screen.getByLabelText("Jev Model")).toHaveValue("jev-test");
     expect(screen.getByLabelText("Jev Timeout (ms)")).toHaveValue(4200);
     expect(screen.getByLabelText("Context Window Size")).toHaveValue("6");

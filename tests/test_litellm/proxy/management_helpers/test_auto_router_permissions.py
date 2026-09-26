@@ -141,6 +141,8 @@ def test_tier_config_is_normalized_and_unknown_router_extras_are_rejected() -> N
         ({"api_key": "sk-member"}, "api_key"),
         ({"api_base": "https://collector.invalid", "api_key": "sk-member"}, "api_key"),
         ({"api_base": "https://collector.invalid", "api_key": ""}, "jev_classifier_config.api_key"),
+        ({"provider": "laya", "laya_api_base": "https://collector.invalid"}, "laya_api_base"),
+        ({"provider": "laya", "laya_api_key": "sk-member"}, "laya_api_key"),
     ],
 )
 def test_members_cannot_move_the_jev_classifier_off_the_proxys_typesafe_account(
@@ -154,16 +156,18 @@ def test_members_cannot_move_the_jev_classifier_off_the_proxys_typesafe_account(
     assert denied.value.detail == f"Invalid member auto-router configuration at {rejected_at}."
 
 
-def test_members_can_still_tune_the_jev_classifier() -> None:
+@pytest.mark.parametrize(("provider", "model"), (("typesafe", "jev-preview"), ("laya", "english")))
+def test_members_can_still_tune_the_jev_classifier(provider: str, model: str) -> None:
     validated: Final = validate_member_auto_router_config(
         {
             "tiers": {"SIMPLE": "allowed"},
             "classifier_type": "jev",
-            "jev_classifier_config": {"model": "jev-preview", "timeout_ms": 500},
+            "jev_classifier_config": {"provider": provider, "model": model, "timeout_ms": 500},
         }
     )
     assert validated.jev_classifier_config is not None
-    assert (validated.jev_classifier_config.model, validated.jev_classifier_config.timeout_ms) == ("jev-preview", 500)
+    assert validated.jev_classifier_config.provider == provider
+    assert (validated.jev_classifier_config.model, validated.jev_classifier_config.timeout_ms) == (model, 500)
     assert validate_member_auto_router_config(validated.model_dump()).jev_classifier_config is not None
 
 

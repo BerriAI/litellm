@@ -31552,12 +31552,12 @@ export interface components {
         JevClassifierConfig: {
             /**
              * Api Base
-             * @description TypeSafe API base, falling back to TYPESAFE_API_BASE and then https://api.typesafe.ai
+             * @description Jev API base, falling back to TYPESAFE_API_BASE or https://api.typesafe.ai
              */
             api_base?: string | null;
             /**
              * Api Key
-             * @description TypeSafe API key, falling back to TYPESAFE_API_KEY
+             * @description Jev API key, falling back to TYPESAFE_API_KEY
              */
             api_key?: string | null;
             /**
@@ -31572,14 +31572,27 @@ export interface components {
             circuit_breaker_enabled: boolean;
             /**
              * Instructions
-             * @description Replaces the built-in Jev question instructions
+             * @description Replaces the built-in decision model question instructions
              */
             instructions?: string | null;
             /**
-             * Model
-             * @default jev-latest
+             * Laya Api Base
+             * @description URL of the self-hosted Laya System One server
              */
-            model: string;
+            laya_api_base?: string | null;
+            /**
+             * Laya Api Key
+             * @description Optional bearer token for the Laya server
+             */
+            laya_api_key?: string | null;
+            /** Model */
+            model?: string;
+            /**
+             * Provider
+             * @default typesafe
+             * @enum {string}
+             */
+            provider: "typesafe" | "laya";
             /**
              * Timeout Ms
              * @default 3000
@@ -39505,7 +39518,7 @@ export interface components {
             classifier_context_per_turn_chars?: number | null;
             /**
              * Classifier Context Window Size
-             * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM or JEV classifier input, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model (the configured TypeSafe endpoint for JEV), which may be a different deployment or provider than the routed completion model; that call carries the current user ask and, except for Claude Code requests, the extracted system-role text in full. Claude Code system text is omitted to avoid classifying harness instructions; the routed completion still receives it. Set to 0 to omit prior turns and the conversation-depth summary; the current ask and selected system text are still sent. Applies to LLM and JEV classification.
+             * @description Number of prior user turns (tool output and harness reminders excluded) to include as context in the LLM or decision model classifier input, so a follow-up like 'now do the same for the streaming path' is classified against what it refers to. Counts turns of both roles when classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier model (the configured TypeSafe or Laya endpoint for decision models), which may be a different deployment or provider than the routed completion model; that call carries the current user ask and, except for Claude Code requests, the extracted system-role text in full. Claude Code system text is omitted to avoid classifying harness instructions; the routed completion still receives it. Set to 0 to omit prior turns and the conversation-depth summary; the current ask and selected system text are still sent. Applies to LLM and JEV classification.
              * @default 3
              */
             classifier_context_window_size: number;
@@ -39531,7 +39544,7 @@ export interface components {
             classifier_plugin_timeout_ms: number;
             /**
              * Classifier Type
-             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary, or 'jev', a TypeSafe AI Jev structured choice call
+             * @description Classification strategy: local regex/keyword scoring, the bundled trained four-tier heuristic, an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer everywhere except when its score lands near a tier boundary, or 'jev', a Jev or Laya structured choice call
              * @default heuristic
              * @enum {string}
              */

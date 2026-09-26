@@ -68,7 +68,7 @@ describe("Auto-router classifier selection", () => {
         llm: "LLM",
         heuristic_first: "LLM",
         hybrid: "LLM",
-        jev: "Jev",
+        jev: "Decision Model",
       }[classifier_type];
       expect(screen.getByRole("radio", { name: new RegExp(`^${family}$`) })).toBeChecked();
       fireEvent.click(screen.getByRole("radio", { name: new RegExp(`^${family}$`) }));

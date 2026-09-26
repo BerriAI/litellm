@@ -678,19 +678,29 @@ class CapabilityClassifierConfig(BaseModel):
         return self
 
 
+def _default_decision_model(data: dict[str, object]) -> str:
+    return "multilingual" if data.get("provider") == "laya" else "jev-latest"
+
+
 class JevClassifierConfig(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    model: str = "jev-latest"
-    api_key: str | None = Field(default=None, description="TypeSafe API key, falling back to TYPESAFE_API_KEY")
+    provider: Literal["typesafe", "laya"] = "typesafe"
+    model: str = Field(default_factory=_default_decision_model)
+    api_key: str | None = Field(
+        default=None,
+        description="Jev API key, falling back to TYPESAFE_API_KEY",
+    )
     api_base: str | None = Field(
         default=None,
-        description="TypeSafe API base, falling back to TYPESAFE_API_BASE and then https://api.typesafe.ai",
+        description="Jev API base, falling back to TYPESAFE_API_BASE or https://api.typesafe.ai",
     )
+    laya_api_base: str | None = Field(default=None, description="URL of the self-hosted Laya System One server")
+    laya_api_key: str | None = Field(default=None, description="Optional bearer token for the Laya server")
     timeout_ms: int = Field(default=3000, ge=1)
     instructions: str | None = Field(
         default=None,
-        description="Replaces the built-in Jev question instructions",
+        description="Replaces the built-in decision model question instructions",
     )
     circuit_breaker_enabled: bool = True
     circuit_breaker_cooldown_seconds: float = Field(default=30.0, gt=0.0)
@@ -702,11 +712,11 @@ class JevClassifierConfig(BaseModel):
             raise ValueError("jev_classifier_config.instructions must be non-empty; omit it to use the default")
         return value
 
-    @field_validator("api_key")
+    @field_validator("api_key", "laya_api_key")
     @classmethod
     def _reject_blank_api_key(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
-            raise ValueError("jev_classifier_config.api_key must be non-empty; omit it to use TYPESAFE_API_KEY")
+            raise ValueError("Classifier API keys must be non-empty; omit unused keys")
         return value
 
     @model_validator(mode="after")
@@ -1036,7 +1046,7 @@ class ComplexityRouterConfig(BaseModel):
             "an LLM tier-selection call, a Switchyard-compatible capability forecast, a joint Fuse V2 forecast, "
             "a custom classifier plugin, 'heuristic_first', which scores locally and only pays for the LLM classifier when the "
             "local scorer does not confidently land a cheap tier, or 'hybrid', which trusts the local scorer "
-            "everywhere except when its score lands near a tier boundary, or 'jev', a TypeSafe AI Jev structured choice call"
+            "everywhere except when its score lands near a tier boundary, or 'jev', a Jev or Laya structured choice call"
         ),
     )
     llm_v2_config: LLMV2Config | None = Field(
@@ -1140,10 +1150,10 @@ class ComplexityRouterConfig(BaseModel):
         ge=0,
         description=(
             "Number of prior user turns (tool output and harness reminders excluded) to include as context "
-            "in the LLM or JEV classifier input, so a follow-up like 'now do the same for the streaming path' is "
+            "in the LLM or decision model classifier input, so a follow-up like 'now do the same for the streaming path' is "
             "classified against what it refers to. Counts turns of both roles when "
             "classifier_context_include_assistant_turns is enabled. These turns are sent to the classifier "
-            "model (the configured TypeSafe endpoint for JEV), which may "
+            "model (the configured TypeSafe or Laya endpoint for decision models), which may "
             "be a different deployment or provider than the routed completion model; that call carries "
             "the current user ask and, except for Claude Code requests, the extracted system-role text in full. "
             "Claude Code system text is omitted to avoid classifying harness instructions; the routed "

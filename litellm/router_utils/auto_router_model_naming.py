@@ -153,6 +153,11 @@ def strategy_router_dependencies(
         )
     complexity: Final = _mapping(litellm_params.get("complexity_router_config"))
     classifier: Final = _mapping(complexity.get("classifier_llm_config"))
+    decision_model: Final = _mapping(complexity.get("jev_classifier_config"))
+    decision_provider: Final = decision_model.get("provider", "typesafe")
+    decision_checkpoint: Final = decision_model.get(
+        "model", "multilingual" if decision_provider == "laya" else "jev-latest"
+    )
     return tuple(
         dict.fromkeys(
             tuple(dep for tier in _mapping(complexity.get("tiers")).values() for dep in _pool(tier, "tier"))
@@ -165,7 +170,7 @@ def strategy_router_dependencies(
             )
             + (
                 _named(
-                    f"typesafe/{_mapping(complexity.get('jev_classifier_config')).get('model', 'jev-latest')}",
+                    f"{decision_provider}/{decision_checkpoint}",
                     "evaluation",
                 )
                 if complexity.get("classifier_type") == "jev"
