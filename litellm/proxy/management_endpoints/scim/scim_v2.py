@@ -2133,7 +2133,7 @@ def _handle_generic_metadata(path: str, op_type: str, value: object, metadata: d
         metadata[path] = value
 
 
-def apply_scim_user_patch(
+def _apply_patch_ops(
     existing_user: LiteLLM_UserTable,
     patch_ops: SCIMPatchOp,
 ) -> tuple[dict[str, object], set[str]]:
@@ -2347,7 +2347,7 @@ async def patch_user(
 
         prev_active: Final = _user_scim_active(existing_user)
 
-        update_data, final_team_set = apply_scim_user_patch(
+        update_data, final_team_set = _apply_patch_ops(
             existing_user=existing_user,
             patch_ops=patch_ops,
         )
