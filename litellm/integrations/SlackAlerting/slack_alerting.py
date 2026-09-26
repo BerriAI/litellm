@@ -376,8 +376,12 @@ class SlackAlerting(CustomBatchLogger):
         if combined_metrics_values is None:
             return False
 
+        metric_values: Final[list[float | None]] = [
+            val if isinstance(val, (int, float)) else None for val in combined_metrics_values
+        ]
+
         all_none = True
-        for val in combined_metrics_values:
+        for val in metric_values:
             if val is not None and val > 0:
                 all_none = False
                 break
@@ -385,8 +389,8 @@ class SlackAlerting(CustomBatchLogger):
         if all_none:
             return False
 
-        failed_request_values: Final = combined_metrics_values[: len(failed_request_keys)]  # # [1, 2, None, ..]
-        latency_values: Final = combined_metrics_values[len(failed_request_keys) :]
+        failed_request_values: Final = metric_values[: len(failed_request_keys)]  # # [1, 2, None, ..]
+        latency_values: Final = metric_values[len(failed_request_keys) :]
 
         # find top 5 failed
         ## Replace None values with a placeholder value (-1 in this case)
