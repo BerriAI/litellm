@@ -269,19 +269,12 @@ _PRE_OUTPUT_PREFIXES: Final = [
 def _failure_tracking_logging_obj() -> Mock:
     logging_obj: Final = _logging_obj_stub()
     logging_obj.async_failure_handler = AsyncMock()
-    logging_obj.dispatch_failure_handlers = AsyncMock()
     return logging_obj
 
 
 def _assert_failure_logged_once(logging_obj: Mock, exception: Exception) -> None:
     assert logging_obj.async_failure_handler.await_count == 1
     assert logging_obj.async_failure_handler.await_args.kwargs["exception"] is exception
-
-
-async def _assert_failure_dispatched_once(logging_obj: Mock, exception: Exception) -> None:
-    await asyncio.sleep(0)
-    assert logging_obj.dispatch_failure_handlers.await_count == 1
-    assert logging_obj.dispatch_failure_handlers.await_args.args[0] is exception
 
 
 @pytest.mark.asyncio
@@ -301,7 +294,7 @@ async def test_transport_error_before_any_output_raises_fallback_error(prefix, p
     assert exc_info.value.original_exception is trailing_error
     assert exc_info.value.is_pre_first_chunk is pre_first_chunk
     assert exc_info.value.generated_content == ""
-    await _assert_failure_dispatched_once(logging_obj, trailing_error)
+    _assert_failure_logged_once(logging_obj, trailing_error)
 
 
 @pytest.mark.asyncio
@@ -317,7 +310,7 @@ async def test_transport_error_after_output_started_is_not_fallback_eligible():
             pass
 
     assert exc_info.value is trailing_error
-    await _assert_failure_dispatched_once(logging_obj, trailing_error)
+    _assert_failure_logged_once(logging_obj, trailing_error)
 
 
 @pytest.mark.asyncio
@@ -337,7 +330,7 @@ async def test_stream_ending_after_partial_output_without_terminal_event_raises(
     assert (created.type, delta.type) == ("response.created", "response.output_text.delta")
     assert not isinstance(exc_info.value, MidStreamFallbackError)
     assert exc_info.value.llm_provider == "openai"
-    await _assert_failure_dispatched_once(logging_obj, exc_info.value)
+    _assert_failure_logged_once(logging_obj, exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -354,7 +347,7 @@ async def test_stream_ending_before_any_output_raises_fallback_error(prefix, pre
     assert isinstance(exc_info.value.original_exception, litellm.APIConnectionError)
     assert exc_info.value.is_pre_first_chunk is pre_first_chunk
     assert exc_info.value.generated_content == ""
-    await _assert_failure_dispatched_once(logging_obj, exc_info.value.original_exception)
+    _assert_failure_logged_once(logging_obj, exc_info.value.original_exception)
 
 
 @pytest.mark.asyncio
@@ -366,7 +359,6 @@ async def test_complete_stream_still_ends_normally(trailer):
     seen: Final = [event.type async for event in iterator]
 
     assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
-    assert logging_obj.dispatch_failure_handlers.await_count == 0
     assert logging_obj.async_failure_handler.await_count == 0
 
 
@@ -432,12 +424,14 @@ class _LoopRecordingLogger(CustomLogger):
     def __init__(self) -> None:
         super().__init__()
         self.failure_loop: asyncio.AbstractEventLoop | None = None
+        self.failure_deployment_id: str | None = None
         self.failure_finished = False
         self.hook_loop: asyncio.AbstractEventLoop | None = None
         self.hook_finished = False
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         self.failure_loop = asyncio.get_running_loop()
+        self.failure_deployment_id = kwargs["litellm_params"].get("model_info", {}).get("id")
         await asyncio.sleep(0.05)
         self.failure_finished = True
 
@@ -448,17 +442,30 @@ class _LoopRecordingLogger(CustomLogger):
         return None
 
 
-def _real_logging_obj() -> LiteLLMLoggingObj:
+class _SyncOnlyRecordingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.sync_failure_finished = False
+
+    def log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.sync_failure_finished = True
+
+
+def _real_logging_obj(
+    *, call_type: str = "aresponses", litellm_params: dict[str, object] | None = None
+) -> LiteLLMLoggingObj:
     logging_obj: Final = LiteLLMLoggingObj(
         model="gpt-4o-mini",
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
-        call_type="aresponses",
+        call_type=call_type,
         start_time=datetime.now(),
         litellm_call_id="lit-8678-test",
         function_id="lit-8678-test",
     )
-    logging_obj.model_call_details["litellm_params"] = {"aresponses": True}
+    logging_obj.model_call_details["litellm_params"] = (
+        dict(litellm_params) if litellm_params is not None else {"aresponses": True}
+    )
     return logging_obj
 
 
@@ -488,9 +495,52 @@ async def test_transport_error_failure_logging_runs_on_the_iterating_loop(monkey
         async for _ in iterator:
             pass
 
-    assert recorder.failure_finished is False
-    await _wait_until(lambda: recorder.failure_finished)
+    assert recorder.failure_finished is True
     assert recorder.failure_loop is asyncio.get_running_loop()
+
+
+@pytest.mark.asyncio
+async def test_failure_logging_finishes_before_the_error_reaches_the_consumer(monkeypatch):
+    """The router's mid-stream fallback re-enters the same logging object for the next
+    deployment as soon as it catches the error, so failure logging that still runs after
+    the raise reads the fallback deployment's params and cools down the wrong deployment."""
+    recorder: Final = _LoopRecordingLogger()
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    logging_obj: Final = _real_logging_obj(
+        litellm_params={"aresponses": True, "model_info": {"id": "primary-deployment"}}
+    )
+    iterator: Final = _make_iterator(
+        sse_events=[],
+        logging_obj=logging_obj,
+        trailing_error=httpx.ReadError("Response payload is not completed"),
+    )
+
+    with pytest.raises(MidStreamFallbackError):
+        async for _ in iterator:
+            pass
+    logging_obj.model_call_details["litellm_params"]["model_info"] = {"id": "fallback-deployment"}
+    await _wait_until(lambda: recorder.failure_finished)
+
+    assert recorder.failure_deployment_id == "primary-deployment"
+
+
+@pytest.mark.asyncio
+async def test_sync_stream_failure_inside_a_running_loop_still_runs_sync_only_callbacks(monkeypatch):
+    recorder: Final = _SyncOnlyRecordingLogger()
+    monkeypatch.setattr(litellm, "failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [])
+    iterator: Final = _make_sync_iterator(
+        sse_events=_PARTIAL_OUTPUT_EVENTS,
+        logging_obj=_real_logging_obj(call_type="responses", litellm_params={}),
+        trailing_error=httpx.ReadError("Response payload is not completed"),
+    )
+
+    with pytest.raises(httpx.ReadError):
+        for _ in iterator:
+            pass
+
+    await _wait_until(lambda: recorder.sync_failure_finished)
 
 
 @pytest.mark.asyncio
@@ -502,8 +552,7 @@ async def test_completed_stream_success_deployment_hook_runs_on_the_iterating_lo
     async for _ in iterator:
         pass
 
-    assert recorder.hook_finished is False
-    await _wait_until(lambda: recorder.hook_finished)
+    assert recorder.hook_finished is True
     assert recorder.hook_loop is asyncio.get_running_loop()
 
 

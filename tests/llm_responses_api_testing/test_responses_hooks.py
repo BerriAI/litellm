@@ -51,11 +51,6 @@ class _FakeLoggingObj:
         self.async_success_calls += 1
         self.last_async_success_kwargs = kwargs
 
-    async def dispatch_failure_handlers(self, *args, **kwargs):
-        kwargs.pop("prefer_async_handlers", None)
-        await self.async_failure_handler(*args, **kwargs)
-        self.failure_handler(*args, **kwargs)
-
     def failure_handler(self, *args, **kwargs):
         self.failure_calls += 1
 

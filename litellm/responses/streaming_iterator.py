@@ -181,11 +181,12 @@ def _running_loop() -> asyncio.AbstractEventLoop | None:
 
 def _spawn_logging_task(
     running_loop: asyncio.AbstractEventLoop, coroutine: Coroutine[object, object, object], *, task_name: str
-) -> None:
+) -> asyncio.Task[object]:
     task: Final = running_loop.create_task(coroutine)
     _PENDING_LOGGING_TASKS.add(task)
     task.add_done_callback(_PENDING_LOGGING_TASKS.discard)
     task.add_done_callback(lambda done: _log_background_task_failure(done, task_name=task_name))
+    return task
 
 
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
@@ -293,6 +294,8 @@ class BaseResponsesAPIStreamingIterator:
 
     This class contains shared logic for both synchronous and asynchronous iterators.
     """
+
+    _pending_logging_tasks: tuple[asyncio.Task[object], ...] = ()
 
     def __init__(
         self,
@@ -860,14 +863,16 @@ class BaseResponsesAPIStreamingIterator:
 
         running_loop: Final = _running_loop()
         if running_loop is not None:
-            _spawn_logging_task(
-                running_loop,
-                async_post_call_success_deployment_hook(
-                    request_data=request_payload,
-                    response=self.completed_response,
-                    call_type=typed_call_type,
-                ),
-                task_name="Responses stream post-call success hook",
+            self._record_pending_logging_task(
+                _spawn_logging_task(
+                    running_loop,
+                    async_post_call_success_deployment_hook(
+                        request_data=request_payload,
+                        response=self.completed_response,
+                        call_type=typed_call_type,
+                    ),
+                    task_name="Responses stream post-call success hook",
+                )
             )
             return
         try:
@@ -891,24 +896,32 @@ class BaseResponsesAPIStreamingIterator:
         self._failure_handled = True
 
         traceback_exception: Final = traceback.format_exc()
+        end_time: Final = datetime.now()
         running_loop: Final = _running_loop()
         if running_loop is not None:
-            _spawn_logging_task(
-                running_loop,
-                self.logging_obj.dispatch_failure_handlers(exception, traceback_exception, prefer_async_handlers=True),
-                task_name="Responses stream failure logging",
+            self._record_pending_logging_task(
+                _spawn_logging_task(
+                    running_loop,
+                    self.logging_obj.async_failure_handler(
+                        exception=exception,
+                        traceback_exception=traceback_exception,
+                        start_time=self.start_time,
+                        end_time=end_time,
+                    ),
+                    task_name="Responses stream failure logging",
+                )
             )
-            return
-        try:
-            run_async_function(
-                async_function=self.logging_obj.async_failure_handler,
-                exception=exception,
-                traceback_exception=traceback_exception,
-                start_time=self.start_time,
-                end_time=datetime.now(),
-            )
-        except Exception:
-            pass
+        else:
+            try:
+                run_async_function(
+                    async_function=self.logging_obj.async_failure_handler,
+                    exception=exception,
+                    traceback_exception=traceback_exception,
+                    start_time=self.start_time,
+                    end_time=end_time,
+                )
+            except Exception:
+                pass
 
         try:
             executor.submit(
@@ -916,10 +929,19 @@ class BaseResponsesAPIStreamingIterator:
                 exception,
                 traceback_exception,
                 self.start_time,
-                datetime.now(),
+                end_time,
             )
         except Exception:
             pass
+
+    def _record_pending_logging_task(self, task: asyncio.Task[object]) -> None:
+        self._pending_logging_tasks = (*self._pending_logging_tasks, task)
+
+    async def _await_pending_logging(self) -> None:
+        pending: Final = self._pending_logging_tasks
+        self._pending_logging_tasks = ()
+        if pending:
+            await asyncio.wait(pending)
 
     def _note_yielded_event(self, event: ResponsesAPIStreamingResponse) -> None:
         self._yielded_first_chunk = True
@@ -1008,6 +1030,13 @@ class ResponsesAPIStreamingIterator(BaseResponsesAPIStreamingIterator):
         return self
 
     async def __anext__(self) -> ResponsesAPIStreamingResponse:
+        try:
+            return await self._next_event()
+        except Exception:
+            await self._await_pending_logging()
+            raise
+
+    async def _next_event(self) -> ResponsesAPIStreamingResponse:
         try:
             self._check_max_streaming_duration()
             while True:
