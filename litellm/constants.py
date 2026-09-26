@@ -1532,6 +1532,7 @@ PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS: Final = 4096
 
 # Headers to control callbacks
 X_LITELLM_DISABLE_CALLBACKS: Final = "x-litellm-disable-callbacks"
+X_LITELLM_INCLUDE_COST_IN_USAGE: Final = "x-litellm-include-cost-in-usage"
 LITELLM_METADATA_FIELD: Final = "litellm_metadata"
 OLD_LITELLM_METADATA_FIELD: Final = "metadata"
 RETURN_RAW_MODEL_NAME_METADATA_KEY: Final = "_complexity_router_return_raw_model_name"

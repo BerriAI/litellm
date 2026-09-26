@@ -45,6 +45,7 @@ from litellm.constants import (
     STREAM_SSE_DATA_PREFIX,
     STREAM_SSE_KEEPALIVE_PING_BYTES,
     UNSAFE_PROXY_RESPONSE_HEADERS,
+    X_LITELLM_INCLUDE_COST_IN_USAGE,
 )
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.bug_report import (
@@ -2912,6 +2913,8 @@ class ProxyBaseLLMRequestProcessing:
             else llm_cost_for_headers
         )
 
+        self._maybe_set_usage_cost(request, response, response_cost_for_headers)
+
         # Always return the client-requested model name (not provider-prefixed internal identifiers)
         # for OpenAI-compatible responses.
         if requested_model_from_client:
@@ -4228,6 +4231,33 @@ class ProxyBaseLLMRequestProcessing:
         if cost_from_logging_obj is not None:
             return cost_from_logging_obj
         return ProxyBaseLLMRequestProcessing._completion_cost_or_none(model_response, model_name, service_tier)
+
+    @staticmethod
+    def _maybe_set_usage_cost(request: Request, response: object, cost: float | str | None) -> None:
+        if ProxyBaseLLMRequestProcessing._should_include_cost_in_usage(request):
+            ProxyBaseLLMRequestProcessing._set_usage_cost(response, cost)
+
+    @staticmethod
+    def _should_include_cost_in_usage(request: Request) -> bool:
+        header_value: Final = request.headers.get(X_LITELLM_INCLUDE_COST_IN_USAGE)
+        if header_value is not None and header_value.strip() != "":
+            return header_value.strip().lower() in ("true", "1", "yes")
+        return bool(getattr(litellm, "include_cost_in_usage", False))
+
+    @staticmethod
+    def _set_usage_cost(response: object, cost: float | str | None) -> None:
+        """
+        usage.cost means what this gateway charged, so an upstream provider's own figure is
+        dropped rather than left behind: an unpriced deployment reports no cost at all, and a
+        caller reading the field should not get a number from whoever happened to serve it.
+        """
+        usage: Final = getattr(response, "usage", None)
+        if not isinstance(usage, Usage):
+            return
+        if isinstance(cost, bool) or not isinstance(cost, (int, float)):
+            del usage.cost
+            return
+        usage.cost = float(cost)
 
     @staticmethod
     def _inject_cost_into_usage_dict(
