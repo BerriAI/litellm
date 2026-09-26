@@ -395,6 +395,20 @@ class _LocalServer:
                     return
                 self._reply(b"posted")
 
+            def do_PUT(self) -> None:
+                self._record_and_reply(b"put")
+
+            def do_DELETE(self) -> None:
+                self._record_and_reply(b"deleted")
+
+            def do_PATCH(self) -> None:
+                self._record_and_reply(b"patched")
+
+            def _record_and_reply(self, body: bytes) -> None:
+                server.hits.append((self.command, self.path))
+                server.received_headers.append(list(self.headers.items()))
+                self._reply(body)
+
             def _redirect(self) -> None:
                 target_port = self.path.rsplit("/", 1)[1]
                 self.send_response(302)
@@ -532,6 +546,73 @@ async def test_caller_host_header_never_reaches_the_validated_destination(local_
     (received,) = local_server.received_headers
     assert [value for name, value in received if name.lower() == "host"] == [f"127.0.0.1:{local_server.port}"]
     assert ("x-extra", "kept") in received
+
+
+@pytest.mark.asyncio
+async def test_caller_headers_pass_through_untouched_when_url_validation_is_disabled(local_server, monkeypatch):
+    monkeypatch.setattr(litellm, "user_url_validation", False)
+    guardrail = _reporting_guardrail(
+        f'http_post("http://127.0.0.1:{local_server.port}/marker", headers={{"host": "spoofed", "X-Extra": "kept"}})'
+    )
+
+    reason = await _block_reason(guardrail)
+
+    assert "status=200" in reason
+    (received,) = local_server.received_headers
+    assert [value for name, value in received if name.lower() == "host"] == ["spoofed"]
+    assert ("x-extra", "kept") in received
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("method", "body"), [("PUT", "put"), ("DELETE", "deleted"), ("PATCH", "patched")])
+async def test_http_request_other_methods_reach_an_allowlisted_host(local_server, monkeypatch, method, body):
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [f"127.0.0.1:{local_server.port}"])
+    guardrail = _reporting_guardrail(
+        f'http_request("http://127.0.0.1:{local_server.port}/marker", method="{method}")'
+    )
+
+    reason = await _block_reason(guardrail)
+
+    assert f"status=200 body={body}" in reason
+    assert local_server.hits == [(method, "/marker")]
+
+
+@pytest.mark.asyncio
+async def test_http_request_refuses_a_method_outside_the_allowlist(local_server, monkeypatch):
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [f"127.0.0.1:{local_server.port}"])
+    guardrail = _reporting_guardrail(f'http_request("http://127.0.0.1:{local_server.port}/marker", method="TRACE")')
+
+    reason = await _block_reason(guardrail)
+
+    assert "error=Invalid HTTP method: TRACE" in reason
+    assert local_server.hits == []
+
+
+@pytest.mark.asyncio
+async def test_http_get_gives_up_at_its_own_timeout(local_server, monkeypatch):
+    monkeypatch.setattr(litellm, "user_url_allowed_hosts", [f"127.0.0.1:{local_server.port}"])
+    guardrail = _reporting_guardrail(f'http_get("http://127.0.0.1:{local_server.port}/slow", timeout=0.5)')
+
+    started = time.monotonic()
+    reason = await _block_reason(guardrail)
+
+    assert time.monotonic() - started < 1.5
+    assert "error=Request timeout after 0.5s" in reason
+
+
+@pytest.mark.asyncio
+async def test_sync_guardrail_returning_a_coroutine_has_it_awaited():
+    code = (
+        "async def decide():\n"
+        '    return block("decided late")\n'
+        "def apply_guardrail(inputs, request_data, input_type):\n"
+        "    return decide()\n"
+    )
+    guardrail = _compile(code)
+
+    reason = await _block_reason(guardrail)
+
+    assert "decided late" in reason
 
 
 @pytest.mark.asyncio

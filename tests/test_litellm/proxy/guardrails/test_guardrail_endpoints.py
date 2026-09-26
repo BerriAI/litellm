@@ -2621,6 +2621,21 @@ async def test_test_custom_code_endpoint_awaits_an_async_guardrail():
 
 
 @pytest.mark.asyncio
+async def test_test_custom_code_endpoint_returns_a_sync_guardrails_result():
+    request = TestCustomCodeGuardrailRequest(
+        custom_code='def apply_guardrail(inputs, request_data, input_type):\n    return block("sync said no")\n',
+        test_input={"texts": ["x"]},
+    )
+
+    response = await run_custom_code_test_endpoint(request=request, user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert response.success is True
+    assert response.result is not None
+    assert response.result["action"] == "block"
+    assert response.result["reason"] == "sync said no"
+
+
+@pytest.mark.asyncio
 async def test_add_guardrail_rolls_back_a_custom_code_guardrail_that_fails_to_compile(mocker, mock_guardrail_registry):
     stored = {
         "guardrail_id": "custom-code-broken",

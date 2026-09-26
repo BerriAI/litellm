@@ -151,3 +151,24 @@ async def test_call_off_loop_with_timeout_stops_the_worker_when_the_caller_is_ca
 
     await asyncio.sleep(0.3)
     assert _worker_threads() == []
+
+
+@pytest.mark.asyncio
+async def test_await_with_timeout_cancels_the_code_when_the_caller_is_cancelled():
+    interrupted = asyncio.Event()
+
+    async def sleep_until_cancelled() -> None:
+        try:
+            await asyncio.sleep(30)
+        except asyncio.CancelledError:
+            interrupted.set()
+            raise
+
+    waiting = asyncio.create_task(await_with_timeout(sleep_until_cancelled(), 30.0, label="sleep"))
+    await asyncio.sleep(0.1)
+
+    waiting.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+
+    await asyncio.wait_for(interrupted.wait(), timeout=1.0)
