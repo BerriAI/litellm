@@ -63,23 +63,25 @@ These are source-level findings, not sampled CPU attribution. The first optimiza
 
 ## Bridge floor benchmark
 
-`litellm-rust/crates/host-python/benches/stream_bridge.rs` isolates the stream bridge: one native call streams 1,500 chunks of the same `content_block_delta` frame the mock emits through `run_call`, the `Execution` handle and `lifecycle.Stream` to an asyncio consumer, with no HTTP, routing or logging. `native/ready` delivers every chunk from a future that is complete on its first poll. `native/pending` yields to Tokio once before each chunk, so every read suspends through the future bridge. A validation pass before timing confirmed the design: both modes take 1,503 driver resumes, `ready` hands Python 0 awaitables and `pending` hands it exactly 1,500. `python/*` is the same consumer loop over a pure-Python async generator, with `asyncio.sleep(0)` as the pending analogue
+`litellm-rust/crates/host-python/benches/stream_bridge.rs` isolates the stream bridge: one native call streams 1,500 chunks of the same `content_block_delta` frame the mock emits through `run_call`, the `Execution` handle and `lifecycle.Stream` to an asyncio consumer, with no HTTP, routing or logging. `native/ready` delivers every chunk from a future that is complete on its first poll. `native/pending` waits for a producer task that hands over each chunk only after the consumer has registered its waker, so every read parks the task on the loop and is woken from a Tokio thread, as a socket read is. A validation pass before timing counts the `asyncio.Future`s the loop creates: `ready` parks 0 reads and `pending` parks 1,500 of 1,500. `python/*` is the same consumer loop over a pure-Python async generator, with `asyncio.sleep(0)` as the pending analogue
 
-Apple M5 Max, release profile, Python 3.12.13. Criterion medians per 1,500-chunk stream, with the per-chunk figure derived from them
+Apple M5 Max, release profile, Python 3.12.13. Criterion medians per 1,500-chunk stream, with the per-read figure derived from them. The three native/pending rows are the same source under three drivers: the `pyo3-async-runtimes` handoff this branch started from, the inline awaitable that polls on the loop thread and parks on one Future, and that awaitable with the loop signal, where a Tokio thread wakes the loop by writing one byte to a socketpair the loop watches instead of taking the interpreter and calling `call_soon_threadsafe`
 
-| Case | Wall per stream | Wall per chunk | Process CPU per stream |
-| --- | ---: | ---: | ---: |
-| native/ready | 0.94 ms | 0.63 µs | 1.63 ms |
-| native/pending | 50.99 ms | 33.99 µs | 55.39 ms |
-| native/sync | 0.89 ms | 0.59 µs | 0.91 ms |
-| python/ready | 0.12 ms | 0.08 µs | 0.10 ms |
-| python/pending | 19.84 ms | 13.23 µs | 3.33 ms |
+| Case | Wall per stream | Wall per read | Process CPU per stream | CPU per read |
+| --- | ---: | ---: | ---: | ---: |
+| native/ready | 0.90 ms | 0.60 µs | 0.90 ms | 0.60 µs |
+| native/pending, `future_into_py` | 49.02 ms | 32.7 µs | 37.46 ms | 25.0 µs |
+| native/pending, inline awaitable | 44.35 ms | 29.6 µs | 34.79 ms | 23.2 µs |
+| native/pending, inline awaitable and loop signal | 37.03 ms | 24.7 µs | 24.05 ms | 16.0 µs |
+| native/sync | 0.87 ms | 0.58 µs | 0.88 ms | 0.59 µs |
+| python/ready | 0.12 ms | 0.08 µs | 0.10 ms | 0.07 µs |
+| python/pending | 19.62 ms | 13.1 µs | 3.32 ms | 2.2 µs |
 
-A suspended read costs about 34 µs of wall time and about 37 µs of process CPU, against 0.6 µs for a ready read. That is roughly 2.5 asyncio loop turns, and the CPU figure shows the handoff is busy work spread across the consumer thread, the Tokio workers and the blocking pool rather than idle waiting. Every real socket read that arrives after the consumer asks for it takes this path, so this one mechanism accounts for most of the 50 to 60 µs per delta excess measured at the proxy. The remaining gap is the outer proxy and logging, which this bench excludes
+The Tokio spawns, the blocking-pool hop and the cancellation channel of the original handoff cost about 3 µs per read together. The rest is the wake into the loop: a Tokio thread taking the interpreter to call `call_soon_threadsafe`, the self-pipe write, the kqueue wake and the loop turn that resumes the task. Keeping the wake off the interpreter removes the thread handoff and the Python calls on worker threads, and lets wakes from many streams share one loop turn. What is left, about 16 µs of CPU per read, is the asyncio loop turn itself, the same cost Python's own path pays per socket read
 
 The byte copy in `chunk` is not a factor at the measured payload size. Ready-mode streams of the 155 byte frame and of 1 KiB chunks cost the same 0.92 ms, 16 KiB chunks cost 1.72 ms and 256 KiB chunks cost 6.46 ms, so the copy only registers above about 16 KiB per chunk
 
-The process CPU clock on macOS is coarse: `native/ready` reads more CPU than wall time, so treat the CPU column as indicative and the wall column as the measurement. Run the bench with `cargo bench --manifest-path litellm-rust/Cargo.toml -p litellm-host-python --bench stream_bridge`, pointing `PYO3_PYTHON` at the interpreter to link. The next experiment is a persistent per-stream reader that parks once on the native side and completes reads through a single long-lived Python future or queue, so a stream pays bridge setup once instead of once per suspended chunk. It must preserve cancellation, backpressure and final billing, and `native/pending` is the number it has to move
+The process CPU clock on macOS is coarse, so treat the CPU column as indicative and the wall column as the measurement. Run the bench with `cargo bench --manifest-path litellm-rust/Cargo.toml -p litellm-host-python --bench stream_bridge`, pointing `PYO3_PYTHON` at the interpreter to link. The bridge accounts for roughly half of the 50 to 60 µs per delta excess measured at the proxy; the other half is outside it, so the next experiment is isolating route selection from logger selection
 
 ## Reproduction
 

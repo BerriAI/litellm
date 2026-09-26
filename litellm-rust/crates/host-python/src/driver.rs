@@ -1062,6 +1062,111 @@ mod tests {
         .collect()
     }
 
+    /// Every chunk arrives from a runtime thread a timer tick after the caller asked for it,
+    /// so each read parks the caller's task and is woken through the loop signal.
+    fn parking_machine() -> CallMachine<Streaming> {
+        CallMachine::new(|host| {
+            Box::pin(async move {
+                host.project().await?;
+                if host.open(Vec::new()).await? == Demand::Detached {
+                    return Ok(());
+                }
+                for chunk in ["first", "second", "third"] {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    if host.deliver(chunk).await? == Demand::Detached {
+                        break;
+                    }
+                }
+                Ok(())
+            })
+        })
+    }
+
+    fn hand_parking_stream(py: Python<'_>, log: &Log) -> Py<PyAny> {
+        let adapter = SyntheticAdapter {
+            log: Log(log.0.clone()),
+            script: AdapterScript::Plain,
+        };
+        run_call(
+            py,
+            parking_machine(),
+            StreamingHost,
+            Box::new(adapter),
+            PyDict::new(py).unbind(),
+            true,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn parked_reads_are_woken_through_the_loop_and_survive_cancellation() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            let cancelled_log = Log::default();
+            let completed_log = Log::default();
+            let locals = PyDict::new(py);
+            locals
+                .set_item("cancelled", hand_parking_stream(py, &cancelled_log))
+                .unwrap();
+            locals
+                .set_item("completed", hand_parking_stream(py, &completed_log))
+                .unwrap();
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+import asyncio
+
+async def consume(handed):
+    stream = await handed
+    return [chunk async for chunk in stream]
+
+async def scenario():
+    task = asyncio.create_task(consume(cancelled))
+    await asyncio.sleep(0.0002)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("a parked read ignored cancellation")
+    return await consume(completed)
+
+chunks = asyncio.run(asyncio.wait_for(scenario(), 10))
+"#
+                ),
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let chunks: Vec<String> = locals
+                .get_item("chunks")
+                .unwrap()
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(chunks, ["first", "second", "third"]);
+            assert!(
+                completed_log
+                    .entries()
+                    .contains(&"succeeded:None".to_string())
+            );
+            let cancelled = cancelled_log.entries();
+            assert!(
+                !cancelled.contains(&"delivered".to_string()),
+                "the cancelled stream delivered a chunk: {cancelled:?}"
+            );
+            assert!(
+                !cancelled.iter().any(|entry| entry.starts_with("succeeded")),
+                "the cancelled stream reported success: {cancelled:?}"
+            );
+        });
+    }
+
     #[test]
     fn a_stream_carries_its_head_as_hidden_params_before_the_first_chunk() {
         let _guard = PYTHON_GLOBALS
