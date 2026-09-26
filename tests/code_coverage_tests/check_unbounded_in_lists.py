@@ -59,6 +59,7 @@ class Finding:
     message: str
     scope: str = MODULE_SCOPE
     subject: str = ""
+    value: str = ""
 
     def render(self) -> str:
         return f"{self.path}:{self.line}: {self.kind} {self.message}"
@@ -284,6 +285,7 @@ def prisma_findings(path: Path, tree: ast.Module) -> Iterator[Finding]:
                 f"or record the bound with `# bounded-ok: <reason>`",
                 scope=scope_of(key.lineno),
                 subject=f"{fields.get(id(node), '?')}.{key.value}",
+                value=_normalized(ast.unparse(value)),
             )
 
 
@@ -322,6 +324,16 @@ def _fstring_part_ids(tree: ast.AST) -> frozenset[int]:
     )
 
 
+def _normalized(text: str) -> str:
+    return " ".join(text.split())
+
+
+def _slot_end(body: str, start: int) -> int:
+    """Just past the `)` closing an `IN (` slot, or the end of the literal when it has none."""
+    close: Final = body.find(")", start)
+    return len(body) if close == -1 else close + 1
+
+
 def raw_sql_findings(path: Path, source: str, tree: ast.AST) -> Iterator[Finding]:
     parts: Final = _fstring_part_ids(tree)
     scope_of: Final = scope_finder(tree)
@@ -346,6 +358,7 @@ def raw_sql_findings(path: Path, source: str, tree: ast.AST) -> Iterator[Finding
             f"`<> ALL($1::text[])` for `NOT IN`), or record the bound with `# bounded-ok: <reason>`",
             scope=scope_of(node.lineno),
             subject=f"{STRING_PREFIX_AND_QUOTES.sub('', operand.group(1)) if operand else '?'}.IN",
+            value=_normalized(body[match.start() : _slot_end(body, match.end())]),
         )
 
 
@@ -403,11 +416,15 @@ def scan(paths: Iterable[Path]) -> tuple[Finding, ...]:
 
 
 def identify(findings: tuple[Finding, ...]) -> Mapping[str, Finding]:
-    """Each finding keyed by `path scope kind subject occurrence`, the occurrence counting the
-    earlier findings in the same file that share the rest of the key. No line number goes in,
-    so code shifting up or down leaves the key alone."""
+    """Each finding keyed by `path scope kind subject `value` occurrence`, the value being the
+    filtered expression's source and the occurrence counting the earlier findings in the same file
+    that share the rest of the key. No line number goes in, so code shifting up or down leaves the
+    key alone, while a different expression on the same field reads as a new finding."""
     ordered: Final = sorted(findings, key=lambda f: (str(f.path), f.line))
-    keys: Final = tuple(f"{repo_relative(f.path)} {f.scope} {f.kind} {f.subject or '-'}" for f in ordered)
+    keys: Final = tuple(
+        f"{repo_relative(f.path)} {f.scope} {f.kind} {f.subject or '-'}" + (f" `{f.value}`" if f.value else "")
+        for f in ordered
+    )
     return {f"{key} {keys[:index].count(key)}": finding for index, (key, finding) in enumerate(zip(keys, ordered))}
 
 

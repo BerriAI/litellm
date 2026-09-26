@@ -290,10 +290,19 @@ class TestIdentity:
         )
         path = (tmp_path / "module.py").resolve().as_posix()
         assert _identities(tmp_path, source) == (
-            f"{path} Repo.load prisma user_id.in 0",
-            f"{path} Repo.load prisma user_id.in 1",
-            f"{path} Repo.load prisma team_id.not_in 0",
+            f"{path} Repo.load prisma user_id.in `ids` 0",
+            f"{path} Repo.load prisma user_id.in `more` 0",
+            f"{path} Repo.load prisma team_id.not_in `teams` 0",
         )
+
+    def test_the_same_expression_twice_in_a_scope_is_told_apart_by_occurrence(self, tmp_path):
+        source = 'def f():\n    a = {"user_id": {"in": ids}}\n    return {"user_id": {"in": ids}}\n'
+        assert tuple(key.rsplit(" ", 1)[1] for key in _identities(tmp_path, source)) == ("0", "1")
+
+    def test_the_value_is_whitespace_normalized(self, tmp_path):
+        spread = 'def f():\n    return {"user_id": {"in": sorted(\n        ids ,\n    )}}\n'
+        compact = 'def f():\n    return {"user_id": {"in": sorted(ids)}}\n'
+        assert _identities(tmp_path, spread) == _identities(tmp_path, compact)
 
     def test_the_field_is_read_from_a_subscript_or_keyword_or_computed_key(self, tmp_path):
         source = 'where["user_id"] = {"in": ids}\nwhere = Filter(team_id={"in": ids})\nwhere = {field: {"in": ids}}\n'
@@ -303,12 +312,39 @@ class TestIdentity:
     def test_raw_sql_is_keyed_by_the_column_before_in(self, tmp_path):
         source = 'def q():\n    return f"WHERE \\"{column}\\" NOT IN ({placeholders})"\n'
         path = (tmp_path / "module.py").resolve().as_posix()
-        assert _identities(tmp_path, source) == (f"{path} q raw-sql {{column}}.IN 0",)
+        assert _identities(tmp_path, source) == (f"{path} q raw-sql {{column}}.IN `IN ({{placeholders}})` 0",)
+
+    def test_a_raw_sql_value_is_its_normalized_in_slot_without_the_rest_of_the_query(self, tmp_path):
+        source = 'def q():\n    return f"""WHERE id IN (\n        {placeholders}\n    ) AND deleted = false"""\n'
+        path = (tmp_path / "module.py").resolve().as_posix()
+        assert _identities(tmp_path, source) == (f"{path} q raw-sql id.IN `IN ( {{placeholders}} )` 0",)
 
     def test_moving_code_down_the_file_keeps_the_key(self, tmp_path):
         source = 'def f():\n    return {"user_id": {"in": ids}}\n'
         shifted = "import os\n\n\ndef g():\n    return 1\n\n\n" + source
         assert _identities(tmp_path, source) == _identities(tmp_path, shifted)
+
+
+class TestReplacedFilter:
+    """Swapping a baselined filter for a different unbounded one on the same field must not pass."""
+
+    def test_a_replaced_expression_reads_as_one_new_and_one_stale(self, tmp_path, capsys):
+        target = tmp_path / "module.py"
+        baseline = tmp_path / "baseline.txt"
+        target.write_text('def f():\n    return {"user_id": {"in": old_ids}}\n', encoding="utf-8")
+        assert checker.main([str(target), "--baseline", str(baseline), "--update-baseline"]) == 0
+        target.write_text('def f():\n    return {"user_id": {"in": new_ids}}\n', encoding="utf-8")
+        capsys.readouterr()
+        assert checker.main([str(target), "--baseline", str(baseline)]) == 1
+        assert "0 baselined, 1 new, 1 stale" in capsys.readouterr().out
+
+    def test_an_identical_expression_re_added_is_the_same_finding(self, tmp_path):
+        target = tmp_path / "module.py"
+        baseline = tmp_path / "baseline.txt"
+        target.write_text('def f():\n    return {"user_id": {"in": ids}}\n', encoding="utf-8")
+        assert checker.main([str(target), "--baseline", str(baseline), "--update-baseline"]) == 0
+        target.write_text('import os\n\n\ndef f():\n    x = 1\n    return {"user_id": {"in": ids}}\n', encoding="utf-8")
+        assert checker.main([str(target), "--baseline", str(baseline)]) == 0
 
 
 class TestBaseline:
@@ -356,7 +392,7 @@ class TestBaseline:
         assert self._run(str(target), "--baseline", str(baseline)) == 1
         out = capsys.readouterr().out
         assert "stale entry" in out
-        assert "f prisma user_id.in 0" in out
+        assert "f prisma user_id.in `user_ids` 0" in out
 
     def test_update_baseline_drops_fixed_entries_and_keeps_unscanned_ones(self, tmp_path):
         target = self._write(tmp_path, 'def f():\n    return {"user_id": {"in": user_ids}}\n')
@@ -366,7 +402,7 @@ class TestBaseline:
         baseline.write_text(f"{elsewhere}\n{fixed}\n", encoding="utf-8")
         assert self._run(str(target), "--baseline", str(baseline), "--update-baseline") == 0
         assert checker.read_baseline(baseline) == frozenset(
-            {elsewhere, f"{target.resolve().as_posix()} f prisma user_id.in 0"}
+            {elsewhere, f"{target.resolve().as_posix()} f prisma user_id.in `user_ids` 0"}
         )
         assert self._run(str(target), "--baseline", str(baseline)) == 0
 
