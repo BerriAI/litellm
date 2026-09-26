@@ -186,7 +186,7 @@ describe("AgentInfoView update payload", () => {
     expect(screen.getByLabelText("Application (Client) ID")).toHaveValue(identity.client_id);
     expect(screen.getByRole("combobox", { name: "Identity Provider" })).toHaveTextContent("Microsoft Entra ID");
     expect(screen.getByRole("combobox", { name: "Execution Mode" })).toHaveTextContent("Autonomous");
-    expect(screen.getByRole("combobox", { name: "Execution", exact: true })).toHaveTextContent("Enabled");
+    expect(screen.getByRole("combobox", { name: /^Execution$/ })).toHaveTextContent("Enabled");
     fireEvent.change(screen.getByLabelText("Agent Name"), { target: { value: "Renamed agent" } });
     await save(user);
     expect(patchedPayload().agent_name).toBe("Renamed agent");
