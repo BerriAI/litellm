@@ -9,8 +9,13 @@ license = "MIT"
 repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
+litellm-config = { path = "crates/config" }
+litellm-router = { path = "crates/router" }
 litellm-tracing = { path = "crates/tracing" }
 litellm-core = { path = "crates/core" }
+litellm-gateway = { path = "crates/gateway" }
+litellm-gateway-inference = { path = "crates/gateway-inference" }
+litellm-gateway-auth = { path = "crates/gateway-auth" }
 litellm-coroutine = { path = "crates/coroutine" }
 litellm-host = { path = "crates/host" }
 litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
@@ -50,6 +55,7 @@ litellm-host-python = { path = "crates/host-python" }
 litellm-python-compat = { path = "crates/python-compat" }
 
 tracing = "0.1"
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "multipart"] }
 bytes = "1"
 http = "1"
 google-cloud-auth = { version = "1.16.0", default-features = false }
