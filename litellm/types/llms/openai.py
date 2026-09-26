@@ -1,13 +1,14 @@
 from collections.abc import Iterable, Mapping
 from enum import Enum
 from os import PathLike
-from typing import IO, Any, Final, Literal, Optional, TypeAlias, Union
+from typing import IO, Any, Final, Generic, Literal, Optional, TypeAlias, Union
 
 import httpx
 from openai import Omit
 from openai._legacy_response import (
     HttpxBinaryResponseContent as _HttpxBinaryResponseContent,
 )
+from openai._types import Response as SDKResponse
 from openai.lib.streaming._assistants import (
     AssistantEventHandler,
     AssistantStreamManager,
@@ -79,6 +80,7 @@ from typing_extensions import (
     ReadOnly,
     Required,
     TypedDict,
+    TypeVar,
     override,
 )
 
@@ -118,11 +120,15 @@ class BinaryResponseSummary(TypedDict):
     num_bytes: ReadOnly[int]
 
 
-class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
-    _hidden_params: dict
+_ResponseT = TypeVar("_ResponseT", bound=httpx.Response | SDKResponse, default=httpx.Response)
 
-    def __init__(self, response: httpx.Response) -> None:
-        super().__init__(response)
+
+class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT]):
+    _hidden_params: dict
+    response: _ResponseT  # pyright: ignore[reportIncompatibleVariableOverride]  # SDK accepts both backends at runtime
+
+    def __init__(self, response: _ResponseT) -> None:
+        super().__init__(response)  # pyright: ignore[reportArgumentType]  # SDK accepts both backends at runtime
         self._hidden_params = {}  # mutable-ok: mutable-dict contract shared with ModelResponse logging consumers
 
     def logging_summary(self) -> BinaryResponseSummary:
@@ -135,7 +141,7 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent):
     def _num_bytes(self) -> int:
         try:
             return len(self.response.content)
-        except httpx.ResponseNotRead:
+        except RuntimeError:
             return self.response.num_bytes_downloaded
 
     def set_response_cost(self, response_cost: float | None) -> None:

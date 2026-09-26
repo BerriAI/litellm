@@ -1,9 +1,9 @@
-from unittest.mock import MagicMock, call, patch
+from typing import Final
+from unittest.mock import MagicMock, patch
 
 import httpx
 import openai
 import pytest
-
 
 import litellm
 from litellm.litellm_core_utils.token_counter import token_counter
@@ -413,3 +413,108 @@ def test_is_openai_backed_api_base_decides_by_hostname_only(api_base, expected):
     assert is_openai_backed_api_base(api_base) is expected
 
 
+def _sdk_api_client(
+    api: str,
+    is_async: bool,
+    timeout: float | httpx.Timeout | openai.Timeout | None,
+    client: openai.OpenAI | openai.AsyncOpenAI | None = None,
+) -> openai.OpenAI | openai.AsyncOpenAI | None:
+    from litellm.llms.azure.common_utils import BaseAzureLLM
+    from litellm.llms.openai.fine_tuning.handler import OpenAIFineTuningAPI
+    from litellm.llms.openai.image_variations.handler import OpenAIImageVariationsHandler
+    from litellm.llms.openai.openai import OpenAIAssistantsAPI, OpenAIBatchesAPI, OpenAIFilesAPI
+
+    kwargs: Final = {
+        "api_key": "transport-only",
+        "api_base": "https://sdk-default.example/v1",
+        "timeout": timeout,
+        "max_retries": 0,
+        "organization": None,
+        "client": client,
+    }
+    if api == "assistants":
+        assistant_factory: Final = OpenAIAssistantsAPI()
+        return (
+            assistant_factory.async_get_openai_client(**kwargs)
+            if is_async
+            else assistant_factory.get_openai_client(**kwargs)
+        )
+    if api == "image_variations":
+        variation_factory: Final = OpenAIImageVariationsHandler()
+        params: Final = {
+            "api_key": "transport-only",
+            "base_url": kwargs["api_base"],
+            "timeout": timeout,
+            "http_client": None,
+        }
+        return (
+            variation_factory.get_async_client(client=client, init_client_params=params)
+            if is_async
+            else variation_factory.get_sync_client(client=client, init_client_params=params)
+        )
+    if api == "azure_gateway":
+        return BaseAzureLLM()._init_azure_client_for_cloudflare_ai_gateway(
+            api_base="https://sdk-default.example",
+            model="deployment",
+            api_version="2024-02-01",
+            max_retries=0,
+            timeout=timeout,
+            litellm_params={},
+            api_key="transport-only",
+            azure_ad_token=None,
+            azure_ad_token_provider=None,
+            acompletion=is_async,
+            client=client,
+        )
+    factory: Final = {"files": OpenAIFilesAPI, "batches": OpenAIBatchesAPI, "fine_tuning": OpenAIFineTuningAPI}[api]()
+    return factory.get_openai_client(**kwargs, _is_async=is_async)
+
+
+@pytest.mark.parametrize("api", ["files", "batches", "assistants", "fine_tuning", "image_variations", "azure_gateway"])
+@pytest.mark.parametrize("is_async", [False, True])
+@pytest.mark.asyncio
+async def test_sdk_api_factories_keep_httpx_transport_and_request_timeouts(api: str, is_async: bool) -> None:
+    timeout: Final = openai.Timeout(connect=1, read=7, write=2, pool=3)
+    sdk_client: Final = _sdk_api_client(api, is_async, timeout)
+    assert sdk_client is not None
+    try:
+        assert isinstance(sdk_client._client, httpx.AsyncClient if is_async else httpx.Client)
+        assert sdk_client._client.follow_redirects is True
+        assert _sdk_api_client(api, is_async, 19, client=sdk_client) is sdk_client
+        assert sdk_client.timeout.as_dict() == timeout.as_dict()
+    finally:
+        if is_async:
+            await sdk_client.close()
+        else:
+            sdk_client.close()
+
+
+@pytest.mark.parametrize("backend", ["httpx", "sdk_default"])
+@pytest.mark.asyncio
+async def test_azure_gateway_and_image_variations_use_the_callers_async_session(
+    backend: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from importlib import import_module
+    from io import BytesIO
+
+    from openai._types import Response as SDKResponse
+
+    from litellm.images.main import aimage_variation
+
+    http_module: Final = httpx if backend == "httpx" else import_module(SDKResponse.__module__)
+    transport: Final = http_module.MockTransport(
+        lambda request: http_module.Response(
+            200, json={"created": 0, "data": [{"url": "https://example.com/image.png"}]}
+        )
+    )
+    async with http_module.AsyncClient(transport=transport) as session:
+        monkeypatch.setattr(litellm, "aclient_session", session)
+        monkeypatch.setattr(litellm, "client_session", None)
+        azure_client: Final = _sdk_api_client("azure_gateway", True, 7)
+        assert azure_client is not None
+        assert azure_client._client is session
+        response: Final = await aimage_variation(
+            image=BytesIO(b"image-bytes"), api_key="transport-only", api_base="https://sdk-default.example/v1"
+        )
+        assert response.data[0].url == "https://example.com/image.png"
+        assert not session.is_closed

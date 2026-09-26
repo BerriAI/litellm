@@ -7,9 +7,19 @@ import respx
 
 import litellm
 
+_SDK_EMBEDDING_MODELS: Final = (
+    "openai/sdk-compat",
+    "mistral/sdk-compat",
+    "fireworks_ai/accounts/fireworks/models/sdk-compat",
+    "together_ai/sdk-compat",
+    "nvidia_nim/sdk-compat",
+)
 
-def _mock_openai_embedding_route(respx_mock: respx.MockRouter) -> respx.Route:
-    return respx_mock.post("https://api.openai.com/v1/embeddings").mock(
+
+def _mock_openai_embedding_route(
+    respx_mock: respx.MockRouter, api_base: str = "https://api.openai.com/v1"
+) -> respx.Route:
+    return respx_mock.post(f"{api_base}/embeddings").mock(
         return_value=httpx.Response(
             200,
             json={
@@ -27,13 +37,21 @@ def clear_default_encoding_format_env(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.delenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", raising=False)
 
 
-def test_embedding_openai_omits_encoding_format_when_client_omits_it(respx_mock: respx.MockRouter) -> None:
-    mock_route: Final = _mock_openai_embedding_route(respx_mock)
+@pytest.mark.parametrize("model", _SDK_EMBEDDING_MODELS)
+def test_embedding_sdk_providers_omit_encoding_format_when_client_omits_it(
+    respx_mock: respx.MockRouter, model: str
+) -> None:
+    provider, upstream_model = model.split("/", 1)
+    api_base: Final = f"https://{provider.replace('_', '-')}.example/v1"
+    mock_route: Final = _mock_openai_embedding_route(respx_mock, api_base)
 
-    response: Final = litellm.embedding(model="openai/text-embedding-3-small", input=["hello"], api_key="sk-test")
+    response: Final = litellm.embedding(model=model, input=["hello"], api_key="sk-test", api_base=api_base)
 
     request_body: Final = json.loads(mock_route.calls.last.request.read())
     assert "encoding_format" not in request_body
+    assert request_body["model"] == upstream_model
+    assert request_body["input"] == ["hello"]
+    assert mock_route.calls.last.request.headers["authorization"] == "Bearer sk-test"
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
 
 
@@ -89,16 +107,22 @@ def test_embedding_openai_env_none_omits_encoding_format(
 
 
 @pytest.mark.asyncio
-async def test_aembedding_openai_omits_encoding_format_when_client_omits_it(
-    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("model", _SDK_EMBEDDING_MODELS)
+async def test_aembedding_sdk_providers_omit_encoding_format_when_client_omits_it(
+    respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch, model: str
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
-    mock_route: Final = _mock_openai_embedding_route(respx_mock)
+    provider, upstream_model = model.split("/", 1)
+    api_base: Final = f"https://{provider.replace('_', '-')}.example/v1"
+    mock_route: Final = _mock_openai_embedding_route(respx_mock, api_base)
 
-    response: Final = await litellm.aembedding(model="openai/text-embedding-3-small", input=["hello"], api_key="sk-test")
+    response: Final = await litellm.aembedding(model=model, input=["hello"], api_key="sk-test", api_base=api_base)
 
     request_body: Final = json.loads(mock_route.calls.last.request.read())
     assert "encoding_format" not in request_body
+    assert request_body["model"] == upstream_model
+    assert request_body["input"] == ["hello"]
+    assert mock_route.calls.last.request.headers["authorization"] == "Bearer sk-test"
     assert response.data[0]["embedding"] == [0.1, 0.2, 0.3]
 
 

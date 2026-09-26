@@ -2,6 +2,7 @@
 Common helpers / utils across al OpenAI endpoints
 """
 
+import asyncio
 import hashlib
 import inspect
 import json
@@ -10,12 +11,13 @@ import ssl
 import time
 import uuid
 from collections.abc import AsyncIterator, Iterator, Mapping
+from contextlib import suppress
 from typing import TYPE_CHECKING, Final, Literal, NamedTuple, Optional
 from urllib.parse import urlsplit
 
 import httpx
 import openai
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, OpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AzureOpenAI, DefaultAsyncHttpxClient, DefaultHttpxClient, OpenAI
 from openai.types.chat import ChatCompletion, ChatCompletionChunk, ChatCompletionMessage
 from openai.types.chat.chat_completion import Choice
 from openai.types.chat.chat_completion_chunk import Choice as ChunkChoice
@@ -26,6 +28,7 @@ if TYPE_CHECKING:
     from aiohttp import ClientSession
 
 import litellm
+from litellm.litellm_core_utils.completion_timeout import CompletionTimeout
 from litellm.litellm_core_utils.token_counter import token_counter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.custom_httpx.http_handler import (
@@ -46,6 +49,42 @@ _AZURE_OPENAI_INIT_PARAMS: Final[tuple[str, ...]] = _get_client_init_params(Azur
 
 
 _OPENAI_API_HOST: Final[str] = "api.openai.com"
+
+
+_OPENAI_HTTPX_DEFAULT_TIMEOUT: Final = CompletionTimeout.normalize(openai.DEFAULT_TIMEOUT)
+_OPENAI_HTTPX_CONNECTION_LIMITS: Final = httpx.Limits(
+    max_connections=openai.DEFAULT_CONNECTION_LIMITS.max_connections,
+    max_keepalive_connections=openai.DEFAULT_CONNECTION_LIMITS.max_keepalive_connections,
+    keepalive_expiry=openai.DEFAULT_CONNECTION_LIMITS.keepalive_expiry,
+)
+
+
+class OpenAIHTTPClient(httpx.Client):
+    def __init__(self) -> None:
+        super().__init__(
+            timeout=_OPENAI_HTTPX_DEFAULT_TIMEOUT,
+            limits=_OPENAI_HTTPX_CONNECTION_LIMITS,
+            follow_redirects=True,
+        )
+
+    def __del__(self) -> None:
+        with suppress(Exception):
+            if not self.is_closed:
+                self.close()
+
+
+class OpenAIAsyncHTTPClient(httpx.AsyncClient):
+    def __init__(self) -> None:
+        super().__init__(
+            timeout=_OPENAI_HTTPX_DEFAULT_TIMEOUT,
+            limits=_OPENAI_HTTPX_CONNECTION_LIMITS,
+            follow_redirects=True,
+        )
+
+    def __del__(self) -> None:
+        with suppress(Exception):
+            if not self.is_closed:
+                asyncio.get_running_loop().create_task(self.aclose())
 
 
 def is_openai_backed_api_base(api_base: str) -> bool:
@@ -221,7 +260,9 @@ class BaseOpenAILLM:
         return _cached_client
 
     @staticmethod
-    def owns_wrapped_http_client(http_client: httpx.Client | httpx.AsyncClient | None) -> bool:
+    def owns_wrapped_http_client(
+        http_client: httpx.Client | httpx.AsyncClient | DefaultHttpxClient | DefaultAsyncHttpxClient | None,
+    ) -> bool:
         """Whether litellm may close an SDK client built around ``http_client``.
 
         ``_get_async_http_client`` / ``_get_sync_http_client`` hand back
@@ -304,7 +345,7 @@ class BaseOpenAILLM:
     @staticmethod
     def _get_async_http_client(
         shared_session: Optional["ClientSession"] = None,
-    ) -> httpx.AsyncClient | None:
+    ) -> httpx.AsyncClient | DefaultAsyncHttpxClient | None:
         if litellm.aclient_session is not None:
             return litellm.aclient_session
 
@@ -330,7 +371,7 @@ class BaseOpenAILLM:
         )
 
     @staticmethod
-    def _get_sync_http_client() -> httpx.Client | None:
+    def _get_sync_http_client() -> httpx.Client | DefaultHttpxClient | None:
         if litellm.client_session is not None:
             return litellm.client_session
 
