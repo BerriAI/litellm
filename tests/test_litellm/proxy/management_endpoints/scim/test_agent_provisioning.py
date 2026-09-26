@@ -600,11 +600,11 @@ async def test_group_validation_reads_all_member_batches() -> None:
     service, tx, _ = provisioning_fixture()
     members: Final = tuple(f"member-{index}" for index in range(IN_LIST_CHUNK_SIZE + 1))
     tx.litellm_scimresource.count.side_effect = [IN_LIST_CHUNK_SIZE, 1]
-    await service._validate_members(tx, members)
+    await service._validate_members(members)
     assert tx.litellm_scimresource.count.await_count == 2
     tx.litellm_scimresource.count.side_effect = [IN_LIST_CHUNK_SIZE, 0]
     with pytest.raises(HTTPException) as failure:
-        await service._validate_members(tx, members)
+        await service._validate_members(members)
     assert failure.value.status_code == 400
 
 
@@ -624,6 +624,34 @@ async def test_group_sync_includes_humans_from_later_batches(monkeypatch: pytest
     await service._sync_human_members(group.model_copy(update={"member_ids": members}))
     create_team.assert_awaited_once()
     assert create_team.call_args.kwargs["group"].members == [SCIMMember(value=human.local_id)]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("operation", ["create", "update"])
+async def test_slow_member_validation_does_not_expire_group_write_transaction(operation: str) -> None:
+    service, tx, native = provisioning_fixture()
+    _, group, document = group_rows(native)
+    single_member: Final = group.model_copy(update={"member_ids": [native.id]})
+    request: Final = document.model_copy(update={"members": [SCIMMember(value=native.id)]})
+    tx.litellm_scimresource.find_unique.return_value = None if operation == "create" else single_member
+    tx.litellm_scimresource.create = AsyncMock(return_value=single_member)
+    tx.litellm_scimresource.count.side_effect = TimeoutError("Membership read exceeded the write transaction deadline")
+    writer: Final = MagicMock()
+    writer.litellm_scimresource.count = AsyncMock(return_value=1)
+    writer.litellm_scimresource.find_many = AsyncMock(return_value=[native])
+    service.client.writer_db = writer
+    result: Final = (
+        await service.create_group(request) if operation == "create" else await service.update_group(group.id, request)
+    )
+    assert result.id == group.id
+    assert result.members == [SCIMMember(value=native.id)]
+    if operation == "create":
+        tx.litellm_scimresource.create.assert_awaited_once()
+    else:
+        assert tx.litellm_scimresource.update_many.call_args.kwargs["where"] == {
+            "id": group.id,
+            "updated_at": group.updated_at,
+        }
 
 
 @pytest.mark.asyncio
@@ -926,7 +954,9 @@ async def test_group_patch_failure_does_not_sync_members(case: str, monkeypatch:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind,operation", [(kind, op) for kind in ("Users", "Groups") for op in ("get", "update", "patch", "delete")])
+@pytest.mark.parametrize(
+    "kind,operation", [(kind, op) for kind in ("Users", "Groups") for op in ("get", "update", "patch", "delete")]
+)
 async def test_legacy_scim_token_cannot_access_source_owned_local_record(
     kind: str, operation: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -944,10 +974,15 @@ async def test_legacy_scim_token_cannot_access_source_owned_local_record(
     monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", AsyncMock(return_value=client))
     lookup = AsyncMock(side_effect=AssertionError("legacy operation reached the source-owned local record"))
     monkeypatch.setattr(scim_v2, "_check_user_exists" if kind == "Users" else "_check_team_exists", lookup)
-    arguments = {"user_id" if kind == "Users" else "group_id": "local-owned", "auth": UserAPIKeyAuth(api_key="legacy-scim")}
+    arguments = {
+        "user_id" if kind == "Users" else "group_id": "local-owned",
+        "auth": UserAPIKeyAuth(api_key="legacy-scim"),
+    }
     if operation == "update":
         arguments["user" if kind == "Users" else "group"] = (
-            SCIMUser(schemas=[], userName="changed@example.com") if kind == "Users" else SCIMGroup(schemas=[], displayName="Changed")
+            SCIMUser(schemas=[], userName="changed@example.com")
+            if kind == "Users"
+            else SCIMGroup(schemas=[], displayName="Changed")
         )
     if operation == "patch":
         arguments["patch_ops"] = SCIMPatchOp(Operations=[{"op": "replace", "path": "displayName", "value": "Changed"}])
@@ -956,4 +991,3 @@ async def test_legacy_scim_token_cannot_access_source_owned_local_record(
         await endpoint(**arguments)
     assert denied.value.status_code == 403
     lookup.assert_not_awaited()
-
