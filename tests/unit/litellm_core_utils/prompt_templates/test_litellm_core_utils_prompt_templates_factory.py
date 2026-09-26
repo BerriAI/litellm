@@ -3491,6 +3491,21 @@ def test_get_tool_calls_from_response_keeps_sanitized_concat_ids_distinct():
     assert ids == ["a:b", "a:b__concat_2", "a_b__concat_1"]
 
 
+def test_get_tool_calls_from_response_bumps_suffix_when_sibling_sanitizes_onto_it():
+    raw = _concatenated_json({"a": 1}, {"b": 2})
+    response: Final = _chat_tool_response(
+        _function_tool_call("a_b", "move", raw),
+        _function_tool_call("a:b__concat_1", "look", '{"x":1}'),
+    )
+
+    ids: Final = [call["id"] for call in get_tool_calls_from_response(response)]
+    sanitized: Final = [_sanitize_anthropic_tool_use_id(call_id) for call_id in ids if isinstance(call_id, str)]
+
+    assert len(ids) == len(sanitized)
+    assert len(sanitized) == len(set(sanitized))
+    assert ids == ["a_b", "a_b__concat_2", "a:b__concat_1"]
+
+
 def test_get_tool_calls_from_response_continues_concat_suffixes_per_sanitized_base():
     raw = _concatenated_json({"a": 1}, {"b": 2})
     response: Final = _chat_tool_response(
