@@ -370,7 +370,7 @@ async def test_delete_stale_mcp_session_returns_success():
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("outcome", ("deleted", "rejected", "exception"))
+@pytest.mark.parametrize("outcome", ("deleted", "rejected", "exception", "cancelled", "owner-cap", "worker-cap", "expired", "other-owner", "queued-delete"))
 async def test_delete_preserves_tracking_until_the_session_is_terminated(outcome):
     try:
         from litellm.proxy._experimental.mcp_server.server import (
@@ -386,6 +386,8 @@ async def test_delete_preserves_tracking_until_the_session_is_terminated(outcome
         )
     except ImportError:
         pytest.skip("MCP server not available")
+
+    from litellm.proxy._experimental.mcp_server import server
 
     session_id = "delete-failure-session"
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import MCPAuthenticatedUser
@@ -415,16 +417,28 @@ async def test_delete_preserves_tracking_until_the_session_is_terminated(outcome
     _stateful_session_owners[session_id] = _owner_fingerprint_for(user_auth)
     _stateful_session_locks[session_id] = session_lock
 
+    queued_deletes = []
+    queued_send = AsyncMock()
+
     async def dispatch(scope, receive, send):
+        if outcome == "queued-delete":
+            queued_deletes.append(asyncio.create_task(handle_streamable_http_mcp(dict(scope), receive, queued_send)))
+            await asyncio.sleep(0)
+        if outcome == "cancelled":
+            raise asyncio.CancelledError
         if outcome == "exception":
             raise RuntimeError("delete failed")
-        if outcome == "deleted":
+        if outcome in ("deleted", "expired", "other-owner", "queued-delete"):
             mock_instances.pop(session_id)
-        await send({"type": "http.response.start", "status": 200 if outcome == "deleted" else 403, "headers": []})
+        await send({"type": "http.response.start", "status": 200 if outcome in ("deleted", "expired", "other-owner", "queued-delete") else 403, "headers": []})
         await send({"type": "http.response.body", "body": b""})
 
     try:
         with (
+            patch.object(server, "_terminated_session_ids", {"retained": 0.0 if outcome == "expired" else server.time.monotonic()}),
+            patch.object(server, "_client_terminated_session_owners", {"retained": _owner_fingerprint_for(user_auth) if outcome == "owner-cap" else "other-owner"}, create=True),
+            patch.object(server, "_MAX_STATEFUL_SESSIONS_PER_OWNER", 1 if outcome in ("owner-cap", "expired", "other-owner") else 100),
+            patch.object(server, "_MAX_CLIENT_TERMINATED_SESSIONS", 1 if outcome == "worker-cap" else 10000, create=True),
             patch(
                 "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
                 new_callable=AsyncMock,
@@ -446,8 +460,24 @@ async def test_delete_preserves_tracking_until_the_session_is_terminated(outcome
                 mock_instances,
             ),
         ):
-            await handle_streamable_http_mcp(scope, receive, send)
-            if outcome == "deleted":
+            if outcome == "cancelled":
+                with pytest.raises(asyncio.CancelledError):
+                    await handle_streamable_http_mcp(scope, receive, send)
+            else:
+                await handle_streamable_http_mcp(scope, receive, send)
+            if queued_deletes:
+                await asyncio.gather(*queued_deletes)
+                assert queued_send.await_args_list[0].args[0]["status"] == 200
+                assert mock_handle_request.await_count == 1
+            if outcome in ("owner-cap", "worker-cap"):
+                assert send.await_args_list[0].args[0]["status"] == 429
+                assert mock_handle_request.await_count == 0
+                assert session_id in mock_instances
+                assert session_id not in server._terminated_session_ids
+                assert _stateful_session_owners[session_id] == _owner_fingerprint_for(user_auth)
+                return
+            if outcome in ("deleted", "expired", "other-owner", "queued-delete"):
+                assert server._client_terminated_session_owners[session_id] == _owner_fingerprint_for(user_auth)
                 assert session_id not in _stateful_session_auth_contexts
                 assert session_id not in _stateful_session_owners
                 assert session_id not in _stateful_session_locks
@@ -462,6 +492,9 @@ async def test_delete_preserves_tracking_until_the_session_is_terminated(outcome
                 assert repeated_delete.await_args_list[0].args[0]["status"] == 200
                 return
 
+            assert session_id not in server._client_terminated_session_owners
+            assert session_id not in server._terminated_session_ids
+
         assert mock_handle_request.await_count == 1
         assert _stateful_session_auth_contexts[session_id] is auth_context
         assert _stateful_session_auth_context_last_seen[session_id] == 1.0
@@ -474,6 +507,37 @@ async def test_delete_preserves_tracking_until_the_session_is_terminated(outcome
         _stateful_session_auth_context_last_seen.pop(session_id, None)
         _stateful_session_owners.pop(session_id, None)
         _stateful_session_locks.pop(session_id, None)
+
+
+@pytest.mark.parametrize("expiry_path", ("cleanup", "replay"))
+def test_expired_client_termination_releases_capacity(expiry_path):
+    from litellm.proxy._experimental.mcp_server import server
+
+    with (
+        patch.object(server, "_terminated_session_ids", {"expired": 0.0}),
+        patch.object(server, "_client_terminated_session_owners", {"expired": "owner"}),
+        patch.object(server, "_stateful_session_active_request_counts", {}),
+    ):
+        now = server._STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS
+        if expiry_path == "cleanup":
+            server._forget_expired_terminated_session_ids(now)
+        else:
+            assert server._is_terminated_session_id("expired", now) is False
+        assert server._terminated_session_ids == {}
+        assert server._client_terminated_session_owners == {}
+
+
+def test_inflight_delete_keeps_its_reserved_capacity_until_dispatch_finishes():
+    from litellm.proxy._experimental.mcp_server import server
+
+    with (
+        patch.object(server, "_terminated_session_ids", {"deleting": 0.0}),
+        patch.object(server, "_client_terminated_session_owners", {"deleting": "owner"}),
+        patch.object(server, "_stateful_session_active_request_counts", {"deleting": 1}),
+    ):
+        server._forget_expired_terminated_session_ids(server._STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS)
+        assert server._terminated_session_ids == {"deleting": 0.0}
+        assert server._client_terminated_session_owners == {"deleting": "owner"}
 
 
 @pytest.mark.asyncio
