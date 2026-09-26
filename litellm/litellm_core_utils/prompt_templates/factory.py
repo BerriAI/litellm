@@ -1823,15 +1823,10 @@ def convert_to_anthropic_tool_invoke(
         expanded_inputs = concatenated_tool_argument_objects(
             tool_input, raw_arguments if isinstance(raw_arguments, str) else None
         )
-        # Server tool ids must stay paired with a single result; do not expand.
-        if tool_id.startswith("srvtoolu_"):
-            if expanded_inputs is not None:
-                first_input: object = expanded_inputs[0]
-            elif isinstance(tool_input, list) and tool_input:
-                first_input = tool_input[0]
-            else:
-                first_input = tool_input
-            tool_inputs = (first_input,)
+        # Server tool ids must stay paired with a single result; do not expand
+        # concatenated salvage. A valid JSON array argument stays one input.
+        if tool_id.startswith("srvtoolu_") and expanded_inputs is not None:
+            tool_inputs = (expanded_inputs[0],)
         elif expanded_inputs is not None:
             tool_inputs = expanded_inputs
         else:

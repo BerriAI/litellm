@@ -3661,6 +3661,38 @@ def test_get_tool_calls_from_response_avoids_concat_id_collision():
     assert tool_calls[1]["arguments"] == {"args": json.dumps({"box": "A"})}
 
 
+def test_convert_to_anthropic_tool_invoke_keeps_srvtoolu_valid_json_array_arguments():
+    """A valid JSON array on srvtoolu_ is one input value, not concatenated salvage to collapse."""
+    from litellm.litellm_core_utils.prompt_templates.factory import convert_to_anthropic_tool_invoke
+
+    server_result = {
+        "type": "web_search_tool_result",
+        "tool_use_id": "srvtoolu_01Array",
+        "content": [{"type": "web_search_result", "url": "https://example.com", "title": "Ex"}],
+    }
+    result = convert_to_anthropic_tool_invoke(
+        tool_calls=[
+            {
+                "id": "srvtoolu_01Array",
+                "type": "function",
+                "function": {"name": "web_search", "arguments": '[{"query": "a"}, {"query": "b"}]'},
+            }
+        ],
+        web_search_results=[server_result],
+        tool_results=None,
+    )
+
+    assert result == [
+        {
+            "type": "server_tool_use",
+            "id": "srvtoolu_01Array",
+            "name": "web_search",
+            "input": [{"query": "a"}, {"query": "b"}],
+        },
+        server_result,
+    ]
+
+
 def test_convert_to_anthropic_tool_invoke_collapses_srvtoolu_concatenated_arguments():
     """srvtoolu_ calls must not expand; server_tool_use stays paired with one result."""
     import json

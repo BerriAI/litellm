@@ -21,6 +21,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     hoist_images_from_tool_messages,
     is_encrypted_reasoning_block,
     merge_consecutive_system_messages,
+    allocate_concat_tool_call_id,
     parse_tool_call_arguments,
     responses_reasoning_items_from_thinking_blocks,
     split_concatenated_json_objects,
@@ -260,6 +261,14 @@ def test_split_concatenated_json_malformed_object_returns_empty():
     empty list rather than raising `Expecting ',' delimiter`.
     """
     assert split_concatenated_json_objects('{"location": "Boston" "unit": "celsius"}') == []
+
+
+def test_allocate_concat_tool_call_id_bumps_past_reserved():
+    """When ``{id}__concat_{n}`` is already taken, allocation advances until free."""
+    reserved: set[str] = {"call", "call__concat_1", "call_1"}
+    assert allocate_concat_tool_call_id("call", 0, reserved) == "call"
+    assert allocate_concat_tool_call_id("call", 1, reserved) == "call__concat_2"
+    assert "call__concat_2" in reserved
 
 
 def test_split_concatenated_json_skips_leading_non_object_before_dict():
