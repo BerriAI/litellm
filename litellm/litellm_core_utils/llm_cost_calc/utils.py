@@ -70,6 +70,7 @@ _SERVICE_TIER_SUFFIXES: Final[tuple[str, ...]] = tuple(
 _SERVICE_TIER_TO_COST_KEY_SUFFIX: Final[Mapping[str, str]] = MappingProxyType(
     {
         ServiceTier.FLEX.value: ServiceTier.FLEX.value,
+        ServiceTier.BALANCED.value: ServiceTier.BALANCED.value,
         ServiceTier.PRIORITY.value: ServiceTier.PRIORITY.value,
         ServiceTier.FAST.value: ServiceTier.PRIORITY.value,
         ServiceTier.ULTRAFAST.value: ServiceTier.ULTRAFAST.value,
@@ -252,7 +253,7 @@ def _get_service_tier_cost_key(base_key: str, service_tier: str | None) -> str:
 
     Args:
         base_key: The base cost key (e.g., "input_cost_per_token")
-        service_tier: The service tier ("flex", "priority", "fast", "ultrafast", or None for standard)
+        service_tier: The service tier ("flex", "balanced", "priority", "fast", "ultrafast", or None for standard)
 
     Returns:
         str: The cost key to use (e.g., "input_cost_per_token_flex" or "input_cost_per_token")

@@ -220,6 +220,10 @@
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
         },
+        "cache_read_input_token_cost_balanced": {
+          "type": "number",
+          "minimum": 0
+        },
         "cache_read_input_token_cost_batches": {
           "type": "number",
           "minimum": 0
@@ -405,6 +409,10 @@
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "input_cost_per_token_balanced": {
+          "type": "number",
+          "minimum": 0
         },
         "input_cost_per_token_batches": {
           "type": "number",
@@ -767,6 +775,10 @@
           "type": "number",
           "minimum": 0,
           "description": "Rate applied once the prompt exceeds the token threshold in the field name."
+        },
+        "output_cost_per_token_balanced": {
+          "type": "number",
+          "minimum": 0
         },
         "output_cost_per_token_batches": {
           "type": "number",
