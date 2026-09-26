@@ -76,6 +76,11 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
             Ok(error)
         }
+        Error::MissingField(field) => {
+            let error = PyValueError::new_err(format!("missing required field: {field}"));
+            error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
+            Ok(error)
+        }
         other => Ok(route_error_to_pyerr(other)),
     }
 }
@@ -314,6 +319,7 @@ mod tests {
 
     #[rstest]
     #[case::rejected_request(Error::InvalidRequest("does not support top_k=5".into()), true)]
+    #[case::missing_field(Error::MissingField("max_tokens"), true)]
     #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
     #[case::upstream_failure(
         Error::Transport(TransportError::Http { status: 400, body: "bad".into() }),

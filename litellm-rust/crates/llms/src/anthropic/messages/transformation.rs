@@ -66,9 +66,7 @@ impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
         context: &MessagesTransformContext,
     ) -> Result<AnthropicMessagesRequest, Error> {
         if request.params.max_tokens.is_none() {
-            return Err(Error::InvalidRequest(
-                "max_tokens is required for Anthropic /v1/messages API".to_string(),
-            ));
+            return Err(Error::MissingField("max_tokens"));
         }
         let request = drop_unsupported_params(request, context)?;
         let request = translate_thinking(request, &context.thinking)?;
@@ -377,7 +375,7 @@ mod tests {
     fn missing_max_tokens_is_rejected(#[case] fields: Value, unmapped: AnthropicModelCapabilities) {
         assert_eq!(
             transform(fields, unmapped, false),
-            invalid("max_tokens is required for Anthropic /v1/messages API")
+            Err(Error::MissingField("max_tokens"))
         );
     }
 
