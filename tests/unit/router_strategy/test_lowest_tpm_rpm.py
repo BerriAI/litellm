@@ -68,7 +68,7 @@ async def test_v2_async_selection_uses_prefetched_counters_only_when_they_cover_
         {"model_name": "g", "litellm_params": {"model": "m"}, "model_info": {"id": "a"}},
         {"model_name": "g", "litellm_params": {"model": "m"}, "model_info": {"id": "b"}},
     ]
-    tpm_keys, rpm_keys = strategy.get_usage_cache_keys(deployments)
+    tpm_keys, rpm_keys = strategy.usage_counter_keys(deployments)
     keys = tpm_keys + rpm_keys
 
     covering = PrefetchedUsage(keys=frozenset(keys), values=dict(zip(keys, [10, 100, None, None])))

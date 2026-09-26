@@ -433,7 +433,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
         else:
             return None
 
-    def get_usage_cache_keys(self, healthy_deployments: list) -> tuple[list[str], list[str]]:
+    def usage_counter_keys(self, healthy_deployments: list) -> tuple[list[str], list[str]]:
         """The `<id>:<model>:tpm:<HH-MM>` and `<id>:<model>:rpm:<HH-MM>` counter keys selection reads."""
         current_minute: Final = get_utc_datetime().strftime("%H-%M")
 
@@ -470,7 +470,7 @@ class LowestTPMLoggingHandler_v2(BaseRoutingStrategy, CustomLogger):
             healthy_deployments,
         )
 
-        tpm_keys, rpm_keys = self.get_usage_cache_keys(healthy_deployments)
+        tpm_keys, rpm_keys = self.usage_counter_keys(healthy_deployments)
         combined_tpm_rpm_keys: Final = tpm_keys + rpm_keys
 
         if prefetched_usage is not None and prefetched_usage.covers(combined_tpm_rpm_keys):

@@ -50,7 +50,7 @@ class RoutingReadBatch:
         """
         model_ids: Final = litellm_router_instance.get_model_ids()
         cooldown_keys: Final = [CooldownCache.get_cooldown_cache_key(model_id) for model_id in model_ids]
-        tpm_keys, rpm_keys = self.usage_selector.get_usage_cache_keys(healthy_deployments)
+        tpm_keys, rpm_keys = self.usage_selector.usage_counter_keys(healthy_deployments)
         usage_keys: Final = tpm_keys + rpm_keys
 
         cooldown_results, usage_values = await DualCache.async_batch_get_cache_shared(
