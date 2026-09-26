@@ -216,6 +216,41 @@ async def test_anthropic_messages_count_tokens_endpoint():
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_count_tokens_rejects_non_dict_tools_with_400():
+    """
+    A tools array with non-object entries fails TokenCountRequest validation and
+    must surface as a client error (400), not an internal server error.
+    """
+    from unittest.mock import MagicMock
+
+    from fastapi import HTTPException, Request
+
+    from litellm.proxy.anthropic_endpoints.endpoints import count_tokens
+
+    mock_request = MagicMock(spec=Request)
+    mock_request_data = {
+        "model": "gemini/gemini-2.5-flash",
+        "messages": [{"role": "user", "content": "hi"}],
+        "tools": ["just-a-string"],
+    }
+
+    async def mock_read_request_body(request):
+        return mock_request_data
+
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+
+    original_read_request_body = anthropic_endpoints._read_request_body
+    anthropic_endpoints._read_request_body = mock_read_request_body
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await count_tokens(mock_request, MagicMock())
+        assert exc_info.value.status_code == 400
+    finally:
+        anthropic_endpoints._read_request_body = original_read_request_body
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_count_tokens_with_non_anthropic_model():
     """
     Test /v1/messages/count_tokens endpoint with non-Anthropic model (GPT-4)

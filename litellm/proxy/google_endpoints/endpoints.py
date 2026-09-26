@@ -1,7 +1,8 @@
 from typing import Final
 
-from fastapi import APIRouter, Depends, Request, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import ORJSONResponse
+from pydantic import ValidationError
 
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
@@ -179,13 +180,16 @@ async def google_count_tokens(request: Request, model_name: str):
     # Translate contents to openai format messages using the adapter
     messages = GoogleGenAIAdapter().translate_generate_content_to_completion(model_name, contents).get("messages", [])
 
-    token_request: Final = TokenCountRequest(
-        model=model_name,
-        contents=contents,
-        messages=messages,  # compatibility when use openai-like endpoint
-        tools=data.get("tools") or wrapped.get("tools"),
-        system=data.get("systemInstruction") or wrapped.get("systemInstruction"),
-    )
+    try:
+        token_request: Final = TokenCountRequest(
+            model=model_name,
+            contents=contents,
+            messages=messages,  # compatibility when use openai-like endpoint
+            tools=data.get("tools") or wrapped.get("tools"),
+            system=data.get("systemInstruction") or wrapped.get("systemInstruction"),
+        )
+    except ValidationError as e:
+        raise HTTPException(status_code=400, detail={"error": f"Invalid count_tokens request: {e}"}) from e
 
     # Call the internal token counter function with direct request flag set to False
     token_response: Final = await internal_token_counter(

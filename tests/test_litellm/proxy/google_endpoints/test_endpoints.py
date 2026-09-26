@@ -154,3 +154,27 @@ async def test_google_count_tokens_unwraps_generate_content_request_body(
     assert sent["contents"] == inner_body["contents"]
     assert sent["systemInstruction"] == inner_body["systemInstruction"]
     assert sent["tools"] == inner_body["tools"]
+
+
+@pytest.mark.asyncio
+async def test_google_count_tokens_rejects_non_dict_tools_with_400() -> None:
+    from fastapi import HTTPException
+
+    with pytest.raises(HTTPException) as exc_info:
+        await google_count_tokens(
+            request=Request(
+                scope={
+                    "type": "http",
+                    "parsed_body": (
+                        ["contents", "tools"],
+                        {
+                            "contents": [{"role": "user", "parts": [{"text": "hello"}]}],
+                            "tools": ["just-a-string"],
+                        },
+                    ),
+                }
+            ),
+            model_name="gemini-count",
+        )
+
+    assert exc_info.value.status_code == 400
