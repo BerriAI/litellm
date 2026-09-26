@@ -1163,7 +1163,7 @@ def responses_api_bridge_check(
         and (
             foundry_chat_rejects_function_tools_while_reasoning(model, reasoning_effort)
             if on_foundry_openai_endpoint
-            else bedrock_chat_rejects_function_tools_while_reasoning(model)
+            else bedrock_chat_rejects_function_tools_while_reasoning(model, litellm.model_cost)
             if on_bedrock_native_responses
             else (
                 OpenAIGPT5Config.is_model_gpt_5_4_plus_model(model)
@@ -4226,9 +4226,6 @@ def _complete_bedrock(ctx: _CompletionDispatchContext) -> _CompletionDispatchRes
             provider_config=provider_config,
         )
     elif bedrock_uses_native_openai_chat(model):
-        # OpenAI models served on bedrock-runtime's native /openai/v1/chat/completions
-        # surface. Bypasses the Converse translation via the generic OpenAI HTTP handler,
-        # which resolves BedrockOpenAIChatConfig for URL/auth/SigV4/transform.
         response = base_llm_http_handler.completion(
             model=model,
             stream=stream,

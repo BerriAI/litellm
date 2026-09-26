@@ -866,21 +866,24 @@ def bedrock_supports_openai_chat(model: str | None, model_cost: Mapping[str, obj
     )
 
 
-def bedrock_chat_rejects_function_tools_while_reasoning(model: str) -> bool:
+def bedrock_chat_rejects_function_tools_while_reasoning(model: str, model_cost: Mapping[str, object]) -> bool:
     """Whether bedrock-runtime's native chat surface rejects function tools while reasoning is active.
 
-    Measured against bedrock-runtime: gpt-5.6 and gpt-6 reject function tools whenever
-    reasoning is on (the default) with "Function tools with reasoning_effort are not
-    supported ... use /v1/responses or set reasoning_effort to 'none'", while gpt-5.4/5.5
-    serve tools with reasoning natively. Callers bridge such requests to /v1/responses.
-
-    The gpt-version helpers anchor on a bare ``gpt-5.6``/``gpt-6`` name, so the Bedrock
-    ``[region.]openai.<model>`` id is normalised to its trailing OpenAI name first.
+    Data-driven from the model's ``bedrock_chat_rejects_function_tools_while_reasoning``
+    flag in the price map (overridable via ``register_model`` / proxy ``model_info``), so
+    onboarding a model is a JSON change, never a code change. Measured against
+    bedrock-runtime: gpt-5.6/6 reject function tools whenever reasoning is on (the default)
+    -- "Function tools with reasoning_effort are not supported ... use /v1/responses or set
+    reasoning_effort to 'none'" -- while gpt-5.4/5.5 serve tools with reasoning natively.
+    Callers bridge the flagged requests to /v1/responses. Absent flag returns False.
     """
-    from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
-
-    openai_name: Final = model.split("openai.")[-1]
-    return OpenAIGPT5Config.is_model_gpt_5_6_plus_model(openai_name)
+    if not model:
+        return False
+    candidates: Final = (model_cost.get(key) for key in (model, f"bedrock/{model}"))
+    return any(
+        isinstance(entry, Mapping) and entry.get("bedrock_chat_rejects_function_tools_while_reasoning") is True
+        for entry in candidates
+    )
 
 
 def bedrock_uses_native_openai_chat(model: str) -> bool:

@@ -57289,6 +57289,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "supports_sampling_params": false,
+        "bedrock_chat_rejects_function_tools_while_reasoning": true,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -57324,6 +57325,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "supports_sampling_params": false,
+        "bedrock_chat_rejects_function_tools_while_reasoning": true,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -57359,6 +57361,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "supports_sampling_params": false,
+        "bedrock_chat_rejects_function_tools_while_reasoning": true,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -57394,6 +57397,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "supports_sampling_params": false,
+        "bedrock_chat_rejects_function_tools_while_reasoning": true,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -57429,6 +57433,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "supports_sampling_params": false,
+        "bedrock_chat_rejects_function_tools_while_reasoning": true,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -57592,6 +57597,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "supports_sampling_params": false,
+        "bedrock_chat_rejects_function_tools_while_reasoning": true,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -57742,6 +57748,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
+        "bedrock_chat_rejects_function_tools_while_reasoning": true,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -57778,6 +57785,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
+        "bedrock_chat_rejects_function_tools_while_reasoning": true,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -57814,6 +57822,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
+        "bedrock_chat_rejects_function_tools_while_reasoning": true,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -57850,6 +57859,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
+        "bedrock_chat_rejects_function_tools_while_reasoning": true,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -57918,6 +57928,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
+        "bedrock_chat_rejects_function_tools_while_reasoning": true,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
@@ -57986,6 +57997,7 @@
         "supports_xhigh_reasoning_effort": true,
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
+        "bedrock_chat_rejects_function_tools_while_reasoning": true,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
