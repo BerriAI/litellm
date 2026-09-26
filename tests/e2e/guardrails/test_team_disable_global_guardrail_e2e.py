@@ -16,22 +16,28 @@ from e2e_config import unique_marker
 from e2e_http import UnknownApiError, unwrap
 from guardrails_client import GuardrailsClient
 from lifecycle import ResourceManager
+from models import ChatResponse
 
 pytestmark = pytest.mark.e2e
 
 MODEL = "gemini-2.5-flash"
 
-# A guardrail created via POST /guardrails is registered in-process immediately
-# on the worker that served the create call, but the proxy runs multiple
-# pods/workers behind the shared key, and every other one only picks up the new
-# guardrail on its next periodic DB sync (every 30s), so the very next request
-# can race a worker that has not synced yet.
+# register() already settles the config reload, but a replica that missed its window serves the old config.
 GUARDRAIL_PROPAGATION_DEADLINE_SECONDS = 40.0
 GUARDRAIL_PROPAGATION_POLL_INTERVAL_SECONDS = 5.0
+
+_BLOCK_MARKER = "content blocked"
 
 
 def _prompt_with(banned_keyword: str) -> str:
     return f"Reply with the single word OK. {banned_keyword}"
+
+
+def _first_content(response: ChatResponse) -> str:
+    if not response.choices:
+        return ""
+    message = response.choices[0].message
+    return (message.content if message else None) or ""
 
 
 def _assert_eventually_blocked(client: GuardrailsClient, key: str, banned: str) -> None:
@@ -41,7 +47,7 @@ def _assert_eventually_blocked(client: GuardrailsClient, key: str, banned: str) 
         match result:
             case UnknownApiError(status_code=status, body=body):
                 assert status == 400, f"expected a 400 guardrail block, got {status}: {body[:300]}"
-                assert "content blocked" in body.lower() or banned in body, (
+                assert _BLOCK_MARKER in body.lower() or banned in body, (
                     f"block response missing content-filter reason: {body[:300]}"
                 )
                 return
@@ -73,7 +79,7 @@ class TestTeamDisableGlobalGuardrail:
         exercised_on=["chat_completions"],
     )
     def test_team_with_disable_flag_bypasses_global_guardrail(
-        self, client: GuardrailsClient, resources: ResourceManager
+        self, client: GuardrailsClient, resources: ResourceManager, scoped_key: str
     ) -> None:
         banned = unique_marker()
         guardrail_id = client.create_content_filter_guardrail(f"e2e-content-filter-{banned}", banned)
@@ -84,9 +90,20 @@ class TestTeamDisableGlobalGuardrail:
         key = client.create_key_in_team(team_id)
         resources.defer(lambda: client.proxy.delete_key(key))
 
-        chat = unwrap(client.chat(key, MODEL, _prompt_with(banned)))
+        _assert_eventually_blocked(client, scoped_key, banned)
+
+        chat = unwrap(client.chat(key, MODEL, _prompt_with(banned), max_tokens=256))
 
         assert chat.choices, (
             f"team opted out of global guardrails, so the banned keyword must pass "
             f"through and the call must succeed, but no choices came back: {chat}"
+        )
+        text = _first_content(chat)
+        assert _BLOCK_MARKER not in text.lower(), (
+            f"the guardrail intercepted a key on a team opted out of global guardrails, "
+            f"returning the content-blocked message instead of the model's answer: {text[:300]!r}"
+        )
+        assert chat.usage is not None and (chat.usage.prompt_tokens or 0) > 0, (
+            f"the opted-out call must reach the model, but the model was never "
+            f"invoked; usage was {chat.usage}"
         )
