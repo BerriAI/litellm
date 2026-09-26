@@ -4,6 +4,7 @@ import { ColumnDef } from "@tanstack/react-table";
 import { Copy, Info, MoreHorizontal } from "lucide-react";
 
 import { DataTableSortHeader } from "@/components/shared/DataTable";
+import { MCP_REACHABLE_DESCRIPTION } from "@/components/mcp_tools/types";
 import { IdentityCell, StatusBadge, type StatusTone } from "@/components/shared/table_cells";
 import { Badge } from "@/components/ui/badge";
 import { buttonVariants } from "@/components/ui/button";
@@ -49,6 +50,7 @@ const STATUS_TONES: Record<string, StatusTone> = {
   inactive: "error",
   unknown: "neutral",
   healthy: "success",
+  reachable: "info",
   unhealthy: "error",
 };
 
@@ -150,7 +152,11 @@ export const getMCPHubTableColumns = ({ onServerClick }: MCPHubTableColumnsDeps)
     enableSorting: true,
     sortingFn: "alphanumeric",
     cell: ({ row }) => (
-      <StatusBadge tone={STATUS_TONES[row.original.status] || "neutral"} label={row.original.status || "unknown"} />
+      <StatusBadge
+        tone={STATUS_TONES[row.original.status] || "neutral"}
+        label={row.original.status || "unknown"}
+        tooltip={row.original.status === "reachable" ? MCP_REACHABLE_DESCRIPTION : undefined}
+      />
     ),
   },
   {
