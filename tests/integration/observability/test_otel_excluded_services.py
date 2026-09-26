@@ -4,6 +4,7 @@ import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import httpx
@@ -11,7 +12,6 @@ import pytest
 import yaml
 from integration._support.client import (
     Gateway,
-    Scenario,
     eventually,
     gateway_from_environment,
 )
@@ -39,8 +39,8 @@ def _config_with(
     directory: Path,
     otel_audit_config: AuditConfigWriter,
     *,
-    otel: Mapping[str, JsonValue] = {},
-    extra: Callable[[dict], None] | None = None,
+    otel: Mapping[str, JsonValue] = MappingProxyType({}),
+    extra: Callable[[dict[str, JsonValue]], None] | None = None,
 ) -> Path:
     config: Final = yaml.safe_load(otel_audit_config(directory, {}).read_text())
     config["callback_settings"]["otel"].update(dict(otel))
@@ -128,12 +128,7 @@ def _await_db_span(sink_url: str, trace_id: str | None, needle: str, seconds: fl
 
 
 def _db_systems(spans: tuple[Span, ...]) -> set[str]:
-    return {
-        str(span["attributes"][key])
-        for span in spans
-        for key in DB_SYSTEM_KEYS
-        if key in span["attributes"]
-    }
+    return {str(span["attributes"][key]) for span in spans for key in DB_SYSTEM_KEYS if key in span["attributes"]}
 
 
 def _assert_core_spans_present(spans: tuple[Span, ...]) -> None:
@@ -202,7 +197,7 @@ def test_env_excluded_services_drops_only_redis(
         gateway, tmp_path, {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "redis"}, config=config, workers=2
     ) as candidate:
         start, _ = recorded_spans(audit_sinks.tenant)
-        traffic: Final = _drive(candidate, langfuse_vars)
+        _drive(candidate, langfuse_vars)
         _await_db_span(audit_sinks.tenant, None, "postgresql", seconds=60, since=start)
         _, tenant_spans = recorded_spans(audit_sinks.tenant, start)
         systems: Final = _db_systems(tenant_spans)
@@ -229,7 +224,9 @@ def test_config_excluded_services_wins_over_env(
         _, all_tenant = recorded_spans(audit_sinks.tenant, start)
         systems: Final = _db_systems(tenant_spans)
         assert "redis" in systems, f"redis spans missing at tenant: {systems}"
-        assert "postgresql" not in _db_systems(all_tenant), f"postgresql spans reached tenant: {_db_systems(all_tenant)}"
+        assert "postgresql" not in _db_systems(all_tenant), (
+            f"postgresql spans reached tenant: {_db_systems(all_tenant)}"
+        )
 
 
 def test_bogus_excluded_service_fails_proxy_start(
