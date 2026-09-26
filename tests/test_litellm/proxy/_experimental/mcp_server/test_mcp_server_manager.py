@@ -7037,6 +7037,37 @@ class TestMCPServerManager:
         listed = manager.get_listed_tool(server, "turn", other)
         assert listed is not None and listed.description == "everyone"
 
+    @pytest.mark.asyncio
+    async def test_byok_stored_credential_lists_into_the_slot_tools_call_reads(self):
+        from litellm.proxy._experimental.mcp_server.byok_credential_cache import (
+            byok_credential_cache_key,
+            cache_byok_credential,
+        )
+        from litellm.proxy._experimental.mcp_server.operations import byok_credential_cache
+
+        manager = MCPServerManager()
+        server = MCPServer(
+            server_id="byok-catalog",
+            name="byok_catalog",
+            transport=MCPTransport.http,
+            url="http://byok-catalog",
+            is_byok=True,
+        )
+        user = UserAPIKeyAuth(api_key="sk-litellm", user_id="byok-user")
+        manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
+        manager._fetch_tools_with_timeout = AsyncMock(
+            return_value=[MCPTool(name="turn", description="stored cred catalog", inputSchema={})]
+        )
+        cache_byok_credential("byok-user", "byok-catalog", "stored-secret")
+        try:
+            await manager._get_tools_from_server(server=server, user_api_key_auth=user)
+        finally:
+            byok_credential_cache.delete_cache(byok_credential_cache_key("byok-user", "byok-catalog"))
+
+        call_side = ListedToolsCaller(user_api_key_auth=user, mcp_auth_header="stored-secret")
+        listed = manager.get_listed_tool(server, "turn", call_side)
+        assert listed is not None and listed.description == "stored cred catalog"
+
     @pytest.mark.parametrize(
         ("signer", "static_headers", "shared"),
         [

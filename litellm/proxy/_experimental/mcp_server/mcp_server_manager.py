@@ -4401,9 +4401,16 @@ class MCPServerManager:
         verbose_logger.info("_get_tools_from_server for %s...", server.name)
 
         client = None
+        # tools/call resolves the BYOK credential before keying its listed-tools slot; resolve the
+        # same value here or a stored-credential server would list into a slot the call never reads.
+        resolved_mcp_auth_header: Final = (
+            mcp_auth_header
+            if not server.is_byok or isinstance(mcp_auth_header, dict)
+            else await _resolve_byok_mcp_auth_header(server, user_api_key_auth, mcp_auth_header)
+        )
         listed_caller: Final = ListedToolsCaller(
             user_api_key_auth=user_api_key_auth,
-            mcp_auth_header=mcp_auth_header,
+            mcp_auth_header=resolved_mcp_auth_header,
             raw_headers=raw_headers,
             oauth2_headers=oauth2_headers,
         )
@@ -4449,7 +4456,7 @@ class MCPServerManager:
                 if (
                     get_mcp_jwt_signer() is not None
                     and not has_static_authorization
-                    and not mcp_auth_header
+                    and not resolved_mcp_auth_header
                     and not has_extra_authorization
                 ):
                     extra_headers = await inject_mcp_jwt_headers_for_upstream(
@@ -4472,7 +4479,7 @@ class MCPServerManager:
 
             client = await self._create_mcp_client(
                 server=server,
-                mcp_auth_header=mcp_auth_header,
+                mcp_auth_header=resolved_mcp_auth_header,
                 extra_headers=extra_headers,
                 stdio_env=stdio_env,
                 subject_token=subject_token,
