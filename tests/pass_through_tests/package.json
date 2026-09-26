@@ -11,8 +11,16 @@
     "jest": "29.7.0"
   },
   "overrides": {
+    "@babel/core": "^7.29.6",
     "@google-cloud/vertexai": {
-      "google-auth-library": "10.6.2"
-    }
+      "google-auth-library": "10.6.2",
+      "protobufjs": "^7.6.5",
+      "ws": "^8.21.0"
+    },
+    "brace-expansion": "^1.1.18",
+    "browserslist": "^4.28.7",
+    "js-yaml": "^3.15.1",
+    "protobufjs": "^7.6.5",
+    "ws": "^8.21.0"
   }
 }
