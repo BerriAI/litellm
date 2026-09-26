@@ -39,6 +39,11 @@ def resolve_s3_log_prompts_only(configured: object, environ: Mapping[str, str] |
 def _resolve_positive_int(setting: str, configured: object, fallback: int) -> int:
     if configured is None or configured == "":
         return fallback
+    if isinstance(configured, bool):
+        verbose_logger.warning(
+            "s3 logging: %s=%r is a boolean, not an integer, using %s", setting, configured, fallback
+        )
+        return fallback
     try:
         bound: Final = _UPLOAD_BOUND.validate_python(configured.strip() if isinstance(configured, str) else configured)
     except ValidationError:
@@ -60,6 +65,12 @@ def resolve_s3_max_queue_size(configured: object, fallback: int) -> int:
 
 def resolve_s3_max_retry_age_seconds(configured: object) -> int | None:
     if configured is None or configured == "":
+        return None
+    if isinstance(configured, bool):
+        verbose_logger.warning(
+            "s3 logging: s3_max_retry_age_seconds=%r is a boolean, not an integer, retry age budget disabled",
+            configured,
+        )
         return None
     try:
         bound: Final = _UPLOAD_BOUND.validate_python(configured.strip() if isinstance(configured, str) else configured)

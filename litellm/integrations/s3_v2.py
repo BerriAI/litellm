@@ -85,7 +85,8 @@ class _PreparedPut:
 
 
 def _s3_error_code(response: httpx.Response) -> str | None:
-    match: Final = _S3_ERROR_CODE.search(response.text)
+    text: Final = response.text
+    match: Final = _S3_ERROR_CODE.search(text) if isinstance(text, str) else None
     return match.group(1) if match else None
 
 
@@ -230,6 +231,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             self.log_queue: list[s3BatchLoggingElement] = []
             self._requeued_count: int = 0
             self._flush_retries: int = 0
+            self._flush_dropped_keys: set[str] = set()
 
             # Call BaseAWSLLM's __init__
             BaseAWSLLM.__init__(self)
@@ -518,11 +520,15 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             verbose_logger.exception("s3 Layer Error - %s", e)
             self.handle_callback_failure(callback_name="S3Logger")
 
+    @property
+    def _upload_semaphore(self) -> AdaptiveConcurrencyLimiter:
+        return self._upload_limiter
+
     async def async_upload_data_to_s3(
         self,
         batch_logging_element: s3BatchLoggingElement,
         slot: AdaptiveConcurrencyLimiter | None = None,
-    ) -> UploadOutcome:
+    ) -> bool:
         limiter: Final = slot if slot is not None else self._upload_limiter
         try:
             from litellm.litellm_core_utils.asyncify import asyncify
@@ -555,28 +561,28 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                     return error.response
 
             max_retries: Final = 3
-            for attempt in range(max_retries):
-                async with limiter:
+            async with limiter:
+                for attempt in range(max_retries):
                     response = await self._recorded_put(partial(signed_put, self._prepare_put(batch_logging_element)))
-                if (
-                    response.status_code in _RETRYABLE_STATUSES
-                    and not _is_terminal(response)
-                    and attempt < max_retries - 1
-                ):
-                    wait_time = 2**attempt  # 1s, 2s
-                    verbose_logger.debug(
-                        "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
-                        response.status_code,
-                        wait_time,
-                        attempt + 1,
-                        max_retries,
-                        batch_logging_element.s3_object_key,
-                    )
-                    self._flush_retries += 1
-                    await asyncio.sleep(wait_time)
-                    continue
-                response.raise_for_status()
-                break
+                    if (
+                        response.status_code in _RETRYABLE_STATUSES
+                        and not _is_terminal(response)
+                        and attempt < max_retries - 1
+                    ):
+                        wait_time = 2**attempt  # 1s, 2s
+                        verbose_logger.debug(
+                            "S3 upload returned %s, retrying in %ss (attempt %s/%s) key=%s",
+                            response.status_code,
+                            wait_time,
+                            attempt + 1,
+                            max_retries,
+                            batch_logging_element.s3_object_key,
+                        )
+                        self._flush_retries += 1
+                        await asyncio.sleep(wait_time)
+                        continue
+                    response.raise_for_status()
+                    break
         except Exception as e:
             verbose_logger.exception("Error uploading to s3: %s", e)
             self.handle_callback_failure(callback_name="S3Logger")
@@ -586,9 +592,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                     batch_logging_element.s3_object_key,
                     e.response.status_code,
                 )
-                return "dropped"
-            return "retry"
-        return "delivered"
+                self._flush_dropped_keys.add(batch_logging_element.s3_object_key)
+            return False
+        return True
 
     async def async_send_batch(self) -> None:
         """
@@ -609,6 +615,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         #########################################################
         uploads: Final = self._batch_file_elements(batch) if self._batch_file_mode_active() else batch
         self._flush_retries = 0
+        self._flush_dropped_keys = set()  # mutable-ok: per-flush drop marks read back by _upload_bounded
         stale: Final = min(self._requeued_count, len(uploads)) if len(uploads) == len(batch) else 0
         order: Final = (*range(stale, len(uploads)), *range(stale))
         ordered: Final = await asyncio.gather(*(self._upload_bounded(uploads[i]) for i in order))
@@ -630,7 +637,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
             tuple(element for element, _ in failed)
             if bucket_wide
             else tuple(
-                element if element.retrying_since is not None else element.model_copy(update={"retrying_since": now})
+                element
+                if element.retrying_since is not None or self.s3_max_retry_age_seconds is None
+                else element.model_copy(update={"retrying_since": now})
                 for element, outcome in failed
                 if outcome != "dropped"
                 and not (
@@ -677,7 +686,11 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         return True
 
     async def _upload_bounded(self, element: s3BatchLoggingElement) -> UploadOutcome:
-        return await self.async_upload_data_to_s3(element)
+        if await self.async_upload_data_to_s3(element):
+            return "delivered"
+        if element.s3_object_key in self._flush_dropped_keys:
+            return "dropped"
+        return "retry"
 
     async def _recorded_put(self, signed_put: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
         try:
