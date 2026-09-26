@@ -32,7 +32,7 @@ def classify_agent_subject(
     if isinstance(scope, str) and scope:
         if allowed_mode == "autonomous" or oid == binding.service_principal_id or claims.get("idtyp") == "app":
             return AgentIdentityFailure(message="Delegated token contradicts the configured agent identity or mode")
-        if not binding.required_scopes or not frozenset(binding.required_scopes).issubset(scope.split()):
+        if not frozenset(binding.required_scopes).issubset(scope.split()):
             return AgentIdentityFailure(message="Token lacks the required delegated scopes")
         return AgentSubject(kind="delegated_subject", oid=oid, mode="delegated")
     if allowed_mode == "delegated" or oid != binding.service_principal_id or claims.get("idtyp") == "user":

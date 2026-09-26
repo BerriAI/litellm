@@ -3,7 +3,12 @@ from typing import Final
 import pytest
 
 from litellm.proxy.agent_endpoints.managed_identity import classify_agent_subject
-from litellm.types.proxy.agent_identity import AgentIdentityBinding, AgentIdentityFailure, AgentSubject
+from litellm.types.proxy.agent_identity import (
+    AgentExecutionMode,
+    AgentIdentityBinding,
+    AgentIdentityFailure,
+    AgentSubject,
+)
 
 TENANT: Final = "11111111-1111-4111-8111-111111111111"
 CLIENT: Final = "22222222-2222-4222-8222-222222222222"
@@ -107,3 +112,17 @@ def test_entra_binding_normalizes_identifiers_and_rejects_invalid_configuration(
     assert config.issuer == f"https://login.microsoftonline.com/{config.tenant_id}/v2.0"
     with pytest.raises(ValidationError):
         EntraIdentityConfig(provider="microsoft_entra", tenant_id="invalid", client_id=identifier)
+
+
+@pytest.mark.parametrize("mode", ["delegated", "both"])
+def test_empty_required_scopes_allow_valid_delegated_scope(mode: AgentExecutionMode) -> None:
+    binding: Final = BINDING.model_copy(update={"required_scopes": ()})
+    result: Final = classify_agent_subject(binding, claims(oid=HUMAN, scp="custom_scope"), mode)
+    assert result == AgentSubject(kind="delegated_subject", oid=HUMAN, mode="delegated")
+
+
+@pytest.mark.parametrize("scope", [None, "", 42])
+def test_empty_requirements_do_not_make_a_scope_less_human_token_valid(scope: object) -> None:
+    binding: Final = BINDING.model_copy(update={"required_scopes": ()})
+    result: Final = classify_agent_subject(binding, claims(oid=HUMAN, scp=scope), "both")
+    assert isinstance(result, AgentIdentityFailure)
