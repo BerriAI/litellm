@@ -46,7 +46,7 @@ async def test_router_image_edit_bills_the_deployment_price_with_a_logger_built_
     logging_obj, routed_request = litellm.utils.function_setup(
         original_function="aimage_edit",
         rules_obj=litellm.utils.Rules(),
-        start_time=datetime.now(),
+        start_time=datetime(2026, 1, 1),
         **request,
     )
 
