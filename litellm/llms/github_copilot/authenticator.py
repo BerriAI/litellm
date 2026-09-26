@@ -111,7 +111,8 @@ class Authenticator:
             if _is_secure_api_base(candidate):
                 return candidate
             verbose_logger.warning(
-                f"Ignoring {source} because it must be an HTTPS URL without credentials, query, or fragment"
+                "Ignoring %s because it must be an HTTPS URL without credentials, query, or fragment",
+                source,
             )
         return None
 
