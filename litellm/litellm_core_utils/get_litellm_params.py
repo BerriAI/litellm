@@ -9,7 +9,7 @@ from pydantic import TypeAdapter, ValidationError
 from litellm.constants import CONTROL_OPTIONS_KEY
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
-from litellm.types.litellm_params import MAX_DECIMAL_STRING_DIGITS, ControlOptions
+from litellm.types.litellm_params import MAX_CONTROL_INT_DIGITS, ControlOptions
 from litellm.types.router import CustomPricingLiteLLMParams
 
 AWS_CREDENTIAL_KWARGS_KEYS: Final = frozenset(
@@ -79,33 +79,35 @@ _OPTIONAL_KWARGS_KEYS: Final = OPTIONAL_KWARGS_KEYS
 _CONTROL_OPTIONS: Final = TypeAdapter(ControlOptions)
 _CONTROL_OPTION_NAMES: Final = tuple(field.name for field in fields(ControlOptions))
 _MAX_SHOWN_INT_BITS: Final = 64
-_EXPECTED: Final = f"expected a positive integer of at most {MAX_DECIMAL_STRING_DIGITS} digits"
+_EXPECTED: Final = f"expected a positive integer of at most {MAX_CONTROL_INT_DIGITS} digits"
 
 
-def _bounded_repr(value: object) -> str:
-    if isinstance(value, int) and value.bit_length() > _MAX_SHOWN_INT_BITS:
-        return f"<int of {value.bit_length()} bits>"
-    return reprlib.repr(value)
+class _BoundedRepr(reprlib.Repr):
+    def repr_int(self, x: int, level: int) -> str:
+        if x.bit_length() > _MAX_SHOWN_INT_BITS:
+            return f"<int of {x.bit_length()} bits>"
+        return super().repr_int(x, level)
+
+
+_BOUNDED_REPR: Final = _BoundedRepr()
 
 
 @dataclass(frozen=True, slots=True)
 class InvalidControlOption:
     param: str
     message: str
-    valid: ControlOptions
 
 
 def parse_control_options(kwargs: Mapping[str, object]) -> ControlOptions | InvalidControlOption:
-    given: Final = {name: kwargs[name] for name in _CONTROL_OPTION_NAMES if name in kwargs}
+    given: Final = {  # mutable-ok: TypeAdapter.validate_python takes a dict
+        name: kwargs[name] for name in _CONTROL_OPTION_NAMES if name in kwargs
+    }
     try:
         return _CONTROL_OPTIONS.validate_python(given)
     except ValidationError as e:
-        invalid: Final = tuple(str(error["loc"][0]) for error in e.errors(include_url=False))
-        param: Final = invalid[0]
+        param: Final = str(e.errors(include_url=False)[0]["loc"][0])
         return InvalidControlOption(
-            param=param,
-            message=f"Invalid {param}={_bounded_repr(given[param])}: {_EXPECTED}",
-            valid=_CONTROL_OPTIONS.validate_python({k: v for k, v in given.items() if k not in invalid}),
+            param=param, message=f"Invalid {param}={_BOUNDED_REPR.repr(given[param])}: {_EXPECTED}"
         )
 
 
@@ -115,7 +117,9 @@ def stored_control_options(litellm_params: Mapping[str, object]) -> ControlOptio
 
 
 def with_control_options(litellm_params: Mapping[str, object], control: ControlOptions) -> dict[str, object]:
-    return {**litellm_params, CONTROL_OPTIONS_KEY: control}
+    if control == ControlOptions():
+        return dict(litellm_params)  # mutable-ok: completion() hands litellm_params to provider code typed as dict
+    return {**litellm_params, CONTROL_OPTIONS_KEY: control}  # mutable-ok: same dict contract as above
 
 
 def _get_base_model_from_litellm_call_metadata(

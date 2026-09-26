@@ -1,5 +1,6 @@
 import json
 from collections.abc import AsyncIterator, Mapping
+from types import MappingProxyType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
@@ -11,7 +12,7 @@ from litellm.llms.bedrock.chat import BedrockConverseLLM
 from litellm.llms.bedrock.chat.converse_handler import make_sync_call
 from litellm.llms.bedrock.common_utils import _get_all_bedrock_regions
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-from tests._support.stream_chunk_size import DEFAULT_CHUNKING_REQUESTS, keys_at_every_depth
+from tests._support.stream_chunk_size import DEFAULT_CHUNKING_REQUESTS, ROUTER_CHUNK_SIZE_CASES, keys_at_every_depth
 
 
 def test_encode_model_id_with_inference_profile():
@@ -396,29 +397,27 @@ async def test_acompletion_uses_default_chunking_unless_a_valid_size_is_requeste
     aiter_bytes_spy.assert_called_once_with(chunk_size=None)
 
 
-@pytest.mark.parametrize("stream_chunk_size,expected_chunk_size", [(64, 64), ("64", 64), (None, None)])
+CONVERSE_DEPLOYMENT: Final = MappingProxyType(
+    {
+        "model": "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        "aws_access_key_id": "fake",
+        "aws_secret_access_key": "fake",
+        "aws_region_name": "us-east-1",
+    }
+)
+
+
+@pytest.mark.parametrize("deployment_extras,expected_chunk_size", ROUTER_CHUNK_SIZE_CASES)
 def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
-    stream_chunk_size: int | None, expected_chunk_size: int | None
+    deployment_extras: Mapping[str, object], expected_chunk_size: int | None
 ) -> None:
     mock_response: Final = MagicMock()
     mock_response.status_code = 200
     mock_response.iter_bytes = MagicMock(return_value=iter([]))
     client: Final = HTTPHandler()
     client.post = MagicMock(return_value=mock_response)
-    deployment_params: Final = {
-        "model": "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
-        "aws_access_key_id": "fake",
-        "aws_secret_access_key": "fake",
-        "aws_region_name": "us-east-1",
-    }
     router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": "converse-chunked",
-                "litellm_params": deployment_params
-                | ({} if stream_chunk_size is None else {"stream_chunk_size": stream_chunk_size}),
-            }
-        ]
+        model_list=[{"model_name": "converse-chunked", "litellm_params": {**CONVERSE_DEPLOYMENT, **deployment_extras}}]
     )
 
     router.completion(

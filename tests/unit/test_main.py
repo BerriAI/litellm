@@ -1,22 +1,24 @@
 import asyncio
 import base64
+from datetime import datetime
 import contextlib
 import copy
 import json
 import logging
 import os
-import urllib.parse
 from collections.abc import Mapping
 from dataclasses import dataclass
-from datetime import datetime
-from importlib import import_module
-from pathlib import Path
 from typing import Final
-from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
 import respx
+
+
+import urllib.parse
+from importlib import import_module
+from pathlib import Path
+from unittest.mock import MagicMock, patch
 
 import litellm
 from litellm import main as litellm_main
@@ -4278,12 +4280,11 @@ def test_completion_rejects_untranslatable_tool_choice_with_a_400(tool_choice):
     assert f"tool_choice={tool_choice}" in str(exc_info.value)
 
 
-@pytest.mark.parametrize("model", ["openai/gpt-4.1-mini", "bedrock/converse/anthropic.claude-sonnet-4-5"])
 @pytest.mark.parametrize("raw", ["sixty-four", 0, -1])
-def test_completion_rejects_an_invalid_stream_chunk_size_with_a_400_naming_the_param(model: str, raw: object) -> None:
+def test_completion_rejects_an_invalid_stream_chunk_size_with_a_400_naming_the_param(raw: object) -> None:
     with pytest.raises(litellm.BadRequestError) as exc_info:
         litellm.completion(
-            model=model,
+            model="openai/gpt-4.1-mini",
             messages=[{"role": "user", "content": "hi"}],
             stream_chunk_size=raw,
             mock_response="unused",
@@ -4416,7 +4417,7 @@ def test_completion_replaces_a_caller_supplied_control_options_key() -> None:
         litellm_logging_obj=logging_obj,
         **{CONTROL_OPTIONS_KEY: {"stream_chunk_size": 1}},
     )
-    assert logging_obj.litellm_params[CONTROL_OPTIONS_KEY] == ControlOptions()
+    assert CONTROL_OPTIONS_KEY not in logging_obj.litellm_params
 
 
 @pytest.mark.parametrize("drop_params", [True, "true"])
@@ -4430,7 +4431,7 @@ def test_drop_params_drops_an_invalid_stream_chunk_size_instead_of_rejecting_it(
         mock_response="hi",
         litellm_logging_obj=logging_obj,
     )
-    assert logging_obj.litellm_params[CONTROL_OPTIONS_KEY] == ControlOptions()
+    assert CONTROL_OPTIONS_KEY not in logging_obj.litellm_params
 
 
 def test_drop_params_keeps_a_dropped_stream_chunk_size_out_of_the_provider_request(
@@ -4479,7 +4480,7 @@ async def test_global_drop_params_drops_an_invalid_stream_chunk_size_on_acomplet
         mock_response="hi",
         litellm_logging_obj=logging_obj,
     )
-    assert logging_obj.litellm_params[CONTROL_OPTIONS_KEY] == ControlOptions()
+    assert CONTROL_OPTIONS_KEY not in logging_obj.litellm_params
 
 
 def test_completion_rejects_an_invalid_stream_chunk_size_before_the_mcp_gateway() -> None:

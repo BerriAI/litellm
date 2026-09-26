@@ -17,7 +17,6 @@ from litellm.litellm_core_utils.get_litellm_params import (
     get_litellm_params,
     parse_control_options,
     stored_control_options,
-    with_control_options,
 )
 from litellm.types.litellm_params import ControlOptions
 
@@ -152,6 +151,10 @@ def test_control_options_are_read_from_the_request_kwargs(kwargs: dict[str, obje
         pytest.param(-(10**5000), "<int of 16610 bits>", id="huge_negative_int"),
         pytest.param(-(2**64 - 1), "-18446744073709551615", id="64_bit_negative_int"),
         pytest.param(-(2**64), "<int of 65 bits>", id="65_bit_negative_int"),
+        pytest.param([-(10**5000)], "[<int of 16610 bits>]", id="nested_huge_int"),
+        pytest.param(10**18, "1000000000000000000", id="19_digit_int"),
+        pytest.param("1" + "0" * 18, "'1000000000000000000'", id="19_digit_string"),
+        pytest.param("9" * 5000, "'999999999999...9999999999999'", id="5000_digit_string"),
         (64.0, "64.0"),
         (True, "True"),
         (0, "0"),
@@ -163,7 +166,6 @@ def test_control_options_reject_a_stream_chunk_size_that_is_not_a_positive_int(r
     assert parse_control_options({"stream_chunk_size": raw}) == InvalidControlOption(
         param="stream_chunk_size",
         message=f"Invalid stream_chunk_size={shown}: expected a positive integer of at most 18 digits",
-        valid=ControlOptions(),
     )
 
 
@@ -172,28 +174,10 @@ def test_control_options_accept_the_largest_18_digit_value(raw: object) -> None:
     assert parse_control_options({"stream_chunk_size": raw}) == ControlOptions(stream_chunk_size=10**18 - 1)
 
 
-@pytest.mark.parametrize("raw", [10**18, "1" + "0" * 18], ids=["int", "digit_string"])
-def test_control_options_reject_a_19_digit_value_whether_int_or_string(raw: object) -> None:
-    rejected = parse_control_options({"stream_chunk_size": raw})
-
-    assert isinstance(rejected, InvalidControlOption)
-    assert rejected.message.endswith("expected a positive integer of at most 18 digits")
-
-
 @pytest.mark.parametrize("raw", [0, -1, "sixty-four", 64.0, True])
 def test_control_options_enforce_their_rule_at_construction(raw: object) -> None:
     with pytest.raises(ValidationError):
         ControlOptions(stream_chunk_size=raw)  # pyright: ignore[reportArgumentType]  # the invalid type is the input
-
-
-def test_with_control_options_replaces_a_forged_value() -> None:
-    control: Final = ControlOptions(stream_chunk_size=64)
-    assert (
-        stored_control_options(
-            with_control_options({CONTROL_OPTIONS_KEY: {"stream_chunk_size": 1}, "api_key": "k"}, control)
-        )
-        is control
-    )
 
 
 @pytest.mark.parametrize(

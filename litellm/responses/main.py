@@ -57,7 +57,7 @@ from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
 from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
-from litellm.types.utils import is_litellm_owned_kwarg
+from litellm.types.utils import all_litellm_params
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -447,13 +447,12 @@ def _bridge_kwargs(
         (
             *litellm.OPENAI_CHAT_COMPLETION_PARAMS,
             *DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
+            *all_litellm_params,
             *GenericLiteLLMParams.model_fields,
             *(allowed_openai_params or ()),
         )
     ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
-    return MappingProxyType(
-        {key: value for key, value in kwargs.items() if key in forwarded_keys or is_litellm_owned_kwarg(key)}
-    )
+    return MappingProxyType({key: value for key, value in kwargs.items() if key in forwarded_keys})
 
 
 _ResponsesCompatibilityFailure: TypeAlias = Literal["encrypted_task_unsupported"]
