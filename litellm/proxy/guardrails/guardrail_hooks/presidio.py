@@ -1729,7 +1729,53 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 )
                 new_texts.append(modified_text)
         inputs["texts"] = new_texts
+
+        tool_calls = inputs.get("tool_calls")
+        if tool_calls:
+            new_tool_calls = []
+            for tool_call in tool_calls:
+                args = self._get_tool_call_arguments(tool_call)
+                if args is None:
+                    new_tool_calls.append(tool_call)
+                    continue
+                if input_type == "response" and pii_tokens:
+                    new_args = self._unmask_pii_text(args, pii_tokens)
+                else:
+                    new_args = await self.check_pii(
+                        text=args,
+                        output_parse_pii=self.output_parse_pii,
+                        presidio_config=None,
+                        request_data=request_data or {},
+                    )
+                new_tool_calls.append(self._with_tool_call_arguments(tool_call, new_args))
+            inputs["tool_calls"] = new_tool_calls
         return inputs
+
+    @staticmethod
+    def _get_tool_call_arguments(tool_call: object) -> str | None:
+        """Return the JSON arguments string of a dict-shaped tool call, if present."""
+        if not isinstance(tool_call, dict):
+            return None
+        function = tool_call.get("function")
+        if not isinstance(function, dict):
+            return None
+        arguments = function.get("arguments")
+        return arguments if isinstance(arguments, str) else None
+
+    @staticmethod
+    def _with_tool_call_arguments(tool_call: object, arguments: str) -> object:
+        """Return a copy of a dict-shaped tool call with its arguments replaced.
+
+        Anything else is handed back untouched: the same shape check that
+        _get_tool_call_arguments ran is repeated here so this helper never
+        depends on the caller having narrowed the type.
+        """
+        if not isinstance(tool_call, dict):
+            return tool_call
+        function = tool_call.get("function")
+        if not isinstance(function, dict):
+            return tool_call
+        return {**tool_call, "function": {**function, "arguments": arguments}}
 
     def update_in_memory_litellm_params(self, litellm_params: LitellmParams) -> None:
         """
