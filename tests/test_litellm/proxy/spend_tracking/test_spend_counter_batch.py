@@ -477,6 +477,158 @@ async def test_pre_call_resize_against_an_inconsistent_counter_writes_nothing_an
     assert all("applied_adjustment" not in entry for entry in entries)
 
 
+RESERVATION_KEYS = frozenset({"spend:key:hashed", "spend:team:team"})
+
+
+def _patch_reservation_estimates(monkeypatch, reservation_cost: float = 0.4) -> None:
+    import litellm.proxy.spend_tracking.budget_reservation as br
+
+    monkeypatch.setattr(br, "count_request_input_tokens", AsyncMock(return_value={"gpt-4.1-nano": 3}))
+    monkeypatch.setattr(br, "estimate_request_max_cost", lambda **kwargs: reservation_cost)
+    monkeypatch.setattr(br, "estimate_request_input_cost", lambda **kwargs: 0.1)
+    monkeypatch.setattr(br, "_start_reservation_lease_renewal", lambda **kwargs: None)
+
+
+async def _reserve_key_and_team(team_max_budget: float = 10.0, fail_closed: bool = False):
+    from litellm.caching import DualCache
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.spend_tracking.budget_reservation import reserve_budget_for_request
+    from litellm.proxy.utils import ProxyLogging
+
+    return await reserve_budget_for_request(
+        request_body={
+            "model": "gpt-4.1-nano",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 5,
+        },
+        route="/v1/chat/completions",
+        llm_router=None,
+        valid_token=UserAPIKeyAuth(token="hashed", team_id="team", max_budget=10.0, spend=0.0),
+        team_object=LiteLLM_TeamTable(team_id="team", max_budget=team_max_budget),
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=UserApiKeyCache(),
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=DualCache()),
+        fail_closed_budget_enforcement=fail_closed,
+    )
+
+
+@pytest.mark.asyncio
+async def test_reservation_inside_the_admission_scope_reuses_its_mget_and_writes_one_pipeline(monkeypatch):
+    redis = CountingRedis({"spend:key:hashed": 1.0, "spend:team:team": 2.0})
+    monkeypatch.setattr(ps, "spend_counter_cache", _spend_counter_cache(redis))
+    monkeypatch.setattr(ps, "prisma_client", None)
+    _patch_reservation_estimates(monkeypatch)
+
+    with spend_counter_batch_scope(redis, counter_keys=RESERVATION_KEYS):
+        assert await ps.get_current_spend(counter_key="spend:key:hashed", fallback_spend=0.0) == 1.0
+        assert await ps.read_spend_counter_cache_value("spend:team:team") == (2.0, True)
+        reservation = await _reserve_key_and_team()
+
+    assert reservation is not None
+    assert [c.split()[0] for c in redis.commands] == ["MGET", "PIPELINE"], redis.commands
+    assert set(redis.commands[0].split()[1:]) == RESERVATION_KEYS
+    assert set(redis.commands[1].split()[1:]) == RESERVATION_KEYS
+    assert {key: round(redis.store[key], 6) for key in RESERVATION_KEYS} == {
+        "spend:key:hashed": 1.4,
+        "spend:team:team": 2.4,
+    }
+    assert {entry["counter_key"] for entry in reservation["entries"]} == RESERVATION_KEYS
+
+
+@pytest.mark.asyncio
+async def test_reservation_pipeline_failure_skips_every_counter_and_invalidates_them(monkeypatch):
+    redis = CountingRedis({"spend:key:hashed": 1.0, "spend:team:team": 2.0})
+    redis.async_increment_pipeline = AsyncMock(side_effect=ConnectionError("redis down"))
+    redis.async_delete_cache = AsyncMock()
+    monkeypatch.setattr(ps, "spend_counter_cache", _spend_counter_cache(redis))
+    monkeypatch.setattr(ps, "prisma_client", None)
+    _patch_reservation_estimates(monkeypatch)
+
+    reservation = await _reserve_key_and_team()
+
+    assert reservation is None
+    assert [c.split()[0] for c in redis.commands] == ["MGET"], redis.commands
+    assert redis.async_increment_pipeline.await_count == 1
+    assert "INCRBYFLOAT" not in " ".join(redis.commands)
+    assert redis.async_delete_cache.await_count == 2
+    assert {call.kwargs["key"] for call in redis.async_delete_cache.await_args_list} == RESERVATION_KEYS
+    assert redis.store == {"spend:key:hashed": 1.0, "spend:team:team": 2.0}
+
+
+@pytest.mark.asyncio
+async def test_reservation_pipeline_failure_with_fail_closed_raises(monkeypatch):
+    from fastapi import HTTPException
+
+    redis = CountingRedis({"spend:key:hashed": 1.0, "spend:team:team": 2.0})
+    redis.async_increment_pipeline = AsyncMock(side_effect=ConnectionError("redis down"))
+    redis.async_delete_cache = AsyncMock()
+    monkeypatch.setattr(ps, "spend_counter_cache", _spend_counter_cache(redis))
+    monkeypatch.setattr(ps, "prisma_client", None)
+    _patch_reservation_estimates(monkeypatch)
+
+    with pytest.raises(HTTPException) as exc:
+        await _reserve_key_and_team(fail_closed=True)
+
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_over_budget_counter_after_the_shared_pipeline_still_denies(monkeypatch):
+    import litellm
+
+    redis = CountingRedis({"spend:key:hashed": 1.0, "spend:team:team": 9.9})
+    monkeypatch.setattr(ps, "spend_counter_cache", _spend_counter_cache(redis))
+    monkeypatch.setattr(ps, "prisma_client", None)
+    _patch_reservation_estimates(monkeypatch)
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await _reserve_key_and_team(team_max_budget=10.0, fail_closed=True)
+
+    assert {key: round(redis.store[key], 6) for key in RESERVATION_KEYS} == {
+        "spend:key:hashed": 1.0,
+        "spend:team:team": 9.9,
+    }
+
+
+@pytest.mark.asyncio
+async def test_post_call_hook_shares_one_batch_across_reconcile_and_increments(monkeypatch):
+    from litellm.proxy.hooks.proxy_track_cost_callback import _update_database_and_spend_counters
+
+    redis = CountingRedis({key: 1.0 for key in POST_CALL_KEYS})
+    monkeypatch.setattr(ps, "spend_counter_cache", _spend_counter_cache(redis))
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr(ps, "user_api_key_cache", MagicMock(async_get_cache=AsyncMock(return_value=None)))
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.db_spend_update_writer.update_database = AsyncMock(return_value=True)
+    reservation = _reservation(reserved_cost=0.4)
+
+    charged = await _update_database_and_spend_counters(
+        proxy_logging_obj=proxy_logging_obj,
+        increment_spend_counters=ps.increment_spend_counters,
+        user_api_key="hashed",
+        user_id="user",
+        end_user_id="eu",
+        team_id="team",
+        org_id="org",
+        kwargs={},
+        completion_response=None,
+        start_time=None,
+        end_time=None,
+        response_cost=0.5,
+        budget_reservation=reservation,
+        request_tags=["prod"],
+        model_access_groups=["premium"],
+        project_id=None,
+    )
+
+    assert charged is True
+    assert [c.split()[0] for c in redis.commands] == ["MGET", "PIPELINE", "PIPELINE"], redis.commands
+    assert set(redis.commands[0].split()[1:]) == POST_CALL_KEYS
+    assert reservation["finalized"] is True
+
+
 @pytest.mark.asyncio
 async def test_a_failed_reconcile_pipeline_invalidates_every_reserved_counter_and_falls_back(monkeypatch):
     redis = CountingRedis({key: 1.0 for key in POST_CALL_KEYS})

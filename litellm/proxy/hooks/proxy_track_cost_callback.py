@@ -30,6 +30,10 @@ from litellm.proxy.db.db_spend_update_writer import (
     get_llm_router,
 )
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.spend_counter_batch import (
+    post_call_counter_keys,
+    spend_counter_batch_scope,
+)
 from litellm.proxy.spend_tracking.spend_event import (
     ObjectMapping,
     SpendEventBuildError,
@@ -695,67 +699,82 @@ async def _update_database_and_spend_counters(
     model_access_groups: Sequence[str] | None = None,
     project_id: str | None = None,
 ) -> bool:
-    if budget_reservation is not None:
-        await _reconcile_budget_reservation_before_db_update(
-            budget_reservation=budget_reservation, response_cost=response_cost
-        )
-    try:
-        charged: Final = await proxy_logging_obj.db_spend_update_writer.update_database(
+    from litellm.proxy.proxy_server import spend_counter_cache
+
+    with spend_counter_batch_scope(
+        spend_counter_cache.redis_cache,
+        counter_keys=post_call_counter_keys(
             token=user_api_key,
-            response_cost=response_cost,
-            user_id=user_id,
-            end_user_id=end_user_id,
             team_id=team_id,
-            kwargs=kwargs,
-            completion_response=completion_response,
-            start_time=start_time,
-            end_time=end_time,
+            user_id=user_id,
             org_id=org_id,
+            end_user_id=end_user_id,
+            tags=request_tags,
+            model_access_groups=model_access_groups,
             project_id=project_id,
-        )
-    except Exception:
+        ),
+    ):
         if budget_reservation is not None:
-            try:
-                await _release_budget_reservation(budget_reservation=budget_reservation)
-            except Exception:
-                verbose_proxy_logger.exception("Failed to release budget reservation after database update failed")
+            await _reconcile_budget_reservation_before_db_update(
+                budget_reservation=budget_reservation, response_cost=response_cost
+            )
+        try:
+            charged: Final = await proxy_logging_obj.db_spend_update_writer.update_database(
+                token=user_api_key,
+                response_cost=response_cost,
+                user_id=user_id,
+                end_user_id=end_user_id,
+                team_id=team_id,
+                kwargs=kwargs,
+                completion_response=completion_response,
+                start_time=start_time,
+                end_time=end_time,
+                org_id=org_id,
+                project_id=project_id,
+            )
+        except Exception:
+            if budget_reservation is not None:
+                try:
+                    await _release_budget_reservation(budget_reservation=budget_reservation)
+                except Exception:
+                    verbose_proxy_logger.exception("Failed to release budget reservation after database update failed")
+                    try:
+                        await _invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
+                    except Exception:
+                        verbose_proxy_logger.exception(
+                            "Failed to invalidate budget reservation counters after release failed"
+                        )
+            raise
+        if not charged:
+            await _release_budget_reservation(budget_reservation=budget_reservation)
+            return False
+
+        try:
+            await increment_spend_counters(
+                token=user_api_key,
+                team_id=team_id,
+                user_id=user_id,
+                response_cost=response_cost,
+                org_id=org_id,
+                budget_reservation=budget_reservation,
+                end_user_id=end_user_id,
+                tags=request_tags,
+                request_started_at=start_time,
+                model_access_groups=model_access_groups,
+                project_id=project_id,
+            )
+        except Exception:
+            if budget_reservation is not None:
                 try:
                     await _invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
                 except Exception:
                     verbose_proxy_logger.exception(
-                        "Failed to invalidate budget reservation counters after release failed"
+                        "Failed to invalidate budget reservation counters after spend counter update failed"
                     )
-        raise
-    if not charged:
-        await _release_budget_reservation(budget_reservation=budget_reservation)
-        return False
-
-    try:
-        await increment_spend_counters(
-            token=user_api_key,
-            team_id=team_id,
-            user_id=user_id,
-            response_cost=response_cost,
-            org_id=org_id,
-            budget_reservation=budget_reservation,
-            end_user_id=end_user_id,
-            tags=request_tags,
-            request_started_at=start_time,
-            model_access_groups=model_access_groups,
-            project_id=project_id,
-        )
-    except Exception:
-        if budget_reservation is not None:
-            try:
-                await _invalidate_budget_reservation_counters(budget_reservation=budget_reservation)
-            except Exception:
-                verbose_proxy_logger.exception(
-                    "Failed to invalidate budget reservation counters after spend counter update failed"
-                )
-            finally:
-                budget_reservation["finalized"] = True
-        raise
-    return True
+                finally:
+                    budget_reservation["finalized"] = True
+            raise
+        return True
 
 
 async def _reconcile_budget_reservation_before_db_update(

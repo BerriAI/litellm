@@ -128,7 +128,6 @@ from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.carried_budget_state import carry_team_and_user_budget_state
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     bind_admission_counter_keys,
-    release_spend_counter_batch,
     spend_counter_batch_scope,
 )
 from litellm.proxy.utils import (
@@ -2990,24 +2989,21 @@ async def _run_centralized_common_checks(
     )
 
     bind_admission_counter_keys(user_api_key_auth_obj, end_user_id=end_user_id)
-    try:
-        _ = await common_checks(
-            request=request,
-            request_body=request_data,
-            team_object=team_object,
-            user_object=user_object,
-            end_user_object=end_user_object,
-            general_settings=general_settings,
-            global_proxy_spend=global_proxy_spend,
-            route=route,
-            llm_router=llm_router,
-            proxy_logging_obj=proxy_logging_obj,
-            valid_token=user_api_key_auth_obj,
-            skip_budget_checks=skip_budget_checks,
-            project_object=project_object,
-        )
-    finally:
-        release_spend_counter_batch()
+    _ = await common_checks(
+        request=request,
+        request_body=request_data,
+        team_object=team_object,
+        user_object=user_object,
+        end_user_object=end_user_object,
+        general_settings=general_settings,
+        global_proxy_spend=global_proxy_spend,
+        route=route,
+        llm_router=llm_router,
+        proxy_logging_obj=proxy_logging_obj,
+        valid_token=user_api_key_auth_obj,
+        skip_budget_checks=skip_budget_checks,
+        project_object=project_object,
+    )
 
     if not skip_budget_checks:
         await _check_team_model_budget(

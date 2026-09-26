@@ -304,6 +304,7 @@ async def reserve_budget_for_request(
         return None
 
     applied_entries: Final[list[dict[str, float | str]]] = []
+    reserved: Final[list[tuple[_BudgetCounter, dict[str, float | str]]]] = []
     try:
         with _counters_batch_scope(frozenset(counter.counter_key for counter in counters)):
             for counter in counters:
@@ -313,21 +314,22 @@ async def reserve_budget_for_request(
                 )
                 applied_entries.append(entry)
                 try:
-                    reserved_value = await _reserve_counter(
-                        counter=counter,
-                        reservation_cost=reservation_cost,
-                    )
-                except _CounterReservationUnavailable as exc:
-                    if exc.touched_counter and not exc.counter_invalidated:
-                        await _release_applied_entries_best_effort(
-                            entries=[entry],
-                            default_reserved_cost=reservation_cost,
-                        )
+                    await _initialize_counter_for_reservation(counter=counter)
+                except _CounterReservationUnavailable:
                     applied_entries.remove(entry)
                     if fail_closed_budget_enforcement:
                         _raise_reservation_unavailable(counter_key=counter.counter_key)
                     continue
+                reserved.append((counter, entry))
 
+            reserved_values: Final = await _reserve_counters_in_one_pipeline(
+                reserved=reserved,
+                reservation_cost=reservation_cost,
+                applied_entries=applied_entries,
+                fail_closed_budget_enforcement=fail_closed_budget_enforcement,
+            )
+
+            for (counter, entry), reserved_value in zip(reserved, reserved_values):
                 if reserved_value is not None:
                     current_spend = reserved_value
                 else:
@@ -917,18 +919,13 @@ def _coerce_window(window: object) -> Mapping[str, object]:
     return dumped if isinstance(dumped, Mapping) else {}
 
 
-async def _reserve_counter(
-    counter: _BudgetCounter,
-    reservation_cost: float,
-) -> float | None:
+async def _initialize_counter_for_reservation(counter: _BudgetCounter) -> None:
     from litellm.proxy.proxy_server import (
         _ensure_spend_counter_initialized,
         _ensure_window_spend_counter_initialized,
-        _increment_spend_counter_cache,
         _invalidate_spend_counter,
     )
 
-    attempted_increment = False
     try:
         if counter.source_cache_key is not None:
             await _ensure_spend_counter_initialized(
@@ -949,13 +946,6 @@ async def _reserve_counter(
                     counter.counter_key,
                 )
                 raise _CounterReservationUnavailable
-
-        attempted_increment = True
-        reserved_value: Final = await _increment_spend_counter_cache(
-            counter_key=counter.counter_key,
-            increment=reservation_cost,
-        )
-        return float(reserved_value) if reserved_value is not None else None
     except _CounterReservationUnavailable:
         raise
     except Exception:
@@ -975,9 +965,39 @@ async def _reserve_counter(
                 exc_info=True,
             )
         raise _CounterReservationUnavailable(
-            touched_counter=attempted_increment,
+            touched_counter=False,
             counter_invalidated=counter_invalidated,
         )
+
+
+async def _reserve_counters_in_one_pipeline(
+    reserved: list[tuple[_BudgetCounter, dict[str, float | str]]],
+    reservation_cost: float,
+    applied_entries: list[dict[str, float | str]],
+    fail_closed_budget_enforcement: bool,
+) -> tuple[float | None, ...]:
+    """Every initialized counter is incremented by ``reservation_cost`` in one pipeline. A failed pipeline has
+    already invalidated each counter, so every entry is dropped like the per-counter failure path did."""
+    from litellm.proxy.proxy_server import increment_spend_counters_pipeline
+
+    try:
+        return await increment_spend_counters_pipeline(
+            pending=tuple(
+                PendingSpendIncrement(counter_key=counter.counter_key, increment=reservation_cost)
+                for counter, _ in reserved
+            )
+        )
+    except Exception:
+        for counter, entry in reserved:
+            verbose_proxy_logger.warning(
+                "Skipping budget reservation for %s because spend counter reservation failed",
+                counter.counter_key,
+            )
+            applied_entries.remove(entry)
+        if fail_closed_budget_enforcement and reserved:
+            _raise_reservation_unavailable(counter_key=reserved[0][0].counter_key)
+        reserved.clear()
+        return ()
 
 
 async def _get_current_counter_value(counter: _BudgetCounter) -> float:

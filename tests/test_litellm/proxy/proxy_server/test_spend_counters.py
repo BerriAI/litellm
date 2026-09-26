@@ -69,10 +69,15 @@ def _make_spend_counter_cache(
     return cache
 
 
-def _make_user_api_key_cache(get_value=None, get_side_effect=None):
+def _make_user_api_key_cache(get_value=None, get_side_effect=None, redis_batch_get=None):
     cache = MagicMock()
     cache.async_get_cache = AsyncMock(return_value=get_value, side_effect=get_side_effect)
     cache.async_set_cache_pipeline = AsyncMock()
+    in_memory = MagicMock()
+    in_memory.get_cache = MagicMock(return_value=None)
+    cache.in_memory_cache_for = MagicMock(return_value=in_memory)
+    cache.redis_cache = MagicMock()
+    cache.redis_cache.async_batch_get_cache = AsyncMock(return_value=redis_batch_get or {})
     return cache
 
 
@@ -1517,8 +1522,8 @@ async def test_invalidate_spend_counter_swallows_redis_failure_no_raise(monkeypa
 
 
 @pytest.mark.asyncio
-async def test_update_cache_no_cached_entities_schedules_pipeline_flush(monkeypatch):
-    fake_user_cache = _make_user_api_key_cache(get_value=None)
+async def test_update_cache_no_cached_entities_reads_every_entity_in_one_batch(monkeypatch):
+    fake_user_cache = _make_user_api_key_cache()
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
 
     await ps.update_cache(
@@ -1531,25 +1536,53 @@ async def test_update_cache_no_cached_entities_schedules_pipeline_flush(monkeypa
         tags=["x"],
     )
 
-    observed = {
-        "lookups": fake_user_cache.async_get_cache.call_count,
-        "got_user": True,
-        "got_team": True,
-    }
-    assert normalize(observed) == {
-        "lookups": 4,
-        "got_user": True,
-        "got_team": True,
+    assert fake_user_cache.async_get_cache.await_count == 0
+    batch_get = fake_user_cache.redis_cache.async_batch_get_cache
+    assert batch_get.await_count == 1
+    assert set(batch_get.await_args.kwargs["key_list"]) == {
+        "u1",
+        "end_user_id:eu1",
+        "team_id:t1",
+        "tag:x",
+        ps.GLOBAL_PROXY_SPEND_CACHE_KEY,
     }
 
 
 @pytest.mark.asyncio
+async def test_update_cache_updates_spend_on_entities_served_by_the_batch(monkeypatch):
+    from litellm.proxy._types import LiteLLM_TagTable, LiteLLM_TeamTableCachedObj
+    from litellm.proxy.common_utils.cache_pydantic_utils import CacheCodec
+
+    team_raw = CacheCodec.serialize(LiteLLM_TeamTableCachedObj(team_id="t1", spend=1.0), LiteLLM_TeamTableCachedObj)
+    tag_raw = CacheCodec.serialize(LiteLLM_TagTable(tag_name="x", spend=2.0), LiteLLM_TagTable)
+    fake_user_cache = _make_user_api_key_cache(redis_batch_get={"team_id:t1": team_raw, "tag:x": tag_raw})
+    monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
+
+    await ps.update_cache(
+        token=None,
+        user_id=None,
+        end_user_id=None,
+        team_id="t1",
+        response_cost=0.5,
+        parent_otel_span=None,
+        tags=["x"],
+    )
+    await asyncio.gather(*(t for t in asyncio.all_tasks() if t is not asyncio.current_task()))
+
+    writes = dict(fake_user_cache.async_set_cache_pipeline.await_args.kwargs["cache_list"])
+    assert writes["team_id:t1"]["spend"] == 1.5
+    assert writes["tag:x"]["spend"] == 2.5
+
+    backfilled = fake_user_cache.in_memory_cache_for.return_value.set_cache.call_args_list
+    assert {call.kwargs["key"] for call in backfilled} == {"team_id:t1", "tag:x"}
+
+
+@pytest.mark.asyncio
 async def test_update_cache_user_cache_failure_invalid_state_is_swallowed(monkeypatch):
-    """An inner _update_user_cache raising must not propagate — update_cache
-    catches and logs, the public coroutine still completes normally."""
-    fake_user_cache = MagicMock()
-    fake_user_cache.async_get_cache = AsyncMock(side_effect=RuntimeError("cache down"))
-    fake_user_cache.async_set_cache_pipeline = AsyncMock()
+    """A failed batched entity read degrades to "not cached": update_cache
+    completes normally instead of propagating the cache error."""
+    fake_user_cache = _make_user_api_key_cache()
+    fake_user_cache.redis_cache.async_batch_get_cache = AsyncMock(side_effect=RuntimeError("cache down"))
     monkeypatch.setattr(ps, "user_api_key_cache", fake_user_cache)
 
     result = await ps.update_cache(

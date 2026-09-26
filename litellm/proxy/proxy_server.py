@@ -3705,18 +3705,24 @@ async def _apply_spend_counter_increments(pending: Sequence[PendingSpendIncremen
         raise
 
 
-async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrement]) -> None:
+async def increment_spend_counters_pipeline(
+    pending: Sequence[PendingSpendIncrement],
+) -> tuple[float | None, ...]:
     """One INCRBYFLOAT+EXPIRE pipeline for every pending counter; on failure every counter is invalidated
-    before the error propagates, so no caller can read a half-applied batch."""
+    before the error propagates, so no caller can read a half-applied batch. Returns each counter's post-write
+    value (None when the backend returned none), aligned with ``pending``."""
     if not pending:
-        return
+        return ()
     redis_cache: Final = spend_counter_cache.redis_cache
     if redis_cache is None:
-        for item in pending:
-            await SpendCounterReseed.increment_in_memory(
-                spend_counter_cache=spend_counter_cache, counter_key=item.counter_key, increment=item.increment
-            )
-        return
+        return tuple(
+            [
+                await SpendCounterReseed.increment_in_memory(
+                    spend_counter_cache=spend_counter_cache, counter_key=item.counter_key, increment=item.increment
+                )
+                for item in pending
+            ]
+        )
     ttl: Final = redis_cache.get_ttl()
     increment_list: Final = [  # mutable-ok: async_increment_pipeline signature requires list[RedisPipelineIncrementOperation]
         RedisPipelineIncrementOperation(key=item.counter_key, increment_value=item.increment, ttl=ttl)
@@ -3727,9 +3733,62 @@ async def increment_spend_counters_pipeline(pending: Sequence[PendingSpendIncrem
     except Exception:
         await asyncio.gather(*(_invalidate_spend_counter(counter_key=item.counter_key) for item in pending))
         raise
-    for item, current_value in zip(pending, results or ()):
+    values: Final = tuple(results or ())
+    for item, current_value in zip(pending, values):
         spend_counter_cache.in_memory_cache.set_cache(key=item.counter_key, value=current_value)
         record_spend_counter_value(item.counter_key, float(current_value))
+    return tuple(float(values[index]) if index < len(values) else None for index in range(len(pending)))
+
+
+async def _read_cached_entities(cache_keys: Sequence[str]) -> Mapping[str, object]:
+    """One Redis MGET for every entity key missing from this pod's in-memory cache; misses map to None."""
+    in_memory: Final[dict[str, object]] = {
+        key: value
+        for key in cache_keys
+        if (value := user_api_key_cache.in_memory_cache_for(key).get_cache(key=key)) is not None  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API
+    }
+    missing: Final = tuple(key for key in cache_keys if key not in in_memory)
+    redis_cache: Final = user_api_key_cache.redis_cache
+    fetched: Final[Mapping[str, object]] = (
+        await _redis_cached_entities(user_api_key_cache, missing)
+        if missing and redis_cache is not None
+        else MappingProxyType({})
+    )
+    return MappingProxyType({**{key: fetched.get(key) for key in missing}, **in_memory})
+
+
+async def _redis_cached_entities(user_api_key_cache: UserApiKeyCache, missing: Sequence[str]) -> Mapping[str, object]:
+    redis_cache: Final = user_api_key_cache.redis_cache
+    if redis_cache is None:
+        return {}
+    try:
+        fetched: Final = await redis_cache.async_batch_get_cache(  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType, reportUnknownVariableType]  # untyped cache API
+            key_list=sorted(missing)
+        )
+    except Exception as e:  # noqa: BLE001  # a failed batch degrades to "not cached", same as a per-key miss
+        verbose_proxy_logger.debug("update_cache: batched entity read failed, treating keys as uncached: %s", e)
+        return {}
+    result: Final = cast(Mapping[str, object], fetched)
+    backfill_kwargs: Final = (
+        {} if user_api_key_cache.default_in_memory_ttl is None else {"ttl": user_api_key_cache.default_in_memory_ttl}
+    )
+    for key, value in result.items():
+        if value is not None:
+            user_api_key_cache.in_memory_cache_for(key).set_cache(  # pyright: ignore[reportUnknownMemberType]  # untyped cache API
+                key=key, value=value, **backfill_kwargs
+            )
+    return result
+
+
+async def _read_cached_entities_or_empty(cache_keys: Sequence[str]) -> Mapping[str, object]:
+    try:
+        return await _read_cached_entities(cache_keys)
+    except Exception as e:  # noqa: BLE001  # keep the per-key "do nothing if not cached" semantics
+        verbose_proxy_logger.warning(
+            "Spend tracking - failed to read cached entities for spend update, treating them as uncached - %s",
+            str(e),
+        )
+        return {}
 
 
 async def update_cache(
@@ -3749,15 +3808,38 @@ async def update_cache(
 
     values_to_update_in_cache: Final[list[tuple[str, object]]] = []
 
+    hashed_token: Final = hash_token(token=token) if isinstance(token, str) and token.startswith("sk-") else token
+    tag_keys: Final = (
+        tuple(tag_cache_key(tag) for tag in tags if tag and isinstance(tag, str)) if tags is not None else ()
+    )
+    cached_entities: Final = await _read_cached_entities_or_empty(
+        tuple(
+            key
+            for key in (
+                hashed_token,
+                user_id,
+                GLOBAL_PROXY_SPEND_CACHE_KEY,
+                end_user_cache_key(end_user_id) if end_user_id is not None else None,
+                f"team_id:{team_id}" if team_id is not None else None,
+                *tag_keys,
+            )
+            if key is not None
+        )
+    )
+
     ### UPDATE KEY SPEND ###
-    async def _update_key_cache(token: str, response_cost: float):
-        # Fetch the existing cost for the given token
-        if isinstance(token, str) and token.startswith("sk-"):
-            hashed_token = hash_token(token=token)
-        else:
-            hashed_token = token
+    async def _update_key_cache(response_cost: float):
         verbose_proxy_logger.debug("_update_key_cache: hashed_token=%s", hashed_token)
-        existing_spend_obj = await user_api_key_cache.async_get_cache(key=hashed_token, model_type=UserAPIKeyAuth)
+        raw_key_obj: Final = cached_entities.get(hashed_token) if hashed_token is not None else None
+        existing_spend_obj: Final = (
+            CacheCodec.deserialize(raw_key_obj, model_type=UserAPIKeyAuth) if raw_key_obj is not None else None
+        )
+        if raw_key_obj is not None and existing_spend_obj is None:
+            verbose_proxy_logger.error(
+                "UserApiKeyCache.async_get_cache failed to deserialize cached value for key=%r model_type=%s",
+                hashed_token,
+                "UserAPIKeyAuth",
+            )
         verbose_proxy_logger.debug("_update_key_cache: existing_spend_obj=%s", existing_spend_obj)
         if existing_spend_obj is None:
             return
@@ -3813,7 +3895,7 @@ async def update_cache(
                 # Fetch the existing cost for the given user
                 if _id is None:
                     continue
-                cached_user = await user_api_key_cache.async_get_cache(key=_id)
+                cached_user = cached_entities.get(_id)
                 if cached_user is None:
                     # do nothing if there is no cache value
                     return
@@ -3836,12 +3918,12 @@ async def update_cache(
                     )
                 )
             ## UPDATE GLOBAL PROXY ##
-            global_proxy_spend: Final = await user_api_key_cache.async_get_cache(key=GLOBAL_PROXY_SPEND_CACHE_KEY)
+            global_proxy_spend: Final = cached_entities.get(GLOBAL_PROXY_SPEND_CACHE_KEY)
             if global_proxy_spend is None:
                 # do nothing if not in cache
                 return
-            elif response_cost is not None and global_proxy_spend is not None:
-                increment: Final = global_proxy_spend + response_cost
+            elif response_cost is not None:
+                increment: Final = cast(float, global_proxy_spend) + response_cost
                 values_to_update_in_cache.append((GLOBAL_PROXY_SPEND_CACHE_KEY, increment))
         except Exception as e:
             verbose_proxy_logger.warning(
@@ -3862,7 +3944,7 @@ async def update_cache(
         _id: Final = end_user_cache_key(end_user_id)
         try:
             # Fetch the existing cost for the given user
-            cached_end_user: Final = await user_api_key_cache.async_get_cache(key=_id)
+            cached_end_user: Final = cached_entities.get(_id)
             if cached_end_user is None:
                 # if user does not exist in LiteLLM_UserTable, create a new user
                 # do nothing if end-user not in api key cache
@@ -3903,7 +3985,7 @@ async def update_cache(
 
         _id: Final = f"team_id:{team_id}"
         try:
-            cached_team: Final = await user_api_key_cache.async_get_cache(key=_id)
+            cached_team: Final = cached_entities.get(_id)
             if cached_team is None:
                 # do nothing if team not in api key cache
                 return
@@ -3953,7 +4035,7 @@ async def update_cache(
 
                 cache_key = tag_cache_key(tag_name)
                 # Fetch the existing tag object from cache
-                cached_tag = await user_api_key_cache.async_get_cache(key=cache_key)
+                cached_tag = cached_entities.get(cache_key)
                 if cached_tag is None:
                     # do nothing if tag not in api key cache
                     continue
@@ -3992,7 +4074,7 @@ async def update_cache(
             )
 
     if token is not None and response_cost is not None:
-        await _update_key_cache(token=token, response_cost=response_cost)
+        await _update_key_cache(response_cost=response_cost)
 
     if user_id is not None:
         await _update_user_cache()
