@@ -133,6 +133,35 @@ async def test_async_write_retries_policy_load_conflict(monkeypatch: pytest.Monk
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "policy_outcome",
+    [422, 500, httpx.ConnectError("conjur unreachable")],
+    ids=["unprocessable", "server_error", "unreachable"],
+)
+@respx.mock
+async def test_async_write_does_not_retry_non_conflict_policy_failures(
+    monkeypatch: pytest.MonkeyPatch, policy_outcome: int | httpx.ConnectError
+) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    fixture: Final = _fixture()
+    manager: Final = _configure_manager(monkeypatch, fixture)
+    secret: Final = fixture["secrets"][0]
+    endpoint: Final = fixture["endpoint"]
+    _respond(respx.post(endpoint + fixture["authenticate_path"]), content=fixture["token_json"].encode())
+    policy_route: Final = respx.post(endpoint + fixture["policy_path"])
+    if isinstance(policy_outcome, int):
+        _respond(policy_route, status_code=policy_outcome)
+    else:
+        policy_route.mock(side_effect=policy_outcome)
+    value_route: Final = _respond(respx.post(endpoint + secret["path"]), status_code=201)
+
+    await manager.async_write_secret(secret["name"], "v")  # pyright: ignore[reportUnknownMemberType]  # legacy secret manager API is untyped
+
+    assert policy_route.call_count == 1
+    assert value_route.call_count == 1
+
+
+@pytest.mark.asyncio
 @respx.mock
 async def test_concurrent_async_writes_load_policy_one_at_a_time(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
