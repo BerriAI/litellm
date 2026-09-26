@@ -12,7 +12,7 @@ from urllib.parse import urlsplit
 
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.integrations.otel.model.metadata import RequestContext, RequestIdentity
+from litellm.integrations.otel.model.metadata import RequestContext, RequestIdentity, exported_request_metadata
 from litellm.integrations.otel.model.semconv import (
     GenAIOperation,
     GenAIOutputType,
@@ -388,6 +388,7 @@ class LLMCallSpanData:
     response_cost: float | None
     server: ServerInfo | None
     identity: RequestIdentity
+    request_metadata: Mapping[str, object] = field(default_factory=dict)
     is_streaming: bool | None = None
     cost: LLMCost = field(default_factory=LLMCost)
     tools: tuple[ToolDefinition, ...] = ()
@@ -455,6 +456,7 @@ class LLMCallSpanData:
             cost=LLMCost.from_breakdown(cast("Mapping[str, object] | None", payload.get("cost_breakdown"))),
             server=ServerInfo.from_api_base(context.api_base),
             identity=context.identity,
+            request_metadata=exported_request_metadata(payload),
             is_streaming=as_bool(payload.get("stream")),
             tools=_extract_tools(params),
             messages_in=_dicts(payload.get("messages")) if capture_content else (),

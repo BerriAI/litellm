@@ -42,9 +42,11 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm.constants import LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL, SESSION_ID_GENERATED_METADATA_KEY
+from litellm.integrations.langfuse.langfuse import log_requester_metadata
 from litellm.integrations.otel.model.semconv import resolve_operation
 from litellm.integrations.otel.model.trace_controls import TraceControls, caller_trace_controls
 from litellm.integrations.otel.model.utils import as_str, as_str_mapping, to_seconds
+from litellm.litellm_core_utils.redact_messages import redact_user_api_key_info
 
 if TYPE_CHECKING:
     from litellm.types.utils import StandardLoggingPayload
@@ -415,6 +417,23 @@ def _model_info_id(model_info: object) -> str | None:
     if isinstance(model_info, Mapping):
         return as_str(model_info.get("id"))
     return None
+
+
+def exported_request_metadata(payload: StandardLoggingPayload) -> Mapping[str, object]:
+    """The request metadata as the logging callbacks export it: ``user_api_key_*``
+    dropped when ``litellm.redact_user_api_key_info`` is on, header keys nested
+    under ``requester_metadata``, ``None`` values dropped."""
+    raw_meta: Final = cast(  # cast-ok: StandardLoggingPayload.get returns Any | None
+        Mapping[str, object], payload.get("metadata") or MappingProxyType({})
+    )
+    redacted: Final = cast(  # cast-ok: redact_user_api_key_info is untyped
+        Mapping[str, object],
+        redact_user_api_key_info(metadata=dict(raw_meta)),  # mutable-ok: the redactor requires a real dict
+    )
+    exported: Final = cast(  # cast-ok: log_requester_metadata is untyped
+        Mapping[str, object], log_requester_metadata(redacted)
+    )
+    return MappingProxyType({key: value for key, value in exported.items() if value is not None})
 
 
 def _team_metadata_dict(value: object) -> Mapping[str, object] | None:

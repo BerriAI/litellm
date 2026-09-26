@@ -12,6 +12,7 @@ the JSON-serialized payloads. ``trace_attributes`` maps the caller's trace contr
 
 import json
 from collections.abc import Callable
+from types import MappingProxyType
 from typing import Final
 
 from litellm.integrations.otel.mappers.base import AttributeMap, AttrValue, SpanData
@@ -28,6 +29,8 @@ from litellm.integrations.otel.model.payloads import (
     LLMUsage,
 )
 from litellm.integrations.otel.model.trace_controls import TraceControls
+from litellm.integrations.otel.model.utils import as_str
+from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
 LANGFUSE_OBSERVATION_INPUT: Final = "langfuse.observation.input"
 LANGFUSE_OBSERVATION_OUTPUT: Final = "langfuse.observation.output"
@@ -35,6 +38,19 @@ LANGFUSE_TRACE_NAME: Final = "langfuse.trace.name"
 LANGFUSE_TRACE_USER_ID: Final = "user.id"
 LANGFUSE_TRACE_SESSION_ID: Final = "session.id"
 LANGFUSE_TRACE_TAGS: Final = "langfuse.trace.tags"
+LANGFUSE_OBSERVATION_METADATA: Final = "langfuse.observation.metadata"
+LANGFUSE_TRACE_METADATA_PREFIX: Final = "langfuse.trace.metadata."
+TRACE_IDENTITY_FIELDS: Final = (
+    "user_api_key_alias",
+    "user_api_key_user_id",
+    "user_api_key_end_user_id",
+    "user_api_key_team_id",
+    "user_api_key_team_alias",
+)
+
+
+def _identity_field(name: str) -> Callable[[LLMCallSpanData], AttrValue | None]:
+    return lambda d: as_str(d.request_metadata.get(name)) or None
 
 
 class LangfuseMapper:
@@ -45,6 +61,9 @@ class LangfuseMapper:
         "langfuse.observation.id": lambda d: d.identity.call_id or None,
         "langfuse.trace.metadata.team_id": lambda d: d.identity.team_id or None,
         "langfuse.trace.metadata.team_alias": lambda d: d.identity.team_alias or None,
+        **MappingProxyType(
+            {f"{LANGFUSE_TRACE_METADATA_PREFIX}{name}": _identity_field(name) for name in TRACE_IDENTITY_FIELDS}
+        ),
     }
 
     # Sub-tables folded into their respective JSON blobs.
@@ -64,6 +83,11 @@ class LangfuseMapper:
 
     # JSON-payload attributes: each builder returns the serialized blob or None.
     _BLOB_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
+        LANGFUSE_OBSERVATION_METADATA: lambda d: (
+            safe_dumps(dict(d.request_metadata))  # mutable-ok: safe_dumps only serializes real dicts
+            if d.request_metadata
+            else None
+        ),
         "langfuse.observation.model.parameters": lambda d: json_if(
             collect(LangfuseMapper._MODEL_PARAMS, d.request_params)
         ),
