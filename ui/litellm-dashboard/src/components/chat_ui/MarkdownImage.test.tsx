@@ -41,6 +41,19 @@ describe("MarkdownImage", () => {
     expect(screen.getByRole("button", { name: "Image mailto:ops@example.com Load image" })).toBeInTheDocument();
   });
 
+  it("labels an inline data image without showing its payload", () => {
+    const payload = `data:image/png;base64,${"A".repeat(4096)}`;
+    render(<MarkdownImage src={payload} alt="Weekly chart" />);
+
+    const load = screen.getByRole("button", { name: "Weekly chart inline image Load image" });
+    expect(load).not.toHaveAttribute("title");
+    expect(load).not.toHaveTextContent("base64");
+
+    fireEvent.click(load);
+
+    expect(screen.getByRole("img", { name: "Weekly chart" })).toHaveAttribute("src", payload);
+  });
+
   it("renders only the alt text when there is no source", () => {
     render(<MarkdownImage alt="Weekly chart" />);
 
