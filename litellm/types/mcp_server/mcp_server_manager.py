@@ -87,6 +87,7 @@ class MCPServer(BaseModel):
     disallowed_tools: list[str] | None = None
     tool_name_to_display_name: dict[str, str] | None = None
     tool_name_to_description: dict[str, str] | None = None
+    pinned_tools: dict[str, str] | None = None
     allowed_params: dict[str, list[str]] | None = None  # map of tool names to allowed parameter lists
     static_headers: dict[str, str] | None = None  # static headers to forward to the MCP server
     # Admin-configured env vars. Each entry is {name, value, scope, description}.

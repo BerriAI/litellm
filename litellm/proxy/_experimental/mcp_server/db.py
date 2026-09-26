@@ -365,6 +365,7 @@ def _prepare_mcp_server_data(
         for json_map_field in (
             "tool_name_to_display_name",
             "tool_name_to_description",
+            "pinned_tools",
         ):
             if json_map_field in data_dict and data_dict[json_map_field] is None:
                 data_dict[json_map_field] = {}
@@ -414,6 +415,8 @@ def _prepare_mcp_server_data(
         data_dict["tool_name_to_display_name"] = safe_dumps(data_dict["tool_name_to_display_name"] or {})
     if "tool_name_to_description" in data_dict:
         data_dict["tool_name_to_description"] = safe_dumps(data_dict["tool_name_to_description"] or {})
+    if "pinned_tools" in data_dict:
+        data_dict["pinned_tools"] = safe_dumps(data_dict["pinned_tools"] or {})
 
     # mcp_access_groups is already List[str], no serialization needed
 

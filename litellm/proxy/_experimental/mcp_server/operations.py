@@ -1124,6 +1124,8 @@ async def _get_tools_from_mcp_servers(
                 server_auth_header = await _get_byok_credential(server, user_api_key_auth)
 
             try:
+                from litellm.proxy.proxy_server import proxy_logging_obj
+
                 tools: Final = await global_mcp_server_manager._get_tools_from_server(
                     server=server,
                     mcp_auth_header=server_auth_header,
@@ -1133,6 +1135,7 @@ async def _get_tools_from_mcp_servers(
                     client_ip=client_ip,
                     user_api_key_auth=user_api_key_auth,
                     oauth2_headers=oauth2_headers,
+                    proxy_logging_obj=proxy_logging_obj,
                 )
                 filtered_tools = filter_tools_by_allowed_tools(tools, server)
 

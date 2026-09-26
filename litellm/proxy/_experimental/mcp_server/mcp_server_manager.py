@@ -143,6 +143,11 @@ from litellm.proxy._experimental.mcp_server.result_conversion import (
 from litellm.proxy._experimental.mcp_server.sampling_handler import (
     MCP_SAMPLING_AVAILABLE,
 )
+from litellm.proxy._experimental.mcp_server.tool_catalog_guard import (
+    CatalogAlert,
+    pin_tool_catalog,
+    scan_tool_descriptions,
+)
 from litellm.proxy._experimental.mcp_server.utils import (
     MCP_TOOL_PREFIX_SEPARATOR,
     MCPMissingUserEnvVarsError,
@@ -187,6 +192,7 @@ from litellm.proxy.middleware.per_request_root_path_middleware import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.table_repositories import MCPServerRepository
+from litellm.types.integrations.slack_alerting import AlertType
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.mcp import (
     DEFAULT_SUBJECT_TOKEN_TYPE,
@@ -1941,6 +1947,7 @@ class MCPServerManager:
         # the same warning every interval; a change in the set logs again.
         self._warned_shadowed_config_server_ids: frozenset[str] = frozenset()
         self._warned_capturing_config_server_ids: frozenset[str] = frozenset()
+        self._catalog_alert_signatures: Mapping[tuple[str, AlertType], str] = MappingProxyType({})
         self._oauth_discovery_on_startup = _mcp_oauth_discovery_on_startup_enabled()
         self._oauth_discovery_generation_counter = 0
         self._oauth_discovery_slots: tuple[_OAuthDiscoverySlot, ...] = ()
@@ -2585,6 +2592,7 @@ class MCPServerManager:
                 allowed_tools=server_config.get("allowed_tools", None),
                 disallowed_tools=server_config.get("disallowed_tools", None),
                 allowed_params=server_config.get("allowed_params", None),
+                pinned_tools=server_config.get("pinned_tools", None),
                 access_groups=server_config.get("access_groups", None),
                 static_headers=server_config.get("static_headers", None),
                 env_vars=server_config.get("env_vars", None),
@@ -3160,6 +3168,7 @@ class MCPServerManager:
             updated_at=getattr(mcp_server, "updated_at", None),
             tool_name_to_display_name=_deserialize_json_dict(getattr(mcp_server, "tool_name_to_display_name", None)),
             tool_name_to_description=_deserialize_json_dict(getattr(mcp_server, "tool_name_to_description", None)),
+            pinned_tools=_deserialize_json_dict(getattr(mcp_server, "pinned_tools", None)),
             is_byok=bool(getattr(mcp_server, "is_byok", False)),
             byok_description=getattr(mcp_server, "byok_description", None) or [],
             byok_api_key_help_url=getattr(mcp_server, "byok_api_key_help_url", None),
@@ -4360,6 +4369,7 @@ class MCPServerManager:
         user_api_key_auth: UserAPIKeyAuth | None = None,
         oauth2_headers: dict[str, str] | None = None,
         client_ip: str | None = None,
+        proxy_logging_obj: ProxyLogging | None = None,
     ) -> list[MCPTool]:
         """
         Helper method to get tools from a single MCP server with prefixed names.
@@ -4479,7 +4489,16 @@ class MCPServerManager:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
                 self._remember_upstream_initialize_instructions(server, client)
 
-            prefixed_or_original_tools: Final = self._create_prefixed_tools(tools, server, add_prefix=add_prefix)
+            guarded_tools: Final = await self._guard_tool_catalog(
+                server=server,
+                tools=tools,
+                proxy_logging_obj=proxy_logging_obj,
+                user_api_key_auth=user_api_key_auth,
+                raw_headers=raw_headers,
+            )
+            prefixed_or_original_tools: Final = self._create_prefixed_tools(
+                list(guarded_tools), server, add_prefix=add_prefix
+            )
 
             return prefixed_or_original_tools
 
@@ -5368,6 +5387,58 @@ class MCPServerManager:
             "attempts; the 3-character prefix space is too crowded."
         )
 
+    async def _guard_tool_catalog(
+        self,
+        server: MCPServer,
+        tools: Sequence[MCPTool],
+        proxy_logging_obj: ProxyLogging | None,
+        user_api_key_auth: UserAPIKeyAuth | None,
+        raw_headers: Mapping[str, str] | None,
+    ) -> tuple[MCPTool, ...]:
+        if server.pinned_tools:
+            pinned, drift = pin_tool_catalog(tools, server.pinned_tools)
+            await self._report_catalog_alert(
+                server, proxy_logging_obj, AlertType.mcp_pinned_tools_changed, drift.alert(server) if drift else None
+            )
+            return pinned
+        if proxy_logging_obj is None:
+            return tuple(tools)
+        scan: Final = await scan_tool_descriptions(tools, server, proxy_logging_obj, user_api_key_auth, raw_headers)
+        await self._report_catalog_alert(
+            server, proxy_logging_obj, AlertType.mcp_tool_description_blocked, scan.alert(server)
+        )
+        return scan.served
+
+    async def _report_catalog_alert(
+        self,
+        server: MCPServer,
+        proxy_logging_obj: ProxyLogging | None,
+        alert_type: AlertType,
+        alert: CatalogAlert | None,
+    ) -> None:
+        key: Final = (server.server_id, alert_type)
+        if alert is None:
+            if key in self._catalog_alert_signatures:
+                self._catalog_alert_signatures = MappingProxyType(
+                    {seen: signature for seen, signature in self._catalog_alert_signatures.items() if seen != key}
+                )
+            return
+        if self._catalog_alert_signatures.get(key) == alert.signature:
+            return
+        self._catalog_alert_signatures = MappingProxyType({**self._catalog_alert_signatures, key: alert.signature})
+        verbose_logger.warning(alert.message)
+        if proxy_logging_obj is None:
+            return
+        try:
+            await proxy_logging_obj.slack_alerting_instance.send_alert(
+                message=alert.message,
+                level="Medium",
+                alert_type=alert_type,
+                alerting_metadata={},
+            )
+        except Exception as e:  # noqa: BLE001  # an alerting outage must never fail tools/list
+            verbose_logger.warning("Failed to send %s alert for MCP server %s: %s", alert_type.value, server.name, e)
+
     def _create_prefixed_tools(self, tools: list[MCPTool], server: MCPServer, add_prefix: bool = True) -> list[MCPTool]:
         """
         Create prefixed tools and update tool mapping.
@@ -5652,6 +5723,15 @@ class MCPServerManager:
                 status_code=403,
                 detail={
                     "error": f"Tool {name} is not allowed for server {server.name}. Contact proxy admin to allow this tool."
+                },
+            )
+
+        if server.pinned_tools and match_known_tool_name(name, server, server.pinned_tools) is None:
+            raise HTTPException(
+                status_code=403,
+                detail={
+                    "error": f"Tool {name} is not in the pinned tool list for server {server.name}. "
+                    "Contact proxy admin to re-pin this server."
                 },
             )
 
@@ -7167,6 +7247,7 @@ class MCPServerManager:
             allowed_tools=server.allowed_tools or [],
             tool_name_to_display_name=server.tool_name_to_display_name,
             tool_name_to_description=server.tool_name_to_description,
+            pinned_tools=server.pinned_tools,
             extra_headers=server.extra_headers or [],
             mcp_info=server.mcp_info,
             static_headers=server.static_headers,
