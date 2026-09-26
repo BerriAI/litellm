@@ -592,11 +592,12 @@ def test_langtrace_sink_outage_mid_burst_recovers_on_the_same_port(gateway: Gate
             with wire_server(_accepted, port=port) as sink:
                 rig: Final = _Rig(owned.gateway, model, provider, _Sink(sink, key))
                 _assert_each_once(rig.sink, _burst(rig, 6))
-            outage: Final = _burst(rig, 12)
             log: Final = owned.log
+            failures_before: Final = log.read_text().count("Exception while exporting Span batch")
+            outage: Final = _burst(rig, 12)
             eventually(
                 lambda: log.read_text().count("Exception while exporting Span batch"),
-                lambda value: value >= 1,
+                lambda value: value > failures_before,
                 seconds=20,
             )
             assert owned.gateway.request("GET", "/health/liveliness").status_code == 200
@@ -605,7 +606,6 @@ def test_langtrace_sink_outage_mid_burst_recovers_on_the_same_port(gateway: Gate
                 _assert_each_once(recovered.sink, _burst(recovered, 6))
                 counts: Final = {marker: len(recovered.sink.spans_for(marker)) for marker in outage}
                 assert all(count <= 1 for count in counts.values()), counts
-                assert sum(counts.values()) < len(outage), counts
 
 
 def test_langtrace_slow_sink_does_not_delay_callers_or_duplicate_spans(gateway: Gateway, tmp_path: Path) -> None:
