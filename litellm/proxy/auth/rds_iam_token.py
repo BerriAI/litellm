@@ -3,6 +3,16 @@ from typing import Any, Final
 
 import httpx
 
+AWS_RDS_IAM_IGNORE_WEB_IDENTITY_TOKEN_ENV_VAR: Final = "AWS_RDS_IAM_IGNORE_WEB_IDENTITY_TOKEN"
+_IGNORE_WEB_IDENTITY_TOKEN_TRUTHY_VALUES: Final[frozenset[str]] = frozenset({"1", "true"})
+
+
+def _ignore_web_identity_token() -> bool:
+    return (
+        os.getenv(AWS_RDS_IAM_IGNORE_WEB_IDENTITY_TOKEN_ENV_VAR, "").strip().lower()
+        in _IGNORE_WEB_IDENTITY_TOKEN_TRUTHY_VALUES
+    )
+
 
 def init_rds_client(
     aws_access_key_id: str | None = None,
@@ -12,6 +22,7 @@ def init_rds_client(
     aws_profile_name: str | None = None,
     aws_role_name: str | None = None,
     aws_web_identity_token: str | None = None,
+    aws_session_token: str | None = None,
     timeout: float | httpx.Timeout | None = None,
 ):
     from litellm.secret_managers.main import get_secret
@@ -29,6 +40,7 @@ def init_rds_client(
         aws_profile_name,
         aws_role_name,
         aws_web_identity_token,
+        aws_session_token,
     ]
 
     # Iterate over parameters and update if needed
@@ -44,6 +56,7 @@ def init_rds_client(
         aws_profile_name,
         aws_role_name,
         aws_web_identity_token,
+        aws_session_token,
     ) = params_to_check
 
     ### SET REGION NAME
@@ -106,6 +119,7 @@ def init_rds_client(
             "sts",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
         )
 
         sts_response = sts_client.assume_role(RoleArn=aws_role_name, RoleSessionName=aws_session_name)
@@ -126,6 +140,7 @@ def init_rds_client(
             service_name="rds",
             aws_access_key_id=aws_access_key_id,
             aws_secret_access_key=aws_secret_access_key,
+            aws_session_token=aws_session_token,
             region_name=region_name,
             config=config,
         )
@@ -159,10 +174,13 @@ def generate_iam_auth_token(db_host, db_port, db_user, client: Any | None = None
             aws_region_name=os.getenv("AWS_REGION_NAME"),
             aws_access_key_id=os.getenv("AWS_ACCESS_KEY_ID"),
             aws_secret_access_key=os.getenv("AWS_SECRET_ACCESS_KEY"),
+            aws_session_token=os.getenv("AWS_SESSION_TOKEN"),
             aws_session_name=os.getenv("AWS_SESSION_NAME"),
             aws_profile_name=os.getenv("AWS_PROFILE_NAME"),
             aws_role_name=os.getenv("AWS_ROLE_NAME", os.getenv("AWS_ROLE_ARN")),
-            aws_web_identity_token=os.getenv("AWS_WEB_IDENTITY_TOKEN", os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")),
+            aws_web_identity_token=None
+            if _ignore_web_identity_token()
+            else os.getenv("AWS_WEB_IDENTITY_TOKEN", os.getenv("AWS_WEB_IDENTITY_TOKEN_FILE")),
         )
     else:
         boto_client = client
