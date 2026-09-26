@@ -3,6 +3,8 @@ from typing import Final
 import pytest
 from fastapi import HTTPException
 
+from litellm.proxy._types import UserAPIKeyAuth
+
 from litellm.proxy.agent_endpoints.auth.managed_authorization import (
     actor_admission_failure,
     invocation_target,
@@ -182,3 +184,28 @@ def test_managed_realtime_requires_a_model_and_ignores_completion_defaults(route
         ]
         == "requested"
     )
+
+
+def test_caller_cannot_construct_trusted_subject_or_policy() -> None:
+    context: Final = ManagedAgentContext(
+        agent_id="agent", binding_revision="current", mode="delegated", user_id="human"
+    )
+    auth: Final = UserAPIKeyAuth.model_validate(
+        {
+            "managed_agent_context": context,
+            "requires_fresh_policy": True,
+            "mcp_explicit_grants_only": True,
+            "managed_agent_policy": agent(),
+            "billing_agent_policy": agent(),
+            "invoked_agent_id": "forged-target",
+            "agent_invocation_cost": 0.0,
+        }
+    )
+    assert auth.requires_fresh_policy is False
+    assert auth.mcp_explicit_grants_only is False
+    assert "mcp_explicit_grants_only" not in auth.model_dump()
+    assert auth.managed_agent_context is None
+    assert auth.managed_agent_policy is None
+    assert auth.billing_agent_policy is None
+    assert auth.invoked_agent_id is None
+    assert auth.agent_invocation_cost is None
