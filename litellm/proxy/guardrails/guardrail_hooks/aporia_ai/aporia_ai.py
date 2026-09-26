@@ -24,6 +24,7 @@ from litellm.litellm_core_utils.logging_utils import (
     convert_litellm_response_object_to_str,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -44,9 +45,17 @@ class AporiaGuardrail(CustomGuardrail):
             GuardrailEventHooks.post_call,
         ]
 
-    def __init__(self, api_key: str | None = None, api_base: str | None = None, **kwargs):
+    def __init__(
+        self,
+        api_key: str | None = None,
+        api_base: str | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
+        **kwargs,
+    ):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.aporia_api_key = api_key or os.environ["APORIO_API_KEY"]
         self.aporia_api_base = api_base or os.environ["APORIO_API_BASE"]
         super().__init__(**kwargs)
@@ -129,7 +138,7 @@ class AporiaGuardrail(CustomGuardrail):
             # check if the response was flagged
             _json_response: Final = response.json()
             action: str = _json_response.get("action")  # possible values are modify, passthrough, block, rephrase
-            if action == "block":
+            if action != "passthrough":
                 raise HTTPException(
                     status_code=400,
                     detail={
