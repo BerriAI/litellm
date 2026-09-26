@@ -1937,6 +1937,53 @@ async def test_summary_model_allowed_when_within_rate_limit():
     assert not result.applied_edits[0].get("error")
 
 
+async def test_summary_model_allowed_while_the_caller_holds_the_keys_only_parallel_slot():
+    """The summary call runs inside a request the limiter already admitted, so the
+    caller's own in-flight slot must not trip a ``max_parallel_requests`` gauge."""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import _PROXY_MaxParallelRequestsHandler_v3
+    from litellm.proxy.utils import InternalUsageCache, hash_token
+
+    messages = _simple_messages()
+    mock_call = AsyncMock(return_value=_make_mock_response("<summary>ok</summary>"))
+    limiter = _PROXY_MaxParallelRequestsHandler_v3(internal_usage_cache=InternalUsageCache(DualCache()))
+    auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-compact-parallel-slot"), max_parallel_requests=1, models=["all-proxy-models"]
+    )
+    await limiter.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=limiter.internal_usage_cache.dual_cache,
+        data={"model": MODEL, "messages": messages},
+        call_type="acompletion",
+    )
+
+    with (
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._read_summary_model_setting",
+            return_value="claude-haiku-4-5",
+        ),
+        patch("litellm.token_counter", return_value=200_000),
+        patch(
+            "litellm.llms.anthropic.experimental_pass_through.context_management.editors.compact._call_summary_model",
+            mock_call,
+        ),
+        patch("litellm.proxy.proxy_server.proxy_logging_obj", _proxy_logging_like_the_live_proxy(limiter)),
+    ):
+        result = await apply_compact_20260112(
+            model=MODEL,
+            messages=messages,
+            tools=None,
+            system=None,
+            edit_spec=_EDIT_SPEC_DEFAULT,
+            user_api_key_auth=auth,
+        )
+
+    mock_call.assert_awaited_once()
+    assert result.compaction_block is not None
+    assert not result.applied_edits[0].get("error")
+
+
 async def test_summary_model_rate_limit_skipped_for_legacy_limiter():
     """A limiter without the v3 read-only check surface fails open so the summary
     call still proceeds (its usage is still charged post-call)."""

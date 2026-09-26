@@ -6928,7 +6928,7 @@ async def test_fail_closed_read_only_check_rejects_with_503_when_redis_counters_
     assert response["overall_code"] == "OK"
 
 
-@pytest.mark.parametrize("stored_counter_value, expected_code", [(1, "OK"), (3, "OVER_LIMIT")])
+@pytest.mark.parametrize("stored_counter_value, expected_code", [(1, "OK"), (2, "OVER_LIMIT"), (3, "OVER_LIMIT")])
 @pytest.mark.asyncio
 async def test_read_only_check_reports_the_redis_counters_without_incrementing_them(
     stored_counter_value, expected_code

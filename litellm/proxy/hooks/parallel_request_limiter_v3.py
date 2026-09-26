@@ -1246,10 +1246,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         keys_to_fetch: list[str],
         cache_values: CacheCounterValues,
         key_metadata: dict[str, WindowKeyMetadata],
+        read_only: bool = False,
     ) -> RateLimitResponse:
         """
         Check if the cache values are over the limit.
         """
+        pending_increment: Final = 1 if read_only else 0
         statuses: Final[list[RateLimitStatus]] = []
         overall_code = "OK"
 
@@ -1274,7 +1276,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if current_limit is None or rate_limit_type is None:
                 continue
 
-            if counter_value is not None and int(counter_value) > current_limit:
+            if counter_value is not None and int(counter_value) + pending_increment > current_limit:
                 overall_code = "OVER_LIMIT"
                 item_code = "OVER_LIMIT"
 
@@ -1516,7 +1518,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
             if cache_values is not None:
-                rate_limit_response: Final = self.is_cache_list_over_limit(keys_to_fetch, cache_values, key_metadata)
+                rate_limit_response: Final = self.is_cache_list_over_limit(
+                    keys_to_fetch, cache_values, key_metadata, read_only=read_only
+                )
                 if rate_limit_response["overall_code"] == "OVER_LIMIT":
                     return rate_limit_response
 
@@ -1569,7 +1573,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     window_size=self.window_size,
                 )
 
-            windowed_response = self.is_cache_list_over_limit(keys_to_fetch, cache_values, key_metadata)
+            windowed_response = self.is_cache_list_over_limit(
+                keys_to_fetch, cache_values, key_metadata, read_only=read_only
+            )
             if windowed_response["overall_code"] == "OVER_LIMIT":
                 return windowed_response
 
