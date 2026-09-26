@@ -227,7 +227,7 @@ def _bearer(rig: Rig, marker: Canary, secret: Canary) -> None:
     )
 
 
-@pytest.mark.timeout(240)  # full S1/S2 walk: every table and ~400 GET routes as three callers at most
+@pytest.mark.timeout(240)
 @pytest.mark.parametrize("outcome", OUTCOMES)
 def test_virtual_key_raw_value_authenticates_and_is_stored_only_as_a_hash(
     rig: Rig, outcome: str, request: pytest.FixtureRequest
@@ -265,7 +265,7 @@ def test_virtual_key_raw_value_authenticates_and_is_stored_only_as_a_hash(
         )
 
 
-@pytest.mark.timeout(240)  # full S1/S2 walk: every table and ~400 GET routes as three callers at most
+@pytest.mark.timeout(240)
 @pytest.mark.parametrize("outcome", OUTCOMES)
 def test_master_key_from_env_authorizes_admin_calls_only(
     tmp_path: Path, outcome: str, request: pytest.FixtureRequest
@@ -297,7 +297,7 @@ def test_master_key_from_env_authorizes_admin_calls_only(
             )
 
 
-@pytest.mark.timeout(240)  # full S1/S2 walk: every table and ~400 GET routes as three callers at most
+@pytest.mark.timeout(240)
 @pytest.mark.parametrize("outcome", OUTCOMES)
 def test_model_api_key_added_through_the_api_reaches_only_the_provider(
     rig: Rig, outcome: str, request: pytest.FixtureRequest
@@ -332,7 +332,7 @@ def test_model_api_key_added_through_the_api_reaches_only_the_provider(
         )
 
 
-@pytest.mark.timeout(240)  # full S1/S2 walk: every table and ~400 GET routes as three callers at most
+@pytest.mark.timeout(240)
 @pytest.mark.parametrize("outcome", OUTCOMES)
 def test_named_credential_reaches_only_the_provider(rig: Rig, outcome: str, request: pytest.FixtureRequest) -> None:
     started: Final = datetime.now(UTC)
@@ -411,7 +411,7 @@ def _signed_with(request: Request, secret: str) -> bool:
     return access == AWS_ACCESS_KEY and hmac.compare_digest(expected, fields["Signature"])
 
 
-@pytest.mark.timeout(240)  # full S1/S2 walk: every table and ~400 GET routes as three callers at most
+@pytest.mark.timeout(240)
 @pytest.mark.parametrize("outcome", OUTCOMES)
 def test_aws_secret_key_signs_the_provider_request_and_stays_encrypted(
     rig: Rig, outcome: str, request: pytest.FixtureRequest
@@ -519,7 +519,7 @@ def _assertion_key_id(request: Request) -> str:
     return string_value(json.loads(base64.urlsafe_b64decode(header + "=" * (-len(header) % 4)))["kid"])
 
 
-@pytest.mark.timeout(240)  # full S1/S2 walk: every table and ~400 GET routes as three callers at most
+@pytest.mark.timeout(240)
 @pytest.mark.parametrize("outcome", OUTCOMES)
 def test_vertex_service_account_and_its_token_reach_only_the_token_endpoint_and_provider(
     rig: Rig, outcome: str, request: pytest.FixtureRequest
@@ -575,7 +575,7 @@ def test_vertex_service_account_and_its_token_reach_only_the_token_endpoint_and_
         )
 
 
-@pytest.mark.timeout(240)  # full S1/S2 walk: every table and ~400 GET routes as three callers at most
+@pytest.mark.timeout(240)
 @pytest.mark.parametrize("outcome", OUTCOMES)
 def test_team_model_config_credential_override_reaches_only_the_provider(
     rig: Rig, outcome: str, request: pytest.FixtureRequest
@@ -637,7 +637,7 @@ def _guardrail_delivered(guardrail: Recorder, marker: Canary, secret: Canary) ->
     )
 
 
-@pytest.mark.timeout(240)  # full S1/S2 walk: every table and ~400 GET routes as three callers at most
+@pytest.mark.timeout(240)
 @pytest.mark.parametrize("outcome", OUTCOMES)
 def test_config_guardrail_api_key_reaches_only_the_guardrail(
     tmp_path: Path, outcome: str, request: pytest.FixtureRequest
@@ -703,7 +703,7 @@ def _assert_callback_secrets_gated(gateway: Gateway, internal_user: str, viewer:
     assert secrets == {"GENERIC_LOGGER_HEADERS": "REDACTED", "LANGFUSE_SECRET_KEY": "REDACTED"}, secrets
 
 
-@pytest.mark.timeout(240)  # full S1/S2 walk: every table and ~400 GET routes as three callers at most
+@pytest.mark.timeout(240)
 @pytest.mark.parametrize("outcome", OUTCOMES)
 def test_sink_credentials_from_env_reach_only_their_sink(
     tmp_path: Path, outcome: str, request: pytest.FixtureRequest
