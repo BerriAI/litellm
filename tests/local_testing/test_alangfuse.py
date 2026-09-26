@@ -5,12 +5,17 @@ import logging
 import os
 from typing import Any, Optional
 from unittest.mock import MagicMock, patch
+import threading
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+from opentelemetry.proto.collector.trace.v1.trace_service_pb2 import ExportTraceServiceRequest
 
 logging.basicConfig(level=logging.DEBUG)
 
 import litellm
 from litellm import completion
 from litellm.caching import InMemoryCache
+from litellm.integrations.langfuse.langfuse_sdk import resolve_trace_id
 
 litellm.num_retries = 3
 litellm.success_callback = ["langfuse"]
@@ -36,7 +41,7 @@ def langfuse_client():
         langfuse_client = langfuse.Langfuse(
             public_key=os.environ["LANGFUSE_PUBLIC_KEY"],
             secret_key=os.environ["LANGFUSE_SECRET_KEY"],
-            host="https://us.cloud.langfuse.com",
+            host=os.environ.get("LANGFUSE_HOST", "https://us.cloud.langfuse.com"),
         )
         litellm.in_memory_llm_clients_cache.set_cache(
             key=_langfuse_cache_key,
@@ -205,55 +210,91 @@ def create_async_task(**completion_kwargs):
     return asyncio.create_task(litellm.acompletion(**completion_args))
 
 
+def _otlp_capture(exports: list[bytes]) -> type[BaseHTTPRequestHandler]:
+    class OtlpCapture(BaseHTTPRequestHandler):
+        def do_POST(self):
+            exports.append(self.rfile.read(int(self.headers.get("content-length", 0))))
+            self.send_response(200)
+            self.end_headers()
+
+        def do_GET(self):
+            self.send_response(200)
+            self.send_header("content-type", "application/json")
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *args):
+            pass
+
+    return OtlpCapture
+
+
+@pytest.fixture
+def local_langfuse():
+    exports: list[bytes] = []
+    server = HTTPServer(("127.0.0.1", 0), _otlp_capture(exports))
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    yield f"http://127.0.0.1:{server.server_port}", exports
+    server.shutdown()
+
+
+def _exported_spans(exports: list[bytes]):
+    for body in exports:
+        for resource_spans in ExportTraceServiceRequest.FromString(body).resource_spans:
+            for scope_spans in resource_spans.scope_spans:
+                yield from scope_spans.spans
+
+
+def _exported_attributes(exports: list[bytes], trace_id: str) -> list[dict[str, str]]:
+    return [
+        {attribute.key: attribute.value.string_value for attribute in span.attributes}
+        for span in _exported_spans(list(exports))
+        if span.trace_id.hex() == trace_id
+    ]
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("stream", [False, True])
-@pytest.mark.flaky(retries=12, delay=2)
-async def test_langfuse_logging_without_request_response(stream, langfuse_client):
-    try:
-        from litellm._uuid import uuid
+async def test_langfuse_logging_without_request_response(stream, local_langfuse, monkeypatch):
+    from litellm._uuid import uuid
 
-        _unique_trace_name = f"litellm-test-{str(uuid.uuid4())}"
-        litellm.set_verbose = True
-        litellm.turn_off_message_logging = True
-        litellm.success_callback = ["langfuse"]
-        response = await create_async_task(
-            model="gpt-3.5-turbo",
-            stream=stream,
-            metadata={"trace_id": _unique_trace_name},
-        )
-        print(response)
-        if stream:
-            async for chunk in response:
-                print(chunk)
+    langfuse_host, exports = local_langfuse
+    prompt = f"prompt-{uuid.uuid4()}"
+    answer = f"answer-{uuid.uuid4()}"
+    trace_name = f"litellm-test-{uuid.uuid4()}"
+    monkeypatch.setattr(litellm, "turn_off_message_logging", True)
+    monkeypatch.setattr(litellm, "success_callback", ["langfuse"])
+    response = await litellm.acompletion(
+        model="gpt-3.5-turbo",
+        messages=[{"role": "user", "content": prompt}],
+        mock_response=answer,
+        stream=stream,
+        metadata={"trace_id": trace_name},
+        langfuse_public_key=f"pk-lf-{trace_name}",
+        langfuse_secret_key="sk-lf-local",
+        langfuse_host=langfuse_host,
+    )
+    if stream:
+        async for _ in response:
+            pass
 
-        langfuse_client.flush()
-        await asyncio.sleep(5)
+    generations: list[dict[str, str]] = []
+    for _ in range(60):
+        generations = [
+            attributes
+            for attributes in _exported_attributes(exports, resolve_trace_id(trace_name))
+            if attributes.get("langfuse.observation.type") == "generation"
+        ]
+        if generations:
+            break
+        await asyncio.sleep(0.5)
 
-        # get trace with _unique_trace_name
-        trace = langfuse_client.get_generations(trace_id=_unique_trace_name)
-
-        print("trace_from_langfuse", trace)
-
-        _trace_data = trace.data
-
-        if (
-            len(_trace_data) == 0
-        ):  # prevent infrequent list index out of range error from langfuse api
-            return
-
-        print(f"_trace_data: {_trace_data}")
-        assert _trace_data[0].input == {
-            "messages": [{"content": "redacted-by-litellm", "role": "user"}]
-        }
-        assert _trace_data[0].output == {
-            "role": "assistant",
-            "content": "redacted-by-litellm",
-            "function_call": None,
-            "tool_calls": None,
-        }
-
-    except Exception as e:
-        pytest.fail(f"An exception occurred - {e}")
+    assert len(generations) == 1, generations
+    assert json.loads(generations[0]["langfuse.observation.input"]) == {
+        "messages": [{"content": "redacted-by-litellm", "role": "user"}]
+    }
+    assert json.loads(generations[0]["langfuse.observation.output"])["content"] == "redacted-by-litellm"
+    assert all(prompt.encode() not in body and answer.encode() not in body for body in exports)
 
 
 # Get the current directory of the file being run

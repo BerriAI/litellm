@@ -68,6 +68,7 @@ from litellm.constants import (
     DEFAULT_SHARED_HEALTH_CHECK_LOCK_TTL,
     DEFAULT_SHARED_HEALTH_CHECK_TTL,
     DEFAULT_SLACK_ALERTING_THRESHOLD,
+    LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
     LITELLM_EMBEDDING_PROVIDERS_SUPPORTING_INPUT_ARRAY_OF_TOKENS,
     LITELLM_SETTINGS_SAFE_DB_OVERRIDES,
     LITELLM_UI_ALLOW_HEADERS,
@@ -293,6 +294,7 @@ from litellm.constants import (
     REALTIME_SESSION_FAILURE_LOGGED_KEY,
     REALTIME_SESSION_SUCCESS_LOGGED_KEY,
     ROUTER_SETTINGS_MANAGED_OUTSIDE_CONFIG,
+    SPEND_CAPTURE_RATE_CHECK_JOB_ID,
     USER_SPEND_ALERTS_JOB_ID,
     WEEKLY_SPEND_REPORT_JOB_ID,
 )
@@ -474,6 +476,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     project_spend_counter_key,
     tag_cache_key,
 )
+from litellm.proxy.common_utils.validation_error_body import public_validation_errors
 from litellm.proxy.config_resolvers import (
     FieldSource,
     SettingsStore,
@@ -549,11 +552,10 @@ from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger, run_sp
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.list_api.common import (
     ManagementProblem,
-    ValidationErrorDetail,
     problem_response,
     request_validation_problem,
 )
-from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
 from litellm.proxy.logging_endpoints.callback_logs_endpoints import (
     rust_control_plane_router,
 )
@@ -758,6 +760,9 @@ from litellm.proxy.spend_tracking.budget_reservation import (
 from litellm.proxy.spend_tracking.daily_global_spend_rollup import (
     run_scheduled_daily_global_spend_reconcile,
 )
+from litellm.proxy.spend_tracking.spend_capture_rate import (
+    run_scheduled_spend_capture_rate_check,
+)
 from litellm.proxy.spend_tracking.spend_counter_batch import (
     PendingSpendIncrement,
     active_spend_counter_batch,
@@ -856,6 +861,7 @@ from litellm.types.proxy.model_deprecation import (
     DEFAULT_DEPRECATION_WARN_DAYS,
     ModelDeprecationResponse,
 )
+from litellm.types.proxy.spend_capture_rate import SpendCaptureProvider, SpendCaptureRateCheckSettings
 from litellm.types.realtime import RealtimeQueryParams
 from litellm.types.router import (
     ClassifierPlugin,
@@ -1117,17 +1123,21 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     if shutdown_billing_metrics_recorder is not None:
         shutdown_billing_metrics_recorder()
 
-    # flush remaining langfuse logs
-    if "langfuse" in litellm.success_callback:
+    if "litellm.integrations.langfuse.langfuse_sdk" in sys.modules:
         try:
-            # flush langfuse logs on shutdow
-            from litellm.utils import langFuseLogger
+            from litellm.integrations.langfuse.langfuse_sdk import flush_langfuse_tracing
 
-            if langFuseLogger is not None:
-                langFuseLogger.Langfuse.flush()
-        except Exception:
-            # [DO NOT BLOCK shutdown events for this]
-            pass
+            flushed: Final = await asyncio.to_thread(flush_langfuse_tracing, LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS)
+            if flushed:
+                verbose_proxy_logger.info("Langfuse export channels flushed")
+            else:
+                verbose_proxy_logger.warning(
+                    "Langfuse shutdown flush incomplete: a channel did not finish within %dms or a batch was rejected "
+                    "(see the export errors above); remaining spans are left to the background exporter",
+                    LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS,
+                )
+        except Exception as e:  # noqa: BLE001  # shutdown must continue even if the flush fails
+            verbose_proxy_logger.exception("Error flushing Langfuse export channels on shutdown: %s", e)
 
     ## RESET CUSTOM VARIABLES ##
     cleanup_router_config_variables()
@@ -1973,16 +1983,14 @@ class _ExceptionRow(TypedDict, total=False):
 
 @app.exception_handler(RequestValidationError)
 async def otel_request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    public_errors: Final = public_validation_errors(exc.errors())
+    public_exc: Final = RequestValidationError(public_errors).with_traceback(exc.__traceback__)
     if request.url.path.startswith(MANAGEMENT_V1_PREFIX):
-        validation_errors: Final[Sequence[ValidationErrorDetail]] = exc.errors()
-        problem: Final = request_validation_problem(validation_errors)
-        _close_dangling_otel_server_span(request, problem.status, exc=exc)
+        problem: Final = request_validation_problem(public_errors)
+        _close_dangling_otel_server_span(request, problem.status, exc=public_exc)
         return problem_response(problem)
-    _close_dangling_otel_server_span(request, 422, exc=exc)
-    return JSONResponse(
-        status_code=422,
-        content={"detail": jsonable_encoder(exc.errors())},
-    )
+    _close_dangling_otel_server_span(request, 422, exc=public_exc)
+    return JSONResponse(status_code=422, content={"detail": public_errors})
 
 
 @app.exception_handler(Exception)
@@ -5060,6 +5068,11 @@ def _bind_general_settings_store(settings: SettingsStore) -> None:
     general_settings = settings  # pyright: ignore[reportAssignmentType]  # legacy global accepts mappings
 
 
+def _current_general_settings() -> Mapping[str, object]:
+    """The live ``general_settings``, whichever object a config reload has bound since the caller was created."""
+    return general_settings
+
+
 @lru_cache(maxsize=4096)
 def _log_ignored_cost_map_copy(model_id: str, fields: tuple[str, ...]) -> None:
     verbose_proxy_logger.warning(
@@ -6326,6 +6339,11 @@ class ProxyConfig:
         general_settings = config.get("general_settings", {})
         if general_settings is None:
             general_settings = {}
+
+        if general_settings.get("mcp_advertised_versions") is not None:
+            from litellm.types.mcp import MCPAdvertisedVersions
+
+            TypeAdapter(MCPAdvertisedVersions).validate_python(general_settings["mcp_advertised_versions"])
 
         if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
             warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
@@ -10448,6 +10466,13 @@ class ProxyStartupEvent:
             prisma_client=prisma_client,
         )
 
+        cls._initialize_spend_capture_rate_check_job(
+            scheduler=scheduler,
+            proxy_logging_obj=proxy_logging_obj,
+            prisma_client=prisma_client,
+            read_general_settings=_current_general_settings,
+        )
+
         ### PTU DAILY ROLLUP ###
         from litellm.proxy.spend_tracking.ptu_feature_flag import (
             is_ptu_cost_attribution_enabled,
@@ -10821,6 +10846,64 @@ class ProxyStartupEvent:
             misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
             next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
         )
+
+    @classmethod
+    def _initialize_spend_capture_rate_check_job(
+        cls,
+        scheduler: AsyncIOScheduler,
+        proxy_logging_obj: ProxyLogging,
+        prisma_client: PrismaClient,
+        read_general_settings: Callable[[], Mapping[str, object]],
+    ) -> None:
+        """The job always runs and re-reads ``spend_capture_rate_check`` each run; an absent setting clears the gauge."""
+        cls._spend_capture_rate_check_settings(read_general_settings())
+
+        async def alert(message: str) -> None:
+            await proxy_logging_obj.alerting_handler(
+                message=message,
+                level="High",
+                alert_type=AlertType.failed_tracking_spend,
+            )
+
+        def publish(provider: str, capture_rate: float | None) -> None:
+            from litellm.integrations.prometheus import PrometheusLogger
+
+            for logger in litellm.logging_callback_manager.get_custom_loggers_for_type(callback_type=PrometheusLogger):
+                if isinstance(logger, PrometheusLogger):
+                    logger.set_spend_capture_rate(api_provider=provider, capture_rate=capture_rate)
+
+        async def check() -> None:
+            settings: Final = cls._spend_capture_rate_check_settings(read_general_settings())
+            if settings is None:
+                for provider in get_args(SpendCaptureProvider):
+                    publish(provider, None)
+                return
+            await run_scheduled_spend_capture_rate_check(
+                prisma_client,
+                settings,
+                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
+                alert=alert,
+                publish=publish,
+            )
+
+        scheduler.add_job(
+            check,
+            "cron",
+            hour=1,
+            minute=15,
+            timezone="UTC",
+            id=SPEND_CAPTURE_RATE_CHECK_JOB_ID,
+            replace_existing=True,
+            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
+            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
+        )
+
+    @staticmethod
+    def _spend_capture_rate_check_settings(
+        general_settings: Mapping[str, object],
+    ) -> SpendCaptureRateCheckSettings | None:
+        raw_settings: Final = general_settings.get("spend_capture_rate_check")
+        return None if raw_settings is None else SpendCaptureRateCheckSettings.model_validate(raw_settings)
 
     @classmethod
     async def _initialize_slack_alerting_jobs(
@@ -16416,8 +16499,9 @@ async def async_queue_request(
             # Covers both missing and JSON-string metadata (multipart /
             # extra_body); see above for the same guard upstream.
             data["metadata"] = {}
-        data["metadata"]["user_api_key"] = user_api_key_dict.api_key
-        data["metadata"]["user_api_key_hash"] = user_api_key_dict.api_key
+        logged_api_key: Final = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
+        data["metadata"]["user_api_key"] = logged_api_key
+        data["metadata"]["user_api_key_hash"] = logged_api_key
         data["metadata"]["user_api_key_metadata"] = strip_callback_config(user_api_key_dict.metadata)
         _headers: Final = _safe_get_request_headers(request).copy()
         _headers.pop("authorization", None)  # do not store the original `sk-..` api key in the db

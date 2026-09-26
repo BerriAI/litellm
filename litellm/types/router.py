@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 
 from .completion import CompletionRequest
 from .embedding import EmbeddingRequest
+from .litellm_params import RoutingStrategyName
 from .llms.bedrock import AwsSessionTag
 from .llms.openai import OpenAIFileObject
 from .search import SearchProvider
@@ -104,12 +105,7 @@ class RouterConfig(BaseModel):
     context_window_fallbacks: list | None = []
     model_group_alias: dict[str, list[str]] | None = {}
     retry_after: int | None = 0
-    routing_strategy: Literal[
-        "simple-shuffle",
-        "least-busy",
-        "usage-based-routing",
-        "latency-based-routing",
-    ] = "simple-shuffle"
+    routing_strategy: RoutingStrategyName = "simple-shuffle"
     routing_groups: list[RoutingGroup] | None = None
 
     model_config = ConfigDict(protected_namespaces=())
@@ -349,6 +345,7 @@ class CredentialLiteLLMParams(BaseModel):
 
     ## OBJECT STORAGE (files / batches) ##
     gcs_bucket_name: str | None = None
+    bucket_name: str | None = None
 
     ## AWS BEDROCK / SAGEMAKER ##
     aws_access_key_id: str | None = None

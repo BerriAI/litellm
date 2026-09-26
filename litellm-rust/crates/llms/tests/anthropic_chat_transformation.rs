@@ -1,7 +1,9 @@
 use litellm_llms::{
+    Error,
     anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
-    base_llm::chat::transformation::{
-        BaseConfig, Error, ProviderChatResponseData, RequestAuth, Unsupported,
+    base_llm::{
+        auth::AuthScheme,
+        chat::transformation::{BaseConfig, ProviderChatResponseData, Unsupported},
     },
 };
 use litellm_types::{llms::openai::ChatMessage, utils::ChatCompletionsResponse};
@@ -430,15 +432,22 @@ fn resolves_the_messages_url_and_x_api_key_auth() {
             .expect("url builds"),
         "https://api.anthropic.com/v1/messages"
     );
-    assert_eq!(
-        config
-            .auth(Some("sk-x"), "claude-sonnet-4-5", &Map::new(), &|_| None)
-            .expect("auth resolves"),
-        RequestAuth::Header {
-            name: "x-api-key",
-            value: "sk-x".to_string()
-        }
-    );
+    let validated = config
+        .validate_environment(
+            Vec::new(),
+            Some("sk-x"),
+            "claude-sonnet-4-5",
+            &Map::new(),
+            &|_| None,
+        )
+        .expect("auth resolves");
+    assert!(matches!(
+        validated.auth,
+        AuthScheme::Credential {
+            placement: litellm_auth::CredentialPlacement::Header("x-api-key"),
+            ref secret
+        } if secret.expose() == "sk-x"
+    ));
     assert_eq!(
         config.default_headers(),
         &[

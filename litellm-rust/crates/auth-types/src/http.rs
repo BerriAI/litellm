@@ -7,7 +7,7 @@ pub enum CredentialPlacement {
 }
 
 impl CredentialPlacement {
-    pub fn header_name(self) -> &'static str {
+    pub const fn header_name(self) -> &'static str {
         match self {
             Self::Bearer => "Authorization",
             Self::Header(name) => name,
@@ -38,21 +38,6 @@ pub fn apply_credential(
             .chain(headers)
             .collect(),
     )
-}
-
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum RequestAuth {
-    Header {
-        name: &'static str,
-        value: String,
-    },
-    Bearer {
-        token: String,
-    },
-    AwsSigV4 {
-        region: String,
-        service: &'static str,
-    },
 }
 
 #[cfg(test)]
