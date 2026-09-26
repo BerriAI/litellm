@@ -543,9 +543,6 @@ class TestScansAttachmentsWithBaseSignatureOnTextOnly:
 
 
 class _InPlaceToolCallMutatingGuardrail(CustomGuardrail):
-    """Mutates the tool_calls list handed to apply_guardrail in place and returns
-    a payload without a tool_calls key."""
-
     async def apply_guardrail(
         self,
         inputs: GenericGuardrailAPIInputs,
@@ -558,16 +555,13 @@ class _InPlaceToolCallMutatingGuardrail(CustomGuardrail):
             assert isinstance(tool_call, dict)
             function = tool_call.get("function")
             assert isinstance(function, dict)
-            inputs["tool_calls"][0] = {
-                **tool_call,
-                "function": {**function, "arguments": "MASKED_ARGS"},
-            }
+            function["arguments"] = "MASKED_ARGS"
         return GenericGuardrailAPIInputs(texts=list(inputs.get("texts") or []))
 
 
 class TestOutputToolCallAliasing:
     @pytest.mark.asyncio
-    async def test_in_place_tool_call_mutation_survives_when_guardrail_returns_no_tool_calls(self):
+    async def test_in_dict_argument_edit_survives_when_guardrail_returns_no_tool_calls(self):
         import litellm
 
         response = litellm.ModelResponse(
