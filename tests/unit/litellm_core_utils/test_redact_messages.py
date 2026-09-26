@@ -163,6 +163,58 @@ def test_streaming_redaction_redacts_delta_provider_fields_without_touching_the_
     assert fields == _provider_fields()
 
 
+@pytest.mark.parametrize("surface", ("typed", "dict", "standard", "callback"))
+def test_responses_redaction_removes_instructions_without_changing_the_response(surface: str) -> None:
+    response: Final = litellm.ResponsesAPIResponse.model_validate(
+        {
+            **mock_responses_api_response("private answer").model_dump(),
+            "instructions": "private system instructions",
+            "reasoning": {"effort": "low", "summary": "auto"},
+            "output": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_test",
+                    "summary": [{"type": "summary_text", "text": "private reasoning"}],
+                },
+                {
+                    "type": "function_call",
+                    "id": "fc_test",
+                    "call_id": "call_test",
+                    "name": "lookup",
+                    "arguments": "private arguments",
+                },
+            ],
+        }
+    )
+    original: Final = response.model_dump()
+    payload: Final = {"response": copy.deepcopy(original), "model": "test-model"}
+    logger: Final = CustomLogger()
+    logger.turn_off_message_logging = True
+
+    surfaces: Final = {
+        "typed": lambda: perform_redaction({}, response).model_dump(),
+        "dict": lambda: perform_redaction({}, original),
+        "standard": lambda: redacted_standard_logging_payload(payload)["response"],
+        "callback": lambda: logger.redact_standard_logging_payload_from_model_call_details(
+            {"standard_logging_object": payload}
+        )["standard_logging_object"]["response"],
+    }
+    redacted: Final = surfaces[surface]()
+
+    assert redacted == {
+        **original,
+        "instructions": "redacted-by-litellm",
+        "reasoning": None,
+        "output": [
+            {**original["output"][0], "summary": [{"type": "summary_text", "text": "redacted-by-litellm"}]},
+            {**original["output"][1], "arguments": "redacted-by-litellm"},
+        ],
+    }
+    assert "private" not in json.dumps(redacted)
+    assert response.model_dump() == original
+    assert payload["response"] == original
+
+
 @pytest.fixture(autouse=True)
 def _reset_global_redaction():
     """Ensure the global setting is off for every test."""
