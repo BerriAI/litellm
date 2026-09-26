@@ -17,12 +17,11 @@ from collections.abc import Mapping
 from dataclasses import dataclass
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, RootModel
-
 from e2e_config import settle_propagation
-from e2e_http import Headers, NoBody, Result, Success, UnknownApiError, unwrap
+from e2e_http import AuthHeaders, Headers, NoBody, Result, Success, UnknownApiError, unwrap
 from models import KeyGenerateBody, McpServerListResponse, McpServerRow, ObjectPermission
 from proxy_client import ProxyClient
+from pydantic import BaseModel, ConfigDict, Field, RootModel
 
 McpToolArg = str | int | float | bool | list[str] | dict[str, str]
 McpToolArguments = Mapping[str, McpToolArg]
@@ -254,10 +253,10 @@ class McpClient:
             )
         )
 
-    def list_tools(self, key: str) -> Result[McpToolsListResponse]:
+    def list_tools(self, key: str, *, headers: AuthHeaders | None = None) -> Result[McpToolsListResponse]:
         return self.proxy.transport.get(
             "/mcp-rest/tools/list",
-            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            headers=headers if headers is not None else ApiKeyHeaders(x_litellm_api_key=key),
             params=NoBody(),
             response_type=McpToolsListResponse,
         )
@@ -308,6 +307,7 @@ class McpClient:
         server_id: str,
         name: str,
         arguments: McpToolArguments,
+        headers: AuthHeaders | None = None,
     ) -> McpCallToolResponse:
         """Poll tools/call until the result is not a multi-worker registry miss.
 
@@ -318,7 +318,7 @@ class McpClient:
         deadline = time.monotonic() + self.proxy.poll_timeout
         last: Result[McpCallToolResponse] | None = None
         while True:
-            last = self.call_tool(key, server_id=server_id, name=name, arguments=arguments)
+            last = self.call_tool(key, server_id=server_id, name=name, arguments=arguments, headers=headers)
             if not _is_mcp_not_synced(last, tool_name=name):
                 return unwrap(last)
             if time.monotonic() >= deadline:
@@ -393,10 +393,11 @@ class McpClient:
         server_id: str,
         name: str,
         arguments: McpToolArguments,
+        headers: AuthHeaders | None = None,
     ) -> Result[McpCallToolResponse]:
         return self.proxy.transport.post(
             "/mcp-rest/tools/call",
-            headers=ApiKeyHeaders(x_litellm_api_key=key),
+            headers=headers if headers is not None else ApiKeyHeaders(x_litellm_api_key=key),
             json=McpCallToolBody(
                 name=name, arguments=dict(arguments), server_id=server_id
             ),

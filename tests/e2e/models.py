@@ -1503,9 +1503,15 @@ class UserNewResponse(BaseModel):
     user_id: str
 
 
+class UserScimMetadata(BaseModel):
+    scim_active: bool | None = None
+
+
 class UserUpdateBody(BaseModel):
     user_id: str
     user_role: UserRole
+    object_permission: ObjectPermission | None = None
+    metadata: UserScimMetadata | None = None
 
 
 class UserInfoParams(BaseModel):
@@ -1516,6 +1522,7 @@ class UserData(BaseModel):
     user_id: str | None = None
     user_email: str | None = None
     user_role: str | None = None
+    metadata: UserScimMetadata | None = None
 
 
 class UserInfoResponse(BaseModel):

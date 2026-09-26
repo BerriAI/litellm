@@ -182,6 +182,8 @@ mcp.<operation>.<auth_family>.<assertion>
   operation   : list_tools | call_tool | list_resources | read_resource | list_prompts | get_prompt
   auth_family : none | api_key | bearer | oauth
   assertion   : succeeds | denied_without_permission | persists_across_processes
+                | access_group_scoped | toolset_scoped | scoped | denied_invalid_signature
+                | denied_expired | denied_inactive_user | explicit_header_precedence
   e.g.  mcp.call_tool.oauth.succeeds
 ```
 
