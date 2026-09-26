@@ -11,7 +11,7 @@ use wiremock::{
 
 fn manager(server: &MockServer) -> AzureKeyVault {
     AzureKeyVault::with_client(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         server.uri().parse().unwrap(),
         Arc::new(|name: &str| (name == "AZURE_AD_TOKEN").then(|| "fake".to_owned())),
     )
@@ -25,6 +25,7 @@ async fn reads_secret_with_bearer_token_and_api_version() {
     Mock::given(path("/secrets/OPENAI-API-KEY"))
         .and(query_param("api-version", "7.4"))
         .and(header("authorization", "Bearer fake"))
+        .and(header("accept", "application/json"))
         .respond_with(
             ResponseTemplate::new(200)
                 .set_body_json(serde_json::json!({"value": "s3cret", "id": "secret-id"})),
@@ -40,6 +41,23 @@ async fn reads_secret_with_bearer_token_and_api_version() {
         .unwrap();
 
     assert_eq!(secret, Secret::String(SecretValue::new("s3cret")));
+}
+
+#[rstest]
+#[tokio::test]
+async fn preserves_secret_contents_and_redacts_debug_output() {
+    let server = MockServer::start().await;
+    let value = " \tvalue-π\n";
+    Mock::given(path("/secrets/NAME"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(serde_json::json!({"value": value})))
+        .expect(1)
+        .mount(&server)
+        .await;
+
+    let secret = manager(&server).get_secret("NAME").await.unwrap().unwrap();
+
+    assert_eq!(secret.as_str(), Some(value));
+    assert!(!format!("{secret:?}").contains(value));
 }
 
 #[rstest]
@@ -112,11 +130,14 @@ fn new_validates_vault_environment(
     #[case] uri: Option<&'static str>,
     #[case] missing_environment: bool,
 ) {
-    let result = AzureKeyVault::new(Arc::new(move |name: &str| {
-        (name == "AZURE_KEY_VAULT_URI")
-            .then(|| uri.map(str::to_owned))
-            .flatten()
-    }));
+    let result = AzureKeyVault::new(
+        litellm_http::Client::plain_for_test(),
+        Arc::new(move |name: &str| {
+            (name == "AZURE_KEY_VAULT_URI")
+                .then(|| uri.map(str::to_owned))
+                .flatten()
+        }),
+    );
 
     if missing_environment {
         assert!(matches!(
@@ -137,7 +158,7 @@ fn new_validates_vault_environment(
 #[case::local("http://localhost:8080", "https://localhost/.default")]
 fn derives_scope_from_vault_host(#[case] uri: &str, #[case] expected: &str) {
     let manager = AzureKeyVault::with_client(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         uri.parse().unwrap(),
         Arc::new(|_: &str| None),
     )
@@ -166,7 +187,7 @@ async fn missing_credentials_do_not_request_vault() {
 
 fn manager_without_credentials(server: &MockServer) -> AzureKeyVault {
     AzureKeyVault::with_client(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         server.uri().parse().unwrap(),
         Arc::new(|name: &str| {
             (name == "AZURE_CREDENTIAL").then(|| "ClientSecretCredential".to_owned())
@@ -229,4 +250,23 @@ async fn parity_fixture_matches_python_backend_contract(parity_fixture: Fixture)
             );
         }
     }
+}
+
+#[tokio::test]
+async fn trait_read_limits_the_operation_duration() {
+    use litellm_secrets_types::{AzureOperationContext, BaseSecretManager};
+    use std::time::Duration;
+    let server = MockServer::start().await;
+    Mock::given(wiremock::matchers::method("GET"))
+        .respond_with(ResponseTemplate::new(200).set_delay(Duration::from_secs(1)))
+        .mount(&server)
+        .await;
+    let manager = manager(&server);
+    let context = AzureOperationContext {
+        timeout: Some(Duration::from_millis(30)),
+    };
+    assert!(matches!(
+        BaseSecretManager::async_read_secret(&manager, "key", &context).await,
+        Err(Error::Timeout)
+    ));
 }

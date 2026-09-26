@@ -1,11 +1,40 @@
 use litellm_core::responses::websocket::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
-use pyo3::prelude::*;
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
 use serde_json::Value;
 
 use crate::{
-    errors::responses_error_to_pyerr,
+    errors::{RustBridgeDeclined, route_error_to_pyerr},
     marshal::{marshal_headers, optional_timeout},
 };
+
+#[pyfunction]
+#[pyo3(signature = (request, args, kwargs))]
+pub(crate) fn responses(
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    drop((request, args, kwargs));
+    Err(RustBridgeDeclined::new_err(
+        "native responses route is not implemented",
+    ))
+}
+
+#[pyfunction]
+#[pyo3(signature = (request, args, kwargs))]
+pub(crate) fn aresponses(
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    drop((request, args, kwargs));
+    Err(RustBridgeDeclined::new_err(
+        "native responses route is not implemented",
+    ))
+}
 
 #[pyclass]
 pub(crate) struct ResponsesWebSocketConnection {
@@ -28,7 +57,7 @@ impl ResponsesWebSocketConnection {
         crate::logger::run_async_value(py, async move {
             let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await
-                .map_err(responses_error_to_pyerr)?;
+                .map_err(route_error_to_pyerr)?;
             Ok(ResponsesWebSocketConnection { inner })
         })
     }
@@ -36,24 +65,21 @@ impl ResponsesWebSocketConnection {
     fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         crate::logger::run_async_value(py, async move {
-            inner
-                .send_text(text)
-                .await
-                .map_err(responses_error_to_pyerr)
+            inner.send_text(text).await.map_err(route_error_to_pyerr)
         })
     }
 
     fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         crate::logger::run_async_value(py, async move {
-            inner.recv_text().await.map_err(responses_error_to_pyerr)
+            inner.recv_text().await.map_err(route_error_to_pyerr)
         })
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         crate::logger::run_async_value(py, async move {
-            inner.close().await.map_err(responses_error_to_pyerr)
+            inner.close().await.map_err(route_error_to_pyerr)
         })
     }
 }
@@ -63,7 +89,28 @@ mod tests {
     use std::{ffi::CString, time::Duration};
 
     use futures_util::{SinkExt, StreamExt};
-    use pyo3::{prelude::*, types::PyDict};
+    use pyo3::{
+        prelude::*,
+        types::{PyDict, PyTuple},
+    };
+
+    use crate::errors::RustBridgeDeclined;
+
+    #[test]
+    fn both_entrypoints_decline_before_provider_execution() {
+        Python::initialize();
+        Python::attach(|py| {
+            let request = PyDict::new(py);
+            let args = PyTuple::empty(py);
+            let kwargs = PyDict::new(py);
+
+            for entrypoint in [super::responses, super::aresponses] {
+                let error = entrypoint(request.clone().into_any(), args.clone(), kwargs.clone())
+                    .expect_err("native responses must decline until a route machine exists");
+                assert!(error.is_instance_of::<RustBridgeDeclined>(py));
+            }
+        });
+    }
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 

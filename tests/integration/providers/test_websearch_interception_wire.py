@@ -183,6 +183,8 @@ from integration._support.client import Gateway, eventually
 _QUERY: Final = "integration capped search"
 _TEXT_BLOCK: Final = {"type": "text", "text": "searching once more"}
 _NOT_INTERCEPTED: Final = "native tool reached the provider"
+_FINAL_BLOCK: Final = {"type": "text", "text": "answered from the stored backend"}
+_OWNED_RESULT_TEXT: Final = "Title: Owned result\nURL: https://owned.invalid/a\nSnippet: owned snippet"
 _SEARCH_RESULT_BLOCK: Final = {
     "type": "web_search_result",
     "url": "https://owned.invalid/a",
@@ -297,3 +299,111 @@ def test_capped_websearch_interception_loop_ends_turn_instead_of_exposing_intern
         assert content[2] == _TEXT_BLOCK, response.text
         targets: Final = tuple((request.method, urlsplit(request.target).path) for request in wire.drain())
         assert targets[-3:] == (("POST", "/v1/messages"), ("GET", "/search"), ("POST", "/v1/messages")), targets
+
+
+@pytest.mark.covers("other.provider_wire.anthropic.websearch_interception_uses_database_search_tool_backend")
+def test_database_created_search_tool_backend_receives_the_intercepted_query_over_a_same_named_config_tool(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    identity: Final = "websearch-db-" + uuid.uuid4().hex
+    tool_name: Final = "integration-db-searxng-" + uuid.uuid4().hex
+    searched: Final = threading.Event()
+
+    def respond(request: Request) -> Reply:
+        parts: Final = urlsplit(request.target)
+        if request.method == "GET" and parts.path == "/database/search":
+            assert parse_qs(parts.query)["q"] == [_QUERY], request.target
+            searched.set()
+            return Reply(
+                body=json.dumps(
+                    {
+                        "results": [
+                            {"title": "Owned result", "url": "https://owned.invalid/a", "content": "owned snippet"}
+                        ]
+                    }
+                ).encode()
+            )
+        assert request.method == "POST" and parts.path == "/v1/messages", request.target
+        body: Final = json.loads(request.body)
+        if any(tool.get("type") == "web_search_20250305" for tool in body["tools"]):
+            return _anthropic_reply(identity, [{"type": "text", "text": _NOT_INTERCEPTED}], "end_turn")
+        assert [tool["name"] for tool in body["tools"]] == ["litellm_web_search"], body["tools"]
+        results: Final = [
+            block
+            for message in body["messages"]
+            if isinstance(message["content"], list)
+            for block in message["content"]
+            if block["type"] == "tool_result"
+        ]
+        if not results:
+            return _anthropic_reply(identity, [_TEXT_BLOCK, _search_tool_use(identity)], "tool_use")
+        assert results == [{"type": "tool_result", "tool_use_id": identity, "content": _OWNED_RESULT_TEXT}], results
+        return _anthropic_reply(identity, [_FINAL_BLOCK], "end_turn")
+
+    def send(candidate: Gateway, model: str) -> httpx.Response:
+        return candidate.request(
+            "POST",
+            "/v1/messages",
+            {
+                "model": model,
+                "max_tokens": 64,
+                "messages": [{"role": "user", "content": identity + " attempt " + uuid.uuid4().hex}],
+                "tools": [{"type": "web_search_20250305", "name": "web_search", "max_uses": 3}],
+            },
+        )
+
+    def searched_through_proxy(response: httpx.Response) -> bool:
+        return searched.is_set() and _NOT_INTERCEPTED not in response.text
+
+    with wire_server(respond) as wire, gateway.scenario() as scenario:
+        created: Final = gateway.post(
+            "/search_tools",
+            {
+                "search_tool": {
+                    "search_tool_name": tool_name,
+                    "litellm_params": {"search_provider": "searxng", "api_base": wire.url + "/database"},
+                }
+            },
+        )
+        scenario.cleanups.callback(gateway.request, "DELETE", f"/search_tools/{created['search_tool_id']}")
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["search_tools"] = [
+            {
+                "search_tool_name": tool_name,
+                "litellm_params": {"search_provider": "searxng", "api_base": wire.url + "/config"},
+            }
+        ]
+        config["litellm_settings"].update(
+            {
+                "callbacks": ["websearch_interception"],
+                "websearch_interception_params": {
+                    "enabled": True,
+                    "enabled_providers": ["anthropic"],
+                    "search_tool_name": tool_name,
+                },
+            }
+        )
+        path: Final = tmp_path / "websearch-db.yaml"
+        path.write_text(yaml.safe_dump(config))
+        environment: Final = {"ANTHROPIC_API_BASE": wire.url}
+        with owned_proxy(gateway, tmp_path, environment, config=path) as candidate, candidate.scenario() as models:
+            model: Final = models.model(
+                model="anthropic/claude-sonnet-4-5-20250929", api_base=wire.url, api_key="synthetic-anthropic-key"
+            )
+            response: Final = eventually(lambda: send(candidate, model), searched_through_proxy, seconds=40)
+        assert response.status_code == 200, response.text
+        body: Final = response.json()
+        assert body["stop_reason"] == "end_turn", response.text
+        assert body["content"][-1] == _FINAL_BLOCK, response.text
+        found: Final = [
+            (result["url"], result["title"])
+            for block in body["content"]
+            if block["type"] == "web_search_tool_result"
+            for result in block["content"]
+        ]
+        assert found == [("https://owned.invalid/a", "Owned result")], response.text
+        assert "litellm_web_search" not in response.text, response.text
+        targets: Final = tuple((request.method, urlsplit(request.target).path) for request in wire.drain())
+        assert targets[-3:] == (("POST", "/v1/messages"), ("GET", "/database/search"), ("POST", "/v1/messages")), (
+            targets
+        )
