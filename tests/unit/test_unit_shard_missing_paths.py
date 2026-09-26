@@ -11,7 +11,13 @@ import yaml
 _REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 _BASE_WORKFLOW: Final = _REPO_ROOT / ".github" / "workflows" / "_test-unit-base.yml"
 _SHARD_ENV: Final = MappingProxyType(
-    {"MAX_FAILURES": "10", "RERUNS": "0", "DIST": "loadscope", "TEST_TIMEOUT_SECONDS": "60", "COVERAGE_CORE": "sysmon"}
+    {
+        "MAX_FAILURES": "10",
+        "RERUNS": "0",
+        "DIST": "loadscope",
+        "TEST_TIMEOUT_SECONDS": "60",
+        "COVERAGE_CORE": "sysmon",
+    }
 )
 _UV_SHIM: Final = f'#!/usr/bin/env bash\nshift 2\nexec "{sys.executable}" -m "$@"\n'
 _PASSING_TEST: Final = "def test_passes():\n    assert True\n"
@@ -20,16 +26,33 @@ _FAILING_TEST: Final = "def test_fails():\n    assert False\n"
 
 def _run_tests_script() -> str:
     workflow: Final = yaml.safe_load(_BASE_WORKFLOW.read_text())
-    return next(step["run"] for step in workflow["jobs"]["run"]["steps"] if step.get("name") == "Run tests")
+    return next(
+        step["run"]
+        for step in workflow["jobs"]["run"]["steps"]
+        if step.get("name") == "Run tests"
+    )
 
 
-def _run_shard(tmp_path: Path, test_path: str, workers: str) -> subprocess.CompletedProcess[str]:
+def _run_shard(
+    tmp_path: Path, test_path: str, workers: str, unit_flag: str = ""
+) -> subprocess.CompletedProcess[str]:
     shim_dir: Final = tmp_path / "bin"
     shim_dir.mkdir()
     (shim_dir / "uv").write_text(_UV_SHIM)
     (shim_dir / "uv").chmod(0o755)
-    (tmp_path / "pyproject.toml").write_text("[tool.pytest.ini_options]\naddopts = '-p no:cacheprovider'\n")
-    return subprocess.run(
+    if unit_flag:
+        selection_script: Final = (
+            tmp_path / ".circleci" / "scripts" / "unit_selection.sh"
+        )
+        selection_script.parent.mkdir(parents=True)
+        selection_script.write_text(
+            '#!/usr/bin/env bash\nprintf "selector-called:%s\\n" "$1" >> "$GITHUB_OUTPUT"\nprintf "tests/present/test_present.py\\n"\n'
+        )
+        selection_script.chmod(0o755)
+    (tmp_path / "pyproject.toml").write_text(
+        "[tool.pytest.ini_options]\naddopts = '-p no:cacheprovider'\n"
+    )
+    result: Final = subprocess.run(
         ("bash", "--noprofile", "--norc", "-eo", "pipefail", "-c", _run_tests_script()),
         cwd=tmp_path,
         env={
@@ -38,7 +61,7 @@ def _run_shard(tmp_path: Path, test_path: str, workers: str) -> subprocess.Compl
             "PATH": f"{shim_dir}{os.pathsep}{os.environ['PATH']}",
             "GITHUB_OUTPUT": str(tmp_path / "github_output"),
             "TEST_PATH": test_path,
-            "UNIT_FLAG": "",
+            "UNIT_FLAG": unit_flag,
             "WORKERS": workers,
         },
         capture_output=True,
@@ -46,6 +69,12 @@ def _run_shard(tmp_path: Path, test_path: str, workers: str) -> subprocess.Compl
         timeout=120,
         check=False,
     )
+    if unit_flag:
+        assert (
+            f"selector-called:{unit_flag}"
+            in (tmp_path / "github_output").read_text().splitlines()
+        )
+    return result
 
 
 def _write_passing_test(tmp_path: Path) -> Path:
@@ -56,7 +85,9 @@ def _write_passing_test(tmp_path: Path) -> Path:
 
 
 @pytest.mark.parametrize("workers", ("0", "2"), ids=("serial", "xdist"))
-def test_a_missing_path_is_dropped_and_the_existing_paths_still_run(tmp_path: Path, workers: str) -> None:
+def test_a_missing_path_is_dropped_and_the_existing_paths_still_run(
+    tmp_path: Path, workers: str
+) -> None:
     _write_passing_test(tmp_path)
 
     result: Final = _run_shard(tmp_path, "tests/gone tests/present", workers)
@@ -70,7 +101,21 @@ def test_ignore_flags_survive_the_path_filter(tmp_path: Path) -> None:
     present: Final = _write_passing_test(tmp_path)
     (present / "test_ignored.py").write_text(_FAILING_TEST)
 
-    result: Final = _run_shard(tmp_path, "tests/present --ignore=tests/present/test_ignored.py", "0")
+    result: Final = _run_shard(
+        tmp_path, "tests/present --ignore=tests/present/test_ignored.py", "0"
+    )
 
     assert result.returncode == 0, result.stdout + result.stderr
+    assert "1 passed" in result.stdout, result.stdout
+
+
+def test_unit_selection_paths_are_run(tmp_path: Path) -> None:
+    _write_passing_test(tmp_path)
+
+    result: Final = _run_shard(tmp_path, "", "0", unit_flag="misc")
+
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert (
+        "selector-called:misc" in (tmp_path / "github_output").read_text().splitlines()
+    )
     assert "1 passed" in result.stdout, result.stdout
