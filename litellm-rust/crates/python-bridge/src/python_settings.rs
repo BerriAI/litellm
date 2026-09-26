@@ -183,7 +183,10 @@ class MissingLitellm:
     def find_spec(self, fullname, path=None, target=None):
         if fullname == 'litellm':
             raise ModuleNotFoundError('No module named litellm', name='litellm')
-sys.meta_path.insert(0, MissingLitellm())
+finder = MissingLitellm()
+previous_litellm = sys.modules.get('litellm')
+had_litellm = 'litellm' in sys.modules
+sys.meta_path.insert(0, finder)
 sys.modules.pop('litellm', None)
 ",
                 Some(&locals),
@@ -194,7 +197,11 @@ sys.modules.pop('litellm', None)
             assert!(result.unwrap().is_none());
             py.run(
                 c"
-sys.meta_path.pop(0)
+sys.meta_path.remove(finder)
+if had_litellm:
+    sys.modules['litellm'] = previous_litellm
+else:
+    sys.modules.pop('litellm', None)
 ",
                 Some(&locals),
                 Some(&locals),
@@ -212,6 +219,11 @@ sys.meta_path.pop(0)
                 c"
 import sys
 import types
+previous_modules = {
+    name: sys.modules[name]
+    for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.settings')
+    if name in sys.modules
+}
 litellm = types.ModuleType('litellm')
 litellm.__path__ = []
 rust_bridge = types.ModuleType('litellm.rust_bridge')
@@ -248,6 +260,7 @@ sys.modules['litellm.rust_bridge.settings'] = settings
                 c"
 for name in ('litellm.rust_bridge.settings', 'litellm.rust_bridge', 'litellm'):
     sys.modules.pop(name, None)
+sys.modules.update(previous_modules)
 ",
                 Some(&locals),
                 Some(&locals),
@@ -265,6 +278,11 @@ for name in ('litellm.rust_bridge.settings', 'litellm.rust_bridge', 'litellm'):
                 c"
 import sys
 import types
+previous_modules = {
+    name: sys.modules[name]
+    for name in ('litellm', 'litellm.rust_bridge', 'litellm.rust_bridge.settings')
+    if name in sys.modules
+}
 litellm = types.ModuleType('litellm')
 litellm.__path__ = []
 rust_bridge = types.ModuleType('litellm.rust_bridge')
@@ -293,6 +311,7 @@ sys.modules['litellm.rust_bridge.settings'] = settings
                 c"
 for name in ('litellm.rust_bridge.settings', 'litellm.rust_bridge', 'litellm'):
     sys.modules.pop(name, None)
+sys.modules.update(previous_modules)
 ",
                 Some(&locals),
                 Some(&locals),
