@@ -32,6 +32,17 @@ from litellm.proxy.utils import PrismaClient
 
 StopReason: TypeAlias = Literal["exhausted", "budget_exhausted", "batch_cap_reached", "aborted"]
 
+Cutoff: TypeAlias = datetime | str
+"""Rows strictly older than this are expired: a timestamp, or an ISO calendar day for tables keyed by day"""
+
+
+def _cutoff_cast(cutoff: Cutoff) -> str:
+    return "timestamptz" if isinstance(cutoff, datetime) else "text"
+
+
+def _cutoff_text(cutoff: Cutoff) -> str:
+    return cutoff.isoformat() if isinstance(cutoff, datetime) else cutoff
+
 
 @dataclass(frozen=True, slots=True)
 class TableCleanupResult:
@@ -278,7 +289,7 @@ class SpendLogCleanup:
         return remaining
 
     async def _execute_delete_batch(
-        self, prisma_client: PrismaClient, delete_sql: str, cutoff_date: datetime, deadline: float
+        self, prisma_client: PrismaClient, delete_sql: str, cutoff_date: Cutoff, deadline: float
     ) -> int | None:
         """
         Run one delete batch under a Postgres statement and lock timeout.
@@ -301,7 +312,7 @@ class SpendLogCleanup:
         return deleted_result if isinstance(deleted_result, int) else None
 
     async def _count_remaining(
-        self, prisma_client: PrismaClient, cutoff_date: datetime, table_name: str, time_column: str, deadline: float
+        self, prisma_client: PrismaClient, cutoff_date: Cutoff, table_name: str, time_column: str, deadline: float
     ) -> int | None:
         """
         Count expired rows still outstanding, stopping at a cap.
@@ -314,7 +325,7 @@ class SpendLogCleanup:
         count_sql: Final = f"""
             SELECT count(*)::int AS remaining FROM (
                 SELECT 1 FROM "{table_name}"
-                WHERE "{time_column}" < $1::timestamptz
+                WHERE "{time_column}" < $1::{_cutoff_cast(cutoff_date)}
                 LIMIT $2
             ) capped
             """
@@ -332,7 +343,7 @@ class SpendLogCleanup:
     async def _delete_old_rows_batched(
         self,
         prisma_client: PrismaClient,
-        cutoff_date: datetime,
+        cutoff_date: Cutoff,
         table_name: str,
         key_columns: tuple[str, ...],
         time_column: str,
@@ -350,7 +361,7 @@ class SpendLogCleanup:
             DELETE FROM "{table_name}"
             WHERE ({key_list}) IN (
                 SELECT {key_list} FROM "{table_name}"
-                WHERE "{time_column}" < $1::timestamptz
+                WHERE "{time_column}" < $1::{_cutoff_cast(cutoff_date)}
                 LIMIT $2
             )
             """
@@ -406,7 +417,7 @@ class SpendLogCleanup:
                     run_count,
                     consecutive_failures,
                     self.batch_size,
-                    cutoff_date.isoformat(),
+                    _cutoff_text(cutoff_date),
                     total_deleted,
                     type(batch_exc).__name__,
                     batch_exc,
@@ -454,7 +465,7 @@ class SpendLogCleanup:
     async def _finish_table(
         self,
         prisma_client: PrismaClient,
-        cutoff_date: datetime,
+        cutoff_date: Cutoff,
         table_name: str,
         time_column: str,
         rows_deleted: int,
@@ -541,6 +552,18 @@ class SpendLogCleanup:
             deadline=deadline,
         )
 
+    async def _delete_old_daily_tag_spend_rows(
+        self, prisma_client: PrismaClient, cutoff_day: str, deadline: float
+    ) -> TableCleanupResult:
+        return await self._delete_old_rows_batched(
+            prisma_client,
+            cutoff_day,
+            table_name="LiteLLM_DailyTagSpend",
+            key_columns=("id",),
+            time_column="date",
+            deadline=deadline,
+        )
+
     async def _clean_spend_log_tables(
         self, prisma_client: PrismaClient, deadline: float
     ) -> tuple[TableCleanupResult, ...]:
@@ -624,6 +647,18 @@ class SpendLogCleanup:
         )
         return (health_checks_result,)
 
+    async def _clean_daily_tag_spend(
+        self, prisma_client: PrismaClient, retention_seconds: int, deadline: float
+    ) -> tuple[TableCleanupResult, ...]:
+        """
+        Prune per-day tag spend rows whose ISO day sorts before the horizon day; the horizon day itself is kept.
+        """
+        horizon: Final = datetime.now(timezone.utc) - timedelta(seconds=float(retention_seconds))
+        cutoff_day: Final = horizon.date().isoformat()
+        result: Final = await self._delete_old_daily_tag_spend_rows(prisma_client, cutoff_day, deadline)
+        verbose_proxy_logger.info("Deleted %s expired daily tag spend rows", result.rows_deleted)
+        return (result,)
+
     @staticmethod
     def _run_outcome(results: tuple[TableCleanupResult, ...]) -> RunOutcome:
         """
@@ -671,10 +706,14 @@ class SpendLogCleanup:
                 "maximum_autorouter_session_retention_period"
             )
             health_check_retention_seconds: Final = self._retention_seconds_for("maximum_health_check_retention_period")
+            daily_tag_spend_retention_seconds: Final = self._retention_seconds_for(
+                "maximum_daily_tag_spend_retention_period"
+            )
             if (
                 not delete_spend_logs
                 and autorouter_retention_seconds is None
                 and health_check_retention_seconds is None
+                and daily_tag_spend_retention_seconds is None
             ):
                 SpendLogCleanupMetrics.record_run("skipped_disabled")
                 return
@@ -706,6 +745,7 @@ class SpendLogCleanup:
                 int(delete_spend_logs and self.retention_seconds is not None)
                 + int(autorouter_retention_seconds is not None)
                 + int(health_check_retention_seconds is not None)
+                + int(daily_tag_spend_retention_seconds is not None)
             )
 
             spend_log_results: Final = (
@@ -716,8 +756,13 @@ class SpendLogCleanup:
                 if delete_spend_logs and self.retention_seconds is not None
                 else ()
             )
-            remaining_groups_after_spend_logs: Final = int(autorouter_retention_seconds is not None) + int(
-                health_check_retention_seconds is not None
+            remaining_groups_after_spend_logs: Final = (
+                int(autorouter_retention_seconds is not None)
+                + int(health_check_retention_seconds is not None)
+                + int(daily_tag_spend_retention_seconds is not None)
+            )
+            remaining_groups_after_sessions: Final = int(health_check_retention_seconds is not None) + int(
+                daily_tag_spend_retention_seconds is not None
             )
             session_results: Final = (
                 await self._clean_session_rollup(
@@ -732,13 +777,18 @@ class SpendLogCleanup:
                 await self._clean_health_checks(
                     prisma_client,
                     health_check_retention_seconds,
-                    deadline,
+                    self._group_deadline(deadline, remaining_groups_after_sessions),
                 )
                 if health_check_retention_seconds is not None
                 else ()
             )
+            daily_tag_spend_results: Final = (
+                await self._clean_daily_tag_spend(prisma_client, daily_tag_spend_retention_seconds, deadline)
+                if daily_tag_spend_retention_seconds is not None
+                else ()
+            )
 
-            results: Final = spend_log_results + session_results + health_check_results
+            results: Final = spend_log_results + session_results + health_check_results + daily_tag_spend_results
             outcome: Final = self._run_outcome(results)
             SpendLogCleanupMetrics.record_run(outcome)
             self._log_run_summary(outcome, results, time.monotonic() - run_started_at)
