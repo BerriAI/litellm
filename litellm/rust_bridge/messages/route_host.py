@@ -4,6 +4,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import asdict, dataclass
 from typing import Final, cast  # noqa: TID251  # narrows the normalized native payload to the public TypedDict
 
+import httpx
 from pydantic import TypeAdapter, ValidationError
 
 import litellm
@@ -51,6 +52,14 @@ def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
         AnthropicMessagesResponse,
         dict(value),  # mutable-ok: the public Messages response is a TypedDict the caller may annotate in place
     )
+
+
+def stream_hidden_params(headers: Sequence[tuple[str, str]]) -> Mapping[str, object]:
+    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        anthropic_messages_stream_hidden_params,
+    )
+
+    return anthropic_messages_stream_hidden_params(httpx.Headers(list(headers)))
 
 
 def arguments(request: LiteLLMMessagesRequest) -> Mapping[str, object]:
