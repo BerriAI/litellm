@@ -2346,6 +2346,12 @@ def _map_exception_by_status(
             )
 
 
+def _is_guardrail_block(original_exception: Exception) -> bool:
+    from litellm.integrations.custom_guardrail import is_guardrail_intervention
+
+    return is_guardrail_intervention(original_exception)
+
+
 def exception_type(
     model,
     original_exception,
@@ -2355,6 +2361,8 @@ def exception_type(
 ):
     """Maps an LLM Provider Exception to OpenAI Exception Format"""
     if any(isinstance(original_exception, exc_type) for exc_type in litellm.LITELLM_EXCEPTION_TYPES):
+        return original_exception
+    if _is_guardrail_block(original_exception):
         return original_exception
     exception_mapping_worked = False
     exception_provider = custom_llm_provider

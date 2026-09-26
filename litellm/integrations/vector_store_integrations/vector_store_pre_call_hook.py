@@ -2,11 +2,13 @@
 Vector Store Pre-Call Hook
 
 This hook is called before making an LLM request when a vector store is configured.
-It searches the vector store for relevant context and appends it to the messages.
+It searches the vector store for relevant context, runs the request's pre-call guardrails
+over that context, and appends it to the messages.
 """
 
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
+from itertools import chain
 from typing import TYPE_CHECKING, Any, Final, Protocol, cast, get_args
 
 from pydantic import TypeAdapter, ValidationError
@@ -16,7 +18,9 @@ import litellm
 import litellm.vector_stores
 from litellm._logging import verbose_logger
 from litellm.exceptions import VectorStoreSearchError
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import (
     AllMessageValues,
     ChatCompletionUserMessage,
@@ -42,6 +46,22 @@ else:
 SEARCH_FAILURES_FIELD: Final = "vector_store_search_failures"
 _DEFAULT_FAILURE_MODE: Final[VectorStoreSearchFailureMode] = "annotate"
 _FAILURE_MODE_ADAPTER: Final = TypeAdapter(VectorStoreSearchFailureMode)
+_STR_KEYED_ADAPTER: Final = TypeAdapter(dict[str, object])
+_CLIENT_KEYS_THE_PROXY_MOVES_INTO_METADATA: Final = frozenset(
+    {"guardrails", "guardrail_config", "policies", "include_guardrail_response"}
+)
+
+
+def _scan_request(model: str, non_default_params: Mapping[str, object]) -> Mapping[str, object]:
+    try:
+        proxy_request: Final = _STR_KEYED_ADAPTER.validate_python(non_default_params.get("proxy_server_request"))
+        client_body: Final = _STR_KEYED_ADAPTER.validate_python(proxy_request.get("body"))
+    except ValidationError:
+        return {**non_default_params, "model": model}
+    client_params: Final = {
+        key: value for key, value in client_body.items() if key not in _CLIENT_KEYS_THE_PROXY_MOVES_INTO_METADATA
+    }
+    return {**client_params, **non_default_params}
 
 
 class ProxyRuntime(Protocol):
@@ -82,7 +102,7 @@ SearchOutcome = SearchSucceeded | SearchFailed
 
 @dataclass(frozen=True, slots=True)
 class VectorStoreAugmentation:
-    messages: tuple[AllMessageValues, ...]
+    context_messages: tuple[AllMessageValues, ...]
     search_results: tuple[VectorStoreSearchResponse, ...]
     failures: tuple[VectorStoreSearchFailure, ...]
 
@@ -95,7 +115,8 @@ class VectorStorePreCallHook(CustomLogger):
     When a vector store is configured, this hook:
     1. Extracts the query from the last user message
     2. Calls litellm.vector_stores.search() to get relevant context
-    3. Appends the search results as context to the messages
+    3. Runs the request's pre-call guardrails over each store's context message
+    4. Appends the (possibly masked) context to the messages, or raises the guardrail's block
     """
 
     def __init__(self, proxy_runtime: ProxyRuntime | None = None):
@@ -170,7 +191,50 @@ class VectorStorePreCallHook(CustomLogger):
                 case _:
                     assert_never(failure_mode)
 
-        return model, list(augmentation.messages), non_default_params
+        scanned_context: Final = await self._scanned_context_messages(
+            model=model,
+            non_default_params=non_default_params,
+            context_messages=augmentation.context_messages,
+        )
+        return (
+            model,
+            self._messages_with_context(messages=messages, context_messages=scanned_context),
+            non_default_params,
+        )
+
+    async def _scanned_context_messages(
+        self,
+        model: str,
+        non_default_params: Mapping[str, object],
+        context_messages: Sequence[AllMessageValues],
+    ) -> tuple[AllMessageValues, ...]:
+        request_data: Final = _scan_request(model, non_default_params)
+        guardrails: Final = tuple(
+            callback
+            for callback in litellm.callbacks
+            if isinstance(callback, CustomGuardrail)
+            and callback.should_run_guardrail(data=request_data, event_type=GuardrailEventHooks.pre_call)
+        )
+        if not guardrails:
+            return tuple(context_messages)
+        scanned: Final = [
+            await self._scan_through(guardrails=guardrails, request_data=request_data, messages=(context_message,))
+            for context_message in context_messages
+        ]
+        return tuple(chain.from_iterable(scanned))
+
+    async def _scan_through(
+        self,
+        guardrails: Sequence[CustomGuardrail],
+        request_data: Mapping[str, object],
+        messages: Sequence[AllMessageValues],
+    ) -> tuple[AllMessageValues, ...]:
+        if not guardrails:
+            return tuple(messages)
+        scanned: Final = await guardrails[0].async_pre_call_hook_on_messages(
+            request_data=request_data, messages=messages
+        )
+        return await self._scan_through(guardrails=guardrails[1:], request_data=request_data, messages=scanned)
 
     async def _augment_messages(
         self,
@@ -234,7 +298,7 @@ class VectorStorePreCallHook(CustomLogger):
         failures: Final = tuple(outcome.failure for outcome in outcomes if isinstance(outcome, SearchFailed))
 
         return VectorStoreAugmentation(
-            messages=self._messages_with_context(messages=messages, search_results=search_results),
+            context_messages=self._context_messages(search_results),
             search_results=search_results,
             failures=failures,
         )
@@ -309,19 +373,21 @@ class VectorStorePreCallHook(CustomLogger):
 
         return None
 
-    def _messages_with_context(
-        self,
-        messages: Sequence[AllMessageValues],
-        search_results: Sequence[VectorStoreSearchResponse],
-    ) -> tuple[AllMessageValues, ...]:
-        context_messages: Final = tuple(
+    def _context_messages(self, search_results: Sequence[VectorStoreSearchResponse]) -> tuple[AllMessageValues, ...]:
+        return tuple(
             context_message
             for search_response in search_results
             if (context_message := self._context_message(search_response)) is not None
         )
+
+    def _messages_with_context(
+        self,
+        messages: Sequence[AllMessageValues],
+        context_messages: Sequence[AllMessageValues],
+    ) -> list[AllMessageValues]:
         if not context_messages:
-            return tuple(messages)
-        return (*messages[:-1], *context_messages, *messages[-1:])
+            return list(messages)
+        return [*messages[:-1], *context_messages, *messages[-1:]]
 
     def _context_message(self, search_response: VectorStoreSearchResponse) -> AllMessageValues | None:
         """Build the context message for one vector store's results, or None when it returned nothing usable."""

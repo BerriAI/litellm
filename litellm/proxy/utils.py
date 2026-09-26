@@ -202,6 +202,7 @@ from litellm.proxy.db.token_auth import (
     mint_database_token,
     resolve_database_token_auth,
 )
+from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
     resolve_endpoint_translation,
@@ -464,28 +465,6 @@ def _accepts_litellm_call_info(cb: CustomLogger) -> bool:
         sig: Final = inspect.signature(cb.async_post_call_response_headers_hook)
         _CALLBACK_ACCEPTS_CALL_INFO[key] = "litellm_call_info" in sig.parameters
     return _CALLBACK_ACCEPTS_CALL_INFO[key]
-
-
-def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: object) -> None:
-    """
-    If `exc` is an HTTPException with a dict `detail`, mutate it in place to
-    add `guardrail_name` and `guardrail_mode` taken from the callback instance.
-
-    Uses setdefault so guardrails that already populate these fields explicitly
-    win over the inferred defaults. No-op for non-HTTPException, non-dict-detail,
-    or callbacks without `guardrail_name`. Never raises.
-    """
-    if not isinstance(exc, HTTPException):
-        return
-    detail: Final = getattr(exc, "detail", None)
-    if not isinstance(detail, dict):
-        return
-    guardrail_name: Final[object] = getattr(callback, "guardrail_name", None)
-    if guardrail_name:
-        detail.setdefault("guardrail_name", guardrail_name)
-    event_hook: Final[object] = getattr(callback, "event_hook", None)
-    if event_hook:
-        detail.setdefault("guardrail_mode", event_hook)
 
 
 def _record_raising_guardrail(request_data: Mapping[str, object], callback: object) -> None:
@@ -1968,7 +1947,7 @@ class ProxyLogging:
         except Exception as e:
             status = "error"
             error_type = type(e).__name__
-            _enrich_http_exception_with_guardrail_context(e, callback)
+            enrich_http_exception_with_guardrail_context(e, callback)
             # Re-raise the exception to maintain existing behavior
             raise
         finally:
@@ -2277,7 +2256,7 @@ class ProxyLogging:
             original_exception: Final = result.original_exception
             if original_exception is not None and not _exception_changes_request_flow(original_exception):
                 if callback is not None:
-                    _enrich_http_exception_with_guardrail_context(original_exception, callback)
+                    enrich_http_exception_with_guardrail_context(original_exception, callback)
                 raise original_exception
 
             step_results_serializable: Final = [
@@ -2723,7 +2702,7 @@ class ProxyLogging:
         except Exception as e:
             status = "error"
             error_type = type(e).__name__
-            _enrich_http_exception_with_guardrail_context(e, callback)
+            enrich_http_exception_with_guardrail_context(e, callback)
             _record_raising_guardrail(request_data, callback)
             raise
         finally:
@@ -2748,7 +2727,7 @@ class ProxyLogging:
                 yield chunk
         except Exception as e:
             if e is not upstream.failure:
-                _enrich_http_exception_with_guardrail_context(e, callback)
+                enrich_http_exception_with_guardrail_context(e, callback)
                 _record_raising_guardrail(request_data, callback)
             raise
 
