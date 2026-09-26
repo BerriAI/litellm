@@ -145,6 +145,7 @@ from litellm.proxy._experimental.mcp_server.sampling_handler import (
 )
 from litellm.proxy._experimental.mcp_server.tool_catalog_guard import (
     CatalogAlert,
+    apply_description_overrides,
     pin_tool_catalog,
     scan_tool_descriptions,
 )
@@ -5400,19 +5401,18 @@ class MCPServerManager:
         user_api_key_auth: UserAPIKeyAuth | None,
         raw_headers: Mapping[str, str] | None,
     ) -> tuple[MCPTool, ...]:
+        described: Final = apply_description_overrides(tools, server)
+        pinned, drift = pin_tool_catalog(described, server.pinned_tools) if server.pinned_tools else (described, None)
         if proxy_logging_obj is None:
-            return pin_tool_catalog(tools, server.pinned_tools)[0] if server.pinned_tools else tuple(tools)
-        scan: Final = await scan_tool_descriptions(tools, server, proxy_logging_obj, user_api_key_auth, raw_headers)
-        await self._report_catalog_alert(
-            server, proxy_logging_obj, AlertType.mcp_tool_description_blocked, scan.alert(server)
-        )
-        if not server.pinned_tools:
-            return scan.served
-        pinned, drift = pin_tool_catalog(scan.served, server.pinned_tools)
+            return pinned
         await self._report_catalog_alert(
             server, proxy_logging_obj, AlertType.mcp_pinned_tools_changed, drift.alert(server) if drift else None
         )
-        return pinned
+        scan: Final = await scan_tool_descriptions(pinned, server, proxy_logging_obj, user_api_key_auth, raw_headers)
+        await self._report_catalog_alert(
+            server, proxy_logging_obj, AlertType.mcp_tool_description_blocked, scan.alert(server)
+        )
+        return scan.served
 
     async def _report_catalog_alert(
         self,
@@ -5423,13 +5423,11 @@ class MCPServerManager:
     ) -> None:
         key: Final = (server.server_id, alert_type)
         if alert is None:
-            if key in self._catalog_alert_signatures:
-                self._catalog_alert_signatures = MappingProxyType(
-                    {seen: signature for seen, signature in self._catalog_alert_signatures.items() if seen != key}
-                )
+            self._forget_catalog_alert(key, signature=None)
             return
         if self._catalog_alert_signatures.get(key) == alert.signature:
             return
+        self._catalog_alert_signatures = MappingProxyType({**self._catalog_alert_signatures, key: alert.signature})
         verbose_logger.warning(alert.message)
         try:
             await proxy_logging_obj.slack_alerting_instance.send_alert(
@@ -5440,8 +5438,15 @@ class MCPServerManager:
             )
         except Exception as e:  # noqa: BLE001  # an alerting outage must never fail tools/list
             verbose_logger.warning("Failed to send %s alert for MCP server %s: %s", alert_type.value, server.name, e)
+            self._forget_catalog_alert(key, signature=alert.signature)
+
+    def _forget_catalog_alert(self, key: tuple[str, AlertType], signature: str | None) -> None:
+        recorded: Final = self._catalog_alert_signatures.get(key)
+        if recorded is None or signature not in (None, recorded):
             return
-        self._catalog_alert_signatures = MappingProxyType({**self._catalog_alert_signatures, key: alert.signature})
+        self._catalog_alert_signatures = MappingProxyType(
+            {seen: kept for seen, kept in self._catalog_alert_signatures.items() if seen != key}
+        )
 
     def _create_prefixed_tools(self, tools: list[MCPTool], server: MCPServer, add_prefix: bool = True) -> list[MCPTool]:
         """

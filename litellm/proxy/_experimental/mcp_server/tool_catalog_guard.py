@@ -1,11 +1,12 @@
 """Discovery-time guard for an MCP server's tool catalog.
 
-Every ``tools/list`` hands each upstream tool's description and input schema to the
-``pre_mcp_call`` guardrails as a ``list_mcp_tools`` payload: a blocked tool leaves the
-listing and a masked description is what the client sees. A pinned catalog is then applied
-on top for servers whose admin snapshotted the tool list: only pinned tools are served, a
-tool whose description or input schema drifted is served with its pinned text, and the
-drift is reported once per distinct diff.
+Every ``tools/list`` turns the upstream catalog into the served one in three steps. The
+admin's description overrides are applied first. The pinned catalog comes next for servers
+whose admin snapshotted the tool list: only pinned tools are served, a tool whose description
+or input schema drifted is served with its pinned text, and the drift is reported once per
+distinct diff. The ``pre_mcp_call`` guardrails then scan what is about to be served, each
+tool's description and input schema as a ``list_mcp_tools`` payload, so a blocked tool leaves
+the listing and a masked description is what the client sees whatever text it came from.
 """
 
 from __future__ import annotations
@@ -20,7 +21,7 @@ from mcp.types import Tool as MCPTool
 from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
-from litellm.proxy._experimental.mcp_server.utils import logging_safe_mcp_headers
+from litellm.proxy._experimental.mcp_server.utils import logging_safe_mcp_headers, strip_known_server_prefix
 from litellm.types.mcp import MCPPreCallRequestObject
 from litellm.types.mcp_server.mcp_server_manager import MCPServer, PinnedMCPTool
 from litellm.types.utils import CallTypes
@@ -113,6 +114,19 @@ class PinnedCatalogDrift:
         )
 
 
+def apply_description_overrides(tools: Sequence[MCPTool], server: MCPServer) -> tuple[MCPTool, ...]:
+    overrides: Final = server.tool_name_to_description or {}
+    if not overrides:
+        return tuple(tools)
+    return tuple(_described_tool(tool, overrides.get(strip_known_server_prefix(tool.name, server))) for tool in tools)
+
+
+def _described_tool(tool: MCPTool, description: str | None) -> MCPTool:
+    if description is None or description == tool.description:
+        return tool
+    return tool.model_copy(update={"description": description})
+
+
 def pin_tool_catalog(
     tools: Sequence[MCPTool], pinned_tools: Mapping[str, PinnedMCPTool]
 ) -> tuple[tuple[MCPTool, ...], PinnedCatalogDrift | None]:
@@ -172,6 +186,20 @@ async def _scan_tool(
 ) -> MCPTool | BlockedTool:
     if not _has_scannable_text(tool):
         return tool
+    try:
+        guarded: Final = await _guarded_catalog_entry(tool, server, proxy_logging_obj, user_api_key_auth, raw_headers)
+    except Exception as e:  # noqa: BLE001  # any guardrail failure hides the tool: fail closed
+        return BlockedTool(name=tool.name, reason=_block_reason(e))
+    return tool if guarded is None else _masked_tool(tool, guarded)
+
+
+async def _guarded_catalog_entry(
+    tool: MCPTool,
+    server: MCPServer,
+    proxy_logging_obj: ProxyLogging,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    raw_headers: Mapping[str, str] | None,
+) -> Mapping[str, object] | None:
     request: Final[_ScanRequest] = {"tool_name": tool.name, "arguments": {}, "server_name": server.name}
     request_obj: Final = MCPPreCallRequestObject.model_validate(request)
     kwargs: Final[_ScanKwargs] = {
@@ -191,18 +219,14 @@ async def _scan_tool(
     data: Final = _JSON_OBJECT.validate_python(
         proxy_logging_obj._convert_mcp_to_llm_format(request_obj, kwargs)  # pyright: ignore[reportPrivateUsage, reportUnknownMemberType]  # the tool-call path builds its guardrail payload through this same untyped helper
     )
-    try:
-        guarded: Final = _OPTIONAL_GUARDED.validate_python(
-            await proxy_logging_obj.pre_call_hook(  # pyright: ignore[reportUnknownMemberType, reportCallIssue, reportUnknownArgumentType]  # untyped hook; its overloads want an auth the MCP call types tolerate missing
-                user_api_key_dict=user_api_key_auth,  # pyright: ignore[reportArgumentType]  # the tool-call path passes the same optional auth
-                data=data,
-                call_type=CallTypes.list_mcp_tools.value,
-                guardrails_only=True,
-            )
+    return _OPTIONAL_GUARDED.validate_python(
+        await proxy_logging_obj.pre_call_hook(  # pyright: ignore[reportUnknownMemberType, reportCallIssue, reportUnknownArgumentType]  # untyped hook; its overloads want an auth the MCP call types tolerate missing
+            user_api_key_dict=user_api_key_auth,  # pyright: ignore[reportArgumentType]  # the tool-call path passes the same optional auth
+            data=data,
+            call_type=CallTypes.list_mcp_tools.value,
+            guardrails_only=True,
         )
-        return tool if guarded is None else _masked_tool(tool, guarded)
-    except Exception as e:  # noqa: BLE001  # any guardrail failure hides the tool: fail closed
-        return BlockedTool(name=tool.name, reason=_block_reason(e))
+    )
 
 
 def _block_reason(exc: Exception) -> str:

@@ -14845,9 +14845,7 @@ class TestToolCatalogGuard:
         )
 
         assert [(tool.name, tool.description) for tool in served] == [("list_notes", LIST_NOTES.description)]
-        assert sorted(texts[0] for texts in guardrail.seen_texts) == sorted(
-            [reworded_list.description, exfiltrate.description]
-        )
+        assert [texts[0] for texts in guardrail.seen_texts] == [LIST_NOTES.description]
         send_alert = proxy_logging_obj.slack_alerting_instance.send_alert
         send_alert.assert_awaited_once()
         assert send_alert.await_args.kwargs["alert_type"] is AlertType.mcp_pinned_tools_changed
@@ -14862,10 +14860,8 @@ class TestToolCatalogGuard:
         assert send_alert.await_count == 1
 
     @pytest.mark.asyncio
-    async def test_pinned_tool_whose_upstream_text_is_blocked_is_hidden_rather_than_served_from_the_pin(
-        self, catalog_guardrail
-    ):
-        _, proxy_logging_obj = catalog_guardrail
+    async def test_pinned_tool_whose_upstream_text_turned_poisonous_is_served_from_the_pin(self, catalog_guardrail):
+        guardrail, proxy_logging_obj = catalog_guardrail
         pinned = {
             "list_notes": _pin(LIST_NOTES),
             "delete_note": PinnedMCPTool(description="Delete a note", input_schema={"type": "object"}),
@@ -14876,14 +14872,139 @@ class TestToolCatalogGuard:
             _notes_server(pinned), add_prefix=False, proxy_logging_obj=proxy_logging_obj
         )
 
+        assert [(tool.name, tool.description) for tool in served] == [
+            ("list_notes", LIST_NOTES.description),
+            ("delete_note", "Delete a note"),
+        ]
+        assert sorted(texts[0] for texts in guardrail.seen_texts) == sorted([LIST_NOTES.description, "Delete a note"])
+        send_alert = proxy_logging_obj.slack_alerting_instance.send_alert
+        send_alert.assert_awaited_once()
+        assert send_alert.await_args.kwargs["alert_type"] is AlertType.mcp_pinned_tools_changed
+        assert "changed: `delete_note`" in send_alert.await_args.kwargs["message"]
+
+    @pytest.mark.asyncio
+    async def test_guardrail_masks_the_pinned_text_it_serves(self, catalog_guardrail):
+        _, proxy_logging_obj = catalog_guardrail
+        upstream = MCPTool(name="read_note", description="Read a SECRET note", inputSchema={"type": "object"})
+        manager = _catalog_manager(upstream)
+
+        served = await manager._get_tools_from_server(
+            _notes_server({"read_note": _pin(upstream)}), add_prefix=False, proxy_logging_obj=proxy_logging_obj
+        )
+
+        assert [(tool.name, tool.description) for tool in served] == [("read_note", "Read a [MASKED] note")]
+        proxy_logging_obj.slack_alerting_instance.send_alert.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_pinned_text_a_guardrail_blocks_is_hidden(self, catalog_guardrail):
+        _, proxy_logging_obj = catalog_guardrail
+        pinned = {"list_notes": _pin(LIST_NOTES), "delete_note": _pin(POISONED_DELETE)}
+        manager = _catalog_manager(LIST_NOTES, POISONED_DELETE)
+
+        served = await manager._get_tools_from_server(
+            _notes_server(pinned), add_prefix=False, proxy_logging_obj=proxy_logging_obj
+        )
+
         assert served == [LIST_NOTES]
-        alerts = {
-            call.kwargs["alert_type"]: call.kwargs["message"]
-            for call in proxy_logging_obj.slack_alerting_instance.send_alert.await_args_list
-        }
-        assert set(alerts) == {AlertType.mcp_tool_description_blocked, AlertType.mcp_pinned_tools_changed}
-        assert "delete_note" in alerts[AlertType.mcp_tool_description_blocked]
-        assert "removed: `delete_note`" in alerts[AlertType.mcp_pinned_tools_changed]
+        send_alert = proxy_logging_obj.slack_alerting_instance.send_alert
+        send_alert.assert_awaited_once()
+        assert send_alert.await_args.kwargs["alert_type"] is AlertType.mcp_tool_description_blocked
+        assert "delete_note" in send_alert.await_args.kwargs["message"]
+
+    @pytest.mark.asyncio
+    async def test_description_override_is_scanned_before_it_is_served(self, catalog_guardrail):
+        guardrail, proxy_logging_obj = catalog_guardrail
+        manager = _catalog_manager(
+            MCPTool(name="read_note", description="Read a note", inputSchema={"type": "object"}),
+            MCPTool(name="delete_note", description="Delete a note", inputSchema={"type": "object"}),
+        )
+        server = MCPServer(
+            server_id="notes",
+            name="notes",
+            transport=MCPTransport.http,
+            tool_name_to_description={"read_note": "Read a SECRET note", "delete_note": POISONED_DELETE.description},
+        )
+
+        served = await manager._get_tools_from_server(server, add_prefix=True, proxy_logging_obj=proxy_logging_obj)
+
+        assert [(tool.name, tool.description) for tool in served] == [("notes-read_note", "Read a [MASKED] note")]
+        assert sorted(texts[0] for texts in guardrail.seen_texts) == sorted(
+            ["Read a SECRET note", POISONED_DELETE.description]
+        )
+        send_alert = proxy_logging_obj.slack_alerting_instance.send_alert
+        send_alert.assert_awaited_once()
+        assert "delete_note" in send_alert.await_args.kwargs["message"]
+
+    @pytest.mark.asyncio
+    async def test_pin_taken_with_an_override_in_effect_is_served_silently(self, catalog_guardrail):
+        _, proxy_logging_obj = catalog_guardrail
+        manager = _catalog_manager(MCPTool(name="read_note", description="Read a note", inputSchema={"type": "object"}))
+        server = MCPServer(
+            server_id="notes",
+            name="notes",
+            transport=MCPTransport.http,
+            tool_name_to_description={"read_note": "Read one of the user's notes"},
+            pinned_tools={
+                "read_note": PinnedMCPTool(description="Read one of the user's notes", input_schema={"type": "object"})
+            },
+        )
+
+        served = await manager._get_tools_from_server(server, add_prefix=False, proxy_logging_obj=proxy_logging_obj)
+
+        assert [(tool.name, tool.description) for tool in served] == [("read_note", "Read one of the user's notes")]
+        proxy_logging_obj.slack_alerting_instance.send_alert.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_a_recovery_during_a_slow_alert_send_is_not_undone_when_the_send_completes(self, catalog_guardrail):
+        _, proxy_logging_obj = catalog_guardrail
+        gate = asyncio.Event()
+
+        async def slow_send(**kwargs):
+            await gate.wait()
+
+        send_alert = AsyncMock(side_effect=slow_send)
+        proxy_logging_obj.slack_alerting_instance.send_alert = send_alert
+        manager = _catalog_manager(LIST_NOTES, POISONED_DELETE)
+
+        poisoned_listing = asyncio.create_task(
+            manager._get_tools_from_server(_notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj)
+        )
+        while send_alert.await_count == 0:
+            await asyncio.sleep(0)
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[LIST_NOTES])
+        await manager._get_tools_from_server(_notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj)
+        gate.set()
+        await poisoned_listing
+
+        manager._fetch_tools_with_timeout = AsyncMock(return_value=[LIST_NOTES, POISONED_DELETE])
+        await manager._get_tools_from_server(_notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj)
+        assert send_alert.await_count == 2
+
+    @pytest.mark.asyncio
+    async def test_a_tool_whose_scan_cannot_be_set_up_is_hidden_alone(self, catalog_guardrail):
+        _, _ = catalog_guardrail
+
+        class SetupFailsForDelete(ProxyLogging):
+            def _convert_mcp_to_llm_format(self, request_obj, kwargs):
+                if kwargs["name"] == "delete_note":
+                    raise ValueError("scan payload could not be built")
+                return super()._convert_mcp_to_llm_format(request_obj, kwargs)
+
+        proxy_logging_obj = SetupFailsForDelete(user_api_key_cache=DualCache())
+        proxy_logging_obj.slack_alerting_instance.send_alert = AsyncMock()
+        manager = _catalog_manager(
+            LIST_NOTES, MCPTool(name="delete_note", description="Delete a note", inputSchema={"type": "object"})
+        )
+
+        served = await manager._get_tools_from_server(
+            _notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj
+        )
+
+        assert served == [LIST_NOTES]
+        send_alert = proxy_logging_obj.slack_alerting_instance.send_alert
+        send_alert.assert_awaited_once()
+        assert send_alert.await_args.kwargs["alert_type"] is AlertType.mcp_tool_description_blocked
+        assert "scan payload could not be built" in send_alert.await_args.kwargs["message"]
 
     @pytest.mark.asyncio
     async def test_pinned_input_schema_is_served_when_upstream_widens_it(self, catalog_guardrail):
@@ -14943,7 +15064,10 @@ class TestToolCatalogGuard:
             url=None,
             transport=MCPTransport.http,
             spec_path="https://example.com/petstore.yaml",
-            pinned_tools={"list_pets": PinnedMCPTool(description="List pets", input_schema={"type": "object"})},
+            pinned_tools={
+                "list_pets": PinnedMCPTool(description="List pets", input_schema={"type": "object"}),
+                "delete_pets": _pin(POISONED_DELETE),
+            },
         )
         manager = _catalog_manager()
 
@@ -14969,6 +15093,7 @@ class TestToolCatalogGuard:
         assert "delete_pets" in alerts[AlertType.mcp_tool_description_blocked]
         assert "added: `find_pet`" in alerts[AlertType.mcp_pinned_tools_changed]
         assert "changed: `list_pets`" in alerts[AlertType.mcp_pinned_tools_changed]
+        assert "delete_pets" not in alerts[AlertType.mcp_pinned_tools_changed]
 
     @pytest.mark.asyncio
     async def test_call_outside_the_pinned_catalog_is_refused(self):
