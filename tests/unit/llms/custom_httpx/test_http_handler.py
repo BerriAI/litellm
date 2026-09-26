@@ -1794,6 +1794,23 @@ async def test_bounded_get_decodes_a_compressed_body_and_reports_the_decoded_len
 
 
 @pytest.mark.asyncio
+async def test_bounded_get_reads_a_compressed_body_whose_wire_length_exceeds_the_cap(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    document = bytes(range(256))
+    compressed = gzip.compress(document)
+    assert len(compressed) > len(document)
+    respx_mock.get("https://cdn.example/blob.bin").respond(
+        200, content=compressed, headers={"content-encoding": "gzip", "content-length": str(len(compressed))}
+    )
+    handler = AsyncHTTPHandler()
+    try:
+        response = await handler.get("https://cdn.example/blob.bin", max_response_bytes=len(document))
+    finally:
+        await handler.close()
+    assert response.content == document
+
+
+@pytest.mark.asyncio
 async def test_bounded_get_caps_the_decoded_size_of_a_compressed_body(respx_mock, monkeypatch):
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
     compressed = gzip.compress(b"0" * 200_000)

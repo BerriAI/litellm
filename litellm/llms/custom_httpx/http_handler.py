@@ -614,6 +614,12 @@ def _headers_of_the_decoded_body(headers: httpx.Headers) -> httpx.Headers:
     )
 
 
+def _declared_decoded_length(headers: httpx.Headers) -> int:
+    if headers.get("content-encoding", "identity") != "identity":
+        return 0
+    return int(headers.get("content-length", "0"))
+
+
 class AsyncHTTPHandler:
     def __init__(
         self,
@@ -789,7 +795,7 @@ class AsyncHTTPHandler:
                 )
             if response.is_redirect or response.is_error:
                 return httpx.Response(response.status_code, headers=response.headers, request=response.request)
-            if int(response.headers.get("content-length", "0")) > max_bytes:
+            if _declared_decoded_length(response.headers) > max_bytes:
                 raise HTTPResponseLimitError("Response exceeds the configured size limit")
             with BytesIO() as body:
                 async for chunk in response.aiter_bytes(chunk_size=65536):

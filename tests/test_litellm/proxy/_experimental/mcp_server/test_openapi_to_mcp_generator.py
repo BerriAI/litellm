@@ -1569,7 +1569,10 @@ class TestBoundedOpenAPISpecLoading:
         assert route.calls[0].request.headers["accept-encoding"] == "identity"
 
     @pytest.mark.asyncio
-    @pytest.mark.parametrize("headers", [{"content-length": "1000000"}, {"content-encoding": "gzip"}])
+    @pytest.mark.parametrize(
+        "headers",
+        [{"content-length": "1000000"}, {"content-length": "1000000", "content-encoding": "identity"}],
+    )
     async def test_unsafe_response_headers_reject_before_reading(self, respx_mock, monkeypatch, headers):
         import httpx
         from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
@@ -1592,6 +1595,36 @@ class TestBoundedOpenAPISpecLoading:
         with pytest.raises(HTTPResponseLimitError):
             await load_openapi_spec_async("https://93.184.216.34/spec.json", max_bytes=12)
         assert closed == [True]
+
+    @pytest.mark.asyncio
+    async def test_compressed_spec_loads_when_its_decoded_size_fits(self, respx_mock, monkeypatch):
+        import gzip
+
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import load_openapi_spec_async
+
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        compressed = gzip.compress(b'{"paths":{}}')
+        assert len(compressed) > 12
+        respx_mock.get("https://93.184.216.34/spec.json").respond(
+            200, content=compressed, headers={"content-encoding": "gzip"}
+        )
+        assert await load_openapi_spec_async("https://93.184.216.34/spec.json", max_bytes=12) == {"paths": {}}
+
+    @pytest.mark.asyncio
+    async def test_compressed_spec_is_capped_on_its_decoded_size(self, respx_mock, monkeypatch):
+        import gzip
+
+        from litellm.llms.custom_httpx.http_handler import HTTPResponseLimitError
+        from litellm.proxy._experimental.mcp_server.openapi_to_mcp_generator import load_openapi_spec_async
+
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        compressed = gzip.compress(b'{"paths":{},"pad":"' + b"x" * 100_000 + b'"}')
+        assert len(compressed) < 12_000
+        respx_mock.get("https://93.184.216.34/spec.json").respond(
+            200, content=compressed, headers={"content-encoding": "gzip"}
+        )
+        with pytest.raises(HTTPResponseLimitError):
+            await load_openapi_spec_async("https://93.184.216.34/spec.json", max_bytes=12_000)
 
     @pytest.mark.asyncio
     async def test_chunked_response_is_bounded_and_closed(self, respx_mock, monkeypatch):
