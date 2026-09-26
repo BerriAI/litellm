@@ -6,7 +6,7 @@ import json
 import time
 import traceback
 import uuid
-from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
+from collections.abc import Awaitable, Callable, Coroutine, Iterable, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -167,6 +167,25 @@ def _log_background_task_failure(task: asyncio.Task[object], *, task_name: str) 
     exception: Final = task.exception()
     if exception is not None:
         verbose_logger.error("%s failed: %s", task_name, exception)
+
+
+_PENDING_LOGGING_TASKS: Final[set[asyncio.Task[object]]] = set()  # mutable-ok: strong refs to pending logging tasks
+
+
+def _running_loop() -> asyncio.AbstractEventLoop | None:
+    try:
+        return asyncio.get_running_loop()
+    except RuntimeError:
+        return None
+
+
+def _spawn_logging_task(
+    running_loop: asyncio.AbstractEventLoop, coroutine: Coroutine[object, object, object], *, task_name: str
+) -> None:
+    task: Final = running_loop.create_task(coroutine)
+    _PENDING_LOGGING_TASKS.add(task)
+    task.add_done_callback(_PENDING_LOGGING_TASKS.discard)
+    task.add_done_callback(lambda done: _log_background_task_failure(done, task_name=task_name))
 
 
 _ERROR_CODE_HTTP_STATUS: Final[Mapping[str, int]] = MappingProxyType(
@@ -839,8 +858,19 @@ class BaseResponsesAPIStreamingIterator:
             except Exception:
                 typed_call_type = None
 
+        running_loop: Final = _running_loop()
+        if running_loop is not None:
+            _spawn_logging_task(
+                running_loop,
+                async_post_call_success_deployment_hook(
+                    request_data=request_payload,
+                    response=self.completed_response,
+                    call_type=typed_call_type,
+                ),
+                task_name="Responses stream post-call success hook",
+            )
+            return
         try:
-            # Call synchronously; async hook will be executed via asyncio.run in a new loop
             run_async_function(
                 async_function=async_post_call_success_deployment_hook,
                 request_data=request_payload,
@@ -861,6 +891,14 @@ class BaseResponsesAPIStreamingIterator:
         self._failure_handled = True
 
         traceback_exception: Final = traceback.format_exc()
+        running_loop: Final = _running_loop()
+        if running_loop is not None:
+            _spawn_logging_task(
+                running_loop,
+                self.logging_obj.dispatch_failure_handlers(exception, traceback_exception, prefer_async_handlers=True),
+                task_name="Responses stream failure logging",
+            )
+            return
         try:
             run_async_function(
                 async_function=self.logging_obj.async_failure_handler,

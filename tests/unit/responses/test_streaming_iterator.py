@@ -3,7 +3,9 @@ completion_start_time on the first chunk so downstream TTFT consumers
 (Prometheus, OTEL, SpendLogs completionStartTime) do not fall back to
 completion_start_time = end_time."""
 
+import asyncio
 import json
+from collections.abc import Callable
 from datetime import datetime
 from typing import Final, Optional
 from unittest.mock import AsyncMock, Mock, patch
@@ -14,6 +16,7 @@ from pydantic_core import PydanticSerializationError
 
 import litellm
 from litellm.exceptions import MidStreamFallbackError
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.responses.streaming_iterator import (
@@ -266,12 +269,19 @@ _PRE_OUTPUT_PREFIXES: Final = [
 def _failure_tracking_logging_obj() -> Mock:
     logging_obj: Final = _logging_obj_stub()
     logging_obj.async_failure_handler = AsyncMock()
+    logging_obj.dispatch_failure_handlers = AsyncMock()
     return logging_obj
 
 
 def _assert_failure_logged_once(logging_obj: Mock, exception: Exception) -> None:
     assert logging_obj.async_failure_handler.await_count == 1
     assert logging_obj.async_failure_handler.await_args.kwargs["exception"] is exception
+
+
+async def _assert_failure_dispatched_once(logging_obj: Mock, exception: Exception) -> None:
+    await asyncio.sleep(0)
+    assert logging_obj.dispatch_failure_handlers.await_count == 1
+    assert logging_obj.dispatch_failure_handlers.await_args.args[0] is exception
 
 
 @pytest.mark.asyncio
@@ -291,7 +301,7 @@ async def test_transport_error_before_any_output_raises_fallback_error(prefix, p
     assert exc_info.value.original_exception is trailing_error
     assert exc_info.value.is_pre_first_chunk is pre_first_chunk
     assert exc_info.value.generated_content == ""
-    _assert_failure_logged_once(logging_obj, trailing_error)
+    await _assert_failure_dispatched_once(logging_obj, trailing_error)
 
 
 @pytest.mark.asyncio
@@ -307,7 +317,7 @@ async def test_transport_error_after_output_started_is_not_fallback_eligible():
             pass
 
     assert exc_info.value is trailing_error
-    _assert_failure_logged_once(logging_obj, trailing_error)
+    await _assert_failure_dispatched_once(logging_obj, trailing_error)
 
 
 @pytest.mark.asyncio
@@ -327,7 +337,7 @@ async def test_stream_ending_after_partial_output_without_terminal_event_raises(
     assert (created.type, delta.type) == ("response.created", "response.output_text.delta")
     assert not isinstance(exc_info.value, MidStreamFallbackError)
     assert exc_info.value.llm_provider == "openai"
-    _assert_failure_logged_once(logging_obj, exc_info.value)
+    await _assert_failure_dispatched_once(logging_obj, exc_info.value)
 
 
 @pytest.mark.asyncio
@@ -344,7 +354,7 @@ async def test_stream_ending_before_any_output_raises_fallback_error(prefix, pre
     assert isinstance(exc_info.value.original_exception, litellm.APIConnectionError)
     assert exc_info.value.is_pre_first_chunk is pre_first_chunk
     assert exc_info.value.generated_content == ""
-    _assert_failure_logged_once(logging_obj, exc_info.value.original_exception)
+    await _assert_failure_dispatched_once(logging_obj, exc_info.value.original_exception)
 
 
 @pytest.mark.asyncio
@@ -356,6 +366,7 @@ async def test_complete_stream_still_ends_normally(trailer):
     seen: Final = [event.type async for event in iterator]
 
     assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    assert logging_obj.dispatch_failure_handlers.await_count == 0
     assert logging_obj.async_failure_handler.await_count == 0
 
 
@@ -415,6 +426,85 @@ def test_sync_complete_stream_still_ends_normally(trailer):
 
     assert seen[-1] == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
     assert logging_obj.async_failure_handler.await_count == 0
+
+
+class _LoopRecordingLogger(CustomLogger):
+    def __init__(self) -> None:
+        super().__init__()
+        self.failure_loop: asyncio.AbstractEventLoop | None = None
+        self.failure_finished = False
+        self.hook_loop: asyncio.AbstractEventLoop | None = None
+        self.hook_finished = False
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.failure_loop = asyncio.get_running_loop()
+        await asyncio.sleep(0.05)
+        self.failure_finished = True
+
+    async def async_post_call_success_deployment_hook(self, request_data, response, call_type):
+        self.hook_loop = asyncio.get_running_loop()
+        await asyncio.sleep(0.05)
+        self.hook_finished = True
+        return None
+
+
+def _real_logging_obj() -> LiteLLMLoggingObj:
+    logging_obj: Final = LiteLLMLoggingObj(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="aresponses",
+        start_time=datetime.now(),
+        litellm_call_id="lit-8678-test",
+        function_id="lit-8678-test",
+    )
+    logging_obj.model_call_details["litellm_params"] = {"aresponses": True}
+    return logging_obj
+
+
+async def _wait_until(condition: Callable[[], bool]) -> None:
+    for _ in range(200):
+        if condition():
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError("condition never became true")
+
+
+@pytest.mark.asyncio
+async def test_transport_error_failure_logging_runs_on_the_iterating_loop(monkeypatch):
+    """LIT-8678: a stream failure used to run async_failure_handler on a helper loop in a
+    worker thread and block the iterating loop until it finished, so a callback waiting on
+    state bound to that loop (a batch logger's flush lock) stalled the whole proxy."""
+    recorder: Final = _LoopRecordingLogger()
+    monkeypatch.setattr(litellm, "_async_failure_callback", [recorder])
+    monkeypatch.setattr(litellm, "failure_callback", [])
+    iterator: Final = _make_iterator(
+        sse_events=_PARTIAL_OUTPUT_EVENTS,
+        logging_obj=_real_logging_obj(),
+        trailing_error=httpx.ReadError("Response payload is not completed"),
+    )
+
+    with pytest.raises(httpx.ReadError):
+        async for _ in iterator:
+            pass
+
+    assert recorder.failure_finished is False
+    await _wait_until(lambda: recorder.failure_finished)
+    assert recorder.failure_loop is asyncio.get_running_loop()
+
+
+@pytest.mark.asyncio
+async def test_completed_stream_success_deployment_hook_runs_on_the_iterating_loop(monkeypatch):
+    recorder: Final = _LoopRecordingLogger()
+    monkeypatch.setattr(litellm, "callbacks", [recorder])
+    iterator: Final = _make_iterator(sse_events=_COMPLETE_STREAM_EVENTS, logging_obj=_logging_obj_stub())
+
+    async for _ in iterator:
+        pass
+
+    assert recorder.hook_finished is False
+    await _wait_until(lambda: recorder.hook_finished)
+    assert recorder.hook_loop is asyncio.get_running_loop()
 
 
 def test_stream_cache_write_completes_when_asyncio_run_closes_the_loop(monkeypatch):
