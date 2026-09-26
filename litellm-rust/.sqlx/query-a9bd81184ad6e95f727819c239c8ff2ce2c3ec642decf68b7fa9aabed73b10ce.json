@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT column_name AS \"column_name!\" FROM information_schema.columns\n        WHERE table_schema = current_schema() AND table_name = 'LiteLLM_VerificationToken'",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "column_name!",
+        "type_info": "Name",
+        "origin": {
+          "Table": {
+            "table": "information_schema.columns",
+            "name": "column_name"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "a9bd81184ad6e95f727819c239c8ff2ce2c3ec642decf68b7fa9aabed73b10ce"
+}

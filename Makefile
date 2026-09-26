@@ -4,7 +4,7 @@
 .PHONY: help test test-unit test-unit-llms test-unit-proxy-guardrails test-unit-proxy-core test-unit-proxy-misc \
 	test-unit-integrations test-unit-core-utils test-unit-other test-unit-root \
 	test-proxy-unit-a test-proxy-unit-b test-integration test-unit-helm \
-	test-rust-extension \
+	test-rust-extension rust-sqlx-prepare \
 	info lint lint-inner lint-dev lint-checks format \
 	lint-basedpyright lint-e2e-basedpyright lint-basedpyright-budget-update lint-type-discipline lint-type-discipline-budget-update \
 	lint-ruff-budget lint-ruff-budget-update lint-budget-update lint-gate \
@@ -56,6 +56,7 @@ help:
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
 	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
+	@echo "  make rust-sqlx-prepare  - Migrate SQLX_DATABASE_URL and refresh litellm-rust/.sqlx"
 	@echo ""
 	@echo "Heavy targets (check, lint) queue for LITELLM_GATE_SLOTS machine-wide"
 	@echo "slots (default 2; 0 disables) so parallel sessions don't thrash one machine."
@@ -305,6 +306,11 @@ test-rust-extension:
 		litellm.rust_bridge._native && \
 	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
 	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
+
+rust-sqlx-prepare:
+	@test -n "$$SQLX_DATABASE_URL" || { echo "set SQLX_DATABASE_URL to a scratch Postgres, it gets prisma migrate deploy" >&2; exit 1; }
+	DATABASE_URL="$$SQLX_DATABASE_URL" $(UV_RUN) prisma migrate deploy --schema litellm-proxy-extras/litellm_proxy_extras/schema.prisma
+	cd litellm-rust && DATABASE_URL="$$SQLX_DATABASE_URL" cargo sqlx prepare --workspace -- -p litellm-db --all-targets --features postgres-tests
 
 test: install-test-deps
 	$(UV_RUN) pytest tests/

@@ -1,0 +1,952 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n    v.token,\n    v.key_name,\n    v.key_alias,\n    v.soft_budget_cooldown,\n    v.spend,\n    v.total_spend,\n    v.expires,\n    v.models,\n    v.aliases,\n    v.config,\n    v.router_settings,\n    v.user_id,\n    v.team_id,\n    v.agent_id,\n    v.project_id,\n    v.permissions,\n    v.max_parallel_requests,\n    v.metadata,\n    v.blocked,\n    v.tpm_limit,\n    v.rpm_limit,\n    v.tpd_limit,\n    v.max_budget,\n    v.budget_duration,\n    v.budget_reset_at,\n    v.allowed_cache_controls,\n    v.allowed_routes,\n    v.key_type,\n    v.policies,\n    v.access_group_ids,\n    v.model_spend,\n    v.model_max_budget,\n    v.budget_fallbacks,\n    v.budget_id,\n    v.organization_id,\n    v.object_permission_id,\n    v.created_at,\n    v.created_by,\n    v.updated_at,\n    v.updated_by,\n    v.settings_updated_at,\n    v.last_active,\n    v.rotation_count,\n    v.auto_rotate,\n    v.rotation_interval,\n    v.last_rotation_at,\n    v.key_rotation_at,\n    v.budget_limits,\n    t.spend AS team_spend,\n    t.max_budget AS team_max_budget,\n    t.soft_budget AS team_soft_budget,\n    t.model_max_budget AS team_model_max_budget,\n    t.tpm_limit AS team_tpm_limit,\n    t.rpm_limit AS team_rpm_limit,\n    t.tpd_limit AS team_tpd_limit,\n    t.models AS team_models,\n    t.blocked AS team_blocked,\n    t.team_alias AS team_alias,\n    t.metadata AS team_metadata,\n    t.members_with_roles AS team_members_with_roles,\n    t.object_permission_id AS team_object_permission_id,\n    t.organization_id as org_id,\n    p.project_alias AS project_alias,\n    tm.spend AS team_member_spend,\n    b_tm.tpm_limit AS team_member_tpm_limit,\n    b_tm.rpm_limit AS team_member_rpm_limit,\n    m.aliases AS team_model_aliases,\n    b.max_budget AS litellm_budget_table_max_budget,\n    b.tpm_limit AS litellm_budget_table_tpm_limit,\n    b.rpm_limit AS litellm_budget_table_rpm_limit,\n    b.tpd_limit AS litellm_budget_table_tpd_limit,\n    b.model_max_budget as litellm_budget_table_model_max_budget,\n    b.soft_budget as litellm_budget_table_soft_budget,\n    o.metadata as organization_metadata,\n    o.organization_alias as organization_alias,\n    b2.max_budget as organization_max_budget,\n    b2.tpm_limit as organization_tpm_limit,\n    b2.rpm_limit as organization_rpm_limit\nFROM \"LiteLLM_VerificationToken\" AS v\nLEFT JOIN \"LiteLLM_TeamTable\" AS t ON v.team_id = t.team_id\nLEFT JOIN \"LiteLLM_TeamMembership\" AS tm ON v.team_id = tm.team_id AND tm.user_id = v.user_id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b_tm ON tm.budget_id = b_tm.budget_id\nLEFT JOIN \"LiteLLM_ModelTable\" m ON t.model_id = m.id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b ON v.budget_id = b.budget_id\nLEFT JOIN \"LiteLLM_ProjectTable\" AS p ON v.project_id = p.project_id\nLEFT JOIN \"LiteLLM_OrganizationTable\" AS o ON v.organization_id = o.organization_id\nLEFT JOIN \"LiteLLM_BudgetTable\" AS b2 ON o.budget_id = b2.budget_id\nWHERE v.token = $1\n",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "token",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "token"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "key_name",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "key_name"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "key_alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "key_alias"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "soft_budget_cooldown",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "soft_budget_cooldown"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "total_spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "total_spend"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "expires",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "expires"
+          }
+        }
+      },
+      {
+        "ordinal": 7,
+        "name": "models",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "models"
+          }
+        }
+      },
+      {
+        "ordinal": 8,
+        "name": "aliases",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "aliases"
+          }
+        }
+      },
+      {
+        "ordinal": 9,
+        "name": "config",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "config"
+          }
+        }
+      },
+      {
+        "ordinal": 10,
+        "name": "router_settings",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "router_settings"
+          }
+        }
+      },
+      {
+        "ordinal": 11,
+        "name": "user_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "user_id"
+          }
+        }
+      },
+      {
+        "ordinal": 12,
+        "name": "team_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "team_id"
+          }
+        }
+      },
+      {
+        "ordinal": 13,
+        "name": "agent_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "agent_id"
+          }
+        }
+      },
+      {
+        "ordinal": 14,
+        "name": "project_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "project_id"
+          }
+        }
+      },
+      {
+        "ordinal": 15,
+        "name": "permissions",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "permissions"
+          }
+        }
+      },
+      {
+        "ordinal": 16,
+        "name": "max_parallel_requests",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "max_parallel_requests"
+          }
+        }
+      },
+      {
+        "ordinal": 17,
+        "name": "metadata",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "ordinal": 18,
+        "name": "blocked",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "blocked"
+          }
+        }
+      },
+      {
+        "ordinal": 19,
+        "name": "tpm_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "tpm_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 20,
+        "name": "rpm_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "rpm_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 21,
+        "name": "tpd_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "tpd_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 22,
+        "name": "max_budget",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "max_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 23,
+        "name": "budget_duration",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "budget_duration"
+          }
+        }
+      },
+      {
+        "ordinal": 24,
+        "name": "budget_reset_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "budget_reset_at"
+          }
+        }
+      },
+      {
+        "ordinal": 25,
+        "name": "allowed_cache_controls",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "allowed_cache_controls"
+          }
+        }
+      },
+      {
+        "ordinal": 26,
+        "name": "allowed_routes",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "allowed_routes"
+          }
+        }
+      },
+      {
+        "ordinal": 27,
+        "name": "key_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "key_type"
+          }
+        }
+      },
+      {
+        "ordinal": 28,
+        "name": "policies",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "policies"
+          }
+        }
+      },
+      {
+        "ordinal": 29,
+        "name": "access_group_ids",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "access_group_ids"
+          }
+        }
+      },
+      {
+        "ordinal": 30,
+        "name": "model_spend",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "model_spend"
+          }
+        }
+      },
+      {
+        "ordinal": 31,
+        "name": "model_max_budget",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "model_max_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 32,
+        "name": "budget_fallbacks",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "budget_fallbacks"
+          }
+        }
+      },
+      {
+        "ordinal": 33,
+        "name": "budget_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "budget_id"
+          }
+        }
+      },
+      {
+        "ordinal": 34,
+        "name": "organization_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "organization_id"
+          }
+        }
+      },
+      {
+        "ordinal": 35,
+        "name": "object_permission_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "object_permission_id"
+          }
+        }
+      },
+      {
+        "ordinal": 36,
+        "name": "created_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "created_at"
+          }
+        }
+      },
+      {
+        "ordinal": 37,
+        "name": "created_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "created_by"
+          }
+        }
+      },
+      {
+        "ordinal": 38,
+        "name": "updated_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 39,
+        "name": "updated_by",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "updated_by"
+          }
+        }
+      },
+      {
+        "ordinal": 40,
+        "name": "settings_updated_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "settings_updated_at"
+          }
+        }
+      },
+      {
+        "ordinal": 41,
+        "name": "last_active",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "last_active"
+          }
+        }
+      },
+      {
+        "ordinal": 42,
+        "name": "rotation_count",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "rotation_count"
+          }
+        }
+      },
+      {
+        "ordinal": 43,
+        "name": "auto_rotate",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "auto_rotate"
+          }
+        }
+      },
+      {
+        "ordinal": 44,
+        "name": "rotation_interval",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "rotation_interval"
+          }
+        }
+      },
+      {
+        "ordinal": 45,
+        "name": "last_rotation_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "last_rotation_at"
+          }
+        }
+      },
+      {
+        "ordinal": 46,
+        "name": "key_rotation_at",
+        "type_info": "Timestamp",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "key_rotation_at"
+          }
+        }
+      },
+      {
+        "ordinal": 47,
+        "name": "budget_limits",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_VerificationToken\"",
+            "name": "budget_limits"
+          }
+        }
+      },
+      {
+        "ordinal": 48,
+        "name": "team_spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 49,
+        "name": "team_max_budget",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "max_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 50,
+        "name": "team_soft_budget",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "soft_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 51,
+        "name": "team_model_max_budget",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "model_max_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 52,
+        "name": "team_tpm_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "tpm_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 53,
+        "name": "team_rpm_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "rpm_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 54,
+        "name": "team_tpd_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "tpd_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 55,
+        "name": "team_models",
+        "type_info": "TextArray",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "models"
+          }
+        }
+      },
+      {
+        "ordinal": 56,
+        "name": "team_blocked",
+        "type_info": "Bool",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "blocked"
+          }
+        }
+      },
+      {
+        "ordinal": 57,
+        "name": "team_alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "team_alias"
+          }
+        }
+      },
+      {
+        "ordinal": 58,
+        "name": "team_metadata",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "ordinal": 59,
+        "name": "team_members_with_roles",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "members_with_roles"
+          }
+        }
+      },
+      {
+        "ordinal": 60,
+        "name": "team_object_permission_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "object_permission_id"
+          }
+        }
+      },
+      {
+        "ordinal": 61,
+        "name": "org_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamTable\"",
+            "name": "organization_id"
+          }
+        }
+      },
+      {
+        "ordinal": 62,
+        "name": "project_alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ProjectTable\"",
+            "name": "project_alias"
+          }
+        }
+      },
+      {
+        "ordinal": 63,
+        "name": "team_member_spend",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_TeamMembership\"",
+            "name": "spend"
+          }
+        }
+      },
+      {
+        "ordinal": 64,
+        "name": "team_member_tpm_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "tpm_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 65,
+        "name": "team_member_rpm_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "rpm_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 66,
+        "name": "team_model_aliases",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_ModelTable\"",
+            "name": "aliases"
+          }
+        }
+      },
+      {
+        "ordinal": 67,
+        "name": "litellm_budget_table_max_budget",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "max_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 68,
+        "name": "litellm_budget_table_tpm_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "tpm_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 69,
+        "name": "litellm_budget_table_rpm_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "rpm_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 70,
+        "name": "litellm_budget_table_tpd_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "tpd_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 71,
+        "name": "litellm_budget_table_model_max_budget",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "model_max_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 72,
+        "name": "litellm_budget_table_soft_budget",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "soft_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 73,
+        "name": "organization_metadata",
+        "type_info": "Jsonb",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_OrganizationTable\"",
+            "name": "metadata"
+          }
+        }
+      },
+      {
+        "ordinal": 74,
+        "name": "organization_alias",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_OrganizationTable\"",
+            "name": "organization_alias"
+          }
+        }
+      },
+      {
+        "ordinal": 75,
+        "name": "organization_max_budget",
+        "type_info": "Float8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "max_budget"
+          }
+        }
+      },
+      {
+        "ordinal": 76,
+        "name": "organization_tpm_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "tpm_limit"
+          }
+        }
+      },
+      {
+        "ordinal": 77,
+        "name": "organization_rpm_limit",
+        "type_info": "Int8",
+        "origin": {
+          "Table": {
+            "table": "\"LiteLLM_BudgetTable\"",
+            "name": "rpm_limit"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "36edd037e0205ed4976d66819c7406934b5c34f1e10fc58123ace6e530a6bbce"
+}
