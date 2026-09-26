@@ -1461,7 +1461,7 @@
     },
     "laya": {
       "display_name": "Laya (`laya`)",
-      "url": "https://github.com/BerriAI/litellm/blob/main/cookbook/decision_model_classifier.md",
+      "url": "https://docs.litellm.ai/docs/auto_router/decision_models",
       "endpoints": {
         "systemone": true
       }
