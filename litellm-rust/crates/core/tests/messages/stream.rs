@@ -1,8 +1,12 @@
-use std::{convert::Infallible, sync::Mutex};
+use std::{
+    convert::Infallible,
+    sync::{Mutex, mpsc},
+};
 
 use bytes::Bytes;
 use litellm_core::messages::route::{Messages, MessagesStreamHead};
 use litellm_host::host::{Demand, Host};
+use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::rstest;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
@@ -21,6 +25,20 @@ const SSE_BODY: &str = "event: message_start\ndata: {\"type\":\"message_start\"}
 enum Seen {
     Open(Vec<(String, String)>),
     Deliver(Bytes),
+}
+
+struct TraceSink(mpsc::Sender<(String, Value)>);
+
+impl Sink for TraceSink {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        metadata.target().starts_with("litellm_core::messages")
+    }
+
+    fn emit(&self, record: &Record) {
+        self.0
+            .send((record.message.clone(), Value::Object(record.fields.clone())))
+            .unwrap();
+    }
 }
 
 /// Projects like `LocalMessagesHost`, records every stream op in the order the route
@@ -118,6 +136,37 @@ async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: Me
         })
         .collect();
     assert_eq!(delivered, SSE_BODY.as_bytes());
+}
+
+#[rstest]
+#[tokio::test]
+async fn debug_trace_keeps_provider_input_and_every_stream_chunk(call: MessagesCall) {
+    let upstream = upstream([sse_response()]).await;
+    let host = RecordingStreamHost::new(streaming(call, upstream.uri()), usize::MAX);
+    let (sender, receiver) = mpsc::channel();
+
+    Logger::new(TraceSink(sender))
+        .instrument(stream_through(&host))
+        .await
+        .unwrap();
+
+    let records: Vec<(String, Value)> = receiver.try_iter().collect();
+    let request = records
+        .iter()
+        .find(|(message, _)| message == "provider request")
+        .unwrap();
+    let body: Value = serde_json::from_str(request.1["body"].as_str().unwrap()).unwrap();
+    assert_eq!(body["messages"][0]["content"], "hi");
+    assert_eq!(request.1["stream"], true);
+    let chunks: String = records
+        .iter()
+        .filter(|(message, fields)| {
+            message == "stream chunk" && fields["stage"] == "provider_response"
+        })
+        .map(|(_, fields)| fields["chunk"].as_str().unwrap())
+        .collect();
+    assert_eq!(chunks, SSE_BODY);
+    assert!(!format!("{records:?}").contains("sk-ant"));
 }
 
 #[rstest]

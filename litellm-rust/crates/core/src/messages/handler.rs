@@ -33,10 +33,13 @@ pub(super) async fn send(
 pub(super) async fn provider_error(response: reqwest::Response) -> Error {
     let status = response.status().as_u16();
     match response.text().await {
-        Ok(text) => Error::Transport(TransportError::Http {
-            status,
-            body: truncate_error_body(&text),
-        }),
+        Ok(text) => {
+            litellm_tracing::debug!(status, body = text.as_str(), "provider error body");
+            Error::Transport(TransportError::Http {
+                status,
+                body: truncate_error_body(&text),
+            })
+        }
         Err(error) => network(error),
     }
 }

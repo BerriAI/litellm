@@ -3138,6 +3138,7 @@ dependencies = [
  "litellm-http",
  "litellm-llms",
  "litellm-secrets",
+ "litellm-tracing",
  "litellm-types",
  "mime_guess",
  "moka",
@@ -3215,6 +3216,8 @@ name = "litellm-gateway"
 version = "0.1.0"
 dependencies = [
  "axum",
+ "futures-util",
+ "http-body-util",
  "litellm-config",
  "litellm-core",
  "litellm-gateway-auth",
@@ -3222,11 +3225,13 @@ dependencies = [
  "litellm-http",
  "litellm-llms",
  "litellm-secrets",
+ "litellm-tracing",
  "rstest",
  "serde_json",
  "tokio",
- "tower-http 0.7.1",
+ "tower",
  "tracing",
+ "uuid",
 ]
 
 [[package]]
@@ -3677,6 +3682,7 @@ dependencies = [
 name = "litellm-tracing"
 version = "0.1.0"
 dependencies = [
+ "base64 0.22.1",
  "fancy-regex 0.19.2",
  "percent-encoding",
  "rstest",
@@ -4880,7 +4886,7 @@ dependencies = [
  "tokio-rustls 0.26.4",
  "tokio-util",
  "tower",
- "tower-http 0.6.11",
+ "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -4922,7 +4928,7 @@ dependencies = [
  "tokio-rustls 0.26.4",
  "tokio-util",
  "tower",
- "tower-http 0.6.11",
+ "tower-http",
  "tower-service",
  "url",
  "wasm-bindgen",
@@ -6161,23 +6167,6 @@ dependencies = [
  "tower-layer",
  "tower-service",
  "url",
-]
-
-[[package]]
-name = "tower-http"
-version = "0.7.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "08a05a66a4fdd61cbbe0a1d755ffe0ca6aba159dd4820936a0ff8a8278245b9c"
-dependencies = [
- "bitflags 2.13.1",
- "bytes",
- "http 1.4.2",
- "http-body 1.1.0",
- "percent-encoding",
- "pin-project-lite",
- "tower-layer",
- "tower-service",
- "tracing",
 ]
 
 [[package]]

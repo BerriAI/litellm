@@ -19,6 +19,7 @@ use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
 };
 use litellm_secrets::source::SecretSource;
+use litellm_tracing::{ByteChunk, debug};
 use litellm_types::{
     llms::anthropic_messages::{
         anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
@@ -160,6 +161,7 @@ async fn execute(
             context,
         )
         .await?;
+    debug!(provider = request.provider.as_str(), stream, body = %wire.body, "provider request");
     let response = send(
         &http,
         Authenticated {
@@ -171,13 +173,25 @@ async fn execute(
         request.timeout,
     )
     .await?;
+    debug!(
+        provider = request.provider.as_str(),
+        status = response.status().as_u16(),
+        "provider response headers"
+    );
     if !response.status().is_success() {
         return Err(provider_error(response).await);
     }
     if stream {
-        return relay(&host, response, config.stream_decoder()).await;
+        return relay(
+            &host,
+            response,
+            config.stream_decoder(),
+            request.provider.as_str(),
+        )
+        .await;
     }
     let text = response.text().await.map_err(network)?;
+    debug!(body = text.as_str(), "provider response body");
     host.emit(MachineEvent::ResponseReceived {
         raw: RawResponse { body: text.clone() },
     })
@@ -201,6 +215,7 @@ async fn relay(
     host: &MessagesHost,
     response: reqwest::Response,
     decoder: Option<StreamDecoder>,
+    provider: &'static str,
 ) -> Result<MessagesOutput, Error> {
     let head = MessagesStreamHead {
         headers: response
@@ -213,16 +228,18 @@ async fn relay(
         return Ok(MessagesOutput::Streamed);
     }
     match decoder {
-        None => relay_bytes(host, response).await,
-        Some(decode) => relay_events(host, response, decode).await,
+        None => relay_bytes(host, response, provider).await,
+        Some(decode) => relay_events(host, response, decode, provider).await,
     }
 }
 
 async fn relay_bytes(
     host: &MessagesHost,
     mut response: reqwest::Response,
+    provider: &'static str,
 ) -> Result<MessagesOutput, Error> {
     while let Some(chunk) = response.chunk().await.map_err(network)? {
+        log_chunk(provider, "provider_response", &chunk);
         if host.deliver(chunk).await? == Demand::Detached {
             break;
         }
@@ -234,6 +251,7 @@ async fn relay_events(
     host: &MessagesHost,
     response: reqwest::Response,
     decode: StreamDecoder,
+    provider: &'static str,
 ) -> Result<MessagesOutput, Error> {
     let bytes: ByteStream = futures_util::stream::unfold(response, |mut response| async move {
         match response.chunk().await {
@@ -242,13 +260,24 @@ async fn relay_events(
             Err(error) => Some((Err(std::io::Error::other(error)), response)),
         }
     })
+    .inspect(move |chunk| {
+        if let Ok(chunk) = chunk {
+            log_chunk(provider, "provider_response", chunk);
+        }
+    })
     .boxed();
     let mut events = decode(bytes);
     while let Some(event) = events.next().await {
         let chunk = encode_anthropic_sse(&event?)?;
+        log_chunk(provider, "client_response", &chunk);
         if host.deliver(chunk).await? == Demand::Detached {
             break;
         }
     }
     Ok(MessagesOutput::Streamed)
+}
+
+fn log_chunk(provider: &str, stage: &str, data: &Bytes) {
+    let chunk = ByteChunk::new(data);
+    debug!(provider, stage, encoding = chunk.encoding(), chunk = %chunk, "stream chunk");
 }
