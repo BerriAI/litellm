@@ -324,12 +324,14 @@ def provisioning_fixture():
     client: Final = MagicMock(spec=PrismaClient)
     tx: Final = MagicMock(spec=Prisma)
     client.tx.return_value.__aenter__.return_value = tx
+    client.writer_db = tx
     tx.execute_raw = AsyncMock(return_value=1)
     tx.litellm_scimsource.find_unique = AsyncMock(return_value=source)
     tx.litellm_scimresource.find_unique = AsyncMock(return_value=row)
     tx.litellm_scimresource.update_many = AsyncMock(return_value=1)
     tx.litellm_scimresource.update = AsyncMock(return_value=row)
     tx.litellm_scimresource.find_many = AsyncMock(return_value=[])
+    tx.litellm_scimresource.count = AsyncMock(return_value=0)
     tx.litellm_agentstable.find_unique = AsyncMock(return_value={"agent_id": row.local_id})
     return AgentProvisioningService(client, source), tx, row
 
@@ -592,6 +594,39 @@ def group_rows(native):
 
 
 @pytest.mark.asyncio
+async def test_group_validation_reads_all_member_batches() -> None:
+    from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
+
+    service, tx, _ = provisioning_fixture()
+    members: Final = tuple(f"member-{index}" for index in range(IN_LIST_CHUNK_SIZE + 1))
+    tx.litellm_scimresource.count.side_effect = [IN_LIST_CHUNK_SIZE, 1]
+    await service._validate_members(tx, members)
+    assert tx.litellm_scimresource.count.await_count == 2
+    tx.litellm_scimresource.count.side_effect = [IN_LIST_CHUNK_SIZE, 0]
+    with pytest.raises(HTTPException) as failure:
+        await service._validate_members(tx, members)
+    assert failure.value.status_code == 400
+
+
+@pytest.mark.asyncio
+async def test_group_sync_includes_humans_from_later_batches(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.management_endpoints.scim import scim_v2
+    from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
+
+    service, tx, native = provisioning_fixture()
+    human, group, document = group_rows(native)
+    members: Final = [f"member-{index}" for index in range(IN_LIST_CHUNK_SIZE)] + [human.id]
+    native_rows: Final = [native.model_copy(update={"id": member}) for member in members[:-1]]
+    tx.litellm_scimresource.find_many.side_effect = [native_rows, [human]]
+    tx.litellm_teamtable.find_unique = AsyncMock(return_value=None)
+    create_team: Final = AsyncMock(return_value=document.model_copy(update={"id": "local-team"}))
+    monkeypatch.setattr(scim_v2, "create_group", create_team)
+    await service._sync_human_members(group.model_copy(update={"member_ids": members}))
+    create_team.assert_awaited_once()
+    assert create_team.call_args.kwargs["group"].members == [SCIMMember(value=human.local_id)]
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("include_human", [True, False])
 async def test_group_create_keeps_agents_out_of_human_teams(
     include_human: bool, monkeypatch: pytest.MonkeyPatch
@@ -604,6 +639,7 @@ async def test_group_create_keeps_agents_out_of_human_teams(
     group: Final = group.model_copy(update={"member_ids": [row.id for row in rows]})
     tx.litellm_scimresource.find_unique.return_value = None
     tx.litellm_scimresource.find_many.return_value = rows
+    tx.litellm_scimresource.count.return_value = len(rows)
     tx.litellm_scimresource.create = AsyncMock(return_value=group)
     tx.litellm_teamtable.find_unique = AsyncMock(return_value=None)
     create_team: Final = AsyncMock(return_value=document.model_copy(update={"id": "local-team"}))
@@ -655,6 +691,7 @@ async def test_group_replay_reconciles_removed_humans_but_preserves_agent_member
     updated: Final = old.model_copy(update={"member_ids": [native.id]})
     tx.litellm_scimresource.find_unique.side_effect = [old, old, updated]
     tx.litellm_scimresource.find_many.return_value = [native]
+    tx.litellm_scimresource.count.return_value = 1
     tx.litellm_teamtable.find_unique = AsyncMock(return_value=SimpleNamespace(team_id="local-team"))
     update_team: Final = AsyncMock(return_value=document.model_copy(update={"id": "local-team"}))
     monkeypatch.setattr(scim_v2, "update_group", update_team)
