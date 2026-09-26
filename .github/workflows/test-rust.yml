@@ -109,6 +109,10 @@ jobs:
         working-directory: .
         run: |
           uv sync --frozen --no-install-project
+
+      - name: Cost test mirrors markers
+        working-directory: .
+        run: python3 scripts/check_cost_test_mirrors.py
           echo "PYTHONPATH=$PWD/.venv/lib/$(ls .venv/lib)/site-packages" >> "$GITHUB_ENV"
 
       - run: rustup toolchain install --no-self-update

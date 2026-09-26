@@ -3,10 +3,10 @@
 use std::{collections::BTreeMap, fs::File, io::Write};
 
 use litellm_python_compat::{
-    Value, json,
+    Error, Value, json,
     literal::literal_eval,
-    pickle,
-    repr::{repr, to_str},
+    number, pickle, pydantic,
+    repr::{float_repr, repr, to_str},
     truthy::truthy,
 };
 use rstest::{fixture, rstest};
@@ -27,6 +27,31 @@ struct Source {
     error: Option<String>,
 }
 
+/// A conversion's result `repr`, or the exception class it raised.
+#[derive(Deserialize)]
+struct Conversion {
+    value: Option<String>,
+    error: Option<String>,
+}
+
+impl Conversion {
+    fn expected(&self) -> String {
+        match (&self.value, &self.error) {
+            (Some(value), None) => value.clone(),
+            (None, Some(error)) => format!("raises {error}"),
+            _ => panic!("a conversion records a value or an error"),
+        }
+    }
+}
+
+fn outcome<T>(result: Result<T, Error>, show: impl Fn(T) -> String) -> String {
+    match result {
+        Ok(value) => show(value),
+        Err(Error::Conversion { exception, .. }) => format!("raises {exception}"),
+        Err(error) => format!("unexpected error: {error}"),
+    }
+}
+
 #[derive(Deserialize)]
 struct Row {
     name: String,
@@ -36,6 +61,11 @@ struct Row {
     repr: String,
     str: String,
     truthy: bool,
+    int: Conversion,
+    float: Conversion,
+    lax_int: Conversion,
+    lax_float: Conversion,
+    lax_bool: Conversion,
     json: Option<String>,
     json_error: Option<String>,
     pickle: Option<BTreeMap<String, String>>,
@@ -190,6 +220,38 @@ fn check_value(mismatches: &mut Mismatches, row: &Row, value: &Value) {
         &row.truthy.to_string(),
         &truthy(value).to_string(),
     );
+    mismatches.check(
+        row,
+        "int",
+        &row.int.expected(),
+        &outcome(number::int(value), |int| int.to_string()),
+    );
+    mismatches.check(
+        row,
+        "float",
+        &row.float.expected(),
+        &outcome(number::float(value), float_repr),
+    );
+    mismatches.check(
+        row,
+        "pydantic lax int",
+        &row.lax_int.expected(),
+        &outcome(pydantic::lax_int(value), |int| int.to_string()),
+    );
+    mismatches.check(
+        row,
+        "pydantic lax float",
+        &row.lax_float.expected(),
+        &outcome(pydantic::lax_float(value), float_repr),
+    );
+    mismatches.check(
+        row,
+        "pydantic lax bool",
+        &row.lax_bool.expected(),
+        &outcome(pydantic::lax_bool(value), |flag| {
+            if flag { "True" } else { "False" }.to_owned()
+        }),
+    );
     let expected = row.json.clone().or_else(|| {
         row.json_error
             .clone()
@@ -208,7 +270,7 @@ fn check_value(mismatches: &mut Mismatches, row: &Row, value: &Value) {
 }
 
 #[rstest]
-fn literal_rows_match_python_repr_str_bool_and_json(fixtures: &Fixtures) {
+fn literal_rows_match_python_repr_str_bool_numbers_and_json(fixtures: &Fixtures) {
     let mut mismatches = Mismatches::default();
     for row in fixtures.rows.iter().filter(|row| row.literal) {
         match literal_eval(&row.repr) {

@@ -2,8 +2,9 @@
 
     python scripts/generate_fixtures.py > generated/values.json
 
-Each row records `repr`, `str`, `json.dumps` (or its error), `bool`, and `pickle.dumps` at
-every protocol. `literal` says whether `ast.literal_eval(repr(value))` gives the value back,
+Each row records `repr`, `str`, `json.dumps` (or its error), `bool`, `int`, `float`, pydantic's
+lax `int`, `float`, and `bool` validation, and `pickle.dumps` at every protocol. Conversions record the result's
+`repr` or the exception class raised. Run it with the repository environment, which has pydantic. `literal` says whether `ast.literal_eval(repr(value))` gives the value back,
 which is how Python reads `str(dict)` text back from a cache; the Rust tests reach the other
 rows only through pickle. `view` is `repr` of the value as `pickle::loads` decodes it, with
 tuples, sets, and frozensets rendered as lists. `sources` records `ast.literal_eval` on raw
@@ -15,6 +16,12 @@ import json
 import pickle
 import sys
 import warnings
+
+from pydantic import TypeAdapter, ValidationError
+
+LAX_INT = TypeAdapter(int)
+LAX_FLOAT = TypeAdapter(float)
+LAX_BOOL = TypeAdapter(bool)
 
 # Entries are source texts, or `(name, source)` when the source is too long to read in a
 # test report. `name` is what the Rust `KNOWN` table keys on.
@@ -79,6 +86,40 @@ CORPUS = [
     'b"a\'b"',
     "b'a\"b\\'c'",
     "b'\\x00\\t\\n\\r\\x7f\\x80\\xff'",
+    # Numeric text, as providers and config files send it
+    "' 12 '",
+    "'+5'",
+    "'-4'",
+    "'007'",
+    "'1_000'",
+    "'1__0'",
+    "'_1'",
+    "'1_'",
+    "'3.0'",
+    "'3.00'",
+    "'3.5'",
+    "' 0.5 '",
+    "'true'",
+    "' Yes '",
+    "'off'",
+    "'2'",
+    "1",
+    "'.5'",
+    "'5.'",
+    "'1e3'",
+    "'1_0.5'",
+    "'1e1_0'",
+    "'inf'",
+    "'-Infinity'",
+    "'nan'",
+    "'NaN'",
+    "'0x10'",
+    "'abc'",
+    "b'12'",
+    "b' 1.5 '",
+    "3.9",
+    "-3.9",
+    "2.5",
     # Containers
     "[]",
     "[1, 'a', None, True]",
@@ -314,6 +355,13 @@ def is_literal(value):
     return repr(parsed) == repr(value)
 
 
+def converted(convert, value):
+    try:
+        return {"value": repr(convert(value))}
+    except (TypeError, ValueError, OverflowError, ValidationError) as error:
+        return {"error": "ValueError" if isinstance(error, ValidationError) else type(error).__name__}
+
+
 def row(entry):
     name, source = named(entry)
     value = eval(source)
@@ -325,6 +373,11 @@ def row(entry):
         "repr": repr(value),
         "str": str(value),
         "truthy": bool(value),
+        "int": converted(int, value),
+        "float": converted(float, value),
+        "lax_int": converted(LAX_INT.validate_python, value),
+        "lax_float": converted(LAX_FLOAT.validate_python, value),
+        "lax_bool": converted(LAX_BOOL.validate_python, value),
     }
     try:
         entry["json"] = json.dumps(value)
