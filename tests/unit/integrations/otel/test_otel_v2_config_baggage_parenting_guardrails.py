@@ -120,6 +120,31 @@ def test_excluded_services_rejects_a_non_datastore_service():
         OpenTelemetryV2Config(excluded_services=["auth"])
 
 
+def test_excluded_services_env_is_validated_at_boot_when_enabled(monkeypatch):
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled, validate_otel_v2_excluded_services_env
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    monkeypatch.setenv("LITELLM_OTEL_EXCLUDED_SERVICES", "auth")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        with pytest.raises(ValueError, match="'auth' is not a datastore service; allowed: postgres, redis"):
+            validate_otel_v2_excluded_services_env()
+    finally:
+        is_otel_v2_enabled.cache_clear()
+
+
+def test_excluded_services_env_validation_accepts_datastore_names(monkeypatch):
+    from litellm.integrations.otel.model.config import is_otel_v2_enabled, validate_otel_v2_excluded_services_env
+
+    monkeypatch.setenv("LITELLM_OTEL_V2", "1")
+    monkeypatch.setenv("LITELLM_OTEL_EXCLUDED_SERVICES", "redis, postgres")
+    is_otel_v2_enabled.cache_clear()
+    try:
+        validate_otel_v2_excluded_services_env()
+    finally:
+        is_otel_v2_enabled.cache_clear()
+
+
 # --------------------------------------------------------------------------- #
 #  Area 2 — pass-through LLM span parents to the ambient server span
 # --------------------------------------------------------------------------- #

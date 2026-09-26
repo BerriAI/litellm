@@ -1106,6 +1106,44 @@ class TestProviderWiring:
         )
         assert fan_out._excluded_db_systems == frozenset({"redis"})
 
+    def test_otel_callback_builds_its_own_logger_after_a_preset(self, monkeypatch):
+        """With ``callbacks: [langfuse_otel, otel]`` the otel branch reused any
+        V2 logger, so ``callback_settings.otel`` (excluded_services) was dropped
+        onto the preset's env-only config."""
+        from litellm.integrations.otel.logger import _excluded_db_systems
+        from litellm.litellm_core_utils import litellm_logging as logging_module
+
+        logging_module._in_memory_loggers.clear()
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
+        monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
+        monkeypatch.delenv("LITELLM_OTEL_EXCLUDED_SERVICES", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        monkeypatch.setattr(litellm, "callback_settings", {"otel": {"excluded_services": ["postgres"]}}, raising=False)
+        try:
+
+            def init(name: str) -> CustomLogger | None:
+                return logging_module._init_custom_logger_compatible_class(
+                    logging_integration=name,  # type: ignore[arg-type]  # test passes a literal callback name
+                    internal_usage_cache=None,
+                    llm_router=None,
+                    custom_logger_init_args={},
+                )
+
+            preset = init("langfuse_otel")
+            otel_cb = init("otel")
+
+            assert otel_cb is not None and otel_cb is not preset
+            v2_names = {
+                cb.callback_name for cb in logging_module._in_memory_loggers if isinstance(cb, OpenTelemetryV2)
+            }
+            assert {"langfuse_otel", "otel"} <= v2_names, v2_names
+            resolved = _excluded_db_systems(logging_module._in_memory_loggers, otel_cb)
+            assert resolved == frozenset({"postgresql"}), resolved
+        finally:
+            logging_module._in_memory_loggers.clear()
+            is_otel_v2_enabled.cache_clear()
+
     @pytest.mark.parametrize("canonical", ["langfuse_otel", "arize"])
     def test_publishing_tells_the_fan_out_about_every_v2_loggers_account(self, monkeypatch, canonical):
         monkeypatch.setenv("LITELLM_OTEL_TENANT_DESTINATION_MODE", "additive")

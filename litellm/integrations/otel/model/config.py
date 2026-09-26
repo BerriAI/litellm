@@ -1,5 +1,6 @@
 """Typed configuration for the OpenTelemetry instrumentation."""
 
+import os
 from collections.abc import Mapping
 from enum import Enum
 from functools import lru_cache
@@ -367,6 +368,22 @@ def _db_system_for_excluded_service(service: str) -> str:
     if resolved is None:
         raise ValueError(f"excluded_services: {service!r} is not a datastore service; allowed: postgres, redis")
     return resolved
+
+
+def validate_otel_v2_excluded_services_env() -> None:
+    """Validate ``LITELLM_OTEL_EXCLUDED_SERVICES`` at boot even with no ``otel`` callback.
+
+    Preset-only deployments build env-only configs through a path that swallows
+    init errors, so a bogus value would otherwise degrade to the legacy callback
+    silently. Splitting and normalizing here raises the same ``ValueError`` the
+    field raises.
+    """
+    if not is_otel_v2_enabled():
+        return
+    raw: Final = os.environ.get("LITELLM_OTEL_EXCLUDED_SERVICES")
+    if not raw:
+        return
+    _normalize_excluded_services(frozenset(item.strip() for item in raw.split(",") if item.strip()))
 
 
 def validate_otel_v2_callback_settings(settings: object) -> None:

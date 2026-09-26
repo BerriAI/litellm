@@ -245,6 +245,33 @@ def test_config_excluded_services_wins_over_env(
         )
 
 
+def test_excluded_services_applies_with_preset_ordered_first(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    langfuse_vars: dict[str, JsonValue],
+    tmp_path: Path,
+) -> None:
+    def preset_first(config: dict) -> None:
+        config["litellm_settings"]["callbacks"] = ["langfuse_otel", "otel"]
+
+    config: Final = _config_with(
+        tmp_path, otel_audit_config, otel={"excluded_services": ["postgres"]}, extra=preset_first
+    )
+    with owned_proxy(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config, workers=2) as candidate:
+        start, _ = recorded_spans(audit_sinks.tenant)
+        traffic: Final = _drive(candidate, langfuse_vars)
+        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
+        _await_db_span(audit_sinks.tenant, tenant_trace, "redis", seconds=60)
+        tenant_spans: Final = _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
+        _, all_tenant = recorded_spans(audit_sinks.tenant, start)
+        systems: Final = _db_systems(tenant_spans)
+        assert "redis" in systems, f"redis spans missing at tenant: {systems}"
+        assert "postgresql" not in _db_systems(all_tenant), (
+            f"postgresql spans reached tenant: {_db_systems(all_tenant)}"
+        )
+
+
 def test_bogus_excluded_service_fails_proxy_start(
     gateway: Gateway, otel_audit_config: AuditConfigWriter, tmp_path: Path
 ) -> None:
@@ -259,6 +286,26 @@ def test_bogus_excluded_service_fails_proxy_start(
     text: Final = "\n".join(logs)
     assert "'auth' is not a datastore service" in text, text[-3000:]
     assert "postgres, redis" in text, text[-3000:]
+
+
+def test_bogus_excluded_services_env_fails_proxy_start_without_otel_callback(
+    gateway: Gateway, otel_audit_config: AuditConfigWriter, tmp_path: Path
+) -> None:
+    def presets_only(config: dict) -> None:
+        config["litellm_settings"]["callbacks"] = ["langfuse_otel"]
+
+    config: Final = _config_with(tmp_path, otel_audit_config, extra=presets_only)
+    log_dir: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(tmp_path)))
+    before: Final = frozenset(log_dir.glob("owned-proxy-*.log"))
+    with pytest.raises(AssertionError, match="readiness"):
+        with owned_proxy_process(
+            gateway, tmp_path, {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "auth"}, config=config, workers=2
+        ):
+            pass
+    logs: Final = [path.read_text() for path in frozenset(log_dir.glob("owned-proxy-*.log")) - before]
+    assert logs, "no owned proxy log written"
+    text: Final = "\n".join(logs)
+    assert "'auth' is not a datastore service" in text, text[-3000:]
 
 
 def test_postgres_exclusion_covers_batch_write_to_db(

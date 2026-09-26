@@ -179,6 +179,10 @@ def initialize_callbacks_on_proxy(
 
                 validate_otel_v2_callback_settings(callback_specific_params.get("otel"))
 
+            from litellm.integrations.otel.model.config import validate_otel_v2_excluded_services_env
+
+            validate_otel_v2_excluded_services_env()
+
             # check if callback is a custom logger compatible callback
             if isinstance(callback, str):
                 callback = LoggingCallbackManager._add_custom_callback_generic_api_str(callback)
