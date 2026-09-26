@@ -62,7 +62,9 @@ async def test_directory_documents_use_authoritative_activity_and_membership() -
         user_document,
     )
 
-    row: Final = SimpleNamespace(id="row", active=False, document={"schemas": [], "userName": "subject", "active": True})
+    row: Final = SimpleNamespace(
+        id="row", active=False, document={"schemas": [], "userName": "subject", "active": True}
+    )
     assert user_document(row).active is False
     assert user_document(row).id == "row"
     group: Final = SimpleNamespace(
@@ -818,3 +820,69 @@ async def test_group_create_cannot_recreate_deleted_group_or_omit_directory_id(s
     assert failure.value.status_code == (400 if state == "missing-external-id" else 409)
     tx.litellm_scimresource.update_many.assert_not_awaited()
 
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["Users", "Groups"])
+async def test_get_returns_the_owned_directory_document(kind: str) -> None:
+    service, tx, row = provisioning_fixture()
+    if kind == "Groups":
+        _, group, _ = group_rows(row)
+        tx.litellm_scimresource.find_unique.return_value = group
+    result: Final = await service.get(kind, tx.litellm_scimresource.find_unique.return_value.id)
+    assert result.id == tx.litellm_scimresource.find_unique.return_value.id
+    assert isinstance(result, SCIMUser if kind == "Users" else SCIMGroup)
+
+
+@pytest.mark.asyncio
+async def test_native_insert_unique_collision_is_a_conflict() -> None:
+    from prisma.errors import UniqueViolationError
+
+    service, tx, _ = provisioning_fixture()
+    tx.litellm_scimresource.find_unique.return_value = None
+    tx.litellm_agentidentity.find_unique = AsyncMock(return_value=None)
+    tx.litellm_agentstable.create = AsyncMock(
+        side_effect=UniqueViolationError({"user_facing_error": {"error_code": "P2002", "message": "Duplicate"}})
+    )
+    tx.litellm_scimresource.create = AsyncMock()
+    tx.litellm_verifiedsubject.create = AsyncMock()
+    with pytest.raises(HTTPException) as failure:
+        await service.create_user(agent_user())
+    assert failure.value.status_code == 409
+    tx.litellm_verifiedsubject.create.assert_not_awaited()
+    assert any(
+        entry.args[0] is UniqueViolationError for entry in service.client.tx.return_value.__aexit__.call_args_list
+    )
+
+
+@pytest.mark.asyncio
+async def test_missing_native_local_id_rejects_profile_update() -> None:
+    service, tx, row = provisioning_fixture()
+    tx.litellm_scimresource.find_unique.return_value = row.model_copy(update={"local_id": None})
+    with pytest.raises(HTTPException) as failure:
+        await service.update_user(row.id, agent_user())
+    assert failure.value.status_code == 409
+    tx.litellm_scimresource.update_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("case", ["invalid-patch", "concurrent"])
+async def test_group_patch_failure_does_not_sync_members(case: str, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    service, tx, native = provisioning_fixture()
+    _, group, _ = group_rows(native)
+    tx.litellm_scimresource.find_unique.return_value = group.model_copy(update={"member_ids": []})
+    tx.litellm_scimresource.update_many.return_value = 0
+    change: Final = SCIMPatchOp(
+        Operations=[
+            {"op": "replace", "path": "externalId" if case == "invalid-patch" else "displayName", "value": "changed"}
+        ]
+    )
+    sync: Final = AsyncMock()
+    monkeypatch.setattr(scim_v2, "update_group", sync)
+    with pytest.raises(HTTPException) as failure:
+        await service.update_group(group.id, change)
+    assert failure.value.status_code == (400 if case == "invalid-patch" else 409)
+    sync.assert_not_awaited()
+    if case == "invalid-patch":
+        tx.litellm_scimresource.update_many.assert_not_awaited()
