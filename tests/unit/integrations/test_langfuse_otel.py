@@ -112,7 +112,7 @@ class TestLangfuseOtelIntegration:
             )
 
             mock_set_attributes.assert_called_once_with(
-                mock_span, mock_kwargs, mock_response, LangfuseLLMObsOTELAttributes
+                mock_span, mock_kwargs, mock_response, LangfuseLLMObsOTELAttributes, emit_session_and_user=False
             )
             mock_span.set_attribute.assert_any_call(
                 "langfuse.observation.type", "generation"
@@ -709,7 +709,7 @@ class TestLangfuseOtelResponsesAPI:
 
                 # Verify that set_attributes was called for general attributes
                 mock_set_attributes.assert_called_once_with(
-                    mock_span, kwargs, mock_response, LangfuseLLMObsOTELAttributes
+                    mock_span, kwargs, mock_response, LangfuseLLMObsOTELAttributes, emit_session_and_user=False
                 )
 
                 # Verify that Langfuse-specific attributes were set
@@ -1004,6 +1004,116 @@ class TestLangfuseOtelResponsesAPI:
             output_data = json.loads(output_calls[0].args[2])
             assert output_data[0]["name"] == "get_weather"
             assert output_data[0]["arguments"] == {}
+
+
+class TestLangfuseOtelTraceIdentity:
+    def _recording_span(self):
+        from opentelemetry.sdk.trace import TracerProvider
+
+        return TracerProvider().get_tracer("test").start_span("generation")
+
+    def _kwargs(self, slp_metadata=None, litellm_metadata=None, model_parameters=None, slp_extra=None):
+        return {
+            "model": "gpt-4o",
+            "messages": [{"role": "user", "content": "hello"}],
+            "optional_params": {},
+            "litellm_params": {"metadata": litellm_metadata or {}, "custom_llm_provider": "openai"},
+            "standard_logging_object": {
+                "call_type": "acompletion",
+                "model_parameters": model_parameters or {},
+                "metadata": slp_metadata or {},
+                **(slp_extra or {}),
+            },
+        }
+
+    def _response_obj(self):
+        return {
+            "id": "chatcmpl-1",
+            "model": "gpt-4o",
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hi"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+        }
+
+    def _identity(self, kwargs):
+        span = self._recording_span()
+        LangfuseOtelLogger.set_langfuse_otel_attributes(span, kwargs, self._response_obj())
+        attributes = dict(span.attributes or {})
+        return {key: attributes.get(key) for key in ("user.id", "session.id")}, attributes
+
+    def test_header_end_user_beats_internal_key_owner_in_user_id(self):
+        identity, _ = self._identity(
+            self._kwargs(
+                slp_metadata={
+                    "user_api_key_end_user_id": "end-1",
+                    "user_api_key_user_id": "internal-1",
+                }
+            )
+        )
+        assert identity == {"user.id": "end-1", "session.id": None}
+
+    def test_header_end_user_lands_in_user_id_for_a_service_key(self):
+        identity, _ = self._identity(self._kwargs(slp_metadata={"user_api_key_end_user_id": "end-1"}))
+        assert identity == {"user.id": "end-1", "session.id": None}
+
+    def test_body_user_is_never_a_session(self):
+        identity, _ = self._identity(
+            self._kwargs(
+                slp_metadata={"user_api_key_end_user_id": "body-user"},
+                model_parameters={"user": "body-user"},
+            )
+        )
+        assert identity == {"user.id": "body-user", "session.id": None}
+
+    def test_caller_trace_user_id_wins_over_the_end_user(self):
+        identity, _ = self._identity(
+            self._kwargs(
+                slp_metadata={"user_api_key_end_user_id": "end-1"},
+                litellm_metadata={"trace_user_id": "caller-1"},
+            )
+        )
+        assert identity == {"user.id": "caller-1", "session.id": None}
+
+    def test_caller_trace_user_id_under_litellm_metadata_wins_over_the_end_user(self):
+        kwargs = self._kwargs(slp_metadata={"user_api_key_end_user_id": "end-1"})
+        kwargs["litellm_params"]["litellm_metadata"] = {"trace_user_id": "caller-1"}
+        identity, _ = self._identity(kwargs)
+        assert identity == {"user.id": "caller-1", "session.id": None}
+
+    def test_end_user_only_under_litellm_metadata_lands_in_user_id(self):
+        kwargs = self._kwargs()
+        kwargs["litellm_params"]["litellm_metadata"] = {"user_api_key_end_user_id": "end-1"}
+        identity, _ = self._identity(kwargs)
+        assert identity == {"user.id": "end-1", "session.id": None}
+
+    def test_caller_session_id_stays_the_session_beside_the_end_user(self):
+        identity, _ = self._identity(
+            self._kwargs(
+                slp_metadata={"user_api_key_end_user_id": "end-1"},
+                litellm_metadata={"session_id": "sess-1"},
+            )
+        )
+        assert identity == {"user.id": "end-1", "session.id": "sess-1"}
+
+    def test_internal_user_without_an_end_user_never_lands_in_user_id(self):
+        identity, _ = self._identity(self._kwargs(slp_metadata={"user_api_key_user_id": "internal-1"}))
+        assert identity == {"user.id": None, "session.id": None}
+
+    def test_request_context_attributes_still_emit(self):
+        _, attributes = self._identity(
+            self._kwargs(
+                slp_metadata={
+                    "user_api_key_end_user_id": "end-1",
+                    "user_api_key_team_id": "team-1",
+                    "user_api_key_team_alias": "team-alias",
+                    "user_api_key_alias": "key-alias",
+                },
+                slp_extra={"trace_id": "trace-1"},
+            )
+        )
+        assert attributes["litellm.trace_id"] == "trace-1"
+        assert attributes["litellm.team_id"] == "team-1"
+        assert attributes["litellm.team_alias"] == "team-alias"
+        assert attributes["litellm.key_alias"] == "key-alias"
 
 
 if __name__ == "__main__":

@@ -419,6 +419,31 @@ def test_langfuse_user_and_session_headers_beat_body_metadata_on_both_spans():
         assert attrs["session.id"] == "from-header-s"
 
 
+def test_the_proxy_end_user_fills_user_id_when_the_caller_names_no_trace_user():
+    logger, exporter = _logger()
+
+    root_attrs, generation_attrs = _run_named_request(
+        logger, exporter, {"metadata": {"user_api_key_end_user_id": "end-1"}, "proxy_server_request": {"headers": {}}}
+    )
+
+    assert root_attrs["user.id"] == "end-1"
+
+
+def test_a_callers_trace_user_id_still_wins_over_the_proxy_end_user():
+    logger, exporter = _logger()
+
+    root_attrs, generation_attrs = _run_named_request(
+        logger,
+        exporter,
+        {
+            "metadata": {"trace_user_id": "caller-1", "user_api_key_end_user_id": "end-1"},
+            "proxy_server_request": {"headers": {}},
+        },
+    )
+
+    assert root_attrs["user.id"] == "caller-1"
+
+
 def test_caller_metadata_cannot_override_the_proxy_team_identity():
     logger, exporter = _logger()
     response: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="pong"))])
