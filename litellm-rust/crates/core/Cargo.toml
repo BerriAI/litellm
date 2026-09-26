@@ -13,10 +13,11 @@ litellm-host.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 base64.workspace = true
-litellm-auth.workspace = true
+litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-auth-aws.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
+litellm-tracing.workspace = true
 moka.workspace = true
 mime_guess = "2.0.5"
 rand.workspace = true
@@ -36,6 +37,7 @@ url.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
 litellm-auth-gcp.workspace = true
 litellm-llms = { workspace = true, features = ["test-support"] }
 rstest.workspace = true

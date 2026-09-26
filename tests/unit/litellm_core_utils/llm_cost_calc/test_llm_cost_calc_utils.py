@@ -3789,3 +3789,15 @@ def test_azure_gpt_6_foundry_price_sheet(_local_model_cost_map, model_base):
         assert azure_ai_info[field] == base
         assert azure_us_info[field] == pytest.approx(1.1 * base)
         assert azure_eu_info[field] == pytest.approx(1.2 * base)
+
+
+@pytest.mark.parametrize("region_prefix", ["azure/", "azure/us/", "azure/eu/"])
+def test_azure_gpt_5_6_alias_matches_sol_pricing(_local_model_cost_map, region_prefix):
+    """The bare gpt-5.6 alias routes to GPT-5.6 Sol, so every Azure region must bill the
+    alias exactly like the Sol entry (including the Sept 2026 $4/$20 promo)."""
+    alias = litellm.model_cost[f"{region_prefix}gpt-5.6"]
+    sol = litellm.model_cost[f"{region_prefix}gpt-5.6-sol"]
+    shared_cost_fields = [f for f in alias if "cost" in f and f in sol and not isinstance(alias[f], dict)]
+    assert shared_cost_fields
+    for field in shared_cost_fields:
+        assert alias[field] == sol[field], field

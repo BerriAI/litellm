@@ -48,6 +48,7 @@ from typing_extensions import NotRequired, ReadOnly, Required, TypedDict
 
 from litellm._logging import verbose_logger
 from litellm._uuid import uuid
+from litellm.constants import INTERNAL_KWARG_PREFIX
 from litellm.types.llms.base import (
     BaseLiteLLMOpenAIResponseObject,
     CachedTokensDetails,
@@ -276,6 +277,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_token: Required[float | None]
     input_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     input_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
+    input_cost_per_token_balanced: ReadOnly[float | None]
     input_cost_per_token_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_creation_input_token_cost: float | None
     cache_creation_input_token_cost_above_200k_tokens: float | None
@@ -291,6 +293,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_image_token_cost: ReadOnly[float | None]
     cache_read_input_token_cost_flex: float | None  # OpenAI flex service tier pricing
     cache_read_input_token_cost_priority: float | None  # OpenAI priority service tier pricing
+    cache_read_input_token_cost_balanced: ReadOnly[float | None]
     cache_read_input_token_cost_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     cache_read_input_token_cost_above_200k_tokens: float | None
     cache_read_input_token_cost_above_200k_tokens_priority: float | None
@@ -302,6 +305,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_batches: ReadOnly[float | None]
+    cache_creation_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
     # Smallest prefix this model will actually cache, whatever caching mechanism its provider uses.
     # Absent means the provider-agnostic default applies; see MINIMUM_PROMPT_CACHE_TOKEN_COUNT.
@@ -336,6 +340,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     output_cost_per_token: Required[float | None]
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
     output_cost_per_token_priority: float | None  # OpenAI priority service tier pricing
+    output_cost_per_token_balanced: ReadOnly[float | None]
     output_cost_per_token_ultrafast: ReadOnly[float | None]  # OpenAI ultrafast service tier pricing
     regional_processing_uplift_multiplier_eu: (
         float | None
@@ -3714,6 +3719,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     # This allows any model_info parameter to be set in litellm_params
     input_cost_per_token_flex: float | None = None
     input_cost_per_token_priority: float | None = None
+    input_cost_per_token_balanced: float | None = None
     input_cost_per_token_ultrafast: float | None = None
     cache_creation_input_token_cost_above_1hr: float | None = None
     cache_creation_input_token_cost_above_200k_tokens: float | None = None
@@ -3726,6 +3732,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_creation_input_audio_token_cost: float | None = None
     cache_read_input_token_cost_flex: float | None = None
     cache_read_input_token_cost_priority: float | None = None
+    cache_read_input_token_cost_balanced: float | None = None
     cache_read_input_token_cost_ultrafast: float | None = None
     cache_read_input_token_cost_above_200k_tokens: float | None = None
     cache_read_input_token_cost_above_200k_tokens_priority: float | None = None
@@ -3735,6 +3742,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_creation_input_token_cost_batches: float | None = None
+    cache_creation_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_read_input_audio_token_cost: float | None = None
     cache_read_input_image_token_cost: float | None = None
@@ -3764,6 +3772,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_batches: float | None = None
     output_cost_per_token_flex: float | None = None
     output_cost_per_token_priority: float | None = None
+    output_cost_per_token_balanced: float | None = None
     output_cost_per_token_ultrafast: float | None = None
     output_cost_per_audio_token: float | None = None
     output_cost_per_token_above_128k_tokens: float | None = None
@@ -3927,6 +3936,10 @@ all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-
     *StandardCallbackDynamicParams.__annotations__,
     *CustomPricingLiteLLMParams.model_fields,
 ]
+
+
+def is_litellm_owned_kwarg(name: str) -> bool:
+    return name in all_litellm_params or name.startswith(INTERNAL_KWARG_PREFIX)
 
 
 class KeyGenerationConfig(TypedDict, total=False):
@@ -4124,6 +4137,7 @@ class LlmProviders(str, Enum):
     SCX_AI = "scx-ai"
     DARKBLOOM = "darkbloom"
     META = "meta"
+    SAIL = "sail"
     LITELLM_AGENT = "litellm_agent"
     CURSOR = "cursor"
     BEDROCK_MANTLE = "bedrock_mantle"
@@ -4384,6 +4398,7 @@ class ServiceTier(Enum):
 
     AUTO = "auto"
     FLEX = "flex"
+    BALANCED = "balanced"
     PRIORITY = "priority"
     FAST = "fast"
     ULTRAFAST = "ultrafast"

@@ -10,6 +10,10 @@ use support::*;
 
 const MODEL: &str = "mistral.voxtral-mini-3b-2507";
 
+async fn transcribe(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
+    audio_transcription(&support::resources(), &http_config(), request).await
+}
+
 fn transcript_response(text: &str) -> ResponseTemplate {
     json_response(json!({"output": {"message": {"content": [{"text": text}]}}}))
 }
@@ -47,7 +51,7 @@ async fn bedrock_converse_request_is_signed_for_the_requested_region(
     let upstream = upstream([transcript_response("hello")]).await;
     let base = upstream.uri();
 
-    let response = audio_transcription(AudioTranscriptionRequest {
+    let response = transcribe(AudioTranscriptionRequest {
         api_base: Some(&base),
         optional_params: aws_params(region),
         ..request
@@ -79,7 +83,7 @@ async fn the_provider_can_come_from_the_model_prefix(request: AudioTranscription
     let base = upstream.uri();
     let model = format!("bedrock/{MODEL}");
 
-    audio_transcription(AudioTranscriptionRequest {
+    transcribe(AudioTranscriptionRequest {
         model: &model,
         custom_llm_provider: None,
         api_base: Some(&base),
@@ -110,7 +114,7 @@ async fn audio_and_transcription_params_reach_the_converse_body(
         ])
         .collect();
 
-    audio_transcription(AudioTranscriptionRequest {
+    transcribe(AudioTranscriptionRequest {
         audio: json!({"data": "AQI=", "format": format}),
         api_base: Some(&base),
         optional_params,
@@ -142,7 +146,7 @@ async fn invalid_audio_is_rejected_before_sending(
     let upstream = upstream([transcript_response("hello")]).await;
     let base = upstream.uri();
 
-    let error = audio_transcription(AudioTranscriptionRequest {
+    let error = transcribe(AudioTranscriptionRequest {
         audio,
         api_base: Some(&base),
         ..request
@@ -174,7 +178,7 @@ async fn unsupported_providers_are_rejected_before_sending(
     #[case] provider: Option<&'static str>,
     #[case] reported: &str,
 ) {
-    let error = audio_transcription(AudioTranscriptionRequest {
+    let error = transcribe(AudioTranscriptionRequest {
         model,
         custom_llm_provider: provider,
         api_base: Some(UNREACHABLE_BASE),
@@ -189,7 +193,7 @@ async fn unsupported_providers_are_rejected_before_sending(
 #[rstest]
 #[tokio::test]
 async fn a_non_string_extra_header_is_rejected(request: AudioTranscriptionRequest<'static>) {
-    let error = audio_transcription(AudioTranscriptionRequest {
+    let error = transcribe(AudioTranscriptionRequest {
         extra_headers: Some(Map::from_iter([("x-count".to_string(), json!(3))])),
         api_base: Some(UNREACHABLE_BASE),
         ..request
@@ -212,7 +216,7 @@ async fn an_upstream_error_keeps_its_status_and_body(
         upstream([ResponseTemplate::new(status).set_body_string("upstream said no")]).await;
     let base = upstream.uri();
 
-    let error = audio_transcription(AudioTranscriptionRequest {
+    let error = transcribe(AudioTranscriptionRequest {
         api_base: Some(&base),
         ..request
     })
@@ -239,7 +243,7 @@ async fn an_unreadable_success_body_is_an_invalid_response(
     let upstream = upstream([response]).await;
     let base = upstream.uri();
 
-    let error = audio_transcription(AudioTranscriptionRequest {
+    let error = transcribe(AudioTranscriptionRequest {
         api_base: Some(&base),
         ..request
     })

@@ -2,6 +2,7 @@ import asyncio
 import json
 import re
 import signal
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Final
 
@@ -51,6 +52,16 @@ def _error_information(call_id: str) -> dict[str, JsonValue]:
     return object_value(parsed["error_information"])
 
 
+@dataclass(frozen=True, slots=True)
+class _Served:
+    response: httpx.Response
+    client_port: int
+
+
+def _spend_rows(call_id: str) -> list[dict[str, JsonValue]]:
+    return read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,))
+
+
 def _single_spend_row(call_id: str) -> None:
     rows: Final = eventually(
         lambda: read_rows('SELECT request_id FROM "LiteLLM_SpendLogs" WHERE request_id=%s', (call_id,)),
@@ -62,19 +73,23 @@ def _single_spend_row(call_id: str) -> None:
 
 async def _fire_burst(
     base_url: str, key: str, count: int, *, tolerate_transport_errors: bool = False
-) -> tuple[httpx.Response, ...]:
-    async def one(client: httpx.AsyncClient, index: int) -> httpx.Response:
+) -> tuple[_Served, ...]:
+    async def one(client: httpx.AsyncClient, index: int) -> _Served:
         if index % 3 == 0:
             path: Final = "/gemini/v1beta/models/nope-9:generateContent"
         elif index % 3 == 1:
             path = "/gemini/v1beta/models/nope-9:streamGenerateContent?alt=sse"
         else:
             path = "/gemini/v1beta/models/healthy-model:streamGenerateContent?alt=sse"
-        return await client.post(
+        async with client.stream(
+            "POST",
             path,
             json=_GENERATE_CONTENT,
             headers={"Authorization": f"Bearer {key}", "x-goog-api-key": key},
-        )
+        ) as response:
+            client_port: Final = int(response.extensions["network_stream"].get_extra_info("client_addr")[1])
+            await response.aread()
+        return _Served(response=response, client_port=client_port)
 
     async with httpx.AsyncClient(base_url=base_url, timeout=30, trust_env=False) as client:
         results: Final = await asyncio.gather(
@@ -82,7 +97,7 @@ async def _fire_burst(
         )
     for result in results:
         assert not isinstance(result, BaseException) or isinstance(result, httpx.TransportError), repr(result)
-    return tuple(result for result in results if isinstance(result, httpx.Response))
+    return tuple(result for result in results if isinstance(result, _Served))
 
 
 async def test_passthrough_upstream_outage_mid_burst_still_logs_errors_once(gateway: Gateway, tmp_path: Path) -> None:
@@ -97,7 +112,7 @@ async def test_passthrough_upstream_outage_mid_burst_still_logs_errors_once(gate
             burst: Final = asyncio.create_task(_fire_burst(str(candidate.client.base_url), candidate.key, 30))
             await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= 10, 30)
     with wire_server(_chaos_reply, port=port):
-        responses: Final = await burst
+        responses: Final = tuple(served.response for served in await burst)
         assert len(responses) == 30
         for response in responses:
             assert response.status_code in (200, 404, 500, 502), response.status_code
@@ -131,10 +146,15 @@ async def test_passthrough_worker_sigkill_leaves_sibling_serving_and_logging(gat
                 _fire_burst(str(candidate.client.base_url), candidate.key, 20, tolerate_transport_errors=True)
             )
             await asyncio.to_thread(eventually, lambda: wire.received.qsize(), lambda size: size >= 5, 30)
-            psutil.Process(workers[0]).send_signal(signal.SIGKILL)
-            responses: Final = await burst
-            for response in responses:
-                assert response.status_code in (200, 404, 500, 502), response.status_code
+            victim: Final = psutil.Process(workers[0])
+            victim.suspend()
+            victim_ports: Final = frozenset(
+                connection.raddr.port for connection in victim.net_connections(kind="tcp") if connection.raddr
+            )
+            victim.send_signal(signal.SIGKILL)
+            served: Final = await burst
+            for item in served:
+                assert item.response.status_code in (200, 404, 500, 502), item.response.status_code
             follow_up: Final = candidate.request(
                 "POST",
                 "/gemini/v1beta/models/nope-9:generateContent",
@@ -143,8 +163,12 @@ async def test_passthrough_worker_sigkill_leaves_sibling_serving_and_logging(gat
             )
             assert follow_up.status_code == 404, follow_up.text
             assert follow_up.json() == json.loads(_NOT_FOUND_BODY), follow_up.text
-            for response in responses:
-                if "x-litellm-call-id" in response.headers:
-                    _single_spend_row(response.headers["x-litellm-call-id"])
+            logged: Final = tuple(item for item in served if "x-litellm-call-id" in item.response.headers)
+            survivor_served: Final = tuple(item for item in logged if item.client_port not in victim_ports)
+            assert survivor_served, [item.client_port for item in logged]
+            for item in survivor_served:
+                _single_spend_row(item.response.headers["x-litellm-call-id"])
+            for item in logged:
+                assert len(_spend_rows(item.response.headers["x-litellm-call-id"])) <= 1, item.response.headers
             error_information: Final = _error_information(follow_up.headers["x-litellm-call-id"])
             assert "not found for this scripted upstream" in str(error_information["error_message"]), follow_up.text
