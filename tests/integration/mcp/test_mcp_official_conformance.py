@@ -48,7 +48,7 @@ def test_official_scenario_through_gateway(gateway: Gateway, tmp_path: Path, unu
             asyncio.run(check_image(endpoint, f"{alias}-test_image_content", key))
         assert tuple(check.status for check in direct if check.id == name) == ("SUCCESS",)
         assert tuple(check.status for check in proxied if check.id == name) == ("SUCCESS",)
-        listed, called = official_client_outcomes(gateway, key, f"/{alias}/mcp", "test_simple_text", {})
+        listed, called = official_client_outcomes(gateway, key, f"/{alias}/mcp", f"{alias}-test_simple_text", {})
         assert f"{alias}-test_simple_text" in listed.tools, listed
         assert called.ok and called.text == "This is a simple text response for testing.", called
 
