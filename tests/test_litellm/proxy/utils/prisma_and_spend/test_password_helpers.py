@@ -4,18 +4,17 @@ Symbols pinned here:
   - ``hash_token``
   - ``hash_password``
   - ``verify_password``
-  - ``migrate_passwords_to_scrypt_async``
+  - ``migrate_plaintext_passwords_async``
   - ``_hash_token_if_needed``
-  - ``PrismaClient._is_sha256_hex`` (a nested helper inside
-    ``migrate_passwords_to_scrypt_async``; the pin list labels it under the
-    PrismaClient health cluster as a documentation artifact)
+  - ``_is_sha256_hex`` (used by ``migrate_plaintext_passwords_async``; the
+    pin list labels it under the PrismaClient health cluster as a
+    documentation artifact)
 """
 
 from __future__ import annotations
 
 import hashlib
 from types import SimpleNamespace
-from typing import List
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -24,7 +23,7 @@ from litellm.proxy.utils import (
     _hash_token_if_needed,
     hash_password,
     hash_token,
-    migrate_passwords_to_scrypt_async,
+    migrate_plaintext_passwords_async,
     verify_password,
 )
 
@@ -57,16 +56,16 @@ def test_hash_token_raises_for_non_string() -> None:
         hash_token(None)  # type: ignore[arg-type]
 
 
-def test_hash_password_uses_scrypt_prefix() -> None:
+def test_hash_password_uses_pbkdf2_prefix() -> None:
     h = hash_password("hunter2")
     fields = {
-        "prefix": h[:7],
+        "prefix": h[:14],
         "min_length": len(h) > 60,
         "verifies_self": verify_password("hunter2", h),
         "rejects_other": verify_password("hunter3", h),
     }
     assert fields == {
-        "prefix": "scrypt:",
+        "prefix": "pbkdf2:sha256:",
         "min_length": True,
         "verifies_self": True,
         "rejects_other": False,
@@ -133,9 +132,9 @@ def test_hash_token_if_needed_error_on_non_string() -> None:
 
 
 # ---------------------------------------------------------------------------
-# migrate_passwords_to_scrypt_async — pins behavior of the nested
-# ``_is_sha256_hex`` helper too: scrypt-prefixed and sha256-hex rows are
-# left alone, plaintext rows are upgraded in place.
+# migrate_plaintext_passwords_async — pins behavior of the
+# ``_is_hashed_password`` helper too: pbkdf2-prefixed, scrypt-prefixed and
+# sha256-hex rows are left alone, plaintext rows are upgraded in place.
 # ---------------------------------------------------------------------------
 
 
@@ -152,11 +151,12 @@ async def test_migrate_passwords_skips_when_no_plaintext() -> None:
         return_value=[
             _make_user("a", "scrypt:abc"),
             _make_user("b", sha),
+            _make_user("c", "pbkdf2:sha256:600000:c2FsdA==:a2V5"),
         ]
     )
     pc.db.litellm_usertable.update = AsyncMock()
 
-    result = await migrate_passwords_to_scrypt_async(pc)
+    result = await migrate_plaintext_passwords_async(pc)
     outcome = {
         "message": result,
         "updates": pc.db.litellm_usertable.update.await_count,
@@ -175,10 +175,11 @@ async def test_migrate_passwords_skips_when_no_plaintext() -> None:
 async def test_migrate_passwords_upgrades_only_plaintext_rows() -> None:
     pc = MagicMock()
     pc.db = MagicMock()
-    users: List[SimpleNamespace] = [
+    users: list[SimpleNamespace] = [
         _make_user("plaintext-user-1", "plain-1"),
         _make_user("plaintext-user-2", "plain-2"),
         _make_user("scrypt-user", "scrypt:already"),
+        _make_user("pbkdf2-user", "pbkdf2:sha256:600000:c2FsdA==:a2V5"),
         _make_user(
             "sha-user",
             hashlib.sha256(b"alreadyhashed").hexdigest(),
@@ -188,7 +189,7 @@ async def test_migrate_passwords_upgrades_only_plaintext_rows() -> None:
     pc.db.litellm_usertable.find_many = AsyncMock(return_value=users)
     pc.db.litellm_usertable.update = AsyncMock()
 
-    result = await migrate_passwords_to_scrypt_async(pc)
+    result = await migrate_plaintext_passwords_async(pc)
 
     updated_user_ids = sorted(
         call.kwargs["where"]["user_id"]
@@ -202,13 +203,13 @@ async def test_migrate_passwords_upgrades_only_plaintext_rows() -> None:
         "message": result,
         "update_count": pc.db.litellm_usertable.update.await_count,
         "updated_ids": updated_user_ids,
-        "all_scrypt_prefixed": new_password_prefixes,
+        "all_pbkdf2_prefixed": new_password_prefixes,
     }
     assert outcome == {
-        "message": "Migrated 2 plaintext passwords to scrypt",
+        "message": "Migrated 2 plaintext passwords to pbkdf2",
         "update_count": 2,
         "updated_ids": ["plaintext-user-1", "plaintext-user-2"],
-        "all_scrypt_prefixed": ["scrypt:", "scrypt:"],
+        "all_pbkdf2_prefixed": ["pbkdf2:", "pbkdf2:"],
     }
 
 
@@ -220,4 +221,4 @@ async def test_migrate_passwords_raises_on_db_failure() -> None:
         side_effect=RuntimeError("db unavailable")
     )
     with pytest.raises(RuntimeError, match="db unavailable"):
-        await migrate_passwords_to_scrypt_async(pc)
+        await migrate_plaintext_passwords_async(pc)

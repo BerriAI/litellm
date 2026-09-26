@@ -1,4 +1,6 @@
 import asyncio
+import base64
+import binascii
 import contextlib
 import copy
 import hashlib
@@ -6,6 +8,7 @@ import inspect
 import json
 import math
 import os
+import secrets
 import smtplib
 import ssl
 import sys
@@ -72,6 +75,7 @@ from litellm.proxy._types import (
     SpendLogsPayload,
 )
 from litellm.proxy.bug_report_config import build_proxy_bug_report
+from litellm.proxy.common_utils.fips import is_fips_mode
 from litellm.proxy.common_utils.openai_error_payload import (
     litellm_call_id_headers,
     openai_error_param,
@@ -7098,54 +7102,87 @@ def hash_token(token: str):
     return hashed_token
 
 
-def hash_password(password: str) -> str:
-    """Hash a password using scrypt with a random salt."""
-    import base64
-    import hashlib
-    import os
+PBKDF2_ITERATIONS: Final = 600_000
+PBKDF2_MAX_ITERATIONS: Final = 10_000_000
+PBKDF2_PREFIX: Final = "pbkdf2:sha256:"
+SCRYPT_PREFIX: Final = "scrypt:"
 
+
+def hash_password(password: str) -> str:
+    """Hash a password as ``pbkdf2:sha256:<iterations>:<salt b64>:<key b64>``.
+
+    Iteration count is the OWASP Password Storage Cheat Sheet floor for
+    PBKDF2-HMAC-SHA256; PBKDF2 is a FIPS-approved primitive so the same row
+    format is written on every image, FIPS mode or not.
+    """
     salt: Final = os.urandom(16)
-    dk: Final = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
-    return "scrypt:" + base64.b64encode(salt + dk).decode()
+    derived: Final = hashlib.pbkdf2_hmac("sha256", password.encode(), salt, PBKDF2_ITERATIONS, dklen=32)
+    return f"{PBKDF2_PREFIX}{PBKDF2_ITERATIONS}:{base64.b64encode(salt).decode()}:{base64.b64encode(derived).decode()}"
+
+
+def _is_sha256_hex(value: str) -> bool:
+    return len(value) == 64 and all(c in "0123456789abcdef" for c in value)
+
+
+def _is_hashed_password(value: str) -> bool:
+    return value.startswith(PBKDF2_PREFIX) or value.startswith(SCRYPT_PREFIX) or _is_sha256_hex(value)
+
+
+def needs_password_rehash(stored: str) -> bool:
+    return not stored.startswith(PBKDF2_PREFIX)
+
+
+def _verify_pbkdf2(password: str, stored: str) -> bool:
+    try:
+        scheme, digest, iterations, salt, derived = stored.split(":")
+        if (scheme, digest) != ("pbkdf2", "sha256"):
+            return False
+        count: Final = int(iterations)
+        if not 1 <= count <= PBKDF2_MAX_ITERATIONS:
+            return False
+        expected: Final = hashlib.pbkdf2_hmac("sha256", password.encode(), base64.b64decode(salt, validate=True), count)
+        return secrets.compare_digest(base64.b64decode(derived, validate=True), expected)
+    except (ValueError, binascii.Error, TypeError, OverflowError):
+        return False
 
 
 def verify_password(password: str, stored: str) -> bool:
-    """Verify a password against a stored hash. Supports scrypt and SHA256."""
-    import base64
-    import hashlib
-    import secrets
-
-    if stored.startswith("scrypt:"):
+    """Verify a password against a stored hash. Supports pbkdf2, scrypt and SHA256 rows."""
+    if stored.startswith(PBKDF2_PREFIX):
+        return _verify_pbkdf2(password, stored)
+    if stored.startswith(SCRYPT_PREFIX):
+        if is_fips_mode():
+            verbose_proxy_logger.error(
+                "LITELLM_FIPS_MODE is on and this account still has a scrypt password hash, "
+                "which is not a FIPS approved primitive. An admin must set a new password with "
+                "POST /user/update so it is stored as pbkdf2 and the account can sign in again"
+            )
+            return False
         try:
             raw: Final = base64.b64decode(stored[7:])
             salt, dk = raw[:16], raw[16:]
             dk2: Final = hashlib.scrypt(password.encode(), salt=salt, n=16384, r=8, p=1, dklen=32)
             return secrets.compare_digest(dk, dk2)
-        except Exception:
+        except (ValueError, binascii.Error, TypeError):
             return False
     # SHA256 fallback (not vulnerable to pass-the-hash: checks sha256(input) == stored)
-    if len(stored) == 64 and all(c in "0123456789abcdef" for c in stored):
+    if _is_sha256_hex(stored):
         return secrets.compare_digest(hashlib.sha256(password.encode()).hexdigest().encode(), stored.encode())
     return False
 
 
-async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
+async def migrate_plaintext_passwords_async(prisma_client) -> str:
     """
-    Migrate plaintext passwords in the DB to scrypt. SHA256 passwords
-    are left alone (they migrate on next login via the SHA256 fallback).
-    Skips quickly if no plaintext passwords exist.
+    Migrate plaintext passwords in the DB to pbkdf2. Already-hashed rows
+    (pbkdf2, scrypt, sha256) are left alone; scrypt and sha256 rows rehash
+    on next successful login. Skips quickly if no plaintext passwords exist.
     """
     all_with_pw: Final = await UserRepository(prisma_client).table.find_many(
         where={"password": {"not": None}},
     )
 
-    def _is_sha256_hex(s: str) -> bool:
-        return len(s) == 64 and all(c in "0123456789abcdef" for c in s)
-
     plaintext_users: Final = [
-        (u.user_id, u.password)
-        for u in all_with_pw
-        if u.password and not u.password.startswith("scrypt:") and not _is_sha256_hex(u.password)
+        (u.user_id, u.password) for u in all_with_pw if u.password and not _is_hashed_password(u.password)
     ]
     if not plaintext_users:
         return "No plaintext passwords found"
@@ -7155,7 +7192,7 @@ async def migrate_passwords_to_scrypt_async(prisma_client) -> str:
             where={"user_id": user_id},
             data={"password": hash_password(plaintext_password)},
         )
-    return f"Migrated {len(plaintext_users)} plaintext passwords to scrypt"
+    return f"Migrated {len(plaintext_users)} plaintext passwords to pbkdf2"
 
 
 def _hash_token_if_needed(token: str) -> str:

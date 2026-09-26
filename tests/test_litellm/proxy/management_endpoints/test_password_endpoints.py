@@ -75,7 +75,7 @@ def _hibp_client_recording(calls: list[httpx.Request]) -> AsyncHTTPHandler:
 
 
 @pytest.mark.asyncio
-async def test_change_password_success_writes_new_scrypt_hash():
+async def test_change_password_success_writes_new_pbkdf2_hash():
     from litellm.proxy._types import ChangePasswordRequest
 
     prisma = _make_prisma(_make_user_row(hash_password(CURRENT_PASSWORD)))
@@ -99,6 +99,7 @@ async def test_change_password_success_writes_new_scrypt_hash():
     assert update_kwargs["where"] == {"user_id": "user-123"}
     stored = update_kwargs["data"]["password"]
     assert stored != NEW_PASSWORD
+    assert stored.startswith("pbkdf2:sha256:")
     assert verify_password(NEW_PASSWORD, stored)
     # A successful change lifts any pending forced reset and re-arms the
     # login-time breach screen for the new password.
