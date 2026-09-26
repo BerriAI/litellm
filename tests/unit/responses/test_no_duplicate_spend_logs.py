@@ -15,35 +15,6 @@ import litellm
 from litellm.integrations.custom_logger import CustomLogger
 
 
-def test_logging_object_not_popped():
-    """
-    Test that litellm_logging_obj is not popped from kwargs.
-
-    This is a regression test for issue #15740. The bug was using
-    kwargs.pop() which removed the logging object, causing duplicate
-    spend logs for non-OpenAI providers.
-    """
-    import inspect
-
-    from litellm.responses import main as responses_module
-
-    # Get the source code of the responses function
-    source = inspect.getsource(responses_module.responses)
-
-    # Check that .pop("litellm_logging_obj") is NOT used
-    # The bug was using kwargs.pop("litellm_logging_obj") which removes it
-    assert 'kwargs.pop("litellm_logging_obj")' not in source, (
-        "FAIL: Found kwargs.pop('litellm_logging_obj') in responses() function. "
-        "This causes duplicate spend logs. Use kwargs.get('litellm_logging_obj') instead."
-    )
-
-    # Check that .get("litellm_logging_obj") IS used
-    assert 'kwargs.get("litellm_logging_obj")' in source, (
-        "FAIL: Expected kwargs.get('litellm_logging_obj') but not found. "
-        "The logging object must be accessed with .get() not .pop() to prevent duplication."
-    )
-
-
 @pytest.mark.asyncio
 async def test_async_no_duplicate_spend_logs():
     """

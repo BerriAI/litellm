@@ -5,8 +5,8 @@ import pytest
 
 
 # Use the same token_counter as the main test.
-from tests.test_litellm.litellm_core_utils.test_token_counter import token_counter
-from tests.test_litellm.litellm_core_utils.test_token_counter_tool_data import *
+from tests.unit.litellm_core_utils.test_token_counter import token_counter
+from tests.unit.litellm_core_utils.test_token_counter_tool_data import *
 
 
 @pytest.mark.parametrize(

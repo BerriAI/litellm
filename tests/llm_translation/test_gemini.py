@@ -1800,7 +1800,7 @@ def test_gemini_image_size_limit_exceeded(monkeypatch):
     that could cause memory issues and pod crashes.
 
     The image fetch is mocked (mirroring the LargeImageClient pattern in
-    tests/test_litellm/litellm_core_utils/test_image_handling.py) so the test
+    tests/unit/litellm_core_utils/test_image_handling.py) so the test
     deterministically exercises the size-limit rejection path without any
     external network dependency.
     """

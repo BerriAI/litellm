@@ -20,7 +20,7 @@ from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 
 def _expected_dir() -> Path:
-    """Path to expected_responses_api_request folder (sibling of test_litellm/responses)."""
+    """Path to expected_responses_api_request folder (sibling of tests/unit/responses)."""
     return Path(__file__).resolve().parent.parent / "expected_responses_api_request"
 
 

@@ -2021,7 +2021,7 @@ async def test_a_dispatched_failure_is_counted_off_the_event_loop():
     from unittest.mock import AsyncMock, patch
 
     from tests.large_text import text
-    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+    from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
         warm_tokenizer,

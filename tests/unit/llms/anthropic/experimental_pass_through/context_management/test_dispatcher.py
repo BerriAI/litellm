@@ -133,7 +133,7 @@ async def test_malformed_edit_entries_are_skipped():
 
 async def test_sync_editor_counts_tokens_off_the_event_loop():
     from tests.large_text import text
-    from tests.test_litellm.litellm_core_utils.event_loop_lag import (
+    from tests.unit.litellm_core_utils.event_loop_lag import (
         assert_loop_stayed_free,
         timed_with_loop_lags,
         warm_tokenizer,

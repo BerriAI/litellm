@@ -7,7 +7,7 @@ from tokenizers import Tokenizer
 from litellm.litellm_core_utils.tokenizer import HuggingFaceTokenizer, OpenAIEncoding
 from litellm.rust_bridge import tokenizer
 from litellm.utils import claude_json_str
-from tests.test_litellm.litellm_core_utils.test_decode_special_tokens import TOKENIZER_JSON
+from tests.unit.litellm_core_utils.test_decode_special_tokens import TOKENIZER_JSON
 
 TEXTS: Final = ("hello <|endoftext|> world", "café 漢字 🙂", "  def f():\n    return 1\n", "<SOS>hello<EOT> again")
 

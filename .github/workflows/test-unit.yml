@@ -62,6 +62,7 @@ jobs:
           - shard: core-utils
             artifact-name: core-utils
             test-path: "tests/test_litellm/litellm_core_utils"
+            unit-flag: core-utils
             workers: 2
             reruns: 1
             timeout-minutes: 20
@@ -69,9 +70,7 @@ jobs:
 
           - shard: enterprise-routing
             artifact-name: enterprise-routing
-            test-path: >-
-              tests/test_litellm/router_utils
-              tests/test_litellm/router_strategy
+            test-path: ""
             unit-flag: enterprise-routing
             workers: 2
             reruns: 2
@@ -111,7 +110,6 @@ jobs:
               tests/test_litellm/interactions
               tests/test_litellm/ocr
               tests/test_litellm/passthrough
-              tests/test_litellm/rust_bridge
               tests/test_litellm/test_*.py
             unit-flag: misc
             workers: 2
@@ -228,9 +226,7 @@ jobs:
 
           - shard: responses-caching-types
             artifact-name: responses-caching-types
-            test-path: >-
-              tests/test_litellm/responses
-              tests/test_litellm/caching
+            test-path: ""
             unit-flag: responses-caching-types
             workers: 2
             reruns: 2
