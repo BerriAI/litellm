@@ -116,13 +116,14 @@ def owned_proxy_process(
             (
                 [
                     sys.executable,
-                    "-m",
-                    "hypercorn",
-                    "litellm.proxy.proxy_server:app",
-                    "--bind",
-                    f"127.0.0.1:{port}",
-                    "--graceful-timeout",
-                    str(graceful_shutdown_seconds),
+                    "litellm/proxy/proxy_cli.py",
+                    "--run_hypercorn",
+                    "--config",
+                    str(config),
+                    "--host",
+                    "127.0.0.1",
+                    "--port",
+                    str(port),
                 ]
                 if asgi_server == "hypercorn"
                 else [

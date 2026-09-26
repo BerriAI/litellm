@@ -384,7 +384,9 @@ async def test_passthrough_abort_after_budget_with_disconnect_during_hook_logs_o
             candidate: Final = owned.gateway
             received: Final = bytearray()
             async with httpx.AsyncClient(
-                base_url=str(candidate.client.base_url), timeout=httpx.Timeout(10, connect=5), trust_env=False
+                base_url=str(candidate.client.base_url),
+                timeout=httpx.Timeout(10, read=1, connect=5),
+                trust_env=False,
             ) as client:
                 try:
                     async with client.stream(
@@ -397,7 +399,7 @@ async def test_passthrough_abort_after_budget_with_disconnect_during_hook_logs_o
                         call_id: Final = response.headers["x-litellm-call-id"]
                         async for chunk in response.aiter_bytes():
                             received.extend(chunk)
-                except httpx.TransportError:
+                except (httpx.TransportError, httpx.TimeoutException):
                     pass
             assert bytes(received) == b"x" * 4608, len(received)
             await asyncio.to_thread(eventually, lambda: (tmp_path / "hook_started").exists(), bool, 30)
@@ -415,8 +417,6 @@ async def test_passthrough_error_report_survives_sigterm_after_full_response(
 ) -> None:
     """The graceful window cancels the request task, but the report task is shielded
     and the lifespan shutdown waits for it before the spend flushes."""
-    if asgi_server == "hypercorn":
-        pytest.skip("BUG: a litellm proxy under hypercorn does not exit within 60s of SIGTERM here, drain unreachable")
 
     def respond(request: Request) -> Reply:
         if "streamGenerateContent" in request.target:
