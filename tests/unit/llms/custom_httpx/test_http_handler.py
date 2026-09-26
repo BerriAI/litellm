@@ -746,7 +746,7 @@ class TestDefaultCachedClientTimeoutHonorsRequestTimeout:
 
         monkeypatch.setattr(litellm, "request_timeout", 300)
         monkeypatch.setattr(litellm, "request_timeout_explicitly_set", True)
-        litellm.in_memory_llm_clients_cache = LLMClientCache()
+        monkeypatch.setattr(litellm, "in_memory_llm_clients_cache", LLMClientCache())
 
         client = _get_httpx_client(params={"timeout": None})
         request = client.client.build_request("GET", "https://example.com")
