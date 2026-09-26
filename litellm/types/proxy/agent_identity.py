@@ -13,6 +13,7 @@ class EntraIdentityConfig(BaseModel):
     provider: Literal["microsoft_entra"]
     tenant_id: str
     client_id: str
+    provisioning_source_id: str | None = None
     service_principal_id: str | None = None
     required_roles: tuple[str, ...] = ()
     required_scopes: tuple[str, ...] = Field(
@@ -38,6 +39,7 @@ class AgentIdentityBinding(BaseModel):
     provider: Literal["microsoft_entra"]
     tenant_id: str
     client_id: str
+    provisioning_source_id: str | None = None
     service_principal_id: str | None = None
     issuer: str
     required_roles: tuple[str, ...] = ()
@@ -65,7 +67,7 @@ class AgentBudgetState(BaseModel):
 class AgentSubject(BaseModel):
     model_config = ConfigDict(frozen=True)
 
-    kind: Literal["application", "delegated_subject"]
+    kind: Literal["application", "delegated_subject", "agent_user"]
     oid: str
     mode: Literal["autonomous", "delegated"]
 
@@ -105,8 +107,21 @@ class MicrosoftInteractiveSubject(BaseModel):
 
 
 class ManagedAgentIdentityStatus(BaseModel):
+    directory_active: bool = True
+    directory_access_group_ids: tuple[str, ...] | None = None
     identity: AgentIdentityBinding | None = None
     identity_managed: bool = False
     enabled: bool = True
     execution_mode: AgentExecutionMode = "autonomous"
     last_authenticated_at: datetime | None = None
+
+
+class VerifiedAgentSubject(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    issuer: str
+    tenant_id: str
+    oid: str
+    agent_id: str
+    parent_client_id: str
+    scim_resource_id: str
