@@ -18,7 +18,7 @@ from litellm.llms.anthropic.chat.transformation import (
     AnthropicConfig,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -770,7 +770,9 @@ class AmazonAnthropicClaudeMessagesConfig(
         aws_decoder: Final = AmazonAnthropicClaudeMessagesStreamDecoder(
             model=model,
         )
-        completion_stream: Final = aws_decoder.aiter_bytes(httpx_response.aiter_bytes())
+        completion_stream: Final = aws_decoder.aiter_bytes(
+            httpx_response.aiter_bytes(), response_headers=httpx_response.headers
+        )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
         return self.bedrock_sse_wrapper(
             completion_stream=completion_stream,
@@ -796,7 +798,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         merge them from ``message_start`` so logging/cost sees a consistent usage
         object (fixes negative input costs: LIT-2411).
         """
-        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             BaseAnthropicMessagesStreamingIterator,
         )
 

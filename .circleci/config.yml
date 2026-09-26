@@ -141,7 +141,7 @@ commands:
             node --version
             npm --version
   install_rust:
-    description: "Install pinned rustup (1.28.2) and Rust toolchain (1.98.0) with checksum verification. Adds ~/.cargo/bin to PATH. Run this before any `uv sync` or `uv build` of the workspace: the root package builds litellm-rust through maturin, and on an image without cargo maturin fetches an unpinned rustup and a floating toolchain by itself."
+    description: "Install pinned rustup (1.28.2) and Rust toolchain (1.98.0) with checksum verification. Adds ~/.cargo/bin to PATH. Run this before any `uv sync` or `uv build` of the workspace: the root package builds litellm-rust through maturin, and on an image without cargo maturin fetches an unpinned rustup and a floating toolchain by itself. Also restores the dev-profile cargo cache that save_cargo_target writes on main, minus the workspace crates' fingerprints so those always rebuild from the checked-out source."
     steps:
       - run:
           name: Install Rust (rustup 1.28.2, toolchain 1.98.0)
@@ -167,9 +167,29 @@ commands:
             /tmp/rustup-init -y --no-modify-path --profile minimal --default-toolchain 1.98.0
             rm -f /tmp/rustup-init
             echo 'export PATH="$HOME/.cargo/bin:$PATH"' >> "$BASH_ENV"
+            echo 'export CARGO_INCREMENTAL=0' >> "$BASH_ENV"
             export PATH="$HOME/.cargo/bin:$PATH"
             rustc --version
             cargo --version
+            { rustc -vV; cc --version; cat /etc/os-release; } > /tmp/cargo-build-env
+      - restore_cache:
+          keys:
+            - v1-cargo-dev-{{ checksum "/tmp/cargo-build-env" }}-{{ checksum "litellm-rust/Cargo.lock" }}
+            - v1-cargo-dev-{{ checksum "/tmp/cargo-build-env" }}-
+      - run:
+          name: Force a rebuild of the workspace crates restored from the cargo cache
+          command: rm -rf litellm-rust/target/debug/.fingerprint/litellm-*
+  save_cargo_target:
+    steps:
+      - when:
+          condition:
+            equal: [main, << pipeline.git.branch >>]
+          steps:
+            - save_cache:
+                key: v1-cargo-dev-{{ checksum "/tmp/cargo-build-env" }}-{{ checksum "litellm-rust/Cargo.lock" }}
+                paths:
+                  - ~/.cargo/registry
+                  - ~/project/litellm-rust/target/debug
   start_postgres:
     description: "Start a postgres-db container on port 5432 and wait until it accepts connections."
     parameters:
@@ -281,50 +301,11 @@ commands:
             # `uv sync --package litellm-enterprise` here — that overwrites the
             # shared .venv and strips out dev/test deps (pytest, prisma, etc.).
             uv run --no-sync python -c "import litellm_enterprise; print('litellm-enterprise OK:', litellm_enterprise.__file__)"
-  setup_litellm_test_deps:
+  install_windows_toolchain:
     steps:
-      - checkout
-      - setup_google_dns
-      - install_uv
-      - install_rust
-      - restore_cache:
-          keys:
-            - v3-integration-uv-cache-{{ checksum "uv.lock" }}
       - run:
-          name: Install Dependencies
-          command: |
-            uv sync --frozen --all-groups --all-extras --python 3.12
-      - setup_litellm_enterprise_pip
-      - save_cache:
-          paths:
-            - ~/.cache/uv
-          key: v3-integration-uv-cache-{{ checksum "uv.lock" }}
-
-jobs:
-  # Add Windows testing job
-  using_litellm_on_windows:
-    executor:
-      name: win/default
-      shell: powershell.exe
-    working_directory: ~/project
-    environment:
-      UV_PYTHON: "3.11"
-      CARGO_HTTP_MULTIPLEXING: "false"
-      CARGO_NET_RETRY: "5"
-    steps:
-      - checkout
-      - run:
-          name: Install Python
-          command: |
-            choco install python --version=3.11.0 -y --no-progress --force
-            refreshenv
-            python --version
-          environment:
-            CHOCOLATEY_CONFIRM_ALL: "true"
-      - run:
-          name: Install Dependencies
-          environment:
-            UV_HTTP_TIMEOUT: "300"
+          name: Install Rust and uv
+          no_output_timeout: 30m
           command: |
             $rustupInit = Join-Path $env:TEMP "rustup-init.exe"
             $rustupVersion = "1.28.2"
@@ -364,6 +345,55 @@ jobs:
             if (-not (Select-String -Path $PROFILE -SimpleMatch $cargoBin -Quiet)) {
               Add-Content -Path $PROFILE -Value "`$env:Path = `"$cargoBin;`$env:Path`""
             }
+  setup_litellm_test_deps:
+    steps:
+      - checkout
+      - setup_google_dns
+      - install_uv
+      - install_rust
+      - restore_cache:
+          keys:
+            - v3-integration-uv-cache-{{ checksum "uv.lock" }}
+      - run:
+          name: Install Dependencies
+          command: |
+            uv sync --frozen --all-groups --all-extras --python 3.12
+      - setup_litellm_enterprise_pip
+      - save_cache:
+          paths:
+            - ~/.cache/uv
+          key: v3-integration-uv-cache-{{ checksum "uv.lock" }}
+      - save_cargo_target
+
+jobs:
+  # Add Windows testing job
+  using_litellm_on_windows:
+    executor:
+      name: win/default
+      shell: powershell.exe
+    working_directory: ~/project
+    environment:
+      UV_PYTHON: "3.11"
+      CARGO_HTTP_MULTIPLEXING: "false"
+      CARGO_NET_RETRY: "5"
+    steps:
+      - checkout
+      - run:
+          name: Install Python
+          command: |
+            choco install python --version=3.11.0 -y --no-progress --force
+            refreshenv
+            python --version
+          environment:
+            CHOCOLATEY_CONFIRM_ALL: "true"
+      - install_windows_toolchain
+      - run:
+          name: Install Dependencies
+          no_output_timeout: 30m
+          environment:
+            UV_HTTP_TIMEOUT: "300"
+          command: |
+            $env:Path = "$HOME\.cargo\bin;$HOME\.local\bin;$env:Path"
             for ($attempt = 1; $attempt -le 5; $attempt++) {
               Write-Host "uv sync attempt $attempt/5"
               uv sync --frozen --group dev --python 3.11
@@ -379,16 +409,68 @@ jobs:
           name: Run Windows-specific test
           command: |
             uv run --no-sync python -m pytest tests/windows_tests/ -v
+
+  windows_release_wheel:
+    executor:
+      name: win/default
+      shell: powershell.exe
+      size: xlarge
+    working_directory: ~/project
+    environment:
+      UV_PYTHON: "3.11"
+      CARGO_HTTP_MULTIPLEXING: "false"
+      CARGO_NET_RETRY: "5"
+    steps:
+      - checkout
       - run:
-          name: Guard against MAX_PATH-busting packaged wheel paths
+          name: Skip job when no windows-release-relevant files changed
+          shell: bash.exe
+          command: bash .circleci/scripts/path_filter.sh windows-release
+      - run:
+          name: Install Python
+          command: |
+            choco install python --version=3.11.0 -y --no-progress --force
+            refreshenv
+            python --version
+          environment:
+            CHOCOLATEY_CONFIRM_ALL: "true"
+      - install_windows_toolchain
+      - run:
+          name: Record the Rust build environment for the release cargo cache key
+          command: |
+            & "$HOME\.cargo\bin\rustc.exe" -vV | Out-File -Encoding ascii .cargo-build-env
+      - restore_cache:
+          keys:
+            - v1-cargo-release-windows-{{ checksum ".cargo-build-env" }}-{{ checksum "litellm-rust/Cargo.lock" }}
+            - v1-cargo-release-windows-{{ checksum ".cargo-build-env" }}-
+      - run:
+          name: Force a rebuild of the workspace crates restored from the cargo cache
+          command: |
+            $fingerprints = "litellm-rust/target/release/.fingerprint"
+            if (Test-Path $fingerprints) {
+              Get-ChildItem -Path $fingerprints -Filter "litellm-*" | Remove-Item -Recurse -Force
+            }
+      - run:
+          name: Build the release wheel and install it under a worst-case MAX_PATH prefix
+          no_output_timeout: 30m
           environment:
             UV_HTTP_TIMEOUT: "300"
           command: |
             $env:Path = "$HOME\.cargo\bin;$HOME\.local\bin;$env:Path"
-            cargo --version
-            Get-ChildItem -Path "litellm\rust_bridge" -Filter "_native*" -File -ErrorAction SilentlyContinue | Remove-Item -Force
             uv build --wheel --out-dir dist
-            uv run --no-sync python tests/windows_tests/check_windows_wheel_install.py
+            if ($LASTEXITCODE -ne 0) {
+              exit $LASTEXITCODE
+            }
+            python tests/windows_tests/check_windows_wheel_install.py
+      - when:
+          condition:
+            equal: [main, << pipeline.git.branch >>]
+          steps:
+            - save_cache:
+                key: v1-cargo-release-windows-{{ checksum ".cargo-build-env" }}-{{ checksum "litellm-rust/Cargo.lock" }}
+                paths:
+                  - ~/.cargo/registry
+                  - ~/project/litellm-rust/target/release
 
   base_sdk_install:
     docker:
@@ -416,6 +498,10 @@ jobs:
             uv venv /tmp/base-sdk --python 3.12
             VIRTUAL_ENV=/tmp/base-sdk uv pip install dist/*.whl
             /tmp/base-sdk/bin/python tests/base_sdk_tests/check_base_sdk_install.py
+      - run:
+          name: Guard against MAX_PATH-busting packaged wheel paths
+          command: |
+            python3 tests/windows_tests/check_windows_wheel_install.py --lengths-only
 
   local_testing_part1:
     docker:
@@ -444,6 +530,7 @@ jobs:
           paths:
             - ~/.cache/uv
           key: v1-uv-cache-{{ checksum "uv.lock" }}
+      - save_cargo_target
       - run:
           name: Run prisma ./docker/entrypoint.sh
           command: |
@@ -3118,10 +3205,14 @@ jobs:
         type: enum
         enum: [standard, replica]
         default: standard
+      parallelism:
+        type: integer
+        default: 1
     machine:
       image: ubuntu-2204:2024.04.1
     resource_class: large
     working_directory: ~/project
+    parallelism: << parameters.parallelism >>
     steps:
       - setup_litellm_test_deps
       - when:
@@ -3247,6 +3338,7 @@ jobs:
       image: ubuntu-2204:2024.04.1
     resource_class: large
     working_directory: ~/project
+    parallelism: 4
     steps:
       - setup_litellm_test_deps
       - run:
@@ -3256,10 +3348,11 @@ jobs:
           name: Run unit tests
           command: |
             mkdir -p test-results/unit
-            mapfile -t files < <(find tests/unit -name 'test_*.py' | sort)
-            if [ "${#files[@]}" -eq 0 ]; then echo "tests/unit holds no test_*.py files; nothing to run"; exit 0; fi
+            shard="$(find tests/unit -name 'test_*.py' | sort | circleci tests split --split-by=timings --timings-type=filename)"
+            if [ -z "${shard}" ]; then echo "shard ${CIRCLE_NODE_INDEX} received no tests/unit files; nothing to run"; exit 0; fi
+            mapfile -t files < <(printf '%s\n' "${shard}")
             set +e
-            LITELLM_LOCAL_MODEL_COST_MAP=True uv run --no-sync pytest "${files[@]}" -p no:rerunfailures -p no:pytest-retry --timeout=90 -n 4 --dist=loadscope --tb=short --junitxml=test-results/unit/junit.xml
+            LITELLM_LOCAL_MODEL_COST_MAP=True uv run --no-sync pytest "${files[@]}" -p no:rerunfailures -p no:pytest-retry --timeout=90 -n 4 --dist=loadscope --tb=short -o junit_family=xunit1 --junitxml=test-results/unit/junit.xml
             status=$?
             set -e
             if [ "$status" -eq 5 ]; then echo "pytest collected no tests from tests/unit; passing"; exit 0; fi
@@ -3326,23 +3419,17 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, extensions, mcp, sdk, cost, browser]
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
+              suite: [management, accounting, database, providers, mcp, sdk, cost, browser]
+      - integration_contracts:
+          name: integration-extensions
+          suite: extensions
+          parallelism: 4
       - integration_contracts:
           name: integration-<< matrix.suite >>-replica
           matrix:
             parameters:
               suite: [management, database]
               mode: [replica]
-          filters:
-            branches:
-              only:
-                - main
-                - /litellm_.*/
   build_and_test:
     unless:
       or:
@@ -3350,101 +3437,61 @@ workflows:
         - not:
             equal: ["", << pipeline.parameters.routing_parity_base >>]
     jobs:
-      - using_litellm_on_windows:
-          filters: &main_branches
-            branches:
-              only:
-                - main
-                - /litellm_.*/
-      - unit:
-          filters: *main_branches
+      - using_litellm_on_windows
+      - windows_release_wheel
+      - unit
       - provider_replay_harness
-      - base_sdk_install:
-          filters: *main_branches
-      - local_testing_part1:
-          filters: *main_branches
-      - local_testing_part2:
-          filters: *main_branches
-      - langfuse_logging_unit_tests:
-          filters: *main_branches
-      - litellm_assistants_api_testing:
-          filters: *main_branches
-      - litellm_router_testing:
-          filters: *main_branches
-      - litellm_router_unit_testing:
-          filters: *main_branches
-      - auth_ui_unit_tests:
-          filters: *main_branches
-      - build_docker_database_image:
-          filters: *main_branches
-      - e2e_ui_testing:
-          filters: *main_branches
-      - e2e_ui_testing_server_root_path:
-          filters: *main_branches
+      - base_sdk_install
+      - local_testing_part1
+      - local_testing_part2
+      - langfuse_logging_unit_tests
+      - litellm_assistants_api_testing
+      - litellm_router_testing
+      - litellm_router_unit_testing
+      - auth_ui_unit_tests
+      - build_docker_database_image
+      - e2e_ui_testing
+      - e2e_ui_testing_server_root_path
       - build_and_test:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - e2e_openai_endpoints:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - proxy_logging_guardrails_model_info_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - proxy_spend_accuracy_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - proxy_multi_instance_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - proxy_store_model_in_db_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
-      - proxy_build_from_pip_tests:
-          filters: *main_branches
+      - proxy_build_from_pip_tests
       - proxy_pass_through_endpoint_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - proxy_e2e_anthropic_messages_tests:
           requires:
             - build_docker_database_image
-          filters: *main_branches
-      - llm_translation_testing:
-          filters: *main_branches
-      - realtime_translation_testing:
-          filters: *main_branches
-      - agent_testing:
-          filters: *main_branches
-      - guardrails_testing:
-          filters: *main_branches
-      - google_generate_content_endpoint_testing:
-          filters: *main_branches
-      - llm_responses_api_testing:
-          filters: *main_branches
-      - ocr_testing:
-          filters: *main_branches
-      - search_testing:
-          filters: *main_branches
-      - batches_testing:
-          filters: *main_branches
-      - litellm_utils_testing:
-          filters: *main_branches
-      - pass_through_unit_testing:
-          filters: *main_branches
-      - image_gen_testing:
-          filters: *main_branches
-      - logging_testing:
-          filters: *main_branches
-      - audio_testing:
-          filters: *main_branches
-      - redis_caching_unit_tests:
-          filters: *main_branches
+      - llm_translation_testing
+      - realtime_translation_testing
+      - agent_testing
+      - guardrails_testing
+      - google_generate_content_endpoint_testing
+      - llm_responses_api_testing
+      - ocr_testing
+      - search_testing
+      - batches_testing
+      - litellm_utils_testing
+      - pass_through_unit_testing
+      - image_gen_testing
+      - logging_testing
+      - audio_testing
+      - redis_caching_unit_tests
       - upload-coverage:
           requires:
             - realtime_translation_testing
@@ -3469,18 +3516,12 @@ workflows:
       - db_migration_disable_update_check:
           requires:
             - build_docker_database_image
-          filters: *main_branches
-      - installing_litellm_on_python:
-          filters: *main_branches
-      - installing_litellm_on_python_3_13:
-          filters: *main_branches
-      - installing_litellm_on_python_v2_migration_resolver:
-          filters: *main_branches
+      - installing_litellm_on_python
+      - installing_litellm_on_python_3_13
+      - installing_litellm_on_python_v2_migration_resolver
       - helm_chart_testing:
           requires:
             - build_docker_database_image
-          filters: *main_branches
       - test_bad_database_url:
           requires:
             - build_docker_database_image
-          filters: *main_branches

@@ -742,7 +742,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     ),
     "CohereChatConfig": (".llms.cohere.chat.transformation", "CohereChatConfig"),
     "AnthropicMessagesConfig": (
-        ".llms.anthropic.experimental_pass_through.messages.transformation",
+        ".llms.anthropic.pass_through.messages.transformation",
         "AnthropicMessagesConfig",
     ),
     "BedrockClaudePlatformMessagesConfig": (
