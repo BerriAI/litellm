@@ -172,7 +172,10 @@ def test_excluded_services_drops_db_spans_at_tenant_only(
         tmp_path, otel_audit_config, otel={"excluded_services": ["redis", "postgres"]}, extra=_guardrail_block
     )
     with owned_proxy(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config, workers=2) as candidate:
+        ten_start, _ = recorded_spans(audit_sinks.tenant)
+        op_start, _ = recorded_spans(audit_sinks.operator)
         traffic: Final = _drive(candidate, langfuse_vars)
+        _await_db_span(audit_sinks.operator, None, "postgresql", seconds=60, since=op_start)
         tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
         tenant_spans: Final = _trace_spans(audit_sinks.tenant, tenant_trace)
         _assert_core_spans_present(tenant_spans)
@@ -183,6 +186,10 @@ def test_excluded_services_drops_db_spans_at_tenant_only(
         operator_systems: Final = _db_systems(_trace_spans(audit_sinks.operator, operator_trace))
         assert operator_trace == tenant_trace
         assert {"redis", "postgresql"} <= operator_systems, f"operator lost db spans: {operator_systems}"
+        _, all_tenant = recorded_spans(audit_sinks.tenant, ten_start)
+        names: Final = sorted(str(span["name"]) for span in all_tenant)
+        assert _db_systems(all_tenant) == set(), f"aux db spans reached tenant: {names}"
+        assert not any("batch_write_to_db" in name for name in names), f"spend writer reached tenant: {names}"
 
 
 def test_env_excluded_services_drops_only_redis(
