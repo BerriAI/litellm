@@ -2974,6 +2974,16 @@ def _parse_session_cursor(session_cursor: str | None) -> tuple[str, str, str] | 
     return (last_activity, session_key, api_key)
 
 
+def _session_rows_sql(session_key: str, api_key: str) -> str:
+    """Every row that can belong to one session, found by its key alone. The OFFSET 0 keeps the caller's window
+    and filters out of this scan, so a generic plan cannot combine it with a scan of the whole window."""
+    return f"""SELECT *
+            FROM "LiteLLM_SpendLogs"
+            WHERE (request_id = {session_key} OR session_id = {session_key})
+              AND api_key = {api_key}
+            OFFSET 0"""
+
+
 async def _fetch_session_representatives(
     prisma_client: "PrismaClient",
     where_clause: str,
@@ -2987,10 +2997,8 @@ async def _fetch_session_representatives(
         FROM unnest(${next_param_index}::text[], ${next_param_index + 1}::text[]) AS requested(session_key, key)
         CROSS JOIN LATERAL (
             SELECT {_SPEND_LOG_LIST_COLUMNS}
-            FROM "LiteLLM_SpendLogs"
+            FROM ({_session_rows_sql("requested.session_key", "requested.key")}) AS "LiteLLM_SpendLogs"
             WHERE {where_clause}
-              AND (request_id = requested.session_key OR session_id = requested.session_key)
-              AND api_key = requested.key
               AND {_SESSION_KEY_EXPR} = requested.session_key
             ORDER BY call_type IN {_MCP_CALL_TYPES_SQL}, "startTime" DESC
             LIMIT 1
@@ -3116,11 +3124,9 @@ class _SessionHeadWalk:
             FROM unnest(${len(params) + 1}::text[], ${len(params) + 2}::text[]) AS requested(session_key, key)
             CROSS JOIN LATERAL (
                 SELECT 1
-                FROM "LiteLLM_SpendLogs"
+                FROM ({_session_rows_sql("requested.session_key", "requested.key")}) AS "LiteLLM_SpendLogs"
                 WHERE {self.where_clause}
-                  AND api_key = requested.key
-                  AND (session_id = requested.session_key
-                       OR (request_id = requested.session_key AND NULLIF(session_id, '') IS NULL))
+                  AND {_SESSION_KEY_EXPR} = requested.session_key
                   AND ("startTime", requested.session_key, requested.key) >= {self._cursor_bounds()}
                 LIMIT 1
             ) AS newer_row
