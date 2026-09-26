@@ -15,7 +15,8 @@ LANGTRACE_TRACE_PATH: Final = "/api/trace"
 
 
 def langtrace_trace_endpoint(api_host: str | None) -> str:
-    return (api_host or LANGTRACE_DEFAULT_HOST).rstrip("/") + LANGTRACE_TRACE_PATH
+    host: Final = (api_host or LANGTRACE_DEFAULT_HOST).rstrip("/")
+    return host if host.endswith(LANGTRACE_TRACE_PATH) else host + LANGTRACE_TRACE_PATH
 
 
 class LangtraceAttributes:

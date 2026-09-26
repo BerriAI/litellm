@@ -1621,6 +1621,7 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
     [
         (None, "https://app.langtrace.ai/api/trace"),
         ("http://langtrace.internal:3000/", "http://langtrace.internal:3000/api/trace"),
+        ("http://langtrace.internal:3000/api/trace", "http://langtrace.internal:3000/api/trace"),
     ],
 )
 def test_langtrace_callback_exports_to_api_trace_with_x_api_key(
