@@ -1288,6 +1288,28 @@ async def exchange_token_with_server(
 
     raw_access_token: Final = token_response.get("access_token") if isinstance(token_response, dict) else None
     if not isinstance(raw_access_token, str) or not raw_access_token:
+        if isinstance(token_response, dict):
+            provider_error = token_response.get("error")
+            if isinstance(provider_error, str) and provider_error:
+                return render_token_fault(
+                    classify_upstream_token_rejection(
+                        response,
+                        credential_source=_token_credential_source(resolved_server),
+                        log_context=resolved_server.server_id,
+                    )
+                )
+            response_keys: Final = sorted(str(key) for key in token_response)
+            verbose_logger.warning(
+                "MCP token exchange: upstream returned 200 without usable access_token (server_id=%s, keys=%s)",
+                resolved_server.server_id,
+                response_keys,
+            )
+        else:
+            verbose_logger.warning(
+                "MCP token exchange: upstream returned 200 without usable access_token (server_id=%s, type=%s)",
+                resolved_server.server_id,
+                type(token_response).__name__,
+            )
         return render_token_fault(UpstreamProtocolFault(note="the upstream token response has no usable access_token"))
 
     result: Final = {

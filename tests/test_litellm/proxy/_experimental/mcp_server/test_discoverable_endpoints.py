@@ -8794,6 +8794,87 @@ async def test_token_exchange_200_without_access_token_is_502_not_keyerror():
 
 
 @pytest.mark.asyncio
+async def test_token_exchange_200_with_valid_access_token_unchanged():
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(200, json_body={"access_token": "token", "token_type": "Bearer"})
+    )
+
+    assert response.status_code == 200
+    body = json.loads(response.body)
+    assert body["access_token"] == "token"
+    assert body["token_type"] == "Bearer"
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_200_with_provider_error_surfaces_upstream_error():
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(
+            200,
+            json_body={
+                "ok": False,
+                "error": "invalid_code",
+                "error_description": "authorization code is invalid",
+            },
+        )
+    )
+
+    assert response.status_code == 400
+    body = json.loads(response.body)
+    assert body["error"] == "invalid_code"
+    assert body["error_description"] == "authorization code is invalid"
+    assert "no usable access_token" not in body.get("error_description", "")
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_200_without_token_or_error_logs_keys_safely(caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING)
+
+    response = await _exchange_with_upstream_response(
+        _upstream_token_response(
+            200,
+            json_body={
+                "token_type": "Bearer",
+                "custom_field": "value",
+                "access_token": "",
+                "refresh_token": "refresh-secret",
+                "client_secret": "client-secret",
+                "code": "authorization-code",
+                "code_verifier": "verifier-secret",
+            },
+        )
+    )
+
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body["error"] == "server_error"
+    assert "access_token" in body["error_description"]
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("without usable access_token" in message and "custom_field" in message for message in messages)
+    for sensitive_value in ("refresh-secret", "client-secret", "authorization-code", "verifier-secret"):
+        assert not any(sensitive_value in message for message in messages)
+
+
+@pytest.mark.asyncio
+async def test_token_exchange_200_with_non_dict_body_logs_type_safely(caplog):
+    import logging
+
+    caplog.set_level(logging.WARNING)
+
+    response = await _exchange_with_upstream_response(_upstream_token_response(200, json_body=[]))
+
+    assert response.status_code == 502
+    body = json.loads(response.body)
+    assert body["error"] == "server_error"
+    assert "access_token" in body["error_description"]
+    messages = [record.getMessage() for record in caplog.records]
+    assert any("without usable access_token" in message and "type=list" in message for message in messages)
+    for sensitive_value in ("refresh-secret", "client-secret", "authorization-code", "verifier-secret"):
+        assert not any(sensitive_value in message for message in messages)
+
+
+@pytest.mark.asyncio
 async def test_token_exchange_relays_rejection_when_http_client_raises():
     """litellm's AsyncHTTPHandler.post raise_for_status()es internally and raises MaskedHTTPStatusError
     at call time, so in production the rejection escapes from the post call itself rather than from the
