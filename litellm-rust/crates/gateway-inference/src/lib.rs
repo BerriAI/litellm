@@ -9,6 +9,7 @@ mod error;
 pub mod messages;
 mod ocr;
 mod request;
+mod responses;
 
 use std::sync::Arc;
 
@@ -46,8 +47,8 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
             "/v1/audio/transcriptions",
             post(audio_transcription::create),
         )
-        .route("/responses", post(request::unsupported))
-        .route("/v1/responses", post(request::unsupported))
+        .route("/responses", post(responses::create))
+        .route("/v1/responses", post(responses::create))
         .route("/embeddings", post(request::unsupported))
         .route("/v1/embeddings", post(request::unsupported))
         .route("/completions", post(request::unsupported))

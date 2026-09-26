@@ -45,8 +45,6 @@ async fn chat_aliases_call_core_and_use_the_body_model_before_the_path(
 }
 
 #[rstest]
-#[case("/responses")]
-#[case("/v1/responses")]
 #[case("/embeddings")]
 #[case("/v1/embeddings")]
 #[case("/completions")]
