@@ -2587,7 +2587,82 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch,
         api_key=None,
         timezone_offset_minutes=480,
         include_current_utc_day=include_current_utc_day,
+        cursor=None,
     )
+
+
+@pytest.mark.asyncio
+async def test_get_user_daily_activity_aggregated_rejects_garbage_cursor(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from fastapi import HTTPException
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_user_daily_activity_aggregated,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    mock_get_daily_agg = AsyncMock()
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
+        mock_get_daily_agg,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_user_daily_activity_aggregated(
+            start_date="2025-01-01",
+            end_date="2025-01-31",
+            model=None,
+            api_key=None,
+            user_id=None,
+            timezone=None,
+            cursor="not-a-cursor",
+            user_api_key_dict=UserAPIKeyAuth(
+                user_id="admin-user-001",
+                user_role=LitellmUserRoles.PROXY_ADMIN,
+            ),
+        )
+
+    assert exc_info.value.status_code == 400
+    mock_get_daily_agg.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_user_daily_activity_aggregated_decodes_cursor_to_key_page_cursor(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.management_endpoints.common_daily_activity import KeyPageCursor
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_user_daily_activity_aggregated,
+    )
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", MagicMock())
+    mock_response = MagicMock()
+    mock_get_daily_agg = AsyncMock(return_value=mock_response)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
+        mock_get_daily_agg,
+    )
+
+    encoded: Final = KeyPageCursor(spend=6.0, api_key="key-004").encode()
+    result = await get_user_daily_activity_aggregated(
+        start_date="2025-01-01",
+        end_date="2025-01-31",
+        model=None,
+        api_key=None,
+        user_id=None,
+        timezone=None,
+        cursor=encoded,
+        user_api_key_dict=UserAPIKeyAuth(
+            user_id="admin-user-001",
+            user_role=LitellmUserRoles.PROXY_ADMIN,
+        ),
+    )
+
+    assert result is mock_response
+    forwarded: Final = mock_get_daily_agg.call_args.kwargs["cursor"]
+    assert isinstance(forwarded, KeyPageCursor)
+    assert (forwarded.spend, forwarded.api_key) == (6.0, "key-004")
 
 
 @pytest.mark.asyncio

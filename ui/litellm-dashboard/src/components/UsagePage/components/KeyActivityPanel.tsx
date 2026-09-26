@@ -13,6 +13,7 @@ interface KeyActivityPanelProps {
   hidePromptCachingMetrics?: boolean;
   apiKeyTruncation?: ApiKeyTruncation;
   searchKeys?: SearchKeys;
+  loadMoreKeys?: () => Promise<void>;
 }
 
 type SearchKeys = (query: string) => Promise<Record<string, ModelActivityData>>;
@@ -23,6 +24,8 @@ type RemoteSearch =
   | { status: "done"; query: string; searchKeys: SearchKeys; keys: Record<string, ModelActivityData> }
   | { status: "error"; query: string; searchKeys: SearchKeys };
 
+type LoadMoreState = { status: "idle" } | { status: "loading" | "error"; loadMoreKeys: () => Promise<void> };
+
 const REMOTE_SEARCH_DEBOUNCE_MS = 300;
 
 const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
@@ -30,9 +33,13 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
   hidePromptCachingMetrics = false,
   apiKeyTruncation,
   searchKeys,
+  loadMoreKeys,
 }) => {
   const [query, setQuery] = useState("");
   const [remote, setRemote] = useState<RemoteSearch>({ status: "idle" });
+  const [loadMore, setLoadMore] = useState<LoadMoreState>({ status: "idle" });
+  const currentLoadMore: LoadMoreState =
+    "loadMoreKeys" in loadMore && loadMore.loadMoreKeys === loadMoreKeys ? loadMore : { status: "idle" };
   const filtered = useMemo(() => filterKeyActivity(keyMetrics, query), [keyMetrics, query]);
   const trimmedQuery = query.trim();
   const remoteEnabled = searchKeys !== undefined && apiKeyTruncation !== undefined && trimmedQuery !== "";
@@ -70,7 +77,9 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
 
   const totalKeys = Object.keys(keyMetrics).length;
   const shownKeys = Object.keys(displayed).length;
-  const totalShown = totalKeys + Object.keys(extraRemoteKeys).length;
+  const loadedPlusRemote = totalKeys + Object.keys(extraRemoteKeys).length;
+  const totalShown =
+    apiKeyTruncation === undefined ? loadedPlusRemote : Math.max(apiKeyTruncation.total, loadedPlusRemote);
   const isFiltering = trimmedQuery !== "";
   const noMatches = isFiltering && !remoteLoading && totalKeys > 0 && shownKeys === 0;
 
@@ -108,10 +117,29 @@ const KeyActivityPanel: React.FC<KeyActivityPanelProps> = ({
             Key search failed
           </span>
         )}
-        {apiKeyTruncation !== undefined && (
-          <span className="text-sm text-muted-foreground" role="note">
-            Only the {apiKeyTruncation.limit.toLocaleString()} highest-spend keys of{" "}
-            {apiKeyTruncation.total.toLocaleString()} are loaded
+        {loadMoreKeys !== undefined && (
+          <button
+            type="button"
+            className="text-sm text-muted-foreground underline disabled:no-underline disabled:opacity-50"
+            disabled={currentLoadMore.status === "loading"}
+            onClick={() => {
+              setLoadMore({ status: "loading", loadMoreKeys });
+              loadMoreKeys()
+                .then(() => setLoadMore({ status: "idle" }))
+                .catch(() => setLoadMore({ status: "error", loadMoreKeys }));
+            }}
+          >
+            Load more keys
+          </button>
+        )}
+        {currentLoadMore.status === "loading" && (
+          <span role="status" className="text-sm text-muted-foreground">
+            Loading more keys...
+          </span>
+        )}
+        {currentLoadMore.status === "error" && (
+          <span role="alert" className="text-sm text-muted-foreground">
+            Loading more keys failed
           </span>
         )}
       </div>

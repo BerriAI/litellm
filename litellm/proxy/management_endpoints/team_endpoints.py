@@ -128,6 +128,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import (
     resolve_model_budget,
 )
 from litellm.proxy.management_endpoints.common_daily_activity import (
+    decode_key_page_cursor,
     get_daily_activity_aggregated,
     get_daily_activity_export_rows,
 )
@@ -6760,6 +6761,7 @@ async def get_team_daily_activity_aggregated(
     api_key: str | None = None,
     exclude_team_ids: str | None = None,
     timezone: int | None = None,
+    cursor: str | None = None,
 ):
     """
     Aggregated daily activity for teams without pagination, including per-team breakdown.
@@ -6776,6 +6778,7 @@ async def get_team_daily_activity_aggregated(
         api_key (Optional[str]): Filter by API key.
         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
         timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset() convention.
+        cursor (Optional[str]): Opaque cursor from a previous response's metadata.next_cursor; loads the next page of api_keys.
     Returns:
         SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
     """
@@ -6791,6 +6794,10 @@ async def get_team_daily_activity_aggregated(
     range_error: Final = _aggregated_date_range_error(start_date, end_date)
     if range_error is not None:
         raise _daily_activity_error(status_code=400, message=range_error)
+
+    page_cursor: Final = None if cursor is None else decode_key_page_cursor(cursor)
+    if cursor is not None and page_cursor is None:
+        raise _daily_activity_error(status_code=400, message="Invalid cursor")
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_ids,
@@ -6815,6 +6822,7 @@ async def get_team_daily_activity_aggregated(
         exclude_entity_ids=scope.exclude_team_ids,
         timezone_offset_minutes=timezone,
         include_entity_breakdown=True,
+        cursor=page_cursor,
     )
 
 

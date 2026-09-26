@@ -1446,8 +1446,9 @@ export const teamDailyActivityAggregatedCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  teamIds: string[] | null = null,
+  ...options: [teamIds?: string[] | null, cursor?: string | null]
 ) => {
+  const [teamIds = null, cursor = null] = options;
   /**
    * Get aggregated daily team activity with per-team breakdown (no pagination)
    */
@@ -1460,6 +1461,7 @@ export const teamDailyActivityAggregatedCall = async (
         timezone: new Date().getTimezoneOffset().toString(),
         team_ids: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
         exclude_team_ids: "litellm-dashboard",
+        cursor: cursor ?? undefined,
       },
     });
   } catch (error) {
@@ -2579,12 +2581,12 @@ export const userDailyActivityAggregatedCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  ...options: [userId?: string | null, includeCurrentUtcDay?: boolean, apiKey?: string | null]
+  ...options: [userId?: string | null, includeCurrentUtcDay?: boolean, apiKey?: string | null, cursor?: string | null]
 ) => {
   /**
    * Get aggregated daily user activity (no pagination)
    */
-  const [userId = null, includeCurrentUtcDay = false, apiKey = null] = options;
+  const [userId = null, includeCurrentUtcDay = false, apiKey = null, cursor = null] = options;
   try {
     const formatDate = (date: Date) => {
       const year = date.getFullYear();
@@ -2604,6 +2606,7 @@ export const userDailyActivityAggregatedCall = async (
         user_id: userId,
         include_current_utc_day: includeCurrentUtcDay ? "true" : undefined,
         api_key: apiKey,
+        cursor: cursor ?? undefined,
       },
     });
   } catch (error) {

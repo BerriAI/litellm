@@ -18,7 +18,7 @@ import traceback
 from collections.abc import Awaitable, Mapping, Sequence
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Any, Final, Literal, Protocol, cast, overload
+from typing import Annotated, Any, Final, Literal, Protocol, cast, overload
 
 import fastapi
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
@@ -54,6 +54,7 @@ from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_
 from litellm.proxy.hooks.user_management_event_hooks import UserManagementEventHooks
 from litellm.proxy.management_endpoints.common_daily_activity import (
     DailySpendRecord,
+    decode_key_page_cursor,
     get_daily_activity,
     get_daily_activity_aggregated,
 )
@@ -3055,6 +3056,12 @@ async def get_user_daily_activity_aggregated(
         "terms) is included. Requires the timezone parameter. Historical ranges are "
         "never extended.",
     ),
+    cursor: Annotated[
+        str | None,
+        fastapi.Query(
+            description="Opaque cursor from a previous response's metadata.next_cursor; loads the next page of api_keys"
+        ),
+    ] = None,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ) -> SpendAnalyticsPaginatedResponse:
     """
@@ -3080,6 +3087,13 @@ async def get_user_daily_activity_aggregated(
             detail={"error": "Please provide start_date and end_date"},
         )
 
+    page_cursor: Final = None if cursor is None else decode_key_page_cursor(cursor)
+    if cursor is not None and page_cursor is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Invalid cursor"},
+        )
+
     try:
         entity_id: Final = _resolve_user_daily_activity_entity_id(user_api_key_dict, user_id)
 
@@ -3095,6 +3109,7 @@ async def get_user_daily_activity_aggregated(
             api_key=api_key,
             timezone_offset_minutes=timezone,
             include_current_utc_day=include_current_utc_day,
+            cursor=page_cursor,
         )
 
     except HTTPException:

@@ -69,14 +69,14 @@ describe("KeyActivityPanel", () => {
     expect(screen.getByTestId("rendered-keys")).toHaveTextContent("hash-alicehash-bob");
   });
 
-  it("says how many keys the proxy left out when only the top spenders were loaded", () => {
+  it("counts toward the server-side key total when only the top spenders were loaded", () => {
     render(<KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 3000 }} />);
-    expect(screen.getByRole("note")).toHaveTextContent("Only the 2 highest-spend keys of 3,000 are loaded");
+    expect(screen.getByText("Showing 2 of 3,000 keys")).toBeInTheDocument();
   });
 
-  it("shows no truncation note when every key is loaded", () => {
-    render(<KeyActivityPanel keyMetrics={keyMetrics} />);
-    expect(screen.queryByRole("note")).not.toBeInTheDocument();
+  it("shows the full server total once every key is loaded", () => {
+    render(<KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 2 }} />);
+    expect(screen.getByText("Showing 2 of 2 keys")).toBeInTheDocument();
   });
 
   it("finds keys outside the loaded top-spend subset via server search", async () => {
@@ -141,5 +141,82 @@ describe("KeyActivityPanel", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Key search failed");
     expect(screen.getByTestId("rendered-keys")).toHaveTextContent("hash-alice");
+  });
+
+  it("shows no Load more keys button without the prop", () => {
+    render(<KeyActivityPanel keyMetrics={keyMetrics} apiKeyTruncation={{ limit: 2, total: 3 }} />);
+    expect(screen.queryByRole("button", { name: "Load more keys" })).not.toBeInTheDocument();
+  });
+
+  it("calls loadMoreKeys when the button is clicked", async () => {
+    const loadMoreKeys = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    render(
+      <KeyActivityPanel
+        keyMetrics={keyMetrics}
+        apiKeyTruncation={{ limit: 2, total: 3 }}
+        loadMoreKeys={loadMoreKeys}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more keys" }));
+
+    expect(loadMoreKeys).toHaveBeenCalledTimes(1);
+    expect(await screen.findByRole("button", { name: "Load more keys" })).toBeEnabled();
+  });
+
+  it("shows a pending status while loadMoreKeys is in flight", async () => {
+    const loadMoreKeys = vi.fn<() => Promise<void>>().mockReturnValue(new Promise(() => {}));
+    render(
+      <KeyActivityPanel
+        keyMetrics={keyMetrics}
+        apiKeyTruncation={{ limit: 2, total: 3 }}
+        loadMoreKeys={loadMoreKeys}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more keys" }));
+
+    expect(await screen.findByRole("status")).toHaveTextContent("Loading more keys...");
+    expect(screen.getByRole("button", { name: "Load more keys" })).toBeDisabled();
+  });
+
+  it("reports a failed key page load", async () => {
+    const loadMoreKeys = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("boom"));
+    render(
+      <KeyActivityPanel
+        keyMetrics={keyMetrics}
+        apiKeyTruncation={{ limit: 2, total: 3 }}
+        loadMoreKeys={loadMoreKeys}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more keys" }));
+
+    expect(await screen.findByRole("alert")).toHaveTextContent("Loading more keys failed");
+  });
+
+  it("clears a stale load-more status when the page callback changes", async () => {
+    const staleLoadMoreKeys = vi.fn<() => Promise<void>>().mockRejectedValue(new Error("boom"));
+    const { rerender } = render(
+      <KeyActivityPanel
+        keyMetrics={keyMetrics}
+        apiKeyTruncation={{ limit: 2, total: 3 }}
+        loadMoreKeys={staleLoadMoreKeys}
+      />,
+    );
+
+    fireEvent.click(screen.getByRole("button", { name: "Load more keys" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Loading more keys failed");
+
+    const freshLoadMoreKeys = vi.fn<() => Promise<void>>().mockResolvedValue(undefined);
+    rerender(
+      <KeyActivityPanel
+        keyMetrics={keyMetrics}
+        apiKeyTruncation={{ limit: 2, total: 3 }}
+        loadMoreKeys={freshLoadMoreKeys}
+      />,
+    );
+
+    expect(screen.queryByRole("alert")).not.toBeInTheDocument();
   });
 });

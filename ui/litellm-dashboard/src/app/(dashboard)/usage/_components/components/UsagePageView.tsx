@@ -32,6 +32,7 @@ import UserDropdown from "@/components/common_components/UserDropdown";
 import EntityUsageExportModal from "@/components/EntityUsageExport";
 import { getApiKeyTruncation, getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
 import KeyActivityPanel from "@/components/UsagePage/components/KeyActivityPanel";
+import { mergeKeyPage } from "@/components/UsagePage/keyPageMerge";
 import { Team } from "@/components/key_team_helpers/key_list";
 import {
   gatewayDailyActivityCall,
@@ -439,6 +440,28 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
     [userSpendData, modelViewType, teams],
   );
   const keyMetrics = useMemo(() => processActivityData(userSpendData, "api_keys", teams), [userSpendData, teams]);
+  const aggregatedCursor = activeAggregated?.metadata?.next_cursor;
+  const keyPageWindow = useMemo(
+    () => (accessToken && startTime && endTime ? { accessToken, startTime, endTime } : null),
+    [accessToken, startTime, endTime],
+  );
+  const loadMoreKeys = useCallback(() => {
+    if (!keyPageWindow || !aggregatedCursor) return Promise.resolve();
+    const rangeKey = currentAggregatedRangeKey;
+    return userDailyActivityAggregatedCall(
+      keyPageWindow.accessToken,
+      keyPageWindow.startTime,
+      keyPageWindow.endTime,
+      effectiveUserId,
+      false,
+      null,
+      aggregatedCursor,
+    ).then((page) => {
+      setAggregatedData((prev) =>
+        prev && prev.rangeKey === rangeKey ? { rangeKey, value: mergeKeyPage(prev.value, page) } : prev,
+      );
+    });
+  }, [keyPageWindow, effectiveUserId, aggregatedCursor, currentAggregatedRangeKey]);
   const searchKeys = useCallback(
     (q: string) => {
       if (!accessToken || !startTime || !endTime) return Promise.resolve({});
@@ -880,6 +903,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     keyMetrics={keyMetrics}
                     apiKeyTruncation={apiKeyTruncation}
                     searchKeys={searchKeys}
+                    loadMoreKeys={aggregatedCursor ? loadMoreKeys : undefined}
                   />
                 </TabsContent>
                 <TabsContent value="mcp" keepMounted>

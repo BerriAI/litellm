@@ -15661,6 +15661,7 @@ export interface paths {
          *         api_key (Optional[str]): Filter by API key.
          *         exclude_team_ids (Optional[str]): Comma-separated list of team IDs to exclude.
          *         timezone (Optional[int]): Timezone offset in minutes from UTC, matching JavaScript's Date.getTimezoneOffset() convention.
+         *         cursor (Optional[str]): Opaque cursor from a previous response's metadata.next_cursor; loads the next page of api_keys.
          *     Returns:
          *         SpendAnalyticsPaginatedResponse: Response containing all daily activity data for the range.
          */
@@ -29508,6 +29509,11 @@ export interface components {
              * @default false
              */
             has_more: boolean;
+            /**
+             * Next Cursor
+             * @description Opaque cursor for the next page of api_keys; None when every key is loaded
+             */
+            next_cursor?: string | null;
             /**
              * Page
              * @default 1
@@ -67002,6 +67008,7 @@ export interface operations {
                 api_key?: string | null;
                 exclude_team_ids?: string | null;
                 timezone?: number | null;
+                cursor?: string | null;
             };
             header?: never;
             path?: never;
@@ -69207,6 +69214,8 @@ export interface operations {
                 timezone?: number | null;
                 /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
                 include_current_utc_day?: boolean;
+                /** @description Opaque cursor from a previous response's metadata.next_cursor; loads the next page of api_keys */
+                cursor?: string | null;
             };
             header?: never;
             path?: never;

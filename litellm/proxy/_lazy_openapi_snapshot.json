@@ -3330,6 +3330,18 @@
               "title": "Has More",
               "type": "boolean"
             },
+            "next_cursor": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Opaque cursor for the next page of api_keys; None when every key is loaded",
+              "title": "Next Cursor"
+            },
             "page": {
               "default": 1,
               "title": "Page",

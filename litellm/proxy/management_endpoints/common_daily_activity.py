@@ -1,13 +1,19 @@
 import asyncio
+import base64
+import binascii
 import dataclasses
 import itertools
+import json
+import math
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from collections.abc import Set as AbstractSet
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import MappingProxyType, SimpleNamespace
 from typing import TYPE_CHECKING, Final, Protocol
 
 from fastapi import HTTPException, status
+from pydantic import TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm._logging import verbose_proxy_logger
@@ -185,6 +191,8 @@ class _GroupingSetsRow(_RollupMetricsRow):
     endpoint: str | None
     group_level: int
     distinct_api_keys: int | None
+    key_spend: float | None = None
+    remaining_api_keys: int | None = None
 
 
 class _EntityRollupRow(_RollupMetricsRow):
@@ -823,6 +831,32 @@ def _key_free_source(pg_table: str, where_clause: str, marker_param: str | None)
         ) AS key_free_source"""
 
 
+@dataclass(frozen=True, slots=True)
+class KeyPageCursor:
+    spend: float
+    api_key: str
+
+    def encode(self) -> str:
+        return base64.urlsafe_b64encode(json.dumps({"spend": self.spend, "api_key": self.api_key}).encode()).decode()
+
+
+_KEY_PAGE_CURSOR_ADAPTER: Final = TypeAdapter(KeyPageCursor)
+
+
+def decode_key_page_cursor(raw: str) -> KeyPageCursor | None:
+    try:
+        decoded: Final = base64.b64decode(raw.encode(), altchars=b"-_", validate=True)
+    except (ValueError, binascii.Error):
+        return None
+    try:
+        cursor: Final = _KEY_PAGE_CURSOR_ADAPTER.validate_json(decoded)
+    except ValidationError:
+        return None
+    if not math.isfinite(cursor.spend) or cursor.api_key == "":
+        return None
+    return cursor
+
+
 def _build_aggregated_sql_query(
     *,
     table_name: str,
@@ -836,7 +870,8 @@ def _build_aggregated_sql_query(
     timezone_offset_minutes: int | None = None,
     include_current_utc_day: bool = False,
     global_rollup_through: str | None = None,
-) -> tuple[str, list[str]]:  # mutable-ok: SQL text plus its ordered $N params
+    cursor: KeyPageCursor | None = None,
+) -> tuple[str, list[str | float]]:  # mutable-ok: SQL text plus its ordered $N params
     """Build the GROUPING SETS query for aggregated daily activity.
 
     Returns:
@@ -861,6 +896,16 @@ def _build_aggregated_sql_query(
     )
     sentinel_param: Final = f"${len(where_params) + 1}"
     marker_param: Final = None if global_rollup_through is None else f"${len(where_params) + 2}"
+    cursor_spend_param: Final = f"${len(where_params) + 2 + (1 if marker_param is not None else 0)}"
+    cursor_key_param: Final = f"${len(where_params) + 3 + (1 if marker_param is not None else 0)}"
+    cursor_clause: Final = (
+        ""
+        if cursor is None
+        else (
+            f"WHERE key_spend < {cursor_spend_param}::float8 "
+            f'OR (key_spend = {cursor_spend_param}::float8 AND api_key COLLATE "C" > {cursor_key_param})'
+        )
+    )
     metric_select: Final = _rollup_metric_select(table_name)
 
     # TODO: drop the successful_requests/failed_requests aggregates (and the
@@ -880,7 +925,8 @@ def _build_aggregated_sql_query(
                 | GROUPING(model, {_MODEL_GROUP_EXPR},
                            custom_llm_provider, mcp_namespaced_tool_name,
                            endpoint) AS group_level,
-            NULL::bigint AS distinct_api_keys,{metric_select}
+            NULL::bigint AS distinct_api_keys, NULL::float8 AS key_spend,
+            NULL::bigint AS remaining_api_keys,{metric_select}
         FROM {_key_free_source(pg_table, where_clause, marker_param)}
         GROUP BY GROUPING SETS (
             (date),
@@ -892,12 +938,18 @@ def _build_aggregated_sql_query(
             ()
         ))
         UNION ALL
-        (WITH top_api_keys AS (
-            SELECT api_key, COUNT(*) OVER () AS distinct_api_keys
+        (WITH ranked_api_keys AS (
+            SELECT api_key, SUM(spend) AS key_spend, COUNT(*) OVER () AS distinct_api_keys
             FROM "{pg_table}"
             WHERE {where_clause} AND api_key <> {sentinel_param}
             GROUP BY api_key
-            ORDER BY SUM(spend) DESC, api_key
+        ),
+        top_api_keys AS (
+            SELECT api_key, key_spend, distinct_api_keys,
+                COUNT(*) OVER () AS remaining_api_keys
+            FROM ranked_api_keys
+            {cursor_clause}
+            ORDER BY key_spend DESC, api_key COLLATE "C"
             LIMIT {USAGE_TOP_API_KEYS_LIMIT}
         )
         SELECT
@@ -911,7 +963,9 @@ def _build_aggregated_sql_query(
             GROUPING(date, api_key, model, {_MODEL_GROUP_EXPR},
                      custom_llm_provider, mcp_namespaced_tool_name,
                      endpoint) AS group_level,
-            MAX(top_api_keys.distinct_api_keys) AS distinct_api_keys,{metric_select}
+            MAX(top_api_keys.distinct_api_keys) AS distinct_api_keys,
+            MAX(top_api_keys.key_spend) AS key_spend,
+            MAX(top_api_keys.remaining_api_keys) AS remaining_api_keys,{metric_select}
         FROM "{pg_table}" JOIN top_api_keys USING (api_key)
         WHERE {where_clause}
         GROUP BY GROUPING SETS (
@@ -925,7 +979,13 @@ def _build_aggregated_sql_query(
     """
 
     marker_params: Final = () if global_rollup_through is None else (global_rollup_through,)
-    return sql_query, [*where_params, PTU_SENTINEL_API_KEY, *marker_params]
+    cursor_params: Final = () if cursor is None else (cursor.spend, cursor.api_key)
+    return sql_query, [  # mutable-ok: prisma query_raw takes ordered $N params; tests assert list equality
+        *where_params,
+        PTU_SENTINEL_API_KEY,
+        *marker_params,
+        *cursor_params,
+    ]
 
 
 def _build_entity_rollup_sql_query(
@@ -1724,6 +1784,7 @@ async def get_daily_activity_aggregated(
     timezone_offset_minutes: int | None = None,
     include_entity_breakdown: bool = False,
     include_current_utc_day: bool = False,
+    cursor: KeyPageCursor | None = None,
 ) -> SpendAnalyticsPaginatedResponse:
     """Aggregated variant that returns the full result set (no pagination).
 
@@ -1760,6 +1821,7 @@ async def get_daily_activity_aggregated(
         sql_query, sql_params = _build_aggregated_sql_query(
             **query_kwargs,
             global_rollup_through=await global_rollup_reconciled_through(prisma_client, query_kwargs),
+            cursor=cursor,
         )
         entity_query: Final = _build_entity_rollup_sql_query(**query_kwargs) if include_entity_breakdown else None
 
@@ -1770,6 +1832,16 @@ async def get_daily_activity_aggregated(
 
         records: Final = [_GroupingSetsRow(**row) for row in (raw_rows or ())]
         total_api_keys: Final = next((r.distinct_api_keys for r in records if r.distinct_api_keys is not None), 0)
+        remaining_api_keys: Final = next((r.remaining_api_keys for r in records if r.remaining_api_keys is not None), 0)
+        page_keys: Final = tuple(
+            (spend, key) for r in records if (spend := r.key_spend) is not None and (key := r.api_key) is not None
+        )
+        page_last: Final = max(page_keys, key=lambda k: (-k[0], k[1]), default=None)
+        next_cursor: Final = (
+            KeyPageCursor(*page_last).encode()
+            if page_last is not None and remaining_api_keys > USAGE_TOP_API_KEYS_LIMIT
+            else None
+        )
 
         # The grouping-sets dispatcher places each row directly in its bucket
         # using the row's GROUPING() bitmask. No Python-side summing needed.
@@ -1825,6 +1897,7 @@ async def get_daily_activity_aggregated(
                 has_more=False,
                 api_key_limit=USAGE_TOP_API_KEYS_LIMIT,
                 total_api_keys=total_api_keys,
+                next_cursor=next_cursor,
             ),
         )
 
