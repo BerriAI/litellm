@@ -30246,6 +30246,7 @@ export interface components {
             required_roles: string[];
             /**
              * Required Scopes
+             * @description Required delegated scopes. An empty list accepts any nonempty scope granted for this gateway.
              * @default [
              *       "user_impersonation"
              *     ]
