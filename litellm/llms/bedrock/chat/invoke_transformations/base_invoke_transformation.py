@@ -1,6 +1,7 @@
 import copy
 import json
 import time
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, cast, get_args
 
 import httpx
@@ -9,6 +10,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm._logging import verbose_logger
 from litellm.litellm_core_utils.core_helpers import map_finish_reason
+from litellm.litellm_core_utils.get_litellm_params import stored_control_options
 from litellm.litellm_core_utils.logging_utils import track_llm_api_timing
 from litellm.litellm_core_utils.prompt_templates.factory import (
     cohere_message_pt,
@@ -18,7 +20,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.llms.bedrock.chat.invoke_handler import make_call, make_sync_call
-from litellm.llms.bedrock.common_utils import BedrockError, stream_chunk_size_from
+from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.request_metadata import (
     bedrock_request_metadata_headers,
     merge_bedrock_invoke_headers,
@@ -180,7 +182,6 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
     ) -> dict:
         ## SETUP ##
         stream: Final = optional_params.pop("stream", None)
-        optional_params.pop("stream_chunk_size", None)
         custom_prompt_dict: Final[dict] = litellm_params.pop("custom_prompt_dict", None) or {}
         hf_model_name: Final = litellm_params.get("hf_model_name", None)
 
@@ -452,8 +453,9 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> CustomStreamWrapper:
-        chunk_size: Final = stream_chunk_size_from(logging_obj.litellm_params)
+        chunk_size: Final = stored_control_options(litellm_params or {}).stream_chunk_size
         completion_stream, response_headers = await make_call(
             client=client,
             api_base=api_base,
@@ -489,11 +491,12 @@ class AmazonInvokeConfig(BaseConfig, BaseAWSLLM):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> CustomStreamWrapper:
         sync_client: Final = (
             _get_httpx_client(params={}) if client is None or isinstance(client, AsyncHTTPHandler) else client
         )
-        chunk_size: Final = stream_chunk_size_from(logging_obj.litellm_params)
+        chunk_size: Final = stored_control_options(litellm_params or {}).stream_chunk_size
         completion_stream, response_headers = make_sync_call(
             client=sync_client,
             api_base=api_base,

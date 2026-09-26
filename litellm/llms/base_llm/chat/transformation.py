@@ -393,6 +393,7 @@ class BaseConfig(ABC):
         client: AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> "CustomStreamWrapper":
         raise NotImplementedError
 
@@ -408,6 +409,7 @@ class BaseConfig(ABC):
         client: HTTPHandler | AsyncHTTPHandler | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        litellm_params: Mapping[str, object] | None = None,
     ) -> "CustomStreamWrapper":
         raise NotImplementedError
 

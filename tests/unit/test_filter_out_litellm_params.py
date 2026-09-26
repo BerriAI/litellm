@@ -34,3 +34,9 @@ def test_filter_out_litellm_params():
     assert "litellm_trace_id" not in filtered
     assert "proxy_server_request" not in filtered
     assert "secret_fields" not in filtered
+
+
+def test_filter_out_litellm_params_also_drops_the_excluded_names():
+    kwargs = {"temperature": 0.2, "top_k": 5, "litellm_trace_id": "trace-1", "_litellm_control": object()}
+
+    assert filter_out_litellm_params(kwargs, excluding=("temperature",)) == {"top_k": 5}
