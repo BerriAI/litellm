@@ -2935,13 +2935,8 @@ def test_translation_audio_duration_is_finalized_once(event_type: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("output_bytes", (0, 48000))
-@pytest.mark.parametrize("event_type", ("input_audio_buffer.append", "session.input_audio_buffer.append"))
-@pytest.mark.parametrize(
-    "audio_format,bytes_per_second",
-    [("pcm16", 48000), ("g711_ulaw", 8000), ({"type": "audio/pcm", "rate": 16000}, 32000)],
-)
 async def test_translation_disconnect_bills_sent_input_audio(
-    output_bytes: int, event_type: str, audio_format: str | Mapping[str, object], bytes_per_second: int
+    output_bytes: int,
 ) -> None:
     import base64
 
@@ -2955,10 +2950,7 @@ async def test_translation_disconnect_bills_sent_input_audio(
         translation_session=True,
     )
     await streaming._send_to_backend(
-        json.dumps({"type": "session.update", "session": {"audio": {"input": {"format": audio_format}}}})
-    )
-    await streaming._send_to_backend(
-        json.dumps({"type": event_type, "audio": base64.b64encode(bytes(2 * bytes_per_second)).decode()})
+        json.dumps({"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(96000)).decode()})
     )
     streaming._capture_translation_output_audio(
         {"type": "session.output_audio.delta", "delta": base64.b64encode(bytes(output_bytes)).decode()}
@@ -2983,10 +2975,44 @@ async def test_translation_failed_audio_send_is_not_billed() -> None:
     )
 
     with pytest.raises(RuntimeError, match="send failed"):
-        await streaming._send_to_backend(json.dumps({"type": "input_audio_buffer.append", "audio": "AAAA"}))
+        await streaming._send_to_backend(json.dumps({"type": "session.input_audio_buffer.append", "audio": "AAAA"}))
     streaming._finalize_translation_usage()
 
     assert streaming.messages == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("retain_close", (False, True))
+@pytest.mark.parametrize("reported_input,expected_input", [(None, 2.0), (0.0, 0.0), (0.25, 0.25)])
+async def test_translation_terminal_usage_fills_only_missing_input_duration(
+    monkeypatch: pytest.MonkeyPatch, retain_close: bool, reported_input: float | None, expected_input: float
+) -> None:
+    import base64
+
+    monkeypatch.setattr(litellm, "logged_real_time_event_types", "*" if retain_close else None)
+    backend: Final = MagicMock()
+    backend.send = AsyncMock()
+    streaming: Final = RealTimeStreaming(
+        websocket=_ga_client_ws(), backend_ws=backend, logging_obj=MagicMock(), translation_session=True
+    )
+    await streaming._send_to_backend(
+        json.dumps({"type": "session.input_audio_buffer.append", "audio": base64.b64encode(bytes(96000)).decode()})
+    )
+    close_event: Final = {
+        "type": "session.closed",
+        "usage": {
+            "type": "duration",
+            "output_seconds": 0.5,
+            **({"input_seconds": reported_input} if reported_input is not None else {}),
+        },
+    }
+    streaming._capture_translation_output_audio(close_event)
+    streaming.store_message(close_event)
+    streaming._finalize_translation_usage()
+
+    usage: Final = tuple(event["usage"] for event in streaming.messages if event.get("type") == "session.closed")
+    assert sum(item.get("input_seconds") or 0.0 for item in usage) == expected_input
+    assert sum(item.get("output_seconds") or 0.0 for item in usage) == 0.5
 
 
 def test_translation_audio_duration_uses_session_output_format():
