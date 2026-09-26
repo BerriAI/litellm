@@ -77,13 +77,13 @@ class _CallerHeadersView(TypedDict):
     headers: ReadOnly[dict[str, str]]
 
 
-# Globally-routable IPs that are cloud-internal. Everything else
-# non-public is caught by ``not ip.is_global`` (RFC 6890, as implemented by
-# Python's ``ipaddress`` module). This list only holds IPs that are
-# publicly routable *and* point to cloud-fabric services reachable from
-# inside a VM via special in-fabric routing.
+# Cloud-internal IPs that ``ip.is_global`` can report as public. Everything
+# else non-public is caught by ``not ip.is_global`` (RFC 6890, as implemented
+# by Python's ``ipaddress`` module). Older Python patch releases (3.12.2, for
+# one) treat most of 192.0.0.0/24 as global, so it is listed to block it everywhere.
 _CLOUD_METADATA_EXCEPTIONS: Final = [
     ip_network("168.63.129.16/32"),  # Azure Wire Server
+    ip_network("192.0.0.0/24"),
 ]
 
 _ALLOWED_SCHEMES: Final = ("http", "https")

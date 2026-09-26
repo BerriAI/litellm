@@ -1,26 +1,30 @@
+use litellm_auth::SecretValue;
+use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_types::llms::anthropic_messages::{
     anthropic_request::{
-        AnthropicMessage, AnthropicMessagesRequest, ContentBlock, MessageContent, SystemPrompt,
+        AnthropicMessage, AnthropicMessagesOptionalParams, AnthropicMessagesRequest, ContentBlock,
+        MessageContent, SystemPrompt,
     },
     anthropic_response::AnthropicMessagesResponse,
 };
 
 use crate::{
-    anthropic::experimental_pass_through::messages::transformation::{
-        ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig, non_empty,
+    Error,
+    anthropic::{
+        common_utils::{API_KEY_PLACEMENT, MESSAGES_PATH_SUFFIX, non_empty},
+        messages::transformation::{ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig},
     },
     base_llm::{
         anthropic_messages::transformation::{
-            BaseAnthropicMessagesConfig, Headers, MessagesAuthStrategy, MessagesTransformContext,
+            BaseAnthropicMessagesConfig, Headers, MessagesTransformContext, ValidatedEnvironment,
         },
-        chat::transformation::Error,
+        auth::AuthScheme,
     },
 };
 
 const AZURE_API_KEY_ENV: &str = "AZURE_API_KEY";
 const AZURE_API_BASE_ENV: &str = "AZURE_API_BASE";
 const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
-const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
 const SYSTEM_ROLE: &str = "system";
 
 pub struct AzureAnthropicMessagesConfig {
@@ -48,7 +52,7 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
         context: &MessagesTransformContext,
     ) -> Result<AnthropicMessagesRequest, Error> {
         let mut request = fold_system_role_messages(request);
-        if let Some(system) = request.system.as_mut() {
+        if let Some(system) = request.params.system.as_mut() {
             strip_scope_from_system(system);
         }
         request
@@ -68,24 +72,30 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
             .transform_anthropic_messages_response(model, response)
     }
 
-    fn resolve_api_key(
-        &self,
-        api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        resolve_azure_api_key(api_key, env_lookup)
-    }
-
     fn secret_names(&self) -> &'static [&'static str] {
         &[AZURE_API_KEY_ENV, AZURE_API_BASE_ENV]
     }
 
-    fn auth_strategy(&self) -> MessagesAuthStrategy {
-        self.anthropic.auth_strategy()
-    }
-
-    fn accepts_bearer_auth(&self) -> bool {
-        true
+    /// A forwarded `x-api-key` or a non-blank bearer (an Entra ID token) is the credential;
+    /// otherwise the Azure key goes in `x-api-key`.
+    fn validate_environment(
+        &self,
+        headers: Headers,
+        api_key: Option<&str>,
+        _model: &str,
+        env_lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<ValidatedEnvironment, Error> {
+        if has_header(&headers, API_KEY_PLACEMENT.header_name()) || has_bearer_auth(&headers) {
+            return Ok(ValidatedEnvironment {
+                headers,
+                auth: AuthScheme::Forwarded,
+            });
+        }
+        let auth = AuthScheme::Credential {
+            placement: API_KEY_PLACEMENT,
+            secret: SecretValue::new(resolve_azure_api_key(api_key, env_lookup)?),
+        };
+        Ok(ValidatedEnvironment { headers, auth })
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -181,7 +191,7 @@ fn fold_system_role_messages(request: AnthropicMessagesRequest) -> AnthropicMess
         .into_iter()
         .partition(|msg| msg.role == SYSTEM_ROLE);
 
-    let folded_system: Vec<ContentBlock> = system_into_blocks(request.system)
+    let folded_system: Vec<ContentBlock> = system_into_blocks(request.params.system)
         .into_iter()
         .chain(
             system_messages
@@ -192,14 +202,20 @@ fn fold_system_role_messages(request: AnthropicMessagesRequest) -> AnthropicMess
 
     AnthropicMessagesRequest {
         messages: chat_messages,
-        system: (!folded_system.is_empty()).then_some(SystemPrompt::Blocks(folded_system)),
+        params: AnthropicMessagesOptionalParams {
+            system: (!folded_system.is_empty()).then_some(SystemPrompt::Blocks(folded_system)),
+            ..request.params
+        },
         ..request
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use serde_json::json;
+
+    use litellm_auth::CredentialPlacement;
 
     use super::*;
     use crate::anthropic::common_utils::AnthropicModelCapabilities;
@@ -292,19 +308,47 @@ mod tests {
         ));
     }
 
-    #[test]
-    fn auth_strategy_is_x_api_key() {
-        assert_eq!(
-            AZURE_ANTHROPIC_MESSAGES_CONFIG
-                .auth_strategy()
-                .header_name(),
-            "x-api-key"
-        );
+    fn validated(forwarded: &[(&str, &str)], api_key: Option<&str>) -> ValidatedEnvironment {
+        AZURE_ANTHROPIC_MESSAGES_CONFIG
+            .validate_environment(
+                forwarded
+                    .iter()
+                    .map(|(name, value)| (name.to_string(), value.to_string()))
+                    .collect(),
+                api_key,
+                "claude",
+                &|_| None,
+            )
+            .unwrap()
     }
 
     #[test]
-    fn accepts_bearer_auth_for_entra_id() {
-        assert!(AZURE_ANTHROPIC_MESSAGES_CONFIG.accepts_bearer_auth());
+    fn the_azure_key_goes_in_x_api_key() {
+        assert!(matches!(
+            validated(&[], Some("sk-azure")).auth,
+            AuthScheme::Credential {
+                placement: CredentialPlacement::Header("x-api-key"),
+                ref secret
+            } if secret.expose() == "sk-azure"
+        ));
+    }
+
+    #[rstest]
+    #[case::x_api_key(&[("X-Api-Key", "caller")])]
+    #[case::entra_id_bearer(&[("Authorization", "Bearer eyJ-token")])]
+    fn a_forwarded_key_or_bearer_is_the_credential(#[case] forwarded: &[(&str, &str)]) {
+        assert!(matches!(
+            validated(forwarded, Some("sk-azure")).auth,
+            AuthScheme::Forwarded
+        ));
+    }
+
+    #[test]
+    fn a_blank_bearer_does_not_count_as_a_credential() {
+        assert!(matches!(
+            validated(&[("Authorization", "Bearer  ")], Some("sk-azure")).auth,
+            AuthScheme::Credential { .. }
+        ));
     }
 
     #[test]
@@ -528,7 +572,7 @@ mod tests {
         assert!(err.is_data());
     }
 
-    #[rstest::rstest]
+    #[rstest]
     #[case::compact_context_management_edit(
         json!({"context_management": {"edits": [{"type": "compact_20260112"}]}}),
         &[],
@@ -608,7 +652,12 @@ mod tests {
             requested.borrow_mut().push(name.to_string());
             None
         };
-        let _ = AZURE_ANTHROPIC_MESSAGES_CONFIG.authenticate(Vec::new(), None, &record);
+        let _ = AZURE_ANTHROPIC_MESSAGES_CONFIG.validate_environment(
+            Vec::new(),
+            None,
+            "claude",
+            &record,
+        );
         let _ = AZURE_ANTHROPIC_MESSAGES_CONFIG.get_complete_url(None, "claude", &record);
         let requested = requested.into_inner();
         assert!(!requested.is_empty());
