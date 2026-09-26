@@ -72,6 +72,7 @@ model LiteLLM_AgentsTable {
   agent_card_params Json
   static_headers       Json?          @default("{}")
   extra_headers        String[]       @default([])
+  kill_switch          Json?
   agent_access_groups String[]       @default([])
   access_group_ids     String[]       @default([])
   object_permission_id String?

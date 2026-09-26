@@ -124,6 +124,12 @@ class _SpendIncrement(TypedDict):
     increment: ReadOnly[float]
 
 
+class _MemberSpendRow(TypedDict):
+    user_id: ReadOnly[str]
+    team_id: ReadOnly[str]
+    cost: ReadOnly[float]
+
+
 class _SpendBatch(Protocol):
     litellm_usertable: BatchTable
     litellm_verificationtoken: BatchTable
@@ -351,17 +357,22 @@ _TEAM_ADVISORY_LOCK_SQL: Final = "SELECT pg_advisory_xact_lock(hashtext($1)) IS 
 
 # One statement adds every member's cost to their membership row. A missing row is created only
 # while the user is still on the team's roster, so a spend flush landing after a removal never
-# recreates the member.
+# recreates the member. The rows travel as one JSON document, not as a numeric array: Prisma
+# types a raw array parameter from the first batch a connection sees, so after an all-$0 batch
+# (integers) every later fractional batch on that connection failed with "improper binary format".
 _TEAM_MEMBER_SPEND_SQL: Final = """
 INSERT INTO "LiteLLM_TeamMembership" (user_id, team_id, spend, total_spend)
-SELECT p.user_id, p.team_id, p.cost, p.cost
-FROM unnest($1::text[], $2::text[], $3::float8[]) AS p(user_id, team_id, cost)
+SELECT member.user_id, member.team_id, member.cost, member.cost
+FROM jsonb_to_recordset($1::jsonb) AS member(user_id text, team_id text, cost float8)
 WHERE EXISTS (
     SELECT 1 FROM "LiteLLM_TeamTable" t
-    WHERE t.team_id = p.team_id
-      AND t.members_with_roles @> jsonb_build_array(jsonb_build_object('user_id', p.user_id))
+    WHERE t.team_id = member.team_id
+      AND t.members_with_roles @> jsonb_build_array(jsonb_build_object('user_id', member.user_id))
 )
-   OR EXISTS (SELECT 1 FROM "LiteLLM_TeamMembership" m WHERE m.user_id = p.user_id AND m.team_id = p.team_id)
+   OR EXISTS (
+    SELECT 1 FROM "LiteLLM_TeamMembership" m
+    WHERE m.user_id = member.user_id AND m.team_id = member.team_id
+)
 ON CONFLICT (user_id, team_id) DO UPDATE
 SET spend = "LiteLLM_TeamMembership".spend + EXCLUDED.spend,
     total_spend = "LiteLLM_TeamMembership".total_spend + EXCLUDED.total_spend
@@ -371,15 +382,12 @@ SET spend = "LiteLLM_TeamMembership".spend + EXCLUDED.spend,
 async def _write_team_member_spend(transaction: _SpendTransaction, spend_by_member_key: Mapping[str, float]) -> None:
     # key is "team_id::<value>::user_id::<value>"; locks are taken in sorted team_id order like the team endpoints
     rows: Final = sorted((key.split("::")[1], key.split("::")[3], cost) for key, cost in spend_by_member_key.items())
-    team_ids: Final = tuple(team_id for team_id, _user_id, _cost in rows)
-    for team_id in dict.fromkeys(team_ids):
+    for team_id in dict.fromkeys(team_id for team_id, _user_id, _cost in rows):
         _ = await transaction.execute_raw(_TEAM_ADVISORY_LOCK_SQL, team_id)
-    _ = await transaction.execute_raw(
-        _TEAM_MEMBER_SPEND_SQL,
-        tuple(user_id for _team_id, user_id, _cost in rows),
-        team_ids,
-        tuple(cost for _team_id, _user_id, cost in rows),
+    members: Final = tuple(
+        _MemberSpendRow(user_id=user_id, team_id=team_id, cost=cost) for team_id, user_id, cost in rows
     )
+    _ = await transaction.execute_raw(_TEAM_MEMBER_SPEND_SQL, json.dumps(members))
 
 
 def get_llm_router():
