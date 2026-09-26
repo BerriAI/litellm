@@ -140,8 +140,6 @@ fn prepare_provider_request(
     })
 }
 
-
-
 fn without_additional_drop_params(
     request: AnthropicMessagesRequest,
     paths: &[String],
@@ -149,7 +147,8 @@ fn without_additional_drop_params(
     if paths.is_empty() {
         return Ok(request);
     }
-    let params = serde_json::to_value(request.params).map_err(|e| Error::RequestEncoding(e.into()))?;
+    let params =
+        serde_json::to_value(request.params).map_err(|e| Error::RequestEncoding(e.into()))?;
     let trimmed = paths
         .iter()
         .fold(params, |params, path| delete_nested_value(params, path));

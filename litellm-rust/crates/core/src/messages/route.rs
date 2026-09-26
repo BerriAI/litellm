@@ -14,15 +14,15 @@ use litellm_host::{
 use litellm_http::{Client, ClientVariant, HttpClientConfig};
 use litellm_secrets::source::SecretSource;
 use litellm_types::llms::anthropic_messages::{
-    anthropic_request::AnthropicMessagesRequest,
-    anthropic_response::AnthropicMessagesResponse,
+    anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
 };
 use reqwest::header::HeaderMap;
 use serde_json::{Map, Value};
 
 use super::{
-    Error, MessagesCall, MessagesResponse, messages_body,
+    Error, MessagesCall, MessagesResponse,
     handler::{self, execute},
+    messages_body,
     prepare::{prepare, resolve_provider},
 };
 
@@ -204,7 +204,10 @@ async fn drive(
                     Verdict::Resend(patch) => body = patched(&body, patch),
                 }
             }
-            MessagesResponse::Stream { headers, mut chunks } => {
+            MessagesResponse::Stream {
+                headers,
+                mut chunks,
+            } => {
                 let headers = headers
                     .iter()
                     .filter_map(|(name, value)| {

@@ -18,10 +18,8 @@ use litellm_core::{
     },
     resources::CoreResources,
 };
-use litellm_http::{
-    HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
-};
 use litellm_host_python::{InvokeError, ProtocolHost, json_fields, to_py};
+use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use litellm_secrets::{SecretValue, source::SecretSource};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
@@ -174,9 +172,7 @@ impl Invoke {
                 self.kwargs.bind(py),
             )?,
             messages_machine(
-                &CoreResources::new(Arc::new(HttpClientPool::new(Arc::new(
-                    PublicDnsResolver,
-                )))),
+                &CoreResources::new(Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)))),
                 &Resolution::from(&HttpSettings::default()).config,
                 Arc::new(NoSecrets),
             )
