@@ -2459,6 +2459,10 @@ class TestTemporaryMCPSessionEndpoints:
                 mock_manager,
             ),
             patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                return_value=None,
+            ),
+            patch(
                 "litellm.proxy.management_endpoints.mcp_management_endpoints._cache_temporary_mcp_server",
                 MagicMock(),
             ) as cache_mock,
@@ -3610,6 +3614,10 @@ class TestTemporaryMCPSessionEndpoints:
                 patch(
                     "litellm.proxy.management_endpoints.mcp_management_endpoints._temporary_mcp_servers",
                     {},
+                ),
+                patch(
+                    "litellm.proxy.management_endpoints.mcp_management_endpoints._get_prisma_client_or_none",
+                    return_value=None,
                 ),
                 patch(
                     "litellm.proxy.management_endpoints.mcp_management_endpoints.decrypt_value_helper",
