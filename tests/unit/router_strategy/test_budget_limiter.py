@@ -154,13 +154,12 @@ async def test_zero_max_budget_blocks_spend(disable_budget_sync):
         }
     ]
 
-    # Provider budget of 0 blocks a deployment that already spent.
-    limiter = RouterBudgetLimiting(
+    provider_limiter = RouterBudgetLimiting(
         dual_cache=DualCache(),
         provider_budget_config={"openai": {"budget_limit": 0.0, "time_period": "1d"}},
     )
     provider_configs: Final = {"openai": BudgetConfig(max_budget=0.0, budget_duration="1d")}
-    kept, _ = limiter._filter_out_deployments_above_budget(
+    provider_kept, _ = provider_limiter._filter_out_deployments_above_budget(
         potential_deployments=[],
         healthy_deployments=healthy_deployments,
         provider_configs=provider_configs,
@@ -169,10 +168,9 @@ async def test_zero_max_budget_blocks_spend(disable_budget_sync):
         spend_map={"provider_spend:openai:1d": 5.0},
         request_tags=[],
     )
-    assert kept == []
+    assert provider_kept == []
 
-    # Deployment budget of 0 blocks even at zero spend.
-    limiter = RouterBudgetLimiting(
+    deployment_limiter = RouterBudgetLimiting(
         dual_cache=DualCache(),
         provider_budget_config=None,
         model_list=[
@@ -184,7 +182,7 @@ async def test_zero_max_budget_blocks_spend(disable_budget_sync):
         ],
     )
     deployment_configs: Final = {"deployment-1": BudgetConfig(max_budget=0.0, budget_duration="1d")}
-    kept, _ = limiter._filter_out_deployments_above_budget(
+    deployment_kept, _ = deployment_limiter._filter_out_deployments_above_budget(
         potential_deployments=[],
         healthy_deployments=healthy_deployments,
         provider_configs={},
@@ -193,14 +191,29 @@ async def test_zero_max_budget_blocks_spend(disable_budget_sync):
         spend_map={"deployment_spend:deployment-1:1d": 0.0},
         request_tags=[],
     )
-    assert kept == []
+    assert deployment_kept == []
 
-    # A None budget still means "no limit" and must stay routable.
-    limiter = RouterBudgetLimiting(
+    tag_limiter = RouterBudgetLimiting(
         dual_cache=DualCache(),
         provider_budget_config=None,
     )
-    kept, _ = limiter._filter_out_deployments_above_budget(
+    tag_limiter.tag_budget_config = {"blocked-tag": BudgetConfig(time_period="1d", budget_limit=0.0)}
+    tag_kept, _ = tag_limiter._filter_out_deployments_above_budget(
+        potential_deployments=[],
+        healthy_deployments=healthy_deployments,
+        provider_configs={},
+        deployment_configs={},
+        deployment_providers=["openai"],
+        spend_map={"tag_spend:blocked-tag:1d": 0.0},
+        request_tags=["blocked-tag"],
+    )
+    assert tag_kept == []
+
+    unset_limiter = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config=None,
+    )
+    unset_kept, _ = unset_limiter._filter_out_deployments_above_budget(
         potential_deployments=[],
         healthy_deployments=healthy_deployments,
         provider_configs={},
@@ -209,4 +222,4 @@ async def test_zero_max_budget_blocks_spend(disable_budget_sync):
         spend_map={},
         request_tags=[],
     )
-    assert len(kept) == 1
+    assert len(unset_kept) == 1
