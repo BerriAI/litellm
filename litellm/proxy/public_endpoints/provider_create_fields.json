@@ -2754,6 +2754,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "PARETO",
+    "provider_display_name": "Pareto Inference",
+    "litellm_provider": "pareto",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.paretoinference.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "pareto/z-ai/glm-5.3-flash"
+  },
+  {
     "provider": "Perplexity",
     "provider_display_name": "Perplexity",
     "litellm_provider": "perplexity",
