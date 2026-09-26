@@ -108,6 +108,7 @@ impl CyberArkSecretManager {
             "- !variable {}\n",
             serde_json::to_string(name).expect("serializing a string cannot fail")
         );
+        let _policy_load = self.policy_load_lock.lock().await;
         for attempt in 0..POLICY_LOAD_ATTEMPTS {
             let response = with_timeout(
                 self.client

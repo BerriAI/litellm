@@ -35,6 +35,7 @@ class CyberArkSecretManager(BaseSecretManager):
         self.conjur_account = os.getenv("CYBERARK_ACCOUNT", "default")
         self.conjur_username = os.getenv("CYBERARK_USERNAME", "admin")
         self.conjur_api_key = os.getenv("CYBERARK_API_KEY", "")
+        self._policy_load_lock: Final = asyncio.Lock()
 
         # Optional config for certificate-based auth
         self.tls_cert_path = os.getenv("CYBERARK_CLIENT_CERT", "")
@@ -139,7 +140,8 @@ class CyberArkSecretManager(BaseSecretManager):
         policy_yaml: Final = f"- !variable {quoted_name}\n"
 
         try:
-            resp: Final = await self._load_variable_policy(async_client, policy_url, policy_yaml)
+            async with self._policy_load_lock:
+                resp: Final = await self._load_variable_policy(async_client, policy_url, policy_yaml)
         except Exception as e:
             verbose_logger.warning("Error ensuring variable exists: %s", e)
             return

@@ -121,6 +121,35 @@ async fn policy_load_conflict_is_retried_before_the_value_write() {
 
 #[rstest]
 #[tokio::test]
+async fn concurrent_writes_load_policy_one_at_a_time() {
+    let server = MockServer::start().await;
+    mount_auth(&server, 1).await;
+    Mock::given(path("/policies/acct/policy/root"))
+        .respond_with(ResponseTemplate::new(201).set_delay(Duration::from_millis(100)))
+        .expect(4)
+        .mount(&server)
+        .await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(201))
+        .mount(&server)
+        .await;
+    let manager = manager(&server, Duration::from_secs(60));
+    let started = std::time::Instant::now();
+
+    let value = SecretValue::new("v");
+    let results = tokio::join!(
+        manager.async_write_secret("key-0", &value, None),
+        manager.async_write_secret("key-1", &value, None),
+        manager.async_write_secret("key-2", &value, None),
+        manager.async_write_secret("key-3", &value, None),
+    );
+
+    assert!(results.0.is_ok() && results.1.is_ok() && results.2.is_ok() && results.3.is_ok());
+    assert!(started.elapsed() >= Duration::from_millis(400));
+}
+
+#[rstest]
+#[tokio::test]
 async fn failed_value_write_is_not_cached() {
     let server = MockServer::start().await;
     mount_auth(&server, 1).await;

@@ -1,3 +1,4 @@
+import asyncio
 import json
 from pathlib import Path
 from typing import Final, TypedDict, cast
@@ -129,6 +130,34 @@ async def test_async_write_retries_policy_load_conflict(monkeypatch: pytest.Monk
     assert policy_route.call_count == 3
     assert value_route.call_count == 1
     assert result["status"] == "success"
+
+
+@pytest.mark.asyncio
+@respx.mock
+async def test_concurrent_async_writes_load_policy_one_at_a_time(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    fixture: Final = _fixture()
+    manager: Final = _configure_manager(monkeypatch, fixture)
+    endpoint: Final = fixture["endpoint"]
+    _respond(respx.post(endpoint + fixture["authenticate_path"]), content=fixture["token_json"].encode())
+    in_flight: Final = asyncio.Semaphore(1)
+
+    async def load_policy(_: httpx.Request) -> httpx.Response:
+        if in_flight.locked():
+            return httpx.Response(409)
+        async with in_flight:
+            await asyncio.sleep(0.05)
+        return httpx.Response(201)
+
+    policy_route: Final = respx.post(endpoint + fixture["policy_path"]).mock(side_effect=load_policy)
+    respx.post(url__startswith=endpoint + "/secrets/").respond(status_code=201)  # pyright: ignore[reportUnknownMemberType]  # respx route stubs leave response builder partially unknown
+
+    results: Final = await asyncio.gather(
+        *(manager.async_write_secret(f"concurrent-{index}", "v") for index in range(4))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # legacy secret manager API is untyped
+    )
+
+    assert policy_route.call_count == 4
+    assert [result["status"] for result in results] == ["success"] * 4
 
 
 def test_missing_credentials_raise_value_error(monkeypatch: pytest.MonkeyPatch) -> None:
