@@ -42,6 +42,7 @@ from litellm.proxy._types import (
     LiteLLM_OrganizationTable,
     LiteLLM_TeamMembership,
     LiteLLM_TeamTable,
+    LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
     LitellmUserRoles,
     Member,
@@ -64,6 +65,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     get_management_object_ttl,
 )
+from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.user_repository import UserRepository
 from litellm.types.agents import AgentResponse
@@ -1319,6 +1321,30 @@ class JWTHandler:
         await self.http_handler.close()
 
 
+async def _read_claim_team(
+    team_id: str,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    parent_otel_span: Span | None,
+    proxy_logging_obj: ProxyLogging,
+) -> LiteLLM_TeamTableCachedObj | None:
+    try:
+        return await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            parent_otel_span=parent_otel_span,
+            proxy_logging_obj=proxy_logging_obj,
+        )
+    except TeamNotFoundError:
+        return None
+    except Exception as e:  # noqa: BLE001  # a wrapped read failure may still carry a DB outage in __cause__
+        db_error: Final = PrismaDBExceptionHandler.find_database_service_unavailable_error_in_chain(e)
+        if db_error is None:
+            return None
+        raise db_error
+
+
 class JWTAuthManager:
     """Manages JWT authentication and authorization operations"""
 
@@ -1667,20 +1693,24 @@ class JWTAuthManager:
             return None, None
 
         any_claim_team_resolved = False
+        db_outage: Exception | None = None
         for team_id in team_ids:
             try:
-                team_object = await get_team_object(
+                team_object = await _read_claim_team(
                     team_id=team_id,
                     prisma_client=prisma_client,
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
                 )
-
-                if team_object is not None:
-                    any_claim_team_resolved = True
-
-                if team_object and team_object.models is not None:
+            except Exception as e:  # noqa: BLE001  # deferred so another claim team can still grant access
+                db_outage = e  # rebind-ok: first outage seen across team claims
+                continue
+            if team_object is None:
+                continue
+            any_claim_team_resolved = True
+            try:
+                if team_object.models is not None:
                     team_models = team_object.models
                     if isinstance(team_models, list) and (
                         not requested_model
@@ -1711,6 +1741,9 @@ class JWTAuthManager:
                             return team_id, team_object
             except Exception:
                 continue
+
+        if db_outage is not None:
+            raise db_outage
 
         if denied_auth_enforced_pass_through_route:
             JWTAuthManager._raise_team_passthrough_route_denial(route=route)

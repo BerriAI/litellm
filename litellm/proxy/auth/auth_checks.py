@@ -3276,11 +3276,11 @@ async def get_team_object(
         )
     except TeamNotFoundError:
         raise
-    except Exception:
+    except Exception as e:
         raise HTTPException(
             status_code=404,
             detail={"error": f"Team doesn't exist in db. Team={team_id}. Create team via `/team/new` call."},
-        )
+        ) from e
 
 
 async def _cache_access_object(

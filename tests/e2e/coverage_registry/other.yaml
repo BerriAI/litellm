@@ -60,3 +60,4 @@
 
 - {id: other.auth.jwt.wrong_issuer_denied, module: other, tier: P0, area: auth, assertions: [wrong_issuer_denied], source: "auth/handle_jwt.py", rationale: "A signed token with the correct audience and an unexpected issuer is rejected"}
 - {id: other.auth.jwt.wrong_audience_denied, module: other, tier: P0, area: auth, assertions: [wrong_audience_denied], source: "auth/handle_jwt.py", rationale: "A signed token from the trusted issuer intended for another app is rejected"}
+- {id: other.auth.jwt.db_outage_is_not_model_denial, module: other, tier: P0, area: auth, assertions: [db_outage_is_not_model_denial], source: "handle_jwt.py find_team_with_model_access / auth_checks.py get_team_object", rationale: "When the team read fails because the database is unreachable, a JWT request whose groups name an existing team with the requested model must be answered 503 no_db_connection, not the 403 model-access denial a missing team gets"}
