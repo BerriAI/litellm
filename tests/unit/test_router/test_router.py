@@ -4486,6 +4486,107 @@ async def test_aresponses_streaming_iterator_pre_first_chunk_skips_continuation(
     assert fbk["input"] == "Hello"  # original input, no continuation messages
 
 
+def _make_native_responses_iterator(*, sse_payloads: tuple[dict[str, str], ...], trailing_error: Exception | None):
+    """A real ResponsesAPIStreamingIterator over canned SSE bytes, so the router test covers the
+    iterator's own transport-error classification instead of a hand-built MidStreamFallbackError."""
+    from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
+    from litellm.responses.streaming_iterator import ResponsesAPIStreamingIterator
+
+    async def aiter_bytes():
+        for payload in sse_payloads:
+            yield f"data: {json.dumps(payload)}\n\n".encode()
+        if trailing_error is not None:
+            raise trailing_error
+
+    def transform(model, parsed_chunk, logging_obj):
+        return MagicMock(type=parsed_chunk["type"])
+
+    response: Final = MagicMock()
+    response.headers = {}
+    response.aiter_bytes = aiter_bytes
+    config: Final = MagicMock(spec=BaseResponsesAPIConfig)
+    config.transform_streaming_response.side_effect = transform
+    logging_obj: Final = MagicMock(spec=LiteLLMLogging)
+    logging_obj.completion_start_time = None
+    logging_obj.model_call_details = {"litellm_params": {}}
+    return ResponsesAPIStreamingIterator(
+        response=response,
+        model="gpt-4",
+        responses_api_provider_config=config,
+        logging_obj=logging_obj,
+        litellm_metadata={},
+        custom_llm_provider="openai",
+    )
+
+
+_RESPONSES_LIFECYCLE_PAYLOADS: Final = ({"type": "response.created"}, {"type": "response.in_progress"})
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_falls_back_on_transport_drop_before_output():
+    """A connection lost after response.created but before any output item is re-routed to the
+    fallback with the original input, the same as a provider error event would be."""
+    router: Final = _make_router_with_fallback()
+    src: Final = _make_native_responses_iterator(
+        sse_payloads=_RESPONSES_LIFECYCLE_PAYLOADS,
+        trailing_error=httpx.ReadError("Response payload is not completed"),
+    )
+
+    with patch.object(
+        router,
+        "async_function_with_fallbacks_common_utils",
+        return_value=_AsyncList([MagicMock(type="response.completed")]),
+    ) as mock_fallback_utils:
+        wrapped: Final = await router._aresponses_streaming_iterator(
+            response=src,
+            initial_kwargs={
+                "model": "gpt-4",
+                "stream": True,
+                "input": "Hello",
+                "original_generic_function": litellm.aresponses,
+            },
+        )
+        seen: Final = [chunk.type async for chunk in wrapped]
+
+    assert seen == ["response.created", "response.in_progress", "response.completed"]
+    assert isinstance(mock_fallback_utils.call_args.kwargs["e"], MidStreamFallbackError)
+    assert mock_fallback_utils.call_args.kwargs["kwargs"]["input"] == "Hello"
+
+
+@pytest.mark.asyncio
+async def test_aresponses_streaming_iterator_surfaces_transport_drop_when_no_fallback_lands():
+    transport_error: Final = httpx.ReadError("Response payload is not completed")
+    router: Final = _make_router_with_fallback()
+    src: Final = _make_native_responses_iterator(
+        sse_payloads=_RESPONSES_LIFECYCLE_PAYLOADS, trailing_error=transport_error
+    )
+
+    async def reraise_trigger(**kwargs):
+        raise kwargs["e"]
+
+    with patch.object(
+        router, "async_function_with_fallbacks_common_utils", new=AsyncMock(side_effect=reraise_trigger)
+    ) as mock_fallback_utils:
+        wrapped: Final = await router._aresponses_streaming_iterator(
+            response=src,
+            initial_kwargs={
+                "model": "gpt-4",
+                "stream": True,
+                "input": "Hello",
+                "original_generic_function": litellm.aresponses,
+            },
+        )
+        with pytest.raises(httpx.ReadError) as exc_info:
+            async for _ in wrapped:
+                pass
+
+    assert exc_info.value is transport_error
+    assert mock_fallback_utils.await_count == 1
+    trigger: Final = mock_fallback_utils.await_args.kwargs["e"]
+    assert isinstance(trigger, MidStreamFallbackError)
+    assert trigger.original_exception is transport_error
+
+
 @pytest.mark.asyncio
 async def test_aresponses_streaming_iterator_partial_content_injects_continuation():
     """Mid-stream error: input is rewritten to include user prompt +
@@ -6090,6 +6191,32 @@ def test_update_kwargs_with_deployment_passthrough_router_stream_timeout_sources
     assert _passthrough_timeout(default_router, default_router.model_list[0], stream=False) == 120.0
 
 
+def test_update_kwargs_with_deployment_passthrough_honors_global_request_timeout(monkeypatch: pytest.MonkeyPatch):
+    """litellm_settings.request_timeout must bound the native responses route when neither the
+    deployment nor the router carries a timeout, while a deployment timeout keeps winning."""
+    monkeypatch.setattr("litellm.request_timeout", 44.0, raising=False)
+    monkeypatch.setattr("litellm.request_timeout_explicitly_set", True, raising=False)
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "responses-global-timeout",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake-key"},
+            },
+            {
+                "model_name": "responses-deployment-timeout",
+                "litellm_params": {"model": "openai/gpt-5.4-mini", "api_key": "fake-key", "timeout": 3},
+            },
+        ],
+    )
+    global_only, per_deployment = router.model_list
+
+    with patch("litellm.proxy.proxy_server.general_settings", {"pass_through_request_timeout": 6}):
+        assert _passthrough_timeout(router, global_only, stream=True) == 44.0
+        assert _passthrough_timeout(router, global_only, stream=False) == 44.0
+        assert _passthrough_timeout(router, per_deployment, stream=True) == 3.0
+        assert _passthrough_timeout(router, per_deployment, stream=False) == 3.0
+
+
 @pytest.mark.asyncio
 async def test_router_acompletion_with_unknown_model_and_default_fallback():
     """
@@ -6341,6 +6468,51 @@ def test_get_deployment_credentials_with_provider_includes_bucket_name():
     assert credentials["gcs_bucket_name"] == "my-batch-bucket"
     assert credentials["vertex_project"] == "my-project"
     assert credentials["custom_llm_provider"] == "vertex_ai"
+
+
+def test_get_deployment_credentials_with_provider_keeps_legacy_bucket_name():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.5-flash",
+                    "vertex_project": "my-project",
+                    "vertex_location": "global",
+                    "bucket_name": "my-legacy-bucket",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(model_id="vertex-gemini")
+
+    assert credentials is not None
+    assert credentials["bucket_name"] == "my-legacy-bucket"
+    assert "gcs_bucket_name" not in credentials
+
+
+def test_get_deployment_credentials_with_provider_keeps_both_bucket_keys():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex-gemini",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-3.5-flash",
+                    "vertex_project": "my-project",
+                    "vertex_location": "global",
+                    "gcs_bucket_name": "new-bucket",
+                    "bucket_name": "legacy-bucket",
+                },
+            }
+        ],
+    )
+
+    credentials = router.get_deployment_credentials_with_provider(model_id="vertex-gemini")
+
+    assert credentials is not None
+    assert credentials["gcs_bucket_name"] == "new-bucket"
+    assert credentials["bucket_name"] == "legacy-bucket"
 
 
 def test_get_deployment_credentials_with_provider_resolves_credential_name():
