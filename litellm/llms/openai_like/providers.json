@@ -200,5 +200,12 @@
       "temperature_max": 1.99
     },
     "supported_endpoints": ["/v1/chat/completions"]
+  },
+  "standardcompute": {
+    "base_url": "https://api.stdcmpt.com/v1",
+    "api_key_env": "STANDARDCOMPUTE_API_KEY",
+    "param_mappings": {
+      "max_completion_tokens": "max_tokens"
+    }
   }
 }
