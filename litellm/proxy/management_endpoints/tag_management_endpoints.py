@@ -21,6 +21,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_json_strings, parse_stored_json_object
 from litellm.proxy.common_utils.user_api_key_cache import (
     tag_cache_key,
     tag_registry_cache_key,
@@ -30,7 +31,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity,
 )
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
-from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.model_repository import ModelRepository, encrypt_model_litellm_params
 from litellm.repositories.table_repositories import (
     DailyTagSpendRepository,
     TagRepository,
@@ -358,7 +359,6 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
         raise HTTPException(status_code=500, detail="Database not connected")
 
     try:
-        # Get current model from database to preserve encrypted fields
         db_model = await ModelRepository(prisma_client).table.find_unique(where={"model_id": deployment.model_info.id})
 
         if db_model is None:
@@ -367,24 +367,20 @@ async def _add_tag_to_deployment(deployment: "Deployment", tag: str):
                 detail=f"Model {deployment.model_info.id} not found in database",
             )
 
-        # Prisma returns litellm_params as dict (already parsed from JSON)
-        existing_params = db_model.litellm_params
-        if isinstance(existing_params, str):  # pyright: ignore[reportUnnecessaryIsInstance]  # prisma Json stub is str
-            # If it's a string, parse it
-            existing_params = json.loads(existing_params)
-        elif not isinstance(existing_params, dict):  # pyright: ignore[reportUnnecessaryIsInstance]  # prisma Json stub
-            raise Exception(f"Unexpected litellm_params type: {type(existing_params)}")
+        stored_params: Final = parse_stored_json_object(db_model.litellm_params)
+        if stored_params is None:
+            raise Exception(f"Unexpected litellm_params type: {type(db_model.litellm_params)}")
+        existing_params: Final = {key: decrypt_json_strings(value) for key, value in stored_params.items()}
+        stored_tags: Final = existing_params.get("tags")
+        tags: Final = stored_tags if isinstance(stored_tags, list) else []
+        if tag in tags:
+            return
 
-        # Add tag to tags array (preserve encryption of other fields)
-        if "tags" not in existing_params:
-            existing_params["tags"] = []
-        if tag not in existing_params["tags"]:
-            existing_params["tags"].append(tag)
-
-        # Update database with modified params (keeps encrypted fields encrypted)
         await ModelRepository(prisma_client).table.update(
             where={"model_id": deployment.model_info.id},
-            data={"litellm_params": json.dumps(existing_params)},
+            data={
+                "litellm_params": json.dumps(encrypt_model_litellm_params({**existing_params, "tags": [*tags, tag]}))
+            },
         )
     except Exception as e:
         verbose_proxy_logger.exception("Error adding tag to deployment: %s", e)

@@ -1429,58 +1429,6 @@ async def test_add_tag_to_deployment_with_string_params():
 
 
 @pytest.mark.asyncio
-async def test_add_tag_to_deployment_no_duplicate_tags():
-    """
-    Test that _add_tag_to_deployment doesn't add duplicate tags
-    """
-    from unittest.mock import AsyncMock, Mock
-
-    from litellm.proxy.management_endpoints.tag_management_endpoints import (
-        _add_tag_to_deployment,
-    )
-    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
-
-    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
-        # Setup prisma mocks
-        mock_db = Mock()
-        mock_prisma.db = mock_db
-
-        # Mock the database model with existing tags
-        db_model = Mock()
-        db_model.model_id = "model-789"
-        db_model.litellm_params = {
-            "model": "gpt-4",
-            "api_key": "encrypted_key",
-            "tags": ["existing-tag", "another-tag"],
-        }
-
-        # Mock find_unique to return the db model
-        mock_db.litellm_proxymodeltable.find_unique = AsyncMock(return_value=db_model)
-
-        # Mock update
-        mock_db.litellm_proxymodeltable.update = AsyncMock(return_value=db_model)
-
-        # Create deployment
-        deployment = Deployment(
-            model_name="gpt-4",
-            litellm_params=LiteLLM_Params(model="gpt-4"),
-            model_info=ModelInfo(id="model-789"),
-        )
-
-        # Try to add an existing tag
-        await _add_tag_to_deployment(deployment, "existing-tag")
-
-        # Verify update was called
-        update_call = mock_db.litellm_proxymodeltable.update.call_args
-        updated_params = json.loads(update_call[1]["data"]["litellm_params"])
-
-        # Verify no duplicate tags
-        assert updated_params["tags"].count("existing-tag") == 1
-        assert len(updated_params["tags"]) == 2
-        assert "another-tag" in updated_params["tags"]
-
-
-@pytest.mark.asyncio
 async def test_add_tag_to_deployment_model_not_found():
     """
     Test that _add_tag_to_deployment raises HTTPException when model not found
@@ -1513,3 +1461,38 @@ async def test_add_tag_to_deployment_model_not_found():
 
         assert exc_info.value.status_code == 500
         assert "not found in database" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_add_tag_to_deployment_merges_into_the_decrypted_tags_and_writes_ciphertext(monkeypatch):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_json_strings, encrypt_json_strings
+    from litellm.proxy.management_endpoints.tag_management_endpoints import _add_tag_to_deployment
+    from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-tag-salt-8627")
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    plaintext_params = {"model": "openai/gpt-5.4-mini", "api_key": "sk-placeholder", "tags": ["existing-tag"]}
+    stored_params = encrypt_json_strings(plaintext_params)
+    assert stored_params != plaintext_params
+    deployment = Deployment(
+        model_name="gpt-5.4-mini",
+        litellm_params=LiteLLM_Params(model="openai/gpt-5.4-mini"),
+        model_info=ModelInfo(id="model-8627"),
+    )
+
+    with patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma:
+        mock_db = Mock()
+        mock_prisma.db = mock_db
+        mock_db.litellm_proxymodeltable.find_unique = AsyncMock(
+            return_value=SimpleNamespace(model_id="model-8627", litellm_params=stored_params)
+        )
+        mock_db.litellm_proxymodeltable.update = AsyncMock()
+
+        await _add_tag_to_deployment(deployment, "existing-tag")
+        mock_db.litellm_proxymodeltable.update.assert_not_awaited()
+
+        await _add_tag_to_deployment(deployment, "new-tag")
+        written = json.loads(mock_db.litellm_proxymodeltable.update.call_args.kwargs["data"]["litellm_params"])
+        assert "new-tag" not in written["tags"]
+        assert written["api_key"] != "sk-placeholder"
+        assert decrypt_json_strings(written) == {**plaintext_params, "tags": ["existing-tag", "new-tag"]}

@@ -22,7 +22,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias, TypeVar, cast, runtime_checkable
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, TypeAdapter, ValidationError, field_validator
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -63,8 +63,8 @@ from litellm.proxy.common_utils.config_sync_pubsub import (
     publish_config_change,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+    decrypt_json_strings,
     decrypt_value_helper,
-    encrypt_json_strings,
     json_value,
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
@@ -98,7 +98,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.repositories.credentials_repository import CredentialsRepository
-from litellm.repositories.model_repository import ModelRepository
+from litellm.repositories.model_repository import ModelRepository, encrypt_model_litellm_params
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import ModelTableRepository
 from litellm.repositories.team_repository import TeamRepository
@@ -434,33 +434,6 @@ def _effective_complexity_router_config(
             **transport,
             **supplied,
         },
-    }
-
-
-def _encrypted_complexity_router_config(config: object, new_encryption_key: str | None = None) -> JsonValue:
-    value: Final = json_value(config)
-    if not isinstance(value, dict):
-        return value
-    jev: Final = value.get("jev_classifier_config")
-    if not isinstance(jev, dict):
-        return value
-    api_key: Final = jev.get("api_key")
-    if not isinstance(api_key, str):
-        return value
-    encrypted_api_key: Final = encrypt_json_strings(api_key, new_encryption_key=new_encryption_key)
-    return {**value, "jev_classifier_config": {**jev, "api_key": encrypted_api_key}}
-
-
-def _encrypted_litellm_params(
-    litellm_params: Mapping[str, object], new_encryption_key: str | None = None
-) -> dict[str, JsonValue]:
-    return {
-        key: (
-            _encrypted_complexity_router_config(value, new_encryption_key)
-            if key == "complexity_router_config"
-            else encrypt_json_strings(json_value(value), new_encryption_key=new_encryption_key)
-        )
-        for key, value in litellm_params.items()
     }
 
 
@@ -1023,7 +996,7 @@ def update_db_model(
             )
             for k, v in updated_patch.litellm_params.model_dump(exclude_none=True).items()
         }
-        merged_litellm_params.update(_encrypted_litellm_params({**merged_litellm_params, **patched_params}))
+        merged_litellm_params.update(encrypt_model_litellm_params({**merged_litellm_params, **patched_params}))
 
     # update model info
     if updated_patch.model_info:
@@ -1527,7 +1500,7 @@ async def _add_model_to_db(
     # encrypt litellm params #
     _litellm_params_dict: Final = model_params.litellm_params.dict(exclude_none=True)
     _original_litellm_model_name: Final = model_params.litellm_params.model
-    for k, v in _encrypted_litellm_params(_litellm_params_dict, new_encryption_key).items():
+    for k, v in encrypt_model_litellm_params(_litellm_params_dict, new_encryption_key).items():
         model_params.litellm_params[k] = v
     _data: Final[dict] = {
         "model_id": model_params.model_info.id,
@@ -2009,6 +1982,15 @@ def _canonical_session_tags(tags: Sequence[AwsSessionTag]) -> tuple[tuple[str, s
     return tuple(sorted((tag["Key"], tag["Value"]) for tag in tags))
 
 
+_SESSION_TAGS: Final = TypeAdapter(list[AwsSessionTag])
+
+
+def _stored_session_tags(existing_litellm_params: GenericLiteLLMParams | None) -> Sequence[AwsSessionTag] | None:
+    if existing_litellm_params is None or existing_litellm_params.aws_session_tags is None:
+        return None
+    return _SESSION_TAGS.validate_python(decrypt_json_strings(json_value(existing_litellm_params.aws_session_tags)))
+
+
 class ModelManagementAuthChecks:
     """
     Common auth checks for model management endpoints
@@ -2074,7 +2056,7 @@ class ModelManagementAuthChecks:
             return True
         if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN:
             return True
-        existing_tags: Final = existing_litellm_params.aws_session_tags if existing_litellm_params is not None else None
+        existing_tags: Final = _stored_session_tags(existing_litellm_params)
         if existing_tags is not None and _canonical_session_tags(existing_tags) == _canonical_session_tags(
             litellm_params.aws_session_tags
         ):
@@ -2695,7 +2677,7 @@ async def update_model(
             )
 
             _mp: Final[dict[str, object]] = model_params.litellm_params.dict()
-            merged_dictionary: Final = _encrypted_litellm_params(
+            merged_dictionary: Final = encrypt_model_litellm_params(
                 {
                     key: _existing_litellm_params_dict[key] if value is None else requested_params[key]
                     for key, value in _mp.items()

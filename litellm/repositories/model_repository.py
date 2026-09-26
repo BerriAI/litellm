@@ -6,6 +6,8 @@ import json
 from collections.abc import Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
+from pydantic import JsonValue
+
 from litellm.models.model import LiteLLM_ProxyModelTable
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     decrypt_json_strings,
@@ -24,6 +26,32 @@ class _ProxyModelTableRepository(PrismaTableRepository["prisma_models.LiteLLM_Pr
     table_name = "litellm_proxymodeltable"
 
 
+def _complexity_router_config_with_encrypted_api_key(config: JsonValue, new_encryption_key: str | None) -> JsonValue:
+    if not isinstance(config, dict):
+        return config
+    jev: Final = config.get("jev_classifier_config")
+    if not isinstance(jev, dict):
+        return config
+    api_key: Final = jev.get("api_key")
+    if not isinstance(api_key, str):
+        return config
+    encrypted_api_key: Final = encrypt_json_strings(api_key, new_encryption_key=new_encryption_key)
+    return {**config, "jev_classifier_config": {**jev, "api_key": encrypted_api_key}}
+
+
+def encrypt_model_litellm_params(
+    litellm_params: Mapping[str, object], new_encryption_key: str | None = None
+) -> dict[str, JsonValue]:
+    return {
+        key: (
+            _complexity_router_config_with_encrypted_api_key(json_value(value), new_encryption_key)
+            if key == "complexity_router_config"
+            else encrypt_json_strings(json_value(value), new_encryption_key=new_encryption_key)
+        )
+        for key, value in litellm_params.items()
+    }
+
+
 class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
     """Repository for proxy model database operations with encryption support."""
 
@@ -40,10 +68,7 @@ class ModelRepository(BaseRepository[LiteLLM_ProxyModelTable]):
         return LiteLLM_ProxyModelTable
 
     def _encrypt_litellm_params(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
-        return {
-            key: encrypt_json_strings(json_value(value), new_encryption_key=self._encryption_key)
-            for key, value in litellm_params.items()
-        }
+        return encrypt_model_litellm_params(litellm_params, new_encryption_key=self._encryption_key)
 
     def _decrypt_litellm_params(self, litellm_params: Mapping[str, object]) -> Mapping[str, object]:
         return {

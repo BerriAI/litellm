@@ -507,6 +507,32 @@ class TestModelManagementAuthChecks:
             )
         assert exc_info.value.code == "403"
 
+    def test_can_user_set_aws_session_tags_compares_against_the_decrypted_stored_tags(self, monkeypatch):
+        from litellm.repositories.model_repository import encrypt_model_litellm_params
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-session-tags-salt-8627")
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+        stored: Final = encrypt_model_litellm_params({"aws_session_tags": [{"Key": "team", "Value": "genai"}]})
+        assert stored["aws_session_tags"] != [{"Key": "team", "Value": "genai"}]
+        existing: Final = LiteLLM_Params(model="bedrock/test_model", aws_session_tags=stored["aws_session_tags"])
+
+        result = ModelManagementAuthChecks.can_user_set_aws_session_tags(
+            litellm_params=LiteLLM_Params(
+                model="bedrock/test_model", aws_session_tags=[{"Key": "team", "Value": "genai"}]
+            ),
+            user_api_key_dict=self.team_admin_user,
+            existing_litellm_params=existing,
+        )
+        assert result is True
+        with pytest.raises(Exception, match="Only a proxy admin can set aws_session_tags"):
+            ModelManagementAuthChecks.can_user_set_aws_session_tags(
+                litellm_params=LiteLLM_Params(
+                    model="bedrock/test_model", aws_session_tags=[{"Key": "team", "Value": "platform"}]
+                ),
+                user_api_key_dict=self.team_admin_user,
+                existing_litellm_params=existing,
+            )
+
     @pytest.mark.asyncio
     async def test_add_new_model_rejects_aws_session_tags_for_non_admin(self):
         from litellm.proxy._types import ProxyException
