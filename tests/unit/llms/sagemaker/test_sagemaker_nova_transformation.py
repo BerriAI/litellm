@@ -309,6 +309,7 @@ class TestSagemakerChatBackwardsCompatibility:
         ) as mock_csw:
             mock_csw.return_value = MagicMock()
             self.config.get_sync_custom_stream_wrapper(
+                litellm_params={},
                 model="my-hf-endpoint",
                 custom_llm_provider="sagemaker_chat",
                 logging_obj=MagicMock(),
@@ -348,6 +349,7 @@ class TestSagemakerChatBackwardsCompatibility:
             mock_csw.return_value = MagicMock()
             asyncio.run(
                 self.config.get_async_custom_stream_wrapper(
+                    litellm_params={},
                     model="my-hf-endpoint",
                     custom_llm_provider="sagemaker_chat",
                     logging_obj=MagicMock(),
