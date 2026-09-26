@@ -324,6 +324,8 @@ def agent_budget_counter_key(agent_id: str, reset_at: datetime | None) -> str:
 
 
 class AgentResponse(BaseModel):
+    directory_active: bool = True
+    directory_access_group_ids: tuple[str, ...] | None = None
     identity: AgentIdentityBinding | None = None
     identity_managed: bool = False
     enabled: bool = True
