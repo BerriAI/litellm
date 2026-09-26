@@ -7,7 +7,7 @@ import json
 import secrets
 import threading
 import uuid
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from typing import Final
@@ -27,6 +27,7 @@ class AuthorizationServer:
     refresh_tokens: dict[str, dict[str, str]] = field(default_factory=dict)
     revoked: set[str] = field(default_factory=set)
     lock: threading.Lock = field(default_factory=threading.Lock)
+    mint: Callable[[str], str] | None = None
 
     @property
     def issuer(self) -> str:
@@ -47,7 +48,7 @@ class AuthorizationServer:
             return token in self.access_tokens and token not in self.revoked
 
     def issue(self, grant: str, client_id: str, subject: str, scope: str) -> dict[str, object]:
-        access: Final = f"at-{grant}-{secrets.token_urlsafe(8)}"
+        access: Final = self.mint(grant) if self.mint is not None else f"at-{grant}-{secrets.token_urlsafe(8)}"
         refresh: Final = f"rt-{secrets.token_urlsafe(8)}"
         with self.lock:
             self.access_tokens[access] = {"client_id": client_id, "subject": subject, "scope": scope, "grant": grant}
@@ -80,7 +81,10 @@ def _client_credentials(request: Request, form: dict[str, str]) -> tuple[str, st
 
 
 @contextmanager
-def oauth_server(*, scopes: tuple[str, ...] = ("tools.read", "tools.call")) -> Iterator[AuthorizationServer]:
+def oauth_server(
+    *, scopes: tuple[str, ...] = ("tools.read", "tools.call"), mint: Callable[[str], str] | None = None
+) -> Iterator[AuthorizationServer]:
+    """``mint(grant)``, when given, chooses each issued access token instead of a random one."""
     holder: list[AuthorizationServer] = []
 
     def respond(request: Request) -> Reply:
@@ -194,5 +198,5 @@ def oauth_server(*, scopes: tuple[str, ...] = ("tools.read", "tools.call")) -> I
         return _json(404, {"error": "not_found", "path": path, "method": request.method})
 
     with wire_server(respond) as wire:
-        holder.append(AuthorizationServer(wire))
+        holder.append(AuthorizationServer(wire, mint=mint))
         yield holder[0]
