@@ -107,9 +107,7 @@ def caller_sign_in_for(server: MCPServer, user_api_key_auth: UserAPIKeyAuth | No
         contribution
         for contribution in (
             *(
-                (
-                    CallerSignIn(issuers=jwt_auth_issuers(), scopes=tuple(server.scopes or ())),
-                )
+                (CallerSignIn(issuers=jwt_auth_issuers(), scopes=tuple(server.scopes or ())),)
                 if server.auth_type == MCPAuth.oauth2_token_exchange
                 else ()
             ),
