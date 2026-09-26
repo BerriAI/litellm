@@ -3205,3 +3205,67 @@ class TestScansAttachmentsWithBaseSignatureOnTextOnly:
 
         assert guardrail.inputs is not None
         assert "files" not in guardrail.inputs
+
+
+class _ContentBlockScanAttachmentsRecorder(AnthropicMessagesHandler):
+    """Lenient _extract_content_block that records whether scan_attachments arrived."""
+
+    seen_scan_attachments: bool | None = None
+
+    @classmethod
+    def _extract_content_block(
+        cls, content_item, msg_idx, content_idx, skip_tool_message, scan_only_tool_results=False, scan_attachments=False
+    ):
+        cls.seen_scan_attachments = scan_attachments
+        return super()._extract_content_block(
+            content_item=content_item,
+            msg_idx=msg_idx,
+            content_idx=content_idx,
+            skip_tool_message=skip_tool_message,
+            scan_only_tool_results=scan_only_tool_results,
+            scan_attachments=scan_attachments,
+        )
+
+
+class TestSystemListAttachmentPredicate:
+    """A list-typed system field is not itself an attachment; only attachment
+    blocks inside it turn the new kwargs on."""
+
+    @pytest.mark.asyncio
+    async def test_text_only_system_list_keeps_base_call_shape(self):
+        _LegacyNestedHooksHandler.seen_tool_result = None
+        _LegacyNestedHooksHandler.seen_image_sources = None
+        _ContentBlockScanAttachmentsRecorder.seen_scan_attachments = None
+        guardrail = MockMaskingGuardrail()
+        guardrail.scans_attachments = True
+        data = {
+            "model": "claude-3",
+            "system": [{"type": "text", "text": "you are terse"}],
+            "messages": [{"role": "user", "content": [{"type": "text", "text": "hello"}]}],
+        }
+
+        await _LegacyNestedHooksHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert guardrail.inputs is not None
+        assert "files" not in guardrail.inputs
+
+    @pytest.mark.asyncio
+    async def test_document_block_in_system_list_enables_scan_attachments(self):
+        _ContentBlockScanAttachmentsRecorder.seen_scan_attachments = None
+        guardrail = MockMaskingGuardrail()
+        guardrail.scans_attachments = True
+        data = {
+            "model": "claude-3",
+            "system": [
+                {
+                    "type": "document",
+                    "source": {"type": "base64", "media_type": "application/pdf", "data": "AAAA"},
+                }
+            ],
+            "messages": [{"role": "user", "content": "hello"}],
+        }
+
+        _HeadSignatureRecordingHandler.seen_scan_attachments = None
+        await _HeadSignatureRecordingHandler().process_input_messages(data=data, guardrail_to_apply=guardrail)
+
+        assert _HeadSignatureRecordingHandler.seen_scan_attachments is True

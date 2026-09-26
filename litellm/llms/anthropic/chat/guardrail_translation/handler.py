@@ -306,7 +306,10 @@ def _block_tree_has_attachment(block: Mapping[str, object]) -> bool:
 
 
 def _request_has_attachment_blocks(data: Mapping[str, object], messages: Sequence[object]) -> bool:
-    if isinstance(data.get("system"), list):
+    system: Final = data.get("system")
+    if isinstance(system, list) and any(
+        isinstance(block, dict) and _block_tree_has_attachment(block) for block in system
+    ):
         return True
     return any(
         isinstance(part, dict) and _block_tree_has_attachment(part)
