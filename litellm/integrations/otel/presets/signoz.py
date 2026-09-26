@@ -1,15 +1,19 @@
+from functools import lru_cache
 from types import MappingProxyType
 from typing import Final
 
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+import litellm
+from litellm._logging import verbose_logger
 from litellm.integrations.otel.model.config import (
     ExporterOwner,
     ExporterSpec,
     OpenTelemetryV2Config,
 )
 from litellm.integrations.otel.presets.utils import ensure_mappers
+from litellm.litellm_core_utils.url_utils import is_url_destination_allowed_by_host
 from litellm.types.utils import StandardCallbackDynamicParams
 
 SIGNOZ_INGESTION_ENDPOINT_ENV: Final = "SIGNOZ_INGESTION_ENDPOINT"
@@ -47,9 +51,25 @@ def signoz_preset(
     )
 
 
+@lru_cache(maxsize=128)
+def _warn_host_not_allowlisted(endpoint: str) -> None:
+    verbose_logger.warning(
+        "SigNoz: not exporting to key/team endpoint '%s'. Add its host to "
+        "litellm_settings.provider_url_destination_allowed_hosts to permit it",
+        endpoint,
+    )
+
+
+def _tenant_endpoint_is_unusable(params: StandardCallbackDynamicParams) -> bool:
+    return bool(params.get("signoz_ingestion_endpoint")) and signoz_dynamic_endpoint(params) is None
+
+
 def signoz_dynamic_endpoint(params: StandardCallbackDynamicParams) -> str | None:
     endpoint: Final = params.get("signoz_ingestion_endpoint")
     if not endpoint or not endpoint.startswith(("http://", "https://")):
+        return None
+    if not is_url_destination_allowed_by_host(endpoint, litellm.provider_url_destination_allowed_hosts):
+        _warn_host_not_allowlisted(endpoint)
         return None
     return endpoint
 
@@ -58,4 +78,6 @@ def signoz_dynamic_headers(
     params: StandardCallbackDynamicParams,
 ) -> dict[str, str]:  # mutable-ok: DYNAMIC_HEADERS_BY_CALLBACK returns a dict
     key: Final = params.get("signoz_ingestion_key")
-    return {"signoz-ingestion-key": key} if key else {}  # mutable-ok: same registry contract
+    if not key or _tenant_endpoint_is_unusable(params):
+        return {}  # mutable-ok: same registry contract
+    return {"signoz-ingestion-key": key}  # mutable-ok: same registry contract

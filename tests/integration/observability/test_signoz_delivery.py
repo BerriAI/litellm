@@ -389,7 +389,11 @@ class RigFactory:
         )
         config: Final = {
             **loaded,
-            "litellm_settings": {**object_value(loaded["litellm_settings"]), "callbacks": ["signoz"]},
+            "litellm_settings": {
+                **object_value(loaded["litellm_settings"]),
+                "callbacks": ["signoz"],
+                "provider_url_destination_allowed_hosts": [self.tenant_sink.wire.url],
+            },
             "general_settings": {**object_value(loaded["general_settings"]), "disable_model_info_refresh": True},
         }
         path: Final = self.directory / f"signoz-{uuid.uuid4().hex}.yaml"
@@ -678,14 +682,34 @@ def test_key_level_destination_wins_over_the_team_level_destination(v2_rig: Rig)
     assert span.ingestion_key == TENANT_KEY, span
 
 
-def test_team_endpoint_without_an_ingestion_key_keeps_the_span_at_the_operator_sink(v2_rig: Rig) -> None:
+def test_team_endpoint_without_an_ingestion_key_routes_the_span_without_the_operator_key(v2_rig: Rig) -> None:
     marker: Final = _marker()
     with v2_rig.proxy.scenario() as scenario:
         team: Final = scenario.team(metadata={"logging": v2_rig.tenant_logging(v2_rig.tenant_sink.wire.url, None)})
         token: Final = scenario.key(team_id=team)
         response: Final = v2_rig.chat(marker, key=token)
     assert response.status_code == 200, response.text
+    identity: Final = _body_id(response)
+    span: Final = v2_rig.tenant_sink.single_span(identity, elsewhere=v2_rig.sink)
+    assert span.ingestion_key is None, f"operator ingestion key leaked to the team collector: {span}"
+    assert v2_rig.sink.landed((identity,)) == {identity: 0}, "operator sink also received the tenant span"
+
+
+def test_team_endpoint_off_the_allowlist_keeps_the_span_at_the_operator_sink(v2_rig: Rig) -> None:
+    marker: Final = _marker()
+    with v2_rig.proxy.scenario() as scenario:
+        team: Final = scenario.team(
+            metadata={"logging": v2_rig.tenant_logging("http://tenant.invalid:4318/v1/traces", TENANT_KEY)}
+        )
+        token: Final = scenario.key(team_id=team)
+        response: Final = v2_rig.chat(marker, key=token)
+    assert response.status_code == 200, response.text
     _assert_operator_span(v2_rig, _body_id(response), marker)
+    eventually(
+        lambda: v2_rig.process.log.read_text(),
+        lambda text: "provider_url_destination_allowed_hosts" in text,
+        seconds=30,
+    )
 
 
 def test_legacy_mode_ignores_key_level_signoz_destination_and_keeps_the_operator_sink(rig: Rig) -> None:

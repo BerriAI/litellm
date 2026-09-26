@@ -32,6 +32,7 @@ from litellm.integrations.otel.plumbing.providers import (
     get_tracer,
 )
 from litellm.integrations.otel.presets import (
+    TENANT_ENDPOINT_CALLBACKS,
     dynamic_otlp_endpoint,
     dynamic_otlp_headers,
     project_routing_headers,
@@ -241,16 +242,17 @@ class TenantTracerCache:
         credential_headers: Final = self._credential_headers(dynamic_params)
         project_headers: Final = self._project_headers(auth_metadata)
         service_name: Final = tenant_service_name(auth_metadata)
-        tenant_account: Final = bool(credential_headers) or bool(project_headers)
+        # A fixed per-integration region endpoint (New Relic us/eu), or a key/team
+        # collector URL the operator allowlisted (SigNoz); ``None`` keeps the preset's own.
+        endpoint: Final = dynamic_otlp_endpoint(self._callback_name, dynamic_params)
+        tenant_endpoint: Final = endpoint is not None and self._callback_name in TENANT_ENDPOINT_CALLBACKS
+        tenant_account: Final = bool(credential_headers) or bool(project_headers) or tenant_endpoint
         # A service name on its own only relabels the operator's own backend, so moving
         # the span to a second provider for it while some other backend has a
         # destination would drop the model call out of the trace the fan-out delivers.
         # The destination stamps the same service name itself.
         if not tenant_account and (service_name is None or destination_backends()):
             return TenantRoute(tracer=default, detached=False)
-        # A fixed per-integration region endpoint (New Relic us/eu), never a
-        # caller-supplied host; ``None`` keeps the preset's own endpoint.
-        endpoint: Final = dynamic_otlp_endpoint(self._callback_name, dynamic_params)
         cache_key: Final = (
             tuple(sorted(credential_headers.items())),
             tuple(sorted(project_headers.items())),
@@ -259,7 +261,7 @@ class TenantTracerCache:
         )
         with self._lock:
             provider: Final = self._cached_provider_locked(
-                cache_key, credential_headers, project_headers, endpoint, service_name
+                cache_key, credential_headers, project_headers, endpoint, service_name, tenant_endpoint
             )
             self._open_span_counts[provider] = self._open_span_counts.get(provider, 0) + 1
             evicted: Final = self._evicted_on_overflow_locked()
@@ -278,13 +280,14 @@ class TenantTracerCache:
         project_headers: Mapping[str, str],
         endpoint: str | None,
         service_name: str | None,
+        tenant_endpoint: bool = False,
     ) -> TracerProvider:
         cached: Final = self._providers.get(cache_key)
         if cached is not None:
             self._providers.move_to_end(cache_key)
             return cached
         built: Final = build_tracer_provider(
-            self._routed_config(credential_headers, project_headers, endpoint, service_name)
+            self._routed_config(credential_headers, project_headers, endpoint, service_name, tenant_endpoint)
         )
         self._providers[cache_key] = built
         return built
@@ -356,6 +359,7 @@ class TenantTracerCache:
         project_headers: Mapping[str, str],
         endpoint: str | None = None,
         service_name: str | None = None,
+        tenant_endpoint: bool = False,
     ) -> OpenTelemetryV2Config:
         """Clone the config, rewriting headers on the callback's own exporter.
 
@@ -371,7 +375,7 @@ class TenantTracerCache:
         ``Authorization``), which must survive routing to a project.
         """
         exporters: Final = [
-            self._routed_exporter(spec, credential_headers, project_headers, endpoint)
+            self._routed_exporter(spec, credential_headers, project_headers, endpoint, tenant_endpoint)
             for spec in self._config.exporters
         ]
         routed: Final = self._config.model_copy(update={"exporters": exporters, "langfuse_span_scope": "full"})
@@ -383,11 +387,14 @@ class TenantTracerCache:
         credential_headers: Mapping[str, str],
         project_headers: Mapping[str, str],
         endpoint: str | None = None,
+        tenant_endpoint: bool = False,
     ) -> ExporterSpec:
         kind: Final = spec.kind.lower()
         if spec.owner != self._callback_name or kind in _NON_OTLP_KINDS:
             return spec
-        base: Final = _plain_header_string(credential_headers) if credential_headers else spec.headers
+        # The operator's static credential never travels to a collector a tenant named.
+        static: Final = None if tenant_endpoint else spec.headers
+        base: Final = _plain_header_string(credential_headers) if credential_headers else static
         routed: Final = (
             ",".join(part for part in (base, _encoded_header_string(project_headers)) if part)
             if project_headers and kind not in _GRPC_KINDS
@@ -395,8 +402,9 @@ class TenantTracerCache:
         )
         update: Final = {  # mutable-ok: model_copy(update=...) requires a plain dict
             field: value
-            for field, value in (("headers", routed), ("endpoint", endpoint))
+            for field, value in (("headers", routed), ("endpoint", endpoint), ("requires_headers", False))
             if (field == "headers" and routed != spec.headers)
             or (field == "endpoint" and endpoint is not None and endpoint != spec.endpoint)
+            or (field == "requires_headers" and tenant_endpoint and spec.requires_headers)
         }
         return spec if not update else spec.model_copy(update=update)

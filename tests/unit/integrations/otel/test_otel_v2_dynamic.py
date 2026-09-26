@@ -682,16 +682,16 @@ def test_newrelic_key_only_team_routes_to_us_not_operator_region(monkeypatch):
 def test_signoz_dynamic_headers_stamp_ingestion_key():
     from litellm.integrations.otel.presets import dynamic_otlp_headers
 
-    assert dynamic_otlp_headers("signoz", {"signoz_ingestion_key": "team-key"}) == {
-        "signoz-ingestion-key": "team-key"
-    }
+    assert dynamic_otlp_headers("signoz", {"signoz_ingestion_key": "team-key"}) == {"signoz-ingestion-key": "team-key"}
     # No key means no per-request routing; the caller keeps its default tracer.
     assert dynamic_otlp_headers("signoz", {}) is None
 
 
-def test_signoz_dynamic_endpoint_comes_from_team_config():
+def test_signoz_dynamic_endpoint_comes_from_team_config_when_its_host_is_allowlisted(monkeypatch):
+    import litellm
     from litellm.integrations.otel.presets import dynamic_otlp_endpoint
 
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["ingest.eu.signoz.cloud"])
     assert (
         dynamic_otlp_endpoint("signoz", {"signoz_ingestion_endpoint": "https://ingest.eu.signoz.cloud:443"})
         == "https://ingest.eu.signoz.cloud:443"
@@ -699,3 +699,41 @@ def test_signoz_dynamic_endpoint_comes_from_team_config():
     # A team that saved only a key keeps the operator's configured endpoint.
     assert dynamic_otlp_endpoint("signoz", {"signoz_ingestion_key": "k"}) is None
     assert dynamic_otlp_endpoint("signoz", {}) is None
+
+
+def test_signoz_team_endpoint_off_the_allowlist_is_dropped_along_with_its_key(monkeypatch):
+    import litellm
+    from litellm.integrations.otel.presets import dynamic_otlp_endpoint, dynamic_otlp_headers
+
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", [])
+    params = {"signoz_ingestion_endpoint": "http://169.254.169.254/v1/traces", "signoz_ingestion_key": "k"}
+    assert dynamic_otlp_endpoint("signoz", params) is None
+    # The tenant key must not ride to the operator's collector either: the request keeps the default tracer.
+    assert dynamic_otlp_headers("signoz", params) is None
+
+
+def test_signoz_keyless_team_endpoint_routes_without_the_operator_ingestion_key(monkeypatch):
+    import litellm
+    from litellm.integrations.otel.plumbing.providers import build_tracer_provider
+    from litellm.integrations.otel.presets import dynamic_otlp_endpoint
+
+    monkeypatch.setattr(litellm, "provider_url_destination_allowed_hosts", ["collector.team.internal"])
+    cache = _cache(
+        "signoz",
+        exporters=[
+            ExporterSpec(
+                kind="otlp_http",
+                endpoint="https://ingest.us.signoz.cloud:443",
+                headers="signoz-ingestion-key=OPERATOR",
+                owner="signoz",
+                requires_headers=True,
+            )
+        ],
+    )
+    endpoint = dynamic_otlp_endpoint("signoz", {"signoz_ingestion_endpoint": "http://collector.team.internal:4318"})
+    routed = cache._routed_config({}, {}, endpoint, None, True)
+    owned = next(e for e in routed.exporters if e.owner == "signoz")
+    assert owned.endpoint == "http://collector.team.internal:4318"
+    assert owned.headers is None
+    assert owned.requires_headers is False
+    assert len(build_tracer_provider(routed)._active_span_processor._span_processors) == 2
