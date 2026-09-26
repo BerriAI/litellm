@@ -12,11 +12,11 @@ import asyncio
 import json
 import re
 import threading
-from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Iterator, Sequence
+from collections.abc import AsyncGenerator, AsyncIterable, AsyncIterator, Awaitable, Callable, Iterator, Sequence
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypedDict, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeAlias, TypedDict, cast
 
 import aiohttp
 from typing_extensions import NotRequired, ReadOnly
@@ -46,7 +46,12 @@ from litellm.proxy.guardrails.anthropic_sse import (
     anthropic_sse_chunks_from_response,
     assemble_anthropic_sse_stream,
     is_anthropic_sse_stream,
-    model_response_text,
+    is_sse_error_stream,
+)
+from litellm.proxy.guardrails.gemini_sse import (
+    assemble_gemini_sse_stream,
+    gemini_sse_chunks_from_response,
+    is_gemini_sse_stream,
 )
 from litellm.types.guardrails import (
     GuardrailEventHooks,
@@ -97,9 +102,6 @@ def _json_escaped_len(text: str) -> int:
     return len(json.dumps(text).encode("utf-8")) - 2  # strip the surrounding quotes
 
 
-_MAX_FIRST_SSE_FRAME_BYTES: Final = 64 * 1024
-
-
 @dataclass(frozen=True, slots=True)
 class _SsePreface:
     """Complete leading SSE frames with no ``data:`` line, relayed verbatim before the stream shape is decided."""
@@ -139,8 +141,7 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
     ``data:`` line) as they complete, and join raw ``bytes`` chunks until they
     hold one complete SSE event with a data line, so the stream shape is
     decided on a whole frame rather than a transport fragment. Everything
-    after that first frame is forwarded untouched. The byte cap can only be
-    reached by a single unterminated frame.
+    after that first frame is forwarded untouched.
     """
     pending = b""
     try:
@@ -154,7 +155,7 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
             if preface:
                 yield _SsePreface(preface)
             pending = classifiable + tail
-            if classifiable or len(pending) >= _MAX_FIRST_SSE_FRAME_BYTES:
+            if classifiable:
                 break
         else:
             if pending:
@@ -167,6 +168,18 @@ async def _coalesce_first_sse_frame(stream: AsyncIterator[object]) -> AsyncGener
     yield pending
     async for chunk in stream:
         yield chunk
+
+
+_RawSseReEmit: TypeAlias = Callable[[ModelResponse], tuple[bytes, ...]]
+
+
+def _assemble_raw_sse_stream(chunks: Sequence[object]) -> tuple[ModelResponse | None, _RawSseReEmit] | None:
+    """The stream assembled by its surface, with that surface's re-emitter; None for an unknown surface."""
+    if is_anthropic_sse_stream(chunks):
+        return assemble_anthropic_sse_stream(chunks, restore_identity=True), anthropic_sse_chunks_from_response
+    if is_gemini_sse_stream(chunks):
+        return assemble_gemini_sse_stream(chunks), gemini_sse_chunks_from_response
+    return None
 
 
 class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
@@ -1442,18 +1455,13 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 elif isinstance(chunk, _SsePreface):
                     yield chunk.raw
                 elif isinstance(chunk, bytes):
-                    first_frame_is_anthropic = (
-                        not passthrough_due_to_unknown_stream_shape
-                        and not all_chunks
-                        and is_anthropic_sse_stream((chunk,))
-                    )
-                    if not first_frame_is_anthropic:
+                    if all_chunks or passthrough_due_to_unknown_stream_shape or is_sse_error_stream((chunk,)):
                         passthrough_due_to_unknown_stream_shape = (
                             passthrough_due_to_unknown_stream_shape or not all_chunks
                         )
                         yield chunk
                         continue
-                    for masked_chunk in await self._mask_anthropic_sse_stream(chunk, stream, request_data):
+                    for masked_chunk in await self._mask_raw_sse_stream(chunk, stream, request_data):
                         yield masked_chunk
                     return
                 else:
@@ -1465,7 +1473,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             if passthrough_due_to_unknown_stream_shape:
                 verbose_proxy_logger.warning(
                     "Presidio apply_to_output: streaming response was not a parsed chat completion stream "
-                    "(raw non-Anthropic SSE passthrough or /v1/responses events). "
+                    "(an error frame from an earlier guardrail, /v1/responses events, or a mixed stream). "
                     "Output PII masking was skipped for this response."
                 )
                 return
@@ -1487,23 +1495,42 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
             for chunk in all_chunks:
                 yield chunk
 
-    async def _mask_anthropic_sse_stream(
+    async def _mask_raw_sse_stream(
         self, first_chunk: bytes, rest: AsyncIterator[object], request_data: dict
     ) -> tuple[object, ...]:
+        """The whole raw SSE stream masked as one response, or a raised refusal when it cannot be read.
+
+        Raw frames are buffered to the end because PII can span frames, so no frame is forwarded
+        before the joined text was scanned. A stream whose surface is unknown, or that its surface's
+        assembler cannot rebuild, is withheld rather than forwarded unmasked.
+        """
         rest_chunks: Final = [chunk async for chunk in rest]  # mutable-ok: tuple() cannot consume an async iterator
         chunks: Final = (first_chunk, *rest_chunks)
-        assembled: Final = assemble_anthropic_sse_stream(chunks, restore_identity=True)
-        if assembled is None:
-            verbose_proxy_logger.warning(
-                "Presidio apply_to_output: raw SSE stream could not be assembled into a response. "
-                "Output PII masking was skipped for this response."
+        surface: Final = _assemble_raw_sse_stream(chunks)
+        if surface is None:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message=(
+                    "output PII masking cannot read this streaming response shape, "
+                    "so the response was withheld instead of being forwarded unmasked"
+                ),
+                status_code=500,
             )
-            return chunks
-        original_text: Final = model_response_text(assembled)
+        assembled, re_emit = surface
+        if assembled is None:
+            raise GuardrailRaisedException(
+                guardrail_name=self.guardrail_name,
+                message=(
+                    "output PII masking could not assemble the streaming response, "
+                    "so the response was withheld instead of being forwarded unmasked"
+                ),
+                status_code=500,
+            )
+        before: Final = assembled.model_dump()
         await self._process_response_for_pii(response=assembled, request_data=request_data, mode="mask")
-        if model_response_text(assembled) == original_text:
+        if assembled.model_dump() == before:
             return chunks
-        return anthropic_sse_chunks_from_response(assembled)
+        return re_emit(assembled)
 
     @staticmethod
     def _unmask_sse_bytes_chunk(chunk: bytes, pii_tokens: dict[str, str]) -> bytes:

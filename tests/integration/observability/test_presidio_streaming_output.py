@@ -2,6 +2,7 @@ import json
 import re
 import signal
 import threading
+import time
 import uuid
 from collections.abc import Callable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
@@ -257,67 +258,93 @@ def gemini_provider(reply: Reply) -> Callable[[Request], Reply]:
     return provider
 
 
-def test_native_gemini_first_frame_reaches_caller_before_upstream_sends_the_second(
-    gateway: Gateway, tmp_path: Path
-) -> None:
-    gate: Final = threading.Event()
-    first: Final = gemini_frame("first ")
-    second: Final = gemini_frame("second ")
-    provider: Final = gemini_provider(
-        Reply(content_type="text/event-stream", chunks=(first, second), gate_after_first=gate)
-    )
+def test_native_gemini_name_split_across_frames_is_masked_as_one_frame(gateway: Gateway, tmp_path: Path) -> None:
+    """The analyzer only matches the whole name, so a per-frame scan would forward both halves."""
+    first, last = PERSON.split(" ")
+    frames: Final = (gemini_frame(f"{first} "), gemini_frame(f"{last} designed it."))
+    provider: Final = gemini_provider(Reply(content_type="text/event-stream", chunks=frames, pause_between_chunks=0.2))
     with presidio_rig(gateway, tmp_path, provider) as rig:
+        received: Final = rig.stream(rig.gemini_path(), rig.gemini_body())
+        assert received.status == 200, received.text
+        assert PERSON not in received.text, received.text
+        assert gemini_texts(b"".join(received.frames)) == (f"{MASK} designed it.",)
+        analyzed: Final = rig.analyzer.drain()
+        assert len(analyzed) == 1 and json.loads(analyzed[0].body)["text"] == f"{PERSON} designed it."
+        assert len(rig.anonymizer.drain()) == 1
+
+
+def test_native_gemini_no_frame_reaches_caller_before_upstream_finishes(gateway: Gateway, tmp_path: Path) -> None:
+    gate: Final = threading.Event()
+    frames: Final = (gemini_frame(f"{PERSON} "), gemini_frame("designed it."))
+    provider: Final = gemini_provider(Reply(content_type="text/event-stream", chunks=frames, gate_after_first=gate))
+    with presidio_rig(gateway, tmp_path, provider) as rig:
+        armed_at: Final = time.monotonic()
+        threading.Timer(1.0, gate.set).start()
         with rig.gateway.client.stream(
             "POST", rig.gemini_path(), json=rig.gemini_body(), headers={"Authorization": f"Bearer {rig.gateway.key}"}
         ) as response:
             assert response.status_code == 200, response.read().decode()
             chunks: Final = response.iter_raw()
             arrived: Final = next(chunks)
-            assert gemini_texts(arrived) == ("first ",), f"first chunk while upstream is gated: {arrived!r}"
-            gate.set()
+            arrived_at: Final = time.monotonic()
             rest: Final = b"".join(chunks)
-        assert gemini_texts(rest) == ("second ",), rest
+        assert arrived_at - armed_at >= 1.0, f"a frame reached the caller while the upstream was gated: {arrived!r}"
+        assert gemini_texts(arrived + rest) == (f"{MASK} designed it.",), (arrived + rest).decode()
+        assert PERSON not in (arrived + rest).decode()
         assert len(rig.upstream.drain()) == 1
-        assert rig.analyzer.drain() == () and rig.anonymizer.drain() == ()
 
 
-def test_native_gemini_frames_received_before_upstream_abort_reach_caller(gateway: Gateway, tmp_path: Path) -> None:
+def test_native_gemini_unrecognized_stream_shape_is_withheld(gateway: Gateway, tmp_path: Path) -> None:
+    frames: Final = (b'data: {"unexpected": "' + PERSON.encode() + b'"}\r\n\r\n',)
+    provider: Final = gemini_provider(Reply(content_type="text/event-stream", chunks=frames))
+    with presidio_rig(gateway, tmp_path, provider) as rig:
+        received: Final = rig.stream(rig.gemini_path(), rig.gemini_body())
+        assert PERSON not in received.text, received.text
+        assert "cannot read this streaming response shape" in received.text, received.text
+        assert rig.analyzer.drain() == ()
+
+
+def test_native_gemini_upstream_abort_mid_stream_returns_an_error_and_no_frame(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    """The stream is read whole before its first byte goes out, so an upstream abort still gets an error status."""
     frames: Final = (gemini_frame(f"chunk {index} from {PERSON}. ") for index in range(3))
     provider: Final = gemini_provider(
         Reply(content_type="text/event-stream", chunks=tuple(frames), abort_after=2, pause_between_chunks=0.2)
     )
     with presidio_rig(gateway, tmp_path, provider) as rig:
         received: Final = rig.stream(rig.gemini_path(), rig.gemini_body())
-        assert received.status == 200, received.text
-        *frames_before_abort, trailer = data_payloads(b"".join(received.frames))
-        assert [gemini_text(frame) for frame in frames_before_abort] == [
-            f"chunk 0 from {PERSON}. ",
-            f"chunk 1 from {PERSON}. ",
-        ], received.text
-        assert "candidates" not in trailer and json.dumps(trailer).count('"code": "500"') == 1, received.text
+        assert received.status == 500, received.text
+        assert PERSON not in received.text, received.text
+        error: Final = json.loads(received.text)["error"]
+        assert error["code"] == "500" and "candidates" not in received.text, received.text
         assert len(rig.upstream.drain()) == 1
 
 
-def test_native_gemini_first_frame_split_into_transport_fragments_streams_every_byte(
+def test_native_gemini_first_frame_split_into_transport_fragments_is_still_masked(
     gateway: Gateway, tmp_path: Path
 ) -> None:
-    first: Final = gemini_frame(f"fragmented {PERSON}")
+    first: Final = gemini_frame(f"fragmented {PERSON} ")
     second: Final = gemini_frame("whole")
     chunks: Final = (first[:7], first[7:19], first[19:], second)
     provider: Final = gemini_provider(Reply(content_type="text/event-stream", chunks=chunks))
     with presidio_rig(gateway, tmp_path, provider) as rig:
         received: Final = rig.stream(rig.gemini_path(), rig.gemini_body())
         assert received.status == 200, received.text
-        assert gemini_texts(b"".join(received.frames)) == (f"fragmented {PERSON}", "whole")
+        assert PERSON not in received.text, received.text
+        assert gemini_texts(b"".join(received.frames)) == (f"fragmented {MASK} whole",)
 
 
-def test_native_gemini_non_json_frame_passes_through_unchanged(gateway: Gateway, tmp_path: Path) -> None:
+def test_native_gemini_non_json_frame_in_a_stream_without_pii_is_replayed_unchanged(
+    gateway: Gateway, tmp_path: Path
+) -> None:
     frames: Final = (b"data: not json at all\r\n\r\n", gemini_frame("after"))
     provider: Final = gemini_provider(Reply(content_type="text/event-stream", chunks=frames))
     with presidio_rig(gateway, tmp_path, provider) as rig:
         received: Final = rig.stream(rig.gemini_path(), rig.gemini_body())
         assert received.status == 200, received.text
         assert received.text.replace("\r\n", "\n") == b"".join(frames).decode().replace("\r\n", "\n")
+        assert len(rig.analyzer.drain()) == 1
 
 
 def test_native_gemini_empty_stream_returns_200_with_no_body(gateway: Gateway, tmp_path: Path) -> None:
@@ -328,14 +355,14 @@ def test_native_gemini_empty_stream_returns_200_with_no_body(gateway: Gateway, t
         assert received.text == ""
 
 
-def test_native_gemini_streams_while_presidio_analyzer_is_down(gateway: Gateway, tmp_path: Path) -> None:
+def test_native_gemini_stream_fails_closed_when_analyzer_is_down(gateway: Gateway, tmp_path: Path) -> None:
     frames: Final = (gemini_frame(f"{PERSON} one. "), gemini_frame("two."))
     provider: Final = gemini_provider(Reply(content_type="text/event-stream", chunks=frames))
     with presidio_rig(gateway, tmp_path, provider, analyze=broken) as rig:
         received: Final = rig.stream(rig.gemini_path(), rig.gemini_body())
-        assert received.status == 200, received.text
-        assert gemini_texts(b"".join(received.frames)) == (f"{PERSON} one. ", "two.")
-        assert rig.analyzer.drain() == ()
+        assert PERSON not in received.text, received.text
+        assert "Presidio analyzer" in received.text, received.text
+        assert rig.anonymizer.drain() == ()
 
 
 def test_native_gemini_unauthenticated_request_is_rejected_before_upstream(gateway: Gateway, tmp_path: Path) -> None:
@@ -526,17 +553,13 @@ def test_mixed_burst_survives_anonymizer_outage_and_recovers(gateway: Gateway, t
 
         def gemini_call(index: int) -> tuple[str, str, int]:
             received: Final = rig.stream(rig.gemini_path(), rig.gemini_body())
-            return (
-                "gemini",
-                f"g{index}",
-                received.status if gemini_texts(b"".join(received.frames)) == (f"{PERSON} ", "designed it.") else -1,
-            )
+            masked: Final = gemini_texts(b"".join(received.frames)) == (f"{MASK} designed it.",)
+            return ("gemini", f"g{index}", -1 if PERSON in received.text else (1 if masked else 0))
 
         def anthropic_call(index: int) -> tuple[str, str, int]:
             body: Final = {**rig.messages_body(), "messages": [{"role": "user", "content": f"a{index}"}]}
             received: Final = rig.stream("/v1/messages", body)
-            leaked: Final = PERSON in received.text
-            return ("anthropic", f"a{index}", -1 if leaked else (1 if MASK in received.text else 0))
+            return ("anthropic", f"a{index}", -1 if PERSON in received.text else (1 if MASK in received.text else 0))
 
         def phase(offset: int) -> tuple[tuple[str, str, int], ...]:
             with ThreadPoolExecutor(max_workers=12) as pool:
@@ -552,13 +575,9 @@ def test_mixed_burst_survives_anonymizer_outage_and_recovers(gateway: Gateway, t
         outage.clear()
         healthy_after: Final = phase(200)
 
-    for name, results in (("before", healthy_before), ("during", during), ("after", healthy_after)):
-        assert all(status == 200 for kind, _, status in results if kind == "gemini"), (name, results)
-    assert all(status == 1 for kind, _, status in healthy_before + healthy_after if kind == "anthropic"), (
-        healthy_before,
-        healthy_after,
-    )
-    assert all(status == 0 for kind, _, status in during if kind == "anthropic"), during
+    for name, results in (("before", healthy_before), ("after", healthy_after)):
+        assert all(outcome == 1 for _, _, outcome in results), (name, results)
+    assert all(outcome == 0 for _, _, outcome in during), during
     identities: Final = tuple(identity for _, identity, _ in healthy_before + during + healthy_after)
     assert len(identities) == len(set(identities)) == 36
 

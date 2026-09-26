@@ -1449,11 +1449,10 @@ from litellm.types.utils import ModelResponseStream
 
 
 @pytest.mark.asyncio
-async def test_streaming_with_bytes_chunks_does_not_crash(mock_user_api_key):
+async def test_streaming_unrecognized_raw_frame_ahead_of_typed_chunks_is_withheld(mock_user_api_key):
     """
-    Regression test: async_post_call_streaming_iterator_hook should
-    gracefully handle raw bytes in the stream instead of crashing with
-    'bytes' object has no attribute 'id'.
+    A raw frame the hook cannot place on a known surface is not a chunk it can
+    mask, so the response is refused instead of being forwarded unscanned.
     """
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
@@ -1462,7 +1461,7 @@ async def test_streaming_with_bytes_chunks_does_not_crash(mock_user_api_key):
     )
 
     async def mock_stream():
-        yield b'data: {"id":"chatcmpl-1"}\n\n'  # raw bytes
+        yield b'data: {"id":"chatcmpl-1"}\n\n'
         yield ModelResponseStream(
             id="chatcmpl-1",
             choices=[],
@@ -1470,18 +1469,22 @@ async def test_streaming_with_bytes_chunks_does_not_crash(mock_user_api_key):
             model="gpt-4",
             object="chat.completion.chunk",
             system_fingerprint=None,
-        )  # proper chunk
+        )
 
     chunks = []
-    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-        user_api_key_dict=mock_user_api_key,
-        response=mock_stream(),
-        request_data={},
-    ):
-        chunks.append(chunk)
 
-    # Should not crash, should produce at least one valid chunk
-    assert len(chunks) >= 1
+    async def collect():
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key,
+            response=mock_stream(),
+            request_data={},
+        ):
+            chunks.append(chunk)
+
+    with pytest.raises(GuardrailRaisedException, match="cannot read this streaming response shape"):
+        await collect()
+
+    assert chunks == []
 
 
 def test_entity_deny_list_filters_detections():
@@ -2114,10 +2117,10 @@ async def test_anthropic_native_response_non_text_blocks_untouched():
 
 
 @pytest.mark.asyncio
-async def test_streaming_bytes_chunks_are_yielded_not_discarded():
+async def test_streaming_partial_anthropic_stream_without_message_start_is_withheld():
     """
-    Regression test: bytes chunks (Anthropic native SSE) should be yielded
-    through the streaming hook, not silently discarded.
+    A raw Anthropic stream that cannot be assembled (no message_start) is
+    refused with a clear error rather than forwarded unmasked or dropped silently.
     """
 
     guardrail = _OPTIONAL_PresidioPIIMasking(
@@ -2132,15 +2135,19 @@ async def test_streaming_bytes_chunks_are_yielded_not_discarded():
 
     mock_user_api_key = UserAPIKeyAuth(api_key="test-key")
     chunks = []
-    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-        user_api_key_dict=mock_user_api_key,
-        response=mock_stream(),
-        request_data={},
-    ):
-        chunks.append(chunk)
 
-    assert any(isinstance(c, bytes) for c in chunks), "bytes chunks must not be discarded"
-    assert byte_chunk in chunks
+    async def collect():
+        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=mock_user_api_key,
+            response=mock_stream(),
+            request_data={},
+        ):
+            chunks.append(chunk)
+
+    with pytest.raises(GuardrailRaisedException, match="could not assemble the streaming response"):
+        await collect()
+
+    assert chunks == []
 
 
 @pytest.mark.asyncio
@@ -2524,13 +2531,135 @@ async def test_apply_to_output_streaming_anthropic_sse_bytes_without_pii_are_for
     assert collected == byte_chunks
 
 
-def _gemini_sse(text: str) -> bytes:
+def _gemini_sse(text: str, terminator: bytes = b"\n\n") -> bytes:
     payload = {"candidates": [{"content": {"parts": [{"text": text}], "role": "model"}, "index": 0}]}
-    return f"data: {json.dumps(payload)}\n\n".encode()
+    return b"data: " + json.dumps(payload).encode() + terminator
+
+
+def _gemini_texts(chunks: list[object]) -> list[str]:
+    frames = b"".join(chunk for chunk in chunks if isinstance(chunk, bytes)).decode()
+    return [
+        json.loads(line[6:])["candidates"][0]["content"]["parts"][0]["text"]
+        for line in frames.splitlines()
+        if line.startswith("data: ")
+    ]
+
+
+async def _collect_masked_output(guardrail: _OPTIONAL_PresidioPIIMasking, stream, collected: list[object]) -> None:
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=stream,
+        request_data={},
+    ):
+        collected.append(chunk)
 
 
 @pytest.mark.asyncio
-async def test_apply_to_output_streaming_gemini_sse_bytes_are_forwarded_incrementally_until_upstream_aborts():
+async def test_apply_to_output_streaming_gemini_name_split_across_frames_is_masked_as_one_response():
+    """
+    The name only exists once the frames are joined, so a per-frame scan would
+    forward both halves unmasked. The analyzer and anonymizer are the in-process
+    fake, which finds a person only in two adjacent capitalized words.
+    """
+    frames = [_gemini_sse("The architect was John"), _gemini_sse(" Smith, per the record.")]
+
+    async def mock_stream():
+        for frame in frames:
+            yield frame
+
+    collected: list[object] = []
+    async with TestServer(_fake_presidio_app()) as server:
+        guardrail = _OPTIONAL_PresidioPIIMasking(
+            apply_to_output=True,
+            presidio_analyzer_api_base=str(server.make_url("/")),
+            presidio_anonymizer_api_base=str(server.make_url("/")),
+            pii_entities_config={PiiEntityType.PERSON: PiiAction.MASK},
+        )
+        await _collect_masked_output(guardrail, mock_stream(), collected)
+        await guardrail._close_http_session()
+
+    assert "John Smith" not in b"".join(collected).decode()
+    assert _gemini_texts(collected) == ["The architect was <PERSON>, per the record."]
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_tool_call_arguments_only_masking_is_re_emitted():
+    """
+    Masking can rewrite a tool call's arguments while the assistant text stays the
+    same, and replaying the original frames in that case would leak the arguments.
+    """
+    byte_chunks = [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {
+                "type": "content_block_start",
+                "index": 0,
+                "content_block": {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}},
+            },
+        ),
+        _anthropic_sse(
+            "content_block_delta",
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "input_json_delta", "partial_json": '{"person": "John Smith"}'},
+            },
+        ),
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "tool_use"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+    async def mock_stream():
+        for chunk in byte_chunks:
+            yield chunk
+
+    collected: list[object] = []
+    async with TestServer(_fake_presidio_app()) as server:
+        guardrail = _OPTIONAL_PresidioPIIMasking(
+            apply_to_output=True,
+            presidio_analyzer_api_base=str(server.make_url("/")),
+            presidio_anonymizer_api_base=str(server.make_url("/")),
+            pii_entities_config={PiiEntityType.PERSON: PiiAction.MASK},
+        )
+        await _collect_masked_output(guardrail, mock_stream(), collected)
+        await guardrail._close_http_session()
+
+    joined = b"".join(collected).decode()
+    assert "John Smith" not in joined, joined
+    assert "<PERSON>" in joined, joined
+    assert joined.count("event: message_start") == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("terminator", [b"\n\n", b"\r\n\r\n"])
+async def test_apply_to_output_streaming_gemini_stream_without_pii_is_replayed_byte_for_byte(terminator):
+    frames = [_gemini_sse("nothing personal ", terminator), _gemini_sse("in here.", terminator)]
+
+    async def mock_stream():
+        for frame in frames:
+            yield frame
+
+    collected: list[object] = []
+    async with TestServer(_fake_presidio_app()) as server:
+        guardrail = _OPTIONAL_PresidioPIIMasking(
+            apply_to_output=True,
+            presidio_analyzer_api_base=str(server.make_url("/")),
+            presidio_anonymizer_api_base=str(server.make_url("/")),
+            pii_entities_config={PiiEntityType.PERSON: PiiAction.MASK},
+        )
+        await _collect_masked_output(guardrail, mock_stream(), collected)
+        await guardrail._close_http_session()
+
+    assert collected == frames
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_upstream_abort_mid_stream_forwards_no_frame():
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
@@ -2544,18 +2673,31 @@ async def test_apply_to_output_streaming_gemini_sse_bytes_are_forwarded_incremen
             yield frame
         raise ConnectionError("upstream closed mid-stream")
 
-    async def collect() -> None:
-        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
-            response=mock_stream(),
-            request_data={},
-        ):
-            collected.append(chunk)
-
     with pytest.raises(ConnectionError):
-        await collect()
+        await _collect_masked_output(guardrail, mock_stream(), collected)
 
-    assert collected == frames
+    assert collected == []
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_sse_bytes_fail_closed_when_presidio_is_unreachable():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        presidio_analyzer_api_base="http://127.0.0.1:9",
+        presidio_anonymizer_api_base="http://127.0.0.1:9",
+    )
+    frames = [_gemini_sse("Hello John Smith"), _gemini_sse(" from the record.")]
+    collected: list[object] = []
+
+    async def mock_stream():
+        for frame in frames:
+            yield frame
+
+    with pytest.raises(Exception, match="Presidio PII analysis failed"):
+        await _collect_masked_output(guardrail, mock_stream(), collected)
+
+    assert collected == []
 
 
 @pytest.mark.asyncio
@@ -2846,7 +2988,7 @@ async def test_apply_to_output_streaming_comment_only_stream_is_forwarded_unchan
 
 
 @pytest.mark.asyncio
-async def test_apply_to_output_streaming_gemini_first_frame_split_across_transport_chunks_streams_incrementally():
+async def test_apply_to_output_streaming_gemini_first_frame_split_across_transport_chunks_is_still_masked():
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
@@ -2860,50 +3002,38 @@ async def test_apply_to_output_streaming_gemini_first_frame_split_across_transpo
         yield first[:20]
         yield first[20:]
         yield second
-        raise ConnectionError("upstream closed mid-stream")
 
-    async def collect() -> None:
-        async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-            user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
-            response=mock_stream(),
-            request_data={},
-        ):
-            collected.append(chunk)
+    await _collect_masked_output(guardrail, mock_stream(), collected)
 
-    with pytest.raises(ConnectionError):
-        await collect()
-
-    assert collected == [first, second]
+    assert "John Smith" not in b"".join(collected).decode()
+    assert _gemini_texts(collected) == ["<PERSON>"]
 
 
 @pytest.mark.asyncio
-async def test_apply_to_output_streaming_unterminated_first_frame_is_released_once_it_exceeds_the_cap():
+@pytest.mark.parametrize(
+    "frame",
+    [
+        b"data: not json at all\n\n",
+        b'data: {"unexpected": true}\n\n',
+        b"data: " + b"x" * (70 * 1024) + b"\n",
+    ],
+    ids=["non-json", "unknown-surface", "unterminated"],
+)
+async def test_apply_to_output_streaming_unrecognized_raw_sse_stream_is_withheld(frame: bytes):
     guardrail = _OPTIONAL_PresidioPIIMasking(
         mock_testing=True,
         apply_to_output=True,
         mock_redacted_text={"text": "<PERSON>"},
     )
-    piece = b"data: " + b"x" * 1023 + b"\n"
-    pieces_to_cap = -(-(64 * 1024) // len(piece))
-    released_at: list[int] = []
+    collected: list[object] = []
 
     async def mock_stream():
-        for index in range(pieces_to_cap * 4):
-            if collected:
-                released_at.append(index)
-            yield piece
+        yield frame
 
-    collected: list[object] = []
-    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
-        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
-        response=mock_stream(),
-        request_data={},
-    ):
-        collected.append(chunk)
+    with pytest.raises(GuardrailRaisedException, match="cannot read this streaming response shape"):
+        await _collect_masked_output(guardrail, mock_stream(), collected)
 
-    assert released_at, "nothing reached the caller before the upstream finished"
-    assert released_at[0] == pieces_to_cap, released_at[:3]
-    assert b"".join(collected) == piece * (pieces_to_cap * 4)
+    assert collected == []
 
 
 @pytest.mark.asyncio
