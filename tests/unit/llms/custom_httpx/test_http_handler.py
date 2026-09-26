@@ -6,11 +6,14 @@ import os
 import pathlib
 import ssl
 import threading
+import tracemalloc
 import weakref
+import zlib
 from collections.abc import Callable, Mapping
 from typing import Final
 from unittest.mock import MagicMock, patch
 
+import brotli
 import certifi
 import httpx
 import pytest
@@ -1874,6 +1877,49 @@ async def test_bounded_get_bounds_an_already_read_body_on_its_decoded_length(mon
         assert served.headers["content-length"] == str(len(document))
         with pytest.raises(HTTPResponseLimitError, match="size limit"):
             await handler.get("https://cdn.example/notes.txt", max_response_bytes=len(document) - 1)
+    finally:
+        await handler.close()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("encoding", "compress"),
+    [("gzip", gzip.compress), ("deflate", zlib.compress), ("br", brotli.compress)],
+)
+async def test_bounded_get_never_inflates_a_compressed_body_past_the_cap(
+    respx_mock, monkeypatch, encoding: str, compress: Callable[[bytes], bytes]
+):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    inflated: Final = 64 * 1024 * 1024
+    cap: Final = 1024 * 1024
+    bomb: Final = compress(b"\0" * inflated)
+    assert len(bomb) < cap
+
+    class WireStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield bomb
+
+    respx_mock.get("https://cdn.example/bomb").respond(200, stream=WireStream(), headers={"content-encoding": encoding})
+    handler = AsyncHTTPHandler()
+    tracemalloc.start()
+    try:
+        with pytest.raises(HTTPResponseLimitError, match="size limit"):
+            await handler.get("https://cdn.example/bomb", max_response_bytes=cap)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+        await handler.close()
+    assert peak < 4 * cap, f"decoder materialized {peak} bytes for a {cap} byte cap"
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_refuses_an_encoding_it_cannot_decode_under_the_cap(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    respx_mock.get("https://cdn.example/zst").respond(200, content=b"\x28\xb5\x2f\xfd", headers={"content-encoding": "zstd"})
+    handler = AsyncHTTPHandler()
+    try:
+        with pytest.raises(HTTPResponseLimitError, match="identity, gzip, deflate, or br"):
+            await handler.get("https://cdn.example/zst", max_response_bytes=1024)
     finally:
         await handler.close()
 
