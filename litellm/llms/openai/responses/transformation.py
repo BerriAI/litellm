@@ -257,7 +257,7 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
             if unsupported_effort:
                 if should_drop_effort:
                     if isinstance(reasoning, dict):
-                        updated_reasoning: Final = reasoning.copy()  # mutable-ok: local copy
+                        updated_reasoning: Final = reasoning.copy()
                         updated_reasoning.pop("effort", None)
                         if updated_reasoning:
                             params["reasoning"] = updated_reasoning
