@@ -34,13 +34,10 @@ class LiteLLM_AutoRouterSession(LiteLLMPydanticObjectBase):
 
     @property
     def baseline_model(self) -> str | None:
-        """The baseline recorded by most session turns, including historical turns.
-
-        A router reconfigured mid-session leaves turns priced against two baselines; the row keeps both
-        counts, and the label is the one recorded by the most turns rather than whatever the
-        router is configured with now.
-        """
+        """A recorded baseline label when excluded turns cannot change the selected model."""
         if not self.baseline_models:
+            return None
+        if self.savings_estimated_turns < self.turns and len(self.baseline_models) > 1:
             return None
         return max(
             self.baseline_models,

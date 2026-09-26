@@ -1175,8 +1175,9 @@ class TestAutoRouterSession:
         assert response.router_name == "new-auto"
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("mixed", [False, True])
     async def test_session_preserves_historical_baseline_labels(
-        self, monkeypatch: pytest.MonkeyPatch
+        self, monkeypatch: pytest.MonkeyPatch, mixed: bool
     ):
         from litellm.proxy.management_endpoints.auto_router_endpoints import get_auto_router_session
 
@@ -1188,14 +1189,15 @@ class TestAutoRouterSession:
                     **self.ROW,
                     "api_key": ADMIN.api_key,
                     "session_id": "s",
-                    "baseline_models": {"old-baseline": 100},
+                    "baseline_models": {"old-baseline": 100, **({"unknown-baseline": 200} if mixed else {})},
+                    "savings_estimated_turns": 1,
                     "savings_estimated_baseline_models": priced,
                 }
             ],
         )
         response = await get_auto_router_session(user_api_key_dict=ADMIN, session_id="s")
-        assert response.baseline_model == "old-baseline"
-        assert response.baseline_models == {"old-baseline": 100}
+        assert response.baseline_model == (None if mixed else "old-baseline")
+        assert response.baseline_models == {"old-baseline": 100, **({"unknown-baseline": 200} if mixed else {})}
 
     @pytest.mark.asyncio
     async def test_an_oversized_client_session_id_is_bounded_like_the_writer_bounded_it(
