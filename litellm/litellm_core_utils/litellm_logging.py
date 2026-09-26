@@ -2242,7 +2242,8 @@ class Logging(LiteLLMLoggingBaseClass):
             return
 
         try:
-            await self.async_failure_handler(exception, traceback_exception)
+            with post_response_phase():
+                await self.async_failure_handler(exception, traceback_exception)
         finally:
             if self._should_run_sync_failure_callbacks_for_async_calls():
                 executor.submit(self.failure_handler, exception, traceback_exception)

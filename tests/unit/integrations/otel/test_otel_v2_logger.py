@@ -2215,6 +2215,50 @@ def test_awaited_failure_logging_service_call_stays_under_the_open_request_span(
     assert list(span.links) == []
 
 
+def test_dispatched_failure_logging_service_call_roots_its_own_trace_while_the_server_span_is_still_open(monkeypatch):
+    """A failed stream spawns ``dispatch_failure_handlers`` as a task, so a Redis
+    call made by its failure callback is post-response work whatever the clock says."""
+    import litellm
+    from litellm.integrations.custom_logger import CustomLogger
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logger, exporter = _logger()
+    server = _service_parent(logger)
+
+    class _LimitCleanup(CustomLogger):
+        async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+            await logger.async_service_success_hook(
+                payload=_ServicePayload("redis", "async_increment <- async_increment_cache"),
+                parent_otel_span=server,
+                start_time=_PHASE_START,
+                end_time=_PHASE_END,
+            )
+
+    monkeypatch.setattr(litellm, "callbacks", [], raising=False)
+    monkeypatch.setattr(litellm, "failure_callback", [], raising=False)
+    monkeypatch.setattr(litellm, "_async_failure_callback", [_LimitCleanup()], raising=False)
+    logging_obj = Logging(
+        model="gpt-4o",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        call_type="acompletion",
+        start_time=_PHASE_T0,
+        litellm_call_id="dispatched_failure",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(litellm_params={"metadata": {}}, optional_params={}, model="gpt-4o")
+
+    async def _dispatch_then_close_server():
+        await asyncio.create_task(
+            logging_obj.dispatch_failure_handlers(RuntimeError("boom"), "", prefer_async_handlers=True)
+        )
+        server.end()
+
+    asyncio.run(_dispatch_then_close_server())
+    by_name = {s.name: s for s in exporter.get_finished_spans()}
+    _assert_linked_root(by_name["redis async_increment"], server)
+
+
 def test_post_response_phase_does_not_detach_from_a_remote_parent():
     from opentelemetry.trace import NonRecordingSpan, SpanContext, TraceFlags
 

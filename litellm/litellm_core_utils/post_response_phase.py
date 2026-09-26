@@ -1,8 +1,8 @@
 """Marks work the proxy does after handing the response to the caller.
 
-Success/failure logging and the response cache write are dispatched as
-fire-and-forget tasks, so whether they finish before or after the server span
-closes is a race. Tracing keys off this marker, not the clock.
+Success logging, dispatched (fire-and-forget) failure logging and the response
+cache write run as background tasks, so whether they finish before or after the
+server span closes is a race. Tracing keys off this marker, not the clock.
 """
 
 from collections.abc import Iterator
