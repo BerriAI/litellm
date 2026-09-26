@@ -3,10 +3,12 @@ import copy
 import hashlib
 import os
 import secrets
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
+
+from typing_extensions import assert_never
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -37,6 +39,7 @@ from litellm.types.utils import (
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+    from litellm.proxy._types import UserAPIKeyAuth
 dc: Final = DualCache()
 
 
@@ -104,6 +107,33 @@ def is_guardrail_intervention(e: Exception) -> bool:
     from litellm.proxy.guardrails.exception_utils import is_fastapi_http_exception
 
     return is_fastapi_http_exception(e, _GUARDRAIL_BLOCK_STATUS_CODES)
+
+
+def _user_api_key_auth_from_request(request_data: Mapping[str, object]) -> "UserAPIKeyAuth":
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    metadata: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
+    stamped: Final[Mapping[str, object]] = metadata if isinstance(metadata, dict) else {}
+
+    def stamped_str(field: str) -> str | None:
+        value: Final = request_data.get(field, stamped.get(field))
+        return value if isinstance(value, str) else None
+
+    return UserAPIKeyAuth(
+        user_id=stamped_str("user_api_key_user_id"),
+        team_id=stamped_str("user_api_key_team_id"),
+        end_user_id=stamped_str("user_api_key_end_user_id"),
+        api_key=stamped_str("user_api_key_hash"),
+        request_route=stamped_str("user_api_key_request_route"),
+    )
+
+
+def _unified_hook_fields(guardrail: "CustomGuardrail", request_data: Mapping[str, object]) -> Mapping[str, object]:
+    metadata_bucket: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
+    return {
+        "guardrail_to_apply": guardrail,
+        **({"litellm_metadata": metadata_bucket} if isinstance(metadata_bucket, dict) else {}),
+    }
 
 
 def _strict_guardrail_modes_enabled() -> bool:
@@ -789,8 +819,6 @@ class CustomGuardrail(CustomLogger):
         return unified_guardrail
 
     async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
-        from litellm.proxy._types import UserAPIKeyAuth
-
         # should run guardrail
         litellm_guardrails: Final = kwargs.get("guardrails")
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
@@ -808,13 +836,7 @@ class CustomGuardrail(CustomLogger):
             if target is not self:
                 kwargs["guardrail_to_apply"] = self
             result: Final = await target.async_pre_call_hook(
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_id=kwargs.get("user_api_key_user_id"),
-                    team_id=kwargs.get("user_api_key_team_id"),
-                    end_user_id=kwargs.get("user_api_key_end_user_id"),
-                    api_key=kwargs.get("user_api_key_hash"),
-                    request_route=kwargs.get("user_api_key_request_route"),
-                ),
+                user_api_key_dict=_user_api_key_auth_from_request(kwargs),
                 cache=dc,
                 data=kwargs,
                 call_type="completion" if call_type == CallTypes.completion else "acompletion",
@@ -826,6 +848,48 @@ class CustomGuardrail(CustomLogger):
                     kwargs["messages"] = result_messages
 
         return kwargs
+
+    async def async_pre_call_hook_on_messages(
+        self,
+        request_data: Mapping[str, object],
+        messages: Sequence[AllMessageValues],
+    ) -> tuple[AllMessageValues, ...]:
+        from litellm.proxy.guardrails.exception_utils import (
+            enrich_http_exception_with_guardrail_context,
+            pre_call_rejection,
+        )
+
+        target: Final = self._deployment_hook_target()
+        scan_request: Final[dict[str, object]] = {  # mutable-ok: async_pre_call_hook writes into the dict it is handed
+            **{key: value for key, value in request_data.items() if key not in _PRE_CALL_CONTENT_KEYS},
+            "messages": list(messages),
+            **({} if target is self else _unified_hook_fields(self, request_data)),
+        }
+        try:
+            result: Final = await target.async_pre_call_hook(
+                user_api_key_dict=_user_api_key_auth_from_request(scan_request),
+                cache=dc,
+                data=scan_request,
+                call_type="acompletion",
+            )
+        except Exception as e:
+            enrich_http_exception_with_guardrail_context(e, self)
+            raise
+        match result:
+            case None:
+                return tuple(messages)
+            case dict():
+                scanned: Final = result.get("messages")
+                return tuple(scanned) if isinstance(scanned, list) else tuple(messages)
+            case str():
+                rejection: Final = pre_call_rejection(result, self.guardrail_name)
+                enrich_http_exception_with_guardrail_context(rejection, self)
+                raise rejection
+            case Exception():
+                enrich_http_exception_with_guardrail_context(result, self)
+                raise result
+            case _:
+                assert_never(result)
 
     async def async_post_call_success_deployment_hook(
         self,
