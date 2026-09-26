@@ -28,9 +28,7 @@ from litellm.proxy._types import (
     MCPServerUserCredentialListItem,
     MCPSubmissionsSummary,
     NewMCPServerRequest,
-    SpecialMCPServerName,
     UpdateMCPServerRequest,
-    UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     SecretMapDecodeError,
@@ -837,35 +835,6 @@ async def get_mcp_servers_by_team(prisma_client: PrismaClient, team_id: str) -> 
     if team_record is not None and team_record.object_permission is not None:
         mcp_servers = team_record.object_permission.mcp_servers
     return mcp_servers or []
-
-
-async def get_all_mcp_servers_for_user(
-    prisma_client: PrismaClient,
-    user: UserAPIKeyAuth,
-) -> list[LiteLLM_MCPServerTable]:
-    """
-    Get all the mcp servers filtered by the given user has access to.
-
-    Following Least-Privilege Principle - the requestor should only be able to see the mcp servers that they have access to.
-    """
-
-    mcp_server_ids: Final[set[str]] = set()
-    mcp_servers = []
-
-    # Get the mcp servers for the key
-    if user.api_key:
-        token_mcp_servers: Final = await get_mcp_servers_by_verificationtoken(prisma_client, user.api_key)
-        mcp_server_ids.update(token_mcp_servers)
-
-        # check for special team membership
-        if SpecialMCPServerName.all_team_servers in mcp_server_ids and user.team_id is not None:
-            team_mcp_servers: Final = await get_mcp_servers_by_team(prisma_client, user.team_id)
-            mcp_server_ids.update(team_mcp_servers)
-
-    if len(mcp_server_ids) > 0:
-        mcp_servers = await get_mcp_servers(prisma_client, mcp_server_ids)
-
-    return mcp_servers
 
 
 async def get_objectpermissions_for_mcp_server(

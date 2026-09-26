@@ -2,6 +2,7 @@ import uuid
 from pathlib import Path
 from typing import Final
 
+import pytest
 import yaml
 from integration._support.client import Gateway, eventually
 from integration._support.mcp import (
@@ -16,7 +17,15 @@ from integration._support.mcp import (
 )
 from integration._support.process import owned_proxy
 
+from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
 ADD: Final = {"a": 4, "b": 5}
+
+
+def _dashboard_ui_session_token(user_id: str) -> str:
+    user: Final = LiteLLM_UserTable(user_id=user_id, user_role="internal_user", models=[])
+    return ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(user)
 
 
 def _servers(gateway: Gateway, key: str | None = None) -> dict[str, dict[str, object]]:
@@ -285,3 +294,47 @@ def test_config_declared_server_behaves_like_database_server_but_is_read_only(ga
             assert declared_id in _servers(candidate)
             assert call_tool(candidate, key, declared_id, declared_names["add"], ADD).status_code == 200
             assert len(tool_calls(declared_peer.drain())) == 1 and tool_calls(database_peer.drain()) == ()
+
+
+def test_team_granted_database_server_detail_is_available_to_team_key(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "lit3974_team_" + uuid.uuid4().hex[:8]
+        server_id: Final = register_mcp(scenario, peer, alias)
+        team_id: Final = scenario.team(object_permission={"mcp_servers": [server_id]})
+        key: Final = scenario.key(team_id=team_id)
+
+        response: Final = gateway.request("GET", f"/v1/mcp/server/{server_id}", key=key)
+
+        assert response.status_code == 200, response.text
+        assert response.json()["server_id"] == server_id, response.text
+        assert response.json()["alias"] == alias, response.text
+
+
+def test_ui_session_lists_and_fetches_team_granted_config_server(
+    gateway: Gateway,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-integration-salt")
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "lit3974_config_" + uuid.uuid4().hex[:8]
+        server_id: Final = "lit3974-" + uuid.uuid4().hex[:12]
+        team_id: Final = scenario.team(object_permission={"mcp_servers": [server_id]})
+        user_id: Final = scenario.user(user_role="internal_user", teams=[team_id])
+        config: Final = yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())
+        config["mcp_servers"] = {alias: {**peer.registration(), "alias": alias, "server_id": server_id}}
+        config_path: Final = tmp_path / "lit3974-mcp.yaml"
+        config_path.write_text(yaml.safe_dump(config))
+
+        with owned_proxy(gateway, tmp_path, {}, config=config_path) as candidate:
+            token: Final = _dashboard_ui_session_token(user_id)
+            headers: Final = {"Authorization": f"Bearer {token}"}
+            listed: Final = candidate.client.get("/v1/mcp/server", headers=headers)
+            assert listed.status_code == 200, listed.text
+            assert [server["server_id"] for server in listed.json()] == [server_id], listed.text
+
+            detail: Final = candidate.client.get(f"/v1/mcp/server/{server_id}", headers=headers)
+
+        assert detail.status_code == 200, detail.text
+        assert detail.json()["server_id"] == server_id, detail.text
+        assert detail.json()["alias"] == alias, detail.text

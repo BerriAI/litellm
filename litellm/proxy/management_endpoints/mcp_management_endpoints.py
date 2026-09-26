@@ -146,7 +146,6 @@ if MCP_AVAILABLE:
         delete_user_credential,
         delete_user_env_vars,
         get_all_mcp_servers,
-        get_all_mcp_servers_for_user,
         get_draft_mcp_server,
         get_mcp_server,
         get_mcp_servers,
@@ -177,10 +176,13 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         global_mcp_server_manager,
     )
+    from litellm.proxy._experimental.mcp_server.server_resolution import (
+        authorize_mcp_server,
+        resolve_mcp_server,
+    )
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         admitted_user_context,
         build_effective_auth_contexts,
-        can_access_mcp_server,
         is_ui_session_credential,
     )
     from litellm.proxy._types import (
@@ -1625,57 +1627,35 @@ if MCP_AVAILABLE:
         """
         prisma_client: Final = get_prisma_client_or_throw("Database not connected. Connect a database to your proxy")
 
-        # check to see if server exists (DB first, then registry for config-based servers)
-        mcp_server = await get_mcp_server(prisma_client, server_id)
-        from_db: Final = mcp_server is not None
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
-        if mcp_server is None:
-            # Fallback: check registry (config-based servers) - list endpoint uses get_registry()
-            from litellm.proxy.auth.ip_address_utils import IPAddressUtils
-
-            client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
-            registry_server = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-            if registry_server is not None and not global_mcp_server_manager._is_server_accessible_from_ip(
-                registry_server, client_ip
-            ):
-                registry_server = None
-            if registry_server is None:
-                # Try lookup by server_name or alias (client may use display name in URL)
-                registry_server = global_mcp_server_manager.get_mcp_server_by_name(server_id, client_ip=client_ip)
-            if registry_server is not None:
-                mcp_server = global_mcp_server_manager._build_mcp_server_table(registry_server)
-
-        if mcp_server is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP Server with id {server_id} not found"},
-            )
-
-        # Implement authz restriction from requested user
+        client_ip: Final = IPAddressUtils.get_mcp_client_ip(request)
         is_admin_view: Final = _user_has_admin_view(user_api_key_dict)
         is_restricted_virtual_key: Final = _is_restricted_virtual_key_request(user_api_key_dict)
-
-        if not is_admin_view:
-            # Perform authz check BEFORE any health check (avoid side-effects for
-            # unauthorized callers).
-            if from_db:
-                mcp_server_records: Final = await get_all_mcp_servers_for_user(prisma_client, user_api_key_dict)
-                exists = does_mcp_server_exist(mcp_server_records, server_id)
-            else:
-                # Registry/config server: use same access logic as list endpoint
-                allowed_server_ids: Final = await global_mcp_server_manager.get_allowed_mcp_servers(user_api_key_dict)
-                exists = mcp_server.server_id in allowed_server_ids
-
-            if not exists:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={
-                        "error": (
-                            f"User does not have permission to view mcp server with id {server_id}. "
-                            "You can only view mcp servers that you have access to."
-                        )
-                    },
+        resolved: Final = await resolve_mcp_server(
+            server_id,
+            manager=global_mcp_server_manager,
+            db_lookup=lambda sid: get_mcp_server(prisma_client, sid),
+            id_client_ip=client_ip,
+            name_client_ip=client_ip,
+            match_name=True,
+        )
+        authorized: Final = await authorize_mcp_server(
+            resolved,
+            user_api_key_dict,
+            manager=global_mcp_server_manager,
+            is_admin_view=is_admin_view,
+            not_found_detail={"error": f"MCP Server with id {server_id} not found"},
+            forbidden_detail={
+                "error": (
+                    f"User does not have permission to view mcp server with id {server_id}. "
+                    "You can only view mcp servers that you have access to."
                 )
+            },
+            non_admin_missing="not_found",
+        )
+        mcp_server: Final = authorized.table
+        from_db: Final = authorized.source == "db"
 
         # At this point caller is authorized to view the server.
         if from_db:
@@ -1748,9 +1728,12 @@ if MCP_AVAILABLE:
             )
 
         if payload.server_id is not None:
-            # fail if the mcp server with id already exists
-            mcp_server: Final = await get_mcp_server(prisma_client, payload.server_id)
-            if mcp_server is not None:
+            resolved: Final = await resolve_mcp_server(
+                payload.server_id,
+                manager=global_mcp_server_manager,
+                db_lookup=lambda sid: get_mcp_server(prisma_client, sid),
+            )
+            if resolved is not None:
                 raise HTTPException(
                     status_code=status.HTTP_400_BAD_REQUEST,
                     detail={"error": f"MCP Server with id {payload.server_id} already exists. Cannot create another."},
@@ -2083,43 +2066,28 @@ if MCP_AVAILABLE:
         user_api_key_dict: UserAPIKeyAuth,
         request: Request | None = None,
     ) -> MCPServer:
-        server = await get_cached_temporary_mcp_server(server_id)
-        resolved_from_temp_cache: Final = server is not None
-        if server is None:
-            # Fall back to real DB/config server (e.g. for the user-side OAuth flow
-            # which calls these endpoints with a real server_id, not a temp session id).
-            from litellm.proxy.auth.ip_address_utils import IPAddressUtils
+        from litellm.proxy.auth.ip_address_utils import IPAddressUtils
 
-            client_ip: Final = IPAddressUtils.get_mcp_client_ip(request) if request else None
-            server = global_mcp_server_manager.get_mcp_server_by_id(
-                server_id
-            ) or global_mcp_server_manager.get_mcp_server_by_name(server_id, client_ip=client_ip)
-        if server is None:
-            raise HTTPException(
-                status_code=status.HTTP_404_NOT_FOUND,
-                detail={"error": f"MCP server {server_id} not found"},
-            )
-
-        # Per-server access policy mirrors `fetch_mcp_server`: admin-view
-        # callers are unrestricted; non-admins must have the server in their
-        # allowed-servers set. Temporary cached servers come from the
-        # admin-only `/server/oauth/session` setup flow and are not exposed
-        # to non-admins.
-        if not _user_has_admin_view(user_api_key_dict):
-            if resolved_from_temp_cache:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": f"Access denied to MCP server {server_id}"},
-                )
-            allowed_server_ids: Final[set[str]] = set()
-            for auth_context in await build_effective_auth_contexts(user_api_key_dict):
-                allowed_server_ids.update(await global_mcp_server_manager.get_allowed_mcp_servers(auth_context))
-            if server.server_id not in allowed_server_ids:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": f"Access denied to MCP server {server_id}"},
-                )
-        return server
+        client_ip: Final = IPAddressUtils.get_mcp_client_ip(request) if request is not None else None
+        resolved: Final = await resolve_mcp_server(
+            server_id,
+            manager=global_mcp_server_manager,
+            temp_lookup=get_cached_temporary_mcp_server,
+            id_client_ip=None,
+            name_client_ip=client_ip,
+            match_name=True,
+        )
+        authorized: Final = await authorize_mcp_server(
+            resolved,
+            user_api_key_dict,
+            manager=global_mcp_server_manager,
+            is_admin_view=_user_has_admin_view(user_api_key_dict),
+            not_found_detail={"error": f"MCP server {server_id} not found"},
+            forbidden_detail={"error": f"Access denied to MCP server {server_id}"},
+            non_admin_missing="not_found",
+        )
+        assert authorized.runtime is not None
+        return authorized.runtime
 
     @router.get(
         "/server/oauth/{server_id}/authorize",
@@ -2576,12 +2544,15 @@ if MCP_AVAILABLE:
                 continue
             sid = cred["server_id"]
             srv = servers.get(sid)
+            registry_server = global_mcp_server_manager.get_mcp_server_by_id(sid) if srv is None else None
             expires_at: str | None = cred.get("expires_at")
             items.append(
                 MCPUserCredentialListItem(
                     server_id=sid,
-                    server_name=getattr(srv, "server_name", None) if srv else None,
-                    alias=getattr(srv, "alias", None) if srv else None,
+                    server_name=(
+                        srv.server_name if srv is not None else registry_server.server_name if registry_server else None
+                    ),
+                    alias=srv.alias if srv is not None else registry_server.alias if registry_server else None,
                     credential_type="oauth2",
                     has_credential=True,
                     expires_at=expires_at,  # always pass the raw timestamp; client computes expiry state
@@ -2630,35 +2601,26 @@ if MCP_AVAILABLE:
         404, so server ids can't be enumerated), using the same allowed-server
         resolution the MCP gateway enforces on tool calls.
         """
-        server = await get_mcp_server(prisma_client, server_id)
-        if server is None:
-            registry_server: Final = global_mcp_server_manager.get_mcp_server_by_id(server_id)
-            if registry_server is not None:
-                server = global_mcp_server_manager._build_mcp_server_table(registry_server)
-
-        if _user_has_admin_view(user_api_key_dict):
-            if server is None:
-                raise HTTPException(
-                    status_code=status.HTTP_404_NOT_FOUND,
-                    detail={"error": f"MCP Server {server_id} not found"},
-                )
-            return server
-
-        if server is None or not await can_access_mcp_server(
+        resolved: Final = await resolve_mcp_server(
+            server_id,
+            manager=global_mcp_server_manager,
+            db_lookup=lambda sid: get_mcp_server(prisma_client, sid),
+        )
+        authorized: Final = await authorize_mcp_server(
+            resolved,
             user_api_key_dict,
-            server.server_id,
-            global_mcp_server_manager.get_allowed_mcp_servers,
-        ):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail={
-                    "error": (
-                        f"User does not have permission to access mcp server with id {server_id}. "
-                        "You can only manage mcp servers that you have access to."
-                    )
-                },
-            )
-        return server
+            manager=global_mcp_server_manager,
+            is_admin_view=_user_has_admin_view(user_api_key_dict),
+            not_found_detail={"error": f"MCP Server {server_id} not found"},
+            forbidden_detail={
+                "error": (
+                    f"User does not have permission to access mcp server with id {server_id}. "
+                    "You can only manage mcp servers that you have access to."
+                )
+            },
+            non_admin_missing="forbidden",
+        )
+        return authorized.table
 
     def _compute_user_env_var_status(
         *,
