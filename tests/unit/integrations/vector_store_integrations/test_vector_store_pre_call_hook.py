@@ -989,6 +989,35 @@ async def test_a_team_guardrail_merged_into_the_metadata_scans_the_chunks_even_w
 
 
 @pytest.mark.asyncio
+async def test_a_team_guardrail_merged_into_the_metadata_scans_the_chunks_even_when_the_deployment_names_its_own(
+    registry_with: RegisterStores,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The router folds a deployment's litellm_params.guardrails into the call as a top-level key."""
+    registry_with("vs-poisoned")
+    team_guardrail = ScanningGuardrail(default_on=False, guardrail_name="team-guardrail")
+    monkeypatch.setattr(litellm, "callbacks", [team_guardrail])
+    client_body = {"model": "kb-model", "messages": [{"role": "user", "content": "what is litellm?"}]}
+
+    with pytest.raises(HTTPException) as raised:
+        await _run_hook(
+            VectorStorePreCallHook(proxy_runtime=FakeProxyRuntime(router=_poisoned_router("vs-poisoned"))),
+            ["vs-poisoned"],
+            FakeLoggingObj({}),
+            request_params={
+                "guardrails": ["model-guardrail"],
+                "metadata": {"guardrails": ["team-guardrail", "model-guardrail"]},
+                "proxy_server_request": {"url": "http://proxy/v1/chat/completions", "body": client_body},
+            },
+        )
+
+    assert raised.value.status_code == 400
+    (scan_request,) = team_guardrail.seen_requests
+    assert "guardrails" not in scan_request
+    assert scan_request["metadata"]["guardrails"] == ["team-guardrail", "model-guardrail"]
+
+
+@pytest.mark.asyncio
 async def test_chunks_are_scanned_against_the_sdk_kwargs_when_there_is_no_proxy_request(
     registry_with: RegisterStores,
     monkeypatch: pytest.MonkeyPatch,

@@ -47,7 +47,7 @@ SEARCH_FAILURES_FIELD: Final = "vector_store_search_failures"
 _DEFAULT_FAILURE_MODE: Final[VectorStoreSearchFailureMode] = "annotate"
 _FAILURE_MODE_ADAPTER: Final = TypeAdapter(VectorStoreSearchFailureMode)
 _STR_KEYED_ADAPTER: Final = TypeAdapter(dict[str, object])
-_CLIENT_KEYS_THE_PROXY_MOVES_INTO_METADATA: Final = frozenset(
+_GUARDRAIL_KEYS_THE_PROXY_MERGES_INTO_METADATA: Final = frozenset(
     {"guardrails", "guardrail_config", "policies", "include_guardrail_response"}
 )
 
@@ -58,10 +58,12 @@ def _scan_request(model: str, non_default_params: Mapping[str, object]) -> Mappi
         client_body: Final = _STR_KEYED_ADAPTER.validate_python(proxy_request.get("body"))
     except ValidationError:
         return {**non_default_params, "model": model}
-    client_params: Final = {
-        key: value for key, value in client_body.items() if key not in _CLIENT_KEYS_THE_PROXY_MOVES_INTO_METADATA
+    proxy_request_params: Final = {**client_body, **non_default_params}
+    return {
+        key: value
+        for key, value in proxy_request_params.items()
+        if key not in _GUARDRAIL_KEYS_THE_PROXY_MERGES_INTO_METADATA
     }
-    return {**client_params, **non_default_params}
 
 
 class ProxyRuntime(Protocol):
