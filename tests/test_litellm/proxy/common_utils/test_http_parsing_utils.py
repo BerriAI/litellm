@@ -1210,3 +1210,28 @@ class TestCoerceNumericFormFields:
             numeric_fields=self.numeric_fields,
         )
         assert result == {"n": 3, "temperature": None, "image": buffer}
+
+
+@pytest.mark.parametrize(
+    "kind,settings,cli,path,body,expected",
+    [
+        ("completion", {"completion_model": "default"}, "cli", "path", "body", "default"),
+        ("completion", {}, "cli", "path", "body", "cli"),
+        ("completion", {}, None, "path", "body", "path"),
+        ("completion", {}, None, None, "body", "body"),
+        ("image_generation", {"completion_model": "text", "image_generation_model": "image"}, None, None, "body", "image"),
+        ("image_generation", {"image_generation_model": "image"}, "cli", "path", "body", "cli"),
+        ("image_generation", {"image_generation_model": "image"}, None, "path", "body", "path"),
+        ("image_edit", {"completion_model": "text", "image_generation_model": "image"}, None, None, "body", "text"),
+        ("image_edit", {"image_generation_model": "image"}, None, "path", "body", "path"),
+        ("image_edit", {"image_generation_model": "image"}, None, None, "body", "image"),
+        ("moderation", {"moderation_model": "mod"}, "cli", None, "body", "cli"),
+        ("speech", {"completion_model": "text"}, None, None, "body", "body"),
+        ("body", {"completion_model": "text"}, "cli", None, "body", "body"),
+        ("path", {"completion_model": "text"}, "cli", "path", "body", "path"),
+    ],
+)
+def test_shared_inference_model_selection_preserves_handler_precedence(kind, settings, cli, path, body, expected):
+    from litellm.proxy.common_utils.http_parsing_utils import resolve_inference_model
+
+    assert resolve_inference_model(body, settings, cli, path, kind=kind) == expected

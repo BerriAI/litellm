@@ -120,7 +120,7 @@ export const getRequestLogsTableColumns = ({
     enableSorting: false,
     meta: { skeleton: "badge" },
     cell: ({ row }) => {
-      const status = readMetaString(row.original.metadata, "status") ?? "Success";
+      const status = row.original.status || readMetaString(row.original.metadata, "status") || "Success";
       const isSuccess = status.toLowerCase() !== "failure";
       const batchCounts = isSuccess ? getBatchRequestCounts(row.original.metadata) : undefined;
       if (batchCounts && batchCounts.failed > 0) {

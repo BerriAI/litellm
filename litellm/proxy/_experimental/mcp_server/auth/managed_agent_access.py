@@ -1,0 +1,67 @@
+from types import MappingProxyType
+from typing import Final
+
+from litellm.proxy._types import UserAPIKeyAuth
+from litellm.proxy.agent_endpoints.auth.agent_access_groups import resolve_managed_agent_ceilings
+from litellm.proxy.agent_endpoints.managed_identity import raise_identity_failure
+from litellm.types.proxy.agent_identity import AgentIdentityFailure
+
+
+async def _delegated_resource_subject(user_id: str) -> UserAPIKeyAuth:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    human: Final = await MCPRequestHandler.reload_admitted_user(user_id, requires_fresh_policy=True)
+    return human.model_copy(update=MappingProxyType({"mcp_explicit_grants_only": True}))
+
+
+async def managed_agent_servers(auth: UserAPIKeyAuth) -> tuple[str, ...]:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    agent: Final = auth.managed_agent_policy
+    if agent is None:
+        return ()
+
+    try:
+        base: Final = frozenset(await MCPRequestHandler.get_allowed_mcp_servers_for_agent(auth))
+        ceilings: Final = await resolve_managed_agent_ceilings(agent)
+        expanded: Final = tuple(
+            frozenset(global_mcp_server_manager.expand_permission_list(sorted(ceiling.mcp_server_ids)))
+            for ceiling in ceilings
+        )
+        own: Final = frozenset(server for server in base if all(server in ceiling for ceiling in expanded))
+        context: Final = auth.managed_agent_context
+        if context is None or context.mode == "autonomous":
+            return tuple(sorted(own))
+        if context.user_id is None:
+            return ()
+        human: Final = await _delegated_resource_subject(context.user_id)
+        allowed: Final = await MCPRequestHandler.resolve_admitted_subject_servers(human)
+        return tuple(sorted(own.intersection(allowed)))
+    except Exception:  # noqa: BLE001  # Authorization boundary: every unresolved policy must deny access
+        raise_identity_failure(
+            AgentIdentityFailure(code="policy_unavailable", message="Agent MCP policy is unavailable")
+        )
+
+
+async def managed_agent_tools(server_id: str, auth: UserAPIKeyAuth) -> list[str] | None:
+    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+
+    if server_id not in await managed_agent_servers(auth):
+        return []
+    try:
+        own: Final = await MCPRequestHandler.get_agent_tool_permissions_for_server(server_id, auth)
+        context: Final = auth.managed_agent_context
+        if context is None or context.mode == "autonomous":
+            return own
+        if context.user_id is None:
+            return []
+        human: Final = await _delegated_resource_subject(context.user_id)
+        human_tools: Final = await MCPRequestHandler.resolve_admitted_subject_tools(server_id, human)
+        if own is None:
+            return human_tools
+        return own if human_tools is None else sorted(frozenset(own).intersection(human_tools))
+    except Exception:  # noqa: BLE001  # Authorization boundary: every unresolved policy must deny access
+        raise_identity_failure(
+            AgentIdentityFailure(code="policy_unavailable", message="Agent tool policy is unavailable")
+        )

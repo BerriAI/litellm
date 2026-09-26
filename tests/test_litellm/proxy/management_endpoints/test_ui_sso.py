@@ -206,6 +206,7 @@ def test_microsoft_sso_handler_openid_from_response_with_custom_attributes():
 def test_get_microsoft_callback_response():
     # Arrange
     mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
     mock_response = {
         "mail": "microsoft_user@example.com",
         "displayName": "Microsoft User",
@@ -8751,6 +8752,7 @@ async def test_redirect_from_openid_persists_assertion_under_canonical_user_id()
     assertion = assertion_from_sso_login(_ema_id_token(), "rt_1")
     assert assertion is not None
     mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
     mock_request.base_url = "http://localhost:4000/"
     mock_request.cookies = {}
 
@@ -8989,6 +8991,7 @@ async def test_browser_funnel_reports_an_uncaptured_assertion(monkeypatch, caplo
     """Wiring: the browser login path must reach the diagnostic, not just define it."""
     monkeypatch.setenv("GOOGLE_CLIENT_ID", "cid")
     mock_request = MagicMock(spec=Request)
+    mock_request.scope = {}
     mock_request.base_url = "http://localhost:4000/"
     mock_request.cookies = {}
 

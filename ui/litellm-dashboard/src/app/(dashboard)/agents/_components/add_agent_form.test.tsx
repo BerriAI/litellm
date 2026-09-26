@@ -83,7 +83,9 @@ describe("AddAgentForm logos", () => {
     expect(titleLogo).toBeInstanceOf(HTMLImageElement);
     expect(titleLogo).toHaveAttribute("src", expect.stringContaining("assets/logos/a2a_agent.png"));
 
-    const selectionLogo = within(await screen.findByRole("combobox")).getByAltText("A2A Agent logo");
+    const selectionLogo = within(await screen.findByRole("combobox", { name: "Agent Type" })).getByAltText(
+      "A2A Agent logo",
+    );
     expect(selectionLogo).toBeInstanceOf(HTMLImageElement);
     expect(selectionLogo).toHaveAttribute("src", expect.stringContaining("assets/logos/a2a_agent.png"));
   });
@@ -93,14 +95,14 @@ describe("AddAgentForm logos", () => {
 
     await screen.findByAltText("A2A Agent logo");
 
-    expect(screen.getByLabelText("Agent Type")).toBe(screen.getByRole("combobox"));
+    expect(screen.getByLabelText("Agent Type")).toBe(screen.getByRole("combobox", { name: "Agent Type" }));
   });
 
   it("renders the option logo when the agent type dropdown is opened", async () => {
     const user = userEvent.setup({ pointerEventsCheck: PointerEventsCheckLevel.Never });
     renderForm();
 
-    const trigger = await screen.findByRole("combobox");
+    const trigger = await screen.findByRole("combobox", { name: "Agent Type" });
     await within(trigger).findByAltText("A2A Agent logo");
     await user.click(trigger);
 
@@ -123,7 +125,7 @@ describe("AddAgentForm logos", () => {
     expect(screen.queryByAltText("Agent logo")).not.toBeInTheDocument();
     expect(within(header).getByText("A")).toBeInTheDocument();
 
-    const trigger = screen.getByRole("combobox");
+    const trigger = screen.getByRole("combobox", { name: "Agent Type" });
     fireEvent.error(within(trigger).getByAltText("A2A Agent logo"));
     expect(within(trigger).queryByAltText("A2A Agent logo")).not.toBeInTheDocument();
     expect(warnSpy).toHaveBeenCalledTimes(2);

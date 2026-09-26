@@ -1,3 +1,6 @@
+import { AgentIdentityFields } from "./AgentIdentityFields";
+import { AgentIdentityDetails } from "./AgentIdentityDetails";
+import { withAgentIdentity } from "./agent_identity";
 import React, { useState, useEffect, useMemo } from "react";
 import { cx } from "@/lib/cva.config";
 import { FormProvider, useForm, useWatch } from "react-hook-form";
@@ -237,7 +240,7 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
         : built;
 
       await patchAgentCall(accessToken, agentId, {
-        ...updateData,
+        ...withAgentIdentity(updateData, values, agent),
         object_permission: buildMcpObjectPermission(values),
         access_group_ids: values.access_group_ids ?? [],
       });
@@ -337,6 +340,12 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
         <div>
           {/* Overview Panel */}
           <TabsContent value="overview" keepMounted>
+            <AgentIdentityDetails
+              agentId={agentId}
+              identity={agent.identity}
+              accessToken={accessToken}
+              isAdmin={isAdmin}
+            />
             <DetailList>
               <DetailItem label="Agent ID">{agent.agent_id}</DetailItem>
               <DetailItem label="Agent Name">{agent.agent_name}</DetailItem>
@@ -504,6 +513,8 @@ const AgentInfoView: React.FC<AgentInfoViewProps> = ({ agentId, onClose, accessT
                         ) : (
                           <AgentFormFields showAgentName={true} panels={panels} />
                         )}
+
+                        <AgentIdentityFields accessToken={accessToken} />
 
                         {discoveryRequest && (
                           <div className="mt-4">

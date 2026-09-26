@@ -2,7 +2,7 @@ import json
 import re
 from collections.abc import Collection, Mapping
 from types import MappingProxyType, UnionType
-from typing import Annotated, Any, Final, Union, get_args, get_origin
+from typing import Annotated, Any, Final, Literal, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
@@ -23,6 +23,39 @@ from litellm.types.router import Deployment
 _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
+
+
+def resolve_inference_model(
+    body_model: object,
+    settings: Mapping[str, object],
+    cli_model: str | None,
+    endpoint_model: object = None,
+    *,
+    kind: Literal[
+        "completion", "image_generation", "image_edit", "moderation", "speech", "body", "path"
+    ] = "completion",
+) -> object:
+    match kind:
+        case "image_generation":
+            return cli_model or endpoint_model or settings.get("image_generation_model") or body_model
+        case "image_edit":
+            return (
+                settings.get("completion_model")
+                or cli_model
+                or endpoint_model
+                or settings.get("image_generation_model")
+                or body_model
+            )
+        case "moderation":
+            return cli_model or settings.get("moderation_model") or body_model
+        case "speech":
+            return cli_model or body_model
+        case "body":
+            return body_model
+        case "path":
+            return endpoint_model
+        case "completion":
+            return settings.get("completion_model") or cli_model or endpoint_model or body_model
 
 
 def _normalize_media_type(content_type: str) -> str:

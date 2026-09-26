@@ -2,15 +2,14 @@ import asyncio
 import re
 import time
 from collections.abc import Mapping, Sequence
-from typing import Final, Optional
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import HTTPException
 import httpx
 import pytest
+from fastapi import HTTPException
 
-import litellm
-
+from litellm.caching.dual_cache import DualCache
 from litellm.proxy._types import (
     DEFAULT_JWKS_STALE_TTL,
     JWTLiteLLMRoleMap,
@@ -26,7 +25,6 @@ from litellm.proxy._types import (
     RoleBasedPermissions,
     ScopeMapping,
 )
-from litellm.caching.dual_cache import DualCache
 from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
 from litellm.proxy.auth.auth_checks import TeamNotFoundError
 from litellm.proxy.auth.handle_jwt import (
@@ -1637,7 +1635,6 @@ async def test_auth_builder_returns_team_membership_object():
 @pytest.mark.asyncio
 async def test_auth_builder_with_oidc_userinfo_enabled():
     """Test that auth_builder uses OIDC UserInfo endpoint when enabled"""
-    from unittest.mock import MagicMock
 
     from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
@@ -1648,9 +1645,7 @@ async def test_auth_builder_with_oidc_userinfo_enabled():
     general_settings = {"enforce_rbac": False}
     route = "/chat/completions"
 
-    user_object = LiteLLM_UserTable(
-        user_id="test_user_1", user_role=LitellmUserRoles.INTERNAL_USER
-    )
+    user_object = LiteLLM_UserTable(user_id="test_user_1", user_role=LitellmUserRoles.INTERNAL_USER)
 
     # Create JWT handler with OIDC UserInfo enabled
     jwt_handler = JWTHandler()
@@ -1677,18 +1672,12 @@ async def test_auth_builder_with_oidc_userinfo_enabled():
 
     # Mock all the dependencies
     with (
-        patch.object(
-            jwt_handler, "get_oidc_userinfo", new_callable=AsyncMock
-        ) as mock_get_userinfo,
+        patch.object(jwt_handler, "get_oidc_userinfo", new_callable=AsyncMock) as mock_get_userinfo,
         patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
-        patch.object(
-            JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-        ) as mock_check_rbac,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock) as mock_check_rbac,
         patch.object(jwt_handler, "get_rbac_role", return_value=None) as mock_get_rbac,
         patch.object(jwt_handler, "get_scopes", return_value=[]) as mock_get_scopes,
-        patch.object(
-            jwt_handler, "get_object_id", return_value=None
-        ) as mock_get_object_id,
+        patch.object(jwt_handler, "get_object_id", return_value=None) as mock_get_object_id,
         patch.object(
             JWTAuthManager,
             "get_user_info",
@@ -1696,9 +1685,7 @@ async def test_auth_builder_with_oidc_userinfo_enabled():
             return_value=("test_user_1", "test@example.com", True),
         ) as mock_get_user_info,
         patch.object(jwt_handler, "get_org_id", return_value=None) as mock_get_org_id,
-        patch.object(
-            jwt_handler, "get_end_user_id", return_value=None
-        ) as mock_get_end_user_id,
+        patch.object(jwt_handler, "get_end_user_id", return_value=None) as mock_get_end_user_id,
         patch.object(
             JWTAuthManager,
             "check_admin_access",
@@ -1711,9 +1698,7 @@ async def test_auth_builder_with_oidc_userinfo_enabled():
             new_callable=AsyncMock,
             return_value=(None, None),
         ) as mock_find_team,
-        patch.object(
-            JWTAuthManager, "get_all_team_ids", return_value=set()
-        ) as mock_get_all_team_ids,
+        patch.object(JWTAuthManager, "get_all_team_ids", return_value=set()) as mock_get_all_team_ids,
         patch.object(
             JWTAuthManager,
             "find_team_with_model_access",
@@ -1726,15 +1711,9 @@ async def test_auth_builder_with_oidc_userinfo_enabled():
             new_callable=AsyncMock,
             return_value=(user_object, None, None, None, user_object.user_id),
         ) as mock_get_objects,
-        patch.object(
-            JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
-        ) as mock_map_user,
-        patch.object(
-            JWTAuthManager, "validate_object_id", return_value=True
-        ) as mock_validate_object,
-        patch.object(
-            JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
-        ) as mock_sync_user,
+        patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock) as mock_map_user,
+        patch.object(JWTAuthManager, "validate_object_id", return_value=True) as mock_validate_object,
+        patch.object(JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock) as mock_sync_user,
     ):
         # Set up mock return values
         mock_get_userinfo.return_value = userinfo_response
@@ -1764,7 +1743,6 @@ async def test_auth_builder_with_oidc_userinfo_enabled():
 @pytest.mark.asyncio
 async def test_auth_builder_with_oidc_userinfo_disabled():
     """Test that auth_builder uses JWT validation when OIDC UserInfo is disabled"""
-    from unittest.mock import MagicMock
 
     from litellm.caching import DualCache
     from litellm.proxy.utils import ProxyLogging
@@ -1775,9 +1753,7 @@ async def test_auth_builder_with_oidc_userinfo_disabled():
     general_settings = {"enforce_rbac": False}
     route = "/chat/completions"
 
-    user_object = LiteLLM_UserTable(
-        user_id="test_user_1", user_role=LitellmUserRoles.INTERNAL_USER
-    )
+    user_object = LiteLLM_UserTable(user_id="test_user_1", user_role=LitellmUserRoles.INTERNAL_USER)
 
     # Create JWT handler with OIDC UserInfo disabled
     jwt_handler = JWTHandler()
@@ -1801,18 +1777,12 @@ async def test_auth_builder_with_oidc_userinfo_disabled():
 
     # Mock all the dependencies
     with (
-        patch.object(
-            jwt_handler, "get_oidc_userinfo", new_callable=AsyncMock
-        ) as mock_get_userinfo,
+        patch.object(jwt_handler, "get_oidc_userinfo", new_callable=AsyncMock) as mock_get_userinfo,
         patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
-        patch.object(
-            JWTAuthManager, "check_rbac_role", new_callable=AsyncMock
-        ) as mock_check_rbac,
+        patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock) as mock_check_rbac,
         patch.object(jwt_handler, "get_rbac_role", return_value=None) as mock_get_rbac,
         patch.object(jwt_handler, "get_scopes", return_value=[]) as mock_get_scopes,
-        patch.object(
-            jwt_handler, "get_object_id", return_value=None
-        ) as mock_get_object_id,
+        patch.object(jwt_handler, "get_object_id", return_value=None) as mock_get_object_id,
         patch.object(
             JWTAuthManager,
             "get_user_info",
@@ -1820,9 +1790,7 @@ async def test_auth_builder_with_oidc_userinfo_disabled():
             return_value=("test_user_1", None, None),
         ) as mock_get_user_info,
         patch.object(jwt_handler, "get_org_id", return_value=None) as mock_get_org_id,
-        patch.object(
-            jwt_handler, "get_end_user_id", return_value=None
-        ) as mock_get_end_user_id,
+        patch.object(jwt_handler, "get_end_user_id", return_value=None) as mock_get_end_user_id,
         patch.object(
             JWTAuthManager,
             "check_admin_access",
@@ -1835,9 +1803,7 @@ async def test_auth_builder_with_oidc_userinfo_disabled():
             new_callable=AsyncMock,
             return_value=(None, None),
         ) as mock_find_team,
-        patch.object(
-            JWTAuthManager, "get_all_team_ids", return_value=set()
-        ) as mock_get_all_team_ids,
+        patch.object(JWTAuthManager, "get_all_team_ids", return_value=set()) as mock_get_all_team_ids,
         patch.object(
             JWTAuthManager,
             "find_team_with_model_access",
@@ -1850,15 +1816,9 @@ async def test_auth_builder_with_oidc_userinfo_disabled():
             new_callable=AsyncMock,
             return_value=(user_object, None, None, None, user_object.user_id),
         ) as mock_get_objects,
-        patch.object(
-            JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock
-        ) as mock_map_user,
-        patch.object(
-            JWTAuthManager, "validate_object_id", return_value=True
-        ) as mock_validate_object,
-        patch.object(
-            JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
-        ) as mock_sync_user,
+        patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock) as mock_map_user,
+        patch.object(JWTAuthManager, "validate_object_id", return_value=True) as mock_validate_object,
+        patch.object(JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock) as mock_sync_user,
     ):
         # Set up mock return values
         mock_auth_jwt.return_value = jwt_response
@@ -2631,7 +2591,6 @@ async def test_find_and_validate_specific_team_id_with_team_alias():
     """
     Test that find_and_validate_specific_team_id resolves team by name when team_id is not found
     """
-    from unittest.mock import MagicMock
 
     from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
@@ -2654,9 +2613,7 @@ async def test_find_and_validate_specific_team_id_with_team_alias():
     # Mock team object returned by get_team_object_by_alias
     team_object = LiteLLM_TeamTable(team_id="resolved-team-id", team_alias="my-team")
 
-    with patch(
-        "litellm.proxy.auth.handle_jwt.get_team_object_by_alias", new_callable=AsyncMock
-    ) as mock_get_by_alias:
+    with patch("litellm.proxy.auth.handle_jwt.get_team_object_by_alias", new_callable=AsyncMock) as mock_get_by_alias:
         mock_get_by_alias.return_value = team_object
 
         team_id, result_team = await JWTAuthManager.find_and_validate_specific_team_id(
@@ -2685,7 +2642,6 @@ async def test_find_and_validate_team_id_takes_precedence_over_name():
     """
     Test that team_id_jwt_field takes precedence over team_alias_jwt_field
     """
-    from unittest.mock import MagicMock
 
     from litellm.caching import DualCache
     from litellm.proxy._types import LiteLLM_JWTAuth, LiteLLM_TeamTable
@@ -2699,9 +2655,7 @@ async def test_find_and_validate_team_id_takes_precedence_over_name():
     jwt_handler.update_environment(
         prisma_client=None,
         user_api_key_cache=user_api_key_cache,
-        litellm_jwtauth=LiteLLM_JWTAuth(
-            team_id_jwt_field="team_id", team_alias_jwt_field="team_alias"
-        ),
+        litellm_jwtauth=LiteLLM_JWTAuth(team_id_jwt_field="team_id", team_alias_jwt_field="team_alias"),
     )
 
     # Token with both team_id and team name
@@ -2711,9 +2665,7 @@ async def test_find_and_validate_team_id_takes_precedence_over_name():
     team_object = LiteLLM_TeamTable(team_id="direct-team-id")
 
     with (
-        patch(
-            "litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock
-        ) as mock_get_by_id,
+        patch("litellm.proxy.auth.handle_jwt.get_team_object", new_callable=AsyncMock) as mock_get_by_id,
         patch(
             "litellm.proxy.auth.handle_jwt.get_team_object_by_alias",
             new_callable=AsyncMock,
@@ -2890,7 +2842,6 @@ async def test_get_objects_resolves_org_by_name():
 @pytest.mark.asyncio
 async def test_resolve_jwks_url_passthrough_for_direct_jwks_url():
     """Non-discovery URLs are returned unchanged."""
-    from unittest.mock import AsyncMock, MagicMock
 
     from litellm.caching.dual_cache import DualCache
 
@@ -3143,7 +3094,7 @@ async def test_find_and_validate_specific_team_id_no_hint_for_valid_field():
     When team_id_jwt_field is a normal field name (no dot-notation) the
     error message should not contain a spurious bracket-notation hint.
     """
-    from unittest.mock import AsyncMock, MagicMock
+    from unittest.mock import MagicMock
 
     from litellm.caching.dual_cache import DualCache
 
@@ -3230,8 +3181,8 @@ async def test_find_and_validate_specific_team_id_no_hint_for_valid_field():
 async def test_auth_builder_single_team_db_fallback_when_jwt_has_no_team(
     user_id: str,
     user_teams: list,
-    get_team_object_return: Optional[str],
-    expected_team_id: Optional[str],
+    get_team_object_return: str | None,
+    expected_team_id: str | None,
     expect_get_team_called: bool,
     expect_get_membership_called: bool,
 ) -> None:
@@ -3244,9 +3195,7 @@ async def test_auth_builder_single_team_db_fallback_when_jwt_has_no_team(
     if len(user_teams) == 1 and get_team_object_return == "resolved_row":
         only = user_teams[0]
         team_table = LiteLLM_TeamTable(team_id=only)
-        membership = LiteLLM_TeamMembership(
-            user_id=user_id, team_id=only, litellm_budget_table=None
-        )
+        membership = LiteLLM_TeamMembership(user_id=user_id, team_id=only, litellm_budget_table=None)
         get_team_return_value = team_table
         membership_return_value = membership
     else:
@@ -3305,9 +3254,7 @@ async def test_auth_builder_single_team_db_fallback_when_jwt_has_no_team(
         ),
         patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock),
         patch.object(JWTAuthManager, "validate_object_id", return_value=True),
-        patch.object(
-            JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
-        ),
+        patch.object(JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock),
         patch(
             "litellm.proxy.auth.handle_jwt.get_team_object",
             new_callable=AsyncMock,
@@ -3324,9 +3271,7 @@ async def test_auth_builder_single_team_db_fallback_when_jwt_has_no_team(
             code = 404 if get_team_object_return == "http_404" else 500
             mock_get_team.side_effect = HTTPException(
                 status_code=code,
-                detail={
-                    "error": f"Team doesn't exist in db. Team={user_teams[0]}. Create team via `/team/new` call."
-                },
+                detail={"error": f"Team doesn't exist in db. Team={user_teams[0]}. Create team via `/team/new` call."},
             )
         else:
             mock_get_team.return_value = get_team_return_value
@@ -4047,7 +3992,7 @@ def _encode_rsa_jwt(
     issuer: str,
     audience: str,
     kid: str,
-    extra_claims: Optional[dict] = None,
+    extra_claims: dict | None = None,
 ) -> str:
     import time
 
@@ -4743,12 +4688,9 @@ async def test_get_objects_team_membership_uses_rebound_user_id():
     async def fake_get_team_membership(user_id, team_id, *args, **kwargs):
         captured["user_id"] = user_id
         captured["team_id"] = team_id
-        return None
 
     jwt_handler = JWTHandler()
-    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(
-        user_id_jwt_field="email", user_id_upsert=True
-    )
+    jwt_handler.litellm_jwtauth = LiteLLM_JWTAuth(user_id_jwt_field="email", user_id_upsert=True)
 
     with (
         patch(
@@ -5389,7 +5331,7 @@ async def test_find_team_with_model_access_defers_no_team_403_under_db_fallback(
     assert team_object is None
 
 
-def _db_fallback_handler(litellm_jwtauth: Optional[LiteLLM_JWTAuth] = None) -> JWTHandler:
+def _db_fallback_handler(litellm_jwtauth: LiteLLM_JWTAuth | None = None) -> JWTHandler:
     handler = JWTHandler()
     handler.litellm_jwtauth = litellm_jwtauth or LiteLLM_JWTAuth()
     return handler
@@ -5447,9 +5389,7 @@ async def test_resolve_db_team_fallback_skips_unresolvable_membership():
         "expect_403",
     ),
     [
-        pytest.param(
-            True, ["team_solo"], None, "team_solo", False, id="flag_on_single_db_team"
-        ),
+        pytest.param(True, ["team_solo"], None, "team_solo", False, id="flag_on_single_db_team"),
         pytest.param(
             True,
             ["team_a", "team_b"],
@@ -5497,8 +5437,8 @@ async def test_resolve_db_team_fallback_skips_unresolvable_membership():
 async def test_auth_builder_db_team_fallback_when_jwt_has_no_team(
     fallback_to_db_teams: bool,
     user_teams: list,
-    header_team_id: Optional[str],
-    expected_team_id: Optional[str],
+    header_team_id: str | None,
+    expected_team_id: str | None,
     expect_403: bool,
 ) -> None:
     """End-to-end auth_builder behavior with no JWT team claims.
@@ -5527,9 +5467,7 @@ async def test_auth_builder_db_team_fallback_when_jwt_has_no_team(
 
     async def call_auth_builder():
         with (
-            patch.object(
-                jwt_handler, "auth_jwt", new_callable=AsyncMock
-            ) as mock_auth_jwt,
+            patch.object(jwt_handler, "auth_jwt", new_callable=AsyncMock) as mock_auth_jwt,
             patch.object(JWTAuthManager, "check_rbac_role", new_callable=AsyncMock),
             patch.object(jwt_handler, "get_rbac_role", return_value=None),
             patch.object(jwt_handler, "get_scopes", return_value=[]),
@@ -5569,9 +5507,7 @@ async def test_auth_builder_db_team_fallback_when_jwt_has_no_team(
             ),
             patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock),
             patch.object(JWTAuthManager, "validate_object_id", return_value=True),
-            patch.object(
-                JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
-            ),
+            patch.object(JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock),
             patch(
                 "litellm.proxy.auth.handle_jwt.get_team_object",
                 new_callable=AsyncMock,
@@ -6765,7 +6701,7 @@ async def test_auth_builder_provisional_header_team_is_not_upserted():
         team_id_upsert=True,
     )
 
-    upsert_by_team: dict[str, Optional[bool]] = {}
+    upsert_by_team: dict[str, bool | None] = {}
 
     async def spy_get_team(team_id, **kwargs):
         upsert_by_team[team_id] = kwargs.get("team_id_upsert")
@@ -6800,9 +6736,7 @@ async def test_auth_builder_provisional_header_team_is_not_upserted():
         ),
         patch.object(JWTAuthManager, "map_user_to_teams", new_callable=AsyncMock),
         patch.object(JWTAuthManager, "validate_object_id", return_value=True),
-        patch.object(
-            JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock
-        ),
+        patch.object(JWTAuthManager, "sync_user_role_and_teams", new_callable=AsyncMock),
         patch(
             "litellm.proxy.auth.handle_jwt.get_team_object",
             new_callable=AsyncMock,
@@ -7806,6 +7740,58 @@ async def test_admin_jwt_team_header_only_provisions_during_admission(monkeypatc
         assert result["team_id"] is None
 
 
+def _explicit_identity_registry() -> AgentRegistry:
+    registry: Final = AgentRegistry()
+    registry.register_agent(AgentResponse(
+        agent_id="explicit-agent-id",
+        agent_name="Readable agent name",
+        agent_card_params={},
+        litellm_params={"identity": {
+            "provider": "microsoft_entra",
+            "tenant_id": "11111111-1111-4111-8111-111111111111",
+            "client_id": "22222222-2222-4222-8222-222222222222",
+        }},
+    ))
+    return registry
+
+
+@pytest.mark.parametrize("claim_field", ["azp", None])
+def test_runtime_json_cannot_establish_a_managed_identity(claim_field: str | None) -> None:
+    registry: Final = _explicit_identity_registry()
+    handler: Final = _entra_agent_jwt_handler(claim_field)
+    claims: Final = {
+        "iss": "https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111/v2.0",
+        "tid": "11111111-1111-4111-8111-111111111111",
+        "azp": "22222222-2222-4222-8222-222222222222",
+    }
+    if claim_field is None:
+        assert JWTAuthManager.resolve_agent_id(handler, claims, registry) is None
+    else:
+        with pytest.raises(HTTPException) as failure:
+            JWTAuthManager.resolve_agent_id(handler, claims, registry)
+        assert failure.value.status_code == 403
+
+
+@pytest.mark.parametrize("override", [
+    {"iss": "https://attacker.example"},
+    {"tid": "33333333-3333-4333-8333-333333333333"},
+    {"azp": "33333333-3333-4333-8333-333333333333"},
+    {"azp": "explicit-agent-id"},
+    {"azp": "Readable agent name"},
+])
+def test_explicit_entra_identity_cannot_be_claimed_via_legacy_lookup(override: Mapping[str, object]) -> None:
+    registry: Final = _explicit_identity_registry()
+    handler: Final = _entra_agent_jwt_handler("azp")
+    with pytest.raises(HTTPException) as failure:
+        JWTAuthManager.resolve_agent_id(handler, {
+            "iss": "https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111/v2.0",
+            "tid": "11111111-1111-4111-8111-111111111111",
+            "azp": "22222222-2222-4222-8222-222222222222",
+            **override,
+        }, registry)
+    assert failure.value.status_code == 403
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("existing_user", [False, True])
 @pytest.mark.parametrize("warm_cache", [False, True])
@@ -7853,3 +7839,187 @@ async def test_scope_admin_admission_resolves_existing_user_without_provisioning
     users.create.assert_not_awaited()
     if existing_user:
         assert users.find_unique.await_count == (0 if warm_cache else 1)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["autonomous", "both", "delegated"])
+@pytest.mark.parametrize("audience_validation", (True, False))
+@pytest.mark.parametrize(
+    "route,allowed",
+    [
+        ("/chat/completions", True), ("/v1/messages", True), ("/v1/responses", True),
+        ("/mcp-rest/tools/call", True), ("/a2a/target", True),
+        ("/v1/files", False), ("/v1/batches", False), ("/v1/vector_stores", False),
+        ("/v1/containers", False), ("/openai/v1/files", False),
+        ("/v1/responses/other-response", False), ("/v1/realtime/client_secrets", False),
+    ],
+)
+async def test_managed_application_uses_persisted_identity_without_provisioning_human(
+    monkeypatch: pytest.MonkeyPatch, mode: str, audience_validation: bool, route: str, allowed: bool
+) -> None:
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    tenant: Final = "11111111-1111-4111-8111-111111111111"
+    client_id: Final = "22222222-2222-4222-8222-222222222222"
+    principal: Final = "33333333-3333-4333-8333-333333333333"
+    issuer: Final = f"https://login.microsoftonline.com/{tenant}/v2.0"
+    jwks_url: Final = "https://login.microsoftonline.test/managed-keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    monkeypatch.setenv("JWT_ISSUER", issuer)
+    monkeypatch.setenv("JWT_AUDIENCE", "api://gateway")
+    private_key, jwk = _get_rsa_key_and_jwk(kid="managed-key")
+    cache: Final = DualCache()
+    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
+    handler: Final = JWTHandler()
+    handler.update_environment(None, cache, LiteLLM_JWTAuth(user_id_upsert=True))
+    binding: Final = AgentIdentityBinding(
+        agent_id="stable-id",
+        provider="microsoft_entra",
+        issuer=issuer,
+        tenant_id=tenant,
+        client_id=client_id,
+        service_principal_id=principal,
+        revision="revision-one",
+        required_roles=("Agent.Invoke",),
+    )
+    agent: Final = AgentResponse.model_validate(
+        {
+            "agent_id": "stable-id",
+            "agent_name": "A readable name",
+            "agent_card_params": {},
+            "identity": binding,
+            "identity_managed": True,
+            "execution_mode": mode,
+        }
+    )
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentidentity.find_unique = AsyncMock(return_value=binding)
+    database.writer_db.litellm_agentidentity.update_many = AsyncMock(return_value=1)
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent)
+    database.writer_db.litellm_verifiedsubject.find_unique = AsyncMock(return_value=None)
+    database.db.litellm_usertable.upsert = AsyncMock()
+    token: Final = _encode_rsa_jwt(
+        private_key,
+        issuer=issuer,
+        audience="api://gateway",
+        kid="managed-key",
+        extra_claims={
+            "tid": tenant,
+            "azp": client_id,
+            "oid": principal,
+            "roles": ["Agent.Invoke"],
+            "idtyp": "app",
+        },
+    )
+    arguments: Final = dict(
+        api_key=token,
+        jwt_handler=handler,
+        request_data={},
+        general_settings={},
+        route=route,
+        prisma_client=database,
+        user_api_key_cache=cache,
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+    )
+    if not audience_validation:
+        monkeypatch.delenv("JWT_AUDIENCE")
+    if mode == "delegated" or not audience_validation or not allowed:
+        with pytest.raises(HTTPException) as failure:
+            await JWTAuthManager.auth_builder(**arguments)
+        assert failure.value.status_code == 403
+    else:
+        result: Final = await JWTAuthManager.auth_builder(**arguments)
+        auth: Final = JWTAuthManager.user_api_key_auth_from_result(result)
+        assert auth.agent_id == "stable-id"
+        assert auth.user_id is None
+        assert auth.team_id is None
+        assert auth.managed_agent_context is not None
+        assert auth.managed_agent_context.mode == "autonomous"
+        assert result["is_proxy_admin"] is False
+    database.db.litellm_usertable.upsert.assert_not_awaited()
+
+
+@pytest.mark.parametrize("claim_value", ["managed", "Readable managed agent"])
+def test_legacy_claim_cannot_select_a_top_level_entra_binding(claim_value: str) -> None:
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    registry: Final = AgentRegistry()
+    registry.register_agent(
+        AgentResponse(
+            agent_id="managed",
+            agent_name="Readable managed agent",
+            agent_card_params={},
+            identity_managed=True,
+            identity=AgentIdentityBinding(
+                agent_id="managed",
+                provider="microsoft_entra",
+                tenant_id="tenant",
+                client_id="client",
+                service_principal_id="principal",
+                issuer="issuer",
+                revision="revision",
+            ),
+        )
+    )
+    with pytest.raises(HTTPException) as denied:
+        JWTAuthManager.resolve_agent_id(_entra_agent_jwt_handler("agent"), {"agent": claim_value}, registry)
+    assert denied.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["human", "config-agent", "managed-agent"])
+async def test_database_free_jwt_admission_with_entra_shaped_claims(monkeypatch: pytest.MonkeyPatch, kind: str) -> None:
+    issuer: Final = "https://login.microsoftonline.com/test-tenant/v2.0"
+    jwks_url: Final = "https://login.microsoftonline.test/config-only-keys"
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    monkeypatch.setenv("JWT_ISSUER", issuer)
+    monkeypatch.setenv("JWT_AUDIENCE", "api://gateway")
+    private_key, jwk = _get_rsa_key_and_jwk(kid="config-key")
+    cache: Final = DualCache()
+    cache.set_cache(key=f"litellm_jwt_auth_keys_{jwks_url}", value=[jwk])
+    registry: Final = AgentRegistry()
+    registry.register_agent(
+        AgentResponse(
+            agent_id="configured",
+            agent_name="Configured",
+            agent_card_params={},
+            identity_managed=kind == "managed-agent",
+        )
+    )
+    handler: Final = JWTHandler()
+    handler.update_environment(None, cache, LiteLLM_JWTAuth(agent_id_jwt_field="agent", admin_allowed_routes=["llm_api_routes"]))
+    handler.bind_agent_lookup(registry)
+    token: Final = _encode_rsa_jwt(
+        private_key,
+        issuer=issuer,
+        audience="api://gateway",
+        kid="config-key",
+        extra_claims={
+            "tid": "test-tenant",
+            "azp": "application",
+            "scope": "litellm_proxy_admin",
+            **({"agent": "configured"} if kind != "human" else {}),
+        },
+    )
+    arguments: Final = dict(
+        api_key=token,
+        jwt_handler=handler,
+        request_data={},
+        general_settings={},
+        route="/chat/completions",
+        prisma_client=None,
+        user_api_key_cache=cache,
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+    )
+    if kind == "managed-agent":
+        with pytest.raises(HTTPException) as denied:
+            await JWTAuthManager.auth_builder(**arguments)
+        assert denied.value.status_code == 403
+    else:
+        result: Final = await JWTAuthManager.auth_builder(**arguments)
+        auth: Final = JWTAuthManager.user_api_key_auth_from_result(result)
+        assert auth.agent_id == ("configured" if kind == "config-agent" else None)
+        assert auth.managed_agent_context is None
+        assert result["is_proxy_admin"] is True

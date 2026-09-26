@@ -2378,6 +2378,19 @@
               "title": "Agent Name",
               "type": "string"
             },
+            "enabled": {
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "execution_mode": {
+              "enum": [
+                "autonomous",
+                "delegated",
+                "both"
+              ],
+              "title": "Execution Mode",
+              "type": "string"
+            },
             "extra_headers": {
               "anyOf": [
                 {
@@ -2391,6 +2404,16 @@
                 }
               ],
               "title": "Extra Headers"
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/EntraIdentityConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "kill_switch": {
               "anyOf": [
@@ -2470,8 +2493,7 @@
             }
           },
           "required": [
-            "agent_name",
-            "agent_card_params"
+            "agent_name"
           ],
           "title": "AgentConfig",
           "type": "object"
@@ -2519,6 +2541,91 @@
             }
           },
           "title": "AgentExtension",
+          "type": "object"
+        },
+        "AgentIdentityBinding": {
+          "properties": {
+            "active": {
+              "default": true,
+              "title": "Active",
+              "type": "boolean"
+            },
+            "agent_id": {
+              "title": "Agent Id",
+              "type": "string"
+            },
+            "client_id": {
+              "title": "Client Id",
+              "type": "string"
+            },
+            "issuer": {
+              "title": "Issuer",
+              "type": "string"
+            },
+            "last_authenticated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Authenticated At"
+            },
+            "provider": {
+              "const": "microsoft_entra",
+              "title": "Provider",
+              "type": "string"
+            },
+            "required_roles": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Roles",
+              "type": "array"
+            },
+            "required_scopes": {
+              "default": [
+                "user_impersonation"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Scopes",
+              "type": "array"
+            },
+            "revision": {
+              "title": "Revision",
+              "type": "string"
+            },
+            "service_principal_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Service Principal Id"
+            },
+            "tenant_id": {
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "agent_id",
+            "provider",
+            "tenant_id",
+            "client_id",
+            "issuer",
+            "revision"
+          ],
+          "title": "AgentIdentityBinding",
           "type": "object"
         },
         "AgentInterface": {
@@ -2972,6 +3079,21 @@
               ],
               "title": "Created By"
             },
+            "enabled": {
+              "default": true,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "execution_mode": {
+              "default": "autonomous",
+              "enum": [
+                "autonomous",
+                "delegated",
+                "both"
+              ],
+              "title": "Execution Mode",
+              "type": "string"
+            },
             "extra_headers": {
               "anyOf": [
                 {
@@ -2985,6 +3107,26 @@
                 }
               ],
               "title": "Extra Headers"
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AgentIdentityBinding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "identity_managed": {
+              "default": false,
+              "title": "Identity Managed",
+              "type": "boolean"
+            },
+            "jwt_auth_configured": {
+              "default": false,
+              "title": "Jwt Auth Configured",
+              "type": "boolean"
             },
             "keys": {
               "anyOf": [
@@ -3441,6 +3583,60 @@
           "title": "DailySpendMetadata",
           "type": "object"
         },
+        "EntraIdentityConfig": {
+          "additionalProperties": false,
+          "properties": {
+            "client_id": {
+              "title": "Client Id",
+              "type": "string"
+            },
+            "provider": {
+              "const": "microsoft_entra",
+              "title": "Provider",
+              "type": "string"
+            },
+            "required_roles": {
+              "default": [],
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Roles",
+              "type": "array"
+            },
+            "required_scopes": {
+              "default": [
+                "user_impersonation"
+              ],
+              "items": {
+                "type": "string"
+              },
+              "title": "Required Scopes",
+              "type": "array"
+            },
+            "service_principal_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Service Principal Id"
+            },
+            "tenant_id": {
+              "title": "Tenant Id",
+              "type": "string"
+            }
+          },
+          "required": [
+            "provider",
+            "tenant_id",
+            "client_id"
+          ],
+          "title": "EntraIdentityConfig",
+          "type": "object"
+        },
         "HTTPAuthSecurityScheme": {
           "description": "Defines a security scheme using HTTP authentication.",
           "properties": {
@@ -3588,6 +3784,54 @@
             "agent_ids"
           ],
           "title": "MakeAgentsPublicRequest",
+          "type": "object"
+        },
+        "ManagedAgentIdentityStatus": {
+          "properties": {
+            "enabled": {
+              "default": true,
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "execution_mode": {
+              "default": "autonomous",
+              "enum": [
+                "autonomous",
+                "delegated",
+                "both"
+              ],
+              "title": "Execution Mode",
+              "type": "string"
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/AgentIdentityBinding"
+                },
+                {
+                  "type": "null"
+                }
+              ]
+            },
+            "identity_managed": {
+              "default": false,
+              "title": "Identity Managed",
+              "type": "boolean"
+            },
+            "last_authenticated_at": {
+              "anyOf": [
+                {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Last Authenticated At"
+            }
+          },
+          "title": "ManagedAgentIdentityStatus",
           "type": "object"
         },
         "MetricWithMetadata": {
@@ -3790,6 +4034,19 @@
               "title": "Agent Name",
               "type": "string"
             },
+            "enabled": {
+              "title": "Enabled",
+              "type": "boolean"
+            },
+            "execution_mode": {
+              "enum": [
+                "autonomous",
+                "delegated",
+                "both"
+              ],
+              "title": "Execution Mode",
+              "type": "string"
+            },
             "extra_headers": {
               "anyOf": [
                 {
@@ -3803,6 +4060,16 @@
                 }
               ],
               "title": "Extra Headers"
+            },
+            "identity": {
+              "anyOf": [
+                {
+                  "$ref": "#/components/schemas/EntraIdentityConfig"
+                },
+                {
+                  "type": "null"
+                }
+              ]
             },
             "kill_switch": {
               "anyOf": [
@@ -4325,6 +4592,36 @@
           ]
         }
       },
+      "/v1/agents/identity/providers": {
+        "get": {
+          "operationId": "get_agent_identity_providers_v1_agents_identity_providers_get",
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "items": {
+                      "type": "string"
+                    },
+                    "title": "Response Get Agent Identity Providers V1 Agents Identity Providers Get",
+                    "type": "array"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Identity Providers",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
       "/v1/agents/make_public": {
         "post": {
           "description": "Make multiple agents publicly discoverable\n\nExample Request:\n```bash\ncurl -X POST \"http://localhost:4000/v1/agents/make_public\" \\\n    -H \"Authorization: Bearer <your_api_key>\" \\\n    -H \"Content-Type: application/json\" \\\n    -d '{\n        \"agent_ids\": [\"123e4567-e89b-12d3-a456-426614174000\", \"123e4567-e89b-12d3-a456-426614174001\"]\n    }'\n```\n\nExample Response:\n```json\n{\n    \"agent_id\": \"123e4567-e89b-12d3-a456-426614174000\",\n    \"agent_name\": \"my-custom-agent\",\n    \"litellm_params\": {\n        \"make_public\": true\n    },\n    \"agent_card_params\": {...},\n    \"created_at\": \"2025-11-15T10:30:00Z\",\n    \"updated_at\": \"2025-11-15T10:35:00Z\",\n    \"created_by\": \"user123\",\n    \"updated_by\": \"user123\"\n}\n```",
@@ -4571,6 +4868,53 @@
             }
           ],
           "summary": "Update Agent",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/v1/agents/{agent_id}/identity": {
+        "get": {
+          "operationId": "get_agent_identity_status_v1_agents__agent_id__identity_get",
+          "parameters": [
+            {
+              "in": "path",
+              "name": "agent_id",
+              "required": true,
+              "schema": {
+                "title": "Agent Id",
+                "type": "string"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/ManagedAgentIdentityStatus"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Identity Status",
           "tags": [
             "agents"
           ]

@@ -2039,13 +2039,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     )}
                   </FormField>
 
-                  <FormField control={form.control} name="mcp_servers_and_groups" label="MCP Servers / Access Groups">
+                  <FormField control={form.control} name="mcp_servers_and_groups" label="MCP Servers">
                     {({ value, onChange }) => (
                       <MCPServerSelector
+                        allowAccessGroups={false}
                         onChange={onChange}
                         value={value}
                         accessToken={accessToken || ""}
-                        placeholder="Select MCP servers or access groups (optional)"
+                        placeholder="Select MCP servers or toolsets (optional)"
                         allowAllProxyMcpServers={is_proxy_admin}
                       />
                     )}
@@ -2062,13 +2063,14 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                     />
                   </div>
 
-                  <FormField control={form.control} name="agents_and_groups" label="Agents / Access Groups">
+                  <FormField control={form.control} name="agents_and_groups" label="Agents">
                     {({ value, onChange }) => (
                       <AgentSelector
+                        allowAccessGroups={false}
                         onChange={onChange}
                         value={value}
                         accessToken={accessToken || ""}
-                        placeholder="Select agents or access groups (optional)"
+                        placeholder="Select agents (optional)"
                       />
                     )}
                   </FormField>

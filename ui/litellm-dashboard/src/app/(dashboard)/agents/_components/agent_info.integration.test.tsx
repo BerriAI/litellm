@@ -8,6 +8,7 @@ import * as networking from "@/components/networking";
 import type { AgentCreateInfo } from "@/components/networking";
 
 vi.mock("@/components/networking", () => ({
+  apiClient: { get: vi.fn() },
   getAgentInfo: vi.fn(),
   patchAgentCall: vi.fn(),
   getAgentCreateMetadata: vi.fn(),
@@ -153,6 +154,50 @@ describe("AgentInfoView update payload", () => {
     vi.mocked(networking.patchAgentCall)
       .mockReset()
       .mockResolvedValue({} as never);
+  });
+
+  it.each(["complete", "empty"])("preserves the Entra binding while renaming an agent with a %s card", async (card) => {
+    const user = setup();
+    const identity = {
+      provider: "microsoft_entra",
+      tenant_id: "11111111-1111-4111-8111-111111111111",
+      client_id: "22222222-2222-4222-8222-222222222222",
+      service_principal_id: "33333333-3333-4333-8333-333333333333",
+    };
+    const params = { ...A2A_AGENT.litellm_params, require_trace_id_on_calls_by_agent: true };
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...A2A_AGENT,
+      agent_card_params: card === "empty" ? {} : A2A_AGENT.agent_card_params,
+      litellm_params: params,
+      identity: { ...identity, agent_id: "agent-1", issuer: "https://issuer.example", revision: "rev", active: true },
+      identity_managed: true,
+      execution_mode: "autonomous",
+      enabled: true,
+      access_group_ids: ["ag-entra"],
+    } as never);
+    vi.mocked(networking.apiClient.get).mockImplementation(async (path) =>
+      path.endsWith("/providers")
+        ? [`https://login.microsoftonline.com/${identity.tenant_id}/v2.0`]
+        : { last_authenticated_at: null },
+    );
+    renderView();
+    expect(await screen.findByText("Configured, awaiting an authenticated request")).toBeInTheDocument();
+    await openEditor(user);
+    expect(screen.getByLabelText("Application (Client) ID")).toHaveValue(identity.client_id);
+    expect(screen.getByRole("combobox", { name: "Identity Provider" })).toHaveTextContent("Microsoft Entra ID");
+    expect(screen.getByRole("combobox", { name: "Execution Mode" })).toHaveTextContent("Autonomous");
+    expect(screen.getByRole("combobox", { name: "Execution", exact: true })).toHaveTextContent("Enabled");
+    fireEvent.change(screen.getByLabelText("Agent Name"), { target: { value: "Renamed agent" } });
+    await save(user);
+    expect(patchedPayload().agent_name).toBe("Renamed agent");
+    expect(patchedPayload()).not.toHaveProperty("litellm_params");
+    expect(patchedPayload().identity).toMatchObject(identity);
+    expect(patchedPayload().access_group_ids).toEqual(["ag-entra"]);
+    expect(networking.patchAgentCall).toHaveBeenCalledWith(
+      "tok",
+      "agent-1",
+      expect.objectContaining({ agent_name: "Renamed agent" }),
+    );
   });
 
   it("sends only the fields whose panel has been opened, dropping the rest", async () => {

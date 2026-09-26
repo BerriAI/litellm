@@ -375,3 +375,17 @@ describe("TTFT column", () => {
     expect(screen.getByText("1.00")).toBeInTheDocument();
   });
 });
+
+describe("Request outcome", () => {
+  it("shows a failed agent outcome even when metadata has no status", () => {
+    renderRows([logEntry({ call_type: "asend_message", status: "failure", session_total_count: 4 })]);
+    expect(screen.getByText("Failure")).toBeInTheDocument();
+    expect(screen.queryByText("Success")).not.toBeInTheDocument();
+  });
+
+  it("prefers the recorded outcome over stale metadata", () => {
+    renderRows([logEntry({ status: "success", metadata: { status: "failure" } })]);
+    expect(screen.getByText("Success")).toBeInTheDocument();
+    expect(screen.queryByText("Failure")).not.toBeInTheDocument();
+  });
+});

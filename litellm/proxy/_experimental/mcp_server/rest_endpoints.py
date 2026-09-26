@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from traceback import walk_tb
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
 from uuid import uuid4
 
 import anyio
@@ -14,6 +14,7 @@ import httpx2
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from pydantic import ValidationError
 from starlette.datastructures import Headers
+from typing_extensions import ReadOnly
 
 from litellm._logging import verbose_logger
 from litellm.constants import MCP_CLIENT_TIMEOUT, MCP_TOOL_LISTING_TIMEOUT
@@ -62,7 +63,27 @@ if TYPE_CHECKING:
     from litellm.proxy._experimental.mcp_server.db import OAuthCredentialPayload
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.types.mcp import MCPAuth
-from litellm.types.utils import CallTypes
+from litellm.types.utils import CallTypes, StandardLoggingMCPToolCall
+
+
+class _MCPModelMetadata(TypedDict):
+    model_group: ReadOnly[str]
+
+
+def _stamp_mcp_tool_metadata(logging_obj: "LiteLLMLoggingObj | None", server_id: str, tool_name: str) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    if logging_obj is None:
+        return
+    server: Final = global_mcp_server_manager.get_mcp_server_by_id(
+        server_id
+    ) or global_mcp_server_manager.get_mcp_server_by_name(server_id)
+    metadata: Final[StandardLoggingMCPToolCall] = {
+        "name": tool_name,
+        "mcp_server_name": server.name if server is not None else server_id,
+    }
+    logging_obj.model_call_details["mcp_tool_call_metadata"] = metadata
+
 
 MCP_AVAILABLE: bool = True
 try:
@@ -1143,6 +1164,12 @@ if MCP_AVAILABLE:
                     },
                 )
 
+            data["model"] = f"MCP: {tool_name}"
+            model_metadata: Final[_MCPModelMetadata] = {
+                **(data.get("metadata") or MappingProxyType({})),
+                "model_group": f"MCP: {tool_name}",
+            }
+            data["metadata"] = model_metadata
             proxy_base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
             _request_start_time: Final = datetime.now()  # noqa: DTZ005  # naive to match the tool start time below
             try:
@@ -1175,6 +1202,8 @@ if MCP_AVAILABLE:
                 # call_mcp_tool expects user_api_key_auth as a top-level parameter
                 if "metadata" in data and "user_api_key_auth" in data["metadata"]:
                     data["user_api_key_auth"] = data["metadata"]["user_api_key_auth"]
+
+                _stamp_mcp_tool_metadata(logging_obj, server_id, tool_name)
 
                 # Resolve allowed MCP servers with IP filtering
                 (

@@ -78,6 +78,11 @@ model LiteLLM_AgentsTable {
   object_permission_id String?
   object_permission LiteLLM_ObjectPermissionTable? @relation(fields: [object_permission_id], references: [object_permission_id])
   spend      Float    @default(0.0)
+  identity_managed Boolean @default(false)
+  enabled Boolean @default(true)
+  execution_mode String @default("autonomous")
+  identity LiteLLM_AgentIdentity?
+  retired_identities LiteLLM_RetiredAgentIdentity[]
   tpm_limit  Int?
   rpm_limit  Int?
   session_tpm_limit Int?
@@ -87,6 +92,56 @@ model LiteLLM_AgentsTable {
   updated_at    DateTime               @default(now()) @updatedAt @map("updated_at")
   updated_by String
 }
+
+model LiteLLM_AgentIdentity {
+  agent_id String @id
+  active Boolean @default(true)
+  agent LiteLLM_AgentsTable @relation(fields: [agent_id], references: [agent_id], onDelete: Cascade)
+  provider String
+  issuer String
+  tenant_id String
+  client_id String
+  service_principal_id String?
+  required_roles String[] @default([])
+  required_scopes String[] @default(["user_impersonation"])
+  revision String @default(uuid())
+  last_authenticated_at DateTime?
+  @@unique([provider, tenant_id, client_id])
+  @@unique([issuer, service_principal_id])
+}
+
+model LiteLLM_RetiredAgentIdentity {
+  binding_id String @id @default(uuid())
+  agent_id String?
+  agent LiteLLM_AgentsTable? @relation(fields: [agent_id], references: [agent_id], onDelete: SetNull)
+  provider String
+  issuer String
+  tenant_id String
+  client_id String
+  @@unique([provider, tenant_id, client_id])
+}
+
+model LiteLLM_RetiredAgent {
+  original_agent_id String @id
+  retired_at DateTime @default(now())
+}
+
+model LiteLLM_VerifiedSubject {
+  subject_id String @id @default(uuid())
+  issuer String
+  tenant_id String
+  oid String
+  kind String @default("human")
+  user_id String?
+  user LiteLLM_UserTable? @relation(fields: [user_id], references: [user_id], onDelete: Cascade)
+  verified_via String @default("sso_interactive")
+  verified_at DateTime @default(now())
+  @@unique([issuer, tenant_id, oid])
+  @@index([user_id])
+}
+
+
+
 
 model LiteLLM_OrganizationTable {
 		organization_id String @id @default(uuid())
@@ -241,6 +296,7 @@ model LiteLLM_DeletedTeamTable {
 
 // Track spend, rate limit, budget Users
 model LiteLLM_UserTable {
+    verified_subjects LiteLLM_VerifiedSubject[]
 		user_id    String @id
     user_alias String? 
     team_id    String?
@@ -674,6 +730,7 @@ model LiteLLM_SpendLogs {
   session_id          String?
   status              String?
   mcp_namespaced_tool_name String? 
+  billing_agent_id    String?
   agent_id            String?
   proxy_server_request Json?     @default("{}")
   litellm_call_id     String?

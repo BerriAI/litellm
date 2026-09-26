@@ -145,10 +145,10 @@ const AgentsPanel: React.FC<AgentsPanelProps> = ({ accessToken, userRole, teams 
         </p>
         <Alert className="mb-3">
           <Info />
-          <AlertTitle>Why do agents need keys?</AlertTitle>
+          <AlertTitle>How do agents authenticate?</AlertTitle>
           <AlertDescription>
-            Keys scope access to an agent and allow it to call MCP tools. Assign a key when creating an agent or from
-            the Virtual Keys page.
+            Agents can authenticate with a virtual key or a trusted identity provider using JWT. Configure an identity
+            binding when adding or editing an agent. JWT authentication does not require a virtual key.
           </AlertDescription>
         </Alert>
         {isAdmin && (
