@@ -1,3 +1,5 @@
+use std::sync::Arc;
+
 use litellm_llms::base_llm::chat::transformation::Error as LlmError;
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
@@ -15,10 +17,38 @@ pub enum Error {
     #[error(transparent)]
     Auth(#[from] litellm_auth::Error),
     #[error(transparent)]
+    Client(#[from] litellm_http::Error),
+    #[error(transparent)]
     Transport(#[from] litellm_http::transport::Error),
     #[error(transparent)]
     Headers(#[from] litellm_http::request::HeaderError),
+    #[error(transparent)]
+    Secret(#[from] SecretError),
 }
+
+#[derive(Clone, Debug, thiserror::Error)]
+#[error(transparent)]
+pub struct SecretError(Arc<litellm_secrets::Error>);
+
+impl SecretError {
+    pub fn source_error(&self) -> &litellm_secrets::Error {
+        &self.0
+    }
+}
+
+impl From<litellm_secrets::Error> for Error {
+    fn from(error: litellm_secrets::Error) -> Self {
+        Self::Secret(SecretError(Arc::new(error)))
+    }
+}
+
+impl PartialEq for SecretError {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for SecretError {}
 
 impl From<LlmError> for Error {
     fn from(error: LlmError) -> Self {

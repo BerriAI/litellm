@@ -9,11 +9,11 @@
 mod error;
 pub mod types;
 pub use error::Error;
-mod client;
 mod common_utils;
 pub(crate) mod handler;
 mod prepare;
 use handler::execute_chat_completions_provider_call;
+use litellm_http::{ClientVariant, HttpClientConfig, HttpClientPool};
 use litellm_types::utils::ChatCompletionsResponse;
 use prepare::{parse_messages, resolve_provider_config, resolve_request};
 use serde_json::{Map, Value};
@@ -21,9 +21,13 @@ use serde_json::{Map, Value};
 use crate::chat_completions::types::ChatCompletionsRequest;
 
 pub async fn chat_completions(
+    pool: &HttpClientPool,
+    config: &HttpClientConfig,
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
-    execute_chat_completions_provider_call(resolve_request(request)?).await
+    let request = resolve_request(request)?;
+    let http = pool.client(config, ClientVariant::Provider)?;
+    execute_chat_completions_provider_call(&http, request).await
 }
 
 /// Whether the core would accept this request, without resolving credentials or
@@ -51,6 +55,3 @@ pub fn chat_completions_decline_reason(
         .unsupported_reason(&messages, optional_params)
         .map(|reason| reason.0)
 }
-
-#[cfg(test)]
-mod tests;

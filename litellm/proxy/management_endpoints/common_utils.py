@@ -528,7 +528,7 @@ def _prisma_value(value: object) -> object:
     return list(value) if isinstance(value, tuple) else value
 
 
-def member_budget_patch(source: BaseModel) -> dict[str, Any]:
+def member_budget_patch(source: BaseModel) -> Mapping[str, object]:
     """Map the per-member limit fields a request actually set to their budget-table
     columns (merge-patch: a sent value updates, an explicit null clears, an absent
     field is left untouched)."""
@@ -561,7 +561,7 @@ async def _upsert_budget_and_membership(
     user_id: str,
     existing_budget_id: str | None,
     user_api_key_dict: UserAPIKeyAuth,
-    budget_patch: dict[str, Any],
+    budget_patch: Mapping[str, object],
     team_default_budget_id: str | None = None,
     shared_budget_ids: frozenset[str] | None = None,
 ):
@@ -624,9 +624,9 @@ async def _upsert_budget_and_membership(
         if is_shared_default and not temp_only
         else None
     )
-    source: Final[Mapping[str, Any]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
+    source: Final[Mapping[str, object]] = source_row.model_dump() if source_row is not None else MappingProxyType({})
 
-    create_data: Final[dict[str, Any]] = {  # mutable-ok: Prisma create payloads are dict-shaped
+    create_data: Final[dict[str, object]] = {  # mutable-ok: Prisma create payloads are dict-shaped
         "created_by": user_api_key_dict.user_id or "",
         "updated_by": user_api_key_dict.user_id or "",
         **MappingProxyType(

@@ -598,6 +598,16 @@ class CountTokensResponse(BaseModel):
     input_tokens: int
 
 
+class AnthropicErrorBody(BaseModel):
+    type: str
+    message: str
+
+
+class AnthropicErrorEvent(BaseModel):
+    type: Literal["error"]
+    error: AnthropicErrorBody
+
+
 # ---------- mcp servers ----------
 
 
@@ -1426,6 +1436,7 @@ class TeamNewBody(BaseModel):
     team_id: str | None = None
     organization_id: str | None = None
     metadata: TeamMetadata | None = None
+    model_aliases: dict[str, str] | None = None
 
 
 class TeamNewResponse(BaseModel):
