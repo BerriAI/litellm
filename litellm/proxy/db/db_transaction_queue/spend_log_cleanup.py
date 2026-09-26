@@ -27,6 +27,7 @@ from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import (
 from litellm.proxy.db.db_transaction_queue.spend_logs_partition_manager import (
     RemainingTimeoutMs,
     SpendLogsPartitionManager,
+    bounded_tx,
 )
 from litellm.proxy.utils import PrismaClient
 
@@ -294,7 +295,7 @@ class SpendLogCleanup:
         fault, so the caller stops instead of retrying.
         """
         timeout_ms: Final = self._timeout_ms(deadline)
-        async with prisma_client.db.tx() as tx:
+        async with bounded_tx(prisma_client, timeout_ms) as tx:
             await tx.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
             await tx.execute_raw(f"SET LOCAL lock_timeout = {timeout_ms}")
             deleted_result: Final = await tx.execute_raw(delete_sql, cutoff_date, self.batch_size)
@@ -318,9 +319,10 @@ class SpendLogCleanup:
                 LIMIT $2
             ) capped
             """
+        timeout_ms: Final = self._timeout_ms(deadline)
         try:
-            async with prisma_client.db.tx() as tx:
-                await tx.execute_raw(f"SET LOCAL statement_timeout = {self._timeout_ms(deadline)}")
+            async with bounded_tx(prisma_client, timeout_ms) as tx:
+                await tx.execute_raw(f"SET LOCAL statement_timeout = {timeout_ms}")
                 rows: Final = _REMAINING_ROWS.validate_python(
                     await tx.query_raw(count_sql, cutoff_date, SPEND_LOG_CLEANUP_REMAINING_COUNT_CAP)
                 )
