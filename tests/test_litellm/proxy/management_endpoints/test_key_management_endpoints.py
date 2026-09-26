@@ -13907,6 +13907,40 @@ def test_effective_key_for_generate_without_duration_never_expires():
     assert effective_key.key_type == "default"
 
 
+@pytest.mark.parametrize("duration", (None, "1h"))
+def test_effective_key_for_generate_preserves_explicit_expiration(duration: str | None) -> None:
+    now: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    explicit: Final = now + timedelta(days=1)
+    request: Final = GenerateKeyRequest(expires=explicit, duration=duration)
+
+    effective: Final = _effective_key_for_generate(data=request, now=now)
+
+    assert effective.expires == (explicit if duration is None else now + timedelta(hours=1))
+    assert request.expires == explicit
+
+
+@pytest.mark.asyncio
+async def test_prepare_key_update_data_preserves_explicit_expiration() -> None:
+    explicit: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    existing: Final = LiteLLM_VerificationToken(token="test-token", metadata={})
+    request: Final = UpdateKeyRequest(key="test-token", expires=explicit)
+
+    update: Final = await prepare_key_update_data(data=request, existing_key_row=existing)
+
+    assert update["expires"] == explicit
+
+
+@pytest.mark.asyncio
+async def test_generate_key_helper_persists_explicit_expiration(monkeypatch: pytest.MonkeyPatch) -> None:
+    explicit: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    database: Final = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", database)
+
+    await generate_key_helper_fn(request_type="key", expires=explicit, table_name="key", token="sk-expiration-test-token")
+
+    assert database.insert_data.call_args.kwargs["data"]["expires"] == explicit
+
+
 def _policy_request_for_generate() -> CustomKeyPolicyRequest:
     return CustomKeyPolicyRequest(
         operation="generate",
