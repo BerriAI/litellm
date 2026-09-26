@@ -7,6 +7,7 @@ import httpx
 import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
+from pydantic import BaseModel, Field
 
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames, LitellmUserRoles, UserAPIKeyAuth
@@ -1158,6 +1159,53 @@ def _agent_with_kill_switch() -> AgentResponse:
         litellm_params={},
         kill_switch=_KILL_SWITCH,
     )
+
+
+class _StoredAgentRow(BaseModel):
+    agent_id: str = "agent-1"
+    agent_name: str = "Test Agent"
+    agent_card_params: dict[str, object] = Field(default_factory=_sample_agent_card_params)
+    litellm_params: dict[str, object] = Field(default_factory=dict)
+    kill_switch: None = None
+    object_permission_id: None = None
+    object_permission: None = None
+    agent_access_groups: list[str] = Field(default_factory=list)
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "table_write"),
+    [
+        ("POST", "/v1/agents", "create"),
+        ("PUT", "/v1/agents/agent-1", "update"),
+        ("PATCH", "/v1/agents/agent-1", "update"),
+    ],
+)
+def test_agent_write_endpoints_store_and_return_agent_access_groups(
+    monkeypatch: pytest.MonkeyPatch, method: str, path: str, table_write: str
+) -> None:
+    """#42766: agent_access_groups sent to the agent write endpoints must reach the DB row and come back."""
+    from litellm.proxy.agent_endpoints.agent_registry import AgentRegistry
+
+    table: Final = MagicMock()
+    table.find_unique = AsyncMock(return_value=_StoredAgentRow())
+    table.create = AsyncMock(return_value=_StoredAgentRow(agent_access_groups=["research", "support"]))
+    table.update = AsyncMock(return_value=_StoredAgentRow(agent_access_groups=["research", "support"]))
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_agentstable = table
+    monkeypatch.setattr(agent_endpoints, "AGENT_REGISTRY", AgentRegistry())
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+
+    response: Final = client.request(
+        method,
+        path,
+        json={**_sample_agent_config(), "agent_access_groups": ["research", "support", "research"]},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200, response.text
+    written: Final = getattr(table, table_write).await_args.kwargs["data"]
+    assert tuple(written["agent_access_groups"]) == ("research", "support"), written
+    assert response.json()["agent_access_groups"] == ["research", "support"], response.text
 
 
 class _FakeKillSwitchClient:
