@@ -689,12 +689,14 @@ class JevClassifierConfig(BaseModel):
     model: str = Field(default_factory=_default_decision_model)
     api_key: str | None = Field(
         default=None,
-        description="Classifier API key, falling back to TYPESAFE_API_KEY or LAYA_API_KEY for its provider",
+        description="Jev API key, falling back to TYPESAFE_API_KEY",
     )
     api_base: str | None = Field(
         default=None,
-        description="Classifier API base; uses TYPESAFE_API_BASE or https://api.typesafe.ai for Jev, LAYA_API_BASE for Laya",
+        description="Jev API base, falling back to TYPESAFE_API_BASE or https://api.typesafe.ai",
     )
+    laya_api_base: str | None = Field(default=None, description="URL of the self-hosted Laya System One server")
+    laya_api_key: str | None = Field(default=None, description="Optional bearer token for the Laya server")
     timeout_ms: int = Field(default=3000, ge=1)
     instructions: str | None = Field(
         default=None,
@@ -710,18 +712,16 @@ class JevClassifierConfig(BaseModel):
             raise ValueError("jev_classifier_config.instructions must be non-empty; omit it to use the default")
         return value
 
-    @field_validator("api_key")
+    @field_validator("api_key", "laya_api_key")
     @classmethod
     def _reject_blank_api_key(cls, value: str | None) -> str | None:
         if value is not None and not value.strip():
-            raise ValueError(
-                "jev_classifier_config.api_key must be non-empty; omit it to use the provider's configured key"
-            )
+            raise ValueError("Classifier API keys must be non-empty; omit unused keys")
         return value
 
     @model_validator(mode="after")
     def _keep_the_environment_key_on_the_environment_base(self) -> "JevClassifierConfig":
-        if self.provider == "typesafe" and self.api_base is not None and self.api_key is None:
+        if self.api_base is not None and self.api_key is None:
             raise ValueError(
                 "jev_classifier_config.api_base requires jev_classifier_config.api_key: TYPESAFE_API_KEY is only sent "
                 "to TYPESAFE_API_BASE or https://api.typesafe.ai"

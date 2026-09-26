@@ -31552,12 +31552,12 @@ export interface components {
         JevClassifierConfig: {
             /**
              * Api Base
-             * @description Classifier API base; uses TYPESAFE_API_BASE or https://api.typesafe.ai for Jev, LAYA_API_BASE for Laya
+             * @description Jev API base, falling back to TYPESAFE_API_BASE or https://api.typesafe.ai
              */
             api_base?: string | null;
             /**
              * Api Key
-             * @description Classifier API key, falling back to TYPESAFE_API_KEY or LAYA_API_KEY for its provider
+             * @description Jev API key, falling back to TYPESAFE_API_KEY
              */
             api_key?: string | null;
             /**
@@ -31575,6 +31575,16 @@ export interface components {
              * @description Replaces the built-in decision model question instructions
              */
             instructions?: string | null;
+            /**
+             * Laya Api Base
+             * @description URL of the self-hosted Laya System One server
+             */
+            laya_api_base?: string | null;
+            /**
+             * Laya Api Key
+             * @description Optional bearer token for the Laya server
+             */
+            laya_api_key?: string | null;
             /** Model */
             model?: string;
             /**

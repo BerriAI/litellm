@@ -7546,10 +7546,13 @@ class TestTeamMemberAutoRouterWrites:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
-    @pytest.mark.parametrize("change", ["save", "rotate", "move", "move-without-key", "reset", "heuristic", "laya"])
+    @pytest.mark.parametrize("change", ["save", "rotate", "move", "move-without-key", "reset", "heuristic", "laya", "move-laya"])
     async def test_jev_dashboard_save_preserves_server_transport(self, endpoint: str, change: str) -> None:
         original: Final = self._row()
-        transport: Final = {"api_key": "synthetic-original-jev-key", "api_base": "https://jev.example.com"}
+        transport: Final = {
+            "api_key": "synthetic-original-jev-key", "api_base": "https://jev.example.com",
+            "laya_api_key": "synthetic-original-laya-key", "laya_api_base": "https://laya.example.com",
+        }
         stored_config: Final = {
             "classifier_type": "jev",
             "tiers": {"SIMPLE": "allowed"},
@@ -7572,6 +7575,7 @@ class TestTeamMemberAutoRouterWrites:
             "reset": {"api_key": None, "api_base": None},
             "heuristic": {},
             "laya": {"provider": "laya", "model": "multilingual"},
+            "move-laya": {"provider": "laya", "laya_api_base": "https://new-laya.example.com", "model": "multilingual"},
         }[change]
         config: Final = {
             "tiers": {"SIMPLE": "allowed"},
@@ -7597,12 +7601,70 @@ class TestTeamMemberAutoRouterWrites:
         saved: Final = json.loads(written["litellm_params"])["complexity_router_config"]
         expected: Final = (
             config
-            if change in ("heuristic", "laya")
-            else {**config, "jev_classifier_config": {**transport, "timeout_ms": 8100, **overrides}}
+            if change == "heuristic"
+            else {**config, "jev_classifier_config": {
+                **{key: value for key, value in transport.items() if change != "move-laya" or key != "laya_api_key"},
+                "timeout_ms": 8100, **overrides,
+            }}
         )
         assert saved == expected
         assert row.litellm_params["complexity_router_config"] == stored_config
         assert request.litellm_params.complexity_router_config == config
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    @pytest.mark.parametrize("member", [False, True])
+    async def test_decision_model_switch_back_preserves_each_provider_connection(self, endpoint: str, member: bool) -> None:
+        from litellm.router_strategy.complexity_router.complexity_router import ComplexityRouter
+
+        transport: Final = {
+            "api_base": "https://typesafe.example.com",
+            "api_key": "synthetic-saved-jev-key",
+            "laya_api_base": "https://laya.example.com",
+            "laya_api_key": "synthetic-saved-laya-key",
+        }
+        initial: Final = self._row().model_copy(update={"litellm_params": {
+            "model": "auto_router/complexity_router",
+            "complexity_router_config": {
+                "classifier_type": "jev", "tiers": {"SIMPLE": "allowed"},
+                "jev_classifier_config": {**transport, "model": "jev-latest"},
+            },
+        }})
+
+        async def save(row: LiteLLM_ProxyModelTable, provider: str, model: str) -> LiteLLM_ProxyModelTable:
+            allowed_models: Final = ["allowed", "typesafe/jev-latest", "laya/multilingual"]
+            database: Final = self._database(self._team().model_copy(update={"models": allowed_models}), row)
+            request: Final = updateDeployment(
+                litellm_params=updateLiteLLMParams(complexity_router_config={
+                    "classifier_type": "jev", "tiers": {"SIMPLE": "allowed"},
+                    "jev_classifier_config": {"provider": provider, "model": model},
+                }),
+                model_info=ModelInfo(id=row.model_id),
+            )
+            actor: Final = (
+                UserAPIKeyAuth(user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER, models=allowed_models)
+                if member else UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+            )
+            with self._environment(database, row):
+                if endpoint == "patch":
+                    await patch_model(row.model_id, request, actor)
+                else:
+                    await update_model(request, actor)
+            written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+            params: Final = json.loads(written["litellm_params"])
+            assert params["complexity_router_config"]["jev_classifier_config"] == {
+                **transport, "provider": provider, "model": model,
+            }
+            router: Final = ComplexityRouter(
+                "round-trip", self._catalog(), params["complexity_router_config"], derive_savings_baseline=False
+            )
+            assert router.config.jev_classifier_config is not None
+            assert router.config.jev_classifier_config.provider == provider
+            return row.model_copy(update={"litellm_params": params})
+
+        laya: Final = await save(initial, "laya", "multilingual")
+        restored: Final = await save(laya, "typesafe", "jev-latest")
+        assert restored.litellm_params["complexity_router_config"]["jev_classifier_config"]["api_key"] == transport["api_key"]
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])

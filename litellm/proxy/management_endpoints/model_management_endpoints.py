@@ -404,6 +404,21 @@ WHERE model_id <> $1
 )
 
 
+def _stored_classifier_connection(
+    supplied: Mapping[str, object], stored: Mapping[str, object], prefix: str
+) -> Mapping[str, object]:
+    base_field: Final = f"{prefix}api_base"
+    key_field: Final = f"{prefix}api_key"
+    same_base: Final = base_field not in supplied or supplied[base_field] == stored.get(base_field)
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in stored.items()
+            if key in (key_field, base_field) and (key != key_field or same_base)
+        }
+    )
+
+
 def _effective_complexity_router_config(
     incoming_params: GenericLiteLLMParams | None, existing_params: GenericLiteLLMParams | None
 ) -> object:
@@ -419,20 +434,11 @@ def _effective_complexity_router_config(
         return incoming
     supplied: Final = TypeAdapter(dict[str, object]).validate_python(incoming_jev)
     stored: Final = TypeAdapter(dict[str, object]).validate_python(existing_jev)
-    if supplied.get("provider", "typesafe") != stored.get("provider", "typesafe"):
-        return incoming
-    same_base: Final = "api_base" not in supplied or supplied["api_base"] == stored.get("api_base")
-    transport: Final = MappingProxyType(
-        {
-            key: value
-            for key, value in stored.items()
-            if key in ("api_key", "api_base") and (key != "api_key" or same_base)
-        }
-    )
     return {  # mutable-ok: persisted JSON requires concrete nested dicts
         **incoming,
         "jev_classifier_config": {  # mutable-ok: json.dumps cannot serialize MappingProxyType
-            **transport,
+            **_stored_classifier_connection(supplied, stored, ""),
+            **_stored_classifier_connection(supplied, stored, "laya_"),
             **supplied,
         },
     }

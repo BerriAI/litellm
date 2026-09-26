@@ -75,6 +75,8 @@ class _MemberJevClassifierConfig(BaseModel):
     model: str
     api_key: None = None
     api_base: None = None
+    laya_api_key: None = None
+    laya_api_base: None = None
     timeout_ms: int
     instructions: str | None = None
     circuit_breaker_enabled: bool

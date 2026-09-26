@@ -55,6 +55,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
+from litellm.llms.base_llm.systemone import create_systemone_client
 from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
@@ -63,7 +64,6 @@ from litellm.router_strategy.complexity_router.tier_predictor import (
     resolve_tier_artifact,
 )
 from litellm.router_utils.pre_call_checks.deployment_affinity_check import DeploymentAffinityCheck
-from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -113,7 +113,6 @@ from .config import (
 )
 from .jev_classifier import (
     DEFAULT_JEV_INSTRUCTIONS,
-    HttpJevClassifierClient,
     JevClassifierClient,
     JevVerdict,
     build_jev_request,
@@ -1309,26 +1308,12 @@ class ComplexityRouter(CustomLogger):
 
     @staticmethod
     def _build_jev_client(config: JevClassifierConfig) -> JevClassifierClient:
-        if config.provider == "laya":
-            laya_base: Final = config.api_base or get_secret_str("LAYA_API_BASE")
-            if not laya_base:
-                raise ValueError("jev_classifier_config.api_base or LAYA_API_BASE is required for Laya")
-            laya_key: Final = (
-                config.api_key if config.api_base is not None else config.api_key or get_secret_str("LAYA_API_KEY")
-            )
-            return HttpJevClassifierClient(
-                api_key=laya_key,
-                api_base=laya_base,
-                http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
-                custom_llm_provider="laya",
-            )
-        api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
-        if not api_key:
-            raise ValueError("jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'")
-        api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
-        return HttpJevClassifierClient(
-            api_key=api_key,
-            api_base=api_base,
+        return create_systemone_client(
+            provider=config.provider,
+            api_base=config.api_base,
+            api_key=config.api_key,
+            laya_api_base=config.laya_api_base,
+            laya_api_key=config.laya_api_key,
             http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
         )
 

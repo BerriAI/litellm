@@ -71329,6 +71329,27 @@
         "output_cost_per_token": 0.0,
         "source": "https://openrouter.ai/typesafe/jev-1.13"
     },
+    "laya/english": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "laya",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://huggingface.co/convaiinnovations/laya"
+    },
+    "laya/multilingual": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "laya",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://huggingface.co/convaiinnovations/laya"
+    },
+    "laya/typed-decisions": {
+        "input_cost_per_token": 0.0,
+        "litellm_provider": "laya",
+        "mode": "evaluation",
+        "output_cost_per_token": 0.0,
+        "source": "https://huggingface.co/convaiinnovations/laya"
+    },
     "typesafe/jev-1.13.0": {
         "input_cost_per_token": 4.2e-08,
         "litellm_provider": "typesafe",

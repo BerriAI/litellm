@@ -100,7 +100,7 @@ async def test_jev_logging_failure_preserves_verdict_and_keeps_circuit_closed(
         ("jev_classifier", "SIMPLE"),
     )
     assert len(requests) == 2
-    assert caplog.messages == [f"JEV response logging failed ({error_name})"] * 2
+    assert caplog.messages == [f"typesafe response logging failed ({error_name})"] * 2
     assert "private-metadata" not in caplog.text
 
 
@@ -418,29 +418,29 @@ def _answer(choice: str = "SIMPLE") -> JevChoiceAnswer:
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("custom_pricing", [False, True])
 @pytest.mark.parametrize(
     ("connection", "authorization"),
     (
-        ({}, "Bearer synthetic-laya-key"),
-        ({"api_base": "https://laya.test"}, None),
-        ({"api_base": "https://laya.test", "api_key": "synthetic-explicit-key"}, "Bearer synthetic-explicit-key"),
+        ({"laya_api_base": "https://laya.test"}, None),
+        ({"laya_api_base": "https://laya.test", "laya_api_key": "synthetic-explicit-key"}, "Bearer synthetic-explicit-key"),
     ),
 )
 async def test_laya_routes_with_its_own_credentials_and_logs_the_selected_checkpoint(
-    monkeypatch: pytest.MonkeyPatch, connection: Mapping[str, str], authorization: str | None
+    monkeypatch: pytest.MonkeyPatch, connection: Mapping[str, str], authorization: str | None, custom_pricing: bool
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     monkeypatch.setenv("TYPESAFE_API_KEY", "synthetic-typesafe-key")
     monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.test")
-    monkeypatch.setenv("LAYA_API_KEY", "synthetic-laya-key")
-    monkeypatch.setenv("LAYA_API_BASE", "https://laya.test")
     recorder: Final = _UsageRecorder("laya/multilingual")
     monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
-    monkeypatch.setitem(
-        litellm.model_cost,
-        "laya/multilingual",
-        {"input_cost_per_token": 0.0002, "output_cost_per_token": 0.0004},
-    )
+    if custom_pricing:
+        monkeypatch.setitem(
+            litellm.model_cost,
+            "laya/multilingual",
+            {"input_cost_per_token": 0.0002, "output_cost_per_token": 0.0004},
+        )
+    expected_cost: Final = 0.0084 if custom_pricing else 0.0
     with respx.mock(assert_all_called=True) as upstream:
         route: Final = upstream.post("https://laya.test/v1/systemone").mock(
             return_value=httpx.Response(
@@ -458,7 +458,12 @@ async def test_laya_routes_with_its_own_credentials_and_logs_the_selected_checkp
             litellm.Router(model_list=[]),
             {
                 "classifier_type": "jev",
-                "jev_classifier_config": {"provider": "laya", **connection},
+                "jev_classifier_config": {
+                    "provider": "laya",
+                    "api_base": "https://typesafe.test",
+                    "api_key": "synthetic-stored-jev-key",
+                    **connection,
+                },
                 "tiers": {"SIMPLE": "cheap"},
                 "session_affinity": False,
                 "deployment_affinity": False,
@@ -472,7 +477,7 @@ async def test_laya_routes_with_its_own_credentials_and_logs_the_selected_checkp
         assert result is not None and result.model == "cheap"
         assert result.routing_decision is not None
         assert result.routing_decision["classifier_model"] == "laya/multilingual"
-        assert result.routing_decision["classifier_cost"] == pytest.approx(0.0084)
+        assert result.routing_decision["classifier_cost"] == pytest.approx(expected_cost)
         assert route.call_count == 1
         sent: Final = route.calls.last.request
         assert sent.headers.get("Authorization") == authorization
@@ -483,13 +488,12 @@ async def test_laya_routes_with_its_own_credentials_and_logs_the_selected_checkp
         assert "Say hello" in payload["state"]
     assert len(recorder.calls) == 1
     assert recorder.calls[0]["custom_llm_provider"] == "laya"
-    assert recorder.calls[0]["response_cost"] == pytest.approx(0.0084)
+    assert recorder.calls[0]["response_cost"] == pytest.approx(expected_cost)
 
 
 def test_laya_requires_its_own_endpoint_instead_of_falling_back_to_typesafe(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv("LAYA_API_BASE", raising=False)
     monkeypatch.setenv("TYPESAFE_API_KEY", "synthetic-typesafe-key")
-    with pytest.raises(ValueError, match="LAYA_API_BASE is required"):
+    with pytest.raises(ValueError, match="laya_api_base is required"):
         ComplexityRouter(
             "decision-router",
             litellm.Router(model_list=[]),
@@ -521,8 +525,8 @@ def test_jev_instructions_reject_blank_values() -> None:
     ("missing_key", "rejection"),
     [
         ({}, r"api_base requires jev_classifier_config\.api_key"),
-        ({"api_key": ""}, r"api_key must be non-empty"),
-        ({"api_key": "   "}, r"api_key must be non-empty"),
+        ({"api_key": ""}, r"API keys must be non-empty"),
+        ({"api_key": "   "}, r"API keys must be non-empty"),
     ],
 )
 def test_jev_api_base_without_its_own_key_is_rejected_so_the_environment_key_stays_home(
