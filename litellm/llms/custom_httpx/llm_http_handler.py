@@ -6162,7 +6162,7 @@ class BaseLLMHTTPHandler:
                 configured_client: Final = openai_client.with_options(
                     timeout=timeout,
                     set_default_headers={  # mutable-ok: OpenAI SDK accepts a mutable custom-header mapping
-                        key: str(value)  # mutable-ok: SDK headers are materialized as a concrete string mapping
+                        key: str(value)
                         for key, value in (extra_headers or {}).items()  # mutable-ok: SDK requires concrete headers
                     },
                 )

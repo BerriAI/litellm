@@ -139,7 +139,7 @@ async def _authorize_and_bind_nested_transcription_models(
     session_data: dict,  # mutable-ok: session payload is rewritten in place for provider serialization
     user_api_key_dict: UserAPIKeyAuth,
     llm_model_list: list | None,  # mutable-ok: inherited auth helper accepts the proxy model list
-    llm_router: Any,
+    llm_router: "Router | None",
 ) -> None:
     nested_models: Final = tuple(_transcription_model_candidates_from_session(session_data))
     for nested_model in nested_models:
@@ -515,18 +515,14 @@ async def proxy_realtime_calls(
         session_type = _coerce_realtime_session_type(raw_session_type)
         if is_translation_request != (raw_session_type == "translation"):
             return Response(
-                content=json.dumps(  # mutable-ok: JSON encoder requires the endpoint error payload mapping
-                    {"error": "Token is not valid for this Realtime endpoint"}
-                ),
+                content=json.dumps({"error": "Token is not valid for this Realtime endpoint"}),
                 status_code=http_status.HTTP_401_UNAUTHORIZED,
                 media_type="application/json",
             )
     else:
         if is_translation_request:
             return Response(
-                content=json.dumps(  # mutable-ok: JSON encoder requires the endpoint error payload mapping
-                    {"error": "Token is not valid for this Realtime endpoint"}
-                ),
+                content=json.dumps({"error": "Token is not valid for this Realtime endpoint"}),
                 status_code=http_status.HTTP_401_UNAUTHORIZED,
                 media_type="application/json",
             )

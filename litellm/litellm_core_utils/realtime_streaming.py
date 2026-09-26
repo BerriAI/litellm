@@ -524,9 +524,8 @@ class RealTimeStreaming:
         for event in self.messages:
             if event.get("type") != "session.closed":
                 continue
-            event_usage = event.get("usage")  # rebind-ok: each close event carries independent usage
             if (
-                isinstance(event_usage, dict)
+                isinstance(event_usage := event.get("usage"), dict)
                 and normalized_audio_duration_seconds(event_usage.get("output_seconds")) is not None
             ):
                 self._translation_usage_finalized = True

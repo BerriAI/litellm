@@ -40,9 +40,7 @@ class OpenAIGPTAudioTranscriptionConfig(OpenAIWhisperAudioTranscriptionConfig):
 
 
 class OpenAIGPTTranscribeAudioTranscriptionConfig(OpenAIGPTAudioTranscriptionConfig):
-    def get_supported_openai_params(  # mutable-ok: base transcription interface returns a mutable parameter list
-        self, model: str
-    ) -> list[OpenAIAudioTranscriptionOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIAudioTranscriptionOptionalParams]:
         return [
             "prompt",
             "response_format",

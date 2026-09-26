@@ -57,7 +57,9 @@ class OpenAIAudioTranscription(OpenAIChatCompletion):
             if data.get("stream") is True:
                 stream_response: Final = openai_client.audio.transcriptions.create(**sdk_data, timeout=timeout)
                 return None, stream_response
-            raw_response: Final = openai_client.audio.transcriptions.with_raw_response.create(**sdk_data, timeout=timeout)
+            raw_response: Final = openai_client.audio.transcriptions.with_raw_response.create(
+                **sdk_data, timeout=timeout
+            )
             headers: Final = dict(raw_response.headers)
             response: Final = raw_response.parse()
             return headers, response

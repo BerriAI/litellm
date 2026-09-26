@@ -75,12 +75,14 @@ def _with_resolved_session_model(session: dict[str, object], model_name: str) ->
         audio = session.get("audio")
         audio = audio if isinstance(audio, dict) else {}  # mutable-ok: nested session model is rebuilt locally
         audio_input = audio.get("input")
-        audio_input = (  # mutable-ok: nested session model is rebuilt locally
-            audio_input if isinstance(audio_input, dict) else {}
+        audio_input = (
+            audio_input if isinstance(audio_input, dict) else {}  # mutable-ok: nested session model is rebuilt locally
         )
         transcription = audio_input.get("transcription")
-        transcription = (  # mutable-ok: nested session model is rebuilt locally
-            transcription if isinstance(transcription, dict) else {}
+        transcription = (
+            transcription
+            if isinstance(transcription, dict)
+            else {}  # mutable-ok: nested session model is rebuilt locally
         )
         return {  # mutable-ok: provider routing requires an independently mutable session payload
             **session,
