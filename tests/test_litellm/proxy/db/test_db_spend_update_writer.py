@@ -46,13 +46,14 @@ from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
         ("2026-09-30T15:59:59.999999Z", "Asia/Singapore", "2026-09-30"),
         ("2026-09-25T17:00:00Z", None, "2026-09-25"),
         ("2026-07-25T22:00:00-07:00", None, "2026-07-25"),
+        (None, "Asia/Singapore", None),
     ],
 )
 async def test_daily_usage_reporting_calendar(
     monkeypatch: pytest.MonkeyPatch,
-    start_time: str | datetime,
+    start_time: str | datetime | None,
     reporting_timezone: str | None,
-    expected_date: str,
+    expected_date: str | None,
 ) -> None:
     monkeypatch.setattr(litellm, "daily_usage_timezone", reporting_timezone, raising=False)
     monkeypatch.setattr(litellm, "timezone", "Asia/Singapore", raising=False)
@@ -73,6 +74,9 @@ async def test_daily_usage_reporting_calendar(
     transaction: Final = await DBSpendUpdateWriter()._common_add_spend_log_transaction_to_daily_transaction(
         payload=payload, prisma_client=prisma
     )
+    if expected_date is None:
+        assert transaction is None
+        return
     assert transaction is not None
     assert transaction["date"] == expected_date
     assert transaction["spend"] == 0.25
