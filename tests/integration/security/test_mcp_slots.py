@@ -269,14 +269,15 @@ def _tool_call_authorizations(peer: McpPeer, seen: list[dict[str, object]]) -> t
     )
 
 
-def _spend_rows(marker: Canary, since: datetime, count: int) -> Sequence[Mapping[str, object]]:
+def _spend_rows(marker: Canary, since: datetime, call_types: frozenset[str]) -> Sequence[Mapping[str, object]]:
+    """Every spend row carrying ``marker``, once a row of each of ``call_types`` has been written."""
     return eventually(
         lambda: read_rows(
             'SELECT request_id, call_type FROM "LiteLLM_SpendLogs" '
             'WHERE "startTime" >= %s AND proxy_server_request::text LIKE %s',
             (since.astimezone(UTC).replace(tzinfo=None) - SLACK, f"%{marker.core}%"),
         ),
-        lambda rows: len(rows) == count,
+        lambda rows: call_types <= {row["call_type"] for row in rows},
         seconds=70,
     )
 
@@ -318,7 +319,9 @@ def test_mcp_credential_reaches_only_its_peer(
         assert _tool_call_authorizations(peer, peer_calls) == (f"Bearer {credential.value}",), (
             f"Positive control: the MCP peer never received the {slot} canary on tools/call"
         )
-        rows: Final = _spend_rows(marker, started, 2 if via == "chat" else 1)
+        rows: Final = _spend_rows(
+            marker, started, frozenset({"call_mcp_tool", "acompletion"} if via == "chat" else {"call_mcp_tool"})
+        )
         tool_row: Final = next(str(row["request_id"]) for row in rows if row["call_type"] == "call_mcp_tool")
         settle(rig, tool_row, marker)
 
