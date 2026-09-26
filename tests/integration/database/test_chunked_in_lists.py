@@ -12,7 +12,7 @@ from prisma import Prisma
 from prisma.errors import DataError
 from psycopg import sql
 
-from litellm.repositories.bounded_in import count_in, delete_many_in, find_many_in, update_many_in
+from litellm.repositories.chunked_in import count_in, delete_many_in, find_many_in, update_many_in
 
 ROWS: Final = 40_000
 OUTSIDE: Final = 25
@@ -67,7 +67,7 @@ def _count(schema: str, condition: sql.Composable) -> int:
     return int(row[0])
 
 
-@pytest.mark.covers("other.database.bounded_in.raw_in_list_over_bind_cap_fails")
+@pytest.mark.covers("other.database.chunked_in.raw_in_list_over_bind_cap_fails")
 async def test_a_raw_in_filter_over_the_bind_parameter_cap_is_rejected_by_postgres() -> None:
     async with _config_table() as (database, schema):
         where: Final = {"param_name": {"in": _listed()}}
@@ -81,8 +81,8 @@ async def test_a_raw_in_filter_over_the_bind_parameter_cap_is_rejected_by_postgr
 
 
 @pytest.mark.covers(
-    "other.database.bounded_in.find_many_in_returns_every_row",
-    "other.database.bounded_in.count_in_counts_every_row",
+    "other.database.chunked_in.find_many_in_returns_every_row",
+    "other.database.chunked_in.count_in_counts_every_row",
 )
 async def test_find_many_in_and_count_in_read_every_row_past_the_bind_parameter_cap() -> None:
     async with _config_table() as (database, _):
@@ -93,7 +93,7 @@ async def test_find_many_in_and_count_in_read_every_row_past_the_bind_parameter_
         assert await count_in(database.litellm_config, "param_name", values, where={"reload_revision": 1}) == 0
 
 
-@pytest.mark.covers("other.database.bounded_in.update_many_in_updates_every_row_in_a_transaction")
+@pytest.mark.covers("other.database.chunked_in.update_many_in_updates_every_row_in_a_transaction")
 async def test_update_many_in_updates_every_row_inside_one_transaction() -> None:
     async with _config_table() as (database, schema):
         async with database.tx(timeout=timedelta(seconds=60)) as transaction:
@@ -109,7 +109,7 @@ async def test_update_many_in_updates_every_row_inside_one_transaction() -> None
         assert _count(schema, sql.SQL("reload_revision = 0 AND param_name LIKE 'outside-%'")) == OUTSIDE
 
 
-@pytest.mark.covers("other.database.bounded_in.delete_many_in_deletes_every_row")
+@pytest.mark.covers("other.database.chunked_in.delete_many_in_deletes_every_row")
 async def test_delete_many_in_deletes_every_listed_row_and_nothing_else() -> None:
     async with _config_table() as (database, schema):
         deleted: Final = await delete_many_in(

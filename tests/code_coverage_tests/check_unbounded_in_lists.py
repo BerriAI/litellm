@@ -14,7 +14,7 @@ the cap (LIT-7535). Reported, across litellm/ and enterprise/:
            `IN (SELECT ...)`, `IN ($1, $2)` and `= ANY($1::text[])` pass.
 
 The Prisma engine chunks `create_many` on its own but sends an `update_many` /
-`delete_many` filter whole. `litellm.repositories.bounded_in` chunks an `in` list for
+`delete_many` filter whole. `litellm.repositories.chunked_in` chunks an `in` list for
 find_many / count / update_many / delete_many and is itself exempt. Record a real bound with
 `# bounded-ok: <reason>` on the reported line or alone on the line above; the reason is required.
 
@@ -45,7 +45,7 @@ from typing import Final
 REPO_ROOT: Final = Path(__file__).resolve().parents[2]
 DEFAULT_TARGETS: Final = ("litellm", "enterprise")
 DEFAULT_BASELINE: Final = Path(__file__).resolve().with_name("unbounded_in_baseline.txt")
-EXEMPT_PATHS: Final = frozenset({"litellm/repositories/bounded_in.py"})
+EXEMPT_PATHS: Final = frozenset({"litellm/repositories/chunked_in.py"})
 MODULE_SCOPE: Final = "<module>"
 BASELINE_HEADER: Final = (
     "# Grandfathered findings of check_unbounded_in_lists.py: path::scope::kind::subject::occurrence.\n"
@@ -245,7 +245,7 @@ def _filtered_fields(tree: ast.AST) -> Mapping[int, str]:
 def _prisma_advice(key: str) -> str:
     if key == "in":
         return (
-            "Chunk it with `litellm.repositories.bounded_in` (find_many_in / count_in / update_many_in / "
+            "Chunk it with `litellm.repositories.chunked_in` (find_many_in / count_in / update_many_in / "
             "delete_many_in)"
         )
     return "A negated list cannot be chunked: use `<> ALL($1::text[])` in raw SQL or a relation filter"

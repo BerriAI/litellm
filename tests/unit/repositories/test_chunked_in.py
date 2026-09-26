@@ -6,8 +6,9 @@ import pytest
 from prisma import models as prisma_models
 from prisma.builder import QueryBuilder
 
-from litellm.repositories.bounded_in import (
+from litellm.repositories.chunked_in import (
     IN_LIST_CHUNK_SIZE,
+    MAX_IN_LIST_CHUNK_SIZE,
     SameFieldFilterError,
     count_in,
     delete_many_in,
@@ -75,8 +76,8 @@ def _ids(size: int) -> list[str]:
     return [f"id-{n}" for n in range(size)]
 
 
-def _expected_chunks(size: int) -> list[int]:
-    return [min(IN_LIST_CHUNK_SIZE, size - start) for start in range(0, size, IN_LIST_CHUNK_SIZE)]
+def _expected_chunks(size: int, chunk_size: int = IN_LIST_CHUNK_SIZE) -> list[int]:
+    return [min(chunk_size, size - start) for start in range(0, size, chunk_size)]
 
 
 @pytest.mark.parametrize("size", SIZES)
@@ -177,3 +178,63 @@ async def test_the_composed_filter_renders_like_a_hand_written_prisma_filter() -
     await find_many_in(table, "param_name", ["a", "b", "a"], where={"param_value": 1})
     hand_written = {"AND": [{"param_value": 1}, {"param_name": {"in": ["a", "b"]}}]}
     assert _find_many_query(table.filters[0]) == _find_many_query(hand_written)
+
+
+async def _run_every_operation(table: FakeTable, values: Sequence[str], chunk_size: int) -> None:
+    await find_many_in(table, "id", values, chunk_size=chunk_size)
+    await count_in(table, "id", values, chunk_size=chunk_size)
+    await update_many_in(table, "id", values, data={"team": "x"}, atomicity="per_chunk_ok", chunk_size=chunk_size)
+    await delete_many_in(table, "id", values, atomicity="per_chunk_ok", chunk_size=chunk_size)
+
+
+async def test_the_default_chunk_size_is_unchanged() -> None:
+    assert IN_LIST_CHUNK_SIZE == 5_000
+    assert MAX_IN_LIST_CHUNK_SIZE == 30_000
+
+
+@pytest.mark.parametrize("chunk_size", [7, 100, 1_234])
+async def test_a_custom_chunk_size_sets_the_number_of_queries_for_every_operation(chunk_size: int) -> None:
+    table = _table(1_234)
+    await _run_every_operation(table, _ids(1_234), chunk_size)
+    assert table.in_list_sizes() == _expected_chunks(1_234, chunk_size) * 4
+    assert table.rows == [{"id": f"id-{n}", "team": "even" if n % 2 == 0 else "odd"} for n in range(1_234, 1_244)]
+
+
+@dataclass
+class ChunkSizeRecorder:
+    """Counts every value it is sent without scanning rows, so large chunks stay cheap."""
+
+    sizes: list[int] = field(default_factory=list)
+
+    async def count(self, *, where: Mapping[str, object]) -> int:
+        self.sizes.append(len(_membership(where)["in"]))
+        return self.sizes[-1]
+
+
+@pytest.mark.parametrize(
+    ("chunk_size", "expected"),
+    [(1, [1] * 5), (MAX_IN_LIST_CHUNK_SIZE, [MAX_IN_LIST_CHUNK_SIZE, 1])],
+)
+async def test_the_chunk_size_bounds_are_accepted(chunk_size: int, expected: list[int]) -> None:
+    table = ChunkSizeRecorder()
+    size = sum(expected)
+    assert await count_in(table, "id", _ids(size), chunk_size=chunk_size) == size
+    assert table.sizes == expected
+
+
+@pytest.mark.parametrize("chunk_size", [-1, 0, MAX_IN_LIST_CHUNK_SIZE + 1])
+@pytest.mark.parametrize("values", [[], ["id-0"]])
+async def test_a_chunk_size_outside_1_to_the_max_is_refused_before_any_query(
+    chunk_size: int, values: list[str]
+) -> None:
+    table = _table(1)
+    operations = (
+        find_many_in(table, "id", values, chunk_size=chunk_size),
+        count_in(table, "id", values, chunk_size=chunk_size),
+        update_many_in(table, "id", values, data={"team": "x"}, atomicity="per_chunk_ok", chunk_size=chunk_size),
+        delete_many_in(table, "id", values, atomicity="per_chunk_ok", chunk_size=chunk_size),
+    )
+    for operation in operations:
+        with pytest.raises(ValueError, match="chunk_size"):
+            await operation
+    assert table.filters == []

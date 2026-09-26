@@ -122,12 +122,12 @@ class TestPrismaFilters:
 
     def test_an_in_list_is_pointed_at_the_chunking_helper(self, tmp_path):
         (finding,) = _check(tmp_path, 'where = {"user_id": {"in": user_ids}}\n')
-        assert "litellm.repositories.bounded_in" in finding.message
+        assert "litellm.repositories.chunked_in" in finding.message
 
     def test_a_not_in_list_is_pointed_at_an_array_parameter_since_it_cannot_be_chunked(self, tmp_path):
         (finding,) = _check(tmp_path, 'where = {"user_id": {"not_in": user_ids}}\n')
         assert "<> ALL($1::text[])" in finding.message
-        assert "bounded_in" not in finding.message
+        assert "chunked_in" not in finding.message
 
 
 class TestRawSql:
@@ -218,13 +218,13 @@ class TestMarkers:
 
 class TestDriver:
     def test_the_chunking_helper_is_exempt(self):
-        helper = checker.REPO_ROOT / "litellm" / "repositories" / "bounded_in.py"
+        helper = checker.REPO_ROOT / "litellm" / "repositories" / "chunked_in.py"
         assert "prisma" in tuple(finding.kind for finding in checker.check_file(helper))
         assert checker.scan(checker.collect_paths([str(helper)])) == ()
 
     def test_a_copy_of_the_helper_elsewhere_is_not_exempt(self, tmp_path):
-        helper = checker.REPO_ROOT / "litellm" / "repositories" / "bounded_in.py"
-        copy = tmp_path / "bounded_in.py"
+        helper = checker.REPO_ROOT / "litellm" / "repositories" / "chunked_in.py"
+        copy = tmp_path / "chunked_in.py"
         copy.write_text(helper.read_text(encoding="utf-8"), encoding="utf-8")
         assert "prisma" in tuple(finding.kind for finding in checker.scan([copy]))
 
