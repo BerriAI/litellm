@@ -298,7 +298,7 @@ def test_config_declared_server_behaves_like_database_server_but_is_read_only(ga
 
 @pytest.mark.xfail(
     strict=True,
-    raises=pytest.RaisesExc(AssertionError, match="LIT-3974 detail access should succeed"),
+    raises=pytest.RaisesExc(AssertionError, match="Team-granted server detail access should succeed"),
     reason="LIT-3974 A: team-granted detail access",
 )
 def test_team_granted_database_server_detail_is_available_to_team_key(gateway: Gateway) -> None:
@@ -310,14 +310,14 @@ def test_team_granted_database_server_detail_is_available_to_team_key(gateway: G
 
         response: Final = gateway.request("GET", f"/v1/mcp/server/{server_id}", key=key)
 
-        assert response.status_code == 200, f"LIT-3974 detail access should succeed: {response.text}"
+        assert response.status_code == 200, f"Team-granted server detail access should succeed: {response.text}"
         assert response.json()["server_id"] == server_id, response.text
         assert response.json()["alias"] == alias, response.text
 
 
 @pytest.mark.xfail(
     strict=True,
-    raises=pytest.RaisesExc(AssertionError, match="LIT-3974 detail access should succeed"),
+    raises=pytest.RaisesExc(AssertionError, match="Team-granted server detail access should succeed"),
     reason="LIT-3974 A: team-granted detail access",
 )
 def test_ui_session_lists_and_fetches_team_granted_config_server(
@@ -345,6 +345,6 @@ def test_ui_session_lists_and_fetches_team_granted_config_server(
 
             detail: Final = candidate.client.get(f"/v1/mcp/server/{server_id}", headers=headers)
 
-        assert detail.status_code == 200, f"LIT-3974 detail access should succeed: {detail.text}"
+        assert detail.status_code == 200, f"Team-granted server detail access should succeed: {detail.text}"
         assert detail.json()["server_id"] == server_id, detail.text
         assert detail.json()["alias"] == alias, detail.text
