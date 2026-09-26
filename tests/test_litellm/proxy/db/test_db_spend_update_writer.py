@@ -982,11 +982,11 @@ async def test_commit_spend_updates_to_db_writes_team_member_spend_in_one_roster
     assert lock_statement is _TEAM_ADVISORY_LOCK_SQL
     assert locked_team_id == team_id
     assert "pg_advisory_xact_lock(hashtext($1))" in lock_statement
-    statement, user_ids, team_ids, costs = spend_call.args
+    statement, members = spend_call.args
     assert statement is _TEAM_MEMBER_SPEND_SQL
-    assert (list(user_ids), list(team_ids), list(costs)) == ([user_id], [team_id], [response_cost])
+    assert json.loads(members) == [{"user_id": user_id, "team_id": team_id, "cost": response_cost}]
     assert 'INSERT INTO "LiteLLM_TeamMembership"' in statement
-    assert "members_with_roles @> jsonb_build_array(jsonb_build_object('user_id', p.user_id))" in statement
+    assert "members_with_roles @> jsonb_build_array(jsonb_build_object('user_id', member.user_id))" in statement
     assert "ON CONFLICT (user_id, team_id) DO UPDATE" in statement
     assert 'spend = "LiteLLM_TeamMembership".spend + EXCLUDED.spend' in statement
     assert 'total_spend = "LiteLLM_TeamMembership".total_spend + EXCLUDED.total_spend' in statement
@@ -995,7 +995,7 @@ async def test_commit_spend_updates_to_db_writes_team_member_spend_in_one_roster
 @pytest.mark.asyncio
 async def test_commit_spend_updates_to_db_orders_team_member_rows_by_team_then_user():
     """
-    The member spend statement touches rows in the order of its input arrays, so the batch
+    The member spend statement touches rows in the order of its input rows, so the batch
     is handed over sorted by (team_id, user_id), with each cost kept next to its member, and
     each distinct team is locked once, in `sorted(team_ids)` order, the order /team/delete
     locks in, so a concurrent flush and delete cannot deadlock. `eng` and `eng2` pin that:
@@ -1022,13 +1022,13 @@ async def test_commit_spend_updates_to_db_orders_team_member_rows_by_team_then_u
     )
 
     *lock_calls, spend_call = mock_transaction.execute_raw.await_args_list
-    _statement, user_ids, team_ids, costs = spend_call.args
+    _statement, members = spend_call.args
     assert [lock_call.args for lock_call in lock_calls] == [
         (_TEAM_ADVISORY_LOCK_SQL, "eng"),
         (_TEAM_ADVISORY_LOCK_SQL, "eng-b"),
         (_TEAM_ADVISORY_LOCK_SQL, "eng2"),
     ]
-    assert list(zip(team_ids, user_ids, costs)) == [
+    assert [(row["team_id"], row["user_id"], row["cost"]) for row in json.loads(members)] == [
         ("eng", "user_x", 0.3),
         ("eng", "user_y", 0.2),
         ("eng-b", "user_x", 0.4),
