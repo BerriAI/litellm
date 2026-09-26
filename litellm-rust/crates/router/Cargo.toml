@@ -6,7 +6,6 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-litellm-config.workspace = true
 litellm-core.workspace = true
 
 [dev-dependencies]

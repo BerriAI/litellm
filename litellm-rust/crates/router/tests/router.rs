@@ -1,35 +1,8 @@
 use std::time::Duration;
 
-use litellm_config::Config;
 use litellm_core::messages::MessagesShaping;
 use litellm_router::{Deployment, Router};
 use rstest::rstest;
-
-#[rstest]
-#[case::minimal("")]
-#[case::configured(
-    "api_key: test-key\n      api_base: https://provider.example/v1\n      custom_llm_provider: test-provider"
-)]
-#[case::secret_reference("api_key: os.environ/ROUTER_TEST_API_KEY")]
-fn configuration_preserves_deployment_parameters(#[case] parameters: &str) {
-    let config = Config::from_yaml(&format!(
-        "model_list:\n  - model_name: public-model\n    litellm_params:\n      model: provider/model\n      {parameters}"
-    ))
-    .unwrap();
-    let router = Router::from_model_list(&config.model_list);
-    let deployment = router.get(&config.model_list[0].model_name).unwrap();
-    let params = &config.model_list[0].litellm_params;
-
-    assert_eq!(deployment.model, params.model);
-    assert_eq!(
-        deployment.api_key.as_deref(),
-        params.api_key.as_ref().map(|key| key.expose())
-    );
-    assert_eq!(deployment.api_base, params.api_base);
-    assert_eq!(deployment.custom_llm_provider, params.custom_llm_provider);
-    assert_eq!(deployment.timeout, Deployment::default().timeout);
-    assert_eq!(deployment.shaping, Deployment::default().shaping);
-}
 
 #[rstest]
 #[case::first("public-a", Some("provider/a"))]
@@ -38,30 +11,29 @@ fn configuration_preserves_deployment_parameters(#[case] parameters: &str) {
 #[case::provider_name_is_not_an_alias("provider/a", None)]
 #[case::case_sensitive("PUBLIC-A", None)]
 fn lookup_uses_public_names(#[case] name: &str, #[case] expected: Option<&str>) {
-    let config = Config::from_yaml(
-        "model_list:
-  - model_name: public-a
-    litellm_params:
-      model: provider/a
-  - model_name: public-b
-    litellm_params:
-      model: provider/b",
-    )
-    .unwrap();
-    let router = Router::from_model_list(&config.model_list);
+    let router = Router::from_iter([
+        (
+            "public-a".into(),
+            Deployment {
+                model: "provider/a".into(),
+                ..Default::default()
+            },
+        ),
+        (
+            "public-b".into(),
+            Deployment {
+                model: "provider/b".into(),
+                ..Default::default()
+            },
+        ),
+    ]);
 
     assert_eq!(router.get(name).map(|entry| entry.model.as_str()), expected);
 }
 
 #[rstest]
-fn empty_configuration_has_no_deployment() {
-    let config = Config::from_yaml("model_list: []").unwrap();
-
-    assert!(
-        Router::from_model_list(&config.model_list)
-            .get("")
-            .is_none()
-    );
+fn empty_router_has_no_deployment() {
+    assert!(Router::from_iter([]).get("").is_none());
     assert!(Router::default().get("unknown").is_none());
 }
 
