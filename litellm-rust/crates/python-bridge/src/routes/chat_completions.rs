@@ -35,7 +35,7 @@ async fn execute(
         timeout,
     } = options;
     run_chat_completions(
-        crate::http::pool(),
+        crate::http::resources(),
         &config,
         ChatCompletionsRequest {
             model: &model,

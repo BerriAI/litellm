@@ -1,3 +1,2 @@
-mod error;
-pub use error::Error;
+pub use crate::error::RouteError as Error;
 pub mod websocket;

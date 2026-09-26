@@ -1,14 +1,18 @@
-use litellm_types::llms::anthropic_messages::anthropic_request::{
-    AnthropicMessage, AnthropicMessagesRequest,
+use litellm_types::{
+    llms::anthropic_messages::anthropic_request::{
+        AdaptiveThinking, AnthropicMessage, AnthropicMessagesOptionalParams,
+        AnthropicMessagesRequest, EnabledThinking, ThinkingConfig, ThinkingDisplay,
+    },
+    recognized::Recognized,
 };
 use serde_json::{Value, json};
 
 use crate::{
+    Error,
     anthropic::common_utils::{
         flatten_unencrypted_web_search_results, sanitize_tool_use_ids, strip_empty_content_blocks,
         strip_provider_specific_fields,
     },
-    base_llm::chat::transformation::Error,
 };
 
 pub fn shape_anthropic_messages_request(
@@ -17,12 +21,16 @@ pub fn shape_anthropic_messages_request(
 ) -> Result<AnthropicMessagesRequest, Error> {
     Ok(AnthropicMessagesRequest {
         messages: sanitize_anthropic_messages(request.messages),
-        metadata: request
-            .metadata
-            .as_ref()
-            .map(validate_anthropic_api_metadata)
-            .transpose()?,
-        thinking: with_reasoning_auto_summary(request.thinking, reasoning_auto_summary),
+        params: AnthropicMessagesOptionalParams {
+            metadata: request
+                .params
+                .metadata
+                .as_ref()
+                .map(validate_anthropic_api_metadata)
+                .transpose()?,
+            thinking: with_reasoning_auto_summary(request.params.thinking, reasoning_auto_summary),
+            ..request.params
+        },
         ..request
     })
 }
@@ -48,20 +56,38 @@ fn validate_anthropic_api_metadata(metadata: &Value) -> Result<Value, Error> {
     }
 }
 
-fn with_reasoning_auto_summary(thinking: Option<Value>, enabled: bool) -> Option<Value> {
-    let Some(Value::Object(thinking)) = thinking else {
+fn with_reasoning_auto_summary(
+    thinking: Option<Recognized<ThinkingConfig>>,
+    enabled: bool,
+) -> Option<Recognized<ThinkingConfig>> {
+    if !enabled {
         return thinking;
-    };
-    if !enabled || thinking.get("type").and_then(Value::as_str) == Some("disabled") {
-        return Some(Value::Object(thinking));
     }
-    Some(Value::Object(
-        thinking
-            .into_iter()
-            .filter(|(key, _)| key != "display")
-            .chain([("display".to_string(), json!("summarized"))])
-            .collect(),
-    ))
+    let summarized = Some(Recognized::Known(ThinkingDisplay::Summarized));
+    match thinking {
+        Some(Recognized::Known(ThinkingConfig::Enabled(enabled))) => Some(Recognized::Known(
+            ThinkingConfig::Enabled(EnabledThinking {
+                display: summarized,
+                ..enabled
+            }),
+        )),
+        Some(Recognized::Known(ThinkingConfig::Adaptive(adaptive))) => Some(Recognized::Known(
+            ThinkingConfig::Adaptive(AdaptiveThinking {
+                display: summarized,
+                ..adaptive
+            }),
+        )),
+        Some(Recognized::Unrecognized(Value::Object(fields))) => {
+            Some(Recognized::Unrecognized(Value::Object(
+                fields
+                    .into_iter()
+                    .filter(|(key, _)| key != "display")
+                    .chain([("display".to_string(), json!("summarized"))])
+                    .collect(),
+            )))
+        }
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -230,12 +256,22 @@ mod tests {
     )]
     #[case::no_thinking(None, true, None)]
     #[case::non_object_thinking(Some(json!("enabled")), true, Some(json!("enabled")))]
+    #[case::unknown_type(
+        Some(json!({"type": "future"})),
+        true,
+        Some(json!({"type": "future", "display": "summarized"})),
+    )]
     fn reasoning_auto_summary_marks_active_thinking_as_summarized(
         #[case] thinking: Option<Value>,
         #[case] enabled: bool,
         #[case] expected: Option<Value>,
     ) {
-        assert_eq!(with_reasoning_auto_summary(thinking, enabled), expected);
+        let thinking = thinking.map(|thinking| serde_json::from_value(thinking).unwrap());
+        assert_eq!(
+            with_reasoning_auto_summary(thinking, enabled)
+                .map(|thinking| serde_json::to_value(thinking).unwrap()),
+            expected
+        );
     }
 
     #[test]

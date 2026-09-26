@@ -11,11 +11,13 @@
 //! accepts; anything richer is declined upstream by the capability gate.
 
 use litellm_types::llms::openai::{ChatMessage, ChatMessageContent};
+use strum::IntoStaticStr;
 
 pub const EMPTY_TEXT_PLACEHOLDER: &str =
     "[System: Empty message content sanitised to satisfy protocol]";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq)]
+#[strum(serialize_all = "snake_case")]
 pub enum TurnRole {
     User,
     Assistant,
@@ -23,10 +25,7 @@ pub enum TurnRole {
 
 impl TurnRole {
     pub fn as_str(self) -> &'static str {
-        match self {
-            Self::User => "user",
-            Self::Assistant => "assistant",
-        }
+        self.into()
     }
 }
 

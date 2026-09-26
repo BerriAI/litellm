@@ -6,7 +6,7 @@ use pyo3::{
 use serde_json::Value;
 
 use crate::{
-    errors::{RustBridgeDeclined, responses_error_to_pyerr},
+    errors::{RustBridgeDeclined, route_error_to_pyerr},
     marshal::{marshal_headers, optional_timeout},
 };
 
@@ -57,7 +57,7 @@ impl ResponsesWebSocketConnection {
         crate::logger::run_async_value(py, async move {
             let inner = RustResponsesWebSocketConnection::connect_url(&url, &headers, timeout)
                 .await
-                .map_err(responses_error_to_pyerr)?;
+                .map_err(route_error_to_pyerr)?;
             Ok(ResponsesWebSocketConnection { inner })
         })
     }
@@ -65,24 +65,21 @@ impl ResponsesWebSocketConnection {
     fn send_text<'py>(&self, py: Python<'py>, text: String) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         crate::logger::run_async_value(py, async move {
-            inner
-                .send_text(text)
-                .await
-                .map_err(responses_error_to_pyerr)
+            inner.send_text(text).await.map_err(route_error_to_pyerr)
         })
     }
 
     fn recv_text<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         crate::logger::run_async_value(py, async move {
-            inner.recv_text().await.map_err(responses_error_to_pyerr)
+            inner.recv_text().await.map_err(route_error_to_pyerr)
         })
     }
 
     fn close<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         let inner = self.inner.clone();
         crate::logger::run_async_value(py, async move {
-            inner.close().await.map_err(responses_error_to_pyerr)
+            inner.close().await.map_err(route_error_to_pyerr)
         })
     }
 }

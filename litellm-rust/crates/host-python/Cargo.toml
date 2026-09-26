@@ -6,14 +6,16 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-host.workspace = true
+
 bytes.workspace = true
 futures-util.workspace = true
-litellm-host.workspace = true
-pyo3.workspace = true
-pyo3-async-runtimes.workspace = true
-pythonize.workspace = true
 serde.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
+
+pyo3.workspace = true
+pyo3-async-runtimes.workspace = true
+pythonize = "0.29.0"
 
 [dev-dependencies]
 rstest.workspace = true

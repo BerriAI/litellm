@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
-use litellm_auth_gcp::VertexAuth;
+use litellm_auth::AuthServices;
 use litellm_host::event::WireRequest;
 use litellm_http::{
     Client, ClientVariant, HttpClientConfig, HttpClientPool,
@@ -36,7 +36,7 @@ pub struct OcrClient {
     provider_http: Client,
     polling_http: Client,
     document_fetcher: MediaFetcher,
-    vertex_auth: VertexAuth,
+    auth: Arc<AuthServices>,
     settings: OcrSettings,
     secrets: Arc<dyn SecretSource>,
 }
@@ -46,7 +46,7 @@ impl OcrClient {
         pool: &HttpClientPool,
         config: &HttpClientConfig,
         url_policy: UrlPolicy,
-        vertex_auth: VertexAuth,
+        auth: Arc<AuthServices>,
         settings: OcrSettings,
         secrets: Arc<dyn SecretSource>,
     ) -> Result<Self, litellm_http::Error> {
@@ -54,7 +54,7 @@ impl OcrClient {
             provider_http: pool.client(config, ClientVariant::Provider)?,
             polling_http: pool.client(config, ClientVariant::NoRedirect)?,
             document_fetcher: MediaFetcher::new(pool, config, url_policy)?,
-            vertex_auth,
+            auth,
             settings,
             secrets,
         })
@@ -72,8 +72,8 @@ impl OcrClient {
         &self.document_fetcher
     }
 
-    pub fn vertex_auth(&self) -> &VertexAuth {
-        &self.vertex_auth
+    pub fn auth(&self) -> &AuthServices {
+        &self.auth
     }
 
     pub fn settings(&self) -> &OcrSettings {
@@ -95,7 +95,7 @@ impl OcrClient {
             provider_http,
             polling_http: no_redirect_http.clone(),
             document_fetcher: MediaFetcher::for_test(no_redirect_http),
-            vertex_auth: VertexAuth::default(),
+            auth: Arc::new(AuthServices::default()),
             settings: OcrSettings::default(),
         }
     }

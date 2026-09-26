@@ -4,7 +4,7 @@ use pyo3::{
     prelude::*,
 };
 
-use crate::errors::{RustUpstreamError, core_error_to_pyerr};
+use crate::errors::{RustUpstreamError, by_fault};
 
 pub(super) fn to_pyerr(error: Error) -> PyErr {
     let status = error.http_status_code();
@@ -19,7 +19,7 @@ pub(super) fn to_pyerr(error: Error) -> PyErr {
                 upstream_error(py, status, body, Vec::new())?
             }
             Error::RequestFormat => {
-                let error = core_error_to_pyerr(Error::RequestFormat.into());
+                let error = by_fault(true, Error::RequestFormat.to_string());
                 error
                     .value(py)
                     .setattr("ocr_request_format_error", true)
@@ -30,11 +30,23 @@ pub(super) fn to_pyerr(error: Error) -> PyErr {
                 PyFileNotFoundError::new_err(format!("File not found: {}", path.display()))
             }
             Error::FileRead { source, .. } => PyOSError::new_err(source.to_string()),
-            other => core_error_to_pyerr(other.into()),
+            other => by_fault(is_request(&other), other.to_string()),
         })
     })
     .unwrap_or_else(|error| error);
     attach_status(mapped, status)
+}
+
+fn is_request(error: &Error) -> bool {
+    error.is_request()
+        || matches!(
+            error,
+            Error::Auth(_)
+                | Error::InvalidProvider(_)
+                | Error::InvalidRequest(_)
+                | Error::MissingField(_)
+                | Error::MissingDocumentUrl
+        )
 }
 
 fn upstream_error(

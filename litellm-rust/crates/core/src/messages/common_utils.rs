@@ -4,20 +4,34 @@ use litellm_llms::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     azure_ai::anthropic::messages_transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
     base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig,
+    bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
+use strum::{EnumString, IntoStaticStr};
 
 use super::Error;
 
 const HEADER_CONTEXT: &str = "messages";
 
-pub(super) fn messages_provider_config(
-    provider: &str,
-) -> Option<&'static dyn BaseAnthropicMessagesConfig> {
-    match provider {
-        "anthropic" => Some(&ANTHROPIC_MESSAGES_CONFIG),
-        "azure_ai" => Some(&AZURE_ANTHROPIC_MESSAGES_CONFIG),
-        _ => None,
+#[derive(Clone, Copy, Debug, EnumString, IntoStaticStr, PartialEq, Eq)]
+#[strum(serialize_all = "snake_case")]
+pub(crate) enum MessagesProvider {
+    Anthropic,
+    AzureAi,
+    Bedrock,
+}
+
+impl MessagesProvider {
+    pub(crate) fn as_str(self) -> &'static str {
+        self.into()
+    }
+
+    pub(crate) fn config(self) -> &'static dyn BaseAnthropicMessagesConfig {
+        match self {
+            Self::Anthropic => &ANTHROPIC_MESSAGES_CONFIG,
+            Self::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,
+            Self::Bedrock => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+        }
     }
 }
 
@@ -31,14 +45,26 @@ pub(super) fn string_headers(
 mod tests {
     use serde_json::json;
 
-    use super::{messages_provider_config, string_headers, truncate_error_body};
+    use rstest::rstest;
+
+    use super::{MessagesProvider, string_headers, truncate_error_body};
     use crate::messages::Error;
 
+    #[rstest]
+    #[case::anthropic("anthropic", MessagesProvider::Anthropic)]
+    #[case::azure_ai("azure_ai", MessagesProvider::AzureAi)]
+    #[case::bedrock("bedrock", MessagesProvider::Bedrock)]
+    fn provider_round_trips_through_its_python_name(
+        #[case] name: &str,
+        #[case] provider: MessagesProvider,
+    ) {
+        assert_eq!(name.parse::<MessagesProvider>(), Ok(provider));
+        assert_eq!(provider.as_str(), name);
+    }
+
     #[test]
-    fn provider_config_resolves_anthropic_and_azure_ai() {
-        assert!(messages_provider_config("anthropic").is_some());
-        assert!(messages_provider_config("azure_ai").is_some());
-        assert!(messages_provider_config("openai").is_none());
+    fn provider_without_a_messages_config_is_rejected() {
+        assert!("openai".parse::<MessagesProvider>().is_err());
     }
 
     #[test]

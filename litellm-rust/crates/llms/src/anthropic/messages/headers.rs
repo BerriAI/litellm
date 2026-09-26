@@ -1,4 +1,7 @@
-use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
+use litellm_auth::{CredentialPlacement, SecretValue};
+use litellm_types::{
+    llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest, recognized::Recognized,
+};
 use serde_json::Value;
 
 use crate::{
@@ -10,7 +13,10 @@ use crate::{
             split_beta_values,
         },
     },
-    base_llm::anthropic_messages::transformation::Headers,
+    base_llm::{
+        anthropic_messages::transformation::Headers,
+        auth::{AuthScheme, ValidatedEnvironment},
+    },
 };
 
 const ANTHROPIC_API_KEY_ENV: &str = "ANTHROPIC_API_KEY";
@@ -41,13 +47,13 @@ fn existing_betas(headers: &[(String, String)]) -> impl Iterator<Item = String> 
         .flat_map(|(_, value)| split_beta_values(Some(value)))
 }
 
-fn with_oauth_bearer(headers: Headers, bearer: String) -> Headers {
+/// The OAuth headers Python's `optionally_handle_anthropic_oauth` sets next to the bearer.
+fn with_oauth_companions(headers: Headers, dropped: &[&str]) -> Headers {
     let beta =
         join_beta_values(existing_betas(&headers).chain([ANTHROPIC_OAUTH_BETA_HEADER.to_string()]));
-    without(headers, &[API_KEY_HEADER, AUTHORIZATION, BETA_HEADER])
+    without(headers, &[dropped, &[BETA_HEADER]].concat())
         .into_iter()
         .chain([
-            (AUTHORIZATION.to_string(), bearer),
             (BETA_HEADER.to_string(), beta),
             (DIRECT_BROWSER_ACCESS_HEADER.to_string(), "true".to_string()),
         ])
@@ -58,38 +64,54 @@ fn non_empty(value: Option<&str>) -> Option<&str> {
     value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-pub fn authenticate(
+fn bearer(token: &str) -> AuthScheme {
+    AuthScheme::Credential {
+        placement: CredentialPlacement::Bearer,
+        secret: SecretValue::new(token),
+    }
+}
+
+pub fn validate_environment(
     headers: Headers,
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<Headers, litellm_auth::Error> {
-    if let Some(forwarded) = header_value(&headers, AUTHORIZATION)
-        && forwarded
-            .strip_prefix("Bearer ")
-            .is_some_and(|token| token.starts_with(ANTHROPIC_OAUTH_TOKEN_PREFIX))
+) -> Result<ValidatedEnvironment, litellm_auth::Error> {
+    if let Some(token) = header_value(&headers, AUTHORIZATION)
+        .and_then(|forwarded| forwarded.strip_prefix("Bearer "))
+        .filter(|token| token.starts_with(ANTHROPIC_OAUTH_TOKEN_PREFIX))
     {
-        let bearer = forwarded.to_string();
-        return Ok(with_oauth_bearer(headers, bearer));
+        let auth = bearer(token);
+        return Ok(ValidatedEnvironment {
+            headers: with_oauth_companions(headers, &[API_KEY_HEADER, AUTHORIZATION]),
+            auth,
+        });
     }
     if let Some(key) = api_key.filter(|key| key.starts_with(ANTHROPIC_OAUTH_TOKEN_PREFIX)) {
-        return Ok(with_oauth_bearer(headers, format!("Bearer {key}")));
+        return Ok(ValidatedEnvironment {
+            headers: with_oauth_companions(headers, &[API_KEY_HEADER]),
+            auth: bearer(key),
+        });
     }
     if header_value(&headers, API_KEY_HEADER).is_some()
         || header_value(&headers, AUTHORIZATION).is_some()
     {
-        return Ok(headers);
+        return Ok(ValidatedEnvironment {
+            headers,
+            auth: AuthScheme::Forwarded,
+        });
     }
     let resolved_key = non_empty(api_key)
         .map(str::to_string)
         .or_else(|| env_lookup(ANTHROPIC_API_KEY_ENV).filter(|value| !value.trim().is_empty()));
     let auth = match resolved_key {
-        Some(key) if is_anthropic_oauth_key(&key) => {
-            (AUTHORIZATION.to_string(), format!("Bearer {key}"))
-        }
-        Some(key) => (API_KEY_HEADER.to_string(), key),
+        Some(key) if is_anthropic_oauth_key(&key) => bearer(&key),
+        Some(key) => AuthScheme::Credential {
+            placement: CredentialPlacement::Header(API_KEY_HEADER),
+            secret: SecretValue::new(key),
+        },
         None => match env_lookup(ANTHROPIC_AUTH_TOKEN_ENV).filter(|value| !value.trim().is_empty())
         {
-            Some(token) => (AUTHORIZATION.to_string(), format!("Bearer {token}")),
+            Some(token) => bearer(&token),
             None => {
                 return Err(litellm_auth::Error::MissingApiKey {
                     provider: "Anthropic",
@@ -98,7 +120,7 @@ pub fn authenticate(
             }
         },
     };
-    Ok(headers.into_iter().chain([auth]).collect())
+    Ok(ValidatedEnvironment { headers, auth })
 }
 
 fn context_management_betas(
@@ -122,12 +144,13 @@ fn context_management_betas(
 }
 
 fn uses_structured_output(request: &AnthropicMessagesRequest) -> bool {
-    request.output_format.is_some()
+    request.params.output_format.is_some()
         || request
+            .params
             .output_config
             .as_ref()
-            .and_then(|config| config.get("format"))
-            .is_some_and(|format| !format.is_null())
+            .and_then(Recognized::known)
+            .is_some_and(|config| config.format.is_some())
 }
 
 fn messages_carry_output_config(request: &AnthropicMessagesRequest) -> bool {
@@ -138,12 +161,12 @@ fn messages_carry_output_config(request: &AnthropicMessagesRequest) -> bool {
 }
 
 pub fn feature_betas(request: &AnthropicMessagesRequest) -> Vec<&'static str> {
-    let tools = request.tools.as_deref();
+    let tools = request.params.tools.as_deref();
     [
-        requires_native_compaction_beta(request.compaction.as_ref(), &request.messages)
+        requires_native_compaction_beta(request.params.compaction.as_ref(), &request.messages)
             .then_some(beta::COMPACT_2026_09_04),
         uses_structured_output(request).then_some(beta::STRUCTURED_OUTPUT),
-        (request.speed.as_deref() == Some("fast")).then_some(beta::FAST_MODE_2026_02_01),
+        (request.params.speed.as_deref() == Some("fast")).then_some(beta::FAST_MODE_2026_02_01),
         messages_carry_output_config(request).then_some(beta::PER_TURN_CONTROL_2026_07_01),
         has_advisor_tool(tools).then_some(beta::ADVISOR_TOOL_2026_03_01),
         is_tool_search_used(tools).then_some(beta::ADVANCED_TOOL_USE_2025_11_20),
@@ -151,7 +174,7 @@ pub fn feature_betas(request: &AnthropicMessagesRequest) -> Vec<&'static str> {
     .into_iter()
     .flatten()
     .chain(context_management_betas(
-        request.context_management.as_ref(),
+        request.params.context_management.as_ref(),
     ))
     .collect()
 }
@@ -179,6 +202,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::base_llm::auth::resolve_auth;
 
     const OAUTH_TOKEN: &str = "sk-ant-oat01-token";
     const OAUTH_BEARER: &str = "Bearer sk-ant-oat01-token";
@@ -230,7 +254,17 @@ mod tests {
                 .find(|(key, _)| *key == name)
                 .map(|(_, value)| value.to_string())
         };
-        authenticate(headers(forwarded), api_key, &lookup)
+        let validated = validate_environment(headers(forwarded), api_key, &lookup)?;
+        let resolved = tokio::runtime::Builder::new_current_thread()
+            .build()
+            .unwrap()
+            .block_on(resolve_auth(
+                &litellm_auth::AuthServices::default(),
+                validated,
+                &lookup,
+            ))
+            .unwrap();
+        Ok(resolved.headers)
     }
 
     #[rstest]
@@ -282,9 +316,9 @@ mod tests {
             .iter()
             .copied()
             .chain([
-                ("authorization", expected_bearer),
                 ("anthropic-beta", ANTHROPIC_OAUTH_BETA_HEADER),
                 BROWSER_ACCESS,
+                ("authorization", expected_bearer),
             ])
             .collect::<Vec<_>>();
         assert_eq!(
@@ -318,12 +352,12 @@ mod tests {
         assert_eq!(
             authenticate_with(forwarded, api_key, no_env).unwrap(),
             headers(&[
-                ("authorization", OAUTH_BEARER),
                 (
                     "anthropic-beta",
                     &betas(&[ANTHROPIC_OAUTH_BETA_HEADER, "web-search-2025-03-05"])
                 ),
                 BROWSER_ACCESS,
+                ("authorization", OAUTH_BEARER),
             ])
         );
     }
@@ -621,8 +655,8 @@ mod tests {
         assert_eq!(
             with_feature_betas(oauth_headers, &all_features),
             headers(&[
-                ("authorization", OAUTH_BEARER),
                 BROWSER_ACCESS,
+                ("authorization", OAUTH_BEARER),
                 (
                     "anthropic-beta",
                     &betas(&[

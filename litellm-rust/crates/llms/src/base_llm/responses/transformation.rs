@@ -1,6 +1,6 @@
 use litellm_types::responses::streaming_websocket::{ResponsesWsEvent, ResponsesWsTransformResult};
 
-use crate::base_llm::chat::transformation::Error;
+use crate::Error;
 
 pub const OPENAI_RESPONSES_DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
 pub const OPENAI_RESPONSES_PATH: &str = "/responses";

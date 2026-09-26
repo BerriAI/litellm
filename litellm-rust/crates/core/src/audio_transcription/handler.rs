@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use litellm_http::{Client, request::truncate_error_body};
+use litellm_llms::base_llm::auth::resolve_auth;
 use serde_json::Value;
 
 use super::Error;
@@ -11,21 +12,21 @@ use crate::{
 
 pub async fn execute_audio_transcription_provider_call(
     http: &Client,
+    auth: &litellm_auth::AuthServices,
     request: ProviderAudioTranscriptionRequest,
 ) -> Result<Value, Error> {
-    let response = crate::outbound::outbound_request::<Error>(
-        &request.auth,
+    let env_lookup = |key: &str| std::env::var(key).ok();
+    let authenticated = resolve_auth(auth, request.environment.clone(), &env_lookup).await?;
+    let response = crate::outbound::outbound_request(
+        authenticated,
         request.url.clone(),
-        request.upstream_headers.clone(),
         &request.body,
         Some(
             request
                 .timeout
                 .unwrap_or(Duration::from_secs(AUDIO_TRANSCRIPTION_TIMEOUT_SECS)),
         ),
-        &request.optional_params,
-    )
-    .await?
+    )?
     .send(http)
     .await
     .map_err(|error| {
