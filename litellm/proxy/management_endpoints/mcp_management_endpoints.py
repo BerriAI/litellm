@@ -183,7 +183,6 @@ if MCP_AVAILABLE:
     from litellm.proxy._experimental.mcp_server.ui_session_utils import (
         admitted_user_context,
         build_effective_auth_contexts,
-        can_access_mcp_server,
         is_ui_session_credential,
     )
     from litellm.proxy._types import (
@@ -1654,7 +1653,13 @@ if MCP_AVAILABLE:
                 )
             },
             non_admin_missing="not_found",
-            allow_catalog_view=_get_user_mcp_management_mode() == "view_all" and not is_restricted_virtual_key,
+            allow_catalog_view=(
+                _get_user_mcp_management_mode() == "view_all"
+                and not is_restricted_virtual_key
+                and resolved is not None
+                and resolved.table.approval_status in (None, MCPApprovalStatus.active, "approved")
+                and global_mcp_server_manager.get_mcp_server_by_id(resolved.table.server_id) is not None
+            ),
         )
         mcp_server: Final = authorized.table
         from_db: Final = authorized.source == "db"
@@ -2540,6 +2545,16 @@ if MCP_AVAILABLE:
         # Fetch server metadata for display names — single batch query instead of N+1.
         server_ids: Final = [c["server_id"] for c in oauth_creds if "server_id" in c]
         servers: Final = {srv.server_id: srv for srv in await get_mcp_servers(prisma_client, server_ids)}
+        allowed_server_ids: Final = (
+            None
+            if _user_has_admin_view(user_api_key_dict)
+            else frozenset[str]().union(
+                *[
+                    await global_mcp_server_manager.get_allowed_mcp_servers(context)
+                    for context in await build_effective_auth_contexts(user_api_key_dict)
+                ]
+            )
+        )
 
         async def lookup_metadata(server_id: str) -> LiteLLM_MCPServerTable | None:
             return servers.get(server_id)
@@ -2551,12 +2566,7 @@ if MCP_AVAILABLE:
                 db_lookup=lookup_metadata,
             )
             visible: Final = resolved is not None and (
-                _user_has_admin_view(user_api_key_dict)
-                or await can_access_mcp_server(
-                    user_api_key_dict,
-                    resolved.table.server_id,
-                    global_mcp_server_manager.get_allowed_mcp_servers,
-                )
+                allowed_server_ids is None or resolved.table.server_id in allowed_server_ids
             )
             return resolved.table if resolved is not None and visible else None
 
