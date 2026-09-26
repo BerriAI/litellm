@@ -1141,9 +1141,7 @@ def _gemini_tool_call_invoke_helper(
     if (
         isinstance(arguments, str) and len(arguments) == 0
     ):  # pass empty dict, if arguments is empty string - prevents call from failing
-        arguments_dict = {
-            "type": "object",
-        }
+        arguments_dict = {}
     else:
         arguments_dict = json.loads(arguments)
     function_call: Final = VertexFunctionCall(
