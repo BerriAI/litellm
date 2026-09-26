@@ -1329,6 +1329,7 @@ async def test_update_user_put_with_valueless_entitlements_deactivates_user(scim
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.writer_db.litellm_scimresource.find_many = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
 
@@ -2692,7 +2693,8 @@ async def test_update_user_demotes_when_default_params_lack_user_role(mocker, mo
 
 
 @pytest.mark.asyncio
-async def test_patch_user_demotes_admin_when_removed_from_scim_admin_group(mocker, monkeypatch):
+@pytest.mark.parametrize("source_owned", [False, True])
+async def test_patch_user_demotes_admin_when_removed_from_scim_admin_group(mocker, monkeypatch, source_owned: bool):
     """PATCH that drops the admin team from the resulting team set must write the
     non-admin default, mirroring the PUT demotion path."""
     from litellm.proxy.proxy_server import proxy_config
@@ -2724,6 +2726,10 @@ async def test_patch_user_demotes_admin_when_removed_from_scim_admin_group(mocke
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
+    mock_prisma_client.db.litellm_scimresource.find_many = AsyncMock(
+        return_value=[mocker.MagicMock(id="source-user", local_id="demote-me")] if source_owned else []
+    )
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
@@ -2754,11 +2760,15 @@ async def test_patch_user_demotes_admin_when_removed_from_scim_admin_group(mocke
     await patch_user(user_id="demote-me", patch_ops=patch_ops)
 
     call_args = mock_prisma_client.db.litellm_usertable.update.call_args
-    assert call_args[1]["data"]["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
+    if source_owned:
+        assert "user_role" not in call_args[1]["data"]
+    else:
+        assert call_args[1]["data"]["user_role"] == LitellmUserRoles.INTERNAL_USER_VIEW_ONLY
 
 
 @pytest.mark.asyncio
-async def test_patch_user_grants_admin_by_team_display_name(mocker, monkeypatch):
+@pytest.mark.parametrize("source_owned", [False, True])
+async def test_patch_user_grants_admin_by_team_display_name(mocker, monkeypatch, source_owned: bool):
     """PATCH carries groups as team ids, so admin-group matching must fall back to
     each team's display name; an admin group configured as a human-readable alias
     grants PROXY_ADMIN even when the team id differs."""
@@ -2791,6 +2801,10 @@ async def test_patch_user_grants_admin_by_team_display_name(mocker, monkeypatch)
 
     mock_prisma_client = mocker.MagicMock()
     mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.writer_db = mock_prisma_client.db
+    mock_prisma_client.db.litellm_scimresource.find_many = AsyncMock(
+        return_value=[mocker.MagicMock(id="source-user", local_id="promote-me")] if source_owned else []
+    )
     mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
     mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
     mock_prisma_client.db.litellm_teamtable = mocker.MagicMock()
@@ -2821,7 +2835,10 @@ async def test_patch_user_grants_admin_by_team_display_name(mocker, monkeypatch)
     await patch_user(user_id="promote-me", patch_ops=patch_ops)
 
     call_args = mock_prisma_client.db.litellm_usertable.update.call_args
-    assert call_args[1]["data"]["user_role"] == LitellmUserRoles.PROXY_ADMIN
+    if source_owned:
+        assert "user_role" not in call_args[1]["data"]
+    else:
+        assert call_args[1]["data"]["user_role"] == LitellmUserRoles.PROXY_ADMIN
 
 
 def _scim_admin_prisma(mocker, *, user_teams):
@@ -2844,6 +2861,8 @@ def _scim_admin_prisma(mocker, *, user_teams):
     prisma.db.litellm_usertable.update = AsyncMock(return_value=user)
     prisma.db.litellm_teamtable = mocker.MagicMock()
     prisma.db.litellm_teamtable.find_unique = AsyncMock(side_effect=_team_find_unique)
+    prisma.writer_db = prisma.db
+    prisma.db.litellm_scimresource.find_many = AsyncMock(return_value=[])
     return prisma
 
 
@@ -6172,6 +6191,147 @@ async def test_merge_placeholder_refuses_rows_that_are_not_a_lone_placeholder(
     prisma_client.db.litellm_usertable.delete.assert_not_awaited()
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "route,arguments,dispatch",
+    [
+        ("get_users", {"startIndex": 2, "count": 5, "filter": None}, "list"),
+        ("get_groups", {"startIndex": 1, "count": 5, "filter": None}, "list"),
+        ("get_user", {"user_id": "scoped-id"}, "get"),
+        ("get_group", {"group_id": "scoped-id"}, "get"),
+        ("create_user", {"user": SCIMUser(schemas=[], userName="human@example.com")}, "create_user"),
+        ("create_group", {"group": SCIMGroup(schemas=[], displayName="Directory")}, "create_group"),
+        (
+            "update_user",
+            {"user_id": "scoped-id", "user": SCIMUser(schemas=[], userName="human@example.com")},
+            "update_user",
+        ),
+        (
+            "update_group",
+            {"group_id": "scoped-id", "group": SCIMGroup(schemas=[], displayName="Directory")},
+            "update_group",
+        ),
+        ("patch_user", {"user_id": "scoped-id", "patch_ops": SCIMPatchOp(Operations=[])}, "update_user"),
+        ("patch_group", {"group_id": "scoped-id", "patch_ops": SCIMPatchOp(Operations=[])}, "update_group"),
+        ("delete_user", {"user_id": "scoped-id"}, "delete"),
+        ("delete_group", {"group_id": "scoped-id"}, "delete"),
+    ],
+)
+async def test_scoped_routes_propagate_source_denial_without_falling_back_to_legacy_humans(
+    route: str,
+    arguments: dict[str, object],
+    dispatch: str,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.scim import scim_v2
+    from litellm.proxy.management_endpoints.scim.agent_provisioning import AgentProvisioningService
+
+    service: Final = AsyncMock(spec=AgentProvisioningService)
+    handler: Final = getattr(service, dispatch)
+    handler.side_effect = HTTPException(403, "Provisioning source disabled")
+    resolver: Final = AsyncMock(return_value=service)
+    legacy_database: Final = AsyncMock()
+    monkeypatch.setattr(scim_v2, "_agent_provisioning_service", resolver)
+    monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", legacy_database)
+    auth: Final = UserAPIKeyAuth(token="scoped-hash")
+    with pytest.raises(HTTPException) as failure:
+        await getattr(scim_v2, route)(**arguments, auth=auth)
+    assert failure.value.status_code == 403
+    resolver.assert_awaited_once_with(auth)
+    handler.assert_awaited_once()
+    legacy_database.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("ownership", ["new", "linked", "legacy"])
+async def test_source_owned_groups_cannot_grant_global_admin(mocker, ownership: str) -> None:
+    from types import SimpleNamespace
+
+    from litellm.proxy.management_endpoints.scim.scim_v2 import _resolve_scim_user_role, _scim_groups_from_team_ids
+
+    prisma = _scim_admin_prisma(mocker, user_teams=["litellm-admins"])
+    resource = SimpleNamespace(
+        id="litellm-admins" if ownership == "new" else "source-group",
+        local_id="litellm-admins" if ownership == "linked" else None,
+    )
+    prisma.writer_db = SimpleNamespace(
+        litellm_scimresource=SimpleNamespace(
+            find_many=AsyncMock(return_value=[] if ownership == "legacy" else [resource])
+        )
+    )
+    groups = await _scim_groups_from_team_ids(prisma, ["litellm-admins"])
+    role = _resolve_scim_user_role(groups, "litellm-admins", LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+    assert role == (LitellmUserRoles.PROXY_ADMIN if ownership == "legacy" else LitellmUserRoles.INTERNAL_USER_VIEW_ONLY)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("role", [LitellmUserRoles.PROXY_ADMIN, LitellmUserRoles.INTERNAL_USER_VIEW_ONLY])
+async def test_source_membership_sync_preserves_manually_assigned_global_role(mocker, role) -> None:
+    from types import SimpleNamespace
+
+    mocker.patch(
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_scim_admin_group",
+        new=AsyncMock(return_value="litellm-admins"),
+    )
+    prisma = _scim_admin_prisma(mocker, user_teams=["litellm-admins"])
+    prisma.db.litellm_usertable.find_unique.return_value.user_role = role
+    prisma.db.litellm_scimresource.find_many.return_value = [SimpleNamespace(id="source-user", local_id="member-1")]
+    await _recompute_scim_member_roles(prisma, ["member-1"])
+    prisma.db.litellm_usertable.update.assert_not_awaited()
+    assert prisma.db.litellm_usertable.find_unique.return_value.user_role == role
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["create", "replace", "patch"])
+async def test_legacy_token_cannot_classify_a_user_as_native_agent(
+    method: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.management_endpoints.scim import scim_v2
+    from litellm.types.proxy.management_endpoints.scim_v2 import SCIM_AGENT_USER_SCHEMA
+
+    monkeypatch.setattr(scim_v2, "_agent_provisioning_service", AsyncMock(return_value=None))
+    database: Final = AsyncMock()
+    monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", database)
+    extension: Final = {"identityParentId": "11111111-1111-4111-8111-111111111111"}
+    user: Final = SCIMUser.model_validate(
+        {"schemas": [], "userName": "agent@example.com", SCIM_AGENT_USER_SCHEMA: extension}
+    )
+    request: Final = (
+        scim_v2.create_user(user=user)
+        if method == "create"
+        else scim_v2.update_user(user_id="human", user=user)
+        if method == "replace"
+        else scim_v2.patch_user(
+            user_id="human",
+            patch_ops=SCIMPatchOp(Operations=[{"op": "add", "path": SCIM_AGENT_USER_SCHEMA, "value": extension}]),
+        )
+    )
+    with pytest.raises(HTTPException) as failure:
+        await request
+    assert failure.value.status_code == 400
+    database.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["Users", "Groups"])
+async def test_source_delete_returns_no_content_without_legacy_fallback(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.management_endpoints.scim import scim_v2
+    from litellm.proxy.management_endpoints.scim.agent_provisioning import AgentProvisioningService
+
+    service: Final = AsyncMock(spec=AgentProvisioningService)
+    monkeypatch.setattr(scim_v2, "_agent_provisioning_service", AsyncMock(return_value=service))
+    database: Final = AsyncMock()
+    monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", database)
+    result: Final = (
+        await scim_v2.delete_user(user_id="owned") if kind == "Users" else await scim_v2.delete_group(group_id="owned")
+    )
+    assert result.status_code == 204
+    service.delete.assert_awaited_once_with(kind, "owned")
+    database.assert_not_awaited()
+
+
 _OWNED_HUMAN: Final = LiteLLM_UserTable(
     user_id="human-local", user_email="human@example.com", sso_user_id="00u1human", teams=["directory-team"]
 )
@@ -6293,6 +6453,7 @@ async def test_legacy_key_cannot_put_a_source_owned_subject_on_its_roster(
     from litellm.proxy.management_endpoints.scim import scim_v2
 
     prisma: Final = _legacy_membership_prisma(mocker)
+    monkeypatch.setattr(scim_v2, "_agent_provisioning_service", AsyncMock(return_value=None))
     monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", AsyncMock(return_value=prisma))
     monkeypatch.setattr(scim_v2, "_check_team_exists", AsyncMock(return_value=_LEGACY_TEAM))
     side_effects: Final = tuple(
@@ -6398,6 +6559,7 @@ async def test_ordinary_legacy_group_members_still_reach_the_roster(
     from litellm.proxy.management_endpoints.scim import scim_v2
 
     prisma: Final = _legacy_membership_prisma(mocker)
+    monkeypatch.setattr(scim_v2, "_agent_provisioning_service", AsyncMock(return_value=None))
     monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", AsyncMock(return_value=prisma))
     monkeypatch.setattr(scim_v2, "_check_team_exists", AsyncMock(return_value=_LEGACY_TEAM))
     monkeypatch.setattr(scim_v2, "_recompute_scim_member_roles", AsyncMock())
@@ -6434,6 +6596,7 @@ async def test_trusted_source_sync_still_places_its_own_humans_on_the_roster(
     from litellm.proxy.management_endpoints.scim import scim_v2
 
     prisma: Final = _legacy_membership_prisma(mocker)
+    monkeypatch.setattr(scim_v2, "_agent_provisioning_service", AsyncMock(return_value=None))
     monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", AsyncMock(return_value=prisma))
     monkeypatch.setattr(scim_v2, "_check_team_exists", AsyncMock(return_value=_LEGACY_TEAM))
     monkeypatch.setattr(scim_v2, "_recompute_scim_member_roles", AsyncMock())
