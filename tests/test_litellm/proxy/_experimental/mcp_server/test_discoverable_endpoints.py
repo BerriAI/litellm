@@ -7288,7 +7288,7 @@ async def test_token_exchange_persists_for_oauth2():
 # -------------------------------------------------------------------
 
 _OBO_RESOURCE = "https://litellm.example.com/mcp/obo_mcp"
-_PATCH_ISSUERS = "litellm.proxy._experimental.mcp_server.discoverable_endpoints._jwt_auth_issuers"
+_PATCH_ISSUERS = "litellm.proxy._experimental.mcp_server.caller_sign_in.jwt_auth_issuers"
 
 
 def _obo_server(scopes=None):
@@ -7307,15 +7307,15 @@ def _obo_server(scopes=None):
     )
 
 
-def test_obo_protected_resource_response_names_jwt_issuers():
+def test_caller_sign_in_protected_resource_response_names_jwt_issuers():
     """An OBO server's PRM points authorization_servers at the configured JWT issuers (the IdP that
     mints and validates the subject token), with the gateway resource echoed back."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _obo_protected_resource_response,
+        _caller_sign_in_protected_resource_response,
     )
 
     with patch(_PATCH_ISSUERS, return_value=["https://idp.example.com"]):
-        response = _obo_protected_resource_response(_obo_server(scopes=["read"]), _OBO_RESOURCE)
+        response = _caller_sign_in_protected_resource_response(_obo_server(scopes=["read"]), _OBO_RESOURCE)
     assert response == {
         "authorization_servers": ["https://idp.example.com"],
         "resource": _OBO_RESOURCE,
@@ -7323,32 +7323,32 @@ def test_obo_protected_resource_response_names_jwt_issuers():
     }
 
 
-def test_obo_protected_resource_response_scopes_default_empty():
+def test_caller_sign_in_protected_resource_response_scopes_default_empty():
     """A scopeless OBO server reports scopes_supported as [] rather than None."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _obo_protected_resource_response,
+        _caller_sign_in_protected_resource_response,
     )
 
     with patch(_PATCH_ISSUERS, return_value=["https://idp.example.com"]):
-        response = _obo_protected_resource_response(_obo_server(scopes=None), _OBO_RESOURCE)
+        response = _caller_sign_in_protected_resource_response(_obo_server(scopes=None), _OBO_RESOURCE)
     assert response["scopes_supported"] == []
 
 
-def test_obo_protected_resource_response_falls_back_when_no_issuer():
+def test_caller_sign_in_protected_resource_response_falls_back_when_no_issuer():
     """With no JWT issuer configured, the OBO branch returns None so the caller falls back to the
     gateway-default PRM (discovery still works, it just can't name the IdP)."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _obo_protected_resource_response,
+        _caller_sign_in_protected_resource_response,
     )
 
     with patch(_PATCH_ISSUERS, return_value=[]):
-        assert _obo_protected_resource_response(_obo_server(), _OBO_RESOURCE) is None
+        assert _caller_sign_in_protected_resource_response(_obo_server(), _OBO_RESOURCE) is None
 
 
-def test_obo_protected_resource_response_ignores_non_obo_server():
+def test_caller_sign_in_protected_resource_response_ignores_non_obo_server():
     """Non-OBO servers are not handled by this branch (returns None -> gateway default)."""
     from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
-        _obo_protected_resource_response,
+        _caller_sign_in_protected_resource_response,
     )
     from litellm.proxy._types import MCPTransport
     from litellm.types.mcp import MCPAuth
@@ -7360,7 +7360,7 @@ def test_obo_protected_resource_response_ignores_non_obo_server():
         transport=MCPTransport.http,
         auth_type=MCPAuth.oauth2,
     )
-    assert _obo_protected_resource_response(oauth2_server, _OBO_RESOURCE) is None
+    assert _caller_sign_in_protected_resource_response(oauth2_server, _OBO_RESOURCE) is None
 
 
 @pytest.mark.asyncio

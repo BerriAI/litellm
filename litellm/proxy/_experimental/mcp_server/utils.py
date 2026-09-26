@@ -370,6 +370,14 @@ def iter_known_server_prefixes(server: _McpServerLike) -> Iterator[str]:
     yield from _emit(server_id)
 
 
+def server_answers_to_name(server: _McpServerLike, name: str) -> bool:
+    """Whether a scoped ``/mcp/{name}`` connect resolves to ``server``: case-insensitive over every prefix
+    form routing accepts (alias, server_name, server_id, short prefix), the same match
+    ``_server_answers_to`` applies when the router scopes a request."""
+    requested: Final = name.lower()
+    return any(requested == known.lower() for known in iter_known_server_prefixes(server) if known)
+
+
 def iter_known_tool_name_spellings(tool_name: str, server: MCPServer) -> Iterator[str]:
     """Yield every name that denotes the bare ``tool_name`` on ``server``: the bare name,
     then its wire spelling under each prefix ``iter_known_server_prefixes`` accepts.
