@@ -10262,3 +10262,24 @@ async def test_aclose_late_response_runs_background_task_for_non_streaming_respo
     produced: Final = StarletteResponse(content=b"{}", background=BackgroundTask(mark))
     await _aclose_late_response(produced)
     assert ran == [True]
+
+
+@pytest.mark.asyncio
+async def test_aclose_late_response_bounds_a_never_returning_background_task(caplog):
+    import logging
+
+    from starlette.background import BackgroundTask
+    from starlette.responses import StreamingResponse
+
+    from litellm.proxy.common_request_processing import _aclose_late_response
+
+    async def body():
+        yield b"x"
+
+    async def parks() -> None:
+        await asyncio.Event().wait()
+
+    produced: Final = StreamingResponse(body(), background=BackgroundTask(parks))
+    with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+        await asyncio.wait_for(_aclose_late_response(produced, background_wait_seconds=0.05), timeout=1)
+    assert "relayed response background task still running after 0s" in caplog.text, caplog.text

@@ -34,6 +34,7 @@ from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     HttpPassThroughEndpointHelpers,
     InitPassThroughEndpointHelpers,
     _PreviewReportingStream,
+    _passthrough_upstream_failure_reporter,
     _registered_pass_through_routes,
     _truncate_upstream_error_body,
     _with_trace_context,
@@ -8189,3 +8190,144 @@ def test_passthrough_attributes_a_cli_session_to_its_alias_not_the_login_token()
     metadata = kwargs["litellm_params"]["metadata"]
     assert metadata["user_api_key"] == "cli-session-alice"
     assert _get_spend_logs_metadata(metadata)["user_api_key"] == "cli-session-alice"
+
+
+@pytest.mark.asyncio
+async def test_preview_stream_dispatches_the_report_as_soon_as_the_preview_budget_is_crossed():
+    """A body that crosses the 4 KiB preview budget reports immediately instead of
+    waiting for EOF, so a held-open upstream cannot stall the failure hook."""
+    chunks: Final = tuple(b"d" * 1000 for _ in range(5))
+    hold: Final = asyncio.Event()
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "text/event-stream"},
+        stream=_UpstreamErrorBodyStreamHeld(chunks, hold),
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+    reported: list[bytes] = []
+    report_started: Final = asyncio.Event()
+    release_report: Final = asyncio.Event()
+
+    async def report(preview: bytes) -> None:
+        reported.append(preview)
+        report_started.set()
+        await release_report.wait()
+
+    relay: Final = _PreviewReportingStream(
+        upstream=upstream_response,
+        report=report,
+        log_warning=MagicMock(),
+    )
+    received: list[bytes] = []
+
+    async def consume() -> None:
+        async for chunk in relay.__aiter__():
+            received.append(chunk)
+
+    consumer: Final = asyncio.create_task(consume())
+    await asyncio.wait_for(report_started.wait(), timeout=5)
+    named: Final = [t for t in asyncio.all_tasks() if t.get_name() == "passthrough-upstream-error-report"]
+    assert len(named) == 1, [t.get_name() for t in asyncio.all_tasks()]
+    assert reported == [b"d" * 5000], reported
+    release_report.set()
+    hold.set()
+    await consumer
+    assert b"".join(received) == b"d" * 5000, received
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_dispatches_the_report_when_the_headers_hook_fails():
+    """An exception between building the relay and returning the StreamingResponse
+    (here, a raising post_call_response_headers_hook) must still start the report."""
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "text/event-stream"},
+        stream=_UpstreamErrorBodyStream(b"frame"),
+        request=httpx.Request("POST", "http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent"),
+    )
+
+    with patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging:
+        with patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client:
+            with patch(
+                "litellm.proxy.pass_through_endpoints.pass_through_endpoints.pass_through_endpoint_logging.pass_through_async_success_handler"
+            ) as mock_success_handler:
+                mock_proxy_logging.pre_call_hook = AsyncMock(return_value={})
+                mock_proxy_logging.post_call_failure_hook = AsyncMock()
+                mock_proxy_logging.post_call_response_headers_hook = AsyncMock(
+                    side_effect=RuntimeError("headers hook blew up")
+                )
+                mock_success_handler.return_value = None
+
+                async_client: Final = MagicMock()
+                async_client.build_request = MagicMock(return_value=MagicMock())
+                async_client.send = AsyncMock(return_value=upstream_response)
+                mock_get_client.return_value = MagicMock(client=async_client)
+
+                with pytest.raises(ProxyException, match="headers hook blew up"):
+                    await pass_through_request(
+                        request=_upstream_error_request(),
+                        target="http://target-api.com/v1beta/models/claude-nope-9:streamGenerateContent",
+                        custom_headers={},
+                        user_api_key_dict=MagicMock(),
+                        stream=True,
+                    )
+
+    for _ in range(10):
+        await asyncio.sleep(0)
+    upstream_exceptions: Final = [
+        call.kwargs["original_exception"]
+        for call in mock_proxy_logging.post_call_failure_hook.call_args_list
+        if "Upstream passthrough request failed" in str(getattr(call.kwargs["original_exception"], "detail", ""))
+    ]
+    assert len(upstream_exceptions) == 1, mock_proxy_logging.post_call_failure_hook.call_args_list
+    assert upstream_exceptions[0].status_code == 500, upstream_exceptions[0]
+    await upstream_response.aclose()
+
+
+@pytest.mark.asyncio
+async def test_passthrough_upstream_failure_reporter_redacts_only_the_bounded_prefix():
+    """A huge upstream error body must not make the report decode and redact all of
+    it: only MAX+MARGIN chars reach redact_secrets, and content before the cut still
+    lands in the failure detail redacted."""
+    marker_key: Final = "sk-" + "leak0" * 8
+    preview: Final = b"A" * 10 + marker_key.encode() + b"z" * (5 * 1024 * 1024)
+    redacted_inputs: list[str] = []
+
+    def recording_redact(text: str) -> str:
+        redacted_inputs.append(text)
+        return text.replace(marker_key, "REDACTED-KEY")
+
+    logged_details: list[str] = []
+
+    def recording_warning(fmt, *args, **kwargs):
+        if str(fmt).startswith("pass_through_endpoint: upstream"):
+            logged_details.append(str(fmt % args))
+
+    upstream_response: Final = httpx.Response(
+        status_code=500,
+        headers={"content-type": "application/json"},
+        request=httpx.Request("POST", "http://target-api.com/v1/chat/completions"),
+        content=b"{}",
+    )
+    logging_obj: Final = MagicMock()
+    logging_obj.model_call_details = {}
+    proxy_logging: Final = MagicMock()
+    proxy_logging.post_call_failure_hook = AsyncMock()
+    report: Final = _passthrough_upstream_failure_reporter(
+        response=upstream_response,
+        user_api_key_dict=MagicMock(),
+        request_payload={},
+        logging_obj=logging_obj,
+        proxy_logging=proxy_logging,
+        log_warning=recording_warning,
+        redact=recording_redact,
+    )
+    await report(preview)
+    max_plus_margin: Final = 4096 + 256
+    assert len(redacted_inputs) == 1, redacted_inputs
+    assert len(redacted_inputs[0]) <= max_plus_margin, len(redacted_inputs[0])
+    assert len(logged_details) == 1, logged_details
+    assert "REDACTED-KEY" in logged_details[0], logged_details[0]
+    assert marker_key not in logged_details[0], logged_details[0]
