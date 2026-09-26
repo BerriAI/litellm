@@ -70,6 +70,7 @@ fn run_ocr(
         PublicCall::capture(&request, &args, &kwargs)?,
         crate::logger::LoggedMachine::new(ocr_machine(client)),
         OcrPythonHost::new(request.unbind()),
+        crate::preflight::sdk_preflight,
         asynchronous,
     )
 }

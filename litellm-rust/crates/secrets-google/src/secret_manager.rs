@@ -23,7 +23,7 @@ const CACHE_CAPACITY: u64 = 200;
 
 #[derive(Clone)]
 pub struct GoogleSecretManager {
-    client: reqwest::Client,
+    client: litellm_http::Client,
     credentials: Arc<GoogleCredentials>,
     endpoint: reqwest::Url,
     project: String,
@@ -46,7 +46,7 @@ struct Payload {
 
 impl GoogleSecretManager {
     pub fn with_client(
-        client: reqwest::Client,
+        client: litellm_http::Client,
         endpoint: reqwest::Url,
         project: String,
         environment: Arc<dyn Lookup + Send + Sync>,
@@ -79,6 +79,7 @@ impl GoogleSecretManager {
     }
 
     pub fn new(
+        client: litellm_http::Client,
         environment: Arc<dyn Lookup + Send + Sync>,
         enterprise_enabled: bool,
     ) -> Result<Self, Error> {
@@ -104,7 +105,7 @@ impl GoogleSecretManager {
             .get(GOOGLE_SECRET_MANAGER_ALWAYS_READ_SECRET_MANAGER)
             .is_some_and(|v| v.eq_ignore_ascii_case("true"));
         Self::with_client(
-            reqwest::Client::new(),
+            client,
             reqwest::Url::parse("https://secretmanager.googleapis.com").expect("static URL"),
             project,
             environment,
