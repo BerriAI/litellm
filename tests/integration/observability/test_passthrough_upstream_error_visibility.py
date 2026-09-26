@@ -763,9 +763,7 @@ async def test_gemini_passthrough_async_streaming_429_first_frame_reaches_client
                         first: Final = await iterator.__anext__()
                         assert first.startswith(b'data: {"error":"rate limited"}'), first
                         gate.set()
-                        rest: Final = b""
-                        async for chunk in iterator:
-                            rest += chunk
+                        rest: Final = b"".join([chunk async for chunk in iterator])
                     assert first + rest == b"".join(frames), first + rest
             finally:
                 gate.set()
