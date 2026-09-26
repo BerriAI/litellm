@@ -17,6 +17,7 @@ from litellm.proxy.spend_tracking.spend_counter_batch import (
     active_spend_counter_batch,
     admission_counter_keys,
     bind_admission_counter_keys,
+    post_call_counter_keys,
     release_spend_counter_batch,
     spend_counter_batch_scope,
 )
@@ -84,6 +85,21 @@ def test_admission_counter_keys_cover_every_entity_the_checks_read():
     assert "spend:team_member:user:team" not in admission_counter_keys(
         UserAPIKeyAuth(token="hashed", user_id="user"), end_user_id=None
     )
+
+
+def test_post_call_counter_keys_skip_ids_that_are_not_strings():
+    """A synthetic logging payload (batch cost polling, tests) can carry placeholders where the ids belong; those
+    have no counter, and deriving the key set must never raise inside the cost callback."""
+    placeholder = object()
+    assert post_call_counter_keys(
+        token=placeholder,  # type: ignore[arg-type]
+        team_id="team",
+        user_id=None,
+        org_id=placeholder,  # type: ignore[arg-type]
+        end_user_id="eu",
+        tags=[placeholder, "t1"],
+        model_access_groups=None,
+    ) == {"spend:team:team", "spend:end_user:eu", "spend:tag:t1"}
 
 
 @pytest.mark.asyncio
