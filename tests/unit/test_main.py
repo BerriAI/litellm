@@ -4320,6 +4320,17 @@ async def test_global_drop_params_drops_an_invalid_stream_chunk_size_on_acomplet
     assert logging_obj.litellm_params[CONTROL_OPTIONS_KEY] == ControlOptions()
 
 
+def test_completion_rejects_an_invalid_stream_chunk_size_before_the_mcp_gateway() -> None:
+    with pytest.raises(litellm.BadRequestError) as exc_info:
+        litellm.completion(
+            model="openai/gpt-4.1-mini",
+            messages=[{"role": "user", "content": "hi"}],
+            tools=[{"type": "mcp", "server_label": "gateway", "server_url": "litellm_proxy"}],
+            stream_chunk_size="sixty-four",
+        )
+    assert exc_info.value.param == "stream_chunk_size"
+
+
 def test_drop_params_false_still_rejects_an_invalid_stream_chunk_size() -> None:
     with pytest.raises(litellm.BadRequestError):
         litellm.completion(
