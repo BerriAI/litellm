@@ -1,4 +1,5 @@
 import base64
+import contextlib
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
@@ -143,10 +144,9 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         read: Final[object] = getattr(image, "read", None)
         if not callable(read):
             raise ValueError(f"Unsupported image type: {type(image)}")
-        rewound: Final = _rewind(image)
+        _rewind(image)
         image_bytes: Final = read()
-        if rewound:
-            _rewind(image)
+        _rewind(image)
         if not isinstance(image_bytes, bytes):
             raise TypeError("FLUX.2 reference images must be opened in binary mode")
         return image_bytes
@@ -197,18 +197,14 @@ class AzureFoundryFlux2ImageEditConfig(OpenAIImageEditConfig):
         )
 
 
-def _rewind(image: object) -> bool:
+def _rewind(image: object) -> None:
     seekable: Final[object] = getattr(image, "seekable", None)
     if callable(seekable) and not seekable():
-        return False
+        return
     seek: Final[object] = getattr(image, "seek", None)
-    if not callable(seek):
-        return False
-    try:
-        seek(0)
-    except OSError:
-        return False
-    return True
+    if callable(seek):
+        with contextlib.suppress(OSError):
+            seek(0)
 
 
 def _pixel_count(image_bytes: bytes) -> int:
