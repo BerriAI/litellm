@@ -19,6 +19,7 @@ from fastapi import HTTPException, Request
 import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
+from litellm.llms.base_llm.base_utils import BaseTokenCounter
 from litellm.llms.bedrock.common_utils import BedrockError
 from litellm.llms.bedrock.count_tokens.bedrock_token_counter import BedrockTokenCounter
 from litellm.llms.bedrock.count_tokens.handler import BedrockCountTokensHandler
@@ -26,7 +27,7 @@ from litellm.proxy._types import ProxyException, TokenCountRequest
 from litellm.proxy.anthropic_endpoints.endpoints import (
     count_tokens as anthropic_count_tokens,
 )
-from litellm.proxy.proxy_server import token_counter
+from litellm.proxy.proxy_server import _try_provider_token_count, token_counter
 from litellm.types.utils import TokenCountResponse
 
 verbose_proxy_logger.setLevel(level=logging.DEBUG)
@@ -950,6 +951,70 @@ async def test_token_counter_httpx_status_error_raises_proxy_exception():
             original_get_provider_token_counter
         )
         litellm.proxy.proxy_server.llm_router = original_router
+
+
+class _RaisingCounter(BaseTokenCounter):
+    def __init__(self, error: Exception) -> None:
+        self._error = error
+
+    def should_use_token_counting_api(self, custom_llm_provider: str | None = None) -> bool:
+        return True
+
+    async def count_tokens(
+        self,
+        model_to_use: str,
+        messages: list | None,
+        contents: list | None,
+        deployment: dict | None = None,
+        request_model: str = "",
+        tools: list | None = None,
+        system: object | None = None,
+    ) -> TokenCountResponse | None:
+        raise self._error
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "provider_error, expected_code",
+    [
+        (
+            litellm.APIError(
+                status_code=400,
+                message="contents is not specified",
+                llm_provider="gemini",
+                model="gemini-2.5-flash",
+            ),
+            "400",
+        ),
+        (
+            litellm.APIConnectionError(message="connection refused", llm_provider="gemini", model="gemini-2.5-flash"),
+            "500",
+        ),
+    ],
+)
+async def test_provider_counter_raising_litellm_error_falls_back_or_surfaces_provider_status(
+    provider_error, expected_code, monkeypatch
+):
+    counter = _RaisingCounter(provider_error)
+    call = dict(
+        provider_counter=counter,
+        custom_llm_provider="gemini",
+        model_to_use="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hello"}],
+        contents=None,
+        deployment={"litellm_params": {"model": "gemini/gemini-2.5-flash"}},
+        request_model="gemini-flash",
+    )
+
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    assert await _try_provider_token_count(**call) is None
+
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    with pytest.raises(ProxyException) as exc_info:
+        await _try_provider_token_count(**call)
+    assert exc_info.value.code == expected_code
+    assert provider_error.message in exc_info.value.message
+    assert exc_info.value.type == "token_counting_error"
 
 
 @pytest.mark.asyncio

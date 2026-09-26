@@ -2,15 +2,17 @@
 ## Helper utilities for token counting
 import base64
 import io
+import json
+import re
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
-from typing import Final, Literal, cast
+from typing import Final, Literal, TypedDict, cast
 
 import anyio
 import anyio.lowlevel
 import httpx
 import tiktoken
-from typing_extensions import ParamSpec, TypeVar
+from typing_extensions import ParamSpec, ReadOnly, TypeVar
 
 import litellm
 from litellm import verbose_logger
@@ -1033,3 +1035,65 @@ def _format_type(props, indent):
     else:
         # This is a guess, as an empty string doesn't yield the expected token count
         return "any"
+
+
+_INLINE_DATA_BASE64_RE: Final = re.compile(r"[A-Za-z0-9+/=]{16,}")
+
+
+def _elide_data_key(obj: Mapping[str, object]) -> Mapping[str, object]:
+    return {  # mutable-ok: object_hook contract returns a dict per JSON node
+        key: (
+            "<binary>"
+            if key == "data" and isinstance(value, str) and _INLINE_DATA_BASE64_RE.fullmatch(value)
+            else value
+        )
+        for key, value in obj.items()
+    }
+
+
+def _serialize_part(part: object) -> str:
+    return json.dumps(json.loads(json.dumps(part, default=str), object_hook=_elide_data_key), default=str)
+
+
+def _part_to_text(part: object) -> str:
+    if isinstance(part, Mapping) and isinstance(part.get("text"), str):
+        return part["text"]
+    return _serialize_part(part)
+
+
+def _content_parts(content: Mapping[str, object]) -> tuple[object, ...]:
+    parts: Final = content.get("parts")
+    if isinstance(parts, list):
+        return tuple(parts)
+    return (content,)
+
+
+class _LocalCountMessage(TypedDict):
+    role: ReadOnly[str]
+    content: ReadOnly[str]
+
+
+def _local_count_message(role: str, content: str) -> _LocalCountMessage:
+    message: Final[_LocalCountMessage] = {"role": role, "content": content}
+    return message
+
+
+def contents_as_chat_messages(contents: object) -> tuple[Mapping[str, object], ...] | None:
+    if contents is None:
+        return None
+    if isinstance(contents, list):
+        messages: Final = tuple(
+            _local_count_message(
+                role="assistant" if content.get("role") == "model" else "user",
+                content="\n".join(_part_to_text(part) for part in _content_parts(content)),
+            )
+            for content in contents
+            if isinstance(content, Mapping)
+        )
+        counted: Final = tuple(message for message in messages if message["content"])
+        if counted:
+            return counted
+    fallback: Final[tuple[Mapping[str, object], ...]] = (
+        _local_count_message(role="user", content=_serialize_part(contents)),
+    )
+    return fallback
