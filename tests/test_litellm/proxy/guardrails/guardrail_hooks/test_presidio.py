@@ -8,7 +8,7 @@ import copy
 import json
 import re
 from contextlib import asynccontextmanager
-from typing import Final
+from typing import Dict, Final, List, Tuple
 from unittest.mock import MagicMock, patch
 
 from aiohttp import web
@@ -4171,3 +4171,178 @@ async def test_pii_masking_replays_a_byte_identical_prefix_across_turns(mock_use
     assert json.dumps(later[: len(earlier)], sort_keys=True) == json.dumps(earlier, sort_keys=True)
     assert earlier[1]["content"] == "My name is <PERSON> and my colleague is <PERSON>."
     assert later[3]["content"] == "Now compare against <PERSON> too."
+
+
+def _analyze_result(entity_type: str, text: str, value: str) -> Dict[str, object]:
+    start = text.index(value)
+    return {"entity_type": entity_type, "start": start, "end": start + len(value), "score": 0.9}
+
+
+def _mask(
+    guardrail: _OPTIONAL_PresidioPIIMasking, text: str, results: List[Dict[str, object]]
+) -> Tuple[str, Dict[str, str]]:
+    request_data: Dict[str, object] = {}
+    masked = guardrail._finalize_presidio_anonymize_numbered_tokens(
+        text=text, analyze_results=results, request_data=request_data, masked_entity_count={}
+    )
+    return masked, request_data["metadata"]["pii_tokens"]
+
+
+def _stable_guardrail(salt: str = "unit-test-salt") -> _OPTIONAL_PresidioPIIMasking:
+    return _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True, output_parse_pii=True, presidio_stable_tokens=True, presidio_token_salt=salt
+    )
+
+
+def test_stable_tokens_are_identical_across_requests():
+    """The same value keeps its token as the conversation grows"""
+    guardrail = _stable_guardrail()
+
+    first_text = "Call Alice Brenner"
+    second_text = "Earlier you asked. Then Bob Smith replied. Call Alice Brenner"
+    first, first_tokens = _mask(guardrail, first_text, [_analyze_result("PERSON", first_text, "Alice Brenner")])
+    second, second_tokens = _mask(
+        guardrail,
+        second_text,
+        [
+            _analyze_result("PERSON", second_text, "Bob Smith"),
+            _analyze_result("PERSON", second_text, "Alice Brenner"),
+        ],
+    )
+
+    alice_token = next(token for token, value in first_tokens.items() if value == "Alice Brenner")
+    assert alice_token in second
+    assert second_tokens[alice_token] == "Alice Brenner"
+
+
+def test_counter_tokens_drift_across_requests():
+    """The default numbering is what stable tokens exist to replace"""
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+
+    first_text = "Call Alice Brenner"
+    second_text = "Earlier you asked. Then Bob Smith replied. Call Alice Brenner"
+    _, first_tokens = _mask(guardrail, first_text, [_analyze_result("PERSON", first_text, "Alice Brenner")])
+    _, second_tokens = _mask(
+        guardrail,
+        second_text,
+        [
+            _analyze_result("PERSON", second_text, "Bob Smith"),
+            _analyze_result("PERSON", second_text, "Alice Brenner"),
+        ],
+    )
+
+    assert first_tokens["<PERSON_1>"] == "Alice Brenner"
+    assert second_tokens["<PERSON_1>"] == "Bob Smith"
+    assert second_tokens["<PERSON_2>"] == "Alice Brenner"
+
+
+def test_stable_tokens_differ_per_value_and_per_entity_type():
+    guardrail = _stable_guardrail()
+
+    text = "Alice Brenner and Bob Smith"
+    _, tokens = _mask(
+        guardrail,
+        text,
+        [_analyze_result("PERSON", text, "Alice Brenner"), _analyze_result("PERSON", text, "Bob Smith")],
+    )
+    assert len(set(tokens)) == 2
+
+    _, person = _mask(guardrail, "Toronto", [_analyze_result("PERSON", "Toronto", "Toronto")])
+    _, location = _mask(guardrail, "Toronto", [_analyze_result("LOCATION", "Toronto", "Toronto")])
+    assert set(person) != set(location)
+
+
+def test_stable_tokens_depend_on_the_salt():
+    """Without this, a token could be reversed by hashing candidate values"""
+    entity = [_analyze_result("PERSON", "Alice Brenner", "Alice Brenner")]
+    salted, salted_tokens = _mask(_stable_guardrail("salt-a"), "Alice Brenner", entity)
+    other, other_tokens = _mask(_stable_guardrail("salt-b"), "Alice Brenner", entity)
+
+    assert salted != other
+    assert set(salted_tokens) != set(other_tokens)
+
+
+def test_stable_tokens_round_trip_through_unmasking():
+    guardrail = _stable_guardrail()
+    text = "Call Alice Brenner today"
+    masked, tokens = _mask(guardrail, text, [_analyze_result("PERSON", text, "Alice Brenner")])
+
+    assert guardrail._unmask_pii_text(masked, tokens) == "Call Alice Brenner today"
+
+
+def test_stable_tokens_are_off_by_default():
+    guardrail = _OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True)
+    assert guardrail.presidio_stable_tokens is False
+
+    text = "Call Alice Brenner"
+    masked, _ = _mask(guardrail, text, [_analyze_result("PERSON", text, "Alice Brenner")])
+    assert masked == "Call <PERSON_1>"
+
+
+def test_stable_token_config_reaches_the_guardrail(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+
+    monkeypatch.setenv("PRESIDIO_ANALYZER_API_BASE", "http://localhost:5002")
+    monkeypatch.setenv("PRESIDIO_ANONYMIZER_API_BASE", "http://localhost:5001")
+    params = LitellmParams(
+        guardrail="presidio",
+        mode="pre_call",
+        output_parse_pii=True,
+        presidio_stable_tokens=True,
+        presidio_token_salt="from-config",
+    )
+    callbacks = initialize_presidio(params, {"guardrail_name": "presidio-unit", "litellm_params": params})
+
+    assert callbacks
+    for callback in callbacks:
+        assert callback.presidio_stable_tokens is True
+        assert callback.presidio_token_salt == "from-config"
+
+
+def test_stable_token_salt_resolves_an_os_environ_reference(monkeypatch):
+    monkeypatch.setenv("MY_PII_SALT", "from-env")
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+        presidio_stable_tokens=True,
+        presidio_token_salt="os.environ/MY_PII_SALT",
+    )
+    assert guardrail.presidio_token_salt == "from-env"
+
+
+def test_stable_token_salt_refuses_an_unset_os_environ_reference(monkeypatch):
+    monkeypatch.delenv("MY_PII_SALT", raising=False)
+    with pytest.raises(ValueError, match="unset or blank"):
+        _OPTIONAL_PresidioPIIMasking(
+            mock_testing=True,
+            output_parse_pii=True,
+            presidio_stable_tokens=True,
+            presidio_token_salt="os.environ/MY_PII_SALT",
+        )
+
+
+def test_stable_tokens_require_a_salt():
+    """An unkeyed digest lets a provider recover the value by hashing candidates"""
+    with pytest.raises(ValueError, match="presidio_token_salt"):
+        _OPTIONAL_PresidioPIIMasking(mock_testing=True, output_parse_pii=True, presidio_stable_tokens=True)
+
+
+def test_stable_tokens_are_namespaced_per_guardrail():
+    """One salt shared by two guardrails must not produce one token"""
+    first = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+        presidio_stable_tokens=True,
+        presidio_token_salt="shared",
+        guardrail_name="tenant-a",
+    )
+    second = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        output_parse_pii=True,
+        presidio_stable_tokens=True,
+        presidio_token_salt="shared",
+        guardrail_name="tenant-b",
+    )
+    entity = [_analyze_result("PERSON", "Alice Brenner", "Alice Brenner")]
+
+    assert _mask(first, "Alice Brenner", entity)[0] != _mask(second, "Alice Brenner", entity)[0]

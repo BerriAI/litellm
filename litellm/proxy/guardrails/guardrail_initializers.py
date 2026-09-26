@@ -139,6 +139,8 @@ def initialize_presidio(litellm_params: LitellmParams, guardrail: Guardrail) -> 
             presidio_anonymizer_api_base=litellm_params.presidio_anonymizer_api_base,
             presidio_language=litellm_params.presidio_language,
             presidio_entities_deny_list=litellm_params.presidio_entities_deny_list,
+            presidio_stable_tokens=getattr(litellm_params, "presidio_stable_tokens", None),
+            presidio_token_salt=getattr(litellm_params, "presidio_token_salt", None),
             apply_to_output=False,
         )
         params.update(overrides)
