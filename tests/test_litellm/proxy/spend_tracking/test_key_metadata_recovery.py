@@ -664,3 +664,41 @@ async def test_attach_user_details_claims_no_team_for_a_multi_team_user_session_
 
     assert "team_id" not in attached["cli-session-bob"]
     assert attached["cli-session-bob"]["user_email"] == "bob@example.com"
+
+
+def _user_lookup_by_filter() -> AsyncMock:
+    async def find_many(*, where):
+        return [
+            SimpleNamespace(user_id=user_id, user_email=f"{user_id}@example.com", teams=[])
+            for user_id in where["user_id"]["in"]
+        ]
+
+    return AsyncMock(side_effect=find_many)
+
+
+@pytest.mark.asyncio
+async def test_attach_user_details_chunks_more_than_5000_user_ids_and_merges_every_chunk():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_many = _user_lookup_by_filter()
+    recovered = {f"key-{n}": {"key_alias": f"alias-{n}", "user_id": f"user-{n}"} for n in range(12_001)}
+
+    attached = await attach_user_details(mock_prisma, recovered)
+
+    sent = [call.kwargs["where"]["user_id"]["in"] for call in mock_prisma.db.litellm_usertable.find_many.call_args_list]
+    assert [len(chunk) for chunk in sent] == [5_000, 5_000, 2_001]
+    assert sorted(user_id for chunk in sent for user_id in chunk) == sorted(f"user-{n}" for n in range(12_001))
+    assert all(attached[f"key-{n}"]["user_email"] == f"user-{n}@example.com" for n in range(12_001))
+
+
+@pytest.mark.asyncio
+async def test_attach_user_details_leaves_metadata_unchanged_when_a_later_chunk_fails():
+    mock_prisma = MagicMock()
+    mock_prisma.db.litellm_usertable.find_many = AsyncMock(
+        side_effect=[[SimpleNamespace(user_id="user-0", user_email="user-0@example.com", teams=[])], PrismaError()]
+    )
+    recovered = {f"key-{n}": {"key_alias": f"alias-{n}", "user_id": f"user-{n}"} for n in range(5_001)}
+
+    attached = await attach_user_details(mock_prisma, recovered)
+
+    assert mock_prisma.db.litellm_usertable.find_many.call_count == 2
+    assert attached == recovered
