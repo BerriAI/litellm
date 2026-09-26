@@ -99,6 +99,8 @@ class ExceptionCheckers:
             "`inputs` tokens + `max_new_tokens` must be",
             "exceeds the available context size",  # llama.cpp/Lemonade
             "exceeds the maximum number of tokens allowed",  # Gemini
+            "prompt is too long",
+            "context_length_exceeded",
         ]
         for substring in known_exception_substrings:
             if substring in _error_str_lowercase:

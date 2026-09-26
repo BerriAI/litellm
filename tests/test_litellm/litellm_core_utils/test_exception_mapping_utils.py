@@ -1500,3 +1500,19 @@ def test_litellm_proxy_repeated_response_header_keeps_each_value():
         )
 
     assert exc_info.value.response.headers.multi_items() == repeated
+
+
+def test_is_error_str_context_window_exceeded_anthropic_and_vllm():
+    from litellm.litellm_core_utils.exception_mapping_utils import ExceptionCheckers
+
+    # Anthropic / Bedrock pattern
+    anthropic_err = "prompt is too long: 205000 tokens > 200000 maximum allowed"
+    assert ExceptionCheckers.is_error_str_context_window_exceeded(anthropic_err) is True
+
+    # vLLM / HuggingFace standard error code
+    vllm_err = "Error code 400: context_length_exceeded"
+    assert ExceptionCheckers.is_error_str_context_window_exceeded(vllm_err) is True
+
+    # Negative test case: generic parameter errors must remain False
+    generic_err = "Invalid parameter 'temperature': must be between 0 and 2"
+    assert ExceptionCheckers.is_error_str_context_window_exceeded(generic_err) is False
