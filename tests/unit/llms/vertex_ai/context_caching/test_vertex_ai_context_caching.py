@@ -1507,15 +1507,9 @@ class TestContextCachingEndpoints:
     @pytest.mark.parametrize(
         "custom_llm_provider", ["gemini", "vertex_ai"]
     )
-    @patch(
-        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.separate_cached_messages"
-    )
-    @patch(
-        "litellm.llms.vertex_ai.context_caching.vertex_ai_context_caching.transform_openai_messages_to_gemini_context_caching"
-    )
     @pytest.mark.asyncio
     async def test_check_and_create_cache_considers_tools_for_min_tokens(
-        self, mock_transform, mock_separate, custom_llm_provider, is_async
+        self, custom_llm_provider, is_async
     ):
         """Test that context caching accounts for tools when validating minimum token count.
 
@@ -1535,7 +1529,6 @@ class TestContextCachingEndpoints:
             {"role": "user", "content": "Hello world"},
         ]
         all_messages = short_cached_messages + non_cached_messages
-        mock_separate.return_value = (short_cached_messages, non_cached_messages)
 
         large_tools = [
             {
@@ -1561,7 +1554,6 @@ class TestContextCachingEndpoints:
             "tools": large_tools,
         }
 
-        mock_transform.return_value = {"model": "gemini-1.5-pro", "contents": []}
         mock_response = MagicMock()
         mock_response.json.return_value = {
             "name": "cachedContents/test_cache_id",
@@ -1619,12 +1611,17 @@ class TestContextCachingEndpoints:
                 )
 
         messages, returned_params, returned_cache = result
+        assert messages == non_cached_messages
         assert returned_cache == "cachedContents/test_cache_id"
         assert "tools" not in returned_params
-        if is_async:
-            self.mock_async_client.post.assert_called_once()
-        else:
-            self.mock_client.post.assert_called_once()
+
+        post_mock = self.mock_async_client.post if is_async else self.mock_client.post
+        post_mock.assert_called_once()
+        call_kwargs = post_mock.call_args.kwargs
+        assert call_kwargs["json"]["tools"] == large_tools
+        assert call_kwargs["json"]["contents"] == [
+            {"role": "user", "parts": [{"text": "Short system instruction."}]}
+        ]
 
         self._token_check_patcher.start()
 
