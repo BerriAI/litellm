@@ -82,6 +82,35 @@ describe("AgentSelector", () => {
     expect(screen.getByRole("option", { name: /group-b/ })).toBeInTheDocument();
   });
 
+  it("offers only individual agents when legacy groups are disabled", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(<AgentSelector {...defaultProps} onChange={onChange} allowAccessGroups={false} />);
+    await user.click(screen.getByRole("combobox"));
+    await user.click(await screen.findByRole("option", { name: /Agent One/ }));
+    expect(screen.queryByRole("option", { name: /group-a/ })).not.toBeInTheDocument();
+    expect(onChange).toHaveBeenCalledWith({ agents: ["agent-1"], accessGroups: [] });
+  });
+
+  it("preserves a saved legacy group while adding an agent with legacy groups disabled", async () => {
+    const user = userEvent.setup();
+    const onChange = vi.fn();
+    render(
+      <AgentSelector
+        {...defaultProps}
+        onChange={onChange}
+        allowAccessGroups={false}
+        value={{ agents: [], accessGroups: ["retired-group"] }}
+      />,
+    );
+    await user.click(screen.getByRole("combobox"));
+    expect(await screen.findByRole("option", { name: /retired-group/ })).toHaveTextContent(
+      "Existing legacy agent group",
+    );
+    await user.click(await screen.findByRole("option", { name: /Agent One/ }));
+    expect(onChange).toHaveBeenCalledWith({ agents: ["agent-1"], accessGroups: ["retired-group"] });
+  });
+
   it("respects disabled prop", () => {
     render(<AgentSelector {...defaultProps} disabled />);
     expect(screen.getByRole("combobox")).toBeDisabled();
