@@ -320,6 +320,33 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
     assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
 
 
+
+def test_get_model_info_bedrock_priced_cross_region_profile_has_priced_base():
+    os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+
+    prefixes = ("us.", "eu.", "apac.", "us-gov.", "au.", "global.")
+    checked = 0
+
+    for k, v in litellm.model_cost.items():
+        if not str(v.get("litellm_provider", "")).startswith("bedrock"):
+            continue
+        base_model_key = next(
+            (k[len(p) :] for p in prefixes if k.startswith(p)),
+            None,
+        )
+        if base_model_key is None or base_model_key not in litellm.model_cost:
+            continue
+        checked += 1
+        base = litellm.model_cost[base_model_key]
+        for cost_key in ("input_cost_per_token", "output_cost_per_token"):
+            if (v.get(cost_key) or 0) > 0:
+                assert (
+                    base.get(cost_key) or 0
+                ) > 0, f"{k} charges {cost_key} but its base {base_model_key} is free"
+
+    assert checked > 0, "no cross-region bedrock profiles found - the filter is inert"
+
 def test_get_model_info_huggingface_models(monkeypatch):
     from litellm import Router
     from litellm.types.router import ModelGroupInfo

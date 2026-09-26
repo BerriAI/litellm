@@ -32950,6 +32950,8 @@ export interface components {
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Creation Input Token Cost Above 200K Tokens */
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 200K Tokens Batches */
+            cache_creation_input_token_cost_above_200k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens */
             cache_creation_input_token_cost_above_272k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Batches */
@@ -46735,6 +46737,8 @@ export interface components {
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Creation Input Token Cost Above 200K Tokens */
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 200K Tokens Batches */
+            cache_creation_input_token_cost_above_200k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens */
             cache_creation_input_token_cost_above_272k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Batches */
