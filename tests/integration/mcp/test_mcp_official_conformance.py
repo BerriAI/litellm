@@ -19,7 +19,7 @@ def test_official_scenario_through_gateway(gateway: Gateway, tmp_path: Path, unu
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
         direct: Final = run_scenario(root, reference.url, name, output / "direct")
         endpoint: Final = str(gateway.client.base_url).rstrip("/") + f"/{alias}/mcp"
-        with authenticated_endpoint(endpoint, key) as authenticated:
+        with authenticated_endpoint(endpoint, key, alias) as authenticated:
             proxied: Final = run_scenario(root, authenticated, name, output / "gateway")
         assert tuple(check.status for check in direct if check.id == name) == ("SUCCESS",)
         assert tuple(check.status for check in proxied if check.id == name) == ("SUCCESS",)
