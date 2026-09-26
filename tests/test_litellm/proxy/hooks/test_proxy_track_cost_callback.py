@@ -2716,14 +2716,14 @@ async def test_track_cost_callback_failure_alert_never_carries_request_metadata_
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("identity_field", ["agent_id", "billing_agent_id"])
-async def test_autonomous_llm_callback_persists_without_human_or_key(identity_field: str) -> None:
+async def test_autonomous_llm_callback_persists_without_human_or_key(identity_field: str) -> None:  # test-quality-ok: verifies anonymous-agent charges reach the persistence boundary; no injection seam
     kwargs: Final = {
         "call_type": "acompletion",
         "model": "test-model",
         "response_cost": 0.01,
         "litellm_params": {"metadata": {identity_field: "autonomous-agent"}},
     }
-    with patch(  # test-quality-ok: callback invokes this module-level persistence boundary without an injection seam
+    with patch(
         "litellm.proxy.hooks.proxy_track_cost_callback._update_database_and_spend_counters",
         new_callable=AsyncMock,
         return_value=False,
