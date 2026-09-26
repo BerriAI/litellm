@@ -116,6 +116,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
     preserve_events_added_during_flush = True
     _flush_retries: int = 0
     _requeued_count: int = 0
+    _upload_limiter: asyncio.Semaphore | AdaptiveConcurrencyLimiter | None = None
     s3_drop_on_terminal_error: bool = False
     s3_max_retry_age_seconds: int | None = None
 
@@ -202,7 +203,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
                 s3_max_adaptive_concurrency=s3_max_adaptive_concurrency,
                 s3_batch_file_upload=s3_batch_file_upload,
             )
-            self._upload_limiter: asyncio.Semaphore | AdaptiveConcurrencyLimiter = (
+            self._upload_limiter = (
                 AdaptiveConcurrencyLimiter(
                     initial=self.s3_max_concurrent_uploads,
                     floor=self.s3_max_concurrent_uploads,
@@ -527,7 +528,10 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
     @property
     def _upload_semaphore(self) -> asyncio.Semaphore | AdaptiveConcurrencyLimiter:
-        return self._upload_limiter
+        limiter: Final = self._upload_limiter
+        if limiter is None:
+            raise AttributeError("_upload_semaphore")
+        return limiter
 
     @_upload_semaphore.setter
     def _upload_semaphore(self, value: asyncio.Semaphore | AdaptiveConcurrencyLimiter) -> None:
@@ -710,7 +714,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         return "retry"
 
     async def _recorded_put(self, signed_put: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
-        limiter: Final = getattr(self, "_upload_limiter", None)
+        limiter: Final = self._upload_limiter
         adaptive: Final = limiter if isinstance(limiter, AdaptiveConcurrencyLimiter) else None
         try:
             response: Final = await signed_put()
