@@ -1571,7 +1571,11 @@ class TestBoundedOpenAPISpecLoading:
     @pytest.mark.asyncio
     @pytest.mark.parametrize(
         "headers",
-        [{"content-length": "1000000"}, {"content-length": "1000000", "content-encoding": "identity"}],
+        [
+            {"content-length": "1000000"},
+            {"content-length": "1000000", "content-encoding": "identity"},
+            {"content-length": "1000000", "content-encoding": "gzip"},
+        ],
     )
     async def test_unsafe_response_headers_reject_before_reading(self, respx_mock, monkeypatch, headers):
         import httpx
