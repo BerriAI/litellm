@@ -45,10 +45,6 @@ class Need(enum.Enum):
     MODEL = "model"
     CALLBACK = "callback"
     INVITATION = "invitation"
-    PERMISSIONS = "permissions"
-
-
-PERMITTED_FIELDS: Final = ("max_budget", "projects", "member_key_budgets")
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,6 +89,7 @@ class Door:
     call: Callable[[World, Target], Call]
     expected: Mapping[Actor, int]
     needs: frozenset[Need] = frozenset()
+    grant: str = ""
     dispose: Callable[[World, Target, dict[str, JsonValue]], None] | None = None
 
 
@@ -174,10 +171,10 @@ def _dispose_callback(world: World, target: Target, created: dict[str, JsonValue
     _delete_callback_if_present(world.gateway, world.team, f"matrix-{target.nonce}")
 
 
-def prepare(world: World, scenario: Scenario, needs: frozenset[Need]) -> Target:
+def prepare(world: World, scenario: Scenario, needs: frozenset[Need], grant: str = "") -> Target:
     gateway: Final = world.gateway
-    if Need.PERMISSIONS in needs:
-        scenario.cleanups.enter_context(team_admin_permissions(gateway, PERMITTED_FIELDS))
+    if grant:
+        scenario.cleanups.enter_context(team_admin_permissions(gateway, (grant,)))
     wants_victim: Final = Need.VICTIM in needs or Need.INVITATION in needs
     victim: Final = scenario.user(user_role="internal_user") if wants_victim else ""
     if victim:
@@ -358,7 +355,8 @@ DOORS: Final[tuple[Door, ...]] = (
         "key_update_member_key_permitted",
         lambda w, t: Call("POST", "/key/update", {"key": t.victim_key, "max_budget": 5}),
         verdict(team_admin=200, member=403, other_team_admin=403, outsider=403),
-        needs=frozenset({Need.VICTIM, Need.PERMISSIONS}),
+        needs=frozenset({Need.VICTIM}),
+        grant="member_key_budgets",
     ),
     Door(
         "team_key_bulk_update",
@@ -495,7 +493,7 @@ DOORS: Final[tuple[Door, ...]] = (
         "team_update_budget_permitted",
         lambda w, t: Call("POST", "/team/update", {"team_id": w.team, "max_budget": 7}),
         verdict(team_admin=200, member=403, other_team_admin=403, outsider=403),
-        needs=frozenset({Need.PERMISSIONS}),
+        grant="max_budget",
     ),
     Door(
         "project_new",
@@ -507,7 +505,7 @@ DOORS: Final[tuple[Door, ...]] = (
         "project_new_permitted",
         lambda w, t: Call("POST", "/project/new", {"team_id": w.team, "project_alias": f"matrix-{t.nonce}"}),
         verdict(team_admin=200, member=403, other_team_admin=403, outsider=403),
-        needs=frozenset({Need.PERMISSIONS}),
+        grant="projects",
         dispose=_dispose_project,
     ),
     Door(
@@ -579,7 +577,7 @@ def world() -> Iterator[World]:
 @pytest.mark.parametrize(("door", "actor"), CASES, ids=tuple(f"{door.name}[{actor.value}]" for door, actor in CASES))
 def test_door_status(world: World, door: Door, actor: Actor) -> None:
     with world.gateway.scenario() as scenario:
-        target: Final = prepare(world, scenario, door.needs)
+        target: Final = prepare(world, scenario, door.needs, door.grant)
         call: Final = door.call(world, target)
         response: Final = world.gateway.request(call.method, call.path, call.body, key=world.keys[actor])
         assert response.status_code == door.expected[actor], (
