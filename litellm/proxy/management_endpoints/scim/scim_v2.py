@@ -22,7 +22,6 @@ from fastapi import (
     Request,
     Response,
 )
-from prisma.types import LiteLLM_SCIMResourceWhereInput
 from pydantic import BaseModel, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict, assert_never
 
@@ -63,6 +62,7 @@ from litellm.proxy.utils import (
     _premium_user_check,
     handle_exception_on_proxy,
 )
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.table_repositories import (
     InvitationLinkRepository,
     OrganizationMembershipRepository,
@@ -465,14 +465,10 @@ async def _source_owned_ids(
 ) -> frozenset[str]:
     if not local_ids:
         return frozenset()
-    where: Final[LiteLLM_SCIMResourceWhereInput] = {
-        "kind": kind,
-        "OR": [  # mutable-ok: Prisma OR filter contract
-            {"id": {"in": list(local_ids)}},  # mutable-ok: Prisma nested filter contract
-            {"local_id": {"in": list(local_ids)}},  # mutable-ok: Prisma nested filter contract
-        ],
-    }
-    resources: Final = await SCIMResourceRepository(prisma_client, use_writer=True).table.find_many(where=where)
+    table: Final = SCIMResourceRepository(prisma_client, use_writer=True).table
+    by_scim_id: Final = await find_many_in(table, "id", local_ids, where={"kind": kind})
+    by_local_id: Final = await find_many_in(table, "local_id", local_ids, where={"kind": kind})
+    resources: Final = chain(by_scim_id, by_local_id)
     return frozenset(filter(None, chain.from_iterable((resource.id, resource.local_id) for resource in resources)))
 
 
