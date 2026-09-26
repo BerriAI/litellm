@@ -564,7 +564,10 @@ mod tests {
         let params = ReductoParseV3Config
             .map_ocr_params(&overrides, "parse-v3")
             .unwrap();
-        let client = OcrClient::for_test(reqwest::Client::new(), reqwest::Client::new());
+        let client = OcrClient::for_test(
+            litellm_http::Client::plain_for_test(),
+            litellm_http::Client::no_redirect_for_test(),
+        );
         let connection = OcrConnection::default();
         let document = serde_json::from_value(
             json!({"type":"document_url","document_url":"reducto://ready.pdf"}),

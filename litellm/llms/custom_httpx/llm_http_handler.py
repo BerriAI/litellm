@@ -204,7 +204,7 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
-    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+    from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
         FakeAnthropicMessagesStreamIterator,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
@@ -649,7 +649,16 @@ class BaseLLMHTTPHandler:
         def sign_and_log(
             transformed: dict[str, object],  # mutable-ok: async_completion takes dict
         ) -> tuple[dict[str, object], dict[str, object], bytes | None]:  # mutable-ok: async_completion takes dict
-            data: Final = {**transformed, **extra_body} if extra_body is not None else transformed
+            data: Final = (
+                {
+                    **transformed,
+                    **provider_config.transform_extra_body(
+                        extra_body=extra_body, request=transformed, model=model, litellm_params=litellm_params
+                    ),
+                }
+                if extra_body is not None
+                else transformed
+            )
             signed: Final = cast(  # cast-ok: sign_request is declared as a bare dict
                 "tuple[dict[str, object], bytes | None]",
                 provider_config.sign_request(
@@ -2115,7 +2124,7 @@ class BaseLLMHTTPHandler:
 
         initial_response: AsyncIterator | AnthropicMessagesResponse
         if stream:
-            from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
                 AnthropicMessagesStreamingResponse,
                 anthropic_messages_stream_hidden_params,
             )
@@ -2139,7 +2148,7 @@ class BaseLLMHTTPHandler:
                     hidden_params=stream_hidden_params,
                 )
 
-            from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+            from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
                 AgenticAnthropicStreamingIterator,
             )
 
@@ -2421,7 +2430,11 @@ class BaseLLMHTTPHandler:
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         if extra_body:
-            data.update(extra_body)
+            data.update(
+                responses_api_provider_config.transform_extra_body(
+                    extra_body=extra_body, request=data, model=model, litellm_params=litellm_params
+                )
+            )
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
@@ -2609,7 +2622,11 @@ class BaseLLMHTTPHandler:
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         if extra_body:
-            data.update(extra_body)
+            data.update(
+                responses_api_provider_config.transform_extra_body(
+                    extra_body=extra_body, request=data, model=model, litellm_params=litellm_params
+                )
+            )
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
@@ -5523,7 +5540,7 @@ class BaseLLMHTTPHandler:
             from typing import cast
 
             from litellm._logging import verbose_logger
-            from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+            from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
                 FakeAnthropicMessagesStreamIterator,
             )
             from litellm.types.llms.anthropic_messages.anthropic_response import (

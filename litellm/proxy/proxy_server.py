@@ -476,6 +476,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     project_spend_counter_key,
     tag_cache_key,
 )
+from litellm.proxy.common_utils.validation_error_body import public_validation_errors
 from litellm.proxy.config_resolvers import (
     FieldSource,
     SettingsStore,
@@ -544,6 +545,7 @@ from litellm.proxy.health_endpoints._health_endpoints import router as health_ro
 from litellm.proxy.hooks.model_max_budget_limiter import (
     _PROXY_VirtualKeyModelMaxBudgetLimiter,
 )
+from litellm.proxy.hooks.parallel_request_limiter_v3 import fail_closed_rate_limit_enforcement_enabled
 from litellm.proxy.hooks.prompt_injection_detection import (
     _OPTIONAL_PromptInjectionDetection,
 )
@@ -551,7 +553,6 @@ from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger, run_sp
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.list_api.common import (
     ManagementProblem,
-    ValidationErrorDetail,
     problem_response,
     request_validation_problem,
 )
@@ -1471,6 +1472,10 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
         max_budget=litellm.max_budget,
         prisma_client=prisma_client,
     )
+    ProxyStartupEvent._warn_fail_closed_rate_limits_without_redis(
+        fail_closed_rate_limit_enforcement=fail_closed_rate_limit_enforcement_enabled(general_settings),
+        redis_usage_cache=redis_usage_cache,
+    )
 
     ### START BATCH WRITING DB + CHECKING NEW MODELS###
     worker_heartbeat: Final = (
@@ -1983,16 +1988,14 @@ class _ExceptionRow(TypedDict, total=False):
 
 @app.exception_handler(RequestValidationError)
 async def otel_request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    public_errors: Final = public_validation_errors(exc.errors())
+    public_exc: Final = RequestValidationError(public_errors).with_traceback(exc.__traceback__)
     if request.url.path.startswith(MANAGEMENT_V1_PREFIX):
-        validation_errors: Final[Sequence[ValidationErrorDetail]] = exc.errors()
-        problem: Final = request_validation_problem(validation_errors)
-        _close_dangling_otel_server_span(request, problem.status, exc=exc)
+        problem: Final = request_validation_problem(public_errors)
+        _close_dangling_otel_server_span(request, problem.status, exc=public_exc)
         return problem_response(problem)
-    _close_dangling_otel_server_span(request, 422, exc=exc)
-    return JSONResponse(
-        status_code=422,
-        content={"detail": jsonable_encoder(exc.errors())},
-    )
+    _close_dangling_otel_server_span(request, 422, exc=public_exc)
+    return JSONResponse(status_code=422, content={"detail": public_errors})
 
 
 @app.exception_handler(Exception)
@@ -9827,6 +9830,20 @@ class ProxyStartupEvent:
             "general_settings.database_url and restart. Redis and fail_closed_budget_enforcement do not "
             "cover the proxy-wide budget because there is no global spend counter; Redis alone is not a substitute.",
             max_budget,
+        )
+
+    @staticmethod
+    def _warn_fail_closed_rate_limits_without_redis(
+        fail_closed_rate_limit_enforcement: bool, redis_usage_cache: RedisCache | None
+    ) -> None:
+        if redis_usage_cache is not None or not fail_closed_rate_limit_enforcement:
+            return
+
+        verbose_proxy_logger.warning(
+            "general_settings.fail_closed_rate_limit_enforcement is enabled but no Redis is configured, so rate "
+            "limits are enforced per pod from memory and the setting rejects nothing. Configure "
+            "general_settings.coordination_redis (or REDIS_HOST/REDIS_PORT/REDIS_PASSWORD) to share the counters "
+            "across pods and make the setting effective."
         )
 
     @classmethod

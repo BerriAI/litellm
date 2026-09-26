@@ -28,10 +28,10 @@ const mockServer: MCPServerData = {
   env: {},
 };
 
-function renderTable(onServerClick = vi.fn(), server = mockServer) {
+function renderTable(onServerClick = vi.fn(), servers = [mockServer]) {
   render(
     <DataTable
-      data={[server]}
+      data={servers}
       columns={getMCPHubTableColumns({ onServerClick })}
       getRowId={(server) => server.server_id}
       sortingMode="client"
@@ -44,7 +44,7 @@ function renderTable(onServerClick = vi.fn(), server = mockServer) {
 describe("getMCPHubTableColumns", () => {
   it("explains the limited check for a reachable server", async () => {
     const user = userEvent.setup();
-    renderTable(vi.fn(), { ...mockServer, status: "reachable" });
+    renderTable(vi.fn(), [{ ...mockServer, status: "reachable" }]);
 
     await user.hover(screen.getByText("reachable"));
 
