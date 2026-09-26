@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::task::Poll;
 
 use futures_util::future::{AbortHandle, Abortable};
 use litellm_host::event::WireRequest;
@@ -16,8 +15,13 @@ use tokio::sync::Mutex;
 use crate::adapter::{
     InvokeError, LifecycleEvent, LifecycleStep, ProtocolHost, PythonLifecycle, missing_state,
 };
-use crate::execution::{poll_async_value, run_async_value, run_sync_value};
+use crate::execution::run_sync_value;
 use crate::handle::{Execution, ExecutionBody, ExecutionStep};
+use crate::inline::{InlineAwait, Started};
+
+#[cfg(test)]
+const RUST_BRIDGE: &str = "litellm.rust_bridge";
+const RUST_BRIDGE_LIFECYCLE: &str = "litellm.rust_bridge.lifecycle";
 
 type ProtocolOf<H> = <H as ProtocolHost>::Protocol;
 type ErrorOf<H> = <ProtocolOf<H> as Protocol>::Error;
@@ -127,7 +131,7 @@ where
     if asynchronous {
         let execution = Py::new(py, Execution::new(driver))?;
         return py
-            .import("litellm.rust_bridge.lifecycle")?
+            .import(RUST_BRIDGE_LIFECYCLE)?
             .getattr("drive")?
             .call1((execution,))
             .map(Bound::unbind);
@@ -135,7 +139,7 @@ where
     match driver.resume(None)? {
         ExecutionStep::Return(value) => Ok(value),
         ExecutionStep::Open(head) => py
-            .import("litellm.rust_bridge.lifecycle")?
+            .import(RUST_BRIDGE_LIFECYCLE)?
             .getattr("SyncStream")?
             .call1((Py::new(py, Execution::suspended(driver))?, head))
             .map(Bound::unbind),
@@ -410,24 +414,22 @@ where
             state.result = Some(result);
             Ok(())
         };
-        if self.asynchronous {
-            let mut future = Box::pin(future);
-            if let Poll::Ready(()) = poll_async_value(py, future.as_mut())? {
-                return Ok(HostStep::Ready(self.take_native_result()?));
-            }
-            let (abort, registration) = AbortHandle::new_pair();
-            self.native_abort = Some(abort);
-            Ok(HostStep::Suspend(
-                run_async_value(py, async move {
-                    Abortable::new(future, registration)
-                        .await
-                        .map_err(|_| PyRuntimeError::new_err("native execution closed"))?
-                })?
-                .unbind(),
-            ))
-        } else {
+        if !self.asynchronous {
             run_sync_value(py, future)?;
-            Ok(HostStep::Ready(self.take_native_result()?))
+            return Ok(HostStep::Ready(self.take_native_result()?));
+        }
+        let (abort, registration) = AbortHandle::new_pair();
+        let started = InlineAwait::start(py, async move {
+            Abortable::new(future, registration)
+                .await
+                .map_err(|_| PyRuntimeError::new_err("native execution closed"))?
+        })?;
+        match started {
+            Started::Ready => Ok(HostStep::Ready(self.take_native_result()?)),
+            Started::Suspended(awaitable) => {
+                self.native_abort = Some(abort);
+                Ok(HostStep::Suspend(awaitable.into_any()))
+            }
         }
     }
 
@@ -568,20 +570,11 @@ mod tests {
     static PYTHON_GLOBALS: Mutex<()> = Mutex::new(());
 
     fn install_lifecycle_module(py: Python<'_>) -> Bound<'_, PyModule> {
-        py.run(
-            pyo3::ffi::c_str!(
-                r#"
-import sys
-import types
-
-sys.modules.setdefault('litellm', types.ModuleType('litellm'))
-sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bridge'))
-"#
-            ),
-            None,
-            None,
-        )
-        .unwrap();
+        let modules = py.import("sys").unwrap().getattr("modules").unwrap();
+        ["litellm", RUST_BRIDGE].into_iter().for_each(|name| {
+            let module = PyModule::new(py, name).unwrap();
+            modules.call_method1("setdefault", (name, module)).unwrap();
+        });
         let source =
             std::ffi::CString::new(include_str!("../../../../litellm/rust_bridge/lifecycle.py"))
                 .unwrap();
@@ -589,7 +582,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             py,
             &source,
             pyo3::ffi::c_str!("lifecycle.py"),
-            pyo3::ffi::c_str!("litellm.rust_bridge.lifecycle"),
+            &std::ffi::CString::new(RUST_BRIDGE_LIFECYCLE).unwrap(),
         )
         .unwrap()
     }

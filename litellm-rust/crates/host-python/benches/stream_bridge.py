@@ -1,6 +1,16 @@
 import asyncio
 
-loop = asyncio.new_event_loop()
+parks = 0
+
+
+class CountingLoop(asyncio.SelectorEventLoop):
+    def create_future(self):
+        global parks
+        parks += 1
+        return super().create_future()
+
+
+loop = CountingLoop()
 asyncio.set_event_loop(loop)
 
 
@@ -55,4 +65,7 @@ async def _count_steps(handed):
 
 
 def count_steps(handed):
-    return loop.run_until_complete(_count_steps(handed))
+    global parks
+    parks = 0
+    chunks, awaits = loop.run_until_complete(_count_steps(handed))
+    return chunks, awaits, parks

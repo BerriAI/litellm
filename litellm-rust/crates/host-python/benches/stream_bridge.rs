@@ -16,7 +16,15 @@
 //! Run with `cargo bench -p litellm-host-python --bench stream_bridge`.
 
 use std::{
-    convert::Infallible, ffi::CString, fmt, hint::black_box, sync::OnceLock, time::Duration,
+    convert::Infallible,
+    ffi::CString,
+    fmt,
+    future::Future,
+    hint::black_box,
+    pin::Pin,
+    sync::OnceLock,
+    task::{Context, Poll},
+    time::Duration,
 };
 
 use bytes::Bytes;
@@ -41,6 +49,7 @@ use pyo3::{
     prelude::*,
     types::{PyBytes, PyDict},
 };
+use tokio::sync::mpsc;
 
 const CHUNKS: usize = 1_500;
 
@@ -99,6 +108,28 @@ impl Native {
     }
 }
 
+/// The native side of a suspended read: the producer task hands over the next chunk only
+/// after this future has returned pending once, so the consumer's waker is registered before
+/// the chunk can arrive and every read parks on the loop.
+struct Arrival<'a> {
+    signal: &'a mut mpsc::Receiver<()>,
+    demand: Option<&'a mpsc::UnboundedSender<()>>,
+}
+
+impl Future for Arrival<'_> {
+    type Output = ();
+
+    fn poll(mut self: Pin<&mut Self>, context: &mut Context<'_>) -> Poll<()> {
+        if self.signal.poll_recv(context).is_ready() {
+            return Poll::Ready(());
+        }
+        if let Some(demand) = self.demand.take() {
+            demand.send(()).expect("the producer outlives the stream");
+        }
+        Poll::Pending
+    }
+}
+
 fn machine(native: Native, chunks: usize, payload: Bytes) -> CallMachine<Stream> {
     CallMachine::new(move |host| {
         Box::pin(async move {
@@ -106,9 +137,24 @@ fn machine(native: Native, chunks: usize, payload: Bytes) -> CallMachine<Stream>
             if host.open(()).await? == Demand::Detached {
                 return Ok(());
             }
+            let (demand, mut demanded) = mpsc::unbounded_channel::<()>();
+            let (signal, mut signalled) = mpsc::channel::<()>(1);
+            if native == Native::Pending {
+                tokio::spawn(async move {
+                    while demanded.recv().await.is_some() {
+                        if signal.send(()).await.is_err() {
+                            break;
+                        }
+                    }
+                });
+            }
             for _ in 0..chunks {
                 if native == Native::Pending {
-                    tokio::task::yield_now().await;
+                    Arrival {
+                        signal: &mut signalled,
+                        demand: Some(&demand),
+                    }
+                    .await;
                 }
                 if host.deliver(payload.clone()).await? == Demand::Detached {
                     break;
@@ -312,33 +358,32 @@ fn consume_python(
 }
 
 /// Proves each mode exercises the path its name claims before anything is timed: `ready` must
-/// never hand Python an awaitable, `pending` must do so once per chunk. Resumes are the
-/// driver's interpreter releases, one per machine poll.
+/// never park the task on the loop, `pending` must park it on nearly every chunk (a wake that
+/// wins the interpreter before the park is the cheap path and stays rare). Parks are the
+/// `asyncio.Future`s the harness loop creates; resumes are the driver's interpreter releases,
+/// one per machine poll.
 fn report_steps(py: Python<'_>, harness: &Bound<'_, PyModule>, payload: &Bytes) {
     for native in [Native::Ready, Native::Pending] {
         let before = release_count();
-        let (chunks, awaits): (usize, usize) = harness
+        let (chunks, awaits, parks): (usize, usize, usize) = harness
             .call_method1("count_steps", (handed(py, native, payload),))
             .expect("the counting drain should finish")
             .extract()
-            .expect("count_steps returns (chunks, awaits)");
+            .expect("count_steps returns (chunks, awaits, parks)");
         let resumes = release_count() - before;
         eprintln!(
-            "native/{}: chunks={chunks} awaits={awaits} resumes={resumes}",
+            "native/{}: chunks={chunks} awaits={awaits} parks={parks} resumes={resumes}",
             native.label()
         );
         assert_eq!(chunks, CHUNKS);
-        let expected_awaits = match native {
-            Native::Ready => 0,
-            Native::Pending => CHUNKS,
+        match native {
+            Native::Ready => assert_eq!(parks, 0, "native/ready parked"),
+            Native::Pending => assert!(
+                parks * 100 >= CHUNKS * 95,
+                "native/pending parked only {parks} of {CHUNKS} reads"
+            ),
             Native::Sync => unreachable!("sync mode never suspends"),
-        };
-        assert_eq!(
-            awaits,
-            expected_awaits,
-            "native/{} suspended unexpectedly",
-            native.label()
-        );
+        }
     }
 }
 
