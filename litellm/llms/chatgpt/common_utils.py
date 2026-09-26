@@ -2,6 +2,7 @@
 Constants and helpers for ChatGPT subscription OAuth.
 """
 
+import hashlib
 import os
 import platform
 from typing import Any, Final
@@ -9,6 +10,7 @@ from uuid import uuid4
 
 import httpx
 
+from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 
 # OAuth + API constants (derived from openai/codex)
@@ -270,15 +272,28 @@ def _normalize_litellm_params(litellm_params: Any | None) -> dict:
 
 def get_chatgpt_session_id(litellm_params: object) -> str | None:
     params: Final = _normalize_litellm_params(litellm_params)
-    for key in ("litellm_session_id", "session_id"):
-        value = params.get(key)
-        if value:
-            return str(value)
     metadata: Final = params.get("metadata")
-    if isinstance(metadata, dict):
-        value = metadata.get("session_id")
-        if value:
-            return str(value)
+    generated: Final = any(
+        isinstance(params.get(name), dict) and params[name].get(SESSION_ID_GENERATED_METADATA_KEY)
+        for name in ("metadata", "litellm_metadata")
+    )
+    if not generated:
+        for key in ("litellm_session_id", "session_id"):
+            value = params.get(key)
+            if value:
+                return str(value)
+        if isinstance(metadata, dict):
+            value = metadata.get("session_id")
+            if value:
+                return str(value)
+    prompt_cache_key: Final = params.get("prompt_cache_key")
+    if prompt_cache_key:
+        key = str(prompt_cache_key)
+        safe = _safe_header_value(key)
+        # hashing avoids collisions from _safe_header_value's replacement char
+        return safe if safe == key else hashlib.sha256(key.encode()).hexdigest()
+    if generated:
+        return None
     for key in ("litellm_trace_id", "litellm_call_id"):
         value = params.get(key)
         if value:
