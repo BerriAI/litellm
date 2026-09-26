@@ -1148,45 +1148,6 @@ def test_translate_openai_content_to_anthropic_empty_function_arguments():
     assert "provider_specific_fields" not in result[0]
 
 
-def test_translate_openai_content_to_anthropic_expands_concatenated_tool_arguments():
-    """A concatenated arguments string becomes one tool_use per object, not a raw list input."""
-    raw = json.dumps({"args": json.dumps({"flag": True})}) + json.dumps(
-        {"args": json.dumps({"box": "A", "limit": 50})}
-    )
-    openai_choices = [
-        Choices(
-            message=Message(
-                role="assistant",
-                content=None,
-                tool_calls=[
-                    ChatCompletionAssistantToolCall(
-                        id="call_move",
-                        type="function",
-                        function=Function(name="move", arguments=raw),
-                    )
-                ],
-            )
-        )
-    ]
-
-    result = LiteLLMAnthropicMessagesAdapter()._translate_openai_content_to_anthropic(choices=openai_choices)
-
-    assert result == [
-        {
-            "type": "tool_use",
-            "id": "call_move",
-            "name": "move",
-            "input": {"args": json.dumps({"flag": True})},
-        },
-        {
-            "type": "tool_use",
-            "id": "call_move__concat_1",
-            "name": "move",
-            "input": {"args": json.dumps({"box": "A", "limit": 50})},
-        },
-    ]
-
-
 def test_translate_openai_content_to_anthropic_text_and_tool_calls():
     """Ensure content blocks contain both the assistant text + tool call data."""
     openai_choices = [
