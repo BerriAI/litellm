@@ -25,7 +25,9 @@ from typing import (
     TypedDict,
 )
 
+from fastapi import HTTPException
 from pydantic import TypeAdapter
+from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
@@ -110,6 +112,20 @@ def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
     if llm_router is None:
         return None
     return resolve_model_group_alias(llm_router.model_group_alias, model)
+
+
+FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING: Final = "fail_closed_rate_limit_enforcement"
+RATE_LIMIT_UNVERIFIABLE_MESSAGE: Final = (
+    "Rate limit enforcement unavailable: request counters could not be verified against Redis, and "
+    "fail_closed_rate_limit_enforcement is enabled, so the request was rejected to avoid exceeding the "
+    "configured rate limit. Retry shortly."
+)
+
+
+def _fail_closed_rate_limit_enforcement_from_general_settings() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return general_settings.get(FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING) is True
 
 
 def _sibling_counter_keys(window_key: str) -> tuple[str, str]:
@@ -692,11 +708,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         time_provider: Callable[[], datetime] | None = None,
         tag_rate_limit_resolver: TagRateLimitResolver = resolve_tag_rate_limits_from_db,
         model_group_resolver: Callable[[str], str | None] = _resolve_model_group_alias_via_proxy_router,
+        fail_closed_resolver: Callable[[], bool] = _fail_closed_rate_limit_enforcement_from_general_settings,
     ):
         self.internal_usage_cache = internal_usage_cache
         self._time_provider = time_provider or datetime.now
         self._tag_rate_limit_resolver = tag_rate_limit_resolver
         self._model_group_resolver = model_group_resolver
+        self._fail_closed_resolver = fail_closed_resolver
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             self.batch_rate_limiter_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 BATCH_RATE_LIMITER_SCRIPT
@@ -1312,6 +1330,21 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             local_only=True,
         )
 
+    def _reject_if_rate_limit_unverifiable(self, failed_operation: str, error: Exception) -> None:
+        if not self._fail_closed_resolver():
+            return
+        verbose_proxy_logger.warning(
+            "fail_closed_rate_limit_enforcement: rejecting request, %s could not verify the counters against "
+            "Redis (%s: %s)",
+            failed_operation,
+            type(error).__name__,
+            error,
+        )
+        raise HTTPException(
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": RATE_LIMIT_UNVERIFIABLE_MESSAGE},
+        )
+
     async def _execute_redis_batch_rate_limiter_script(
         self,
         keys_to_fetch: list[str],
@@ -1344,6 +1377,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 log_redis_failure(
                     verbose_proxy_logger, logging.WARNING, f"Redis Lua script failed for hash tag {hash_tag}", e
                 )
+                self._reject_if_rate_limit_unverifiable("batch_rate_limiter_script", e)
                 # Fallback to in-memory cache for this group
                 group_cache_values = await self.in_memory_cache_sliding_window(
                     keys=group_keys,
@@ -1629,6 +1663,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     "parallel_acquire_script failed, falling back to in-memory gauge",
                     e,
                 )
+                self._reject_if_rate_limit_unverifiable("parallel_acquire_script", e)
                 async with self._check_and_increment_lock:
                     return await self._acquire_parallel_slots_in_memory(gauges, slot_id, parent_otel_span)
             if int(raw[0]) == 1:
@@ -1966,6 +2001,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     e,
                 )
                 await self._refund_applied_descriptor_groups(applied)
+                self._reject_if_rate_limit_unverifiable("check_and_increment_by_n_script", e)
                 flat_meta: list[AtomicCounterMeta] = [m for _k, _a, group_meta in descriptor_groups for m in group_meta]
                 async with self._check_and_increment_lock:
                     return await self._atomic_check_and_increment_in_memory(

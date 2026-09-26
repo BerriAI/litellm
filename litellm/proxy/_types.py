@@ -2664,6 +2664,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "borrowing the `cache_params` Redis and over the REDIS_* env fallback"
         ),
     )
+    fail_closed_rate_limit_enforcement: bool | None = Field(
+        None,
+        description=(
+            "reject requests with a 503 while the rate limit counters in Redis are unreachable, instead of "
+            "enforcing tpm/rpm/max_parallel_requests limits per pod from memory (which admits up to N times "
+            "the limit across N pods)"
+        ),
+    )
     control_plane_url: str | None = Field(
         None,
         description=(

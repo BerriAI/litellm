@@ -6718,6 +6718,140 @@ async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
 
 
+class _UnreachableRedis:
+    def async_register_script(self, script: str):
+        async def refused(keys, args):
+            raise ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused.")
+
+        return refused
+
+
+class _ScriptedRedis:
+    def __init__(self, failing_script: str | None = None):
+        self.failing_script = failing_script
+        self.released_slots: list[tuple[list[str], list[str]]] = []
+        self.batch_calls = 0
+
+    def async_register_script(self, script: str):
+        from litellm.proxy.hooks import parallel_request_limiter_v3 as v3
+
+        async def run(keys, args):
+            if script == self.failing_script:
+                raise ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused.")
+            if script == v3.BATCH_RATE_LIMITER_SCRIPT:
+                self.batch_calls += 1
+                return [value for _ in range(0, len(keys), 2) for value in (args[0], self.batch_calls)]
+            if script == v3.PARALLEL_ACQUIRE_SCRIPT:
+                return [0, *[1 for _ in keys]]
+            if script == v3.PARALLEL_RELEASE_SCRIPT:
+                self.released_slots.append((list(keys), list(args)))
+                return [0 for _ in keys]
+            raise AssertionError(f"unexpected script: {script[:60]}")
+
+        return run
+
+
+def _handler_with_redis(redis, fail_closed: bool | None = None):
+    internal_usage_cache = InternalUsageCache(DualCache(redis_cache=redis))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    if fail_closed is None:
+        return _PROXY_MaxParallelRequestsHandler(internal_usage_cache=internal_usage_cache)
+    return _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=internal_usage_cache,
+        fail_closed_resolver=lambda: fail_closed,
+    )
+
+
+async def _admit(handler, auth, data=None):
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=handler.internal_usage_cache.dual_cache,
+        data=data if data is not None else {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+    )
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [{"rpm_limit": 2}, {"max_parallel_requests": 1}, {"tpm_limit": 1000}],
+    ids=["rpm_window", "parallel_gauge", "tpm_reservation"],
+)
+@pytest.mark.asyncio
+async def test_fail_closed_rejects_with_503_when_redis_counters_are_unreachable(limits):
+    handler = _handler_with_redis(_UnreachableRedis(), fail_closed=True)
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed"), **limits)
+
+    with pytest.raises(HTTPException) as exc:
+        await _admit(handler, auth)
+
+    assert exc.value.status_code == 503
+    assert not isinstance(exc.value, ProxyRateLimitError)
+    assert "fail_closed_rate_limit_enforcement" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_fail_open_default_keeps_enforcing_per_pod_from_memory_when_redis_counters_are_unreachable():
+    handler = _handler_with_redis(_UnreachableRedis(), fail_closed=False)
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-open"), rpm_limit=2)
+
+    await _admit(handler, auth)
+    await _admit(handler, auth)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _admit(handler, auth)
+
+    assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_is_a_no_op_while_redis_answers():
+    handler = _handler_with_redis(_ScriptedRedis(), fail_closed=True)
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-healthy"), rpm_limit=2)
+
+    await _admit(handler, auth)
+    await _admit(handler, auth)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _admit(handler, auth)
+
+    assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_tpm_rejection_releases_the_parallel_slot_it_acquired():
+    from litellm.proxy.hooks import parallel_request_limiter_v3 as v3
+
+    redis = _ScriptedRedis(failing_script=v3.CHECK_AND_INCREMENT_BY_N_SCRIPT)
+    handler = _handler_with_redis(redis, fail_closed=True)
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-slot"), max_parallel_requests=1, tpm_limit=1000)
+    data = {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]}
+
+    with pytest.raises(HTTPException) as exc:
+        await _admit(handler, auth, data)
+    assert exc.value.status_code == 503
+    acquired = get_or_create_request_stash().parallel_slot
+    assert acquired is not None
+
+    await handler.async_post_call_failure_hook(
+        request_data=data, original_exception=exc.value, user_api_key_dict=auth
+    )
+
+    assert redis.released_slots == [(list(acquired["counter_keys"]), [acquired["slot_id"]])]
+    assert get_or_create_request_stash().parallel_slot is None
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_rate_limit_enforcement_is_read_from_general_settings(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-settings"), rpm_limit=2)
+
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
+    with pytest.raises(HTTPException) as exc:
+        await _admit(_handler_with_redis(_UnreachableRedis()), auth)
+    assert exc.value.status_code == 503
+
+    monkeypatch.delitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement")
+    await _admit(_handler_with_redis(_UnreachableRedis()), auth)
+
+
 @pytest.mark.parametrize(
     "limits, request_data, counter_scope",
     [
