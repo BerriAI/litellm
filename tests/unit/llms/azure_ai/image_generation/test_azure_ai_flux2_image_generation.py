@@ -405,6 +405,32 @@ def test_flux2_pro_bills_one_megapixel_for_a_size_it_cannot_measure(size: str):
     assert cost == pytest.approx(first)
 
 
+@pytest.mark.parametrize(
+    ("optional_params", "megapixels"),
+    (
+        pytest.param({"width": 1, "height": 1}, 1, id="smallest-mapped-dimensions-win"),
+        pytest.param({"width": 0, "height": 1024}, 2, id="zero-width-falls-back-to-size"),
+        pytest.param({"width": 2048, "height": 0}, 2, id="zero-height-falls-back-to-size"),
+        pytest.param({"width": True, "height": 1024}, 2, id="bool-width-falls-back-to-size"),
+    ),
+)
+def test_flux2_pro_bills_mapped_dimensions_only_when_both_are_positive_integers(
+    optional_params: dict[str, int | bool], megapixels: int
+):
+    first, additional = _pro_megapixel_rates()
+
+    cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
+        model="flux.2-pro",
+        completion_response=ImageResponse(data=[ImageObject(b64_json="aW1n")]),
+        custom_llm_provider="azure_ai",
+        size="2048x1024",
+        optional_params=optional_params,
+        call_type="image_generation",
+    )
+
+    assert cost == pytest.approx(first + additional * (megapixels - 1))
+
+
 def test_flux2_pro_bills_the_requested_size_when_the_returned_image_is_not_valid_base64():
     first, additional = _pro_megapixel_rates()
 
@@ -435,14 +461,15 @@ def test_flux2_pro_bills_the_requested_image_count_when_the_response_lists_none(
     assert cost == pytest.approx(first * billed_images)
 
 
-def test_flux2_pro_reads_an_uppercase_size():
+@pytest.mark.parametrize("size", ("2048X1024", "2048-x-1024"))
+def test_flux2_pro_reads_each_size_spelling(size: str):
     first, additional = _pro_megapixel_rates()
 
     cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
         model="flux.2-pro",
         completion_response=ImageResponse(data=[ImageObject(b64_json="aW1n")]),
         custom_llm_provider="azure_ai",
-        size="2048X1024",
+        size=size,
         call_type="image_generation",
     )
 
@@ -511,6 +538,7 @@ def test_flux2_flex_edit_bills_reference_pixels_on_top_of_generated_pixels():
     assert _flex_edit_cost(_edit_response((3 * 1024 * 1024,))) - generated_only == pytest.approx(
         _flex_pixel_rate() * 3 * 1024 * 1024
     )
+    assert _flex_edit_cost(_edit_response((1,))) - generated_only == pytest.approx(_flex_pixel_rate() * 1024 * 1024)
 
 
 def test_flux2_flex_edit_reference_cost_does_not_scale_with_image_count():
@@ -533,6 +561,15 @@ def test_flux2_flex_edit_bills_only_positive_integer_reference_counts(reference_
     generated_only: Final = _flex_edit_cost(ImageResponse(data=[ImageObject(b64_json="aW1n")], size="1024x1024"))
 
     assert _flex_edit_cost(_edit_response(reference_image_pixels)) == generated_only
+
+
+@pytest.mark.parametrize("reference_image_pixels", ((0,), ("1048576",), 1048576))
+def test_flux2_flex_edit_warns_when_it_ignores_malformed_reference_counts(
+    reference_image_pixels: object, litellm_warnings: pytest.LogCaptureFixture
+):
+    _flex_edit_cost(_edit_response(reference_image_pixels))
+
+    assert "Ignoring malformed FLUX.2 reference pixel counts" in litellm_warnings.text
 
 
 def test_flux2_flex_edit_ignores_reference_pixels_when_provider_reports_token_usage():
@@ -634,19 +671,20 @@ def test_flux2_flex_cost_prefers_deployment_input_cost_per_pixel() -> None:
     assert cost == pytest.approx(2e-07 * 2048 * 1024 * 2)
 
 
-def test_unlisted_azure_ai_model_bills_deployment_input_cost_per_pixel() -> None:
+@pytest.mark.parametrize(("width", "height"), ((1024, 1024), (1536, 1024)), ids=("whole-megapixel", "fractional"))
+def test_unlisted_azure_ai_model_bills_deployment_input_cost_per_pixel(width: int, height: int) -> None:
     response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n"), ImageObject(b64_json="aW1n")])
 
     cost: Final = CostCalculatorUtils.route_image_generation_cost_calculator(
         model="unlisted-flux-deployment",
         completion_response=response,
         custom_llm_provider="azure_ai",
-        size="1024x1024",
+        size=f"{width}x{height}",
         call_type="image_generation",
         model_info={"input_cost_per_pixel": 1e-07},
     )
 
-    assert cost == pytest.approx(1e-07 * 1024 * 1024 * 2)
+    assert cost == pytest.approx(1e-07 * width * height * 2)
 
 
 def test_unlisted_azure_ai_deployment_without_a_generated_image_price_bills_nothing() -> None:
