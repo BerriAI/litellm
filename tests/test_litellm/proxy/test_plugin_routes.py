@@ -12,9 +12,16 @@ Covers three bugs:
 """
 
 import asyncio
-from unittest.mock import MagicMock
+import base64
+import hashlib
+import hmac
+import json
+import time
 
 import pytest
+from cryptography.exceptions import InvalidTag
+from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+from pydantic import JsonValue, TypeAdapter
 
 from litellm.proxy._types import (
     ConfigGeneralSettings,
@@ -22,7 +29,13 @@ from litellm.proxy._types import (
     PluginConfig,
     UserAPIKeyAuth,
 )
-from litellm.proxy.plugin_routes import list_plugins, register_plugins_from_config
+from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_aes_gcm_with_key
+from litellm.proxy.plugin_routes import (
+    issue_plugin_session_claim,
+    list_plugins,
+    register_plugins_from_config,
+    verify_plugin_session_claim,
+)
 
 
 def _admin() -> UserAPIKeyAuth:
@@ -97,9 +110,7 @@ def test_registered_plugins_appear_in_list_without_restart() -> None:
             ]
         }
     )
-    names = sorted(
-        p["name"] for p in asyncio.run(list_plugins(user_api_key_dict=_admin()))
-    )
+    names = sorted(p["name"] for p in asyncio.run(list_plugins(user_api_key_dict=_admin())))
     assert names == ["agent-builder", "chat-ui"]
 
     # Removing a plugin from config drops it from the live list.
@@ -230,3 +241,77 @@ def test_configured_custom_key_header_is_stripped() -> None:
         assert "x-my-tenant-key" in _request_strip_headers()
     finally:
         proxy_server.general_settings = original
+
+
+_CLAIM_SALT = "sk-unit-test-salt"
+
+
+def _claim_key(plugin_name: str, salt: str = _CLAIM_SALT) -> bytes:
+    return hmac.new(salt.encode(), plugin_name.encode(), hashlib.sha256).digest()
+
+
+def _decrypt_raw(claim: str, key: bytes) -> dict[str, JsonValue]:
+    assert claim.startswith("v2:gcm:"), claim
+    raw = base64.urlsafe_b64decode(claim[len("v2:gcm:") :])
+    return TypeAdapter(dict[str, JsonValue]).validate_json(AESGCM(key).decrypt(raw[:12], raw[12:], None))
+
+
+def test_plugin_claim_round_trip_is_aes_gcm_under_hmac_plugin_key(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _CLAIM_SALT)
+    before = int(time.time())
+    claim = issue_plugin_session_claim("chat-ui", "user-1", "proxy_admin")
+
+    verified = verify_plugin_session_claim("chat-ui", claim)
+    assert verified["plugin"] == "chat-ui"
+    assert verified["user_id"] == "user-1"
+    assert verified["user_role"] == "proxy_admin"
+    expiry = verified["exp"]
+    assert isinstance(expiry, int) and before + 30 <= expiry <= before + 31, verified
+
+    plugin_side = _decrypt_raw(claim, _claim_key("chat-ui"))
+    assert plugin_side == verified
+    assert issue_plugin_session_claim("chat-ui", "user-1", "proxy_admin") != claim
+
+
+def test_plugin_claim_for_other_plugin_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _CLAIM_SALT)
+    claim = issue_plugin_session_claim("chat-ui", "user-1", "proxy_admin")
+
+    with pytest.raises(ValueError, match="Invalid, tampered, or expired"):
+        verify_plugin_session_claim("agent-builder", claim)
+    with pytest.raises(InvalidTag):
+        _decrypt_raw(claim, _claim_key("agent-builder"))
+
+
+def test_plugin_claim_with_forged_audience_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A claim encrypted under plugin A's key but naming plugin B fails the audience check."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", _CLAIM_SALT)
+    payload = {"plugin": "agent-builder", "user_id": "user-1", "user_role": "proxy_admin", "exp": int(time.time()) + 30}
+    forged = encrypt_aes_gcm_with_key(json.dumps(payload), _claim_key("chat-ui"))
+
+    with pytest.raises(ValueError, match="audience mismatch"):
+        verify_plugin_session_claim("chat-ui", forged)
+
+
+def test_expired_plugin_claim_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _CLAIM_SALT)
+    payload = {"plugin": "chat-ui", "user_id": "user-1", "user_role": "proxy_admin", "exp": int(time.time()) - 1}
+    expired = encrypt_aes_gcm_with_key(json.dumps(payload), _claim_key("chat-ui"))
+
+    with pytest.raises(ValueError, match="expired"):
+        verify_plugin_session_claim("chat-ui", expired)
+
+
+def test_tampered_plugin_claim_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", _CLAIM_SALT)
+    claim = issue_plugin_session_claim("chat-ui", "user-1", "proxy_admin")
+    raw = bytearray(base64.urlsafe_b64decode(claim[len("v2:gcm:") :]))
+    raw[-1] ^= 0x01
+    tampered = "v2:gcm:" + base64.urlsafe_b64encode(bytes(raw)).decode()
+
+    with pytest.raises(ValueError, match="Invalid, tampered, or expired"):
+        verify_plugin_session_claim("chat-ui", tampered)
+    with pytest.raises(ValueError, match="Invalid, tampered, or expired"):
+        verify_plugin_session_claim("chat-ui", "gAAAAABlegacyFernetToken==")
+    with pytest.raises(ValueError, match="Invalid, tampered, or expired"):
+        verify_plugin_session_claim("chat-ui", encrypt_aes_gcm_with_key("[1, 2]", _claim_key("chat-ui")))
