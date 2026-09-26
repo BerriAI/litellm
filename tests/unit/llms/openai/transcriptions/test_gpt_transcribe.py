@@ -3,11 +3,12 @@ import json
 import wave
 from collections.abc import Iterator
 from datetime import datetime
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
-from openai import AsyncAzureOpenAI, AsyncOpenAI, AsyncStream, AzureOpenAI
+from openai import AsyncAzureOpenAI, AsyncOpenAI, AsyncStream, AzureOpenAI, OpenAI
 
 import litellm
 from litellm.litellm_core_utils.audio_utils.transcription_streaming import wrap_transcription_stream
@@ -64,6 +65,39 @@ def test_gpt_transcribe_optional_params_are_preserved():
 def test_transcription_response_preserves_empty_languages():
     response = TranscriptionResponse(text="hello", languages=[])
     assert response.model_dump()["languages"] == []
+
+
+def test_sync_transcription_stream_logs_final_text_and_usage_once() -> None:
+    def send_response(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            headers={"content-type": "text/event-stream"},
+            content=(
+                'data: {"type":"transcript.text.delta","delta":"hello "}\n\n'
+                'data: {"type":"transcript.text.done","text":"hello world",'
+                '"usage":{"type":"duration","seconds":2.5}}\n\n'
+            ),
+        )
+
+    logging_obj: Final = MagicMock()
+    with OpenAI(
+        api_key="sk-test",
+        base_url="https://example.com/v1",
+        http_client=httpx.Client(transport=httpx.MockTransport(send_response)),
+    ) as client:
+        stream: Final = client.audio.transcriptions.create(
+            model="gpt-transcribe", file=("sample.webm", b"audio"), stream=True
+        )
+        wrapped: Final = wrap_transcription_stream(stream, logging_obj, datetime(2026, 1, 1))
+        received: Final = tuple(wrapped)
+        wrapped.close()
+
+    assert tuple(event.type for event in received) == ("transcript.text.delta", "transcript.text.done")
+    logging_obj.success_handler.assert_called_once()
+    logged_response: Final = logging_obj.success_handler.call_args.args[0]
+    assert logged_response.text == "hello world"
+    assert logged_response.usage.model_dump(exclude_none=True) == {"type": "duration", "seconds": 2.5}
+    logging_obj.failure_handler.assert_not_called()
 
 
 @pytest.mark.asyncio
