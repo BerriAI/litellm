@@ -870,11 +870,7 @@ if MCP_AVAILABLE:
         async def forward_progress(progress: float, total: float | None):
             """Forward progress notifications from external MCP to Host"""
             try:
-                await host_session.send_progress_notification(
-                    progress_token=host_token,
-                    progress=progress,
-                    total=total,
-                )
+                await host_session.report_progress(progress=progress, total=total)
                 verbose_logger.debug("Forwarded progress %s/%s to Host", progress, total)
             except Exception as e:
                 verbose_logger.error("Failed to forward progress to Host: %s", e)
