@@ -146,12 +146,6 @@ def _extract_converse_texts(
 
 
 def _converse_media_ref(media: Mapping[str, object], media_kind: str, fallback: str) -> str:
-    """Identify a Converse image/document/video block by whichever source it carries.
-
-    Inline bytes become a data URI so the format travels with the payload; an s3
-    location yields its uri. Anything else still yields the fallback literal so an
-    unreadable attachment is surfaced to the guardrail rather than dropped.
-    """
     source: Final = media.get("source")
     if isinstance(source, dict):
         data: Final = source.get("bytes")
@@ -169,7 +163,6 @@ def _converse_media_ref(media: Mapping[str, object], media_kind: str, fallback: 
 
 
 def _converse_block_attachments(block: Mapping[str, object]) -> tuple[tuple[str, ...], tuple[str, ...]]:
-    """Return the (image refs, file refs) one converse content block carries."""
     image: Final = block.get("image")
     document: Final = block.get("document")
     video: Final = block.get("video")
@@ -189,10 +182,6 @@ def _converse_block_attachments(block: Mapping[str, object]) -> tuple[tuple[str,
 def _converse_input_blocks(
     body: RequestObject, skip_tool: bool
 ) -> tuple[tuple[Mapping[str, object], ...], tuple[Mapping[str, object], ...]]:
-    """Content blocks the attachment walk covers, split into (in-scope, scoped-out).
-
-    In-scope blocks contribute images and files as usual; scoped-out toolUse/
-    toolResult blocks contribute only refs the guardrail must refuse."""
     top_level: Final = tuple(
         block
         for block in chain.from_iterable(
@@ -232,7 +221,6 @@ def _converse_scoped_out_refs(image_refs: tuple[str, ...], file_refs: tuple[str,
 
 
 def _extract_converse_attachments(body: RequestObject, skip_tool: bool) -> tuple[list[str], list[str]]:
-    """Collect image and document/video references the text walk would skip."""
     in_scope, scoped_out = _converse_input_blocks(body, skip_tool)
     attachments: Final = tuple(_converse_block_attachments(block) for block in in_scope)
     images: Final = [*chain.from_iterable(pair[0] for pair in attachments)]  # mutable-ok: inputs takes list[str]
