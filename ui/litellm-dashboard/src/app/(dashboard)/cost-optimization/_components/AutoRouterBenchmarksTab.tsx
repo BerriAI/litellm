@@ -11,7 +11,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { Separator } from "@/components/ui/separator";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { SimpleTooltip, Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { ApiError } from "@/lib/http/client";
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 
@@ -52,15 +52,17 @@ const Metric: React.FC<{ label: string; value: string; hint?: string }> = ({ lab
   </Card>
 );
 
-const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?: boolean }> = ({
+const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?: boolean; tooltip?: string }> = ({
   label,
   value,
   hint,
   subdued,
+  tooltip,
 }) => (
   <dl className="flex flex-wrap items-baseline justify-between gap-x-6 gap-y-1 py-2">
     <dt className="flex min-w-0 flex-wrap items-baseline gap-x-2 text-sm text-muted-foreground">
       {label}
+      {tooltip && <SimpleTooltip content={tooltip} />}
       {hint && <span className="text-xs">{hint}</span>}
     </dt>
     <dd
@@ -73,14 +75,14 @@ const SpendRow: React.FC<{ label: string; value: string; hint?: string; subdued?
 
 const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
   const stats = view.stats;
-  const cheaper = stats.saved_spend != null && stats.saved_spend >= 0;
+  const cheaper = stats.saved_pct != null && stats.saved_pct >= 0;
   const completeCoverage = stats.savings_estimated_turns === stats.turns;
   return (
     <Card className="overflow-hidden py-0">
       <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
         <div className="flex flex-col items-center justify-center gap-2 p-6">
           <p className="text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-            {completeCoverage ? "Total estimated savings" : "Estimated savings on covered turns"}
+            Total estimated savings
           </p>
           <div className="flex flex-wrap items-center justify-center gap-3">
             <p className="min-w-0 break-all text-center text-4xl font-semibold tracking-tight text-foreground xl:text-6xl">
@@ -91,53 +93,57 @@ const HeroCard: React.FC<{ view: BenchmarkView }> = ({ view }) => {
                 variant="secondary"
                 className={`h-6 px-2.5 text-sm ${cheaper ? "bg-success/10 text-success" : "bg-destructive/10 text-destructive"}`}
               >
-                {stats.saved_spend !== 0 && (cheaper ? "-" : "+")}
+                {stats.saved_pct !== 0 && (cheaper ? "-" : "+")}
                 {Math.abs(stats.saved_pct).toFixed(0)}%
               </Badge>
             )}
           </div>
-          <p className="text-center text-xs text-muted-foreground">
-            {stats.savings_estimated_turns.toLocaleString()} of {stats.turns.toLocaleString()} turns estimated
-          </p>
-          {!completeCoverage && (
+          {stats.baseline_spend != null && !completeCoverage && (
             <p className="text-center text-xs text-muted-foreground">
-              Turns without a current estimate are excluded, including older estimates.
+              Savings based on {stats.savings_estimated_turns.toLocaleString()} of {stats.turns.toLocaleString()}{" "}
+              requests
+            </p>
+          )}
+          {stats.saved_spend != null && stats.baseline_spend == null && (
+            <p className="text-center text-xs text-muted-foreground">
+              Historical savings are included. Matching cost details are unavailable.
             </p>
           )}
         </div>
 
         <div className="flex flex-col justify-center border-t p-6 md:border-t-0 md:border-l">
-          <SpendRow label="Actual auto-router spend" value={usd(stats.spend)} />
-          <div className="mb-3 border-l-2 pl-4">
-            <SpendRow
-              subdued
-              label="LLM spend"
-              value={stats.classifier_cost == null ? "Unavailable" : usd(stats.spend - stats.classifier_cost)}
-            />
-            <SpendRow
-              subdued
-              label="Classification cost"
-              value={stats.classifier_cost == null ? "Unavailable" : usd(stats.classifier_cost)}
-              hint={
-                stats.classifier_cost == null
-                  ? undefined
-                  : classificationRatePer1kTurns(stats.classifier_cost, stats.turns)
-              }
-            />
-          </div>
-          {stats.classifier_cost == null && (
+          <SpendRow
+            label="Actual auto-router spend"
+            value={stats.baseline_spend == null ? "Unavailable" : usd(stats.savings_estimated_actual_spend)}
+            tooltip="Savings, actual spend, and baseline include historical and newer requests with recorded savings estimates. Requests without estimates are excluded. Actual spend includes classification costs."
+          />
+          {completeCoverage && stats.baseline_spend != null && (
+            <div className="mb-3 border-l-2 pl-4">
+              <SpendRow
+                subdued
+                label="LLM spend"
+                value={stats.classifier_cost == null ? "Unavailable" : usd(stats.spend - stats.classifier_cost)}
+              />
+              <SpendRow
+                subdued
+                label="Classification cost"
+                value={stats.classifier_cost == null ? "Unavailable" : usd(stats.classifier_cost)}
+                hint={
+                  stats.classifier_cost == null
+                    ? undefined
+                    : classificationRatePer1kTurns(stats.classifier_cost, stats.turns)
+                }
+              />
+            </div>
+          )}
+          {completeCoverage && stats.classifier_cost == null && (
             <p className="mb-3 text-xs text-muted-foreground">
               Breakdown unavailable because some usage predates classification-cost tracking.
             </p>
           )}
           <Separator />
-          {!completeCoverage && (
-            <SpendRow label="Actual spend on covered turns" value={usd(stats.savings_estimated_actual_spend)} />
-          )}
           <SpendRow
-            label={
-              completeCoverage ? "Estimated spend at highest-tier model" : "Estimated baseline spend on covered turns"
-            }
+            label="Estimated baseline spend"
             value={stats.baseline_spend == null ? "Unavailable" : usd(stats.baseline_spend)}
           />
         </div>
@@ -307,12 +313,11 @@ const BenchmarksBody: React.FC<BenchmarksBodyProps> = ({ isPending, error, data,
       </div>
 
       <p className="text-xs text-muted-foreground">
-        Compares covered turns with the estimated cost of using the router&apos;s highest-tier baseline model. Estimates
-        use registered requests since tracking began, matching cache prefixes and expiry, and the actual response
-        length. Total actual spend includes every turn; savings and baseline spend include only turns with a current
-        estimate, including turns with zero savings. Savings are net of recorded LLM classification cost. Classification
-        cost per 1K turns is averaged over all auto-router turns, including those that skip classification. The range
-        counts whole sessions that overlap it, so totals can differ from savings views that group usage by UTC day.
+        Savings, actual spend, and baseline compare the same historical and newer requests with recorded estimates,
+        including zero or negative savings. Requests without estimates are excluded. Savings are net of recorded LLM
+        classification cost. If historical cost details are unavailable, recorded savings remain visible without a
+        baseline or percentage. The range counts whole sessions that overlap it, so totals can differ from savings views
+        that group usage by UTC day.
       </p>
 
       <div className="space-y-4">

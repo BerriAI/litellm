@@ -6,6 +6,7 @@ tests/test_litellm/proxy/db/test_autorouter_session_rollup.py.
 """
 
 import asyncio
+import json
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -24,6 +25,10 @@ from litellm.proxy.db.autorouter_session_rollup import (
     flush_autorouter_turn_transactions,
 )
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup import SpendLogCleanup
+from litellm.proxy.db.autorouter_savings_comparison import (
+    HISTORICAL_SESSION_COMPARISONS_SQL,
+    SessionSavingsComparison,
+)
 
 pytestmark = pytest.mark.asyncio(loop_scope="session")
 
@@ -89,6 +94,63 @@ async def _row(db, key: str, session_id: str = "s1", router: str = "auto-1") -> 
     )
     assert len(rows) == 1
     return rows[0]
+
+
+@pytest.mark.parametrize("historical_saved, damaged, user_id, split_sessions", [
+    (29.5, None, None, False), (29.5, None, "owner", False), (0.0, None, None, False),
+    (-3.0, None, None, False), (29.5, "missing", None, False), (29.5, "cost", None, False),
+    (0.0, "missing", None, False), (29.5, None, None, True),
+])
+async def test_historical_and_new_savings_compare_matching_costs_and_exclude_unknown_requests(
+    db: Prisma, historical_saved: float, damaged: str | None, user_id: str | None, split_sessions: bool,
+) -> None:
+    async with db.tx() as tx:
+        for table in ("LiteLLM_AutoRouterSession", "LiteLLM_AutoRouterUserSession", "LiteLLM_SpendLogs"):
+            await tx.execute_raw(f'CREATE TEMP TABLE "{table}" (LIKE public."{table}" INCLUDING ALL) ON COMMIT DROP')
+        for name, spend, saved, classifier, estimated in (
+            ("historical", 9.0, historical_saved, 0.1, False),
+            ("current", 1.0, 0.5, 0.0, True),
+            ("unknown", 99.0, 0.0, 0.0, False),
+        ):
+            session_id: Final = "s2" if split_sessions and name == "current" else "s1"
+            await _turn(tx, "key", "model", T0, spend=spend, saved=saved, classifier_cost=classifier,
+                        estimated=estimated, session_id=session_id)
+            metadata: Final = {
+                "routing_decision": {"router_model_name": "auto-1", "classifier_cost": classifier},
+                "autorouter_savings": saved if name != "unknown" else None,
+                **({"autorouter_savings_estimate": {
+                    "version": 3, "status": "estimated" if estimated else "unknown",
+                }} if name != "historical" else {}),
+            }
+            await tx.execute_raw('''INSERT INTO "LiteLLM_SpendLogs"
+                (request_id,api_key,session_id,model,"user","startTime","endTime",call_type,
+                 spend,prompt_tokens,completion_tokens,status,metadata)
+                VALUES ($1,'key',$5,'model','owner',$2::timestamp,$2::timestamp,'acompletion',
+                        $3::float8,100,0,'success',$4::jsonb)
+            ''', name, T0.isoformat(), spend - classifier, json.dumps(metadata), session_id)
+        await tx.execute_raw('''INSERT INTO "LiteLLM_AutoRouterUserSession"
+            (user_id,api_key,session_id,router_name,router_type,first_turn_at,last_turn_at,last_model,
+             turns,total_tokens,spend,saved_spend,savings_estimated_turns,savings_estimated_actual_spend,
+             savings_estimated_saved_spend)
+            SELECT 'owner',api_key,session_id,router_name,router_type,first_turn_at,last_turn_at,last_model,
+                turns,total_tokens,spend,saved_spend,savings_estimated_turns,savings_estimated_actual_spend,
+                savings_estimated_saved_spend FROM "LiteLLM_AutoRouterSession"
+        ''')
+        if damaged == "missing":
+            await tx.execute_raw('DELETE FROM "LiteLLM_SpendLogs" WHERE request_id = \'historical\'')
+        elif damaged == "cost":
+            await tx.execute_raw('UPDATE "LiteLLM_SpendLogs" SET spend = 1 WHERE request_id = \'historical\'')
+        rows: Final = await tx.query_raw(
+            HISTORICAL_SESSION_COMPARISONS_SQL, "2026-08-01", "2026-08-02", "key", user_id, None,
+        )
+        comparison: Final = SessionSavingsComparison.model_validate(rows[0])
+        assert comparison.saved_spend == historical_saved + 0.5
+        assert comparison.complete is (damaged is None)
+        assert comparison.coverage_fields(historical_saved + 0.5) == ({
+            "savings_estimated_turns": 2,
+            "savings_estimated_actual_spend": 10.0,
+            "savings_estimated_saved_spend": historical_saved + 0.5,
+        } if damaged is None else {})
 
 
 async def test_every_turn_lands_in_exactly_one_bucket(db):

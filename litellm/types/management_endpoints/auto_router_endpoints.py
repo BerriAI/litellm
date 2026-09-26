@@ -224,19 +224,19 @@ class AutoRouterBenchmarkTotals(BaseModel):
         "subtotal recording, and zero for an empty window"
     )
     savings_estimated_turns: int = Field(
-        description="Turns covered by the current savings estimator; legacy estimates are excluded"
+        description="Requests with a matching savings comparison, including historical recorded estimates"
     )
     savings_estimated_actual_spend: float = Field(
         description="Actual spend, including classifier cost, for covered turns only"
     )
     saved_spend: float | None = Field(
-        description="Signed savings for covered turns only; null when traffic has no current estimates"
+        description="Recorded historical savings plus newer estimates; null when traffic has no recorded savings estimates"
     )
     baseline_spend: float | None = Field(description="Estimated single-model cost for covered turns only")
-    saved_pct: float | None = Field(description="Covered savings over covered baseline spend, as a percentage")
-    saved_per_session: float | None = Field(
-        description="Average session savings; unavailable unless every turn is covered"
+    saved_pct: float | None = Field(
+        description="Total recorded savings over the matching historical and current baseline; null when costs are unavailable"
     )
+    saved_per_session: float | None = Field(description="Recorded savings per session, including historical estimates")
     cache: AutoRouterCacheStats
 
 
@@ -268,12 +268,14 @@ class AutoRouterSessionResponse(BaseModel):
     last_model: str = Field(description="The deployment model the most recent turn was routed to")
     spend: float = Field(description="What the session's routed traffic actually cost, classifier calls included")
     savings_estimated_turns: int = Field(
-        description="Turns covered by the current savings estimator; legacy estimates are excluded"
+        description="Requests with a matching savings comparison, including historical recorded estimates"
     )
     savings_estimated_actual_spend: float = Field(
         description="Actual spend, including classifier cost, for covered turns only"
     )
-    saved_spend: float | None = Field(description="Estimated savings for covered turns only, net of classifier cost")
+    saved_spend: float | None = Field(
+        description="Recorded historical savings plus newer estimates, net of classifier cost"
+    )
     baseline_spend: float | None = Field(
         description="Estimated single-model cost; unavailable unless every turn is covered"
     )
@@ -281,14 +283,14 @@ class AutoRouterSessionResponse(BaseModel):
         description="Estimated single-model cost for covered turns only"
     )
     baseline_model: str | None = Field(
-        description="The savings baseline most covered turns were priced against, recorded turn by "
+        description="The savings baseline recorded by most session turns, including historical turns, recorded turn by "
         "turn, so it still names the counterfactual after the router is reconfigured or removed. None when no "
         "turn recorded one: rows from before the baseline was recorded, and adaptive and quality routers, "
         "which derive no baseline and so report no savings"
     )
     baseline_models: Mapping[str, int] = Field(
-        description="Covered turns priced against each baseline model; more than one entry means the router's "
-        "baseline changed mid-session and baseline_spend mixes both"
+        description="Session turns recording each baseline model; more than one entry means the router's "
+        "baseline changed mid-session; these counts do not imply savings coverage"
     )
 
 

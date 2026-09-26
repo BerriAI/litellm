@@ -7,8 +7,8 @@ on the prisma client. The spend-log flush job drains the queue into
 key and user session rollups with one atomic statement per turn: each upsert classifies
 the turn (same model, first visit, return to a model the session already used, out of
 order) against the row's own columns, so nothing is read before the write and concurrent
-pods compose. The benchmarks endpoint aggregates these rows and never touches
-LiteLLM_SpendLogs.
+pods compose. The benchmarks endpoint aggregates these rows and can recover matching historical
+costs from retained spend logs when estimate coverage predates these columns.
 """
 
 from __future__ import annotations
@@ -45,20 +45,24 @@ _SESSION_COLUMNS: Final = """
     savings_estimated_baseline_models
 """
 
-AUTOROUTER_BENCHMARKS_SQL: Final = f"""
-WITH windowed AS (
-    SELECT {_SESSION_COLUMNS} FROM "LiteLLM_AutoRouterSession"
+AUTOROUTER_SESSION_WINDOW_SQL: Final = f"""
+windowed AS (
+    SELECT {_SESSION_COLUMNS}, NULL::text AS comparison_user_id FROM "LiteLLM_AutoRouterSession"
     WHERE $4::text IS NULL
       AND last_turn_at >= $1::timestamp
       AND first_turn_at < $2::timestamp
       AND ($3::text IS NULL OR api_key = $3::text)
     UNION ALL
-    SELECT {_SESSION_COLUMNS} FROM "LiteLLM_AutoRouterUserSession"
+    SELECT {_SESSION_COLUMNS}, user_id AS comparison_user_id FROM "LiteLLM_AutoRouterUserSession"
     WHERE (($4::text IS NOT NULL AND user_id = $4::text) OR ($4::text IS NULL AND api_key = ''))
       AND last_turn_at >= $1::timestamp
       AND first_turn_at < $2::timestamp
       AND ($3::text IS NULL OR api_key = $3::text)
-),
+)
+"""
+
+AUTOROUTER_BENCHMARKS_SQL: Final = f"""
+WITH {AUTOROUTER_SESSION_WINDOW_SQL},
 tier_maps AS (
     SELECT router_name, router_type, jsonb_object_agg(tier, tier_turns) AS tier_turns
     FROM (

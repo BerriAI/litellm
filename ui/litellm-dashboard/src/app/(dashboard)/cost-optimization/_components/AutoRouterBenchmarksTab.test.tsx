@@ -158,35 +158,43 @@ describe("AutoRouterBenchmarksTab", () => {
   });
 
   it.each([
-    { estimatedTurns: 0, saved: null, pct: null },
-    { estimatedTurns: 10, saved: -0.5, pct: -33.3 },
-    { estimatedTurns: 10, saved: 0, pct: 0 },
-  ])("preserves costs for $estimatedTurns estimated turns with savings $saved", ({ estimatedTurns, saved, pct }) => {
-    const cohort = {
+    { estimatedTurns: 0, actual: 0, saved: null, pct: null },
+    { estimatedTurns: 0, actual: 0, saved: 30, pct: null },
+    { estimatedTurns: 10, actual: 2, saved: -0.5, pct: -33.3 },
+    { estimatedTurns: 10, actual: 2, saved: 0, pct: 0 },
+    { estimatedTurns: 40, actual: 10, saved: 30, pct: 75 },
+  ])("compares matching old and new requests with savings $saved", ({ estimatedTurns, actual, saved, pct }) => {
+    const comparison = {
+      spend: actual + 99,
       savings_estimated_turns: estimatedTurns,
-      savings_estimated_actual_spend: estimatedTurns ? 2 : 0,
+      savings_estimated_actual_spend: actual,
       saved_spend: saved,
-      baseline_spend: estimatedTurns ? 2 + (saved ?? 0) : null,
+      baseline_spend: estimatedTurns ? actual + (saved ?? 0) : null,
       saved_pct: pct,
       saved_per_session: null,
     };
-    const partial = totals(cohort);
-    mockHook({ data: response([], partial) });
+    mockHook({
+      data: response([], totals(comparison)),
+    });
     renderTab();
-    expect(screen.getByText("Estimated savings on covered turns")).toBeInTheDocument();
-    expect(screen.getByText(`${estimatedTurns} of 3,073 turns estimated`)).toBeInTheDocument();
-    expect(screen.getByText("$359.86")).toBeInTheDocument();
-    expect(screen.getByText("Actual spend on covered turns")).toBeInTheDocument();
-    expect(screen.getByText("Estimated baseline spend on covered turns")).toBeInTheDocument();
-    expect(screen.getAllByText("Unavailable")).toHaveLength(estimatedTurns ? 1 : 3);
-    if (saved === 0) {
-      expect(screen.getByText("0%")).toBeInTheDocument();
-      expect(screen.getAllByText("$2.00")).toHaveLength(2);
-    } else if (estimatedTurns) {
-      expect(screen.getByText("-$0.5000")).toBeInTheDocument();
-      expect(screen.getByText("+33%")).toBeInTheDocument();
-    } else {
-      expect(screen.queryByText("+0%")).not.toBeInTheDocument();
+    expect(screen.getByText("Total estimated savings")).toBeInTheDocument();
+    expect(screen.getAllByRole("definition").map((row) => row.textContent)).toEqual(
+      estimatedTurns
+        ? [`$${actual.toFixed(2)}`, `$${(actual + (saved ?? 0)).toFixed(2)}`]
+        : ["Unavailable", "Unavailable"],
+    );
+    expect(screen.queryByText("Actual spend on covered turns")).not.toBeInTheDocument();
+    expect(screen.getByLabelText("question-circle")).toBeInTheDocument();
+    if (estimatedTurns) {
+      expect(screen.getByText(`Savings based on ${estimatedTurns} of 3,073 requests`)).toBeInTheDocument();
+      const sign = pct && pct > 0 ? "-" : "+";
+      const badge = pct === 0 ? "0%" : `${sign}${Math.abs(pct ?? 0).toFixed(0)}%`;
+      expect(screen.getByText(badge)).toBeInTheDocument();
+    } else if (saved != null) {
+      expect(screen.getByText("$30.00")).toBeInTheDocument();
+      expect(
+        screen.getByText("Historical savings are included. Matching cost details are unavailable."),
+      ).toBeInTheDocument();
     }
   });
 
@@ -216,7 +224,7 @@ describe("AutoRouterBenchmarksTab", () => {
     expect(screen.getByText("-86%")).toBeInTheDocument();
     expect(screen.getByText("Actual auto-router spend")).toBeInTheDocument();
     expect(screen.getByText("$359.86")).toBeInTheDocument();
-    expect(screen.getByText("Estimated spend at highest-tier model")).toBeInTheDocument();
+    expect(screen.getByText("Estimated baseline spend")).toBeInTheDocument();
     expect(screen.getByText("$2,534.45")).toBeInTheDocument();
     expect(screen.getByText("32.7")).toBeInTheDocument();
     expect(screen.getByText("2.1h")).toBeInTheDocument();
@@ -275,7 +283,7 @@ describe("AutoRouterBenchmarksTab", () => {
       "Actual auto-router spend",
       "LLM spend",
       "Classification cost($2.00 / 1K turns)",
-      "Estimated spend at highest-tier model",
+      "Estimated baseline spend",
     ]);
     expect(values).toEqual(["$359.86", "$353.71", "$6.15", "$2,534.45"]);
   });
