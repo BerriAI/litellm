@@ -7346,10 +7346,10 @@ class TestStreamingClientDisconnectBilling:
         through the translate_completion_output_params_streaming result to the
         inner chat stream's collected chunks or a disconnect bills nothing.
         """
-        from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+        from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
             AnthropicSSEStream,
         )
-        from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+        from litellm.llms.anthropic.pass_through.adapters.transformation import (
             AnthropicAdapter,
         )
         from litellm.router import FallbackAwareAnthropicMessagesStream

@@ -10,7 +10,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from litellm.llms.anthropic.experimental_pass_through.adapters.streaming_iterator import (
+from litellm.llms.anthropic.pass_through.adapters.streaming_iterator import (
     AnthropicSSEStream,
     AnthropicStreamWrapper,
 )
