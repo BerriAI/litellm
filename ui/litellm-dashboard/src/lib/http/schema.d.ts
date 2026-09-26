@@ -32494,10 +32494,10 @@ export interface components {
             } | null;
             /**
              * Status
-             * @description Health status: 'healthy', 'unhealthy', 'unknown'
+             * @description Health status: 'healthy', 'unhealthy', 'unknown', or 'reachable' (requires include_reachability=true; authentication and tools unchecked)
              * @default unknown
              */
-            status: ("healthy" | "unhealthy" | "unknown") | null;
+            status: ("healthy" | "reachable" | "unhealthy" | "unknown") | null;
             /** Subject Token Type */
             subject_token_type?: string | null;
             /** Submitted At */
@@ -72190,6 +72190,8 @@ export interface operations {
             query?: {
                 /** @description Server IDs to check. If not provided, checks all accessible servers. */
                 server_ids?: string[] | null;
+                /** @description Allow the 'reachable' status for responding servers whose authentication is unchecked. */
+                include_reachability?: boolean;
             };
             header?: never;
             path?: never;
@@ -72341,7 +72343,10 @@ export interface operations {
     };
     fetch_mcp_server_v1_mcp_server__server_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Allow the 'reachable' status for responding servers whose authentication is unchecked. */
+                include_reachability?: boolean;
+            };
             header?: never;
             path: {
                 server_id: string;

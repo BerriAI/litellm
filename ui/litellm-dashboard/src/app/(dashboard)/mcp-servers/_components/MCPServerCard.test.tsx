@@ -1,5 +1,6 @@
 import React from "react";
 import { fireEvent, render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { describe, it, expect, vi, afterEach } from "vitest";
 import MCPServerCard from "./MCPServerCard";
 import type { MCPServer } from "@/components/mcp_tools/types";
@@ -17,6 +18,19 @@ const baseServer: MCPServer = {
 function renderCard(overrides: Partial<MCPServer>) {
   render(<MCPServerCard server={{ ...baseServer, ...overrides } as MCPServer} onClick={vi.fn()} />);
 }
+
+describe("MCPServerCard health", () => {
+  it("explains that reachable does not verify authentication or tools", async () => {
+    const user = userEvent.setup();
+    renderCard({ status: "reachable", oauth2_flow: "authorization_code" });
+
+    await user.hover(screen.getByText("Reachable"));
+
+    expect(await screen.findByText("Server responded. Authentication and tools were not checked")).toBeInTheDocument();
+    expect(screen.queryByText("No health data")).not.toBeInTheDocument();
+    expect(screen.queryByText("Healthy")).not.toBeInTheDocument();
+  });
+});
 
 describe("MCPServerCard OAuth flow indicator", () => {
   it("shows the 'OAuth flow not set' badge for an oauth2 server with no oauth2_flow", () => {

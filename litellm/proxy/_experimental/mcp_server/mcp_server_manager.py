@@ -897,6 +897,41 @@ def _sanitized_error_text(exc: Exception) -> str:
     return re.sub(r"https?://\S+", "<url>", str(exc))[:200]
 
 
+async def _mcp_server_reachability(
+    server: MCPServer, *, timeout: float
+) -> tuple[Literal["reachable", "unhealthy", "unknown"], str | None]:
+    if server.transport not in (MCPTransport.http, MCPTransport.sse) or not server.url:
+        return "unknown", "Server reachability requires an HTTP or SSE URL"
+    try:
+        url: Final = httpx.URL(server.url)
+    except (httpx.InvalidURL, ValueError):
+        return "unknown", "Server reachability requires an HTTP URL without embedded credentials"
+    if url.scheme not in ("http", "https") or not url.host or url.userinfo:
+        return "unknown", "Server reachability requires an HTTP URL without embedded credentials"
+
+    async def probe() -> None:
+        handler: Final = get_async_httpx_client(llm_provider="mcp_reachability")
+        async with handler.client.stream(
+            "GET",
+            url,
+            headers={"Accept": "text/event-stream, application/json"},
+            auth=None,
+            follow_redirects=False,
+            timeout=timeout,
+        ):
+            pass
+
+    try:
+        await asyncio.wait_for(probe(), timeout=timeout)
+    except (asyncio.TimeoutError, httpx.TimeoutException):
+        return "unhealthy", f"Reachability check timed out after {timeout} seconds"
+    except asyncio.CancelledError:
+        return "unknown", "Reachability check was cancelled"
+    except Exception as exc:
+        return "unhealthy", f"Reachability check failed ({type(exc).__name__})"
+    return "reachable", None
+
+
 async def _openapi_spec_health(
     spec_path: str, *, timeout: float
 ) -> tuple[Literal["healthy", "unhealthy", "unknown"], str | None]:
@@ -6986,13 +7021,9 @@ class MCPServerManager:
                 )
             )
 
-        status: Literal["healthy", "unhealthy", "unknown"] = "unknown"
+        status: Literal["healthy", "reachable", "unhealthy", "unknown"] = "unknown"
         health_check_error = None
 
-        # Check if we should skip health check based on auth configuration
-        should_skip_health_check = False
-
-        # Skip if server requires per-user authentication (OAuth2 or passthrough auth)
         if (
             server.requires_per_user_auth
             or (
@@ -7003,9 +7034,8 @@ class MCPServerManager:
             )
             or self._references_per_user_env_var(server)
         ):
-            should_skip_health_check = True
-
-        if not should_skip_health_check:
+            status, health_check_error = await _mcp_server_reachability(server, timeout=MCP_HEALTH_CHECK_TIMEOUT)
+        else:
             try:
                 resolved_static_headers: Final = await self._resolve_static_headers_with_env_vars(
                     server=server,

@@ -28,10 +28,10 @@ const mockServer: MCPServerData = {
   env: {},
 };
 
-function renderTable(onServerClick = vi.fn()) {
+function renderTable(onServerClick = vi.fn(), server = mockServer) {
   render(
     <DataTable
-      data={[mockServer]}
+      data={[server]}
       columns={getMCPHubTableColumns({ onServerClick })}
       getRowId={(server) => server.server_id}
       sortingMode="client"
@@ -42,6 +42,15 @@ function renderTable(onServerClick = vi.fn()) {
 }
 
 describe("getMCPHubTableColumns", () => {
+  it("explains the limited check for a reachable server", async () => {
+    const user = userEvent.setup();
+    renderTable(vi.fn(), { ...mockServer, status: "reachable" });
+
+    await user.hover(screen.getByText("reachable"));
+
+    expect(await screen.findByText("Server responded. Authentication and tools were not checked")).toBeInTheDocument();
+  });
+
   it("renders the server row", () => {
     renderTable();
     expect(screen.getByText("exa_test")).toBeInTheDocument();

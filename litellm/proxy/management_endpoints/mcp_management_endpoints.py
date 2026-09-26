@@ -1294,6 +1294,12 @@ if MCP_AVAILABLE:
 
         return redacted_mcp_servers
 
+    def _mcp_health_status_for_response(
+        health_status: Literal["healthy", "reachable", "unhealthy", "unknown"] | None,
+        include_reachability: bool,
+    ) -> Literal["healthy", "reachable", "unhealthy", "unknown"] | None:
+        return "unknown" if health_status == "reachable" and not include_reachability else health_status
+
     @router.get(
         "/server/health",
         description="Health check for MCP servers",
@@ -1305,6 +1311,10 @@ if MCP_AVAILABLE:
             description="Server IDs to check. If not provided, checks all accessible servers.",
         ),
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        include_reachability: Annotated[
+            bool,
+            Query(description="Allow the 'reachable' status for responding servers whose authentication is unchecked."),
+        ] = False,
     ):
         """
         Perform health checks on one or more MCP servers.
@@ -1329,11 +1339,17 @@ if MCP_AVAILABLE:
 
         if user_mcp_management_mode == "view_all" and not _is_restricted_virtual_key_request(user_api_key_dict):
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_unfiltered(server_ids=server_ids)
-            return [{"server_id": server.server_id, "status": server.status} for server in servers]
+            return [
+                {
+                    "server_id": server.server_id,
+                    "status": _mcp_health_status_for_response(server.status, include_reachability),
+                }
+                for server in servers
+            ]
 
         auth_contexts: Final = await build_effective_auth_contexts(user_api_key_dict)
 
-        server_status_map: Final[dict[str, Literal["healthy", "unhealthy", "unknown"] | None]] = {}
+        server_status_map: Final[dict[str, Literal["healthy", "reachable", "unhealthy", "unknown"] | None]] = {}
         for auth_context in auth_contexts:
             servers = await global_mcp_server_manager.get_all_mcp_servers_with_health_and_teams(
                 user_api_key_auth=auth_context,
@@ -1343,7 +1359,10 @@ if MCP_AVAILABLE:
                 if server.server_id not in server_status_map:
                     server_status_map[server.server_id] = server.status
 
-        return [{"server_id": server_id, "status": status} for server_id, status in server_status_map.items()]
+        return [
+            {"server_id": server_id, "status": _mcp_health_status_for_response(status, include_reachability)}
+            for server_id, status in server_status_map.items()
+        ]
 
     @router.post(
         "/server/register",
@@ -1613,6 +1632,10 @@ if MCP_AVAILABLE:
         request: Request,
         server_id: str,
         user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
+        include_reachability: Annotated[
+            bool,
+            Query(description="Allow the 'reachable' status for responding servers whose authentication is unchecked."),
+        ] = False,
     ):
         """
         Get the info on the mcp server specified by the `server_id`
@@ -1685,7 +1708,7 @@ if MCP_AVAILABLE:
         try:
             health_result: Final = await global_mcp_server_manager.health_check_server(server_id)
             # Update the server object with health check results
-            mcp_server.status = health_result.status if health_result.status else "unknown"
+            mcp_server.status = _mcp_health_status_for_response(health_result.status, include_reachability) or "unknown"
             mcp_server.last_health_check = health_result.last_health_check
             mcp_server.health_check_error = health_result.health_check_error
         except Exception as e:
