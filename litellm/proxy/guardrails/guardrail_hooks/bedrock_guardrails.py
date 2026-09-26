@@ -469,9 +469,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             )
         return cleaned or None
 
-    async def _create_bedrock_input_content_request(
-        self, messages: "Sequence[AllMessageValues] | None"
-    ) -> BedrockRequest:
+    def _create_bedrock_input_content_request(self, messages: "Sequence[AllMessageValues] | None") -> BedrockRequest:
         """Create a bedrock request for the input content - the LLM request."""
         bedrock_request: Final[BedrockRequest] = BedrockRequest(source="INPUT")
         if messages is None:
@@ -491,15 +489,13 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 },
             )
 
-        per_message: Final = await asyncio.gather(
-            *(self._build_input_content_items(message=message) for message in messages)
-        )
+        per_message: Final = tuple(self._build_input_content_items(message=message) for message in messages)
         bedrock_request["content"] = [  # mutable-ok: BedrockRequest["content"] is a list in the AWS wire format
             *chain.from_iterable(per_message)
         ]
         return bedrock_request
 
-    async def _build_input_content_items(self, message: AllMessageValues) -> tuple[BedrockContentItem, ...]:
+    def _build_input_content_items(self, message: AllMessageValues) -> tuple[BedrockContentItem, ...]:
         """Flatten one request message into ApplyGuardrail INPUT content items.
 
         Grounding qualifiers are attached only when assembling the OUTPUT request, so a
@@ -513,10 +509,10 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         if not isinstance(content, list):
             return ()
         parts: Final = _content_leaf_parts(content, skip_tool_results=effective_skip_tool_message_for_guardrail(self))
-        items: Final = await asyncio.gather(*(self._build_input_content_item(item=item) for item in parts))
+        items: Final = tuple(self._build_input_content_item(item=item) for item in parts)
         return tuple(item for item in items if item is not None)
 
-    async def _build_input_content_item(self, item: object) -> BedrockContentItem | None:
+    def _build_input_content_item(self, item: object) -> BedrockContentItem | None:
         if isinstance(item, str):
             return BedrockContentItem(text=BedrockTextContent(text=item))
         if not isinstance(item, dict):
@@ -529,18 +525,18 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             image_url: Final = self._get_image_url(item=part)
             if image_url is None:
                 self._handle_unscannable_attachment(reason="image part carries no inline url")
-            return await self._build_image_content_item(image_url=image_url)
+            return self._build_image_content_item(image_url=image_url)
         payload_key: Final = _UNSCANNABLE_ATTACHMENT_PAYLOAD_KEYS.get(str(part.get("type")))
         if payload_key is not None and (part.get(payload_key) or part.get("file_id")):
             self._handle_unscannable_attachment(reason="a document, file, video or audio attachment cannot be scanned")
         if part.get("type") == "image":
-            return await self._build_anthropic_image_content_item(part=part)
+            return self._build_anthropic_image_content_item(part=part)
         text: Final = part.get("text")
         if isinstance(text, str):
             return BedrockContentItem(text=BedrockTextContent(text=text))
         return None
 
-    async def _build_anthropic_image_content_item(self, part: Mapping[str, object]) -> BedrockContentItem:
+    def _build_anthropic_image_content_item(self, part: Mapping[str, object]) -> BedrockContentItem:
         """Only inline base64 is scannable; url and file sources are refused."""
         source: Final = part.get("source")
         if not isinstance(source, dict) or source.get("type") != "base64":
@@ -554,7 +550,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             if isinstance(media_type, str) and media_type
             else self._normalize_image_input(data)
         )
-        return await self._build_image_content_item(image_url=image_ref)
+        return self._build_image_content_item(image_url=image_ref)
 
     @classmethod
     def _anthropic_base64_image_ref(cls, part: Mapping[str, object]) -> str | None:
@@ -724,14 +720,14 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             for leaf in _content_leaf_parts(message.get("content")):
                 self._refuse_unscannable_part(part=leaf)
 
-    async def _build_image_content_item(self, image_url: str) -> BedrockContentItem:
+    def _build_image_content_item(self, image_url: str) -> BedrockContentItem:
         """Refuse remote urls with the same substring test
-        `BedrockImageProcessor.process_image_async` uses to decide to fetch, so nothing
+        `BedrockImageProcessor.process_image_sync` uses to decide to fetch, so nothing
         it would download slips past."""
         self._refuse_unscannable_image_ref(image_url=image_url)
 
         try:
-            block: Final = await BedrockImageProcessor.process_image_async(image_url=image_url, format=None)
+            block: Final = BedrockImageProcessor.process_image_sync(image_url=image_url, format=None)
         except (ValueError, TypeError, KeyError, IndexError, binascii.Error) as e:
             self._handle_unscannable_attachment(reason=f"image content could not be read: {e}")
 
@@ -799,7 +795,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 items.append(self._build_content_item(block))
         return items
 
-    async def convert_to_bedrock_format(
+    def convert_to_bedrock_format(
         self,
         source: Literal["INPUT", "OUTPUT"],
         messages: list[AllMessageValues] | None = None,
@@ -815,7 +811,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
             BedrockRequest: The bedrock request object.
         """
         if source == "INPUT":
-            return await self._create_bedrock_input_content_request(messages=messages)
+            return self._create_bedrock_input_content_request(messages=messages)
         if source == "OUTPUT":
             return self._create_bedrock_output_content_request(response=response, messages=messages)
         return BedrockRequest(source=source)
@@ -1281,7 +1277,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         """
         start_time: Final = datetime.now(timezone.utc)
         bedrock_request_data: Final[dict] = dict(
-            await self.convert_to_bedrock_format(source=source, messages=messages, response=response)
+            self.convert_to_bedrock_format(source=source, messages=messages, response=response)
         )
         api_key: str | None = None
         if request_data:
