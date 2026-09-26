@@ -867,6 +867,7 @@ async def _prepare_bridge_refresh(
     from litellm.proxy._experimental.mcp_server.outbound_credentials.bridge_credentials import (  # noqa: PLC0415  # inline import avoids a module-load circular import
         BridgeRefreshOpened,
         envelope_keys_from_master_key,
+        legacy_envelope_keys_from_master_key,
         open_bridge_refresh_envelope,
     )
     from litellm.proxy.proxy_server import (  # noqa: PLC0415  # inline import avoids a module-load circular import
@@ -878,7 +879,13 @@ async def _prepare_bridge_refresh(
     if not refresh_value:
         return "invalid_refresh"
     keys: Final = envelope_keys_from_master_key(master_key)
-    opened: Final = open_bridge_refresh_envelope(refresh_value, keys, datetime.now(timezone.utc), mcp_server.server_id)
+    opened: Final = open_bridge_refresh_envelope(
+        refresh_value,
+        keys,
+        datetime.now(timezone.utc),
+        mcp_server.server_id,
+        legacy_keys=legacy_envelope_keys_from_master_key(master_key),
+    )
     if not isinstance(opened, BridgeRefreshOpened):
         return "invalid_refresh"
     failure: Final = await _revalidate_active_subject(opened.identity)
