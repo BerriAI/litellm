@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import time
 import uuid
-from collections.abc import Callable, Iterator, Mapping
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from hashlib import sha256
@@ -174,6 +174,12 @@ class Scenario:
         assert response.status_code == 200 and response.json() == 1, response.text
         assert read_rows('SELECT user_id FROM "LiteLLM_UserTable" WHERE user_id = %s', (identity,)) == []
 
+    def member(self, team_id: str, role: str = "user") -> str:
+        """Create an internal user and add them to ``team_id``; deleting the user later removes the membership."""
+        user_id: Final = self.user(user_role="internal_user")
+        self.gateway.post("/team/member_add", {"team_id": team_id, "member": {"role": role, "user_id": user_id}})
+        return user_id
+
     def delete_key(self, token: str) -> None:
         self.gateway.post("/key/delete", {"keys": [token]})
         hashed: Final = sha256(token.encode()).hexdigest()
@@ -214,3 +220,19 @@ def gateway_from_environment() -> Iterator[Gateway]:
     upstream: Final = os.environ["INTEGRATION_UPSTREAM_URL"]
     with httpx.Client(base_url=url, timeout=15, trust_env=False) as client:
         yield Gateway(client, os.environ["INTEGRATION_MASTER_KEY"], upstream)
+
+
+def _set_team_admin_permissions(gateway: Gateway, fields: Sequence[str]) -> None:
+    response: Final = gateway.request("PATCH", "/update/ui_settings", {"team_admin_editable_team_fields": list(fields)})
+    assert response.status_code == 200, response.text
+
+
+@contextmanager
+def team_admin_permissions(gateway: Gateway, fields: Sequence[str]) -> Iterator[None]:
+    """Grant team admins ``fields`` proxy-wide for the block, then restore the prior grant."""
+    original: Final = object_value(gateway.get("/get/ui_settings")["values"]).get("team_admin_editable_team_fields")
+    _set_team_admin_permissions(gateway, fields)
+    try:
+        yield
+    finally:
+        _set_team_admin_permissions(gateway, [str(field) for field in original] if isinstance(original, list) else ())
