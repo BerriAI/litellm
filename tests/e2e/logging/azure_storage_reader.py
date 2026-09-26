@@ -3,8 +3,12 @@ proxy ships StandardLoggingPayload objects to (litellm_settings.callbacks:
 ["azure_storage"]).
 
 Delivery is judged on what actually landed in the filesystem: the proxy writes
-with its own credentials exactly as in production (account key or Entra ID), and
-the tests list and download the objects back with the Azure Data Lake SDK
+with its own credentials exactly as in production (account key or Entra ID).
+The object layout differs by credential: the account-key path writes
+{date}/{id}.json under a per-day directory, while the Entra ID path writes
+{id}.json at the filesystem root, so reads match on the {id}.json name
+wherever it sits. The tests list and download the objects back with the Azure
+Data Lake SDK
 (already a litellm proxy dependency, so the e2e runner image carries it; it is
 an Azure SDK, not a raw HTTP client, so the e2e_http-only transport rule is
 untouched). The filesystem comes from AZURE_STORAGE_ACCOUNT_NAME +
@@ -21,6 +25,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 import pytest
+from azure.core.exceptions import ResourceNotFoundError
 from azure.identity import ClientSecretCredential
 from azure.storage.filedatalake import DataLakeServiceClient
 from pydantic import BaseModel, ConfigDict
@@ -44,8 +49,9 @@ class AzureLogRecord(BaseModel):
 
 
 def _candidate_days() -> tuple[str, ...]:
-    """The date directories an object can sit under: the proxy names them from
-    its host's local date, which UTC and local time can straddle at midnight."""
+    """The date directories an account-key-written object can sit under: the
+    proxy names them from its host's local date. Only used in failure messages,
+    since reads match the {id}.json name wherever it sits."""
     now = datetime.now()
     yesterday = now - timedelta(days=1)
     return tuple(dict.fromkeys((now.strftime("%Y-%m-%d"), yesterday.strftime("%Y-%m-%d"))))
@@ -58,12 +64,14 @@ class AzureStorageLogReader:
 
     def _paths_for_id(self, response_id: str) -> list[str]:
         fs_client = self.client.get_file_system_client(self.file_system)
-        return [
-            path.name
-            for day in _candidate_days()
-            for path in fs_client.get_paths(path=day)
-            if path.name.endswith(f"/{response_id}.json")
-        ]
+        try:
+            return [
+                path.name
+                for path in fs_client.get_paths()
+                if path.name == f"{response_id}.json" or path.name.endswith(f"/{response_id}.json")
+            ]
+        except ResourceNotFoundError:
+            return []
 
     def read_record(self, path: str) -> AzureLogRecord:
         file_client = self.client.get_file_client(self.file_system, path)
@@ -79,9 +87,10 @@ class AzureStorageLogReader:
     def poll_record(
         self, response_id: str, *, timeout: float = POLL_TIMEOUT, interval: float = POLL_INTERVAL
     ) -> AzureLogRecord:
-        """Poll {date}/{response_id}.json under today's and yesterday's
-        directories until one exists (the callback flushes on a timer), then
-        download and parse it. A timeout is a hard failure."""
+        """Poll the filesystem for the {response_id}.json object (under a per-day
+        directory for account-key auth, at the root for Entra ID auth) until it
+        exists - the callback flushes on a timer - then download and parse it.
+        A timeout is a hard failure."""
         deadline = time.monotonic() + timeout
         while time.monotonic() < deadline:
             paths = self._paths_for_id(response_id)
@@ -89,8 +98,8 @@ class AzureStorageLogReader:
                 return self.read_record(paths[0])
             time.sleep(interval)
         pytest.fail(
-            f"no azure_storage object {response_id}.json under {_candidate_days()} reached the "
-            f"filesystem within {timeout}s"
+            f"no azure_storage object {response_id}.json (under {_candidate_days()} for account-key "
+            f"auth, at the filesystem root for Entra ID auth) reached the filesystem within {timeout}s"
         )
 
 
