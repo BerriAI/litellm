@@ -7,6 +7,7 @@
 
 use litellm_auth::{AuthServices, CredentialPlacement, SecretValue, TokenProviderHandle};
 use litellm_auth_aws::{AwsCredentialSource, SigV4Signer};
+use litellm_http::request::without_headers;
 
 pub type Headers = Vec<(String, String)>;
 
@@ -107,9 +108,8 @@ fn with_credential(headers: Headers, placement: CredentialPlacement, credential:
         CredentialPlacement::Bearer => format!("Bearer {credential}"),
         CredentialPlacement::Header(_) => credential.to_string(),
     };
-    headers
+    without_headers(headers, &[name])
         .into_iter()
-        .filter(|(header, _)| !header.eq_ignore_ascii_case(name))
         .chain([(name.to_ascii_lowercase(), value)])
         .collect()
 }
