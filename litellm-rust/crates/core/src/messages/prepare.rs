@@ -514,7 +514,7 @@ mod tests {
             unreachable!()
         };
         assert!(matches!(
-            crate::messages::route::messages_body(fields),
+            crate::messages::messages_body(fields),
             Err(Error::RequestDecoding(_))
         ));
     }
