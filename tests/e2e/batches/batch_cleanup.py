@@ -1,3 +1,4 @@
+import warnings
 from builtins import ExceptionGroup
 from collections.abc import Callable
 from itertools import count
@@ -12,8 +13,9 @@ from pydantic import BaseModel
 CLEANUP_DELAYS: Final = (1.0, 2.0, 4.0)
 BATCH_TERMINAL_STATUSES: Final = frozenset({"completed", "failed", "expired", "cancelled"})
 BATCH_PENDING_STATUSES: Final = frozenset({"validating", "in_progress", "finalizing", "cancelling"})
-BATCH_CANCEL_TIMEOUT_SECONDS: Final = 660.0
+BATCH_CANCEL_TIMEOUT_SECONDS: Final = 120.0
 BATCH_CANCEL_POLL_SECONDS: Final = 10.0
+FILE_IN_USE_REFUSAL: Final = "batch(es) in non-terminal state"
 
 
 class BatchCleanupClient(Protocol):
@@ -24,6 +26,10 @@ class BatchCleanupClient(Protocol):
     def retrieve_batch(self, batch_id: str, *, key: str, provider: str | None = None) -> Result[BatchObject]: ...
 
     def cancel_batch(self, batch_id: str, *, key: str, provider: str | None = None) -> Result[BatchObject]: ...
+
+
+class BatchCleanupLeftover(UserWarning):
+    pass
 
 
 def cleanup_result[R: BaseModel](
@@ -58,6 +64,13 @@ def cleanup_file(client: BatchCleanupClient, file_id: str, *, key: str, provider
     )
     result: Final = cleanup_result(delete)
     if isinstance(result, UnknownApiError) and result.status_code == 404:
+        return
+    if isinstance(result, UnknownApiError) and result.status_code == 400 and FILE_IN_USE_REFUSAL in result.body:
+        warnings.warn(
+            f"Left file {file_id} in place: LiteLLM refused to delete it while a batch still references it",
+            BatchCleanupLeftover,
+            stacklevel=2,
+        )
         return
     deleted: Final = _require_cleanup_success(result, f"Delete file {file_id}")
     assert deleted.deleted is True or (
@@ -120,10 +133,17 @@ def cleanup_batch(
         )
         if current.status == "cancelling" and not needs_terminal_state:
             return
-        assert clock() < deadline, (
-            f"Batch {batch_id} cancellation did not finish within {BATCH_CANCEL_TIMEOUT_SECONDS}s, "
-            f"last status {current.status}"
-        )
+        if clock() >= deadline:
+            assert current.status == "cancelling", (
+                f"Batch {batch_id} cancellation did not finish within {BATCH_CANCEL_TIMEOUT_SECONDS}s, "
+                f"last status {current.status}"
+            )
+            warnings.warn(
+                f"Left batch {batch_id} cancelling after {BATCH_CANCEL_TIMEOUT_SECONDS}s for the provider to finish",
+                BatchCleanupLeftover,
+                stacklevel=2,
+            )
+            return
         wait(BATCH_CANCEL_POLL_SECONDS)
 
 

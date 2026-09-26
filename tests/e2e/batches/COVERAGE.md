@@ -22,10 +22,9 @@ failures are hard test failures (see `tests/e2e/AGENTS.md`).
 | Bedrock   | yes (unified only) | yes | yes | yes (unfiltered managed list) | yes (provider-transformed) | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` on model) |
 | Bedrock GovCloud (`us-gov-west-1`) | yes (unified only) | yes | no | no | yes (provider-transformed) | S3 (`s3_bucket_name` + `aws_*` on model, resolved from `AWS_GOVCLOUD_ACCESS_KEY_ID` / `AWS_GOVCLOUD_SECRET_ACCESS_KEY` / `AWS_GOVCLOUD_BATCH_S3_BUCKET` / `AWS_GOVCLOUD_BATCH_ROLE_ARN`) |
 | Bedrock split S3 identity | no | no | no | no | yes (file upload, content, delete) | S3 signed with `s3_access_key_id` / `s3_secret_access_key` (`AWS_S3_ONLY_ACCESS_KEY_ID` / `AWS_S3_ONLY_SECRET_ACCESS_KEY`, object rights on `AWS_BATCH_S3_BUCKET` only) while `aws_*` is `AWS_BEDROCK_ONLY_ACCESS_KEY_ID` / `AWS_BEDROCK_ONLY_SECRET_ACCESS_KEY`, an identity with no S3 rights on that bucket |
-| Bedrock blank S3 env | yes (unified only, on an owned gateway exporting `AWS_S3_ENCRYPTION_KEY_ID` / `AWS_S3_BUCKET_OWNER` as empty strings) | no | no | no | no | S3 (`s3_bucket_name` + `aws_*` + `AWS_BATCH_ROLE_ARN` in the gateway config); blank env vars must be treated as unset, not serialized |
 
 Bedrock cancel maps to `StopModelInvocationJob` and comes back `cancelling`; the
-lifecycle asserts it the same way it does for OpenAI (`_CANCEL_ASSERTED_PROVIDERS`).
+lifecycle asserts it the same way it does for OpenAI and Azure (`_CANCEL_ASSERTED_PROVIDERS`).
 Bedrock has no provider-side list, so list is the proxy's DB-backed managed view: the
 unified lifecycle lists with the plain `GET /v1/batches` and the batch must appear
 there. Both were gated off until LIT-5730, after LIT-4774 landed cancel support. A batch that completes inside the 2 s pre-cancel window skips the cancel assertion (a documented vacuous pass for the cancel cell, same as OpenAI); the list assertion runs either way.
@@ -132,8 +131,11 @@ provider when deleted. Model-encoded and managed file IDs route themselves
 File deletion and batch cancellation check their responses and retry transient
 failures up to three times. Teardown attempts every registered cleanup before
 reporting failures as test errors. Already deleted files and batches that are
-terminal are safe to clean up again. Managed batch cancellation polls for up to eleven minutes
-before input deletion: the ten-minute provider window plus a propagation margin.
+terminal are safe to clean up again. Managed batch cancellation polls for up to two minutes
+before input deletion. A managed batch still `cancelling` after that is left for the provider to
+finish, and its input file is left in place because LiteLLM refuses to delete a file a non-terminal
+batch references. Both are reported as `BatchCleanupLeftover` warnings naming their ids rather than
+failing the test. Any other status or error still fails
 Accepted cancellation may still report validating or in_progress while the provider
 updates its state. Raw and model-encoded batches are polled until cancelling or
 terminal before input deletion. OpenAI and Azure lifecycle cleanup also deletes

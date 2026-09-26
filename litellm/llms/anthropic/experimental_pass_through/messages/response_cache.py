@@ -5,6 +5,7 @@ from typing import TYPE_CHECKING, Final
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.caching.caching_handler import create_cache_write_task
 from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
     BaseAnthropicMessagesStreamingIterator,
@@ -57,7 +58,7 @@ class AnthropicMessagesStreamCacheWriter:
         try:
             chunk: Final = await self.stream.__anext__()
         except StopAsyncIteration:
-            await self._persist()
+            self._persist()
             raise
         self.collected_chunks.append(chunk.encode("utf-8") if isinstance(chunk, str) else chunk)
         return chunk
@@ -65,8 +66,9 @@ class AnthropicMessagesStreamCacheWriter:
     async def aclose(self) -> None:
         await aclose_if_supported(self.stream)
 
-    async def _persist(self) -> None:
-        if self.persisted or litellm.cache is None:
+    def _persist(self) -> None:
+        cache: Final = litellm.cache
+        if self.persisted or cache is None:
             return
         collected_stream: Final = b"".join(self.collected_chunks)
         if not _is_message_stop_chunk(collected_stream) or _is_provider_error_chunk(collected_stream):
@@ -88,14 +90,19 @@ class AnthropicMessagesStreamCacheWriter:
 
         try:
             events: Final = _split_sse_events(collected_stream.decode("utf-8"))
-            cached_payload: Final = {CACHED_STREAM_EVENTS_KEY: events}
-            await litellm.cache.async_add_cache(
-                cached_payload,
-                dynamic_cache_object=self.caching_handler.dual_cache,
-                **request_kwargs,
-            )
-        except Exception as e:  # noqa: BLE001  # a cache write must never surface as a client-visible stream error
+        except UnicodeDecodeError as e:
             verbose_logger.exception("Anthropic Messages stream cache write failed: %s", e)
+            return
+        cached_payload: Final = {CACHED_STREAM_EVENTS_KEY: events}
+        dual_cache: Final = self.caching_handler.dual_cache
+
+        async def _write() -> None:
+            try:
+                await cache.async_add_cache(cached_payload, dynamic_cache_object=dual_cache, **request_kwargs)
+            except Exception as e:  # noqa: BLE001  # a cache write must never surface as a client-visible stream error
+                verbose_logger.exception("Anthropic Messages stream cache write failed: %s", e)
+
+        create_cache_write_task(_write)
 
 
 class CachedAnthropicMessagesStreamIterator(BaseAnthropicMessagesStreamingIterator):
