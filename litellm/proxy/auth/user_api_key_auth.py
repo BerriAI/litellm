@@ -714,6 +714,8 @@ def update_valid_token_with_end_user_params(valid_token: UserAPIKeyAuth, end_use
         valid_token.end_user_rpm_limit = end_user_params["end_user_rpm_limit"]
     if end_user_params.get("end_user_tpd_limit") is not None:
         valid_token.end_user_tpd_limit = end_user_params["end_user_tpd_limit"]
+    if end_user_params.get("end_user_max_budget") is not None:
+        valid_token.end_user_max_budget = end_user_params["end_user_max_budget"]
     if end_user_params.get("allowed_model_region") is not None:
         valid_token.allowed_model_region = end_user_params["allowed_model_region"]
     if end_user_params.get("end_user_model_max_budget") is not None:
@@ -3557,6 +3559,12 @@ async def _lookup_end_user_and_apply_budget(
                     budget_info=default_budget,
                     end_user_id=valid_token.end_user_id or "",
                 )
+                # This branch has no end-user row, so the budget here is the key's
+                # ``end_user_budget_id`` (or the proxy-wide default) - a fallback, not
+                # this end user's own budget. It must only fill a cap the custom auth
+                # callable left unset, never loosen one it set, so keep it out of the
+                # write-back and let the fill-only assignment below apply it.
+                end_user_params.pop("end_user_max_budget", None)
                 valid_token = update_valid_token_with_end_user_params(
                     valid_token=valid_token, end_user_params=end_user_params
                 )

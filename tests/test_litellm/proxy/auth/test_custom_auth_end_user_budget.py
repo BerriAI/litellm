@@ -403,3 +403,38 @@ def test_end_user_budget_tpd_limit_reaches_the_token():
 
     assert result.end_user_rpm_limit == 5
     assert result.end_user_tpd_limit == 750000
+
+def test_end_user_max_budget_reaches_the_token():
+    # Regression for #29142: a DB-derived end_user max_budget must land on the
+    # per-request token, exactly like end_user_model_max_budget already does.
+    # Without the write-back, a token reused from the user_api_key_cache keeps
+    # the previous end user's budget and rejects valid requests.
+    from litellm.proxy.auth.user_api_key_auth import _apply_budget_limits_to_end_user_params
+
+    end_user_params = {"end_user_id": "user_1"}
+    _apply_budget_limits_to_end_user_params(
+        end_user_params=end_user_params,
+        budget_info=LiteLLM_BudgetTable(max_budget=20.0),
+        end_user_id="user_1",
+    )
+    result = update_valid_token_with_end_user_params(UserAPIKeyAuth(token="test_token"), end_user_params)
+
+    assert result.end_user_max_budget == 20.0
+
+
+def test_end_user_max_budget_is_not_leaked_from_a_previous_end_user():
+    # #29142 cache-poisoning shape: a token reused across end users carries the
+    # earlier end user's smaller budget; the DB lookup for the current end user
+    # must overwrite it so the request is not rejected against the wrong budget.
+    from litellm.proxy.auth.user_api_key_auth import _apply_budget_limits_to_end_user_params
+
+    reused_token = UserAPIKeyAuth(token="test_token", end_user_max_budget=2.0)
+    end_user_params = {"end_user_id": "user_2"}
+    _apply_budget_limits_to_end_user_params(
+        end_user_params=end_user_params,
+        budget_info=LiteLLM_BudgetTable(max_budget=20.0),
+        end_user_id="user_2",
+    )
+    result = update_valid_token_with_end_user_params(reused_token, end_user_params)
+
+    assert result.end_user_max_budget == 20.0
