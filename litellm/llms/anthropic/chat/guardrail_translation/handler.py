@@ -1092,7 +1092,6 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @classmethod
     def _scoped_out_block_file_refs(cls, block: Mapping[str, object]) -> tuple[str, ...]:
-        """The unscannable refs a scoped-out block still contributes so the guardrail can refuse them."""
         block_type: Final = block.get("type")
         if block_type == "document":
             return cls._document_sources(block)
@@ -1102,7 +1101,6 @@ class AnthropicMessagesHandler(BaseTranslation):
 
     @classmethod
     def _scoped_out_container_attachments(cls, container: Mapping[str, object]) -> ExtractedInput:
-        """Attachment refs nested inside a scoped-out message or tool_result; text and inline images stay unscanned."""
         inner: Final = container.get("content")
         return ExtractedInput(
             scanned=(),

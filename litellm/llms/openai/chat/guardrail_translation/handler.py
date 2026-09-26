@@ -128,7 +128,6 @@ def _attachment_part_refs(content_item: Mapping[str, object], scan_attachments: 
 
 
 def _scoped_out_attachment_refs(content: object) -> tuple[str, ...]:
-    """The unscannable refs a scoped-out message still contributes so the guardrail can refuse them."""
     if not isinstance(content, list):
         return ()
     refs: list[str] = []  # mutable-ok: collected per part, then frozen

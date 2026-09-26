@@ -220,7 +220,6 @@ def _converse_input_blocks(
 
 
 def _converse_scoped_out_refs(image_refs: tuple[str, ...], file_refs: tuple[str, ...]) -> tuple[str, ...]:
-    """The refs a scoped-out block still contributes: file refs plus non-inline image refs."""
     return (*file_refs, *(ref for ref in image_refs if not ref.startswith("data:")))
 
 
