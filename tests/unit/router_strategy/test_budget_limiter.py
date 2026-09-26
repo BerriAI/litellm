@@ -12,6 +12,7 @@ import pytest
 
 from litellm.caching.caching import DualCache
 from litellm.router_strategy.budget_limiter import RouterBudgetLimiting
+from litellm.types.utils import BudgetConfig
 
 
 @pytest.fixture
@@ -135,3 +136,77 @@ async def test_deployment_budget_tracked_when_provider_is_unresolvable(disable_b
     )
 
     assert await limiter.dual_cache.async_get_cache("deployment_spend:deployment-1:1d") == 0.25
+
+
+@pytest.mark.asyncio
+async def test_zero_max_budget_blocks_spend(disable_budget_sync):
+    """A configured budget of 0 blocks all spend; only None means "no limit".
+
+    The three budget checks used a truthy test on ``max_budget``, so a legitimate
+    ``0`` (an admin fully blocking spend) short-circuited to "no limit" and left
+    the deployment routable.
+    """
+    healthy_deployments: Final = [
+        {
+            "model_name": "gpt-4o",
+            "litellm_params": {"model": "openai/gpt-4o", "max_budget": 0.0, "budget_duration": "1d"},
+            "model_info": {"id": "deployment-1"},
+        }
+    ]
+
+    # Provider budget of 0 blocks a deployment that already spent.
+    limiter = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config={"openai": {"budget_limit": 0.0, "time_period": "1d"}},
+    )
+    provider_configs: Final = {"openai": BudgetConfig(max_budget=0.0, budget_duration="1d")}
+    kept, _ = limiter._filter_out_deployments_above_budget(
+        potential_deployments=[],
+        healthy_deployments=healthy_deployments,
+        provider_configs=provider_configs,
+        deployment_configs={},
+        deployment_providers=["openai"],
+        spend_map={"provider_spend:openai:1d": 5.0},
+        request_tags=[],
+    )
+    assert kept == []
+
+    # Deployment budget of 0 blocks even at zero spend.
+    limiter = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config=None,
+        model_list=[
+            {
+                "model_name": "gpt-4o",
+                "litellm_params": {"model": "openai/gpt-4o", "max_budget": 0.0, "budget_duration": "1d"},
+                "model_info": {"id": "deployment-1"},
+            }
+        ],
+    )
+    deployment_configs: Final = {"deployment-1": BudgetConfig(max_budget=0.0, budget_duration="1d")}
+    kept, _ = limiter._filter_out_deployments_above_budget(
+        potential_deployments=[],
+        healthy_deployments=healthy_deployments,
+        provider_configs={},
+        deployment_configs=deployment_configs,
+        deployment_providers=["openai"],
+        spend_map={"deployment_spend:deployment-1:1d": 0.0},
+        request_tags=[],
+    )
+    assert kept == []
+
+    # A None budget still means "no limit" and must stay routable.
+    limiter = RouterBudgetLimiting(
+        dual_cache=DualCache(),
+        provider_budget_config=None,
+    )
+    kept, _ = limiter._filter_out_deployments_above_budget(
+        potential_deployments=[],
+        healthy_deployments=healthy_deployments,
+        provider_configs={},
+        deployment_configs={},
+        deployment_providers=["openai"],
+        spend_map={},
+        request_tags=[],
+    )
+    assert len(kept) == 1
