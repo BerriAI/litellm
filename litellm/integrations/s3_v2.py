@@ -10,7 +10,6 @@ import asyncio
 import re
 import time
 from collections.abc import Awaitable, Callable, Mapping
-from contextlib import AbstractAsyncContextManager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from functools import partial
@@ -78,7 +77,6 @@ _BODY_CODED_STATUSES: Final = frozenset({400, 403})
 _RETRYABLE_STATUSES: Final = frozenset({403, 408, 429, 500, 502, 503, 504})
 _SYNC_RETRYABLE_STATUSES: Final = frozenset({403, 500, 503})
 _S3_ERROR_CODE: Final = re.compile(r"<Code>([^<]+)</Code>")
-_NO_SLOT: Final = nullcontext()
 
 
 @dataclass(frozen=True, slots=True)
@@ -524,8 +522,9 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
     async def async_upload_data_to_s3(
         self,
         batch_logging_element: s3BatchLoggingElement,
-        slot: AbstractAsyncContextManager[object] = _NO_SLOT,
+        slot: AdaptiveConcurrencyLimiter | None = None,
     ) -> UploadOutcome:
+        limiter: Final = slot if slot is not None else self._upload_limiter
         try:
             from litellm.litellm_core_utils.asyncify import asyncify
 
@@ -558,7 +557,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
 
             max_retries: Final = 3
             for attempt in range(max_retries):
-                async with slot:
+                async with limiter:
                     response = await self._recorded_put(partial(signed_put, self._prepare_put(batch_logging_element)))
                 if (
                     response.status_code in _RETRYABLE_STATUSES
@@ -679,7 +678,7 @@ class S3Logger(CustomBatchLogger, BaseAWSLLM):
         return True
 
     async def _upload_bounded(self, element: s3BatchLoggingElement) -> UploadOutcome:
-        return await self.async_upload_data_to_s3(element, slot=self._upload_limiter)
+        return await self.async_upload_data_to_s3(element)
 
     async def _recorded_put(self, signed_put: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
         try:

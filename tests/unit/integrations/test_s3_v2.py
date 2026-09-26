@@ -3567,6 +3567,30 @@ async def test_peak_serialized_bodies_bounded_by_upload_width() -> None:
 
 
 @pytest.mark.asyncio
+async def test_send_batch_calls_upload_with_one_positional_arg() -> None:
+    logger = S3Logger(
+        s3_bucket_name="test-bucket",
+        s3_aws_access_key_id="test-key",
+        s3_aws_secret_access_key="test-secret",
+        s3_region_name="us-east-1",
+    )
+
+    uploaded: list[str] = []  # mutable-ok: appended once per upload by the double
+
+    async def mock_upload(batch_logging_element) -> str:
+        uploaded.append(batch_logging_element.s3_object_key)
+        return "delivered"
+
+    logger.async_upload_data_to_s3 = mock_upload
+    logger.log_queue = [_element({"id": "a"}, "a"), _element({"id": "b"}, "b")]
+
+    await logger.flush_queue()
+
+    assert sorted(key.rsplit("/", 1)[-1] for key in uploaded) == ["test-a.json", "test-b.json"]
+    assert logger.log_queue == []
+
+
+@pytest.mark.asyncio
 async def test_retry_rebuilds_the_body_inside_the_slot() -> None:
     logger = S3Logger(
         s3_bucket_name="test-bucket",
