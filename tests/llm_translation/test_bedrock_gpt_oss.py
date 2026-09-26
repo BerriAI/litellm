@@ -22,7 +22,7 @@ class TestBedrockGPTOSS(BaseLLMChatTest):
         """Bedrock GPT-OSS intermittently emits truncated toolUse.input deltas on
         the live endpoint, which makes the inherited live integration test flaky.
         The accumulation side is covered deterministically by
-        tests/test_litellm/llms/bedrock/chat/test_invoke_handler.py::test_transform_tool_calls_index;
+        tests/unit/llms/bedrock/chat/test_invoke_handler.py::test_transform_tool_calls_index;
         the GPT-OSS-specific request-body transformation is covered by
         test_function_calling_request_body_gpt_oss below.
         """

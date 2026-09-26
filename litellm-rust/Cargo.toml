@@ -9,9 +9,13 @@ license = "MIT"
 repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
+litellm-config = { path = "crates/config" }
+litellm-router = { path = "crates/router" }
 litellm-tracing = { path = "crates/tracing" }
-tracing = "0.1"
 litellm-core = { path = "crates/core" }
+litellm-gateway = { path = "crates/gateway" }
+litellm-gateway-inference = { path = "crates/gateway-inference" }
+litellm-gateway-auth = { path = "crates/gateway-auth" }
 litellm-coroutine = { path = "crates/coroutine" }
 litellm-host = { path = "crates/host" }
 litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
@@ -48,7 +52,10 @@ litellm-token-counter-fast = { path = "crates/token-counter-fast" }
 litellm-token-counter-huggingface = { path = "crates/token-counter-huggingface" }
 litellm-token-counter-tiktoken = { path = "crates/token-counter-tiktoken" }
 litellm-host-python = { path = "crates/host-python" }
+litellm-python-compat = { path = "crates/python-compat" }
 
+tracing = "0.1"
+axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "multipart"] }
 bytes = "1"
 http = "1"
 google-cloud-auth = { version = "1.16.0", default-features = false }
@@ -57,8 +64,8 @@ hyper-util = { version = "0.1.20", default-features = false, features = ["client
 proptest = "1.7.0"
 pyo3 = "0.29.2"
 pyo3-async-runtimes = { version = "0.29.0", features = ["tokio-runtime"] }
-pythonize = "0.29.0"
 rand = "0.8"
+schemars = "1"
 reqwest = { version = "0.12", default-features = false, features = ["json", "multipart", "rustls-tls", "http2", "stream"] }
 qdrant-client = { version = "1.19.0", default-features = false }
 uuid = { version = "1", features = ["v4"] }
@@ -81,6 +88,12 @@ tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"]
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 base64 = "0.22"
+flate2 = "1"
+semver = "1"
+tar = "0.4"
+target-lexicon = "0.13.5"
+tempfile = "3"
+zip = { version = "2", default-features = false, features = ["deflate"] }
 moka = { version = "0.12.16", features = ["future"] }
 strum = { version = "0.28.0", features = ["derive"] }
 url = "2.5.8"

@@ -117,6 +117,10 @@ impl ProtocolHost for OcrPythonHost {
             .map(Bound::unbind)
     }
 
+    fn head(&mut self, _: Python<'_>, head: std::convert::Infallible) -> PyResult<Py<PyAny>> {
+        match head {}
+    }
+
     fn chunk(&mut self, _: Python<'_>, chunk: std::convert::Infallible) -> PyResult<Py<PyAny>> {
         match chunk {}
     }
