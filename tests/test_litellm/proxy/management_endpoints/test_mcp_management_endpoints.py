@@ -8224,7 +8224,7 @@ class _ResolutionEffects:
         self.env_invalidate.assert_not_called()
 
 
-def _lit3974_prisma_client(
+def _mock_mcp_resolution_prisma_client(
     server: LiteLLM_MCPServerTable,
     key_permission: LiteLLM_ObjectPermissionTable,
     team: LiteLLM_TeamTable,
@@ -8271,14 +8271,14 @@ def _lit3974_prisma_client(
     return prisma
 
 
-def _lit3974_cache() -> MagicMock:
+def _mock_mcp_resolution_cache() -> MagicMock:
     cache: Final = MagicMock()
     cache.async_get_cache = AsyncMock(return_value=None)
     cache.async_set_cache = AsyncMock()
     return cache
 
 
-class TestLIT3974ResolutionRegressions:
+class TestMCPServerResolutionRegressions:
     @pytest.mark.asyncio
     async def test_team_granted_database_server_is_visible_to_virtual_key(self) -> None:
         server_id: Final = "lit3974-team-db"
@@ -8299,7 +8299,7 @@ class TestLIT3974ResolutionRegressions:
                 mcp_servers=[server_id],
             ),
         )
-        prisma: Final = _lit3974_prisma_client(server, key_permission, team)
+        prisma: Final = _mock_mcp_resolution_prisma_client(server, key_permission, team)
         manager: Final = MCPServerManager()
         auth: Final = UserAPIKeyAuth(
             api_key="lit3974-key",
@@ -8314,7 +8314,7 @@ class TestLIT3974ResolutionRegressions:
             patch.object(mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=server)),
             patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
         ):
             try:
                 result: Final = await mgmt_endpoints.fetch_mcp_server(
@@ -8381,7 +8381,7 @@ class TestLIT3974ResolutionRegressions:
             if org_server_ids is not None
             else None
         )
-        prisma: Final = _lit3974_prisma_client(server, key_permission, team, organization=organization)
+        prisma: Final = _mock_mcp_resolution_prisma_client(server, key_permission, team, organization=organization)
         manager: Final = MCPServerManager()
         health_check: Final = AsyncMock()
         add_server: Final = AsyncMock()
@@ -8401,7 +8401,7 @@ class TestLIT3974ResolutionRegressions:
             patch.object(manager, "health_check_server", health_check),
             patch.object(manager, "add_server", add_server),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await mgmt_endpoints.fetch_mcp_server(
@@ -8489,7 +8489,7 @@ class TestLIT3974ResolutionRegressions:
             if org_server_ids is not None
             else None
         )
-        prisma: Final = _lit3974_prisma_client(server, key_permission, team, organization=organization)
+        prisma: Final = _mock_mcp_resolution_prisma_client(server, key_permission, team, organization=organization)
         manager: Final = MCPServerManager()
         health_check: Final = AsyncMock()
         add_server: Final = AsyncMock()
@@ -8509,7 +8509,7 @@ class TestLIT3974ResolutionRegressions:
             patch.object(manager, "health_check_server", health_check),
             patch.object(manager, "add_server", add_server),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
         ):
             result: Final = await mgmt_endpoints.fetch_mcp_server(
                 request=_make_mock_request(),
@@ -8542,7 +8542,7 @@ class TestLIT3974ResolutionRegressions:
             teams=[team_id],
             user_role=LitellmUserRoles.INTERNAL_USER,
         )
-        prisma: Final = _lit3974_prisma_client(server, key_permission, team, user=user)
+        prisma: Final = _mock_mcp_resolution_prisma_client(server, key_permission, team, user=user)
         prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
         prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
         manager: Final = MCPServerManager()
@@ -8571,7 +8571,7 @@ class TestLIT3974ResolutionRegressions:
             patch.object(mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=None)),
             patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
         ):
             try:
                 result: Final = await mgmt_endpoints.fetch_mcp_server(
@@ -8589,7 +8589,7 @@ class TestLIT3974ResolutionRegressions:
     @pytest.mark.asyncio
     async def test_create_rejects_config_server_identifier_collision(self) -> None:
         server_id: Final = "lit3974-config-collision"
-        prisma: Final = _lit3974_prisma_client(
+        prisma: Final = _mock_mcp_resolution_prisma_client(
             generate_mock_mcp_server_db_record(server_id=server_id),
             LiteLLM_ObjectPermissionTable(object_permission_id="lit3974-key", mcp_servers=[]),
             LiteLLM_TeamTable(team_id="lit3974-team"),
@@ -8645,7 +8645,7 @@ class TestLIT3974ResolutionRegressions:
     async def test_alias_lookup_authorizes_the_resolved_canonical_server_id(self) -> None:
         allowed_id: Final = "lit3974-allowed-config"
         denied_id: Final = "lit3974-denied-config"
-        prisma: Final = _lit3974_prisma_client(
+        prisma: Final = _mock_mcp_resolution_prisma_client(
             generate_mock_mcp_server_db_record(server_id=denied_id),
             LiteLLM_ObjectPermissionTable(
                 object_permission_id="lit3974-alias-permission",
@@ -8697,7 +8697,7 @@ class TestLIT3974ResolutionRegressions:
             patch.object(manager, "add_server", add_server),
             patch.object(manager, "health_check_server", health_check),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await mgmt_endpoints.fetch_mcp_server(
@@ -8719,7 +8719,7 @@ class TestLIT3974ResolutionRegressions:
     @pytest.mark.asyncio
     async def test_alias_lookup_allows_when_canonical_id_is_granted(self) -> None:
         server_id: Final = "lit3974-granted-alias-config"
-        prisma: Final = _lit3974_prisma_client(
+        prisma: Final = _mock_mcp_resolution_prisma_client(
             generate_mock_mcp_server_db_record(server_id=server_id),
             LiteLLM_ObjectPermissionTable(
                 object_permission_id="lit3974-granted-alias-permission",
@@ -8766,7 +8766,7 @@ class TestLIT3974ResolutionRegressions:
             patch.object(manager, "add_server", add_server),
             patch.object(manager, "health_check_server", health_check),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
         ):
             result: Final = await mgmt_endpoints.fetch_mcp_server(
                 request=_make_mock_request(),
@@ -8780,7 +8780,7 @@ class TestLIT3974ResolutionRegressions:
         health_check.assert_awaited_once()
 
 
-class TestLIT3974ResolutionCharacterization:
+class TestMCPServerResolutionCharacterization:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("caller", ["denied", "admin"])
     @pytest.mark.parametrize(
@@ -8819,7 +8819,7 @@ class TestLIT3974ResolutionCharacterization:
             patch.object(manager, "add_server", add),
             patch.object(manager, "health_check_server", health),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
             patch("litellm.proxy.proxy_server.general_settings", {"user_mcp_management_mode": "view_all"}),
         ):
             listed: Final = await mgmt_endpoints.fetch_all_mcp_servers(auth, team_id=None)
@@ -8863,7 +8863,7 @@ class TestLIT3974ResolutionCharacterization:
             patch.object(manager, "get_allowed_mcp_servers", permissions),
             patch.object(mgmt_endpoints, "list_user_oauth_credentials", AsyncMock(return_value=credentials)),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
             patch("litellm.proxy.proxy_server.general_settings", {}),
         ):
             result: Final = await mgmt_endpoints.list_mcp_user_credentials(auth)
@@ -8904,7 +8904,7 @@ class TestLIT3974ResolutionCharacterization:
             patch.object(manager, "add_server", add),
             patch.object(manager, "health_check_server", health),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
             patch("litellm.proxy.proxy_server.general_settings", {"user_mcp_management_mode": mode}),
         ):
             listed: Final = await mgmt_endpoints.fetch_all_mcp_servers(auth, team_id=None)
@@ -8969,7 +8969,7 @@ class TestLIT3974ResolutionCharacterization:
             patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
             patch.object(mgmt_endpoints, "list_user_oauth_credentials", AsyncMock(return_value=[credential])),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
             patch("litellm.proxy.proxy_server.general_settings", {}),
         ):
             result: Final = await mgmt_endpoints.list_mcp_user_credentials(auth)
@@ -9045,7 +9045,7 @@ class TestLIT3974ResolutionCharacterization:
             if caller == "ui_allowed"
             else None
         )
-        prisma: Final = _lit3974_prisma_client(db_server, key_permission, team, user=user)
+        prisma: Final = _mock_mcp_resolution_prisma_client(db_server, key_permission, team, user=user)
         if source != "db_runtime":
             prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
             prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
@@ -9143,7 +9143,7 @@ class TestLIT3974ResolutionCharacterization:
                 mcp_servers=[],
             ),
         )
-        prisma: Final = _lit3974_prisma_client(
+        prisma: Final = _mock_mcp_resolution_prisma_client(
             server,
             key_permission,
             team,
@@ -9200,7 +9200,7 @@ class TestLIT3974ResolutionCharacterization:
             patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
             patch("litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager", manager),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
             patch("litellm.proxy.proxy_server.general_settings", {}),
         ):
             permitted: Final = await mgmt_endpoints.fetch_all_mcp_servers(auth, team_id=None)
@@ -9317,7 +9317,7 @@ class TestLIT3974ResolutionCharacterization:
             patch.object(mgmt_endpoints, "get_user_oauth_credential", oauth_read),
             patch.object(mgmt_endpoints, "get_user_env_vars", env_read),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
         ):
             if expected_error is not None:
                 with pytest.raises(HTTPException) as exc_info:
@@ -9445,7 +9445,7 @@ class TestLIT3974ResolutionCharacterization:
             patch.object(manager, "invalidate_user_oauth_token_cache", oauth_invalidate),
             patch.object(mgmt_endpoints, "get_user_oauth_credential", oauth_read),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
         ):
             result: Final = await mgmt_endpoints.get_mcp_oauth_user_credential_status(
                 server_id=server_id,
@@ -9467,7 +9467,7 @@ class TestLIT3974ResolutionCharacterization:
     async def test_non_admin_deletes_own_oauth_credential_for_missing_server(self) -> None:
         server_id: Final = "lit3974_removed_oauth_server"
         user_id: Final = "lit3974_oauth_owner"
-        prisma: Final = _lit3974_prisma_client(
+        prisma: Final = _mock_mcp_resolution_prisma_client(
             generate_mock_mcp_server_db_record(server_id=server_id),
             LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_delete_key", mcp_servers=[]),
             LiteLLM_TeamTable(team_id="lit3974_delete_team"),
@@ -9500,7 +9500,7 @@ class TestLIT3974ResolutionCharacterization:
             patch.object(mgmt_endpoints, "get_user_oauth_credential", credential_read),
             patch.object(mgmt_endpoints, "delete_user_credential", delete_credential),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
         ):
             result: Final = await mgmt_endpoints.delete_mcp_oauth_user_credential(
                 server_id=server_id,
@@ -9538,7 +9538,7 @@ class TestLIT3974ResolutionCharacterization:
         expected_status: int,
     ) -> None:
         server: Final = generate_mock_mcp_server_db_record(server_id=server_id)
-        prisma: Final = _lit3974_prisma_client(
+        prisma: Final = _mock_mcp_resolution_prisma_client(
             server,
             LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_create_key", mcp_servers=[]),
             LiteLLM_TeamTable(team_id="lit3974_create_team"),
@@ -9707,7 +9707,7 @@ class TestLIT3974ResolutionCharacterization:
             if caller in ("ui_denied", "ui_key_allowed")
             else None
         )
-        prisma: Final = _lit3974_prisma_client(server, key_permission, team, user=user)
+        prisma: Final = _mock_mcp_resolution_prisma_client(server, key_permission, team, user=user)
         if source != "db_runtime":
             prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
             prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
@@ -9749,7 +9749,7 @@ class TestLIT3974ResolutionCharacterization:
             patch.object(manager, "add_server", add_server),
             patch.object(manager, "health_check_server", health_check),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
         ):
             if expected_status in (403, 404):
                 with pytest.raises(HTTPException) as exc_info:
@@ -9795,7 +9795,7 @@ class TestLIT3974ResolutionCharacterization:
     async def test_fetch_config_alias_filters_external_client_ip(self) -> None:
         effects: Final = _ResolutionEffects()
         server_id: Final = "lit3974_private_config"
-        prisma: Final = _lit3974_prisma_client(
+        prisma: Final = _mock_mcp_resolution_prisma_client(
             generate_mock_mcp_server_db_record(server_id=server_id),
             LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_private_key", mcp_servers=[]),
             LiteLLM_TeamTable(team_id="lit3974_private_team"),
@@ -9852,7 +9852,7 @@ class TestLIT3974ResolutionCharacterization:
     async def test_fetch_db_runtime_ignores_external_client_ip(self) -> None:
         server_id: Final = "lit3974_private_db"
         server: Final = generate_mock_mcp_server_db_record(server_id=server_id, alias="Private DB")
-        prisma: Final = _lit3974_prisma_client(
+        prisma: Final = _mock_mcp_resolution_prisma_client(
             server,
             LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_private_db_key", mcp_servers=[]),
             LiteLLM_TeamTable(team_id="lit3974_private_db_team"),
@@ -9937,7 +9937,7 @@ class TestLIT3974ResolutionCharacterization:
             mcp_servers=[server_id] if caller == "allowed" else [],
         )
         team: Final = LiteLLM_TeamTable(team_id=f"lit3974_{source}_oauth_team")
-        prisma: Final = _lit3974_prisma_client(db_server, key_permission, team)
+        prisma: Final = _mock_mcp_resolution_prisma_client(db_server, key_permission, team)
         prisma.db.litellm_mcpservertable.find_unique = AsyncMock(
             return_value=db_server if source == "db_only" else None
         )
@@ -10005,7 +10005,7 @@ class TestLIT3974ResolutionCharacterization:
                 patch.object(manager, "add_server", add_server),
                 patch.object(manager, "health_check_server", health_check),
                 patch("litellm.proxy.proxy_server.prisma_client", prisma),
-                patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+                patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
             ):
                 if expected_status in (403, 404):
                     with pytest.raises(HTTPException) as exc_info:
@@ -10053,7 +10053,7 @@ class TestLIT3974ResolutionCharacterization:
         )
 
         server_id: Final = "lit3974_private_oauth"
-        prisma: Final = _lit3974_prisma_client(
+        prisma: Final = _mock_mcp_resolution_prisma_client(
             generate_mock_mcp_server_db_record(server_id=server_id),
             LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_private_oauth_permission", mcp_servers=[]),
             LiteLLM_TeamTable(team_id="lit3974_private_oauth_team"),
@@ -10141,7 +10141,7 @@ class TestLIT3974ResolutionCharacterization:
 
         server_id: Final = f"lit3974_{source}_oauth_endpoint"
         db_server: Final = generate_mock_mcp_server_db_record(server_id=server_id)
-        prisma: Final = _lit3974_prisma_client(
+        prisma: Final = _mock_mcp_resolution_prisma_client(
             db_server,
             LiteLLM_ObjectPermissionTable(object_permission_id="lit3974_oauth_endpoint_key", mcp_servers=[]),
             LiteLLM_TeamTable(team_id="lit3974_oauth_endpoint_team"),
@@ -10200,7 +10200,7 @@ class TestLIT3974ResolutionCharacterization:
                 patch.object(mgmt_endpoints, "exchange_token_with_server", upstream_token),
                 patch.object(mgmt_endpoints, "register_client_with_server", upstream_register),
                 patch("litellm.proxy.proxy_server.prisma_client", prisma),
-                patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+                patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
             ):
                 if endpoint == "authorize":
                     operation = mcp_authorize(
@@ -10295,7 +10295,7 @@ class TestLIT3974ResolutionCharacterization:
             patch.object(manager, "add_server", add_server),
             patch.object(manager, "health_check_server", health_check),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
             patch("litellm.proxy.proxy_server.general_settings", {}),
         ):
             if grant_route == "direct user object_permission":
@@ -10363,7 +10363,7 @@ class TestLIT3974ResolutionCharacterization:
             object_permission_id="lit3974_restricted_detail_permission",
             mcp_servers=[server_id],
         )
-        prisma: Final = _lit3974_prisma_client(
+        prisma: Final = _mock_mcp_resolution_prisma_client(
             server,
             key_permission,
             LiteLLM_TeamTable(team_id="lit3974_restricted_detail_team"),
@@ -10397,7 +10397,7 @@ class TestLIT3974ResolutionCharacterization:
             patch.object(manager, "add_server", add_server),
             patch.object(manager, "health_check_server", health_check),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
         ):
             result: Final = await mgmt_endpoints.fetch_mcp_server(
                 request=_make_mock_request(),
@@ -10440,7 +10440,7 @@ class TestLIT3974ResolutionCharacterization:
                 mcp_servers=[server_id],
             ),
         )
-        prisma: Final = _lit3974_prisma_client(server, key_permission, team)
+        prisma: Final = _mock_mcp_resolution_prisma_client(server, key_permission, team)
         if source == "config":
             prisma.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
             prisma.db.litellm_mcpservertable.find_unique = AsyncMock(return_value=None)
@@ -10474,7 +10474,7 @@ class TestLIT3974ResolutionCharacterization:
             patch.object(manager, "add_server", add_server),
             patch.object(manager, "health_check_server", health_check),
             patch("litellm.proxy.proxy_server.prisma_client", prisma),
-            patch("litellm.proxy.proxy_server.user_api_key_cache", _lit3974_cache()),
+            patch("litellm.proxy.proxy_server.user_api_key_cache", _mock_mcp_resolution_cache()),
             patch("litellm.proxy.proxy_server.general_settings", {"require_key_mcp_access_defined": True}),
         ):
             with pytest.raises(HTTPException) as exc_info:
