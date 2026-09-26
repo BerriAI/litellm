@@ -1,7 +1,6 @@
 
 
 import asyncio
-import logging
 from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, call, patch
 
@@ -9,7 +8,6 @@ import pytest
 from prometheus_client import REGISTRY
 
 import litellm
-from litellm._logging import verbose_logger
 from litellm.types.utils import (
     StandardLoggingHiddenParams,
     StandardLoggingMetadata,
@@ -26,10 +24,6 @@ try:
 except Exception:
     PrometheusLogger = None
 from litellm.proxy._types import UserAPIKeyAuth
-
-verbose_logger.setLevel(logging.DEBUG)
-
-litellm.set_verbose = True
 
 
 @pytest.fixture

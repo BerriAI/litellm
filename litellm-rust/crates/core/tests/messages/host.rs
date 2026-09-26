@@ -78,7 +78,7 @@ impl Host<Messages> for RecordingHost {
 }
 
 async fn run_through(host: &RecordingHost) -> Result<MessagesOutput, Error> {
-    litellm_host::run::run(messages_machine(Arc::new(RecordingSecrets::empty())), host).await
+    litellm_host::run::run(machine(Arc::new(RecordingSecrets::empty())), host).await
 }
 
 fn authenticated(call: MessagesCall, api_base: String) -> MessagesCall {

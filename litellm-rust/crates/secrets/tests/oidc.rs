@@ -30,7 +30,7 @@ async fn environment_sources_resolve_expected_value(
         ("CIRCLE_OIDC_TOKEN_V2", "circle-v2"),
     ]);
     assert_eq!(
-        OidcResolver::default()
+        OidcResolver::new(litellm_http::Client::plain_for_test())
             .resolve(reference, env.as_ref())
             .await
             .unwrap()
@@ -43,7 +43,7 @@ async fn environment_sources_resolve_expected_value(
 #[tokio::test]
 async fn environment_sources_bypass_boolean_conversion_and_defaults() {
     let env = environment(&[("TOKEN", "true")]);
-    let oidc = OidcResolver::default();
+    let oidc = OidcResolver::new(litellm_http::Client::plain_for_test());
     let resolver = SecretResolver::new(Arc::new(SecretManagerState::default()), env, oidc);
     assert_eq!(
         resolver
@@ -94,7 +94,7 @@ async fn github_requests_are_authenticated_cached_and_revalidate_environment() {
         ),
         ("ACTIONS_ID_TOKEN_REQUEST_TOKEN", "request-token"),
     ]);
-    let oidc = OidcResolver::default();
+    let oidc = OidcResolver::new(litellm_http::Client::plain_for_test());
     for _ in 0..2 {
         assert_eq!(
             oidc.resolve("oidc/github/https://service/oidc/path", env.as_ref())
@@ -131,7 +131,7 @@ async fn file_allowlist_resolves_symlinks_while_environment_paths_remain_explici
         ("PATH_TOKEN", private.to_str().unwrap()),
         ("AZURE_FEDERATED_TOKEN_FILE", token.to_str().unwrap()),
     ]);
-    let oidc = OidcResolver::default();
+    let oidc = OidcResolver::new(litellm_http::Client::plain_for_test());
     assert_eq!(
         oidc.resolve(&format!("oidc/file/{}", token.display()), env.as_ref())
             .await
@@ -213,8 +213,9 @@ async fn google_expiry_caps_cache_and_preserves_audience(
         .expect(calls)
         .mount(&server)
         .await;
-    let oidc =
-        OidcResolver::new(reqwest::Client::new(), server.uri().parse().unwrap()).with_clock(now);
+    let oidc = OidcResolver::new(litellm_http::Client::plain_for_test())
+        .with_google_identity_endpoint(server.uri().parse().unwrap())
+        .with_clock(now);
     for _ in 0..2 {
         assert_eq!(
             oidc.resolve(
@@ -234,7 +235,7 @@ async fn google_expiry_caps_cache_and_preserves_audience(
 #[tokio::test]
 async fn google_oidc_requires_its_build_feature() {
     assert!(matches!(
-        OidcResolver::default()
+        OidcResolver::new(litellm_http::Client::plain_for_test())
             .resolve("oidc/google/audience", environment(&[]).as_ref())
             .await,
         Err(Error::UnsupportedOidc)
@@ -245,7 +246,7 @@ async fn google_oidc_requires_its_build_feature() {
 #[tokio::test]
 async fn azure_oidc_without_a_token_file_requires_its_build_feature() {
     assert!(matches!(
-        OidcResolver::default()
+        OidcResolver::new(litellm_http::Client::plain_for_test())
             .resolve("oidc/azure/scope", environment(&[]).as_ref())
             .await,
         Err(Error::UnsupportedOidc)
@@ -261,7 +262,7 @@ async fn invalid_references_fail_before_environment_lookup(
     #[case] reference: &str,
     #[case] unsupported: bool,
 ) {
-    let error = OidcResolver::default()
+    let error = OidcResolver::new(litellm_http::Client::plain_for_test())
         .resolve(reference, &|_: &str| {
             panic!("invalid reference reached environment lookup")
         })
@@ -283,7 +284,8 @@ async fn unreadable_expiry_keeps_python_cache_fallback(#[case] token: &str) {
         .expect(1)
         .mount(&server)
         .await;
-    let resolver = OidcResolver::new(reqwest::Client::new(), server.uri().parse().unwrap());
+    let resolver = OidcResolver::new(litellm_http::Client::plain_for_test())
+        .with_google_identity_endpoint(server.uri().parse().unwrap());
     for _ in 0..2 {
         assert_eq!(
             resolver
@@ -334,7 +336,8 @@ async fn azure_oidc_acquires_the_requested_scope_and_preserves_failures(#[case] 
             })
         }
     }
-    let oidc = OidcResolver::default().with_azure_token_provider(Arc::new(Provider(failed)));
+    let oidc = OidcResolver::new(litellm_http::Client::plain_for_test())
+        .with_azure_token_provider(Arc::new(Provider(failed)));
     let resolver = SecretResolver::new_python_compatible(
         Arc::new(SecretManagerState::default()),
         environment(&[("AZURE_CLIENT_ID", "client-id")]),
@@ -361,7 +364,7 @@ async fn azure_oidc_acquires_the_requested_scope_and_preserves_failures(#[case] 
 #[tokio::test]
 async fn missing_oidc_environment_is_an_error(#[case] reference: &str) {
     assert!(matches!(
-        OidcResolver::default()
+        OidcResolver::new(litellm_http::Client::plain_for_test())
             .resolve(reference, environment(&[]).as_ref())
             .await,
         Err(Error::MissingEnvironment)
@@ -380,7 +383,8 @@ async fn google_oidc_failures_are_not_cached_or_hidden_by_defaults() {
     let resolver = SecretResolver::new_python_compatible(
         Arc::new(SecretManagerState::default()),
         environment(&[]),
-        OidcResolver::new(reqwest::Client::new(), server.uri().parse().unwrap()),
+        OidcResolver::new(litellm_http::Client::plain_for_test())
+            .with_google_identity_endpoint(server.uri().parse().unwrap()),
     );
     for _ in 0..2 {
         assert!(matches!(
@@ -420,7 +424,8 @@ async fn google_tokens_expire_at_the_python_cache_deadline(
         .expect(2)
         .mount(&server)
         .await;
-    let resolver = OidcResolver::new(reqwest::Client::new(), server.uri().parse().unwrap())
+    let resolver = OidcResolver::new(litellm_http::Client::plain_for_test())
+        .with_google_identity_endpoint(server.uri().parse().unwrap())
         .with_clock(|| UNIX_EPOCH + Duration::from_secs(1000));
     assert_eq!(
         resolver
@@ -472,7 +477,8 @@ async fn google_cache_uses_payload_expiry_without_requiring_a_jwt_header() {
         .expect(2)
         .mount(&server)
         .await;
-    let resolver = OidcResolver::new(reqwest::Client::new(), server.uri().parse().unwrap())
+    let resolver = OidcResolver::new(litellm_http::Client::plain_for_test())
+        .with_google_identity_endpoint(server.uri().parse().unwrap())
         .with_clock(|| UNIX_EPOCH + Duration::from_secs(1000));
     for _ in 0..2 {
         assert_eq!(
