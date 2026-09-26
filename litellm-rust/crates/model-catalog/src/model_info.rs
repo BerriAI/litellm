@@ -432,6 +432,10 @@ pub struct ModelInfo {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supports_audio_output: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_bedrock_runtime_chat_completions_response_format: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub supports_bedrock_runtime_chat_completions_tools_with_reasoning: Option<bool>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub supports_computer_use: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub supports_embedding_image_input: Option<bool>,

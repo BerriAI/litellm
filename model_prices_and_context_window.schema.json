@@ -938,6 +938,12 @@
         "supports_audio_output": {
           "type": "boolean"
         },
+        "supports_bedrock_runtime_chat_completions_response_format": {
+          "type": "boolean"
+        },
+        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": {
+          "type": "boolean"
+        },
         "supports_computer_use": {
           "type": "boolean"
         },
