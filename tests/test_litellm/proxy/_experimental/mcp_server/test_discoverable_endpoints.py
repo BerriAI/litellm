@@ -8794,6 +8794,34 @@ async def test_token_exchange_200_without_access_token_is_502_not_keyerror():
 
 
 @pytest.mark.asyncio
+async def test_token_exchange_200_with_oauth_error_surfaces_it_and_logs_redacted_body(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    """Regression for #42477: an IdP answering 200 with an RFC 6749 error body must not collapse into a
+    generic no-access_token 502 with nothing logged."""
+    import logging
+
+    upstream_body: Final = {
+        "error": "invalid_grant",
+        "error_description": "the authorization code has expired",
+        "id_token": "leaked-id-token",
+    }
+    with caplog.at_level(logging.WARNING, logger="LiteLLM"):
+        response: Final = await _exchange_with_upstream_response(
+            _upstream_token_response(200, json_body=upstream_body)
+        )
+
+    assert response.status_code == 502
+    body: Final = bytes(response.body).decode()
+    assert "invalid_grant" in body
+    assert "the authorization code has expired" in body
+    assert "leaked-id-token" not in body
+    logged: Final = tuple(record.getMessage() for record in caplog.records)
+    assert any("gcal" in line and "invalid_grant" in line for line in logged)
+    assert not any("leaked-id-token" in line for line in logged)
+
+
+@pytest.mark.asyncio
 async def test_token_exchange_relays_rejection_when_http_client_raises():
     """litellm's AsyncHTTPHandler.post raise_for_status()es internally and raises MaskedHTTPStatusError
     at call time, so in production the rejection escapes from the post call itself rather than from the
