@@ -5,7 +5,7 @@ from typing import Final, cast  # noqa: TID251  # narrows legacy callable signat
 import pytest
 
 import litellm
-from litellm.llms.anthropic.experimental_pass_through.messages import handler as python_messages
+from litellm.llms.anthropic.pass_through.messages import handler as python_messages
 from litellm.messages.dispatch import (
     _ADISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch
     _DISPATCH,  # pyright: ignore[reportPrivateUsage]  # tests configured dispatch

@@ -1691,7 +1691,7 @@ if TYPE_CHECKING:
         SagemakerNovaConfig as SagemakerNovaConfig,
     )
     from .llms.cohere.chat.transformation import CohereChatConfig as CohereChatConfig
-    from .llms.anthropic.experimental_pass_through.messages.transformation import (
+    from .llms.anthropic.pass_through.messages.transformation import (
         AnthropicMessagesConfig as AnthropicMessagesConfig,
     )
     from .llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (

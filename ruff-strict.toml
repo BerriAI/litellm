@@ -63,7 +63,7 @@ max-args = 5
 # directly, each with a `# noqa: TID251  # <reason>`.
 "litellm.responses.main.responses".msg = "Import litellm.responses.dispatch.responses so the call routes through dispatch."
 "litellm.responses.main.aresponses".msg = "Import litellm.responses.dispatch.aresponses so the call routes through dispatch."
-"litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages".msg = "Import litellm.messages.anthropic_messages so the call routes through dispatch."
-"litellm.llms.anthropic.experimental_pass_through.messages.handler.anthropic_messages_handler".msg = "Import litellm.messages.anthropic_messages_handler so the call routes through dispatch."
+"litellm.llms.anthropic.pass_through.messages.handler.anthropic_messages".msg = "Import litellm.messages.anthropic_messages so the call routes through dispatch."
+"litellm.llms.anthropic.pass_through.messages.handler.anthropic_messages_handler".msg = "Import litellm.messages.anthropic_messages_handler so the call routes through dispatch."
 "litellm.main.completion".msg = "Import litellm.completion so the call routes through dispatch."
 "litellm.main.acompletion".msg = "Import litellm.acompletion so the call routes through dispatch."

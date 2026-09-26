@@ -167,10 +167,10 @@ def is_sse_error_stream(all_chunks: Sequence[object]) -> bool:
 
 
 def anthropic_sse_chunks_from_response(assembled: ModelResponse) -> tuple[bytes, ...]:
-    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.pass_through.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
-    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+    from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
         FakeAnthropicMessagesStreamIterator,
     )
 

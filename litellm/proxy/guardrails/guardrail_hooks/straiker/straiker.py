@@ -535,7 +535,7 @@ def _v3_answer(request_data: Mapping[str, object], model: str | None) -> Mapping
         return _v3_text_completion_as_chat(response)
     if not isinstance(response, ModelResponse) or not _v3_anthropic_messages_route(request_data):
         return _jsonable_dict(response)
-    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.pass_through.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
 

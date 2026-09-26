@@ -9,7 +9,7 @@ from unittest.mock import AsyncMock, MagicMock
 import litellm
 import pytest
 from dotenv import load_dotenv
-from litellm.llms.anthropic.experimental_pass_through.messages.handler import (
+from litellm.llms.anthropic.pass_through.messages.handler import (
     anthropic_messages,
 )
 

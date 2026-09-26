@@ -4089,7 +4089,7 @@ async def test_spend_log_request_id_is_the_message_id_a_bridged_streaming_caller
     adapter mints itself, and it is the only request id that call ever shows the caller, so
     GET /spend/logs?request_id=msg_... has to land on the row."""
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.llms.anthropic.experimental_pass_through.responses_adapters.streaming_iterator import (
+    from litellm.llms.anthropic.pass_through.responses_adapters.streaming_iterator import (
         AnthropicResponsesStreamWrapper,
     )
     from litellm.types.llms.openai import (

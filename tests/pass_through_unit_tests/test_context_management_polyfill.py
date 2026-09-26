@@ -6,7 +6,7 @@ from unittest.mock import patch
 import pytest
 
 import litellm
-from litellm.llms.anthropic.experimental_pass_through.context_management.constants import (
+from litellm.llms.anthropic.pass_through.context_management.constants import (
     CLEARED_TOOL_RESULT_PLACEHOLDER,
 )
 from litellm.types.utils import (

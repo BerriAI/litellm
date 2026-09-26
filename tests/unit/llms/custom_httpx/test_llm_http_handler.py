@@ -676,7 +676,7 @@ async def test_async_anthropic_messages_handler_streaming_forwards_provider_resp
     """
     from collections.abc import AsyncIterator as ABCAsyncIterator
 
-    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+    from litellm.llms.anthropic.pass_through.messages.transformation import (
         AnthropicMessagesConfig,
     )
 
@@ -738,10 +738,10 @@ async def test_async_anthropic_messages_handler_agentic_streaming_forwards_provi
     from collections.abc import AsyncIterator as ABCAsyncIterator
 
     from litellm.integrations.custom_logger import CustomLogger
-    from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+    from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
         AgenticAnthropicStreamingIterator,
     )
-    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+    from litellm.llms.anthropic.pass_through.messages.transformation import (
         AnthropicMessagesConfig,
     )
 
@@ -809,7 +809,7 @@ async def test_anthropic_messages_streaming_response_aclose_closes_upstream_stre
     the upstream stream so provider connections are released on client
     disconnect instead of lingering until garbage collection.
     """
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
         AnthropicMessagesStreamingResponse,
     )
 
@@ -841,10 +841,10 @@ async def test_anthropic_messages_streaming_response_aclose_closes_upstream_stre
 
 @pytest.mark.asyncio
 async def test_anthropic_messages_streaming_response_aclose_closes_agentic_upstream_stream():
-    from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+    from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
         AgenticAnthropicStreamingIterator,
     )
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
         AnthropicMessagesStreamingResponse,
     )
 

@@ -10,7 +10,7 @@ import pytest
 
 import litellm
 from litellm.integrations.custom_secret_manager import CustomSecretManager
-from litellm.llms.anthropic.experimental_pass_through.messages.handler import anthropic_messages
+from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
 from litellm.rust_bridge import settings
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, NATIVE_MESSAGES, LiteLLMMessagesRequest
 from litellm.types.secret_managers.main import KeyManagementSettings, KeyManagementSystem

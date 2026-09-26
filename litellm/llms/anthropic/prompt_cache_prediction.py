@@ -16,7 +16,7 @@ import litellm
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo, is_anthropic_oauth_key
 from litellm.llms.anthropic.count_tokens.handler import AnthropicCountTokensHandler
 from litellm.llms.anthropic.count_tokens.transformation import COUNT_TOKEN_OPTION_NAMES
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     DEFAULT_ANTHROPIC_API_VERSION,
     AnthropicMessagesConfig,
 )
