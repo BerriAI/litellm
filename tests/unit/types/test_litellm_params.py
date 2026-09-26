@@ -262,7 +262,7 @@ OWNED_NAMES: Final = (
     *PRICING_NAMES,
 )
 
-Classifier: TypeAlias = Callable[[dict[str, object]], dict[str, object]]  # mutable-ok: classifiers use dict
+Classifier: TypeAlias = Callable[[Mapping[str, object]], Mapping[str, object]]
 
 CLASSIFIERS: Final[Mapping[str, Classifier]] = MappingProxyType(
     {  # pyright: ignore[reportUnknownArgumentType]  # untyped legacy classifiers
@@ -279,16 +279,29 @@ def test_owned_name_is_kept_out_of_provider_params(name: str, classifier_name: s
     provider_value: Final = object()
     classify: Final = CLASSIFIERS[classifier_name]
 
-    result: Final = classify({name: object(), PROVIDER_KNOB: provider_value})  # mutable-ok: classifiers take a dict
+    result: Final = classify(MappingProxyType({name: object(), PROVIDER_KNOB: provider_value}))
 
     assert result == MappingProxyType({PROVIDER_KNOB: provider_value})
     assert result[PROVIDER_KNOB] is provider_value
 
 
 def test_a_name_no_object_declares_reaches_the_provider() -> None:
-    result: Final = CLASSIFIERS["completion"]({PROVIDER_KNOB: 1})  # mutable-ok: classifier input type
+    result: Final = CLASSIFIERS["completion"](MappingProxyType({PROVIDER_KNOB: 1}))
 
     assert result == MappingProxyType({PROVIDER_KNOB: 1})
+
+
+@pytest.mark.parametrize("classifier_name", CLASSIFIERS)
+def test_an_undeclared_internal_prefixed_name_is_kept_out_of_provider_params(classifier_name: str) -> None:
+    undeclared: Final = "_litellm_never_declared_anywhere"
+    lookalike: Final = "provider_litellm_knob"
+    assert undeclared not in all_litellm_params
+
+    result: Final = CLASSIFIERS[classifier_name](
+        MappingProxyType({undeclared: object(), PROVIDER_KNOB: 1, lookalike: 2})
+    )
+
+    assert result == MappingProxyType({PROVIDER_KNOB: 1, lookalike: 2})
 
 
 def _cache_key_for_model_group(cache: Cache, model_group: str, options: CachingOptions) -> str:
@@ -421,9 +434,7 @@ CARRIED_PARAMS: Final = tuple(
 def test_every_param_get_litellm_params_carries_is_kept_out_of_provider_params(name: str) -> None:
     provider_value: Final = object()
 
-    result: Final = CLASSIFIERS["completion"](
-        {name: object(), PROVIDER_KNOB: provider_value}  # mutable-ok: classifier input type
-    )
+    result: Final = CLASSIFIERS["completion"](MappingProxyType({name: object(), PROVIDER_KNOB: provider_value}))
 
     assert result == MappingProxyType({PROVIDER_KNOB: provider_value})
 
