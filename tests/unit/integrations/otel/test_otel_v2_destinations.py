@@ -1124,7 +1124,7 @@ class TestProviderWiring:
 
             def init(name: str) -> CustomLogger | None:
                 return logging_module._init_custom_logger_compatible_class(
-                    logging_integration=name,  # type: ignore[arg-type]  # test passes a literal callback name
+                    logging_integration=name,  # pyright: ignore[reportArgumentType]  # test passes a literal callback name
                     internal_usage_cache=None,
                     llm_router=None,
                     custom_logger_init_args={},
