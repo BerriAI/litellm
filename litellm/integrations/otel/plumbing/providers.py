@@ -1167,7 +1167,9 @@ def build_tracer_provider(
 _FAN_OUT_ATTACH_LOCK: Final = threading.Lock()
 
 
-def attach_tenant_fan_out(provider: TracerProvider, *configs: OpenTelemetryV2Config) -> None:
+def attach_tenant_fan_out(
+    provider: TracerProvider, *configs: OpenTelemetryV2Config, excluded_db_systems: frozenset[str] = frozenset()
+) -> None:
     """Give ``provider`` the fan-out that delivers spans to key/team destinations.
 
     Called on the one provider published as the OTel global, and idempotent so a
@@ -1176,7 +1178,9 @@ def attach_tenant_fan_out(provider: TracerProvider, *configs: OpenTelemetryV2Con
     so exactly one fan-out lands. ``configs`` name the operator's own exporters, one
     config per v2 logger since each keeps its own provider and still writes its
     account, so an additive destination pointing at any of them is delivered once
-    rather than twice.
+    rather than twice. ``excluded_db_systems`` comes from the ``otel`` callback's
+    config alone (see ``_excluded_db_systems``); unioning it across every logger's
+    config would reintroduce the env value that ``callback_settings.otel`` overrode.
     """
     with _FAN_OUT_ATTACH_LOCK:
         if any(isinstance(processor, TenantFanOutSpanProcessor) for processor in _attached_processors(provider)):
@@ -1184,7 +1188,7 @@ def attach_tenant_fan_out(provider: TracerProvider, *configs: OpenTelemetryV2Con
         provider.add_span_processor(
             TenantFanOutSpanProcessor(
                 operator_sinks=operator_sink_scopes(*configs),
-                excluded_db_systems=frozenset().union(*(config.excluded_services for config in configs)),
+                excluded_db_systems=excluded_db_systems,
             )
         )
 

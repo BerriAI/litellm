@@ -212,7 +212,12 @@ def test_config_excluded_services_wins_over_env(
     langfuse_vars: dict[str, JsonValue],
     tmp_path: Path,
 ) -> None:
-    config: Final = _config_with(tmp_path, otel_audit_config, otel={"excluded_services": ["postgres"]})
+    def with_langfuse_otel(config: dict) -> None:
+        config["litellm_settings"]["callbacks"] = ["otel", "langfuse_otel"]
+
+    config: Final = _config_with(
+        tmp_path, otel_audit_config, otel={"excluded_services": ["postgres"]}, extra=with_langfuse_otel
+    )
     with owned_proxy(
         gateway, tmp_path, {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "redis"}, config=config, workers=2
     ) as candidate:

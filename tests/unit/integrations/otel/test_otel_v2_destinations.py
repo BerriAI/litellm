@@ -1069,6 +1069,43 @@ class TestProviderWiring:
         assert kinds(published).count("TenantFanOutSpanProcessor") == 1
         assert "TenantFanOutSpanProcessor" not in kinds(other)
 
+    def test_excluded_services_come_from_the_otel_callback_config_only(self):
+        """A preset builds its config env-only, so unioning ``excluded_services``
+        across loggers reintroduces the env value ``callback_settings.otel``
+        overrode. The fan-out must take the set from the ``otel`` config alone."""
+        otel = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")], excluded_services=["postgres"]),
+            callback_name="otel",
+        )
+        preset = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")], excluded_services=["redis"]),
+            callback_name="langfuse_otel",
+        )
+
+        publish_global_otel_v2_provider([preset], lambda _p: None, registered=otel)
+
+        fan_out = next(
+            processor
+            for processor in otel._tracer_provider._active_span_processor._span_processors
+            if isinstance(processor, TenantFanOutSpanProcessor)
+        )
+        assert fan_out._excluded_db_systems == frozenset({"postgresql"})
+
+    def test_excluded_services_fall_back_to_the_published_logger_without_an_otel_callback(self):
+        preset = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")], excluded_services=["redis"]),
+            callback_name="langfuse_otel",
+        )
+
+        publish_global_otel_v2_provider([], lambda _p: None, registered=preset)
+
+        fan_out = next(
+            processor
+            for processor in preset._tracer_provider._active_span_processor._span_processors
+            if isinstance(processor, TenantFanOutSpanProcessor)
+        )
+        assert fan_out._excluded_db_systems == frozenset({"redis"})
+
     @pytest.mark.parametrize("canonical", ["langfuse_otel", "arize"])
     def test_publishing_tells_the_fan_out_about_every_v2_loggers_account(self, monkeypatch, canonical):
         monkeypatch.setenv("LITELLM_OTEL_TENANT_DESTINATION_MODE", "additive")
