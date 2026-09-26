@@ -262,14 +262,6 @@ def test_langfuse_callback_stored_in_the_db_through_config_update_delivers_the_g
                     },
                 },
             )
-            stored: Final = {string_value(row["param_name"]): row["param_value"] for row in _config_rows()}
-            callbacks: Final = TypeAdapter(list[str]).validate_python(
-                object_value(stored["litellm_settings"]).get("success_callback") or []
-            )
-            assert "langfuse" in callbacks, stored
-            assert set(object_value(stored["environment_variables"])) >= set(LANGFUSE_ENVIRONMENT), stored
-            assert secret_key not in json.dumps(stored["environment_variables"]), stored
-
             model: Final = scenario.model(api_base=provider.url + "/v1", api_key=provider_secret)
             body: Final = candidate.post(
                 "/v1/chat/completions",
@@ -302,6 +294,14 @@ def test_langfuse_callback_stored_in_the_db_through_config_update_delivers_the_g
             assert _attribute(attributes, "langfuse.observation.metadata.response_id") == string_value(body["id"])
             assert marker + "-question" in str(_attribute(attributes, "langfuse.observation.input"))
             assert marker + "-answer" in str(_attribute(attributes, "langfuse.observation.output"))
+
+            stored: Final = {string_value(row["param_name"]): row["param_value"] for row in _config_rows()}
+            callbacks: Final = TypeAdapter(list[str]).validate_python(
+                object_value(stored["litellm_settings"]).get("success_callback") or []
+            )
+            assert "langfuse" in callbacks, stored
+            assert set(object_value(stored["environment_variables"])) >= set(LANGFUSE_ENVIRONMENT), stored
+            assert secret_key not in json.dumps(stored["environment_variables"]), stored
     finally:
         _restore_config_rows(snapshot)
     assert _config_rows() == snapshot
