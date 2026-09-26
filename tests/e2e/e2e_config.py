@@ -33,12 +33,36 @@ CONTROL_PLANE_BASE_URL = os.environ.get(
 ).rstrip("/")
 
 
+def split_replica_urls(raw: str) -> tuple[str, ...]:
+    return tuple(dict.fromkeys(url.strip().rstrip("/") for url in raw.split(",") if url.strip()))
+
+
 def parse_replica_urls(raw: str, fallback: str) -> tuple[str, ...]:
-    urls: Final = tuple(dict.fromkeys(url.strip().rstrip("/") for url in raw.split(",") if url.strip()))
-    return urls or (fallback,)
+    return split_replica_urls(raw) or (fallback,)
+
+
+def parse_control_plane_replica_urls(
+    raw: str, *, control_plane_base_url: str, base_url: str, replica_urls: tuple[str, ...]
+) -> tuple[str, ...]:
+    """The replicas a management read-back polls. LITELLM_CONTROL_PLANE_REPLICA_URLS
+    names them outright; unset, they follow the two base URLs: every data-plane
+    replica when the planes share a base (a monolith serves every route from every
+    replica) and the control-plane base alone when they differ. A stack sets it when
+    LITELLM_PROXY_REPLICA_URLS names gateway pods behind a shared router base, since
+    a gateway trims the management routes at startup and answers them 404."""
+    explicit: Final = split_replica_urls(raw)
+    if explicit:
+        return explicit
+    return replica_urls if control_plane_base_url == base_url else (control_plane_base_url,)
 
 
 PROXY_REPLICA_URLS: Final = parse_replica_urls(os.environ.get("LITELLM_PROXY_REPLICA_URLS", ""), PROXY_BASE_URL)
+CONTROL_PLANE_REPLICA_URLS: Final = parse_control_plane_replica_urls(
+    os.environ.get("LITELLM_CONTROL_PLANE_REPLICA_URLS", ""),
+    control_plane_base_url=CONTROL_PLANE_BASE_URL,
+    base_url=PROXY_BASE_URL,
+    replica_urls=PROXY_REPLICA_URLS,
+)
 
 UI_USERNAME = os.environ.get("E2E_UI_USERNAME", "admin")
 UI_PASSWORD = os.environ.get("E2E_UI_PASSWORD", MASTER_KEY)
