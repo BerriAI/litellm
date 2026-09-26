@@ -629,9 +629,12 @@ model LiteLLM_TagTable {
   spend Float @default(0.0)
   budget_id String?
   litellm_budget_table LiteLLM_BudgetTable? @relation(fields: [budget_id], references: [budget_id])
+  team_id String?
   created_at DateTime @default(now()) @map("created_at")
   created_by String?
   updated_at DateTime @default(now()) @updatedAt @map("updated_at")
+
+  @@index([team_id])
 }
 
 // store proxy config.yaml

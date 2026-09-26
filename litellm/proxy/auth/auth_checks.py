@@ -43,6 +43,7 @@ from litellm.models.project import LiteLLM_ProjectTable
 from litellm.proxy._types import (
     RBAC_ROLES,
     CallInfo,
+    HTTPExceptionErrorDetail,
     LiteLLM_AccessGroupTable,
     LiteLLM_BudgetTable,
     LiteLLM_EndUserTable,
@@ -1117,22 +1118,35 @@ async def common_checks(
     # Run before apply_key_tags_pre_auth injects key metadata.tags into request_body.
     _reject_clientside_metadata_tags_check(general_settings, request_body, route)
 
+    # Key metadata.tags are injected into request_body here so the tag owner and
+    # budget checks can read them; this mutation must run before the gathered checks.
+    if valid_token is not None:
+        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+        LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(
+            request_data=request_body,
+            route=route,
+        )
+
+        LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
+            request_data=request_body,
+            user_api_key_dict=valid_token,
+        )
+
+    tag_check_coro: Final = _tag_owner_and_budget_check(
+        request_body=request_body,
+        team_object=team_object,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        valid_token=valid_token,
+        check_budgets=not skip_all_budget_checks,
+    )
+
     # If this is a free model, skip all budget checks
-    if not skip_all_budget_checks:
-        # Key metadata.tags are injected into request_body here so the tag budget
-        # check can read them; this mutation must run before the gathered checks.
-        if valid_token is not None:
-            from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
-
-            LiteLLMProxyRequestSetup.pre_seed_litellm_metadata_for_route(
-                request_data=request_body,
-                route=route,
-            )
-
-            LiteLLMProxyRequestSetup.apply_key_tags_pre_auth(
-                request_data=request_body,
-                user_api_key_dict=valid_token,
-            )
+    if skip_all_budget_checks:
+        await tag_check_coro
+    else:
 
         async def _user_max_budget_check() -> None:
             # 4.1 personal budget
@@ -1199,13 +1213,7 @@ async def common_checks(
                     user_api_key_cache=user_api_key_cache,
                     proxy_logging_obj=proxy_logging_obj,
                 ),
-                _tag_max_budget_check(
-                    request_body=request_body,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    proxy_logging_obj=proxy_logging_obj,
-                    valid_token=valid_token,
-                ),
+                tag_check_coro,
                 _model_access_group_max_budget_check(
                     matched_model_access_groups=matched_model_access_groups,
                     prisma_client=prisma_client,
@@ -2203,8 +2211,13 @@ async def _fetch_uncached_tags(
     uncached_tags: Sequence[str],
     prisma_client: PrismaClient,
     user_api_key_cache: UserApiKeyCache,
+    fail_open: bool,
 ) -> tuple[tuple[str, LiteLLM_TagTable], ...]:
-    """Rows for the tags a cache probe missed; names absent from the registry never reach the DB."""
+    """Rows for the tags a cache probe missed; names absent from the registry never reach the DB.
+
+    With ``fail_open`` a DB error reads as "no tag rows"; without it the error propagates so an
+    authorization decision that depends on the rows (tag ownership) cannot be skipped by an outage.
+    """
     if not uncached_tags:
         return ()
 
@@ -2223,7 +2236,23 @@ async def _fetch_uncached_tags(
             where={"tag_name": {"in": list(tags_to_fetch)}},
             include={"litellm_budget_table": True},
         )
-        fetched: Final = tuple((db_tag.tag_name, LiteLLM_TagTable.model_validate(db_tag.dict())) for db_tag in db_tags)
+    except Exception as e:  # noqa: BLE001  # fail-safe (fail_open callers): a tag fetch error must yield "no budget objects"
+        if not fail_open:
+            raise
+        verbose_proxy_logger.debug("Error batch fetching tags from database: %s", e)
+        return ()
+
+    fetched: Final = tuple((db_tag.tag_name, LiteLLM_TagTable.model_validate(db_tag.dict())) for db_tag in db_tags)
+    await _cache_fetched_tags(fetched=fetched, user_api_key_cache=user_api_key_cache)
+    return fetched
+
+
+async def _cache_fetched_tags(
+    fetched: Sequence[tuple[str, LiteLLM_TagTable]],
+    user_api_key_cache: UserApiKeyCache,
+) -> None:
+    """Best-effort cache fill; the rows are already in hand, so a cache write error is only a lost cache hit."""
+    try:
         for fetched_name, fetched_obj in fetched:
             await user_api_key_cache.async_set_cache(
                 key=tag_cache_key(fetched_name),
@@ -2231,11 +2260,8 @@ async def _fetch_uncached_tags(
                 model_type=LiteLLM_TagTable,
                 ttl=get_management_object_ttl(user_api_key_cache),
             )
-    except Exception as e:  # noqa: BLE001  # fail-safe: a tag fetch error must yield "no budget objects", never break auth
-        verbose_proxy_logger.debug("Error batch fetching tags from database: %s", e)
-        return ()
-    else:
-        return fetched
+    except Exception as e:  # noqa: BLE001  # fail-safe: a cache write error must not fail a request whose rows were read
+        verbose_proxy_logger.debug("Error caching tags fetched from database: %s", e)
 
 
 @log_db_metrics
@@ -2245,6 +2271,7 @@ async def get_tag_objects_batch(
     user_api_key_cache: UserApiKeyCache,
     parent_otel_span: Span | None = None,
     proxy_logging_obj: ProxyLogging | None = None,
+    fail_open: bool = True,
 ) -> dict[str, LiteLLM_TagTable]:
     """
     Batch fetch multiple tag objects from cache and db.
@@ -2260,6 +2287,7 @@ async def get_tag_objects_batch(
         user_api_key_cache: Cache for storing tag objects
         parent_otel_span: Optional OpenTelemetry span for tracing
         proxy_logging_obj: Optional proxy logging object
+        fail_open: When False a DB read error propagates instead of reading as "no rows"
 
     Returns:
         Dictionary mapping tag_name to LiteLLM_TagTable object
@@ -2278,6 +2306,7 @@ async def get_tag_objects_batch(
         uncached_tags=tuple(tag_name for tag_name, tag_obj in probed if tag_obj is None),
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
+        fail_open=fail_open,
     )
     return {tag_name: tag_obj for tag_name, tag_obj in (*probed, *fetched) if tag_obj is not None}
 
@@ -6324,23 +6353,79 @@ async def _tag_max_budget_check(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     valid_token: UserAPIKeyAuth | None,
-):
-    """
-    Check if any tags in the request are over their max budget.
-
-    Raises:
-        BudgetExceededError if any tag is over its max budget.
-        Triggers a budget alert if any tag is over its max budget.
-    """
-    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
-
-    await tag_max_budget_check_for_tags(
-        tags=get_tags_from_request_body(request_body=request_body),
+) -> None:
+    await _tag_owner_and_budget_check(
+        request_body=request_body,
+        team_object=None,
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
         valid_token=valid_token,
+        check_budgets=True,
     )
+
+
+def _team_metadata_tags(team_object: LiteLLM_TeamTableCachedObj | None) -> tuple[str, ...]:
+    team_tags: Final = (
+        team_object.metadata.get("tags") if team_object is not None and team_object.metadata is not None else None
+    )
+    if not isinstance(team_tags, list):
+        return ()
+    return tuple(tag for tag in team_tags if isinstance(tag, str))
+
+
+def _project_metadata_tags(valid_token: UserAPIKeyAuth | None) -> tuple[str, ...]:
+    project_tags: Final = (
+        valid_token.project_metadata.get("tags")
+        if valid_token is not None and valid_token.project_metadata is not None
+        else None
+    )
+    if not isinstance(project_tags, list):
+        return ()
+    return tuple(tag for tag in project_tags if isinstance(tag, str))
+
+
+async def _tag_owner_and_budget_check(
+    request_body: dict,
+    team_object: LiteLLM_TeamTableCachedObj | None,
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    valid_token: UserAPIKeyAuth | None,
+    check_budgets: bool,
+) -> None:
+    """
+    Reject tags owned by another team, then (unless budgets are skipped) reject tags over their max budget.
+
+    Tags are read from the request body (root, metadata and litellm_metadata, plus the key tags merged
+    in before this runs) and from the team's and project's metadata, so every tag that will be recorded
+    against this request is checked with a single batched lookup before any spend is written.
+    """
+    from litellm.proxy.common_utils.http_parsing_utils import get_tags_from_request_body
+
+    request_tags: Final = tuple(get_tags_from_request_body(request_body=request_body))
+    inherited_tags: Final = (*_team_metadata_tags(team_object), *_project_metadata_tags(valid_token))
+    await _tag_checks_for_tags(
+        tags=request_tags + tuple(dict.fromkeys(tag for tag in inherited_tags if tag not in request_tags)),
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        valid_token=valid_token,
+        check_budgets=check_budgets,
+    )
+
+
+def _tag_owner_check(tag_object: LiteLLM_TagTable, valid_token: UserAPIKeyAuth | None) -> None:
+    owner_team_id: Final = tag_object.team_id
+    if owner_team_id is None:
+        return
+    caller_team_id: Final = valid_token.team_id if valid_token is not None else None
+    if caller_team_id == owner_team_id:
+        return
+    detail: Final[HTTPExceptionErrorDetail] = {
+        "error": f"Tag {tag_object.tag_name} is owned by team {owner_team_id} and can only be sent by keys of that team"
+    }
+    raise HTTPException(status_code=403, detail=detail)
 
 
 async def tag_max_budget_check_for_tags(
@@ -6349,6 +6434,25 @@ async def tag_max_budget_check_for_tags(
     user_api_key_cache: UserApiKeyCache,
     proxy_logging_obj: ProxyLogging,
     valid_token: UserAPIKeyAuth | None,
+    check_budgets: bool = True,
+) -> None:
+    await _tag_checks_for_tags(
+        tags=tags,
+        prisma_client=prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=proxy_logging_obj,
+        valid_token=valid_token,
+        check_budgets=check_budgets,
+    )
+
+
+async def _tag_checks_for_tags(
+    tags: Sequence[str],
+    prisma_client: PrismaClient | None,
+    user_api_key_cache: UserApiKeyCache,
+    proxy_logging_obj: ProxyLogging,
+    valid_token: UserAPIKeyAuth | None,
+    check_budgets: bool,
 ) -> None:
     if prisma_client is None or not tags:
         return
@@ -6358,7 +6462,14 @@ async def tag_max_budget_check_for_tags(
         prisma_client=prisma_client,
         user_api_key_cache=user_api_key_cache,
         proxy_logging_obj=proxy_logging_obj,
+        fail_open=False,
     )
+
+    for tag_object in tag_objects.values():
+        _tag_owner_check(tag_object=tag_object, valid_token=valid_token)
+
+    if not check_budgets:
+        return
 
     # Check budget for each tag
     for tag_name in tags:

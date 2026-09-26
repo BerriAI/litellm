@@ -9,6 +9,7 @@ import TagManagement from "./index";
 vi.mock("@/components/networking", () => ({
   tagListCall: vi.fn(),
   tagCreateCall: vi.fn(),
+  teamListCall: vi.fn().mockResolvedValue([]),
   tagDeleteCall: vi.fn(),
   modelInfoCall: vi.fn(),
 }));

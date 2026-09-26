@@ -146,6 +146,24 @@ export const getTagTableColumns = ({ onSelectTag, onEdit, onDelete }: TagTableCo
     cell: ({ row }) => <TagModelsCell tag={row.original} />,
   },
   {
+    id: "team_id",
+    accessorKey: "team_id",
+    meta: { title: "Owning Team" },
+    header: "Owning Team",
+    size: 200,
+    enableSorting: false,
+    cell: ({ row }) => {
+      const teamId = row.original.team_id;
+      return teamId ? (
+        <span className="block max-w-48 truncate font-mono text-xs" title={teamId}>
+          {teamId}
+        </span>
+      ) : (
+        <Badge variant="secondary">Any team</Badge>
+      );
+    },
+  },
+  {
     id: "created_at",
     accessorKey: "created_at",
     sortingFn: "datetime",

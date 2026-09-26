@@ -1598,6 +1598,25 @@ class OrgDeleteResponse(RootModel[tuple[OrgInfoResponse, ...]]):
 class TagNewBody(BaseModel):
     name: str
     description: str | None = None
+    team_id: str | None = None
+
+
+class TagUpdateBody(PartialBody):
+    name: str
+    team_id: str | None = None
+
+
+class TagInfoBody(BaseModel):
+    names: list[str]
+
+
+class TagInfoEntry(BaseModel):
+    name: str
+    team_id: str | None = None
+
+
+class TagInfoResponse(RootModel[dict[str, TagInfoEntry]]):
+    pass
 
 
 class TagDeleteBody(BaseModel):

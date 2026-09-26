@@ -2,6 +2,7 @@ import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import CreateTagModal from "./CreateTagModal";
+import { chooseSelectOption } from "../../../../../../tests/test-utils";
 
 describe("CreateTagModal", () => {
   const mockOnCancel = vi.fn();
@@ -60,5 +61,24 @@ describe("CreateTagModal", () => {
 
     // Form validation should prevent submission
     expect(mockOnSubmit).not.toHaveBeenCalled();
+  });
+});
+
+describe("CreateTagModal owning team", () => {
+  const teams = [
+    { team_id: "team-a", team_alias: "Team A" },
+    { team_id: "team-b", team_alias: "Team B" },
+  ] as never[];
+
+  it("submits the selected owning team as team_id", async () => {
+    const user = userEvent.setup();
+    const onSubmit = vi.fn();
+    render(<CreateTagModal visible onCancel={vi.fn()} onSubmit={onSubmit} availableModels={[]} teams={teams} />);
+
+    fireEvent.change(screen.getByLabelText("Tag Name"), { target: { value: "owned-tag" } });
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Owning Team" }), /Team B/);
+    await user.click(screen.getByRole("button", { name: /Create Tag/i }));
+
+    expect(onSubmit).toHaveBeenCalledWith({ tag_name: "owned-tag", team_id: "team-b" });
   });
 });

@@ -13,6 +13,8 @@ import BudgetDurationDropdown from "@/components/common_components/budget_durati
 import { FieldGroup } from "@/components/ui/field";
 import { FormField } from "@/components/shared/form/FormField";
 import { MultiSelect } from "@/components/shared/MultiSelect";
+import { SearchSelect } from "@/components/shared/SearchSelect";
+import { Team } from "@/components/key_team_helpers/key_list";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardTitle } from "@/components/ui/card";
@@ -27,6 +29,7 @@ const tagEditShape = {
   name: z.string().min(1, "Please input a tag name"),
   description: z.string().optional(),
   models: z.array(z.string()).optional(),
+  team_id: z.string().nullable(),
   max_budget: z.union([z.string(), z.number()]).optional(),
   budget_duration: z.string().nullish(),
 };
@@ -39,17 +42,19 @@ interface TagEditFormProps {
   tag: Tag;
   seedBudgetFields: boolean;
   userModels: string[];
+  teams: Team[];
   onCancel: () => void;
   onSave: (values: TagEditFormValues) => Promise<void>;
 }
 
-const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userModels, onCancel, onSave }) => {
+const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userModels, teams, onCancel, onSave }) => {
   const [budgetSectionOpen, setBudgetSectionOpen] = useState(false);
   const form = useZodForm(tagEditSchema, {
     defaultValues: {
       name: tag.name,
       description: tag.description,
       models: tag.models,
+      team_id: tag.team_id ?? null,
       max_budget: seedBudgetFields ? tag.litellm_budget_table?.max_budget : undefined,
       budget_duration: seedBudgetFields ? tag.litellm_budget_table?.budget_duration : undefined,
     },
@@ -59,6 +64,11 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
     onSave(budgetSectionOpen ? values : { ...values, max_budget: undefined, budget_duration: undefined });
 
   const modelOptions = userModels.map((modelId) => ({ label: getModelDisplayName(modelId), value: modelId }));
+  const teamOptions = teams.map((team) => ({
+    label: team.team_alias || team.team_id,
+    value: team.team_id,
+    sublabel: team.team_id,
+  }));
 
   return (
     <form onSubmit={form.handleSubmit(submitVisibleValues)} noValidate>
@@ -79,6 +89,23 @@ const TagEditForm: React.FC<TagEditFormProps> = ({ tag, seedBudgetFields, userMo
         >
           {({ value, onChange }) => (
             <MultiSelect options={modelOptions} value={value} onValueChange={onChange} placeholder="Select Models" />
+          )}
+        </FormField>
+
+        <FormField
+          control={form.control}
+          name="team_id"
+          label="Owning Team"
+          description="Only keys of the owning team can send this tag on requests. Leave empty to let any key use it"
+        >
+          {({ id, value, onChange }) => (
+            <SearchSelect
+              inputId={id}
+              options={teamOptions}
+              value={value}
+              onValueChange={onChange}
+              placeholder="No owning team"
+            />
           )}
         </FormField>
       </FieldGroup>
@@ -148,9 +175,10 @@ interface TagInfoViewProps {
   accessToken: string | null;
   is_admin: boolean;
   editTag: boolean;
+  teams?: Team[];
 }
 
-const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, is_admin, editTag }) => {
+const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, is_admin, editTag, teams = [] }) => {
   const [tagDetails, setTagDetails] = useState<Tag | null>(null);
   const [isEditing, setIsEditing] = useState<boolean>(editTag);
   const [userModels, setUserModels] = useState<string[]>([]);
@@ -203,6 +231,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
         tpm_limit: undefined,
         rpm_limit: undefined,
         budget_duration: values.budget_duration,
+        team_id: values.team_id,
       });
       toast.success("Tag updated successfully");
       setIsEditing(false);
@@ -254,6 +283,7 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
               tag={tagDetails}
               seedBudgetFields={editTag}
               userModels={userModels}
+              teams={teams}
               onCancel={() => setIsEditing(false)}
               onSave={handleSave}
             />
@@ -288,6 +318,14 @@ const TagInfoView: React.FC<TagInfoViewProps> = ({ tagId, onClose, accessToken, 
                       ))
                     )}
                   </div>
+                </div>
+                <div>
+                  <p className="font-medium">Owning Team</p>
+                  <p>
+                    {tagDetails.team_id
+                      ? teams.find((team) => team.team_id === tagDetails.team_id)?.team_alias || tagDetails.team_id
+                      : "Any team"}
+                  </p>
                 </div>
                 <div>
                   <p className="font-medium">Created</p>

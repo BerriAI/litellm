@@ -67,6 +67,7 @@ describe("TagInfoView save payload", () => {
       max_budget: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
+      team_id: null,
       budget_duration: undefined,
     };
 
@@ -92,6 +93,7 @@ describe("TagInfoView save payload", () => {
       max_budget: "150.75",
       tpm_limit: undefined,
       rpm_limit: undefined,
+      team_id: null,
       budget_duration: "7d",
     };
 
@@ -131,6 +133,7 @@ describe("TagInfoView save payload", () => {
       max_budget: "150.75",
       tpm_limit: undefined,
       rpm_limit: undefined,
+      team_id: null,
       budget_duration: "7d",
     };
 

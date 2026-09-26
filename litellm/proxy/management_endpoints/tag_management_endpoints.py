@@ -19,9 +19,12 @@ from typing import TYPE_CHECKING, Final, Protocol, TypedDict, overload
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from litellm._logging import verbose_proxy_logger
-from litellm.proxy._types import UserAPIKeyAuth, user_api_key_has_admin_view
+from litellm.proxy._types import HTTPExceptionErrorDetail, UserAPIKeyAuth, user_api_key_has_admin_view
+from litellm.proxy.auth.auth_checks import get_team_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 from litellm.proxy.common_utils.user_api_key_cache import (
+    UserApiKeyCache,
     tag_cache_key,
     tag_registry_cache_key,
 )
@@ -29,6 +32,7 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     SpendAnalyticsPaginatedResponse,
     get_daily_activity,
 )
+from litellm.proxy.management_endpoints.common_utils import _is_user_team_admin
 from litellm.proxy.management_helpers.utils import handle_budget_for_entity
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.table_repositories import (
@@ -65,6 +69,7 @@ class _TagRecord(Protocol):
     models: Sequence[str]
     model_info: object
     budget_id: str | None
+    team_id: str | None
     created_at: datetime
     updated_at: datetime
     created_by: str | None
@@ -149,6 +154,40 @@ async def _evict_tag_cache_keys(cache_keys: Sequence[str]) -> None:
     from litellm.proxy.proxy_server import user_api_key_cache
 
     await evict_and_broadcast(cache_keys=cache_keys, user_api_key_cache=user_api_key_cache)
+
+
+async def _authorize_tag_owner_change(
+    prisma_client: "PrismaClient",
+    user_api_key_cache: UserApiKeyCache,
+    user_api_key_dict: UserAPIKeyAuth,
+    current_team_id: str | None,
+    new_team_id: str | None,
+) -> None:
+    if current_team_id == new_team_id:
+        return
+
+    caller_is_proxy_admin: Final = is_proxy_admin(user_api_key_dict)
+    for team_id in (current_team_id, new_team_id):
+        if team_id is None:
+            continue
+        if caller_is_proxy_admin and team_id == current_team_id:
+            continue
+        team_obj = await get_team_object(
+            team_id=team_id,
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            check_db_only=True,
+        )
+        if caller_is_proxy_admin or _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj):
+            continue
+        raise _tag_owner_change_forbidden(team_id)
+
+
+def _tag_owner_change_forbidden(team_id: str) -> HTTPException:
+    detail: Final[HTTPExceptionErrorDetail] = {
+        "error": f"Only a proxy admin or an admin of team {team_id} can change the owner of this tag"
+    }
+    return HTTPException(status_code=403, detail=detail)
 
 
 async def _get_internal_user_api_keys(
@@ -260,6 +299,8 @@ async def new_tag(
     - description: Optional[str] - Description of what this tag represents
     - models: List[str] - List of either 'model_id' or 'model_name' allowed for this tag
     - budget_id: Optional[str] - The id for a budget (tpm/rpm/max budget) for the tag
+    - team_id: str | None - Owning team. Only keys of this team may send the tag on requests.
+      Requires proxy admin or team admin of that team
 
     ### IF NO BUDGET ID - CREATE ONE WITH THESE PARAMS ###
     - max_budget: Optional[float] - Max budget for tag
@@ -275,6 +316,7 @@ async def new_tag(
         litellm_proxy_admin_name,
         llm_router,
         prisma_client,
+        user_api_key_cache,
     )
 
     if prisma_client is None:
@@ -286,6 +328,14 @@ async def new_tag(
         existing_tag: Final = await _table(TagRepository(prisma_client)).find_unique(where={"tag_name": tag.name})
         if existing_tag is not None:
             raise HTTPException(status_code=400, detail=f"Tag {tag.name} already exists")
+
+        await _authorize_tag_owner_change(
+            prisma_client=prisma_client,
+            user_api_key_cache=user_api_key_cache,
+            user_api_key_dict=user_api_key_dict,
+            current_team_id=None,
+            new_team_id=tag.team_id,
+        )
 
         # Handle budget creation/assignment using common helper
         budget_id: Final = await handle_budget_for_entity(
@@ -308,6 +358,7 @@ async def new_tag(
                 "model_info": json.dumps(model_info),
                 "spend": 0.0,
                 "budget_id": budget_id,
+                "team_id": tag.team_id,
                 "created_by": user_api_key_dict.user_id,
             }
         )
@@ -336,6 +387,7 @@ async def new_tag(
             description=new_tag_record.description,
             models=new_tag_record.models,
             model_info=model_info,
+            team_id=new_tag_record.team_id,
             created_at=new_tag_record.created_at.isoformat(),
             updated_at=new_tag_record.updated_at.isoformat(),
             created_by=new_tag_record.created_by,
@@ -345,6 +397,8 @@ async def new_tag(
             "message": f"Tag {tag.name} created successfully",
             "tag": tag_config,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error creating tag: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -408,6 +462,8 @@ async def update_tag(
     - description: Optional[str] - Updated description
     - models: List[str] - Updated list of allowed LLM models
     - budget_id: Optional[str] - The id for a budget to associate with the tag
+    - team_id: str | None - Owning team. Omit to keep the current owner, send null to release ownership.
+      Requires proxy admin or team admin of the current and new owning teams
 
     ### BUDGET UPDATE PARAMS ###
     - max_budget: Optional[float] - Max budget for tag
@@ -418,7 +474,7 @@ async def update_tag(
     - model_max_budget: Optional[dict] - Max budget for a specific model
     - budget_duration: Optional[str] - Frequency of resetting tag budget
     """
-    from litellm.proxy.proxy_server import prisma_client
+    from litellm.proxy.proxy_server import litellm_proxy_admin_name, prisma_client, user_api_key_cache
 
     if prisma_client is None:
         raise HTTPException(status_code=500, detail="Database not connected")
@@ -429,7 +485,15 @@ async def update_tag(
         if existing_tag is None:
             raise HTTPException(status_code=404, detail=f"Tag {tag.name} not found")
 
-        from litellm.proxy.proxy_server import litellm_proxy_admin_name
+        team_id_changed: Final = "team_id" in tag.model_fields_set and tag.team_id != existing_tag.team_id
+        if team_id_changed:
+            await _authorize_tag_owner_change(
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                user_api_key_dict=user_api_key_dict,
+                current_team_id=existing_tag.team_id,
+                new_team_id=tag.team_id,
+            )
 
         # Handle budget updates using common helper
         budget_id: Final = await handle_budget_for_entity(
@@ -454,6 +518,8 @@ async def update_tag(
         # Add budget_id if it changed
         if budget_id != existing_tag.budget_id:
             update_data["budget_id"] = budget_id
+        if team_id_changed:
+            update_data["team_id"] = tag.team_id
 
         # Update tag in database
         updated_tag_record: Final = await _table(TagRepository(prisma_client)).update(
@@ -469,6 +535,7 @@ async def update_tag(
             description=updated_tag_record.description,
             models=updated_tag_record.models,
             model_info=model_info,
+            team_id=updated_tag_record.team_id,
             created_at=updated_tag_record.created_at.isoformat(),
             updated_at=updated_tag_record.updated_at.isoformat(),
             created_by=updated_tag_record.created_by,
@@ -478,6 +545,8 @@ async def update_tag(
             "message": f"Tag {tag.name} updated successfully",
             "tag": tag_config,
         }
+    except HTTPException:
+        raise
     except Exception as e:
         verbose_proxy_logger.exception("Error updating tag: %s", e)
         raise HTTPException(status_code=500, detail=str(e))
@@ -532,6 +601,7 @@ async def info_tag(
                 "description": tag_record.description,
                 "models": tag_record.models,
                 "model_info": model_info,
+                "team_id": tag_record.team_id,
                 "created_at": tag_record.created_at.isoformat(),
                 "updated_at": tag_record.updated_at.isoformat(),
                 "created_by": tag_record.created_by,
@@ -655,6 +725,7 @@ async def list_tags(
                 "description": tag_record.description,
                 "models": tag_record.models,
                 "model_info": model_info,
+                "team_id": tag_record.team_id,
                 "created_at": tag_record.created_at.isoformat(),
                 "updated_at": tag_record.updated_at.isoformat(),
                 "created_by": tag_record.created_by,
