@@ -13,6 +13,12 @@ from litellm.proxy.guardrails.guardrail_hooks.llm_shield_proxy.llm_shield_proxy 
 )
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.guardrails import GuardrailEventHooks
+from litellm.types.llms.openai import (
+    FunctionCallArgumentsDeltaEvent,
+    OutputTextDeltaEvent,
+    OutputTextDoneEvent,
+    ResponsesAPIStreamEvents,
+)
 from litellm.types.utils import Choices, Delta, Message, ModelResponse, ModelResponseStream, StreamingChoices
 
 
@@ -64,6 +70,81 @@ def _tool_chunk(arguments: str, finish_reason: str | None = None) -> ModelRespon
 def _field(holder: object, name: str) -> object:
     """Reads a field from a dict or a model; the guardrail emits both shapes."""
     return holder.get(name) if isinstance(holder, dict) else getattr(holder, name)
+
+
+class _FakeShield:
+    """The three guard endpoints over one fixed vault, placeholder -> original.
+
+    The stream endpoint holds back a trailing `[` that has not closed yet, which is the
+    behaviour that makes a placeholder split across two chunks come out whole.
+    """
+
+    def __init__(self, vault: dict[str, str]) -> None:
+        self.vault = vault
+        self.urls: list[str] = []
+
+    def _restore(self, text: str) -> str:
+        for placeholder, original in self.vault.items():
+            text = text.replace(placeholder, original)
+        return text
+
+    async def post(self, url: str, headers: dict, json: dict, timeout: float) -> Response:
+        self.urls.append(url)
+        if url.endswith("/rehydrate/stream"):
+            text = self._restore(json["carry"] + json["text"])
+            opening = text.rfind("[")
+            if json["final"] or opening == -1 or "]" in text[opening:]:
+                return _response({"text": text, "carry": ""})
+            return _response({"text": text[:opening], "carry": text[opening:]})
+        return _response({"texts": [self._restore(text) for text in json["texts"]]})
+
+
+def _shielded(vault: dict[str, str]) -> tuple[LLMShieldProxyGuardrail, _FakeShield]:
+    guardrail = _guardrail(event_hook="post_call")
+    shield = _FakeShield(vault)
+    guardrail.async_handler.post = shield.post  # type: ignore[method-assign]
+    return guardrail, shield
+
+
+def _sse(event: dict) -> bytes:
+    return f"event: {event['type']}\ndata: {json.dumps(event)}\n\n".encode()
+
+
+def _sse_events(frames: list) -> list[dict]:
+    """Parses emitted SSE output, whatever its chunking, back into event payloads."""
+    raw = b"".join(frame.encode() if isinstance(frame, str) else frame for frame in frames).decode()
+    return [
+        json.loads(line[len("data:") :])
+        for event in raw.split("\n\n")
+        for line in event.split("\n")
+        if line.startswith("data:")
+    ]
+
+
+def _text_block_stream(*deltas: str) -> list[bytes]:
+    """An Anthropic /v1/messages stream with one text block made of `deltas`."""
+    return [
+        _sse({"type": "message_start", "message": {"id": "msg_1", "role": "assistant", "content": []}}),
+        _sse({"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}}),
+        *(
+            _sse({"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": d}})
+            for d in deltas
+        ),
+        _sse({"type": "content_block_stop", "index": 0}),
+        _sse({"type": "message_stop"}),
+    ]
+
+
+async def _restore_stream(guardrail: LLMShieldProxyGuardrail, chunks: list) -> list:
+    async def stream():
+        for chunk in chunks:
+            yield chunk
+
+    return await _drain(
+        guardrail.async_post_call_streaming_iterator_hook(
+            user_api_key_dict=None, response=stream(), request_data={"messages": []}
+        )
+    )
 
 
 def test_llm_shield_guardrail_config(monkeypatch: pytest.MonkeyPatch):
@@ -479,6 +560,79 @@ class TestRequestCoverage:
         assert data["messages"][2]["tool_calls"][0]["function"]["arguments"] == "c"
         assert data["input"] == "d"
 
+    @pytest.mark.asyncio
+    async def test_anthropic_tool_use_input_is_redacted(self):
+        """A replayed tool_use block carries its arguments as a JSON object, not a string."""
+        guardrail = _guardrail()
+        mock = _mock_post(guardrail, {"texts": ["[EMAIL_1]", "[PHONE_1]"]})
+
+        data = {
+            "messages": [
+                {
+                    "role": "assistant",
+                    "content": [
+                        {
+                            "type": "tool_use",
+                            "id": "t1",
+                            "name": "send",
+                            "input": {"to": "jane.doe@example.com", "meta": {"phone": "555-0100"}},
+                        }
+                    ],
+                }
+            ]
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="completion")
+
+        assert mock.call_args_list[0].kwargs["json"]["texts"] == ["jane.doe@example.com", "555-0100"]
+        block = data["messages"][0]["content"][0]
+        assert block["input"] == {"to": "[EMAIL_1]", "meta": {"phone": "[PHONE_1]"}}
+        assert block["name"] == "send", "the tool name has to arrive unchanged for the call to route"
+
+    @pytest.mark.asyncio
+    async def test_responses_reasoning_summary_is_redacted(self):
+        """A replayed reasoning item quotes the conversation in its summary parts."""
+        guardrail = _guardrail()
+        _mock_post(guardrail, {"texts": ["user asked about [EMAIL_1]"]})
+
+        data = {
+            "input": [
+                {
+                    "type": "reasoning",
+                    "id": "rs_1",
+                    "summary": [{"type": "summary_text", "text": "user asked about jane.doe@example.com"}],
+                }
+            ]
+        }
+        await guardrail.async_pre_call_hook(user_api_key_dict=None, cache=None, data=data, call_type="aresponses")
+
+        assert data["input"][0]["summary"][0]["text"] == "user asked about [EMAIL_1]"
+
+    def test_tool_schemas_give_up_descriptions_and_nothing_else(self):
+        """Only free text is collected; names, types and enum values must reach the model."""
+        data = {
+            "tools": [
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "description": "top",
+                        "parameters": {
+                            "type": "object",
+                            "properties": {
+                                # A property that is itself named "description".
+                                "description": {"type": "string", "description": "named"},
+                                "kind": {"type": "string", "enum": ["a", "b"], "description": "enum"},
+                                "deep": {"type": "array", "items": {"type": "object", "description": "nested"}},
+                            },
+                        },
+                    },
+                }
+            ]
+        }
+        _, privileged = LLMShieldProxyGuardrail._locate_request_texts(data)
+
+        assert sorted(text for text, _ in privileged) == ["enum", "named", "nested", "top"]
+
 
 class TestRestoration:
     @pytest.mark.asyncio
@@ -653,6 +807,30 @@ class TestVaultIsolation:
                 id="anthropic-top-level-system",
             ),
             pytest.param({"instructions": "S", "input": "U"}, id="responses-instructions"),
+            pytest.param(
+                {
+                    "messages": [{"role": "user", "content": "U"}],
+                    "tools": [{"type": "function", "function": {"name": "f", "description": "S"}}],
+                },
+                id="chat-tool-description",
+            ),
+            pytest.param(
+                {"input": "U", "tools": [{"type": "function", "name": "f", "description": "S"}]},
+                id="responses-tool-description",
+            ),
+            pytest.param(
+                {"messages": [{"role": "user", "content": "U"}], "functions": [{"name": "f", "description": "S"}]},
+                id="legacy-function-description",
+            ),
+            pytest.param(
+                {
+                    "messages": [{"role": "user", "content": "U"}],
+                    "tools": [{"name": "f", "input_schema": {"properties": {"to": {"description": "S"}}}}],
+                },
+                id="anthropic-schema-description",
+            ),
+            pytest.param({"messages": [{"role": "user", "content": "U"}], "user": "S"}, id="end-user-id"),
+            pytest.param({"input": "U", "safety_identifier": "S"}, id="safety-identifier"),
         ],
     )
     def test_server_authored_text_is_split_from_the_callers(self, data: dict) -> None:
@@ -1016,3 +1194,196 @@ class TestApplyGuardrailToolCalls:
 
         assert merged["tool_calls"][0]["function"]["arguments"] == '{"email": "a@b.com"}'
         assert inputs["tool_calls"][0]["function"]["arguments"] == '{"email": "[EMAIL_1]"}'
+
+
+class TestAnthropicStreamRestoration:
+    """/v1/messages streams reach the hook as raw SSE frames, with no `choices` to walk."""
+
+    VAULT = {"[EMAIL_1]": "a@example.com"}
+
+    @pytest.mark.asyncio
+    async def test_split_placeholder_is_restored_and_never_fragmented(self):
+        guardrail, _ = _shielded(self.VAULT)
+
+        out = await _restore_stream(guardrail, _text_block_stream("Mail [EMA", "IL_1] now"))
+
+        deltas = [e["delta"]["text"] for e in _sse_events(out) if e["type"] == "content_block_delta"]
+        assert "".join(deltas) == "Mail a@example.com now"
+        assert not any("[EMA" in d for d in deltas), "a placeholder fragment reached the client"
+
+    @pytest.mark.asyncio
+    async def test_held_text_lands_before_its_block_stops(self):
+        """A trailing `[` that never became a placeholder is still part of the answer."""
+        guardrail, _ = _shielded(self.VAULT)
+
+        out = await _restore_stream(guardrail, _text_block_stream("Mail [EMAIL_1], x = a["))
+
+        types = [e["type"] for e in _sse_events(out)]
+        deltas = [e["delta"]["text"] for e in _sse_events(out) if e["type"] == "content_block_delta"]
+        assert "".join(deltas) == "Mail a@example.com, x = a["
+        assert types.index("content_block_stop") > max(i for i, t in enumerate(types) if t == "content_block_delta")
+
+    @pytest.mark.asyncio
+    async def test_events_split_across_network_chunks_are_restored(self):
+        """A chunk can end mid-event; the frame is parsed once it is whole."""
+        guardrail, _ = _shielded(self.VAULT)
+        raw = b"".join(_text_block_stream("Mail [EMA", "IL_1] now"))
+
+        out = await _restore_stream(guardrail, [raw[i : i + 7] for i in range(0, len(raw), 7)])
+
+        deltas = [e["delta"]["text"] for e in _sse_events(out) if e["type"] == "content_block_delta"]
+        assert "".join(deltas) == "Mail a@example.com now"
+
+    @pytest.mark.asyncio
+    async def test_str_frames_stay_str(self):
+        guardrail, _ = _shielded(self.VAULT)
+
+        out = await _restore_stream(guardrail, [frame.decode() for frame in _text_block_stream("[EMAIL_1]")])
+
+        assert all(isinstance(frame, str) for frame in out)
+        assert "a@example.com" in "".join(out)
+
+    @pytest.mark.asyncio
+    async def test_tool_input_json_is_restored(self):
+        guardrail, _ = _shielded(self.VAULT)
+        frames = [
+            _sse({"type": "content_block_start", "index": 1, "content_block": {"type": "tool_use", "input": {}}}),
+            *(
+                _sse(
+                    {
+                        "type": "content_block_delta",
+                        "index": 1,
+                        "delta": {"type": "input_json_delta", "partial_json": p},
+                    }
+                )
+                for p in ('{"to": "[EMAI', 'L_1]"}')
+            ),
+            _sse({"type": "content_block_stop", "index": 1}),
+        ]
+
+        out = await _restore_stream(guardrail, frames)
+
+        partial = "".join(e["delta"]["partial_json"] for e in _sse_events(out) if e["type"] == "content_block_delta")
+        assert json.loads(partial) == {"to": "a@example.com"}
+
+    @pytest.mark.asyncio
+    async def test_signed_thinking_and_foreign_frames_pass_through_byte_for_byte(self):
+        """Rewriting a signed thinking block breaks it; other frames are not ours to touch."""
+        guardrail, shield = _shielded(self.VAULT)
+        thinking = {"type": "thinking_delta", "thinking": "[EMAIL_1]"}
+        frames = [
+            _sse({"type": "content_block_delta", "index": 0, "delta": thinking}),
+            b'data: {"candidates": [{"content": {"parts": [{"text": "[EMAIL_1]"}]}}]}\n\n',
+            b"data: not json\n\n",
+        ]
+
+        out = await _restore_stream(guardrail, frames)
+
+        assert b"".join(out) == b"".join(frames)
+        assert shield.urls == []
+
+    @pytest.mark.asyncio
+    async def test_a_raw_stream_that_is_not_sse_is_never_buffered(self):
+        """Without event boundaries to wait for, buffering would hold the whole reply."""
+        guardrail, _ = _shielded(self.VAULT)
+        chunks = [b'[{"candidates": []}', b', {"candidates": []}]']
+
+        out = await _restore_stream(guardrail, chunks)
+
+        assert out == chunks
+
+
+class TestResponsesStreamRestoration:
+    """/v1/responses streams are typed events, with no `choices` to walk."""
+
+    VAULT = {"[EMAIL_1]": "a@example.com"}
+
+    @staticmethod
+    def _text_delta(delta: str, sequence_number: int, content_index: int = 0) -> OutputTextDeltaEvent:
+        return OutputTextDeltaEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DELTA,
+            item_id="msg_1",
+            output_index=0,
+            content_index=content_index,
+            delta=delta,
+            sequence_number=sequence_number,
+        )
+
+    @pytest.mark.asyncio
+    async def test_deltas_and_done_text_are_restored(self):
+        guardrail, _ = _shielded(self.VAULT)
+        done = OutputTextDoneEvent(
+            type=ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+            item_id="msg_1",
+            output_index=0,
+            content_index=0,
+            text="Mail [EMAIL_1] x[",
+        )
+
+        out = await _restore_stream(
+            guardrail, [self._text_delta("Mail [EMA", 1), self._text_delta("IL_1] x[", 2), done]
+        )
+
+        deltas = [e.delta for e in out if isinstance(e, OutputTextDeltaEvent)]
+        assert not any("[EMA" in d for d in deltas), "a placeholder fragment reached the client"
+        assert "".join(deltas) == "Mail a@example.com x["
+        assert out[-1].text == "Mail a@example.com x[", "the done event repeats the full, restored text"
+        assert isinstance(out[-2], OutputTextDeltaEvent), "held text must land before the done event"
+
+    @pytest.mark.asyncio
+    async def test_function_call_arguments_are_restored(self):
+        guardrail, _ = _shielded(self.VAULT)
+        events = [
+            FunctionCallArgumentsDeltaEvent(
+                type=ResponsesAPIStreamEvents.FUNCTION_CALL_ARGUMENTS_DELTA,
+                item_id="fc_1",
+                output_index=1,
+                delta=part,
+            )
+            for part in ('{"to": "[EMAI', 'L_1]"}')
+        ]
+
+        out = await _restore_stream(guardrail, events)
+
+        assert json.loads("".join(e.delta for e in out)) == {"to": "a@example.com"}
+
+    @pytest.mark.asyncio
+    async def test_a_truncated_stream_still_flushes(self):
+        """No done event at all: whatever the window holds goes out at the end."""
+        guardrail, _ = _shielded(self.VAULT)
+
+        out = await _restore_stream(guardrail, [self._text_delta("see [EMAIL_1] a[", 1)])
+
+        assert "".join(e.delta for e in out) == "see a@example.com a["
+
+    @pytest.mark.asyncio
+    async def test_completed_response_is_restored(self):
+        """The terminal event repeats the whole reply, and clients read it as the answer."""
+        guardrail, _ = _shielded(self.VAULT)
+        block = {"type": "output_text", "text": "Mail [EMAIL_1]"}
+        call = SimpleNamespace(type="function_call", arguments='{"to": "[EMAIL_1]"}')
+        completed = SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(output=[SimpleNamespace(content=[block]), call]),
+        )
+
+        await _restore_stream(guardrail, [completed])
+
+        assert block["text"] == "Mail a@example.com"
+        assert call.arguments == '{"to": "a@example.com"}'
+
+    @pytest.mark.asyncio
+    async def test_streams_on_different_parts_do_not_share_a_window(self):
+        guardrail, _ = _shielded(self.VAULT)
+        events = [
+            self._text_delta("one [EMA", 1),
+            self._text_delta("two", 2, content_index=1),
+            self._text_delta("IL_1]", 3),
+        ]
+
+        out = await _restore_stream(guardrail, events)
+
+        by_part: dict[int, str] = {}
+        for event in out:
+            by_part[event.content_index] = by_part.get(event.content_index, "") + event.delta
+        assert by_part == {0: "one a@example.com", 1: "two"}
