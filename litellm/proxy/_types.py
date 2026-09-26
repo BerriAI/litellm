@@ -3152,6 +3152,67 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
         None,
         description="Allowlist of hosts a request may redirect a provider call's destination URL to.",
     )
+    always_include_stream_usage: bool | None = Field(
+        None, description="If True, streaming responses always include usage, even without stream_options."
+    )
+    auto_redirect_ui_login_to_sso: bool | None = Field(
+        None, description="If True, the UI login page redirects straight to the SSO provider."
+    )
+    default_team_disabled: bool | None = Field(
+        None, description="If True, /sso/get/ui_settings reports DEFAULT_TEAM_DISABLED as true to the UI."
+    )
+    disable_batch_input_file_rate_limiting: bool | None = Field(
+        None, description="If True, batch input files are not counted against TPM/RPM limits at submission."
+    )
+    disable_bedrock_agent_runtime_passthrough: bool | None = Field(
+        None, description="If True, the Bedrock agent runtime pass-through routes are turned off."
+    )
+    disable_error_logs: bool | None = Field(None, description="If True, errors are not written to the DB.")
+    disable_model_info_refresh: bool | None = Field(
+        None, description="If True, the job that refreshes deployments' advertised token limits does not run."
+    )
+    disable_prisma_schema_update: bool | None = Field(
+        None, description="If True, the proxy does not apply Prisma schema updates to the DB at startup."
+    )
+    disable_reset_budget: bool | None = Field(None, description="If True, the scheduled budget reset job does not run.")
+    disable_retry_on_max_parallel_request_limit_error: bool | None = Field(
+        None, description="If True, requests are not retried when the max parallel request limit is hit."
+    )
+    disable_spend_logs: bool | None = Field(None, description="If True, per-request spend logs are not written.")
+    disable_spend_updates: bool | None = Field(
+        None, description="If True, no spend updates are written to the DB, including key/user/team spend."
+    )
+    enable_health_check_routing: bool | None = Field(
+        None, description="If True, routing skips deployments that failed their last health check."
+    )
+    enforce_user_param: bool | None = Field(
+        None, description="If True, OpenAI-compatible requests must include the 'user' param."
+    )
+    fail_closed_budget_enforcement: bool | None = Field(
+        None,
+        description="If True, budget checks read spend from the DB instead of trusting only the Redis counter.",
+    )
+    health_check_details: bool | None = Field(
+        None, description="If False, health check responses hide details like remaining rate limits. Default True."
+    )
+    health_check_ignore_transient_errors: bool | None = Field(
+        None, description="If True, 429 and 408 health check failures do not mark a deployment unhealthy."
+    )
+    hide_default_credentials_hint: bool | None = Field(
+        None, description="If True, the UI login page hides the default credentials hint."
+    )
+    track_unmanaged_batch_cost: bool | None = Field(
+        None, description="If True, cost is also tracked for batches created outside LiteLLM's /v1/batches."
+    )
+    use_redis_transaction_buffer: bool | None = Field(
+        None, description="If True, spend updates are buffered in Redis before being written to the DB."
+    )
+    use_shared_health_check: bool | None = Field(
+        None, description="If True, health check state is shared across proxy instances through Redis."
+    )
+    use_team_public_model_name: bool | None = Field(
+        None, description="If False, team models are listed by internal name, not public name. Default True."
+    )
 
 
 class ConfigYAML(LiteLLMPydanticObjectBase):

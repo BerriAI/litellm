@@ -28063,10 +28063,20 @@ export interface components {
              */
             allowed_routes?: unknown[] | null;
             /**
+             * Always Include Stream Usage
+             * @description If True, streaming responses always include usage, even without stream_options.
+             */
+            always_include_stream_usage?: boolean | null;
+            /**
              * Apply User Budget To Team Keys
              * @description If True, a user's personal max_budget is enforced on every request they make, including requests made with a team-scoped key. Defaults to False, where a team-scoped key is governed only by the team and team-member budgets and the key owner's personal max_budget does not apply (see GitHub issue #12905).
              */
             apply_user_budget_to_team_keys?: boolean | null;
+            /**
+             * Auto Redirect Ui Login To Sso
+             * @description If True, the UI login page redirects straight to the SSO provider.
+             */
+            auto_redirect_ui_login_to_sso?: boolean | null;
             /**
              * Background Health Check Model Groups
              * @description Opt-in allowlist of model group names for background health checks and health-check routing. When set, the background loop probes only deployments whose model_name is listed, and enable_health_check_routing filters unhealthy deployments only within the listed groups; every other group, including newly added deployments, is skipped and keeps its configured routing strategy. When unset, all deployments participate (opt out per deployment via model_info.disable_background_health_check).
@@ -28169,10 +28179,25 @@ export interface components {
              */
             database_url?: string | null;
             /**
+             * Default Team Disabled
+             * @description If True, /sso/get/ui_settings reports DEFAULT_TEAM_DISABLED as true to the UI.
+             */
+            default_team_disabled?: boolean | null;
+            /**
              * Disable Auto Add Proxy Admin To Teams
              * @description By default, the user calling /team/new is automatically added to the new team as a team admin. If True, proxy admins are no longer auto-added; members explicitly listed in members_with_roles are unaffected. Default is False.
              */
             disable_auto_add_proxy_admin_to_teams?: boolean | null;
+            /**
+             * Disable Batch Input File Rate Limiting
+             * @description If True, batch input files are not counted against TPM/RPM limits at submission.
+             */
+            disable_batch_input_file_rate_limiting?: boolean | null;
+            /**
+             * Disable Bedrock Agent Runtime Passthrough
+             * @description If True, the Bedrock agent runtime pass-through routes are turned off.
+             */
+            disable_bedrock_agent_runtime_passthrough?: boolean | null;
             /**
              * Disable Budget Reservation
              * @description If True, disables the optimistic per-request budget reservation introduced in v1.84.0. WARNING: This weakens hard budget enforcement. Without the reservation, a burst of concurrent requests from a single key can each pass the read-time spend check before any of them is charged, allowing a configured budget to be exceeded under high concurrency. Budgets are still evaluated on every request at read time, so an already-exhausted budget is still rejected. Enable only if your deployment is experiencing phantom BudgetExceededError responses caused by leaked reservations (see GitHub issue #27639). An INFO notice is logged once per worker at config load while this flag is active as a reminder that hard enforcement is relaxed.
@@ -28184,20 +28209,60 @@ export interface components {
              */
             disable_env_credential_login?: boolean | null;
             /**
+             * Disable Error Logs
+             * @description If True, errors are not written to the DB.
+             */
+            disable_error_logs?: boolean | null;
+            /**
+             * Disable Model Info Refresh
+             * @description If True, the job that refreshes deployments' advertised token limits does not run.
+             */
+            disable_model_info_refresh?: boolean | null;
+            /**
              * Disable Password Login When Sso Enabled
              * @description If True and SSO is configured (MICROSOFT_CLIENT_ID, GOOGLE_CLIENT_ID, GENERIC_CLIENT_ID, or SAML_IDP_METADATA_URL/XML), disables username/password login on /login, /v2/login, and /v3/login so SSO is the only way to reach the Admin UI. An admin locked out of the UI can still administer the proxy over the API with the master key; unset this setting and restart the proxy to restore UI username/password login. Default is False.
              */
             disable_password_login_when_sso_enabled?: boolean | null;
+            /**
+             * Disable Prisma Schema Update
+             * @description If True, the proxy does not apply Prisma schema updates to the DB at startup.
+             */
+            disable_prisma_schema_update?: boolean | null;
+            /**
+             * Disable Reset Budget
+             * @description If True, the scheduled budget reset job does not run.
+             */
+            disable_reset_budget?: boolean | null;
             /**
              * Disable Responses Id Security
              * @description If True, disables ownership enforcement on Responses API ids. Keys may then retrieve, cancel, delete, and chain from any response id, including ids belonging to another user or team and ids this proxy never issued. WARNING: this removes tenant isolation on /v1/responses
              */
             disable_responses_id_security?: boolean | null;
             /**
+             * Disable Retry On Max Parallel Request Limit Error
+             * @description If True, requests are not retried when the max parallel request limit is hit.
+             */
+            disable_retry_on_max_parallel_request_limit_error?: boolean | null;
+            /**
+             * Disable Spend Logs
+             * @description If True, per-request spend logs are not written.
+             */
+            disable_spend_logs?: boolean | null;
+            /**
+             * Disable Spend Updates
+             * @description If True, no spend updates are written to the DB, including key/user/team spend.
+             */
+            disable_spend_updates?: boolean | null;
+            /**
              * Enable Claude Code Gateway
              * @description serve the Claude Code gateway protocol (https://code.claude.com/docs/en/claude-apps-gateway) under /claude_code_gateway: OAuth device-flow sign-in reusing proxy SSO, plus managed settings and OTLP telemetry ingestion. Off by default
              */
             enable_claude_code_gateway?: boolean | null;
+            /**
+             * Enable Health Check Routing
+             * @description If True, routing skips deployments that failed their last health check.
+             */
+            enable_health_check_routing?: boolean | null;
             /**
              * Enable Openai Websocket Passthrough
              * @description Serve the OpenAI pass-through WebSocket route, which relays frames to OpenAI under the proxy's own provider credential without reading them. Off by default.
@@ -28214,6 +28279,16 @@ export interface components {
              * @description If True, router fallbacks configured in router_settings are only attempted when the calling key (and its team and project) is allowed to call the fallback model; unauthorized fallback targets are skipped and the primary model's error is returned. Default is False.
              */
             enforce_fallback_model_access?: boolean | null;
+            /**
+             * Enforce User Param
+             * @description If True, OpenAI-compatible requests must include the 'user' param.
+             */
+            enforce_user_param?: boolean | null;
+            /**
+             * Fail Closed Budget Enforcement
+             * @description If True, budget checks read spend from the DB instead of trusting only the Redis counter.
+             */
+            fail_closed_budget_enforcement?: boolean | null;
             /**
              * Failed Login Block Seconds
              * @description How long a blocked source address, or source address and username, stays blocked. Every attempt from a blocked key, right or wrong, is refused with 429 before the password is checked; the block is not extended by refused attempts. Set under `general_settings` in config.yaml. Defaults to 300
@@ -28240,6 +28315,16 @@ export interface components {
              */
             health_check_concurrency?: number | null;
             /**
+             * Health Check Details
+             * @description If False, health check responses hide details like remaining rate limits. Default True.
+             */
+            health_check_details?: boolean | null;
+            /**
+             * Health Check Ignore Transient Errors
+             * @description If True, 429 and 408 health check failures do not mark a deployment unhealthy.
+             */
+            health_check_ignore_transient_errors?: boolean | null;
+            /**
              * Health Check Interval
              * @description background health check interval in seconds
              * @default 300
@@ -28251,6 +28336,11 @@ export interface components {
              * @default false
              */
             health_check_skip_disabled_background_models: boolean;
+            /**
+             * Hide Default Credentials Hint
+             * @description If True, the UI login page hides the default credentials hint.
+             */
+            hide_default_credentials_hint?: boolean | null;
             /**
              * Include Call Id In Error Body
              * @description opt-in to copy the x-litellm-call-id response header's value into JSON error bodies, as error.litellm_call_id on the OpenAI-shaped and /v1/messages routes and as a top-level litellm_call_id on pass-through routes, so an error a client prints names the request to look up. Off by default
@@ -28476,6 +28566,11 @@ export interface components {
              */
             supported_db_objects?: components["schemas"]["SupportedDBObjectType"][] | null;
             /**
+             * Track Unmanaged Batch Cost
+             * @description If True, cost is also tracked for batches created outside LiteLLM's /v1/batches.
+             */
+            track_unmanaged_batch_cost?: boolean | null;
+            /**
              * Transcribe Media Buckets
              * @description S3 bucket names that keys other than proxy admins may read media from and write transcripts to through the Amazon Transcribe pass-through. Unset means only proxy admins can start transcription jobs.
              */
@@ -28502,10 +28597,25 @@ export interface components {
              */
             use_google_kms?: boolean | null;
             /**
+             * Use Redis Transaction Buffer
+             * @description If True, spend updates are buffered in Redis before being written to the DB.
+             */
+            use_redis_transaction_buffer?: boolean | null;
+            /**
+             * Use Shared Health Check
+             * @description If True, health check state is shared across proxy instances through Redis.
+             */
+            use_shared_health_check?: boolean | null;
+            /**
              * Use Spend Logs Partitioning
              * @description If True and LiteLLM_SpendLogs has been converted to a range-partitioned table (db_scripts/partition_spend_logs.sql), retention cleanup drops expired partitions instead of deleting rows, and pre-creates upcoming partitions. Default is False.
              */
             use_spend_logs_partitioning?: boolean | null;
+            /**
+             * Use Team Public Model Name
+             * @description If False, team models are listed by internal name, not public name. Default True.
+             */
+            use_team_public_model_name?: boolean | null;
             /**
              * User Api Key Cache Max Size
              * @description max number of entries (virtual keys, teams, users, end users, memberships, ...) each worker keeps in its in-memory auth cache. Defaults to 200. Raise this if you have more active keys than that or auth lookups keep hitting the DB

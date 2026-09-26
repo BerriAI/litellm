@@ -12599,6 +12599,121 @@ async def test_update_config_general_settings_is_visible_to_the_next_read(monkey
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "always_include_stream_usage",
+        "auto_redirect_ui_login_to_sso",
+        "default_team_disabled",
+        "disable_batch_input_file_rate_limiting",
+        "disable_bedrock_agent_runtime_passthrough",
+        "disable_error_logs",
+        "disable_model_info_refresh",
+        "disable_prisma_schema_update",
+        "disable_reset_budget",
+        "disable_retry_on_max_parallel_request_limit_error",
+        "disable_spend_logs",
+        "disable_spend_updates",
+        "enable_health_check_routing",
+        "enforce_user_param",
+        "fail_closed_budget_enforcement",
+        "health_check_details",
+        "health_check_ignore_transient_errors",
+        "hide_default_credentials_hint",
+        "track_unmanaged_batch_cost",
+        "use_redis_transaction_buffer",
+        "use_shared_health_check",
+        "use_team_public_model_name",
+    ],
+)
+async def test_update_config_general_settings_stores_operational_flag(monkeypatch, flag):
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.config_resolvers import SettingsStore
+    from litellm.proxy.proxy_server import get_config_general_settings, update_config_general_settings
+
+    monkeypatch.setattr(proxy_server_module, "prisma_client", _fake_prisma_with_config({}))
+    settings = SettingsStore("general_settings")
+    settings.load_yaml({})
+    monkeypatch.setattr(proxy_server_module.proxy_config, "settings", settings)
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    await update_config_general_settings(
+        data=ConfigFieldUpdate(field_name=flag, field_value=True, config_type="general_settings"),
+        user_api_key_dict=admin,
+    )
+
+    read_back = await get_config_general_settings(field_name=flag, user_api_key_dict=admin)
+    assert (read_back.field_value, read_back.source) == (True, "db")
+
+
+@pytest.mark.asyncio
+async def test_update_config_general_settings_rejects_a_non_bool_flag_value(monkeypatch):
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as exc_info:
+        await update_config_general_settings(
+            data=ConfigFieldUpdate(
+                field_name="disable_spend_logs", field_value={"enabled": True}, config_type="general_settings"
+            ),
+            user_api_key_dict=admin,
+        )
+
+    assert exc_info.value.status_code == 400
+    fake.db.litellm_config.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "flag",
+    [
+        "allow_client_side_credentials",
+        "allow_public_health_readiness_details",
+        "allow_requests_on_db_unavailable",
+        "allow_user_auth",
+        "custom_auth_run_common_checks",
+        "disable_key_generate_for_org_admin",
+        "disable_master_key_return",
+        "enable_drain_endpoint",
+        "enable_jwt_auth",
+        "enable_mcp_registry",
+        "enable_oauth2_auth",
+        "enable_oauth2_proxy_auth",
+        "enforce_rbac",
+        "expose_fallback_errors_to_caller",
+        "forward_llm_provider_auth_headers",
+        "forward_openai_org_id",
+        "mcp_allow_all_keys_respects_mcp_scope",
+        "passthrough_managed_object_ids",
+        "password_policy_check_breached_passwords",
+        "require_end_user_mcp_access_defined",
+        "require_key_mcp_access_defined",
+        "use_x_forwarded_for",
+    ],
+)
+async def test_config_field_update_refuses_auth_and_exposure_flags(monkeypatch, flag):
+    from litellm.proxy._types import ConfigFieldUpdate
+    from litellm.proxy.proxy_server import update_config_general_settings
+
+    fake = _fake_prisma_with_config({})
+    monkeypatch.setattr(proxy_server_module, "prisma_client", fake)
+
+    admin = UserAPIKeyAuth(api_key="hashed-admin", user_id="admin-1", user_role=LitellmUserRoles.PROXY_ADMIN)
+    with pytest.raises(HTTPException) as exc_info:
+        await update_config_general_settings(
+            data=ConfigFieldUpdate(field_name=flag, field_value=True, config_type="general_settings"),
+            user_api_key_dict=admin,
+        )
+
+    assert exc_info.value.status_code == 400, f"{flag} must stay config-file-only, not writable over the API"
+    fake.db.litellm_config.upsert.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_save_config_makes_a_db_owned_write_visible_to_the_next_read(monkeypatch):
     import litellm.proxy.proxy_server as proxy_server_module
     from litellm.proxy.proxy_server import ProxyConfig
