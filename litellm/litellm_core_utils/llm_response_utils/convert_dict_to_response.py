@@ -413,7 +413,7 @@ def _handle_invalid_parallel_tool_calls(
             shift += len(replacement) - 1
 
         return tool_calls
-    except (json.JSONDecodeError, KeyError, TypeError, AttributeError):
+    except json.JSONDecodeError:
         # if there is a JSONDecodeError, return the original tool_calls
         return tool_calls
 
