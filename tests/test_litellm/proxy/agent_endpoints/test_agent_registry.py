@@ -1284,3 +1284,56 @@ def test_load_agents_from_config_exposes_a_typed_kill_switch():
     (agent,) = registry.get_agent_list()
     assert agent.kill_switch is not None
     assert agent.kill_switch.model_dump() == _KILL_SWITCH
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("bound", [False, True])
+async def test_agent_listing_preserves_stored_identity_bindings(bound: bool) -> None:
+    from datetime import datetime, timezone
+
+    from prisma.models import LiteLLM_AgentIdentity, LiteLLM_AgentsTable
+
+    from litellm.types.agents import AgentResponse
+
+    binding: Final = LiteLLM_AgentIdentity(
+        agent_id="agent",
+        provider="microsoft_entra",
+        issuer="issuer",
+        tenant_id="tenant",
+        client_id="client",
+        active=True,
+        required_roles=[],
+        required_scopes=["user_impersonation"],
+        revision="revision",
+    )
+    row: Final = LiteLLM_AgentsTable(
+        agent_id="agent",
+        agent_name="Bound agent",
+        agent_card_params="{}",
+        identity_managed=bound,
+        identity=binding if bound else None,
+        enabled=True,
+        execution_mode="autonomous",
+        spend=0.0,
+        agent_access_groups=[],
+        access_group_ids=[],
+        extra_headers=[],
+        created_by="admin",
+        updated_by="admin",
+        created_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        updated_at=datetime(2026, 1, 1, tzinfo=timezone.utc),
+    )
+    client: Final = MagicMock()
+    client.db.litellm_agentstable.find_many = AsyncMock(return_value=[row])
+    listed: Final = await AgentRegistry.get_all_agents_from_db(client)
+    response: Final = AgentResponse.model_validate(listed[0])
+    if bound:
+        assert response.identity is not None
+        assert response.identity.client_id == binding.client_id
+        assert response.identity.revision == binding.revision
+    else:
+        assert response.identity is None
+    client.db.litellm_agentstable.find_many.assert_awaited_once_with(
+        order={"created_at": "desc"},
+        include={"object_permission": True, "identity": True},
+    )

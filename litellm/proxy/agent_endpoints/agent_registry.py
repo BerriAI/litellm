@@ -826,12 +826,12 @@ class AgentRegistry:
         try:
             agents_from_db: Final = await agents_table(prisma_client).find_many(
                 order={"created_at": "desc"},
-                include={"object_permission": True},
+                include={"object_permission": True, "identity": True},
             )
 
             agents: Final[list[dict[str, object]]] = []
             for agent in agents_from_db:
-                agent_dict = dict(agent)
+                agent_dict = agent.model_dump()
                 # object_permission is eagerly loaded via include above
                 if agent.object_permission is not None:
                     try:
