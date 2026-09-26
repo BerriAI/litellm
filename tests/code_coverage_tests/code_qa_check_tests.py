@@ -13,15 +13,16 @@ def check_for_litellm_module_deletion(base_dir):
             del sys.modules[module]
     """
     problematic_files = []
-    test_dir = os.path.join(base_dir, "test_litellm")
+    candidate_dirs = [os.path.join(base_dir, name) for name in ("test_litellm", "unit")]
+    test_dirs = [test_dir for test_dir in candidate_dirs if os.path.exists(test_dir)]
 
-    if not os.path.exists(test_dir):
-        print(f"Warning: Directory {test_dir} does not exist.")
+    if not test_dirs:
+        print(f"Warning: None of {candidate_dirs} exist.")
         return []
 
-    print(f"Checking directory: {test_dir}")
+    print(f"Checking directories: {test_dirs}")
 
-    for root, _, files in os.walk(test_dir):
+    for root, _, files in (entry for test_dir in test_dirs for entry in os.walk(test_dir)):
         for file in files:
             if file.endswith(".py"):
                 file_path = os.path.join(root, file)
@@ -173,7 +174,7 @@ def main():
             f"This can cause import issues and test failures. Files: {problematic_files}"
         )
     else:
-        print("✓ No litellm module deletion patterns found in test_litellm directory.")
+        print("✓ No litellm module deletion patterns found in tests/test_litellm or tests/unit.")
 
 
 if __name__ == "__main__":

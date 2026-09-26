@@ -5,6 +5,7 @@ from datetime import datetime
 from types import MappingProxyType
 from typing import Final, Protocol
 
+from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
@@ -26,6 +27,8 @@ class OperationContext:
     raw_headers: Mapping[str, str] | None = field(default=None, repr=False)
     client_ip: str | None = None
     mcp_proxy_mode: bool = False
+    wire_compat: WireCompat = WireCompat.LEGACY
+    protocol_version: str | None = None
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "_caller", copy_caller(self._caller))
