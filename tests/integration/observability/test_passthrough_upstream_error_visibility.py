@@ -717,12 +717,12 @@ def test_gemini_passthrough_streaming_429_client_disconnect_still_logs_failure(
                     first: Final = next(response.iter_bytes())
                     assert first.startswith(b'data: {"error":"rate limited"}'), first
                     call_id: Final = response.headers["x-litellm-call-id"]
+                error_information: Final = _spend_error_information_or_none(call_id)
+                assert error_information is not None, f"no spend row for {call_id} after client disconnect"
+                assert error_information["error_code"] == "429", error_information
+                assert error_information["normalized_error"] == "500_UPSTREAM_PASSTHROUGH", error_information
             finally:
                 gate.set()
-            error_information: Final = _spend_error_information_or_none(call_id)
-            assert error_information is not None, f"no spend row for {call_id} after client disconnect"
-            assert error_information["error_code"] == "429", error_information
-            assert error_information["normalized_error"] == "500_UPSTREAM_PASSTHROUGH", error_information
             warnings: Final = _upstream_warnings(owned.log, "returned 429")
             assert len(warnings) == 1, warnings
 
