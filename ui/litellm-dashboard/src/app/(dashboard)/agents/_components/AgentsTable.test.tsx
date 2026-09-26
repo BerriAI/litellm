@@ -62,6 +62,12 @@ describe("AgentsTable", () => {
     expect(within(keylessRow).getByText("Needs Setup")).toBeInTheDocument();
   });
 
+  it("shows JWT configured for agents without a virtual key", () => {
+    render(<AgentsTable agents={[makeAgent({ keys: [], jwt_auth_configured: true })]} {...baseProps} />);
+    expect(screen.getByText("JWT configured")).toBeInTheDocument();
+    expect(screen.queryByText("Needs Setup")).not.toBeInTheDocument();
+  });
+
   it("deletes an agent through the ⋯ actions menu", async () => {
     const user = userEvent.setup();
     const onDeleteClick = vi.fn();
