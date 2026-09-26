@@ -7,6 +7,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 
+from litellm.caching._redis_scripts import DELETE_IF_OWNER
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.constants import DEFAULT_CRON_JOB_LOCK_TTL_SECONDS
 from litellm.proxy.db.db_transaction_queue.pod_lock_manager import PodLockManager
@@ -334,24 +335,10 @@ async def test_release_lock_uses_atomic_compare_delete_script_when_available(pod
     await pod_lock_manager.release_lock(cronjob_id="test_job")
 
     lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
-    mock_redis.async_register_script.assert_called_once_with(PodLockManager._COMPARE_AND_DELETE_LOCK_SCRIPT)
+    mock_redis.async_register_script.assert_called_once_with(DELETE_IF_OWNER)
     script_callable.assert_called_once_with(keys=[lock_key], args=[json.dumps(pod_lock_manager.pod_id)])
     mock_redis.async_get_cache.assert_not_called()
     mock_redis.async_delete_cache.assert_not_called()
-
-
-@pytest.mark.asyncio
-async def test_release_lock_reuses_registered_script(pod_lock_manager, mock_redis):
-    """
-    Test script registration is cached on manager instance and reused.
-    """
-    script_callable = AsyncMock(return_value=0)
-    mock_redis.async_register_script = MagicMock(return_value=script_callable)
-
-    await pod_lock_manager.release_lock(cronjob_id="test_job")
-    await pod_lock_manager.release_lock(cronjob_id="test_job")
-
-    assert mock_redis.async_register_script.call_count == 1
 
 
 @pytest.mark.asyncio
@@ -445,7 +432,7 @@ async def test_release_lock_preserves_lock_held_by_other_pod():
 async def test_release_lock_falls_back_to_get_del_when_lua_execution_fails(pod_lock_manager, mock_redis):
     """
     Test that release_lock falls back to GET+DEL when Lua script execution
-    raises (e.g. Redis restart cleared loaded scripts).
+    raises (e.g. scripting is disabled).
     """
     script_callable = AsyncMock(side_effect=Exception("NOSCRIPT"))
     mock_redis.async_register_script = MagicMock(return_value=script_callable)
@@ -458,8 +445,6 @@ async def test_release_lock_falls_back_to_get_del_when_lua_execution_fails(pod_l
     lock_key = pod_lock_manager.get_redis_lock_key(cronjob_id="test_job")
     mock_redis.async_get_cache.assert_called_once_with(lock_key)
     mock_redis.async_delete_cache.assert_called_once_with(lock_key)
-    # Cached script handle should be reset so next call re-registers
-    assert pod_lock_manager._release_lock_script is None
 
 
 @pytest.mark.asyncio

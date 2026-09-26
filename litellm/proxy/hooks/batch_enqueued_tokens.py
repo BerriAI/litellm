@@ -13,14 +13,20 @@ import logging
 import math
 import time
 import uuid
-from collections.abc import Awaitable, Callable, Mapping, Sequence
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias
+from typing import TYPE_CHECKING, Annotated, Final, Literal, TypeAlias
 
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
-from litellm.caching.redis_cache import log_redis_failure
+from litellm.caching._redis_scripts import (
+    pop_reservation,
+    refund_enqueued_tokens,
+    reserve_enqueued_tokens,
+    save_reservation,
+)
+from litellm.caching.redis_cache import RedisScriptClient, log_redis_failure
 from litellm.constants import BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY, BATCH_ENQUEUED_TOKEN_TTL_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
 
@@ -37,40 +43,6 @@ BATCH_ENQUEUED_REFUND_STATUSES: Final[frozenset[str]] = frozenset(
 )
 
 ScopeKey: TypeAlias = Literal["api_key", "team"]
-
-RESERVE_ENQUEUED_TOKENS_SCRIPT: Final = """
-local amount = tonumber(ARGV[1])
-local ttl = tonumber(ARGV[2])
-local limit = tonumber(ARGV[3])
-local current = tonumber(redis.call('GET', KEYS[1]) or '0')
-if current + amount > limit then
-    return {0, current}
-end
-local updated = redis.call('INCRBY', KEYS[1], amount)
-redis.call('EXPIRE', KEYS[1], ttl)
-return {1, updated}
-"""
-
-REFUND_ENQUEUED_TOKENS_SCRIPT: Final = """
-local updated = redis.call('DECRBY', KEYS[1], tonumber(ARGV[1]))
-if updated <= 0 then
-    redis.call('DEL', KEYS[1])
-end
-return 1
-"""
-
-SAVE_RESERVATION_SCRIPT: Final = """
-redis.call('SET', KEYS[1], ARGV[1], 'EX', tonumber(ARGV[2]))
-return 1
-"""
-
-POP_RESERVATION_SCRIPT: Final = """
-local value = redis.call('GET', KEYS[1])
-if value and value ~= '' then
-    redis.call('SET', KEYS[1], '', 'EX', tonumber(ARGV[1]))
-end
-return value
-"""
 
 
 @dataclass(frozen=True, slots=True)
@@ -105,10 +77,6 @@ _RESERVE_RESULT_ADAPTER: Final = TypeAdapter(tuple[int, int])
 _POPPED_VALUE_ADAPTER: Final = TypeAdapter(str | bytes | None)
 _STORED_COUNTER_ADAPTER: Final = TypeAdapter(int | None)
 _RESERVATION_ADAPTER: Final = TypeAdapter(BatchEnqueuedTokenReservation)
-
-
-class _ScriptRunner(Protocol):
-    def __call__(self, keys: Sequence[str], args: Sequence[str | bytes | int | float]) -> Awaitable[object]: ...
 
 
 def _read_metadata_limit(metadata: Mapping[str, object] | None) -> int | None:
@@ -200,18 +168,7 @@ class BatchEnqueuedTokenStore:
         self._lock = asyncio.Lock()
         self._owner_token = uuid.uuid4().hex
         redis_cache = internal_usage_cache.dual_cache.redis_cache
-        self._reserve_script: _ScriptRunner | None = (
-            redis_cache.async_register_script(RESERVE_ENQUEUED_TOKENS_SCRIPT) if redis_cache is not None else None
-        )
-        self._refund_script: _ScriptRunner | None = (
-            redis_cache.async_register_script(REFUND_ENQUEUED_TOKENS_SCRIPT) if redis_cache is not None else None
-        )
-        self._save_script: _ScriptRunner | None = (
-            redis_cache.async_register_script(SAVE_RESERVATION_SCRIPT) if redis_cache is not None else None
-        )
-        self._pop_script: _ScriptRunner | None = (
-            redis_cache.async_register_script(POP_RESERVATION_SCRIPT) if redis_cache is not None else None
-        )
+        self._scripts: Final = RedisScriptClient(redis_cache) if redis_cache is not None else None
 
     @staticmethod
     def _counter_key(scope: BatchEnqueuedTokenScope) -> str:
@@ -229,11 +186,10 @@ class BatchEnqueuedTokenStore:
     ) -> BatchEnqueuedTokenOutcome:
         if tokens <= 0 or not scopes:
             return BatchEnqueuedTokenReservation(tokens=max(tokens, 0), scopes=scopes)
-        reserve_script: Final = self._reserve_script
-        refund_script: Final = self._refund_script
-        if reserve_script is not None and refund_script is not None:
+        scripts: Final = self._scripts
+        if scripts is not None:
             try:
-                return await self._reserve_via_redis(reserve_script, refund_script, tokens=tokens, scopes=scopes)
+                return await self._reserve_via_redis(scripts, tokens=tokens, scopes=scopes)
             except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory counters
                 log_redis_failure(
                     verbose_proxy_logger,
@@ -245,22 +201,20 @@ class BatchEnqueuedTokenStore:
 
     async def _reserve_via_redis(
         self,
-        reserve_script: _ScriptRunner,
-        refund_script: _ScriptRunner,
+        scripts: RedisScriptClient,
         tokens: int,
         scopes: tuple[BatchEnqueuedTokenScope, ...],
     ) -> BatchEnqueuedTokenOutcome:
         started: Final = self._monotonic()
         for index, scope in enumerate(scopes):
             result = await self._run_reserve_script(
-                reserve_script,
-                refund_script,
+                scripts,
                 tokens=tokens,
                 scope=scope,
                 already_reserved=scopes[:index],
             )
             if result[0] != 1:
-                await self._rollback_partial_reserve(refund_script, tokens=tokens, scopes=scopes[:index])
+                await self._rollback_partial_reserve(scripts, tokens=tokens, scopes=scopes[:index])
                 return BatchEnqueuedTokenOverLimit(scope=scope, enqueued=result[1])
         return BatchEnqueuedTokenReservation(
             tokens=tokens, scopes=scopes, backend="redis", reserved_at_monotonic=started
@@ -268,30 +222,32 @@ class BatchEnqueuedTokenStore:
 
     async def _run_reserve_script(
         self,
-        reserve_script: _ScriptRunner,
-        refund_script: _ScriptRunner,
+        scripts: RedisScriptClient,
         tokens: int,
         scope: BatchEnqueuedTokenScope,
         already_reserved: tuple[BatchEnqueuedTokenScope, ...],
     ) -> tuple[int, int]:
         try:
-            raw_result: Final = await reserve_script(
-                (self._counter_key(scope),),
-                (tokens, BATCH_ENQUEUED_TOKEN_TTL_SECONDS, scope.limit),
+            raw_result: Final = await reserve_enqueued_tokens(
+                scripts,
+                key=self._counter_key(scope),
+                amount=tokens,
+                ttl=BATCH_ENQUEUED_TOKEN_TTL_SECONDS,
+                limit=scope.limit,
             )
             return _RESERVE_RESULT_ADAPTER.validate_python(raw_result)
         except Exception:
-            await self._rollback_partial_reserve(refund_script, tokens=tokens, scopes=already_reserved)
+            await self._rollback_partial_reserve(scripts, tokens=tokens, scopes=already_reserved)
             raise
 
     async def _rollback_partial_reserve(
         self,
-        refund_script: _ScriptRunner,
+        scripts: RedisScriptClient,
         tokens: int,
         scopes: tuple[BatchEnqueuedTokenScope, ...],
     ) -> None:
         try:
-            await self._refund_via_redis(refund_script, tokens=tokens, scopes=scopes)
+            await self._refund_via_redis(scripts, tokens=tokens, scopes=scopes)
         except Exception as e:  # noqa: BLE001  # best-effort rollback: the leak is TTL-bounded and only tightens the allowance
             verbose_proxy_logger.warning(
                 "Rollback of partially reserved enqueued tokens failed; leaked increments expire with the TTL: %s",
@@ -300,12 +256,12 @@ class BatchEnqueuedTokenStore:
 
     async def _refund_via_redis(
         self,
-        refund_script: _ScriptRunner,
+        scripts: RedisScriptClient,
         tokens: int,
         scopes: tuple[BatchEnqueuedTokenScope, ...],
     ) -> None:
         for scope in scopes:
-            await refund_script((self._counter_key(scope),), (tokens,))
+            await refund_enqueued_tokens(scripts, key=self._counter_key(scope), amount=tokens)
 
     async def _reserve_in_memory(
         self,
@@ -350,14 +306,14 @@ class BatchEnqueuedTokenStore:
                     await self._set_local_counter(scope, remaining, litellm_parent_otel_span)
 
     async def _refund_redis_reservation(self, reservation: BatchEnqueuedTokenReservation) -> None:
-        refund_script: Final = self._refund_script
-        if refund_script is None:
+        scripts: Final = self._scripts
+        if scripts is None:
             verbose_proxy_logger.warning(
                 "No Redis client for a Redis-granted enqueued-token refund; leaked increments expire with the TTL"
             )
             return
         try:
-            await self._refund_via_redis(refund_script, tokens=reservation.tokens, scopes=reservation.scopes)
+            await self._refund_via_redis(scripts, tokens=reservation.tokens, scopes=reservation.scopes)
         except Exception as e:  # noqa: BLE001  # best-effort refund: the leak is TTL-bounded and only tightens the allowance
             verbose_proxy_logger.warning(
                 "Redis enqueued-token refund failed; leaked increments expire with the TTL: %s", str(e)
@@ -372,12 +328,9 @@ class BatchEnqueuedTokenStore:
         serialized: Final = _RESERVATION_ADAPTER.dump_json(reservation).decode("utf-8")
         elapsed: Final = self._monotonic() - reservation.reserved_at_monotonic
         ttl: Final = max(1, BATCH_ENQUEUED_TOKEN_TTL_SECONDS - math.ceil(elapsed))
-        if self._save_script is not None:
+        if self._scripts is not None:
             try:
-                await self._save_script(
-                    (self._record_key(batch_id),),
-                    (serialized, ttl),
-                )
+                await save_reservation(self._scripts, key=self._record_key(batch_id), record=serialized, ttl=ttl)
             except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory record
                 log_redis_failure(
                     verbose_proxy_logger,
@@ -421,12 +374,12 @@ class BatchEnqueuedTokenStore:
             return None
 
     async def _pop_redis_record(self, batch_id: str) -> str | bytes | None:
-        pop_script: Final = self._pop_script
-        if pop_script is None:
+        scripts: Final = self._scripts
+        if scripts is None:
             return None
         try:
             return _POPPED_VALUE_ADAPTER.validate_python(
-                await pop_script((self._record_key(batch_id),), (BATCH_ENQUEUED_TOKEN_TTL_SECONDS,))
+                await pop_reservation(scripts, key=self._record_key(batch_id), ttl=BATCH_ENQUEUED_TOKEN_TTL_SECONDS)
             )
         except Exception as e:  # noqa: BLE001  # any Redis failure must fall back to the in-memory record
             log_redis_failure(

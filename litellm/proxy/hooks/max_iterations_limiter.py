@@ -15,6 +15,8 @@ from typing import TYPE_CHECKING, Any, Final
 
 from litellm import DualCache
 from litellm._logging import verbose_proxy_logger
+from litellm.caching._redis_scripts import increment_session_iterations
+from litellm.caching.redis_cache import RedisScriptClient
 from litellm.exceptions import RateLimitType
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import UserAPIKeyAuth
@@ -28,21 +30,6 @@ if TYPE_CHECKING:
 else:
     InternalUsageCache = Any
 
-
-# Redis Lua script for atomic increment with TTL.
-# Returns the new count after increment.
-# Only sets EXPIRE on first increment (when count becomes 1).
-MAX_ITERATIONS_INCREMENT_SCRIPT: Final = """
-local key = KEYS[1]
-local ttl = tonumber(ARGV[1])
-
-local current = redis.call('INCR', key)
-if current == 1 then
-    redis.call('EXPIRE', key, ttl)
-end
-
-return current
-"""
 
 # Default TTL for session iteration counters (1 hour)
 DEFAULT_MAX_ITERATIONS_TTL: Final = 3600
@@ -72,13 +59,8 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         self.internal_usage_cache = internal_usage_cache
         self.ttl = int(os.getenv("LITELLM_MAX_ITERATIONS_TTL", DEFAULT_MAX_ITERATIONS_TTL))
 
-        # Register Lua script with Redis if available (same pattern as v3 limiter)
-        if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                MAX_ITERATIONS_INCREMENT_SCRIPT
-            )
-        else:
-            self.increment_script = None
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
+        self._scripts: Final = RedisScriptClient(redis_cache) if redis_cache is not None else None
 
     async def async_pre_call_hook(
         self,
@@ -187,13 +169,9 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         Tries Redis first (via registered Lua script for atomicity across
         instances), falls back to in-memory cache.
         """
-        if self.increment_script is not None:
+        if self._scripts is not None:
             try:
-                result: Final = await self.increment_script(
-                    keys=[cache_key],
-                    args=[self.ttl],
-                )
-                return int(result)
+                return await increment_session_iterations(self._scripts, key=cache_key, ttl=self.ttl)
             except Exception as e:
                 verbose_proxy_logger.warning(
                     "MaxIterationsHandler: Redis failed, falling back to in-memory: %s",

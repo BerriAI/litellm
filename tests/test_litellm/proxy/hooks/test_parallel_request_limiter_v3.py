@@ -17,6 +17,7 @@ from fastapi import HTTPException
 
 import litellm
 from litellm import Router
+from tests.unit.caching._redis_script_fakes import fake_scripts
 from litellm.caching.caching import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY
@@ -125,15 +126,15 @@ async def test_sliding_window_rate_limit_v3(monkeypatch, time_controller):
         time_provider=time_controller.now,
     )
 
-    # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
+    # Fake the batch_rate_limit script to simulate window expiry and use correct key construction
     window_starts: Dict[str, int] = {}
     request_counts: Dict[str, int] = {}
 
     async def mock_batch_rate_limiter(*args, **kwargs):
         keys = kwargs.get("keys") if kwargs else args[0]
         args_list = kwargs.get("args") if kwargs else args[1]
-        now = args_list[0]
-        window_size = args_list[1]
+        now = int(args_list[0])
+        window_size = int(args_list[1])
         results = []
         for i in range(0, len(keys), 2):  # Fixed: should be 2, not 3
             window_key = keys[i]
@@ -162,7 +163,7 @@ async def test_sliding_window_rate_limit_v3(monkeypatch, time_controller):
             results.append(new_counter)
         return results
 
-    parallel_request_handler.batch_rate_limiter_script = mock_batch_rate_limiter
+    parallel_request_handler._scripts = fake_scripts(batch_rate_limit=mock_batch_rate_limiter)
 
     # First request should succeed
     await parallel_request_handler.async_pre_call_hook(
@@ -218,15 +219,15 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch, time_controller
         time_provider=time_controller.now,
     )
 
-    # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
+    # Fake the batch_rate_limit script to simulate window expiry and use correct key construction
     window_starts: Dict[str, int] = {}
     request_counts: Dict[str, int] = {}
 
     async def mock_batch_rate_limiter(*args, **kwargs):
         keys = kwargs.get("keys") if kwargs else args[0]
         args_list = kwargs.get("args") if kwargs else args[1]
-        now = args_list[0]
-        window_size = args_list[1]
+        now = int(args_list[0])
+        window_size = int(args_list[1])
         results = []
         for i in range(0, len(keys), 2):  # Fixed: should be 2, not 3
             window_key = keys[i]
@@ -255,7 +256,7 @@ async def test_rate_limiter_script_return_values_v3(monkeypatch, time_controller
             results.append(new_counter)
         return results
 
-    parallel_request_handler.batch_rate_limiter_script = mock_batch_rate_limiter
+    parallel_request_handler._scripts = fake_scripts(batch_rate_limit=mock_batch_rate_limiter)
 
     # Make first request
     await parallel_request_handler.async_pre_call_hook(
@@ -371,7 +372,7 @@ async def test_normal_router_call_tpm_v3(
         time_provider=time_controller.now,
     )
 
-    # Mock the batch_rate_limiter_script to simulate window expiry and use correct key construction
+    # Fake the batch_rate_limit script to simulate window expiry and use correct key construction
     window_starts: Dict[str, int] = {}
     request_counts: Dict[str, int] = {}
 
@@ -379,8 +380,8 @@ async def test_normal_router_call_tpm_v3(
         print(f"args: {args}, kwargs: {kwargs}")
         keys = kwargs.get("keys") if kwargs else args[0]
         args_list = kwargs.get("args") if kwargs else args[1]
-        now = args_list[0]
-        window_size = args_list[1]
+        now = int(args_list[0])
+        window_size = int(args_list[1])
         results = []
         for i in range(0, len(keys), 2):  # Fixed: should be 2, not 3
             window_key = keys[i]
@@ -409,7 +410,7 @@ async def test_normal_router_call_tpm_v3(
             results.append(new_counter)
         return results
 
-    parallel_request_handler.batch_rate_limiter_script = mock_batch_rate_limiter
+    parallel_request_handler._scripts = fake_scripts(batch_rate_limit=mock_batch_rate_limiter)
     monkeypatch.setattr(litellm, "callbacks", [parallel_request_handler])
 
     # Helper to get the correct value for key construction
@@ -880,7 +881,7 @@ async def test_parallel_gauge_uses_atomic_redis_script_v3():
         captured_calls.append((list(keys), list(args)))
         return [0, 3]
 
-    handler.parallel_acquire_script = fake_acquire
+    handler._scripts = fake_scripts(parallel_acquire=fake_acquire)
 
     data: Dict[str, Any] = {"model": "gpt-3.5-turbo"}
     await handler.async_pre_call_hook(
@@ -895,7 +896,7 @@ async def test_parallel_gauge_uses_atomic_redis_script_v3():
     assert isinstance(stashed_slot_id, str) and stashed_slot_id
     assert stashed_acquisition["counter_keys"] == [counter_key]
     assert captured_calls == [
-        ([counter_key], [5, PARALLEL_REQUEST_SLOT_TTL_SECONDS, stashed_slot_id])
+        ([counter_key], ["5", str(PARALLEL_REQUEST_SLOT_TTL_SECONDS), stashed_slot_id])
     ]
     assert (
         await handler.internal_usage_cache.async_get_cache(
@@ -921,7 +922,7 @@ async def test_parallel_gauge_uses_atomic_redis_script_v3():
     async def fake_acquire_over_limit(keys, args):
         return [1, 1, 5, 5]
 
-    handler.parallel_acquire_script = fake_acquire_over_limit
+    handler._scripts = fake_scripts(parallel_acquire=fake_acquire_over_limit)
 
     with pytest.raises(HTTPException) as exc_info:
         await handler.async_pre_call_hook(
@@ -1615,7 +1616,7 @@ async def test_async_increment_tokens_with_ttl_preservation():
         pytest.skip(f"Redis connection failed: {str(e)}")
 
     # Verify the TTL preservation script is registered
-    if parallel_request_handler.token_increment_script is None:
+    if parallel_request_handler._scripts is None:
         pytest.skip(
             "Token increment script not available - Redis Lua scripting may not be supported"
         )
@@ -1767,8 +1768,8 @@ async def test_async_increment_tokens_fallback_behavior():
         internal_usage_cache=InternalUsageCache(local_cache)
     )
 
-    # Mock the token_increment_script to None to simulate unavailable script
-    parallel_request_handler.token_increment_script = None
+    # No script client simulates an unavailable script
+    parallel_request_handler._scripts = None
 
     # Mock the fallback method
     fallback_called = False
@@ -1931,7 +1932,7 @@ async def test_execute_redis_batch_rate_limiter_script_cluster_compatibility():
             ),  # First group fails
             [1234, 1, 1234, 2],  # Second group succeeds
         ]
-        handler.batch_rate_limiter_script = mock_script
+        handler._scripts = fake_scripts(batch_rate_limit=mock_script)
 
         # Mock in-memory fallback (returns 2 values for 2 keys: window_start, counter)
         handler.in_memory_cache_sliding_window = AsyncMock(return_value=[1234, 1])
@@ -2372,7 +2373,7 @@ async def test_execute_token_increment_script_cluster_compatibility():
     with patch.object(handler, "_is_redis_cluster", return_value=True):
         # Mock script
         mock_script = AsyncMock()
-        handler.token_increment_script = mock_script
+        handler._scripts = fake_scripts(increment_tokens=mock_script)
 
         # Create pipeline operations with different hash tags
         pipeline_operations: List[RedisPipelineIncrementOperation] = [
@@ -2881,8 +2882,8 @@ async def test_agent_rate_limit_429_on_over_limit(monkeypatch, time_controller):
     async def mock_batch_rate_limiter(*args, **kwargs):
         keys = kwargs.get("keys") if kwargs else args[0]
         args_list = kwargs.get("args") if kwargs else args[1]
-        now = args_list[0]
-        window_size = args_list[1]
+        now = int(args_list[0])
+        window_size = int(args_list[1])
         results = []
         for i in range(0, len(keys), 2):
             window_key = keys[i]
@@ -2909,7 +2910,7 @@ async def test_agent_rate_limit_429_on_over_limit(monkeypatch, time_controller):
             results.append(new_counter)
         return results
 
-    parallel_request_handler.batch_rate_limiter_script = mock_batch_rate_limiter
+    parallel_request_handler._scripts = fake_scripts(batch_rate_limit=mock_batch_rate_limiter)
 
     with patch(
         "litellm.proxy.agent_endpoints.agent_registry.global_agent_registry.get_agent_by_id",
@@ -3966,8 +3967,8 @@ async def test_mcp_per_key_rpm_enforced_v3(monkeypatch):
     async def mock_batch_rate_limiter(*args, **kwargs):
         keys = kwargs.get("keys") if kwargs else args[0]
         args_list = kwargs.get("args") if kwargs else args[1]
-        now = args_list[0]
-        window_size = args_list[1]
+        now = int(args_list[0])
+        window_size = int(args_list[1])
         results = []
         for i in range(0, len(keys), 2):
             window_key = keys[i]
@@ -3984,7 +3985,7 @@ async def test_mcp_per_key_rpm_enforced_v3(monkeypatch):
             results.append(new_counter)
         return results
 
-    handler.batch_rate_limiter_script = mock_batch_rate_limiter
+    handler._scripts = fake_scripts(batch_rate_limit=mock_batch_rate_limiter)
 
     user_api_key_dict = UserAPIKeyAuth(
         api_key=api_key,
@@ -4137,7 +4138,7 @@ async def test_concurrent_success_callbacks_release_parallel_slot_once_when_redi
         raise ConnectionError("redis unavailable")
 
     release_script = AsyncMock(side_effect=failing_release)
-    handler.parallel_release_script = release_script
+    handler._scripts = fake_scripts(parallel_release=release_script)
     await local_cache.async_set_cache(key=parallel_key, value=2, local_only=True)
     stash = get_or_create_request_stash()
     stash.owner_litellm_call_id = call_id
@@ -4409,11 +4410,11 @@ async def test_read_only_gauge_check_counts_without_acquiring_v3():
         captured_calls.append((list(keys), list(args)))
         return [3]
 
-    handler.parallel_count_script = fake_count
+    handler._scripts = fake_scripts(parallel_count=fake_count)
 
     response = await handler.should_rate_limit(descriptors=descriptors, read_only=True)
     assert captured_calls == [
-        ([counter_key], [PARALLEL_REQUEST_SLOT_TTL_SECONDS])
+        ([counter_key], [str(PARALLEL_REQUEST_SLOT_TTL_SECONDS)])
     ]
     assert response["overall_code"] == "OK"
     assert response["statuses"] == [
@@ -4430,7 +4431,7 @@ async def test_read_only_gauge_check_counts_without_acquiring_v3():
     async def failing_count(keys, args):
         raise ConnectionError("redis unavailable")
 
-    handler.parallel_count_script = failing_count
+    handler._scripts = fake_scripts(parallel_count=failing_count)
     await _seed_max_parallel_requests_slots(
         local_cache, counter_key, ["s1", "s2", "s3", "s4", "s5"]
     )
@@ -4459,7 +4460,7 @@ async def test_redis_release_script_updates_local_mirror_v3():
         captured_calls.append((list(keys), list(args)))
         return [2]
 
-    handler.parallel_release_script = fake_release
+    handler._scripts = fake_scripts(parallel_release=fake_release)
 
     get_or_create_request_stash().parallel_slot = ParallelSlotAcquisition(
         slot_id="slot-redis-test",
@@ -4546,8 +4547,7 @@ async def test_in_memory_fallback_respects_mirrored_redis_count_v3():
     async def failing_script(keys, args):
         raise ConnectionError("redis unavailable")
 
-    handler.parallel_acquire_script = failing_script
-    handler.parallel_release_script = failing_script
+    handler._scripts = fake_scripts(parallel_acquire=failing_script, parallel_release=failing_script)
 
     await local_cache.async_set_cache(key=counter_key, value=5, local_only=True)
     with pytest.raises(HTTPException) as exc_info:
