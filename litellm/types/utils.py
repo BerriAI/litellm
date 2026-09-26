@@ -56,8 +56,15 @@ from litellm.types.llms.base import (
 from litellm.types.mcp import MCPServerCostInfo
 
 from ..litellm_core_utils.core_helpers import map_finish_reason, process_response_headers
+from . import litellm_params as _litellm_params
 from .agents import LiteLLMSendMessageResponse
 from .guardrails import GuardrailEventHooks
+from .litellm_params import (
+    AGENTIC_LOOP_KWARG_NAMES,
+    BEDROCK_BATCH_KWARG_NAMES,
+    KWARG_ARTIFACTS,
+    OWNED_KWARG_NAMES,
+)
 from .llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
 from .llms.base import HiddenParams
 from .llms.openai import (
@@ -292,6 +299,7 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     cache_read_input_token_cost_above_272k_tokens_flex: float | None
     cache_read_input_token_cost_above_512k_tokens: float | None
     cache_read_input_token_cost_batches: ReadOnly[float | None]
+    cache_read_input_token_cost_above_200k_tokens_batches: ReadOnly[float | None]
     cache_read_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_batches: ReadOnly[float | None]
     cache_creation_input_token_cost_above_272k_tokens_batches: ReadOnly[float | None]
@@ -320,8 +328,10 @@ class ModelInfoBase(ProviderSpecificModelInfo, total=False):
     input_cost_per_second: float | None  # for OpenAI Speech models
     input_cost_per_token_batches: float | None
     input_cost_per_video_token_batches: ReadOnly[float | None]
+    input_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
     input_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_batches: float | None
+    output_cost_per_token_above_200k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token_above_272k_tokens_batches: ReadOnly[float | None]
     output_cost_per_token: Required[float | None]
     output_cost_per_token_flex: float | None  # OpenAI flex service tier pricing
@@ -1354,9 +1364,7 @@ def add_provider_specific_fields(object: BaseModel, provider_specific_fields: di
 class Message(SafeAttributeModel, OpenAIObject):
     content: str | None
     role: Literal["assistant", "user", "system", "tool", "function"]
-    tool_calls: (
-        list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
-    )  # mutable-ok: public pydantic response field; only the union member is new
+    tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall] | None
     function_call: FunctionCall | None
     audio: ChatCompletionAudioResponse | None = None
     images: list[ImageURLListItem] | None = None
@@ -1479,9 +1487,7 @@ class Delta(SafeAttributeModel, OpenAIObject):
         content: str | None
         role: str | None
         function_call: FunctionCall | None
-        tool_calls: (
-            list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
-        )  # mutable-ok: public pydantic response field; only the union member is new
+        tool_calls: list[ChatCompletionDeltaToolCall | ChatCompletionDeltaCustomToolCall] | None
         audio: ChatCompletionAudioResponse | None
         images: list[ImageURLListItem] | None
         annotations: list[ChatCompletionAnnotation] | None
@@ -3726,6 +3732,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     cache_read_input_token_cost_above_272k_tokens_priority: float | None = None
     cache_read_input_token_cost_above_272k_tokens_flex: float | None = None
     cache_read_input_token_cost_batches: float | None = None
+    cache_read_input_token_cost_above_200k_tokens_batches: float | None = None
     cache_read_input_token_cost_above_272k_tokens_batches: float | None = None
     cache_creation_input_token_cost_batches: float | None = None
     cache_creation_input_token_cost_above_272k_tokens_batches: float | None = None
@@ -3739,6 +3746,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     input_cost_per_token_above_200k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_priority: float | None = None
     input_cost_per_token_above_272k_tokens_flex: float | None = None
+    input_cost_per_token_above_200k_tokens_batches: float | None = None
     input_cost_per_token_above_272k_tokens_batches: float | None = None
     input_cost_per_query: float | None = None
     input_cost_per_image: float | None = None
@@ -3763,6 +3771,7 @@ class CustomPricingLiteLLMParams(MirroredPricingParams):
     output_cost_per_token_above_200k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_priority: float | None = None
     output_cost_per_token_above_272k_tokens_flex: float | None = None
+    output_cost_per_token_above_200k_tokens_batches: float | None = None
     output_cost_per_token_above_272k_tokens_batches: float | None = None
     output_cost_per_character_above_128k_tokens: float | None = None
     output_cost_per_image: float | None = None
@@ -3864,7 +3873,7 @@ def without_server_derived_pricing(model_info: Mapping[str, Any]) -> Mapping[str
     )
 
 
-def echoed_cost_map_pricing_fields(model_info: Mapping[str, Any]) -> tuple[str, ...]:
+def echoed_cost_map_pricing_fields(model_info: Mapping[str, object]) -> tuple[str, ...]:
     """Pricing fields a stored ``model_info`` blob copied from a ``/model/info`` response.
 
     Only ``litellm.get_model_info`` emits ``key`` (the resolved cost-map entry), so a stored
@@ -3895,7 +3904,7 @@ def echoed_cost_map_fields(
     )
 
 
-def pricing_override_fields(*sources: Mapping[str, Any]) -> tuple[str, ...]:
+def pricing_override_fields(*sources: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(
         sorted(
             frozenset(
@@ -3905,204 +3914,19 @@ def pricing_override_fields(*sources: Mapping[str, Any]) -> tuple[str, ...]:
     )
 
 
-# Server-controlled fields that bound or drive an interceptor's agentic loop
-# (depth, cycle fingerprints, ceiling, code-interpreter sandbox state). Listed
-# in all_litellm_params so they are treated as LiteLLM-level and excluded from
-# get_non_default_completion_params; otherwise the OpenAI param builder sweeps
-# any unrecognized top-level key into extra_body and leaks them to the provider.
-# This is what lets the loop carry state across rerun calls without a provider
-# scrubber.
-agentic_loop_internal_litellm_params: Final = [
-    "_agentic_loop_depth",
-    "_agentic_loop_fingerprints",
-    "_agentic_loop_api_surface",
-    "max_agentic_loops",
-    "_code_interpreter_interception_active",
-    "_code_interpreter_interception_sandbox_key",
-    "_code_interpreter_interception_session_scoped",
-    "_code_interpreter_interception_converted_stream",
-    "_websearch_interception_emit_native_blocks",
-    "_websearch_interception_converted_stream",
-    "_headroom_interception_converted_stream",
+agentic_loop_internal_litellm_params: Final = list(AGENTIC_LOOP_KWARG_NAMES)  # mutable-ok: public type stays a list
+
+bedrock_batch_litellm_params: Final = BEDROCK_BATCH_KWARG_NAMES
+
+TRUSTED_CALLBACK_VARS_FIELD: Final = _litellm_params.TRUSTED_CALLBACK_VARS_FIELD
+ADDRESSED_RESPONSE_ID_FIELD: Final = _litellm_params.ADDRESSED_RESPONSE_ID_FIELD
+
+all_litellm_params = [  # rebind-ok: two star imports in litellm/__init__.py re-bind it  # mutable-ok: callers concat
+    *OWNED_KWARG_NAMES,
+    *KWARG_ARTIFACTS,
+    *StandardCallbackDynamicParams.__annotations__,
+    *CustomPricingLiteLLMParams.model_fields,
 ]
-
-# Proxy-owned callback credentials, stamped from admin-configured team/key callback
-# settings. Listed in all_litellm_params for the same reason as the agentic-loop
-# fields above: an unrecognized top-level key is swept into extra_body and sent to
-# the provider.
-TRUSTED_CALLBACK_VARS_FIELD: Final = "litellm_trusted_callback_vars"
-
-ADDRESSED_RESPONSE_ID_FIELD: Final = "_litellm_addressed_response_id"
-
-# Bedrock managed-batch deployment config, read from litellm_params by the batch and
-# files transformations. Listed for the same reason as the fields above: these sit on
-# a deployment that also serves chat, so leaking them into extra_body makes Bedrock
-# reject every non-batch request to that deployment.
-bedrock_batch_litellm_params: Final = (
-    "aws_batch_role_arn",
-    "s3_bucket_name",
-    "s3_region_name",
-    "s3_endpoint_url",
-    "s3_output_bucket_name",
-    "s3_bucket_owner",
-    "s3_access_key_id",
-    "s3_secret_access_key",
-    "s3_encryption_key_id",
-    "bedrock_tags",
-)
-
-all_litellm_params = (
-    agentic_loop_internal_litellm_params
-    + [TRUSTED_CALLBACK_VARS_FIELD, ADDRESSED_RESPONSE_ID_FIELD, *bedrock_batch_litellm_params]
-    + [
-        "_context_compaction_state",
-        "metadata",
-        "litellm_metadata",
-        "keepalive_seconds",
-        "allow_client_keepalive_override",
-        "litellm_trace_id",
-        "litellm_request_debug",
-        "guardrails",
-        "tags",
-        "acompletion",
-        "aimg_generation",
-        "atext_completion",
-        "text_completion",
-        "caching",
-        "mock_response",
-        "mock_timeout",
-        "disable_add_transform_inline_image_block",
-        "api_key",
-        "api_version",
-        "prompt_id",
-        "prompt_variables",
-        "litellm_system_prompt",
-        "provider_specific_header",
-        "prompt_version",
-        "prompt_environment",
-        "api_base",
-        "force_timeout",
-        "logger_fn",
-        "verbose",
-        "custom_llm_provider",
-        "model_file_id_mapping",
-        "litellm_logging_obj",
-        "litellm_call_id",
-        "completion_call_id",
-        "model_alias_map",
-        "custom_prompt_dict",
-        "stream_response",
-        "cost_per_query",
-        "ssl_verify",
-        "data_residency",
-        "async_call",
-        "aembedding",
-        "allm_passthrough_route",
-        "_litellm_strip_stream_usage",
-        "use_client",
-        "id",
-        "fallbacks",
-        "routing_strategy",
-        "_router_weights",
-        "azure",
-        "headers",
-        "model_list",
-        "num_retries",
-        "context_window_fallback_dict",
-        "retry_policy",
-        "retry_strategy",
-        "roles",
-        "final_prompt_value",
-        "bos_token",
-        "eos_token",
-        "request_timeout",
-        "client_side_timeout",
-        "complete_response",
-        "self",
-        "client",
-        "rpm",
-        "tpm",
-        "default_api_key_rpm_limit",
-        "default_api_key_tpm_limit",
-        "itpm",
-        "otpm",
-        "max_parallel_requests",
-        "input_cost_per_token",
-        "output_cost_per_token",
-        "input_cost_per_second",
-        "output_cost_per_second",
-        "hf_model_name",
-        "model_info",
-        "proxy_server_request",
-        "secret_fields",
-        "preset_cache_key",
-        "caching_groups",
-        "ttl",
-        "cache",
-        "enable_prompt_caching",
-        "no-log",
-        "base_model",
-        "stream_timeout",
-        "stream_chunk_size",
-        "supports_system_message",
-        "region_name",
-        "allowed_model_region",
-        "model_config",
-        "fastest_response",
-        "cooldown_time",
-        "cache_key",
-        "max_retries",
-        "azure_ad_token_provider",
-        "tenant_id",
-        "client_id",
-        "azure_username",
-        "azure_password",
-        "azure_scope",
-        "client_secret",
-        "user_continue_message",
-        "configurable_clientside_auth_params",
-        "weight",
-        "ensure_alternating_roles",
-        "assistant_continue_message",
-        "user_continue_message",
-        "fallback_depth",
-        "max_fallbacks",
-        "attempted_targets",
-        "max_budget",
-        "budget_duration",
-        "use_in_pass_through",
-        "merge_reasoning_content_in_choices",
-        "litellm_credential_name",
-        "allowed_openai_params",
-        "litellm_session_id",
-        "provider_affinity_header",
-        "use_litellm_proxy",
-        "use_chat_completions_api",
-        "rust",
-        "prompt_label",
-        "shared_session",
-        "search_tool_name",
-        "order",
-        "enable_tag_filtering",
-        "enable_json_schema_validation",
-        "use_xai_oauth",
-        "auto_router_config_path",
-        "auto_router_config",
-        "auto_router_default_model",
-        "auto_router_embedding_model",
-        "auto_router_max_input_chars",
-        "auto_router_routing_compression",
-        "auto_router_model_compression",
-        "complexity_router_config",
-        "complexity_router_default_model",
-        "adaptive_router_config",
-        "adaptive_router_default_model",
-        "quality_router_config",
-        "quality_router_default_model",
-    ]
-    + list(StandardCallbackDynamicParams.__annotations__.keys())
-    + list(CustomPricingLiteLLMParams.model_fields.keys())
-)
 
 
 class KeyGenerationConfig(TypedDict, total=False):
@@ -4198,6 +4022,7 @@ class LlmProviders(str, Enum):
     NVIDIA_RIVA = "nvidia_riva"
     SONIOX = "soniox"
     CEREBRAS = "cerebras"
+    NADIR = "nadir"
     AI21_CHAT = "ai21_chat"
     VOLCENGINE = "volcengine"
     CODESTRAL = "codestral"
@@ -4321,7 +4146,7 @@ FILE_CONTENT_STREAMING_PROVIDERS: Final[frozenset[str]] = frozenset(
 
 LITELLM_EXECUTED_BATCH_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.HOSTED_VLLM.value})
 
-ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai"]
+ListBatchesSupportedProvider = Literal["openai", "azure", "hosted_vllm", "litellm_proxy", "vertex_ai", "xai"]
 
 LIST_BATCHES_SUPPORTED_PROVIDERS: Final[frozenset[str]] = frozenset(get_args(ListBatchesSupportedProvider))
 

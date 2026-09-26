@@ -39,6 +39,7 @@ from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, TypeAdapter
 
 from litellm.constants import MCP_METADATA_TIMEOUT
+from litellm.proxy._experimental.mcp_server.tool_outcome import TextResult
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
@@ -62,7 +63,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.mcp import MCPAuth, MCPAuthType
+from litellm.types.mcp import MCPAuth, MCPAuthType, MCPUpstreamProtocol
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
 from litellm.caching.caching import DualCache
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -6730,7 +6731,7 @@ class TestMCPServerManager:
         # Create mock client that tracks call_tool usage
         mock_client = AsyncMock()
 
-        async def mock_call_tool(params, host_progress_callback=None):
+        async def mock_call_tool(params, host_progress_callback=None, allow_input_required=False):
             # Return a mock CallToolResult
             result = MagicMock(spec=CallToolResult)
             result.content = [{"type": "text", "text": "Tool executed successfully"}]
@@ -8709,6 +8710,35 @@ class TestMCPServerManagerExpandToolPermissions:
         result = manager.expand_tool_permissions({"uuid-a": ["read_file"], "alias-a": ["write_file"]})
         assert sorted(result["uuid-a"]) == ["read_file", "write_file"]
 
+    def test_wildcard_survives_expansion_as_list_entry(self):
+        """["*"] stays in the expanded list so the caller's wildcard check
+        (``_union_tool_grants``) can read it; this function only normalizes
+        keys and never maps grants to None."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alpha")
+
+        result = manager.expand_tool_permissions({"uuid-a": ["*"]})
+        assert result == {"uuid-a": ["*"]}
+
+    def test_wildcard_unions_with_concrete_names_across_keys_for_same_server(self):
+        """An alias key carrying ["*"] unioned with an id key naming one tool
+        keeps both entries; interpretation of the wildcard belongs to the
+        caller, not the expansion."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alias-a", alias="alias-a")
+
+        result = manager.expand_tool_permissions({"uuid-a": ["read_file"], "alias-a": ["*"]})
+        assert sorted(result["uuid-a"]) == ["*", "read_file"]
+
+    def test_empty_list_stays_deny_all(self):
+        """[] is deny-all, a distinct meaning from no entry (unrestricted);
+        the key must survive expansion rather than disappear."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alpha")
+
+        result = manager.expand_tool_permissions({"uuid-a": []})
+        assert result == {"uuid-a": []}
+
 
 class TestOAuthDiscoverySSRFGuard:
     """SSRF guard for the OAuth metadata discovery follow-up fetches.
@@ -10032,7 +10062,7 @@ class _RetryFakeClient:
         self._MCPClient = MCPClient
         self.attempts = 0
 
-    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, allow_input_required=False):
         self.attempts += 1
         if self._raises is not None:
             if raise_on_error:
@@ -10244,7 +10274,7 @@ class TestOBOConcurrencyLimit:
         inflight = {"current": 0, "peak": 0}
 
         class _ConcurrencyRecordingClient:
-            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, allow_input_required=False):
                 inflight["current"] += 1
                 inflight["peak"] = max(inflight["peak"], inflight["current"])
                 try:
@@ -12220,6 +12250,38 @@ class TestOpenApiHandlerRelaysUpstreamAuth:
 
         assert result.is_error is True
         assert "upstream returned HTTP 503" in result.content[0].text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("body", "compat", "expected_structured"),
+        [
+            ('{"total": 1.10, "items": [ ]}', "legacy", {"total": 1.1, "items": []}),
+            ('{"total": 1.10, "items": [ ]}', "modern", {"total": 1.1, "items": []}),
+            ("[1, 2]", "legacy", None),
+            ("[1, 2]", "modern", [1, 2]),
+            ("plain text", "legacy", None),
+            ("plain text", "modern", None),
+        ],
+    )
+    async def test_json_bodies_keep_verbatim_text_and_gain_structured_content(self, body, compat, expected_structured):
+        """The OpenAPI arm used to stringify the response; now the text block is the upstream body
+        byte for byte, exactly once, and JSON bodies carry structuredContent when the caller's revision admits it."""
+        from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat, parse_http_body
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        manager = MCPServerManager()
+
+        async def handler(**_kwargs):
+            return parse_http_body(body)
+
+        tool = MagicMock()
+        tool.handler = handler
+        with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
+            result = await manager._call_openapi_tool_handler(self._server(), "list_reports", {}, WireCompat(compat))
+
+        assert result.is_error is False
+        assert [block.text for block in result.content] == [body]
+        assert result.structured_content == expected_structured
 
 
 class TestConfigServerIdPinning:
@@ -14225,7 +14287,7 @@ class TestProtectedCredentialPreparation:
         caller_token: Final = _request_auth_header.set(caller)
         extra_token: Final = _request_extra_headers.set(forwarded)
         try:
-            assert await tool() == "authenticated"
+            assert await tool() == TextResult("authenticated")
             sent: Final = destination.calls.last.request.headers
             assert sent.get("x-api-key") == static.get("X-API-Key", (forwarded or {}).get("X-API-Key"))
             if caller:
@@ -14516,3 +14578,86 @@ async def test_client_sampling_does_not_fill_explicit_context_from_another_ambie
         assert captured["client_ip"] is None
     finally:
         auth_context_var.reset(token)
+
+
+class TestSharedIdentifierPrefixWarning:
+    """Two stored rows sharing lowercased alias-or-server_name publish one tool
+    prefix; reload must surface them once so the ambiguity is visible."""
+
+    @pytest.mark.asyncio
+    async def test_reload_warns_once_per_shared_identifier(self, caplog):
+        manager = MCPServerManager()
+        rows = [
+            LiteLLM_MCPServerTable(
+                server_id="srv-a", server_name="alpha", alias="shared", url="https://a.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+            LiteLLM_MCPServerTable(
+                server_id="srv-b", server_name="beta", alias="Shared", url="https://b.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+            LiteLLM_MCPServerTable(
+                server_id="srv-c", server_name="gamma", alias="lonely", url="https://c.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+        ]
+        raw_rows = [MagicMock(model_dump=lambda row=row: row.model_dump()) for row in rows]
+        repository = MagicMock()
+        repository.table.find_many = AsyncMock(return_value=raw_rows)
+
+        async def build_from_table(table, **_kwargs):
+            return MCPServer(
+                server_id=table.server_id,
+                name=table.alias or table.server_name,
+                alias=table.alias,
+                server_name=table.server_name,
+                url=table.url,
+                transport=table.transport,
+            )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=repository,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch.object(manager, "build_mcp_server_from_table", new=build_from_table),
+            patch.object(manager, "_maybe_register_openapi_tools", new=AsyncMock()),
+            patch.object(manager, "_prime_oauth_metadata_discovery_for_servers"),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.reload_servers_from_database()
+
+        shared_warnings = [m for m in caplog.messages if "share the identifier" in m]
+        assert len(shared_warnings) == 1
+        assert "srv-a" in shared_warnings[0]
+        assert "srv-b" in shared_warnings[0]
+        assert "srv-c" not in shared_warnings[0]
+        assert "'shared'" in shared_warnings[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", ["auto", "2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"])
+async def test_configured_protocol_reaches_the_upstream_client(config_only_mcp_manager_factory, revision):
+    manager = config_only_mcp_manager_factory()
+    await manager.load_servers_from_config({"versions": {"url": "http://127.0.0.1:9/mcp", "transport": "http", "protocol_version": revision}})
+    server = next(iter(manager.config_mcp_servers.values()))
+    client = await manager._create_mcp_client(server)
+    assert server.protocol_version == revision
+    assert client.protocol_version == revision
+
+
+@pytest.mark.parametrize("revision", ("auto", "2024-11-05", "2025-06-18"))
+@pytest.mark.parametrize("explicit", (None, "auto", "2025-11-25"))
+def test_runtime_protocol_metadata_preserves_explicit_precedence(
+    revision: MCPUpstreamProtocol, explicit: MCPUpstreamProtocol | None
+) -> None:
+    server: Final = MCPServer.model_validate({
+        "server_id": "preview", "name": "preview", "transport": "http",
+        "mcp_info": {"protocol_version": revision},
+        **({"protocol_version": explicit} if explicit is not None else {}),
+    })
+    assert server.protocol_version == (explicit if explicit is not None else revision)

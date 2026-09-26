@@ -7927,7 +7927,7 @@ export interface paths {
          *     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
-         *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+         *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key. Proxy admin only.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
          *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
          *     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
@@ -8408,7 +8408,7 @@ export interface paths {
          *     - send_invite_email: Optional[bool] - Send invite email to user_id
          *     - guardrails: Optional[List[str]] - List of active guardrails for the key
          *     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
-         *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+         *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key. Proxy admin only.
          *     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
          *     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
          *     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
@@ -14615,6 +14615,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/spend/capture_rate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Spend Capture Rate
+         * @description Compare the spend LiteLLM captured for a provider against that provider's own bill, per UTC day.
+         *
+         *     Admin only. Reads the provider's billing API with the billing credential set on the proxy
+         *     (OpenAI: `OPENAI_ADMIN_KEY`) and sums `LiteLLM_DailyUserSpend` for the same days.
+         *
+         *     Example:
+         *     ```
+         *     curl -H "Authorization: Bearer sk-1234"       "http://localhost:4000/spend/capture_rate?provider=openai&start_date=2026-09-17&end_date=2026-09-23"
+         *     ```
+         */
+        get: operations["get_spend_capture_rate_spend_capture_rate_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/spend/keys": {
         parameters: {
             query?: never;
@@ -15645,6 +15673,53 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/team/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search Team Daily Activity Keys
+         * @description Aggregated daily team activity for the keys matching `search`, across every key the caller may
+         *     see rather than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend.
+         */
+        get: operations["search_team_daily_activity_keys_team_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/team/daily/activity/export": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Team Daily Activity Export
+         * @description Server-side Team Usage export, not subject to USAGE_TOP_API_KEYS_LIMIT.
+         *
+         *     Same scoping as /team/daily/activity/aggregated, answered by one unbounded
+         *     rollup query, returned as CSV or JSON. For daily_with_keys,
+         *     daily_with_users and daily_with_models the PTU sentinel flat-cost rows are
+         *     excluded, so metadata totals under those export types cover request spend
+         *     only; the plain daily export includes them.
+         */
+        get: operations["get_team_daily_activity_export_team_daily_activity_export_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/team/delete": {
         parameters: {
             query?: never;
@@ -16001,7 +16076,7 @@ export interface paths {
          *     - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
-         *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+         *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
          *     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
@@ -16228,7 +16303,7 @@ export interface paths {
          *     - model_max_budget: Optional[dict] - Per-model max budget every key on the team inherits unless the key sets its own for that model. Example: {"gpt-4o": {"max_budget": 10, "budget_duration": "1d"}}
          *     - guardrails: Optional[List[str]] - Guardrails for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails)
          *     - policies: Optional[List[str]] - Policies for the team. [Docs](https://docs.litellm.ai/docs/proxy/guardrails/guardrail_policies)
-         *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+         *     - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the team. Proxy admin only.
          *     - object_permission: Optional[LiteLLM_ObjectPermissionBase] - team-specific object permission. Example - {"vector_stores": ["vector_store_1", "vector_store_2"], "agents": ["agent_1", "agent_2"], "agent_access_groups": ["dev_group"]}. IF null or {} then no object permission.
          *     - team_member_budget: Optional[float] - The maximum budget allocated to an individual team member.
          *     - team_member_budget_duration: Optional[str] - The duration of the budget for the team member. Doc [here](https://docs.litellm.ai/docs/proxy/team_budgets)
@@ -17326,6 +17401,29 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/user/daily/activity/aggregated/search": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Search User Daily Activity Keys
+         * @description Search verification tokens by exact token hash or by a case-insensitive substring of
+         *     the key alias or owning user ID, then return the aggregated daily activity for the
+         *     matches. Lets the Usage page surface keys that fell outside the top-spend subset
+         *     the aggregated endpoint loads.
+         */
+        get: operations["search_user_daily_activity_keys_user_daily_activity_aggregated_search_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/user/delete": {
         parameters: {
             query?: never;
@@ -18120,6 +18218,37 @@ export interface paths {
          *     ```
          */
         patch: operations["patch_agent_v1_agents__agent_id__patch"];
+        trace?: never;
+    };
+    "/v1/agents/{agent_id}/kill_switch": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        /**
+         * Trigger Agent Kill Switch
+         * @description Fire the agent's configured kill switch webhook. Proxy admin only.
+         *
+         *     LiteLLM only makes the configured HTTP call and reports what came back; it
+         *     does not change the agent's state in LiteLLM. Returns 200 when the webhook
+         *     answered 2xx, 502 with the same result body otherwise. Every attempt is
+         *     written to the audit log as a `kill_switch_fired` row against the agent.
+         *
+         *     Example Request:
+         *     ```bash
+         *     curl -X POST "http://localhost:4000/v1/agents/123e4567-e89b-12d3-a456-426614174000/kill_switch" \
+         *         -H "Authorization: Bearer <your_api_key>"
+         *     ```
+         */
+        post: operations["trigger_agent_kill_switch_v1_agents__agent_id__kill_switch_post"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
         trace?: never;
     };
     "/v1/agents/{agent_id}/make_public": {
@@ -23701,6 +23830,270 @@ export interface components {
             description?: string | null;
         };
         /**
+         * AcknowledgedSafetyCheck
+         * @description A pending safety check for the computer call.
+         */
+        AcknowledgedSafetyCheck: {
+            /** Code */
+            code?: string | null;
+            /** Id */
+            id: string;
+            /** Message */
+            message?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * Action
+         * @description The shell commands and limits that describe how to run the tool call.
+         */
+        Action: {
+            /** Commands */
+            commands: string[];
+            /** Max Output Length */
+            max_output_length?: number | null;
+            /** Timeout Ms */
+            timeout_ms?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ActionClick
+         * @description A click action.
+         */
+        ActionClick: {
+            /**
+             * Button
+             * @enum {string}
+             */
+            button: "left" | "right" | "wheel" | "back" | "forward";
+            /** Keys */
+            keys?: string[] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "click";
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ActionDoubleClick
+         * @description A double click action.
+         */
+        ActionDoubleClick: {
+            /** Keys */
+            keys?: string[] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "double_click";
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ActionDrag
+         * @description A drag action.
+         */
+        ActionDrag: {
+            /** Keys */
+            keys?: string[] | null;
+            /** Path */
+            path: components["schemas"]["ActionDragPath"][];
+            /**
+             * Type
+             * @constant
+             */
+            type: "drag";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ActionDragPath
+         * @description An x/y coordinate pair, e.g. `{ x: 100, y: 200 }`.
+         */
+        ActionDragPath: {
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ActionFind
+         * @description Action type "find_in_page": Searches for a pattern within a loaded page.
+         */
+        ActionFind: {
+            /** Pattern */
+            pattern: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "find_in_page";
+            /** Url */
+            url: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ActionKeypress
+         * @description A collection of keypresses the model would like to perform.
+         */
+        ActionKeypress: {
+            /** Keys */
+            keys: string[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "keypress";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ActionMove
+         * @description A mouse move action.
+         */
+        ActionMove: {
+            /** Keys */
+            keys?: string[] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "move";
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ActionOpenPage
+         * @description Action type "open_page" - Opens a specific URL from search results.
+         */
+        ActionOpenPage: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "open_page";
+            /** Url */
+            url?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ActionScreenshot
+         * @description A screenshot action.
+         */
+        ActionScreenshot: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "screenshot";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ActionScroll
+         * @description A scroll action.
+         */
+        ActionScroll: {
+            /** Keys */
+            keys?: string[] | null;
+            /** Scroll X */
+            scroll_x: number;
+            /** Scroll Y */
+            scroll_y: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "scroll";
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ActionSearch
+         * @description Action type "search" - Performs a web search query.
+         */
+        ActionSearch: {
+            /** Queries */
+            queries?: string[] | null;
+            /** Query */
+            query: string;
+            /** Sources */
+            sources?: components["schemas"]["ActionSearchSource"][] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "search";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ActionSearchSource
+         * @description A source used in the search.
+         */
+        ActionSearchSource: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "url";
+            /** Url */
+            url: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ActionType
+         * @description An action to type in text.
+         */
+        ActionType: {
+            /** Text */
+            text: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "type";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ActionWait
+         * @description A wait action.
+         */
+        ActionWait: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "wait";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * ActiveUsersAnalyticsResponse
          * @description Response for active users analytics
          */
@@ -23818,6 +24211,7 @@ export interface components {
             agent_name: string;
             /** Extra Headers */
             extra_headers?: string[] | null;
+            kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
                 [key: string]: unknown;
@@ -23922,6 +24316,90 @@ export interface components {
             /** Token */
             token: string;
         };
+        /** AgentKillSwitchApiKeyAuth */
+        AgentKillSwitchApiKeyAuth: {
+            /** Api Key */
+            api_key: string;
+            /**
+             * Header Name
+             * @default x-api-key
+             */
+            header_name: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "api_key";
+        };
+        /** AgentKillSwitchBasicAuth */
+        AgentKillSwitchBasicAuth: {
+            /** Password */
+            password: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "basic";
+            /** Username */
+            username: string;
+        };
+        /** AgentKillSwitchBearerAuth */
+        AgentKillSwitchBearerAuth: {
+            /** Token */
+            token: string;
+            /**
+             * @description discriminator enum property added by openapi-typescript
+             * @enum {string}
+             */
+            type: "bearer";
+        };
+        /**
+         * AgentKillSwitchConfig
+         * @description Webhook an admin fires to shut an agent down out of band. LiteLLM only
+         *     makes the call; whatever the endpoint does with it is the agent's business.
+         */
+        AgentKillSwitchConfig: {
+            /** Auth */
+            auth?: (components["schemas"]["AgentKillSwitchBearerAuth"] | components["schemas"]["AgentKillSwitchApiKeyAuth"] | components["schemas"]["AgentKillSwitchBasicAuth"]) | null;
+            /** Body */
+            body?: {
+                [key: string]: unknown;
+            } | null;
+            /** Headers */
+            headers?: {
+                [key: string]: string;
+            };
+            /**
+             * Method
+             * @default POST
+             * @enum {string}
+             */
+            method: "POST" | "PUT" | "PATCH" | "DELETE" | "GET";
+            /** Query Params */
+            query_params?: {
+                [key: string]: string;
+            };
+            /** Url */
+            url: string;
+        };
+        /** AgentKillSwitchResult */
+        AgentKillSwitchResult: {
+            /** Agent Id */
+            agent_id: string;
+            /** Error */
+            error?: string | null;
+            /**
+             * Method
+             * @enum {string}
+             */
+            method: "POST" | "PUT" | "PATCH" | "DELETE" | "GET";
+            /** Response Body */
+            response_body?: string | null;
+            /** Status Code */
+            status_code?: number | null;
+            /** Url */
+            url: string;
+        };
         /** AgentMakePublicResponse */
         AgentMakePublicResponse: {
             /** Message */
@@ -23978,6 +24456,7 @@ export interface components {
             extra_headers?: string[] | null;
             /** Keys */
             keys?: components["schemas"]["AgentKeySummary"][] | null;
+            kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
                 [key: string]: unknown;
@@ -24070,6 +24549,86 @@ export interface components {
             /** Index Permissions */
             index_permissions: ("read" | "write")[];
         };
+        /**
+         * AnnotationContainerFileCitation
+         * @description A citation for a container file used to generate a model response.
+         */
+        AnnotationContainerFileCitation: {
+            /** Container Id */
+            container_id: string;
+            /** End Index */
+            end_index: number;
+            /** File Id */
+            file_id: string;
+            /** Filename */
+            filename: string;
+            /** Start Index */
+            start_index: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "container_file_citation";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * AnnotationFileCitation
+         * @description A citation to a file.
+         */
+        AnnotationFileCitation: {
+            /** File Id */
+            file_id: string;
+            /** Filename */
+            filename: string;
+            /** Index */
+            index: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "file_citation";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * AnnotationFilePath
+         * @description A path to a file.
+         */
+        AnnotationFilePath: {
+            /** File Id */
+            file_id: string;
+            /** Index */
+            index: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "file_path";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * AnnotationURLCitation
+         * @description A citation for a web resource used to generate a model response.
+         */
+        AnnotationURLCitation: {
+            /** End Index */
+            end_index: number;
+            /** Start Index */
+            start_index: number;
+            /** Title */
+            title: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "url_citation";
+            /** Url */
+            url: string;
+        } & {
+            [key: string]: unknown;
+        };
         /** ApplyGuardrailRequest */
         ApplyGuardrailRequest: {
             /** Entities */
@@ -24098,6 +24657,117 @@ export interface components {
         ApplyGuardrailResponse: {
             /** Response Text */
             response_text: string;
+        };
+        /**
+         * ApplyPatchCall
+         * @description A tool call representing a request to create, delete, or update files using diff patches.
+         */
+        ApplyPatchCall: {
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id?: string | null;
+            /** Operation */
+            operation: components["schemas"]["ApplyPatchCallOperationCreateFile"] | components["schemas"]["ApplyPatchCallOperationDeleteFile"] | components["schemas"]["ApplyPatchCallOperationUpdateFile"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed";
+            /**
+             * Type
+             * @constant
+             */
+            type: "apply_patch_call";
+        };
+        /**
+         * ApplyPatchCallOperationCreateFile
+         * @description Instruction for creating a new file via the apply_patch tool.
+         */
+        ApplyPatchCallOperationCreateFile: {
+            /** Diff */
+            diff: string;
+            /** Path */
+            path: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "create_file";
+        };
+        /**
+         * ApplyPatchCallOperationDeleteFile
+         * @description Instruction for deleting an existing file via the apply_patch tool.
+         */
+        ApplyPatchCallOperationDeleteFile: {
+            /** Path */
+            path: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "delete_file";
+        };
+        /**
+         * ApplyPatchCallOperationUpdateFile
+         * @description Instruction for updating an existing file via the apply_patch tool.
+         */
+        ApplyPatchCallOperationUpdateFile: {
+            /** Diff */
+            diff: string;
+            /** Path */
+            path: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "update_file";
+        };
+        /**
+         * ApplyPatchCallOutput
+         * @description The streamed output emitted by an apply patch tool call.
+         */
+        ApplyPatchCallOutput: {
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id?: string | null;
+            /** Output */
+            output?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "failed";
+            /**
+             * Type
+             * @constant
+             */
+            type: "apply_patch_call_output";
+        };
+        /**
+         * ApplyPatchTool
+         * @description Allows the assistant to create, delete, or update files using unified diffs.
+         */
+        ApplyPatchTool: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "apply_patch";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ApplyPatchToolParam
+         * @description Allows the assistant to create, delete, or update files using unified diffs.
+         */
+        ApplyPatchToolParam: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "apply_patch";
         };
         /**
          * AttachmentImpactResponse
@@ -25071,6 +25741,11 @@ export interface components {
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
+            /**
+             * Passthrough
+             * @default false
+             */
+            passthrough: boolean;
             /** Purpose */
             purpose: string;
             /**
@@ -25095,6 +25770,11 @@ export interface components {
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
+            /**
+             * Passthrough
+             * @default false
+             */
+            passthrough: boolean;
             /** Purpose */
             purpose: string;
             /**
@@ -25119,6 +25799,11 @@ export interface components {
             file: string;
             /** Litellm Metadata */
             litellm_metadata?: string | null;
+            /**
+             * Passthrough
+             * @default false
+             */
+            passthrough: boolean;
             /** Purpose */
             purpose: string;
             /**
@@ -26039,6 +26724,15 @@ export interface components {
              */
             uncached_input_tokens: number;
         };
+        /** CachedTokensDetails */
+        CachedTokensDetails: {
+            /** Audio Tokens */
+            audio_tokens?: number | null;
+            /** Image Tokens */
+            image_tokens?: number | null;
+            /** Text Tokens */
+            text_tokens?: number | null;
+        };
         /**
          * CallTypes
          * @enum {string}
@@ -26193,6 +26887,41 @@ export interface components {
              */
             threshold_step: number;
         };
+        /** CaptureRateDay */
+        CaptureRateDay: {
+            /** Capture Rate */
+            capture_rate: number | null;
+            /** Captured Spend */
+            captured_spend: number;
+            /** Date */
+            date: string;
+            /** Provider Spend */
+            provider_spend: number;
+        };
+        /** CaptureRateReport */
+        CaptureRateReport: {
+            /** Below Threshold */
+            below_threshold: boolean;
+            /** Capture Rate */
+            capture_rate: number | null;
+            /** Captured Spend */
+            captured_spend: number;
+            /** Days */
+            days: components["schemas"]["CaptureRateDay"][];
+            /** End Date */
+            end_date: string;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "openai";
+            /** Provider Spend */
+            provider_spend: number;
+            /** Start Date */
+            start_date: string;
+            /** Threshold */
+            threshold: number;
+        };
         /** ChangePasswordRequest */
         ChangePasswordRequest: {
             /** Current Password */
@@ -26298,6 +27027,8 @@ export interface components {
              * @constant
              */
             type: "ephemeral";
+        } & {
+            [key: string]: unknown;
         };
         /** ChatCompletionCustomToolCallPayload */
         ChatCompletionCustomToolCallPayload: {
@@ -26428,6 +27159,8 @@ export interface components {
              * @constant
              */
             type: "reasoning";
+        } & {
+            [key: string]: unknown;
         };
         /** ChatCompletionReasoningSummaryTextBlock */
         ChatCompletionReasoningSummaryTextBlock: {
@@ -26438,6 +27171,8 @@ export interface components {
              * @constant
              */
             type: "summary_text";
+        } & {
+            [key: string]: unknown;
         };
         /** ChatCompletionRedactedThinkingBlock */
         ChatCompletionRedactedThinkingBlock: {
@@ -26452,6 +27187,8 @@ export interface components {
              * @constant
              */
             type: "redacted_thinking";
+        } & {
+            [key: string]: unknown;
         };
         /** ChatCompletionSystemMessage */
         ChatCompletionSystemMessage: {
@@ -26492,6 +27229,8 @@ export interface components {
              * @constant
              */
             type: "thinking";
+        } & {
+            [key: string]: unknown;
         };
         /** ChatCompletionTokenLogprob */
         ChatCompletionTokenLogprob: {
@@ -26802,6 +27541,30 @@ export interface components {
             max_images: number;
         };
         /**
+         * Click
+         * @description A click action.
+         */
+        Click: {
+            /**
+             * Button
+             * @enum {string}
+             */
+            button: "left" | "right" | "wheel" | "back" | "forward";
+            /** Keys */
+            keys?: string[] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "click";
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * CloudZeroExportRequest
          * @description Request model for CloudZero export operations
          */
@@ -26934,6 +27697,59 @@ export interface components {
             timezone?: string | null;
         };
         /**
+         * CodeInterpreter
+         * @description A tool that runs Python code to help generate a response to a prompt.
+         */
+        CodeInterpreter: {
+            /** Container */
+            container: string | components["schemas"]["CodeInterpreterContainerCodeInterpreterToolAuto"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "code_interpreter";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * CodeInterpreterContainerCodeInterpreterToolAuto
+         * @description Configuration for a code interpreter container.
+         *
+         *     Optionally specify the IDs of the files to run the code on.
+         */
+        CodeInterpreterContainerCodeInterpreterToolAuto: {
+            /** File Ids */
+            file_ids?: string[] | null;
+            /** Memory Limit */
+            memory_limit?: ("1g" | "4g" | "16g" | "64g") | null;
+            /** Network Policy */
+            network_policy?: components["schemas"]["ContainerNetworkPolicyDisabled"] | components["schemas"]["ContainerNetworkPolicyAllowlist"] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "auto";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ComparisonFilter
+         * @description A filter used to compare a specified attribute key to a given value using a defined comparison operation.
+         */
+        ComparisonFilter: {
+            /** Key */
+            key: string;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "eq" | "ne" | "gt" | "gte" | "lt" | "lte" | "in" | "nin";
+            /** Value */
+            value: string | number | boolean | (string | number)[];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * ComplexityRouterConfigValidationRequest
          * @description A complexity-router config to validate without saving, so a form can surface the
          *     backend's own verdict inline instead of a raw 400 at write time.
@@ -27037,6 +27853,114 @@ export interface components {
             compliant: boolean;
             /** Regulation */
             regulation: string;
+        };
+        /**
+         * CompoundFilter
+         * @description Combine multiple filters using `and` or `or`.
+         */
+        CompoundFilter: {
+            /** Filters */
+            filters: (components["schemas"]["ComparisonFilter"] | unknown)[];
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "and" | "or";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ComputerCallOutput
+         * @description The output of a computer tool call.
+         */
+        ComputerCallOutput: {
+            /** Acknowledged Safety Checks */
+            acknowledged_safety_checks?: components["schemas"]["ComputerCallOutputAcknowledgedSafetyCheck"][] | null;
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id?: string | null;
+            output: components["schemas"]["ResponseComputerToolCallOutputScreenshotParam"];
+            /** Status */
+            status?: ("in_progress" | "completed" | "incomplete") | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "computer_call_output";
+        };
+        /**
+         * ComputerCallOutputAcknowledgedSafetyCheck
+         * @description A pending safety check for the computer call.
+         */
+        ComputerCallOutputAcknowledgedSafetyCheck: {
+            /** Code */
+            code?: string | null;
+            /** Id */
+            id: string;
+            /** Message */
+            message?: string | null;
+        };
+        /**
+         * ComputerTool
+         * @description A tool that controls a virtual computer.
+         *
+         *     Learn more about the [computer tool](https://platform.openai.com/docs/guides/tools-computer-use).
+         */
+        ComputerTool: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "computer";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ComputerUsePreviewTool
+         * @description A tool that controls a virtual computer.
+         *
+         *     Learn more about the [computer tool](https://platform.openai.com/docs/guides/tools-computer-use).
+         */
+        ComputerUsePreviewTool: {
+            /** Display Height */
+            display_height: number;
+            /** Display Width */
+            display_width: number;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "windows" | "mac" | "linux" | "ubuntu" | "browser";
+            /**
+             * Type
+             * @constant
+             */
+            type: "computer_use_preview";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ComputerUsePreviewToolParam
+         * @description A tool that controls a virtual computer.
+         *
+         *     Learn more about the [computer tool](https://platform.openai.com/docs/guides/tools-computer-use).
+         */
+        ComputerUsePreviewToolParam: {
+            /** Display Height */
+            display_height: number;
+            /** Display Width */
+            display_width: number;
+            /**
+             * Environment
+             * @enum {string}
+             */
+            environment: "windows" | "mac" | "linux" | "ubuntu" | "browser";
+            /**
+             * Type
+             * @constant
+             */
+            type: "computer_use_preview";
         };
         /** ConfigFieldDelete */
         ConfigFieldDelete: {
@@ -27427,6 +28351,11 @@ export interface components {
              */
             maximum_spend_logs_retention_period?: string | null;
             /**
+             * Mcp Advertised Versions
+             * @description MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. Modern protocol serving and Apps/Tasks remain disabled.
+             */
+            mcp_advertised_versions?: ("2024-11-05" | "2025-03-26" | "2025-06-18" | "2025-11-25")[] | null;
+            /**
              * Mcp Allowed Clients
              * @description MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.
              */
@@ -27529,6 +28458,8 @@ export interface components {
             reject_clientside_metadata_tags?: boolean | null;
             /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
             scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
+            /** @description Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window falls under the threshold (default 0.9). Off unless set. */
+            spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
             /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
@@ -27710,6 +28641,141 @@ export interface components {
             /** Api Base */
             api_base: string;
         };
+        /** ContainerAuto */
+        ContainerAuto: {
+            /** File Ids */
+            file_ids?: string[] | null;
+            /** Memory Limit */
+            memory_limit?: ("1g" | "4g" | "16g" | "64g") | null;
+            /** Network Policy */
+            network_policy?: components["schemas"]["ContainerNetworkPolicyDisabled"] | components["schemas"]["ContainerNetworkPolicyAllowlist"] | null;
+            /** Skills */
+            skills?: (components["schemas"]["SkillReference"] | components["schemas"]["InlineSkill"])[] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "container_auto";
+        } & {
+            [key: string]: unknown;
+        };
+        /** ContainerAutoParam */
+        ContainerAutoParam: {
+            /** File Ids */
+            file_ids?: string[];
+            /** Memory Limit */
+            memory_limit?: ("1g" | "4g" | "16g" | "64g") | null;
+            /** Network Policy */
+            network_policy?: components["schemas"]["ContainerNetworkPolicyDisabledParam"] | components["schemas"]["ContainerNetworkPolicyAllowlistParam"];
+            /** Skills */
+            skills?: (components["schemas"]["SkillReferenceParam"] | components["schemas"]["InlineSkillParam"])[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "container_auto";
+        };
+        /** ContainerNetworkPolicyAllowlist */
+        ContainerNetworkPolicyAllowlist: {
+            /** Allowed Domains */
+            allowed_domains: string[];
+            /** Domain Secrets */
+            domain_secrets?: components["schemas"]["ContainerNetworkPolicyDomainSecret"][] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "allowlist";
+        } & {
+            [key: string]: unknown;
+        };
+        /** ContainerNetworkPolicyAllowlistParam */
+        ContainerNetworkPolicyAllowlistParam: {
+            /** Allowed Domains */
+            allowed_domains: string[];
+            /** Domain Secrets */
+            domain_secrets?: components["schemas"]["ContainerNetworkPolicyDomainSecretParam"][];
+            /**
+             * Type
+             * @constant
+             */
+            type: "allowlist";
+        };
+        /** ContainerNetworkPolicyDisabled */
+        ContainerNetworkPolicyDisabled: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "disabled";
+        } & {
+            [key: string]: unknown;
+        };
+        /** ContainerNetworkPolicyDisabledParam */
+        ContainerNetworkPolicyDisabledParam: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "disabled";
+        };
+        /** ContainerNetworkPolicyDomainSecret */
+        ContainerNetworkPolicyDomainSecret: {
+            /** Domain */
+            domain: string;
+            /** Name */
+            name: string;
+            /** Value */
+            value: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** ContainerNetworkPolicyDomainSecretParam */
+        ContainerNetworkPolicyDomainSecretParam: {
+            /** Domain */
+            domain: string;
+            /** Name */
+            name: string;
+            /** Value */
+            value: string;
+        };
+        /** ContainerReference */
+        ContainerReference: {
+            /** Container Id */
+            container_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "container_reference";
+        } & {
+            [key: string]: unknown;
+        };
+        /** ContainerReferenceParam */
+        ContainerReferenceParam: {
+            /** Container Id */
+            container_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "container_reference";
+        };
+        /**
+         * Content
+         * @description Reasoning text from the model.
+         */
+        Content: {
+            /** Text */
+            text: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "reasoning_text";
+        } & {
+            [key: string]: unknown;
+        };
         /**
          * ContentFilterAction
          * @description Action to take when content filter detects a match
@@ -27805,6 +28871,17 @@ export interface components {
              * @default 0.9
              */
             trigger_ratio: number;
+        };
+        /**
+         * ContextManagementEntry
+         * @description Context management configuration entry for a request.
+         *     See https://developers.openai.com/api/docs/guides/compaction.
+         */
+        ContextManagementEntry: {
+            /** Compact Threshold */
+            compact_threshold?: number;
+            /** Type */
+            type?: string;
         };
         /**
          * CoordinationRedisNode
@@ -28262,6 +29339,77 @@ export interface components {
             weight: number;
         };
         /**
+         * CustomTool
+         * @description A custom tool that processes input using a specified format.
+         *
+         *     Learn more about   [custom tools](https://platform.openai.com/docs/guides/function-calling#custom-tools)
+         */
+        CustomTool: {
+            /** Defer Loading */
+            defer_loading?: boolean | null;
+            /** Description */
+            description?: string | null;
+            /** Format */
+            format?: components["schemas"]["Text"] | components["schemas"]["Grammar"] | null;
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "custom";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * CustomToolCallOutputItem
+         * @description A custom/freeform tool call output item (e.g. apply_patch).
+         *
+         *     Mirrors the ``custom_tool_call`` variant of OpenAI's Responses API output.
+         *     Unlike ``OutputFunctionToolCall`` which uses ``arguments`` (JSON string),
+         *     this uses ``input`` (raw string) for the tool payload.
+         */
+        CustomToolCallOutputItem: {
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id?: string | null;
+            /** Input */
+            input: string;
+            /** Name */
+            name: string;
+            /** Status */
+            status?: ("in_progress" | "completed" | "incomplete") | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "custom_tool_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * CustomToolParam
+         * @description A custom tool that processes input using a specified format.
+         *
+         *     Learn more about   [custom tools](https://platform.openai.com/docs/guides/function-calling#custom-tools)
+         */
+        CustomToolParam: {
+            /** Defer Loading */
+            defer_loading?: boolean;
+            /** Description */
+            description?: string;
+            /** Format */
+            format?: components["schemas"]["Text"] | components["schemas"]["Grammar"];
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "custom";
+        };
+        /**
          * CustomerResponse
          * @description Customer object returned by the /customer read+write endpoints.
          *
@@ -28617,6 +29765,26 @@ export interface components {
             project_ids: string[];
         };
         /**
+         * DeleteResponseResult
+         * @description Result of a delete response request
+         *
+         *     {
+         *         "id": "resp_6786a1bec27481909a17d673315b29f6",
+         *         "object": "response",
+         *         "deleted": true
+         *     }
+         */
+        DeleteResponseResult: {
+            /** Deleted */
+            deleted: boolean | null;
+            /** Id */
+            id: string | null;
+            /** Object */
+            object: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * DeleteSkillResponse
          * @description Response from deleting a skill
          */
@@ -28713,6 +29881,54 @@ export interface components {
              */
             type: "text";
         };
+        /**
+         * DoubleClick
+         * @description A double click action.
+         */
+        DoubleClick: {
+            /** Keys */
+            keys?: string[] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "double_click";
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * Drag
+         * @description A drag action.
+         */
+        Drag: {
+            /** Keys */
+            keys?: string[] | null;
+            /** Path */
+            path: components["schemas"]["DragPath"][];
+            /**
+             * Type
+             * @constant
+             */
+            type: "drag";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * DragPath
+         * @description An x/y coordinate pair, e.g. `{ x: 100, y: 200 }`.
+         */
+        DragPath: {
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** DynamoDBArgs */
         DynamoDBArgs: {
             /** Assume Role Aws Role Name */
@@ -28766,6 +29982,30 @@ export interface components {
             user_table_name: string;
             /** Write Capacity Units */
             write_capacity_units?: number | null;
+        };
+        /**
+         * EasyInputMessageParam
+         * @description A message input to the model with a role indicating instruction following
+         *     hierarchy. Instructions given with the `developer` or `system` role take
+         *     precedence over instructions given with the `user` role. Messages with the
+         *     `assistant` role are presumed to have been generated by the model in previous
+         *     interactions.
+         */
+        EasyInputMessageParam: {
+            /** Content */
+            content: string | (components["schemas"]["ResponseInputTextParam"] | components["schemas"]["ResponseInputImageParam"] | components["schemas"]["ResponseInputFileParam"])[];
+            /** Phase */
+            phase?: ("commentary" | "final_answer") | null;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "assistant" | "system" | "developer";
+            /**
+             * Type
+             * @constant
+             */
+            type?: "message";
         };
         /**
          * EmailEvent
@@ -29079,6 +30319,58 @@ export interface components {
             /** Stored In Db */
             stored_in_db: boolean | null;
         };
+        /**
+         * FileSearchTool
+         * @description A tool that searches for relevant content from uploaded files.
+         *
+         *     Learn more about the [file search tool](https://platform.openai.com/docs/guides/tools-file-search).
+         */
+        FileSearchTool: {
+            /** Filters */
+            filters?: components["schemas"]["ComparisonFilter"] | components["schemas"]["CompoundFilter"] | null;
+            /** Max Num Results */
+            max_num_results?: number | null;
+            ranking_options?: components["schemas"]["RankingOptions"] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "file_search";
+            /** Vector Store Ids */
+            vector_store_ids: string[];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * FileSearchToolParam
+         * @description A tool that searches for relevant content from uploaded files.
+         *
+         *     Learn more about the [file search tool](https://platform.openai.com/docs/guides/tools-file-search).
+         */
+        FileSearchToolParam: {
+            /** Filters */
+            filters?: components["schemas"]["ComparisonFilter"] | components["schemas"]["CompoundFilter"] | null;
+            /** Max Num Results */
+            max_num_results?: number;
+            ranking_options?: components["schemas"]["RankingOptions"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "file_search";
+            /** Vector Store Ids */
+            vector_store_ids: string[];
+        };
+        /**
+         * Filters
+         * @description Filters for the search.
+         */
+        Filters: {
+            /** Allowed Domains */
+            allowed_domains?: string[] | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** FunctionCall */
         FunctionCall: {
             /** Arguments */
@@ -29087,6 +30379,105 @@ export interface components {
             name?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * FunctionCallOutput
+         * @description The output of a function tool call.
+         */
+        FunctionCallOutput: {
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id?: string | null;
+            /** Output */
+            output: string | (components["schemas"]["ResponseInputTextContentParam"] | components["schemas"]["ResponseInputImageContentParam"] | components["schemas"]["ResponseInputFileContentParam"])[];
+            /** Status */
+            status?: ("in_progress" | "completed" | "incomplete") | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "function_call_output";
+        };
+        /**
+         * FunctionShellTool
+         * @description A tool that allows the model to execute shell commands.
+         */
+        FunctionShellTool: {
+            /** Environment */
+            environment?: components["schemas"]["ContainerAuto"] | components["schemas"]["LocalEnvironment"] | components["schemas"]["ContainerReference"] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "shell";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * FunctionShellToolParam
+         * @description A tool that allows the model to execute shell commands.
+         */
+        FunctionShellToolParam: {
+            /** Environment */
+            environment?: components["schemas"]["ContainerAutoParam"] | components["schemas"]["LocalEnvironmentParam"] | components["schemas"]["ContainerReferenceParam"] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "shell";
+        };
+        /**
+         * FunctionTool
+         * @description Defines a function in your own code the model can choose to call.
+         *
+         *     Learn more about [function calling](https://platform.openai.com/docs/guides/function-calling).
+         */
+        FunctionTool: {
+            /** Defer Loading */
+            defer_loading?: boolean | null;
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name: string;
+            /** Parameters */
+            parameters?: {
+                [key: string]: unknown;
+            } | null;
+            /** Strict */
+            strict?: boolean | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "function";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * FunctionToolParam
+         * @description Defines a function in your own code the model can choose to call.
+         *
+         *     Learn more about [function calling](https://platform.openai.com/docs/guides/function-calling).
+         */
+        FunctionToolParam: {
+            /** Defer Loading */
+            defer_loading?: boolean;
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name: string;
+            /** Parameters */
+            parameters: {
+                [key: string]: unknown;
+            } | null;
+            /** Strict */
+            strict: boolean | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "function";
         };
         /** FuseHarnessPreset */
         FuseHarnessPreset: {
@@ -29538,6 +30929,44 @@ export interface components {
             tools?: components["schemas"]["ChatCompletionToolParam"][];
         };
         /**
+         * GenericResponseOutputItem
+         * @description Generic response API output item
+         */
+        GenericResponseOutputItem: {
+            /** Content */
+            content: components["schemas"]["OutputText"][];
+            /** Id */
+            id: string;
+            /** Phase */
+            phase?: ("commentary" | "final_answer") | null;
+            /** Role */
+            role: string;
+            /** Status */
+            status: string;
+            /** Type */
+            type: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * GenericResponseOutputItemContentAnnotation
+         * @description Annotation for content in a message
+         */
+        GenericResponseOutputItemContentAnnotation: {
+            /** End Index */
+            end_index: number | null;
+            /** Start Index */
+            start_index: number | null;
+            /** Title */
+            title: string | null;
+            /** Type */
+            type: string | null;
+            /** Url */
+            url: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * GetTeamMemberPermissionsResponse
          * @description Response to get the team member permissions for a team
          */
@@ -29560,6 +30989,26 @@ export interface components {
             endTime?: string | null;
             /** Starttime */
             startTime?: string | null;
+        };
+        /**
+         * Grammar
+         * @description A grammar defined by the user.
+         */
+        Grammar: {
+            /** Definition */
+            definition: string;
+            /**
+             * Syntax
+             * @enum {string}
+             */
+            syntax: "lark" | "regex";
+            /**
+             * Type
+             * @constant
+             */
+            type: "grammar";
+        } & {
+            [key: string]: unknown;
         };
         /** Guardrail */
         Guardrail: {
@@ -29764,6 +31213,77 @@ export interface components {
             /** Ip */
             ip: string;
         };
+        /**
+         * ImageGeneration
+         * @description A tool that generates images using the GPT image models.
+         */
+        ImageGeneration: {
+            /** Action */
+            action?: ("generate" | "edit" | "auto") | null;
+            /** Background */
+            background?: ("transparent" | "opaque" | "auto") | null;
+            /** Input Fidelity */
+            input_fidelity?: ("high" | "low") | null;
+            input_image_mask?: components["schemas"]["ImageGenerationInputImageMask"] | null;
+            /** Model */
+            model?: string | ("gpt-image-1" | "gpt-image-1-mini" | "gpt-image-1.5") | null;
+            /** Moderation */
+            moderation?: ("auto" | "low") | null;
+            /** Output Compression */
+            output_compression?: number | null;
+            /** Output Format */
+            output_format?: ("png" | "webp" | "jpeg") | null;
+            /** Partial Images */
+            partial_images?: number | null;
+            /** Quality */
+            quality?: ("low" | "medium" | "high" | "auto") | null;
+            /** Size */
+            size?: ("1024x1024" | "1024x1536" | "1536x1024" | "auto") | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "image_generation";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ImageGenerationCall
+         * @description An image generation request made by the model.
+         */
+        ImageGenerationCall: {
+            /** Id */
+            id: string;
+            /** Result */
+            result?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "generating" | "failed";
+            /**
+             * Type
+             * @constant
+             */
+            type: "image_generation_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ImageGenerationInputImageMask
+         * @description Optional mask for inpainting.
+         *
+         *     Contains `image_url`
+         *     (string, optional) and `file_id` (string, optional).
+         */
+        ImageGenerationInputImageMask: {
+            /** File Id */
+            file_id?: string | null;
+            /** Image Url */
+            image_url?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** ImageURLListItem */
         ImageURLListItem: {
             image_url: components["schemas"]["ImageURLObject"];
@@ -29783,6 +31303,16 @@ export interface components {
             detail?: string | null;
             /** Url */
             url: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * IncompleteDetails
+         * @description Details about why the response is incomplete.
+         */
+        IncompleteDetails: {
+            /** Reason */
+            reason?: ("max_output_tokens" | "content_filter") | null;
         } & {
             [key: string]: unknown;
         };
@@ -29814,6 +31344,72 @@ export interface components {
              */
             object: "list";
         };
+        /** InlineSkill */
+        InlineSkill: {
+            /** Description */
+            description: string;
+            /** Name */
+            name: string;
+            source: components["schemas"]["InlineSkillSource"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "inline";
+        } & {
+            [key: string]: unknown;
+        };
+        /** InlineSkillParam */
+        InlineSkillParam: {
+            /** Description */
+            description: string;
+            /** Name */
+            name: string;
+            source: components["schemas"]["InlineSkillSourceParam"];
+            /**
+             * Type
+             * @constant
+             */
+            type: "inline";
+        };
+        /**
+         * InlineSkillSource
+         * @description Inline skill payload
+         */
+        InlineSkillSource: {
+            /** Data */
+            data: string;
+            /**
+             * Media Type
+             * @constant
+             */
+            media_type: "application/zip";
+            /**
+             * Type
+             * @constant
+             */
+            type: "base64";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * InlineSkillSourceParam
+         * @description Inline skill payload
+         */
+        InlineSkillSourceParam: {
+            /** Data */
+            data: string;
+            /**
+             * Media Type
+             * @constant
+             */
+            media_type: "application/zip";
+            /**
+             * Type
+             * @constant
+             */
+            type: "base64";
+        };
         /** InputAudio */
         InputAudio: {
             /** Data */
@@ -29823,6 +31419,25 @@ export interface components {
              * @enum {string}
              */
             format: "wav" | "mp3";
+        };
+        /** InputTokensDetails */
+        InputTokensDetails: {
+            /** Audio Tokens */
+            audio_tokens?: number | null;
+            /**
+             * Cached Tokens
+             * @default 0
+             */
+            cached_tokens: number;
+            cached_tokens_details?: components["schemas"]["CachedTokensDetails"] | null;
+            /** Image Tokens */
+            image_tokens?: number | null;
+            /** Text Tokens */
+            text_tokens?: number | null;
+            /** Video Tokens */
+            video_tokens?: number | null;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * InternalUserSettingsResponse
@@ -29893,6 +31508,16 @@ export interface components {
             invitation_id: string;
             /** Is Accepted */
             is_accepted: boolean;
+        };
+        /**
+         * ItemReference
+         * @description An internal identifier for an item to reference.
+         */
+        ItemReference: {
+            /** Id */
+            id: string;
+            /** Type */
+            type?: "item_reference" | null;
         };
         /** JWTKeyMappingResponse */
         JWTKeyMappingResponse: {
@@ -29987,7 +31612,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/team/daily/activity/export" | "/team/daily/activity/aggregated/search" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -30071,6 +31696,21 @@ export interface components {
             tpm_limit?: number | null;
             /** Tpm Limit Type */
             tpm_limit_type?: ("guaranteed_throughput" | "best_effort_throughput" | "dynamic") | null;
+        };
+        /**
+         * Keypress
+         * @description A collection of keypresses the model would like to perform.
+         */
+        Keypress: {
+            /** Keys */
+            keys: string[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "keypress";
+        } & {
+            [key: string]: unknown;
         };
         /**
          * KeywordTierRule
@@ -31305,6 +32945,8 @@ export interface components {
             azure_username?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
+            /** Bucket Name */
+            bucket_name?: string | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -31339,6 +32981,8 @@ export interface components {
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
             cache_read_input_token_cost_above_200k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 200K Tokens Batches */
+            cache_read_input_token_cost_above_200k_tokens_batches?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Priority */
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens */
@@ -31417,6 +33061,8 @@ export interface components {
             input_cost_per_token_above_128k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens */
             input_cost_per_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Batches */
+            input_cost_per_token_above_200k_tokens_batches?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
@@ -31540,6 +33186,8 @@ export interface components {
             output_cost_per_token_above_128k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens */
             output_cost_per_token_above_200k_tokens?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Batches */
+            output_cost_per_token_above_200k_tokens_batches?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
@@ -33208,6 +34856,128 @@ export interface components {
          * @enum {string}
          */
         LitellmUserRoles: "proxy_admin" | "proxy_admin_viewer" | "org_admin" | "internal_user" | "internal_user_viewer" | "team" | "customer";
+        /** LocalEnvironment */
+        LocalEnvironment: {
+            /** Skills */
+            skills?: components["schemas"]["LocalSkill"][] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "local";
+        } & {
+            [key: string]: unknown;
+        };
+        /** LocalEnvironmentParam */
+        LocalEnvironmentParam: {
+            /** Skills */
+            skills?: components["schemas"]["LocalSkillParam"][];
+            /**
+             * Type
+             * @constant
+             */
+            type: "local";
+        };
+        /**
+         * LocalShell
+         * @description A tool that allows the model to execute shell commands in a local environment.
+         */
+        LocalShell: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "local_shell";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * LocalShellCall
+         * @description A tool call to run a command on the local shell.
+         */
+        LocalShellCall: {
+            action: components["schemas"]["LocalShellCallAction"];
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "local_shell_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * LocalShellCallAction
+         * @description Execute a shell command on the server.
+         */
+        LocalShellCallAction: {
+            /** Command */
+            command: string[];
+            /** Env */
+            env: {
+                [key: string]: string;
+            };
+            /** Timeout Ms */
+            timeout_ms?: number | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "exec";
+            /** User */
+            user?: string | null;
+            /** Working Directory */
+            working_directory?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * LocalShellCallOutput
+         * @description The output of a local shell tool call.
+         */
+        LocalShellCallOutput: {
+            /** Id */
+            id: string;
+            /** Output */
+            output: string;
+            /** Status */
+            status?: ("in_progress" | "completed" | "incomplete") | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "local_shell_call_output";
+        } & {
+            [key: string]: unknown;
+        };
+        /** LocalSkill */
+        LocalSkill: {
+            /** Description */
+            description: string;
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /** LocalSkillParam */
+        LocalSkillParam: {
+            /** Description */
+            description: string;
+            /** Name */
+            name: string;
+            /** Path */
+            path: string;
+        };
         /** LoggingCallbackStatus */
         LoggingCallbackStatus: {
             /** Callbacks */
@@ -33219,6 +34989,36 @@ export interface components {
              * @enum {string}
              */
             status?: "healthy" | "unhealthy";
+        };
+        /**
+         * Logprob
+         * @description The log probability of a token.
+         */
+        Logprob: {
+            /** Bytes */
+            bytes: number[];
+            /** Logprob */
+            logprob: number;
+            /** Token */
+            token: string;
+            /** Top Logprobs */
+            top_logprobs: components["schemas"]["LogprobTopLogprob"][];
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * LogprobTopLogprob
+         * @description The top log probability of a token.
+         */
+        LogprobTopLogprob: {
+            /** Bytes */
+            bytes: number[];
+            /** Logprob */
+            logprob: number;
+            /** Token */
+            token: string;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * MCPAllowedClient
@@ -33726,6 +35526,198 @@ export interface components {
             /** Mcp Server Ids */
             mcp_server_ids: string[];
         };
+        /**
+         * Mcp
+         * @description Give the model access to additional tools via remote Model Context Protocol
+         *     (MCP) servers. [Learn more about MCP](https://platform.openai.com/docs/guides/tools-remote-mcp).
+         */
+        Mcp: {
+            /** Allowed Tools */
+            allowed_tools?: string[] | components["schemas"]["McpAllowedToolsMcpToolFilter"] | null;
+            /** Authorization */
+            authorization?: string | null;
+            /** Connector Id */
+            connector_id?: ("connector_dropbox" | "connector_gmail" | "connector_googlecalendar" | "connector_googledrive" | "connector_microsoftteams" | "connector_outlookcalendar" | "connector_outlookemail" | "connector_sharepoint") | null;
+            /** Defer Loading */
+            defer_loading?: boolean | null;
+            /** Headers */
+            headers?: {
+                [key: string]: string;
+            } | null;
+            /** Require Approval */
+            require_approval?: components["schemas"]["McpRequireApprovalMcpToolApprovalFilter"] | ("always" | "never") | null;
+            /** Server Description */
+            server_description?: string | null;
+            /** Server Label */
+            server_label: string;
+            /** Server Url */
+            server_url?: string | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "mcp";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * McpAllowedToolsMcpToolFilter
+         * @description A filter object to specify which tools are allowed.
+         */
+        McpAllowedToolsMcpToolFilter: {
+            /** Read Only */
+            read_only?: boolean | null;
+            /** Tool Names */
+            tool_names?: string[] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * McpApprovalRequest
+         * @description A request for human approval of a tool invocation.
+         */
+        McpApprovalRequest: {
+            /** Arguments */
+            arguments: string;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Server Label */
+            server_label: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "mcp_approval_request";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * McpApprovalResponse
+         * @description A response to an MCP approval request.
+         */
+        McpApprovalResponse: {
+            /** Approval Request Id */
+            approval_request_id: string;
+            /** Approve */
+            approve: boolean;
+            /** Id */
+            id: string;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "mcp_approval_response";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * McpCall
+         * @description An invocation of a tool on an MCP server.
+         */
+        McpCall: {
+            /** Approval Request Id */
+            approval_request_id?: string | null;
+            /** Arguments */
+            arguments: string;
+            /** Error */
+            error?: string | null;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Output */
+            output?: string | null;
+            /** Server Label */
+            server_label: string;
+            /** Status */
+            status?: ("in_progress" | "completed" | "incomplete" | "calling" | "failed") | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "mcp_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * McpListTools
+         * @description A list of tools available on an MCP server.
+         */
+        McpListTools: {
+            /** Error */
+            error?: string | null;
+            /** Id */
+            id: string;
+            /** Server Label */
+            server_label: string;
+            /** Tools */
+            tools: components["schemas"]["McpListToolsTool"][];
+            /**
+             * Type
+             * @constant
+             */
+            type: "mcp_list_tools";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * McpListToolsTool
+         * @description A tool available on an MCP server.
+         */
+        McpListToolsTool: {
+            /** Annotations */
+            annotations?: unknown | null;
+            /** Description */
+            description?: string | null;
+            /** Input Schema */
+            input_schema: unknown;
+            /** Name */
+            name: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * McpRequireApprovalMcpToolApprovalFilter
+         * @description Specify which of the MCP server's tools require approval.
+         *
+         *     Can be
+         *     `always`, `never`, or a filter object associated with tools
+         *     that require approval.
+         */
+        McpRequireApprovalMcpToolApprovalFilter: {
+            always?: components["schemas"]["McpRequireApprovalMcpToolApprovalFilterAlways"] | null;
+            never?: components["schemas"]["McpRequireApprovalMcpToolApprovalFilterNever"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * McpRequireApprovalMcpToolApprovalFilterAlways
+         * @description A filter object to specify which tools are allowed.
+         */
+        McpRequireApprovalMcpToolApprovalFilterAlways: {
+            /** Read Only */
+            read_only?: boolean | null;
+            /** Tool Names */
+            tool_names?: string[] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * McpRequireApprovalMcpToolApprovalFilterNever
+         * @description A filter object to specify which tools are allowed.
+         */
+        McpRequireApprovalMcpToolApprovalFilterNever: {
+            /** Read Only */
+            read_only?: boolean | null;
+            /** Tool Names */
+            tool_names?: string[] | null;
+        } & {
+            [key: string]: unknown;
+        };
         /** Member */
         Member: {
             /**
@@ -34054,6 +36046,25 @@ export interface components {
             [key: string]: unknown;
         };
         /**
+         * Move
+         * @description A mouse move action.
+         */
+        Move: {
+            /** Keys */
+            keys?: string[] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "move";
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * MutualTLSSecurityScheme
          * @description Defines a security scheme using mTLS authentication.
          */
@@ -34065,6 +36076,42 @@ export interface components {
              * @constant
              */
             type: "mutualTLS";
+        };
+        /**
+         * NamespaceTool
+         * @description Groups function/custom tools under a shared namespace.
+         */
+        NamespaceTool: {
+            /** Description */
+            description: string;
+            /** Name */
+            name: string;
+            /** Tools */
+            tools: (components["schemas"]["ToolFunction"] | components["schemas"]["CustomTool"])[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "namespace";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * NamespaceToolParam
+         * @description Groups function/custom tools under a shared namespace.
+         */
+        NamespaceToolParam: {
+            /** Description */
+            description: string;
+            /** Name */
+            name: string;
+            /** Tools */
+            tools: (components["schemas"]["ToolFunction"] | components["schemas"]["CustomToolParam"])[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "namespace";
         };
         /**
          * NewCustomerRequest
@@ -35039,6 +37086,55 @@ export interface components {
              */
             type: "openIdConnect";
         };
+        /**
+         * OperationCreateFile
+         * @description Instruction describing how to create a file via the apply_patch tool.
+         */
+        OperationCreateFile: {
+            /** Diff */
+            diff: string;
+            /** Path */
+            path: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "create_file";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * OperationDeleteFile
+         * @description Instruction describing how to delete a file via the apply_patch tool.
+         */
+        OperationDeleteFile: {
+            /** Path */
+            path: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "delete_file";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * OperationUpdateFile
+         * @description Instruction describing how to update a file via the apply_patch tool.
+         */
+        OperationUpdateFile: {
+            /** Diff */
+            diff: string;
+            /** Path */
+            path: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "update_file";
+        } & {
+            [key: string]: unknown;
+        };
         /** OrgMember */
         OrgMember: {
             /**
@@ -35135,6 +37231,217 @@ export interface components {
             soft_budget?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
+        };
+        /**
+         * OutcomeExit
+         * @description Indicates that the shell commands finished and returned an exit code.
+         */
+        OutcomeExit: {
+            /** Exit Code */
+            exit_code: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "exit";
+        };
+        /**
+         * OutcomeTimeout
+         * @description Indicates that the shell call exceeded its configured time limit.
+         */
+        OutcomeTimeout: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "timeout";
+        };
+        /**
+         * Output
+         * @description The content of a shell tool call output that was emitted.
+         */
+        Output: {
+            /** Created By */
+            created_by?: string | null;
+            /** Outcome */
+            outcome: components["schemas"]["OutputOutcomeTimeout"] | components["schemas"]["OutputOutcomeExit"];
+            /** Stderr */
+            stderr: string;
+            /** Stdout */
+            stdout: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * OutputCodeInterpreterCall
+         * @description A code interpreter / code execution call output
+         */
+        OutputCodeInterpreterCall: {
+            /** Code */
+            code: string | null;
+            /** Container Id */
+            container_id: string | null;
+            /** Id */
+            id: string;
+            /** Outputs */
+            outputs: components["schemas"]["OutputCodeInterpreterCallLog"][] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete" | "failed";
+            /**
+             * Type
+             * @constant
+             */
+            type: "code_interpreter_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * OutputCodeInterpreterCallLog
+         * @description Log output from a code interpreter call
+         */
+        OutputCodeInterpreterCallLog: {
+            /** Logs */
+            logs: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "logs";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * OutputFunctionToolCall
+         * @description A tool call to run a function
+         */
+        OutputFunctionToolCall: {
+            /** Arguments */
+            arguments: string | null;
+            /** Call Id */
+            call_id: string | null;
+            /** Id */
+            id: string | null;
+            /** Name */
+            name: string | null;
+            /** Phase */
+            phase?: ("commentary" | "final_answer") | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /** Type */
+            type: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * OutputImage
+         * @description The image output from the code interpreter.
+         */
+        OutputImage: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "image";
+            /** Url */
+            url: string;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * OutputImageGenerationCall
+         * @description An image generation call output
+         */
+        OutputImageGenerationCall: {
+            /** Id */
+            id: string;
+            /** Result */
+            result: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete" | "failed";
+            /**
+             * Type
+             * @constant
+             */
+            type: "image_generation_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * OutputLogs
+         * @description The logs output from the code interpreter.
+         */
+        OutputLogs: {
+            /** Logs */
+            logs: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "logs";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * OutputOutcomeExit
+         * @description Indicates that the shell commands finished and returned an exit code.
+         */
+        OutputOutcomeExit: {
+            /** Exit Code */
+            exit_code: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "exit";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * OutputOutcomeTimeout
+         * @description Indicates that the shell call exceeded its configured time limit.
+         */
+        OutputOutcomeTimeout: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "timeout";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * OutputText
+         * @description Text output content from an assistant message
+         */
+        OutputText: {
+            /** Annotations */
+            annotations: components["schemas"]["GenericResponseOutputItemContentAnnotation"][] | null;
+            /** Text */
+            text: string | null;
+            /** Type */
+            type: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** OutputTokensDetails */
+        OutputTokensDetails: {
+            /** Audio Tokens */
+            audio_tokens?: number | null;
+            /** Reasoning Tokens */
+            reasoning_tokens?: number | null;
+            /** Text Tokens */
+            text_tokens?: number | null;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * PageLinks
@@ -35295,6 +37602,7 @@ export interface components {
             agent_name?: string;
             /** Extra Headers */
             extra_headers?: string[] | null;
+            kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
             /** Litellm Params */
             litellm_params?: {
                 [key: string]: unknown;
@@ -35436,6 +37744,20 @@ export interface components {
             tpd_limit?: number | null;
             /** Tpm Limit */
             tpm_limit?: number | null;
+        };
+        /**
+         * PendingSafetyCheck
+         * @description A pending safety check for the computer call.
+         */
+        PendingSafetyCheck: {
+            /** Code */
+            code?: string | null;
+            /** Id */
+            id: string;
+            /** Message */
+            message?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * PerTestingCriteriaResult
@@ -36319,6 +38641,19 @@ export interface components {
             prompt_id: string;
             prompt_info?: components["schemas"]["PromptInfo"] | null;
         };
+        /** PromptCacheOptions */
+        PromptCacheOptions: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode?: "implicit" | "explicit";
+            /**
+             * Ttl
+             * @constant
+             */
+            ttl?: "30m";
+        };
         /** PromptCachingRequest */
         PromptCachingRequest: {
             /** Cache Creation Tokens */
@@ -36411,6 +38746,20 @@ export interface components {
             } | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * PromptObject
+         * @description Reference to a stored prompt template.
+         */
+        PromptObject: {
+            /** Id */
+            id: string;
+            /** Variables */
+            variables?: {
+                [key: string]: unknown;
+            } | null;
+            /** Version */
+            version?: string | null;
         };
         /** PromptSpec */
         PromptSpec: {
@@ -36702,6 +39051,31 @@ export interface components {
                 };
             } | null;
         };
+        /**
+         * RankingOptions
+         * @description Ranking options for search.
+         */
+        RankingOptions: {
+            hybrid_search?: components["schemas"]["RankingOptionsHybridSearch"] | null;
+            /** Ranker */
+            ranker?: ("auto" | "default-2024-11-15") | null;
+            /** Score Threshold */
+            score_threshold?: number | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * RankingOptionsHybridSearch
+         * @description Weights that control how reciprocal rank fusion balances semantic embedding matches versus sparse keyword matches when hybrid search is enabled.
+         */
+        RankingOptionsHybridSearch: {
+            /** Embedding Weight */
+            embedding_weight: number;
+            /** Text Weight */
+            text_weight: number;
+        } & {
+            [key: string]: unknown;
+        };
         /** RawRequestTypedDict */
         RawRequestTypedDict: {
             /** Error */
@@ -36749,6 +39123,21 @@ export interface components {
             } | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * Reasoning
+         * @description **gpt-5 and o-series models only**
+         *
+         *     Configuration options for
+         *     [reasoning models](https://platform.openai.com/docs/guides/reasoning).
+         */
+        Reasoning: {
+            /** Effort */
+            effort?: ("none" | "minimal" | "low" | "medium" | "high" | "xhigh") | null;
+            /** Generate Summary */
+            generate_summary?: ("auto" | "concise" | "detailed") | null;
+            /** Summary */
+            summary?: ("auto" | "concise" | "detailed") | null;
         };
         /** RegenerateKeyRequest */
         RegenerateKeyRequest: {
@@ -37420,9 +39809,1488 @@ export interface components {
             /** Reset To */
             reset_to: number;
         };
+        /** ResponseAPIUsage */
+        ResponseAPIUsage: {
+            /** Cost */
+            cost?: number | null;
+            /** Input Tokens */
+            input_tokens: number;
+            input_tokens_details?: components["schemas"]["InputTokensDetails"] | null;
+            /** Output Tokens */
+            output_tokens: number;
+            output_tokens_details?: components["schemas"]["OutputTokensDetails"] | null;
+            /** Total Tokens */
+            total_tokens: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseApplyPatchToolCall
+         * @description A tool call that applies file diffs by creating, deleting, or updating files.
+         */
+        ResponseApplyPatchToolCall: {
+            /** Call Id */
+            call_id: string;
+            /** Created By */
+            created_by?: string | null;
+            /** Id */
+            id: string;
+            /** Operation */
+            operation: components["schemas"]["OperationCreateFile"] | components["schemas"]["OperationDeleteFile"] | components["schemas"]["OperationUpdateFile"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed";
+            /**
+             * Type
+             * @constant
+             */
+            type: "apply_patch_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseApplyPatchToolCallOutput
+         * @description The output emitted by an apply patch tool call.
+         */
+        ResponseApplyPatchToolCallOutput: {
+            /** Call Id */
+            call_id: string;
+            /** Created By */
+            created_by?: string | null;
+            /** Id */
+            id: string;
+            /** Output */
+            output?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "failed";
+            /**
+             * Type
+             * @constant
+             */
+            type: "apply_patch_call_output";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseCodeInterpreterToolCall
+         * @description A tool call to run code.
+         */
+        ResponseCodeInterpreterToolCall: {
+            /** Code */
+            code?: string | null;
+            /** Container Id */
+            container_id: string;
+            /** Id */
+            id: string;
+            /** Outputs */
+            outputs?: (components["schemas"]["OutputLogs"] | components["schemas"]["OutputImage"])[] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete" | "interpreting" | "failed";
+            /**
+             * Type
+             * @constant
+             */
+            type: "code_interpreter_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseCodeInterpreterToolCallParam
+         * @description A tool call to run code.
+         */
+        ResponseCodeInterpreterToolCallParam: {
+            /** Code */
+            code: string | null;
+            /** Container Id */
+            container_id: string;
+            /** Id */
+            id: string;
+            /** Outputs */
+            outputs: (components["schemas"]["OutputLogs"] | components["schemas"]["OutputImage"])[] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete" | "interpreting" | "failed";
+            /**
+             * Type
+             * @constant
+             */
+            type: "code_interpreter_call";
+        };
+        /**
+         * ResponseCompactionItem
+         * @description A compaction item generated by the [`v1/responses/compact` API](https://platform.openai.com/docs/api-reference/responses/compact).
+         */
+        ResponseCompactionItem: {
+            /** Created By */
+            created_by?: string | null;
+            /** Encrypted Content */
+            encrypted_content: string;
+            /** Id */
+            id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "compaction";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseCompactionItemParamParam
+         * @description A compaction item generated by the [`v1/responses/compact` API](https://platform.openai.com/docs/api-reference/responses/compact).
+         */
+        ResponseCompactionItemParamParam: {
+            /** Encrypted Content */
+            encrypted_content: string;
+            /** Id */
+            id?: string | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "compaction";
+        };
+        /**
+         * ResponseComputerToolCall
+         * @description A tool call to a computer use tool.
+         *
+         *     See the
+         *     [computer use guide](https://platform.openai.com/docs/guides/tools-computer-use) for more information.
+         */
+        ResponseComputerToolCall: {
+            /** Action */
+            action?: components["schemas"]["ActionClick"] | components["schemas"]["ActionDoubleClick"] | components["schemas"]["ActionDrag"] | components["schemas"]["ActionKeypress"] | components["schemas"]["ActionMove"] | components["schemas"]["ActionScreenshot"] | components["schemas"]["ActionScroll"] | components["schemas"]["ActionType"] | components["schemas"]["ActionWait"] | null;
+            /** Actions */
+            actions?: (components["schemas"]["Click"] | components["schemas"]["DoubleClick"] | components["schemas"]["Drag"] | components["schemas"]["Keypress"] | components["schemas"]["Move"] | components["schemas"]["Screenshot"] | components["schemas"]["Scroll"] | components["schemas"]["Type"] | components["schemas"]["Wait"])[] | null;
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id: string;
+            /** Pending Safety Checks */
+            pending_safety_checks: components["schemas"]["PendingSafetyCheck"][];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "computer_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /** ResponseComputerToolCallOutputItem */
+        ResponseComputerToolCallOutputItem: {
+            /** Acknowledged Safety Checks */
+            acknowledged_safety_checks?: components["schemas"]["AcknowledgedSafetyCheck"][] | null;
+            /** Call Id */
+            call_id: string;
+            /** Created By */
+            created_by?: string | null;
+            /** Id */
+            id: string;
+            output: components["schemas"]["ResponseComputerToolCallOutputScreenshot"];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "completed" | "incomplete" | "failed" | "in_progress";
+            /**
+             * Type
+             * @constant
+             */
+            type: "computer_call_output";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseComputerToolCallOutputScreenshot
+         * @description A computer screenshot image used with the computer use tool.
+         */
+        ResponseComputerToolCallOutputScreenshot: {
+            /** File Id */
+            file_id?: string | null;
+            /** Image Url */
+            image_url?: string | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "computer_screenshot";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseComputerToolCallOutputScreenshotParam
+         * @description A computer screenshot image used with the computer use tool.
+         */
+        ResponseComputerToolCallOutputScreenshotParam: {
+            /** File Id */
+            file_id?: string;
+            /** Image Url */
+            image_url?: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "computer_screenshot";
+        };
+        /**
+         * ResponseComputerToolCallParam
+         * @description A tool call to a computer use tool.
+         *
+         *     See the
+         *     [computer use guide](https://platform.openai.com/docs/guides/tools-computer-use) for more information.
+         */
+        ResponseComputerToolCallParam: {
+            /** Action */
+            action?: components["schemas"]["ActionClick"] | components["schemas"]["ResponsesAPIRequestParams_ActionDoubleClick"] | components["schemas"]["ActionDrag"] | components["schemas"]["ActionKeypress"] | components["schemas"]["ActionMove"] | components["schemas"]["ActionScreenshot"] | components["schemas"]["ActionScroll"] | components["schemas"]["ActionType"] | components["schemas"]["ActionWait"];
+            /** Actions */
+            actions?: (components["schemas"]["Click"] | components["schemas"]["ResponsesAPIRequestParams_DoubleClick"] | components["schemas"]["Drag"] | components["schemas"]["Keypress"] | components["schemas"]["Move"] | components["schemas"]["Screenshot"] | components["schemas"]["Scroll"] | components["schemas"]["Type"] | components["schemas"]["Wait"])[];
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id: string;
+            /** Pending Safety Checks */
+            pending_safety_checks: components["schemas"]["PendingSafetyCheck"][];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "computer_call";
+        };
+        /**
+         * ResponseContainerReference
+         * @description Represents a container created with /v1/containers.
+         */
+        ResponseContainerReference: {
+            /** Container Id */
+            container_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "container_reference";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseCustomToolCall
+         * @description A call to a custom tool created by the model.
+         */
+        ResponseCustomToolCall: {
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id?: string | null;
+            /** Input */
+            input: string;
+            /** Name */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "custom_tool_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseCustomToolCallItem
+         * @description A call to a custom tool created by the model.
+         */
+        ResponseCustomToolCallItem: {
+            /** Call Id */
+            call_id: string;
+            /** Created By */
+            created_by?: string | null;
+            /** Id */
+            id: string;
+            /** Input */
+            input: string;
+            /** Name */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "custom_tool_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseCustomToolCallOutputItem
+         * @description The output of a custom tool call from your code, being sent back to the model.
+         */
+        ResponseCustomToolCallOutputItem: {
+            /** Call Id */
+            call_id: string;
+            /** Created By */
+            created_by?: string | null;
+            /** Id */
+            id: string;
+            /** Output */
+            output: string | (components["schemas"]["ResponseInputText"] | components["schemas"]["ResponseInputImage"] | components["schemas"]["ResponseInputFile"])[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "custom_tool_call_output";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseCustomToolCallOutputParam
+         * @description The output of a custom tool call from your code, being sent back to the model.
+         */
+        ResponseCustomToolCallOutputParam: {
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id?: string;
+            /** Output */
+            output: string | (components["schemas"]["ResponseInputTextParam"] | components["schemas"]["ResponseInputImageParam"] | components["schemas"]["ResponseInputFileParam"])[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "custom_tool_call_output";
+        };
+        /**
+         * ResponseCustomToolCallParam
+         * @description A call to a custom tool created by the model.
+         */
+        ResponseCustomToolCallParam: {
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id?: string;
+            /** Input */
+            input: string;
+            /** Name */
+            name: string;
+            /** Namespace */
+            namespace?: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "custom_tool_call";
+        };
+        /**
+         * ResponseFileSearchToolCall
+         * @description The results of a file search tool call.
+         *
+         *     See the
+         *     [file search guide](https://platform.openai.com/docs/guides/tools-file-search) for more information.
+         */
+        ResponseFileSearchToolCall: {
+            /** Id */
+            id: string;
+            /** Queries */
+            queries: string[];
+            /** Results */
+            results?: components["schemas"]["Result"][] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "searching" | "completed" | "incomplete" | "failed";
+            /**
+             * Type
+             * @constant
+             */
+            type: "file_search_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseFileSearchToolCallParam
+         * @description The results of a file search tool call.
+         *
+         *     See the
+         *     [file search guide](https://platform.openai.com/docs/guides/tools-file-search) for more information.
+         */
+        ResponseFileSearchToolCallParam: {
+            /** Id */
+            id: string;
+            /** Queries */
+            queries: string[];
+            /** Results */
+            results?: components["schemas"]["Result"][] | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "searching" | "completed" | "incomplete" | "failed";
+            /**
+             * Type
+             * @constant
+             */
+            type: "file_search_call";
+        };
+        /**
+         * ResponseFormatJSONObject
+         * @description JSON object response format.
+         *
+         *     An older method of generating JSON responses.
+         *     Using `json_schema` is recommended for models that support it. Note that the
+         *     model will not generate JSON without a system or user message instructing it
+         *     to do so.
+         */
+        ResponseFormatJSONObject: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "json_object";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseFormatText
+         * @description Default response format. Used to generate text responses.
+         */
+        ResponseFormatText: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "text";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseFormatTextJSONSchemaConfigParam
+         * @description JSON Schema response format.
+         *
+         *     Used to generate structured JSON responses.
+         *     Learn more about [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs).
+         */
+        ResponseFormatTextJSONSchemaConfigParam: {
+            /** Description */
+            description?: string;
+            /** Name */
+            name: string;
+            /** Schema */
+            schema: {
+                [key: string]: unknown;
+            };
+            /** Strict */
+            strict?: boolean | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "json_schema";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseFunctionShellCallOutputContentParam
+         * @description Captured stdout and stderr for a portion of a shell tool call output.
+         */
+        ResponseFunctionShellCallOutputContentParam: {
+            /** Outcome */
+            outcome: components["schemas"]["OutcomeTimeout"] | components["schemas"]["OutcomeExit"];
+            /** Stderr */
+            stderr: string;
+            /** Stdout */
+            stdout: string;
+        };
+        /**
+         * ResponseFunctionShellToolCall
+         * @description A tool call that executes one or more shell commands in a managed environment.
+         */
+        ResponseFunctionShellToolCall: {
+            action: components["schemas"]["Action"];
+            /** Call Id */
+            call_id: string;
+            /** Created By */
+            created_by?: string | null;
+            /** Environment */
+            environment?: components["schemas"]["ResponseLocalEnvironment"] | components["schemas"]["ResponseContainerReference"] | null;
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "shell_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseFunctionShellToolCallOutput
+         * @description The output of a shell tool call that was emitted.
+         */
+        ResponseFunctionShellToolCallOutput: {
+            /** Call Id */
+            call_id: string;
+            /** Created By */
+            created_by?: string | null;
+            /** Id */
+            id: string;
+            /** Max Output Length */
+            max_output_length?: number | null;
+            /** Output */
+            output: components["schemas"]["Output"][];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "shell_call_output";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseFunctionToolCall
+         * @description A tool call to run a function.
+         *
+         *     See the
+         *     [function calling guide](https://platform.openai.com/docs/guides/function-calling) for more information.
+         */
+        ResponseFunctionToolCall: {
+            /** Arguments */
+            arguments: string;
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id?: string | null;
+            /** Name */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /** Status */
+            status?: ("in_progress" | "completed" | "incomplete") | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "function_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseFunctionToolCallItem
+         * @description A tool call to run a function.
+         *
+         *     See the
+         *     [function calling guide](https://platform.openai.com/docs/guides/function-calling) for more information.
+         */
+        ResponseFunctionToolCallItem: {
+            /** Arguments */
+            arguments: string;
+            /** Call Id */
+            call_id: string;
+            /** Created By */
+            created_by?: string | null;
+            /** Id */
+            id: string;
+            /** Name */
+            name: string;
+            /** Namespace */
+            namespace?: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "function_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /** ResponseFunctionToolCallOutputItem */
+        ResponseFunctionToolCallOutputItem: {
+            /** Call Id */
+            call_id: string;
+            /** Created By */
+            created_by?: string | null;
+            /** Id */
+            id: string;
+            /** Output */
+            output: string | (components["schemas"]["ResponseInputText"] | components["schemas"]["ResponseInputImage"] | components["schemas"]["ResponseInputFile"])[];
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "function_call_output";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseFunctionToolCallParam
+         * @description A tool call to run a function.
+         *
+         *     See the
+         *     [function calling guide](https://platform.openai.com/docs/guides/function-calling) for more information.
+         */
+        ResponseFunctionToolCallParam: {
+            /** Arguments */
+            arguments: string;
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id?: string;
+            /** Name */
+            name: string;
+            /** Namespace */
+            namespace?: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status?: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "function_call";
+        };
+        /**
+         * ResponseFunctionWebSearch
+         * @description The results of a web search tool call.
+         *
+         *     See the
+         *     [web search guide](https://platform.openai.com/docs/guides/tools-web-search) for more information.
+         */
+        ResponseFunctionWebSearch: {
+            /** Action */
+            action: components["schemas"]["ActionSearch"] | components["schemas"]["ActionOpenPage"] | components["schemas"]["ActionFind"];
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "searching" | "completed" | "failed";
+            /**
+             * Type
+             * @constant
+             */
+            type: "web_search_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseFunctionWebSearchParam
+         * @description The results of a web search tool call.
+         *
+         *     See the
+         *     [web search guide](https://platform.openai.com/docs/guides/tools-web-search) for more information.
+         */
+        ResponseFunctionWebSearchParam: {
+            /** Action */
+            action: components["schemas"]["ActionSearch"] | components["schemas"]["ActionOpenPage"] | components["schemas"]["ActionFind"];
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "searching" | "completed" | "failed";
+            /**
+             * Type
+             * @constant
+             */
+            type: "web_search_call";
+        };
+        /**
+         * ResponseInputFile
+         * @description A file input to the model.
+         */
+        ResponseInputFile: {
+            /** Detail */
+            detail?: ("high" | "low") | null;
+            /** File Data */
+            file_data?: string | null;
+            /** File Id */
+            file_id?: string | null;
+            /** File Url */
+            file_url?: string | null;
+            /** Filename */
+            filename?: string | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "input_file";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseInputFileContentParam
+         * @description A file input to the model.
+         */
+        ResponseInputFileContentParam: {
+            /**
+             * Detail
+             * @enum {string}
+             */
+            detail?: "low" | "high";
+            /** File Data */
+            file_data?: string | null;
+            /** File Id */
+            file_id?: string | null;
+            /** File Url */
+            file_url?: string | null;
+            /** Filename */
+            filename?: string | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "input_file";
+        };
+        /**
+         * ResponseInputFileParam
+         * @description A file input to the model.
+         */
+        ResponseInputFileParam: {
+            /**
+             * Detail
+             * @enum {string}
+             */
+            detail?: "low" | "high";
+            /** File Data */
+            file_data?: string;
+            /** File Id */
+            file_id?: string | null;
+            /** File Url */
+            file_url?: string;
+            /** Filename */
+            filename?: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "input_file";
+        };
+        /**
+         * ResponseInputImage
+         * @description An image input to the model.
+         *
+         *     Learn about [image inputs](https://platform.openai.com/docs/guides/vision).
+         */
+        ResponseInputImage: {
+            /**
+             * Detail
+             * @enum {string}
+             */
+            detail: "low" | "high" | "auto" | "original";
+            /** File Id */
+            file_id?: string | null;
+            /** Image Url */
+            image_url?: string | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "input_image";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseInputImageContentParam
+         * @description An image input to the model.
+         *
+         *     Learn about [image inputs](https://platform.openai.com/docs/guides/vision)
+         */
+        ResponseInputImageContentParam: {
+            /** Detail */
+            detail?: ("low" | "high" | "auto" | "original") | null;
+            /** File Id */
+            file_id?: string | null;
+            /** Image Url */
+            image_url?: string | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "input_image";
+        };
+        /**
+         * ResponseInputImageParam
+         * @description An image input to the model.
+         *
+         *     Learn about [image inputs](https://platform.openai.com/docs/guides/vision).
+         */
+        ResponseInputImageParam: {
+            /**
+             * Detail
+             * @enum {string}
+             */
+            detail: "low" | "high" | "auto" | "original";
+            /** File Id */
+            file_id?: string | null;
+            /** Image Url */
+            image_url?: string | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "input_image";
+        };
+        /** ResponseInputMessageItem */
+        ResponseInputMessageItem: {
+            /** Content */
+            content: (components["schemas"]["ResponseInputText"] | components["schemas"]["ResponseInputImage"] | components["schemas"]["ResponseInputFile"])[];
+            /** Id */
+            id: string;
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "system" | "developer";
+            /** Status */
+            status?: ("in_progress" | "completed" | "incomplete") | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "message";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseInputText
+         * @description A text input to the model.
+         */
+        ResponseInputText: {
+            /** Text */
+            text: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "input_text";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseInputTextContentParam
+         * @description A text input to the model.
+         */
+        ResponseInputTextContentParam: {
+            /** Text */
+            text: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "input_text";
+        };
+        /**
+         * ResponseInputTextParam
+         * @description A text input to the model.
+         */
+        ResponseInputTextParam: {
+            /** Text */
+            text: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "input_text";
+        };
+        /**
+         * ResponseItemList
+         * @description A list of Response items.
+         */
+        ResponseItemList: {
+            /** Data */
+            data: (components["schemas"]["ResponseInputMessageItem"] | components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseFunctionToolCallItem"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallItem"] | components["schemas"]["ResponseCustomToolCallOutputItem"])[];
+            /** First Id */
+            first_id: string;
+            /** Has More */
+            has_more: boolean;
+            /** Last Id */
+            last_id: string;
+            /**
+             * Object
+             * @constant
+             */
+            object: "list";
+        } & {
+            [key: string]: unknown;
+        };
         /** ResponseLiteLLM_ManagedVectorStore */
         ResponseLiteLLM_ManagedVectorStore: {
             vector_store?: components["schemas"]["LiteLLM_ManagedVectorStoresTable"];
+        };
+        /**
+         * ResponseLocalEnvironment
+         * @description Represents the use of a local environment to perform shell actions.
+         */
+        ResponseLocalEnvironment: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "local";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseOutputMessage
+         * @description An output message from the model.
+         */
+        ResponseOutputMessage: {
+            /** Content */
+            content: (components["schemas"]["ResponseOutputText"] | components["schemas"]["ResponseOutputRefusal"])[];
+            /** Id */
+            id: string;
+            /** Phase */
+            phase?: ("commentary" | "final_answer") | null;
+            /**
+             * Role
+             * @constant
+             */
+            role: "assistant";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "message";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseOutputMessageParam
+         * @description An output message from the model.
+         */
+        ResponseOutputMessageParam: {
+            /** Content */
+            content: (components["schemas"]["ResponseOutputTextParam"] | components["schemas"]["ResponseOutputRefusalParam"])[];
+            /** Id */
+            id: string;
+            /** Phase */
+            phase?: ("commentary" | "final_answer") | null;
+            /**
+             * Role
+             * @constant
+             */
+            role: "assistant";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "message";
+        };
+        /**
+         * ResponseOutputRefusal
+         * @description A refusal from the model.
+         */
+        ResponseOutputRefusal: {
+            /** Refusal */
+            refusal: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "refusal";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseOutputRefusalParam
+         * @description A refusal from the model.
+         */
+        ResponseOutputRefusalParam: {
+            /** Refusal */
+            refusal: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "refusal";
+        };
+        /**
+         * ResponseOutputText
+         * @description A text output from the model.
+         */
+        ResponseOutputText: {
+            /** Annotations */
+            annotations: (components["schemas"]["AnnotationFileCitation"] | components["schemas"]["AnnotationURLCitation"] | components["schemas"]["AnnotationContainerFileCitation"] | components["schemas"]["AnnotationFilePath"])[];
+            /** Logprobs */
+            logprobs?: components["schemas"]["Logprob"][] | null;
+            /** Text */
+            text: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "output_text";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseOutputTextParam
+         * @description A text output from the model.
+         */
+        ResponseOutputTextParam: {
+            /** Annotations */
+            annotations: (components["schemas"]["AnnotationFileCitation"] | components["schemas"]["AnnotationURLCitation"] | components["schemas"]["AnnotationContainerFileCitation"] | components["schemas"]["AnnotationFilePath"])[];
+            /** Logprobs */
+            logprobs?: components["schemas"]["Logprob"][];
+            /** Text */
+            text: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "output_text";
+        };
+        /**
+         * ResponseReasoningItem
+         * @description A description of the chain of thought used by a reasoning model while generating
+         *     a response. Be sure to include these items in your `input` to the Responses API
+         *     for subsequent turns of a conversation if you are manually
+         *     [managing context](https://platform.openai.com/docs/guides/conversation-state).
+         */
+        ResponseReasoningItem: {
+            /** Content */
+            content?: components["schemas"]["Content"][] | null;
+            /** Encrypted Content */
+            encrypted_content?: string | null;
+            /** Id */
+            id: string;
+            /** Status */
+            status?: ("in_progress" | "completed" | "incomplete") | null;
+            /** Summary */
+            summary: components["schemas"]["Summary"][];
+            /**
+             * Type
+             * @constant
+             */
+            type: "reasoning";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ResponseReasoningItemParam
+         * @description A description of the chain of thought used by a reasoning model while generating
+         *     a response. Be sure to include these items in your `input` to the Responses API
+         *     for subsequent turns of a conversation if you are manually
+         *     [managing context](https://platform.openai.com/docs/guides/conversation-state).
+         */
+        ResponseReasoningItemParam: {
+            /** Content */
+            content?: components["schemas"]["Content"][];
+            /** Encrypted Content */
+            encrypted_content?: string | null;
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status?: "in_progress" | "completed" | "incomplete";
+            /** Summary */
+            summary: components["schemas"]["Summary"][];
+            /**
+             * Type
+             * @constant
+             */
+            type: "reasoning";
+        };
+        /**
+         * ResponseTextConfigParam
+         * @description Configuration options for a text response from the model.
+         *
+         *     Can be plain
+         *     text or structured JSON data. Learn more:
+         *     - [Text inputs and outputs](https://platform.openai.com/docs/guides/text)
+         *     - [Structured Outputs](https://platform.openai.com/docs/guides/structured-outputs)
+         */
+        ResponseTextConfigParam: {
+            /** Format */
+            format?: components["schemas"]["ResponseFormatText"] | components["schemas"]["ResponseFormatTextJSONSchemaConfigParam"] | components["schemas"]["ResponseFormatJSONObject"];
+            /** Verbosity */
+            verbosity?: ("low" | "medium" | "high") | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** ResponseToolSearchCall */
+        ResponseToolSearchCall: {
+            /** Arguments */
+            arguments: unknown;
+            /** Call Id */
+            call_id?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /**
+             * Execution
+             * @enum {string}
+             */
+            execution: "server" | "client";
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search_call";
+        } & {
+            [key: string]: unknown;
+        };
+        /** ResponseToolSearchOutputItem */
+        ResponseToolSearchOutputItem: {
+            /** Call Id */
+            call_id?: string | null;
+            /** Created By */
+            created_by?: string | null;
+            /**
+             * Execution
+             * @enum {string}
+             */
+            execution: "server" | "client";
+            /** Id */
+            id: string;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "incomplete";
+            /** Tools */
+            tools: (components["schemas"]["FunctionTool"] | components["schemas"]["FileSearchTool"] | components["schemas"]["ComputerTool"] | components["schemas"]["ComputerUsePreviewTool"] | components["schemas"]["WebSearchTool"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellTool"] | components["schemas"]["CustomTool"] | components["schemas"]["NamespaceTool"] | components["schemas"]["ToolSearchTool"] | components["schemas"]["WebSearchPreviewTool"] | components["schemas"]["ApplyPatchTool"])[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search_output";
+        } & {
+            [key: string]: unknown;
+        };
+        /** ResponseToolSearchOutputItemParamParam */
+        ResponseToolSearchOutputItemParamParam: {
+            /** Call Id */
+            call_id?: string | null;
+            /**
+             * Execution
+             * @enum {string}
+             */
+            execution?: "server" | "client";
+            /** Id */
+            id?: string | null;
+            /** Status */
+            status?: ("in_progress" | "completed" | "incomplete") | null;
+            /** Tools */
+            tools: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"])[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search_output";
+        };
+        /**
+         * ResponsesAPIRequestParams
+         * @description TypedDict for request parameters supported by the responses API.
+         */
+        ResponsesAPIRequestParams: {
+            /** Background */
+            background?: boolean | null;
+            /** Context Management */
+            context_management?: components["schemas"]["ContextManagementEntry"][] | null;
+            /** Include */
+            include?: ("file_search_call.results" | "web_search_call.results" | "web_search_call.action.sources" | "message.input_image.image_url" | "computer_call_output.output.image_url" | "code_interpreter_call.outputs" | "reasoning.encrypted_content" | "message.output_text.logprobs")[] | null;
+            /** Input */
+            input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
+            /** Instructions */
+            instructions?: string | null;
+            /** Max Output Tokens */
+            max_output_tokens?: number | null;
+            /** Max Tool Calls */
+            max_tool_calls?: number | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model */
+            model: string;
+            /** Parallel Tool Calls */
+            parallel_tool_calls?: boolean | null;
+            /** Partial Images */
+            partial_images?: number | null;
+            /** Previous Response Id */
+            previous_response_id?: string | null;
+            prompt?: components["schemas"]["PromptObject"] | null;
+            /** Prompt Cache Key */
+            prompt_cache_key?: string | null;
+            prompt_cache_options?: components["schemas"]["PromptCacheOptions"] | null;
+            /** Prompt Cache Retention */
+            prompt_cache_retention?: string | null;
+            reasoning?: components["schemas"]["Reasoning"] | null;
+            /** Safety Identifier */
+            safety_identifier?: string | null;
+            /** Service Tier */
+            service_tier?: string | null;
+            /** Store */
+            store?: boolean | null;
+            /** Stream */
+            stream?: boolean | null;
+            stream_options?: components["schemas"]["ResponsesAPIStreamOptions"] | null;
+            /** Temperature */
+            temperature?: number | null;
+            text?: components["schemas"]["ResponseTextConfigParam"] | null;
+            /** Tool Choice */
+            tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
+            /** Tools */
+            tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+            /** Top Logprobs */
+            top_logprobs?: number | null;
+            /** Top P */
+            top_p?: number | null;
+            /** Truncation */
+            truncation?: ("auto" | "disabled") | null;
+            /** User */
+            user?: string | null;
+        };
+        /**
+         * ActionDoubleClick
+         * @description A double click action.
+         */
+        ResponsesAPIRequestParams_ActionDoubleClick: {
+            /** Keys */
+            keys: string[] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "double_click";
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        };
+        /**
+         * DoubleClick
+         * @description A double click action.
+         */
+        ResponsesAPIRequestParams_DoubleClick: {
+            /** Keys */
+            keys: string[] | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "double_click";
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        };
+        /**
+         * ImageGenerationCall
+         * @description An image generation request made by the model.
+         */
+        ResponsesAPIRequestParams_ImageGenerationCall: {
+            /** Id */
+            id: string;
+            /** Result */
+            result: string | null;
+            /**
+             * Status
+             * @enum {string}
+             */
+            status: "in_progress" | "completed" | "generating" | "failed";
+            /**
+             * Type
+             * @constant
+             */
+            type: "image_generation_call";
+        };
+        /**
+         * McpApprovalResponse
+         * @description A response to an MCP approval request.
+         */
+        ResponsesAPIRequestParams_McpApprovalResponse: {
+            /** Approval Request Id */
+            approval_request_id: string;
+            /** Approve */
+            approve: boolean;
+            /** Id */
+            id?: string | null;
+            /** Reason */
+            reason?: string | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "mcp_approval_response";
+        };
+        /**
+         * Message
+         * @description A message input to the model with a role indicating instruction following
+         *     hierarchy. Instructions given with the `developer` or `system` role take
+         *     precedence over instructions given with the `user` role.
+         */
+        ResponsesAPIRequestParams_Message: {
+            /** Content */
+            content: (components["schemas"]["ResponseInputTextParam"] | components["schemas"]["ResponseInputImageParam"] | components["schemas"]["ResponseInputFileParam"])[];
+            /**
+             * Role
+             * @enum {string}
+             */
+            role: "user" | "system" | "developer";
+            /**
+             * Status
+             * @enum {string}
+             */
+            status?: "in_progress" | "completed" | "incomplete";
+            /**
+             * Type
+             * @constant
+             */
+            type?: "message";
+        };
+        /** ResponsesAPIResponse */
+        ResponsesAPIResponse: {
+            /** Created At */
+            created_at: number;
+            /** Error */
+            error?: {
+                [key: string]: unknown;
+            } | null;
+            /** Id */
+            id: string;
+            incomplete_details?: components["schemas"]["IncompleteDetails"] | null;
+            /** Instructions */
+            instructions?: string | null;
+            /** Max Output Tokens */
+            max_output_tokens?: number | null;
+            /** Metadata */
+            metadata?: {
+                [key: string]: unknown;
+            } | null;
+            /** Model */
+            model?: string | null;
+            /** Object */
+            object?: string | null;
+            /** Output */
+            output: (components["schemas"]["ResponseOutputMessage"] | components["schemas"]["ResponseFileSearchToolCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionToolCallOutputItem"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["ResponseComputerToolCall"] | components["schemas"]["ResponseComputerToolCallOutputItem"] | components["schemas"]["ResponseReasoningItem"] | components["schemas"]["ResponseToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItem"] | components["schemas"]["ResponseCompactionItem"] | components["schemas"]["ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCall"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ResponseFunctionShellToolCall"] | components["schemas"]["ResponseFunctionShellToolCallOutput"] | components["schemas"]["ResponseApplyPatchToolCall"] | components["schemas"]["ResponseApplyPatchToolCallOutput"] | components["schemas"]["McpCall"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["McpApprovalResponse"] | components["schemas"]["ResponseCustomToolCall"] | components["schemas"]["ResponseCustomToolCallOutputItem"] | {
+                [key: string]: unknown;
+            })[] | (components["schemas"]["GenericResponseOutputItem"] | components["schemas"]["OutputCodeInterpreterCall"] | components["schemas"]["OutputFunctionToolCall"] | components["schemas"]["OutputImageGenerationCall"] | components["schemas"]["ResponseFunctionToolCall"] | components["schemas"]["ResponseFunctionWebSearch"] | components["schemas"]["CustomToolCallOutputItem"])[];
+            /** Parallel Tool Calls */
+            parallel_tool_calls?: boolean | null;
+            /** Previous Response Id */
+            previous_response_id?: string | null;
+            /** Reasoning */
+            reasoning?: {
+                [key: string]: unknown;
+            } | null;
+            /** Status */
+            status?: string | null;
+            /** Store */
+            store?: boolean | null;
+            /** Temperature */
+            temperature?: number | null;
+            /** Text */
+            text?: components["schemas"]["ResponseTextConfigParam"] | {
+                [key: string]: unknown;
+            } | null;
+            /** Tool Choice */
+            tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
+            /** Tools */
+            tools?: (components["schemas"]["FunctionTool"] | components["schemas"]["FileSearchTool"] | components["schemas"]["ComputerTool"] | components["schemas"]["ComputerUsePreviewTool"] | components["schemas"]["WebSearchTool"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellTool"] | components["schemas"]["CustomTool"] | components["schemas"]["NamespaceTool"] | components["schemas"]["ToolSearchTool"] | components["schemas"]["WebSearchPreviewTool"] | components["schemas"]["ApplyPatchTool"])[] | components["schemas"]["ResponseFunctionToolCall"][] | {
+                [key: string]: unknown;
+            }[] | null;
+            /** Top P */
+            top_p?: number | null;
+            /** Truncation */
+            truncation?: ("auto" | "disabled") | null;
+            usage?: components["schemas"]["ResponseAPIUsage"] | null;
+            /** User */
+            user?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** ResponsesAPIStreamOptions */
+        ResponsesAPIStreamOptions: {
+            /** Include Obfuscation */
+            include_obfuscation?: boolean;
+        };
+        /** Result */
+        Result: {
+            /** Attributes */
+            attributes?: {
+                [key: string]: string | number | boolean;
+            } | null;
+            /** File Id */
+            file_id?: string | null;
+            /** Filename */
+            filename?: string | null;
+            /** Score */
+            score?: number | null;
+            /** Text */
+            text?: string | null;
+        } & {
+            [key: string]: unknown;
         };
         /**
          * ResultCounts
@@ -38087,6 +41955,42 @@ export interface components {
             window_seconds: number;
         };
         /**
+         * Screenshot
+         * @description A screenshot action.
+         */
+        Screenshot: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "screenshot";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * Scroll
+         * @description A scroll action.
+         */
+        Scroll: {
+            /** Keys */
+            keys?: string[] | null;
+            /** Scroll X */
+            scroll_x: number;
+            /** Scroll Y */
+            scroll_y: number;
+            /**
+             * Type
+             * @constant
+             */
+            type: "scroll";
+            /** X */
+            x: number;
+            /** Y */
+            y: number;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * SearchTool
          * @description Search tool configuration.
          *
@@ -38409,6 +42313,72 @@ export interface components {
             turn_count: number;
         };
         /**
+         * ShellCall
+         * @description A tool representing a request to execute one or more shell commands.
+         */
+        ShellCall: {
+            action: components["schemas"]["ShellCallAction"];
+            /** Call Id */
+            call_id: string;
+            /** Environment */
+            environment?: components["schemas"]["LocalEnvironmentParam"] | components["schemas"]["ContainerReferenceParam"] | null;
+            /** Id */
+            id?: string | null;
+            /** Status */
+            status?: ("in_progress" | "completed" | "incomplete") | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "shell_call";
+        };
+        /**
+         * ShellCallAction
+         * @description The shell commands and limits that describe how to run the tool call.
+         */
+        ShellCallAction: {
+            /** Commands */
+            commands: string[];
+            /** Max Output Length */
+            max_output_length?: number | null;
+            /** Timeout Ms */
+            timeout_ms?: number | null;
+        };
+        /**
+         * ShellCallOutput
+         * @description The streamed output items emitted by a shell tool call.
+         */
+        ShellCallOutput: {
+            /** Call Id */
+            call_id: string;
+            /** Id */
+            id?: string | null;
+            /** Max Output Length */
+            max_output_length?: number | null;
+            /** Output */
+            output: components["schemas"]["ResponseFunctionShellCallOutputContentParam"][];
+            /** Status */
+            status?: ("in_progress" | "completed" | "incomplete") | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "shell_call_output";
+        };
+        /**
+         * ShellToolParam
+         * @description Shell tool for Responses API: run commands in hosted containers or local runtime.
+         *     See https://developers.openai.com/api/docs/guides/tools-shell.
+         */
+        ShellToolParam: {
+            /** Environment */
+            environment: {
+                [key: string]: unknown;
+            };
+            /** Type */
+            type: "shell" | string;
+        };
+        /**
          * Skill
          * @description Represents a skill from the Anthropic Skills API
          */
@@ -38435,6 +42405,32 @@ export interface components {
             /** Updated At */
             updated_at: string;
         };
+        /** SkillReference */
+        SkillReference: {
+            /** Skill Id */
+            skill_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "skill_reference";
+            /** Version */
+            version?: string | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /** SkillReferenceParam */
+        SkillReferenceParam: {
+            /** Skill Id */
+            skill_id: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "skill_reference";
+            /** Version */
+            version?: string;
+        };
         /** SpendAnalyticsPaginatedResponse */
         SpendAnalyticsPaginatedResponse: {
             metadata?: components["schemas"]["DailySpendMetadata"];
@@ -38451,6 +42447,35 @@ export interface components {
             messages?: unknown[] | null;
             /** Model */
             model?: string | null;
+        };
+        /**
+         * SpendCaptureRateCheckSettings
+         * @description ``general_settings.spend_capture_rate_check``: the daily check of captured spend against the provider bill.
+         */
+        SpendCaptureRateCheckSettings: {
+            /**
+             * Lookback Days
+             * @default 7
+             */
+            lookback_days: number;
+            /**
+             * Openai Project Ids
+             * @description Scope the OpenAI bill to these project ids; empty compares against the whole organization. Captured spend is never scoped, so list every project LiteLLM's OpenAI keys belong to
+             * @default []
+             */
+            openai_project_ids: string[];
+            /**
+             * Providers
+             * @default [
+             *       "openai"
+             *     ]
+             */
+            providers: "openai"[];
+            /**
+             * Threshold
+             * @default 0.9
+             */
+            threshold: number;
         };
         /** SpendMetrics */
         SpendMetrics: {
@@ -38762,6 +42787,21 @@ export interface components {
             model?: string | null;
         };
         /**
+         * Summary
+         * @description A summary text from the model.
+         */
+        Summary: {
+            /** Text */
+            text: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "summary_text";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * SupportedDBObjectType
          * @description Supported database object types for fine-grained DB storage control.
          *     Use in general_settings.supported_db_objects to specify which objects to load from DB.
@@ -39022,6 +43062,87 @@ export interface components {
             success_callbacks: string[];
             /** Team Id */
             team_id: string;
+        };
+        /** TeamDailyActivityExportMetadata */
+        TeamDailyActivityExportMetadata: {
+            /** End Date */
+            end_date: string;
+            /** Export Date */
+            export_date: string;
+            /**
+             * Export Type
+             * @enum {string}
+             */
+            export_type: "daily" | "daily_with_keys" | "daily_with_users" | "daily_with_models";
+            /** Start Date */
+            start_date: string;
+            /** Team Ids */
+            team_ids: string[] | null;
+            /** Total Api Requests */
+            total_api_requests: number;
+            /** Total Failed Requests */
+            total_failed_requests: number;
+            /**
+             * Total Flat Cost
+             * @default 0
+             */
+            total_flat_cost: number;
+            /** Total Spend */
+            total_spend: number;
+            /** Total Successful Requests */
+            total_successful_requests: number;
+            /** Total Tokens */
+            total_tokens: number;
+        };
+        /** TeamDailyActivityExportResponse */
+        TeamDailyActivityExportResponse: {
+            /** Data */
+            data: components["schemas"]["TeamDailyActivityExportRow"][];
+            metadata: components["schemas"]["TeamDailyActivityExportMetadata"];
+        };
+        /** TeamDailyActivityExportRow */
+        TeamDailyActivityExportRow: {
+            /** Api Key */
+            api_key?: string | null;
+            /** Api Requests */
+            api_requests: number;
+            /** Cache Creation Input Tokens */
+            cache_creation_input_tokens: number;
+            /** Cache Read Input Tokens */
+            cache_read_input_tokens: number;
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Date */
+            date: string;
+            /** Failed Requests */
+            failed_requests: number;
+            /**
+             * Flat Cost
+             * @default 0
+             */
+            flat_cost: number;
+            /** Key Alias */
+            key_alias?: string | null;
+            /** Keys */
+            keys?: number | null;
+            /** Model */
+            model?: string | null;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Spend */
+            spend: number;
+            /** Successful Requests */
+            successful_requests: number;
+            /** Team Alias */
+            team_alias?: string | null;
+            /** Team Id */
+            team_id: string;
+            /** Total Tokens */
+            total_tokens: number;
+            /** User Email */
+            user_email?: string | null;
+            /** User Id */
+            user_id?: string | null;
         };
         /**
          * TeamListItem
@@ -39650,6 +43771,19 @@ export interface components {
                 [key: string]: unknown;
             };
         };
+        /**
+         * Text
+         * @description Unconstrained free-form text.
+         */
+        Text: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "text";
+        } & {
+            [key: string]: unknown;
+        };
         /** TierCohortStatistic */
         TierCohortStatistic: {
             /** Cohort */
@@ -39770,11 +43904,140 @@ export interface components {
             /** Total Tokens */
             total_tokens: number;
         };
+        /**
+         * ToolChoiceAllowedParam
+         * @description Constrains the tools available to the model to a pre-defined set.
+         */
+        ToolChoiceAllowedParam: {
+            /**
+             * Mode
+             * @enum {string}
+             */
+            mode: "auto" | "required";
+            /** Tools */
+            tools: {
+                [key: string]: unknown;
+            }[];
+            /**
+             * Type
+             * @constant
+             */
+            type: "allowed_tools";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ToolChoiceApplyPatchParam
+         * @description Forces the model to call the apply_patch tool when executing a tool call.
+         */
+        ToolChoiceApplyPatchParam: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "apply_patch";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ToolChoiceCustomParam
+         * @description Use this option to force the model to call a specific custom tool.
+         */
+        ToolChoiceCustomParam: {
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "custom";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ToolChoiceFunctionParam
+         * @description Use this option to force the model to call a specific function.
+         */
+        ToolChoiceFunctionParam: {
+            /** Name */
+            name: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "function";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ToolChoiceMcpParam
+         * @description Use this option to force the model to call a specific tool on a remote MCP server.
+         */
+        ToolChoiceMcpParam: {
+            /** Name */
+            name?: string | null;
+            /** Server Label */
+            server_label: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "mcp";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ToolChoiceShellParam
+         * @description Forces the model to call the shell tool when a tool call is required.
+         */
+        ToolChoiceShellParam: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "shell";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ToolChoiceTypesParam
+         * @description Indicates that the model should use a built-in tool to generate a response.
+         *     [Learn more about built-in tools](https://platform.openai.com/docs/guides/tools).
+         */
+        ToolChoiceTypesParam: {
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "file_search" | "web_search_preview" | "computer" | "computer_use_preview" | "computer_use" | "web_search_preview_2025_03_11" | "image_generation" | "code_interpreter";
+        } & {
+            [key: string]: unknown;
+        };
         /** ToolDetailResponse */
         ToolDetailResponse: {
             /** Overrides */
             overrides?: components["schemas"]["ToolPolicyOverrideRow"][];
             tool: components["schemas"]["LiteLLM_ToolTableRow"];
+        };
+        /** ToolFunction */
+        ToolFunction: {
+            /** Defer Loading */
+            defer_loading?: boolean | null;
+            /** Description */
+            description?: string | null;
+            /** Name */
+            name: string;
+            /** Parameters */
+            parameters?: unknown | null;
+            /** Strict */
+            strict?: boolean | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "function";
+        } & {
+            [key: string]: unknown;
         };
         /** ToolListResponse */
         ToolListResponse: {
@@ -39885,6 +44148,66 @@ export interface components {
             tool_name: string;
             /** Updated */
             updated: boolean;
+        };
+        /** ToolSearchCall */
+        ToolSearchCall: {
+            /** Arguments */
+            arguments: unknown;
+            /** Call Id */
+            call_id?: string | null;
+            /**
+             * Execution
+             * @enum {string}
+             */
+            execution?: "server" | "client";
+            /** Id */
+            id?: string | null;
+            /** Status */
+            status?: ("in_progress" | "completed" | "incomplete") | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search_call";
+        };
+        /**
+         * ToolSearchTool
+         * @description Hosted or BYOT tool search configuration for deferred tools.
+         */
+        ToolSearchTool: {
+            /** Description */
+            description?: string | null;
+            /** Execution */
+            execution?: ("server" | "client") | null;
+            /** Parameters */
+            parameters?: unknown | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * ToolSearchToolParam
+         * @description Hosted or BYOT tool search configuration for deferred tools.
+         */
+        ToolSearchToolParam: {
+            /** Description */
+            description?: string | null;
+            /**
+             * Execution
+             * @enum {string}
+             */
+            execution?: "server" | "client";
+            /** Parameters */
+            parameters?: unknown | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "tool_search";
         };
         /**
          * ToolSpendDailyEntry
@@ -40039,6 +44362,21 @@ export interface components {
             request_body: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * Type
+         * @description An action to type in text.
+         */
+        Type: {
+            /** Text */
+            text: string;
+            /**
+             * Type
+             * @constant
+             */
+            type: "type";
+        } & {
+            [key: string]: unknown;
         };
         /**
          * UISettingsResponse
@@ -41922,6 +46260,19 @@ export interface components {
             vector_store_name?: string | null;
         };
         /**
+         * Wait
+         * @description A wait action.
+         */
+        Wait: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "wait";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
          * WebSearchInterceptionSettings
          * @description Configuration for server-side web search interception
          */
@@ -41967,6 +46318,88 @@ export interface components {
             values: {
                 [key: string]: unknown;
             };
+        };
+        /**
+         * WebSearchPreviewTool
+         * @description This tool searches the web for relevant results to use in a response.
+         *
+         *     Learn more about the [web search tool](https://platform.openai.com/docs/guides/tools-web-search).
+         */
+        WebSearchPreviewTool: {
+            /** Search Content Types */
+            search_content_types?: ("text" | "image")[] | null;
+            /** Search Context Size */
+            search_context_size?: ("low" | "medium" | "high") | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "web_search_preview" | "web_search_preview_2025_03_11";
+            user_location?: components["schemas"]["openai__types__responses__web_search_preview_tool__UserLocation"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * WebSearchPreviewToolParam
+         * @description This tool searches the web for relevant results to use in a response.
+         *
+         *     Learn more about the [web search tool](https://platform.openai.com/docs/guides/tools-web-search).
+         */
+        WebSearchPreviewToolParam: {
+            /** Search Content Types */
+            search_content_types?: ("text" | "image")[];
+            /**
+             * Search Context Size
+             * @enum {string}
+             */
+            search_context_size?: "low" | "medium" | "high";
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "web_search_preview" | "web_search_preview_2025_03_11";
+            user_location?: components["schemas"]["openai__types__responses__web_search_preview_tool_param__UserLocation"] | null;
+        };
+        /**
+         * WebSearchTool
+         * @description Search the Internet for sources related to the prompt.
+         *
+         *     Learn more about the
+         *     [web search tool](https://platform.openai.com/docs/guides/tools-web-search).
+         */
+        WebSearchTool: {
+            filters?: components["schemas"]["Filters"] | null;
+            /** Search Context Size */
+            search_context_size?: ("low" | "medium" | "high") | null;
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "web_search" | "web_search_2025_08_26";
+            user_location?: components["schemas"]["openai__types__responses__web_search_tool__UserLocation"] | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * WebSearchToolParam
+         * @description Search the Internet for sources related to the prompt.
+         *
+         *     Learn more about the
+         *     [web search tool](https://platform.openai.com/docs/guides/tools-web-search).
+         */
+        WebSearchToolParam: {
+            filters?: components["schemas"]["Filters"] | null;
+            /**
+             * Search Context Size
+             * @enum {string}
+             */
+            search_context_size?: "low" | "medium" | "high";
+            /**
+             * Type
+             * @enum {string}
+             */
+            type: "web_search" | "web_search_2025_08_26";
+            user_location?: components["schemas"]["openai__types__responses__web_search_tool_param__UserLocation"] | null;
         };
         /** WorkerRegistryEntry */
         WorkerRegistryEntry: {
@@ -42027,6 +46460,8 @@ export interface components {
         litellm__proxy___types__ModelInfo: {
             /** Base Model */
             base_model: ("gpt-4-1106-preview" | "gpt-4-32k" | "gpt-4" | "gpt-3.5-turbo-16k" | "gpt-3.5-turbo" | "text-embedding-ada-002") | null;
+            /** Discoverable */
+            discoverable?: boolean | null;
             /** Id */
             id: string | null;
             /**
@@ -42048,6 +46483,17 @@ export interface components {
             output_cost_per_token: number | null;
         } & {
             [key: string]: unknown;
+        };
+        /** ComputerToolParam */
+        litellm__types__llms__openai__ComputerToolParam: {
+            /** Display Height */
+            display_height: number;
+            /** Display Width */
+            display_width: number;
+            /** Environment */
+            environment: ("mac" | "windows" | "ubuntu" | "browser") | string;
+            /** Type */
+            type: "computer_use_preview" | string;
         };
         /** ModelInfo */
         litellm__types__router__ModelInfo: {
@@ -42074,6 +46520,8 @@ export interface components {
              * @default false
              */
             db_model: boolean;
+            /** Discoverable */
+            discoverable?: boolean | null;
             /** Enable Tag Filtering */
             enable_tag_filtering?: boolean | null;
             /** Id */
@@ -42115,6 +46563,96 @@ export interface components {
             updated_by?: string | null;
         } & {
             [key: string]: unknown;
+        };
+        /**
+         * ComputerToolParam
+         * @description A tool that controls a virtual computer.
+         *
+         *     Learn more about the [computer tool](https://platform.openai.com/docs/guides/tools-computer-use).
+         */
+        openai__types__responses__computer_tool_param__ComputerToolParam: {
+            /**
+             * Type
+             * @constant
+             */
+            type: "computer";
+        };
+        /**
+         * UserLocation
+         * @description The user's location.
+         */
+        openai__types__responses__web_search_preview_tool__UserLocation: {
+            /** City */
+            city?: string | null;
+            /** Country */
+            country?: string | null;
+            /** Region */
+            region?: string | null;
+            /** Timezone */
+            timezone?: string | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "approximate";
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * UserLocation
+         * @description The user's location.
+         */
+        openai__types__responses__web_search_preview_tool_param__UserLocation: {
+            /** City */
+            city?: string | null;
+            /** Country */
+            country?: string | null;
+            /** Region */
+            region?: string | null;
+            /** Timezone */
+            timezone?: string | null;
+            /**
+             * Type
+             * @constant
+             */
+            type: "approximate";
+        };
+        /**
+         * UserLocation
+         * @description The approximate location of the user.
+         */
+        openai__types__responses__web_search_tool__UserLocation: {
+            /** City */
+            city?: string | null;
+            /** Country */
+            country?: string | null;
+            /** Region */
+            region?: string | null;
+            /** Timezone */
+            timezone?: string | null;
+            /** Type */
+            type?: "approximate" | null;
+        } & {
+            [key: string]: unknown;
+        };
+        /**
+         * UserLocation
+         * @description The approximate location of the user.
+         */
+        openai__types__responses__web_search_tool_param__UserLocation: {
+            /** City */
+            city?: string | null;
+            /** Country */
+            country?: string | null;
+            /** Region */
+            region?: string | null;
+            /** Timezone */
+            timezone?: string | null;
+            /**
+             * Type
+             * @constant
+             */
+            type?: "approximate";
         };
         /** updateDeployment */
         updateDeployment: {
@@ -42200,6 +46738,8 @@ export interface components {
             azure_username?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
+            /** Bucket Name */
+            bucket_name?: string | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -42234,6 +46774,8 @@ export interface components {
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
             cache_read_input_token_cost_above_200k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 200K Tokens Batches */
+            cache_read_input_token_cost_above_200k_tokens_batches?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Priority */
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens */
@@ -42312,6 +46854,8 @@ export interface components {
             input_cost_per_token_above_128k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens */
             input_cost_per_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Batches */
+            input_cost_per_token_above_200k_tokens_batches?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
@@ -42435,6 +46979,8 @@ export interface components {
             output_cost_per_token_above_128k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens */
             output_cost_per_token_above_200k_tokens?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Batches */
+            output_cost_per_token_above_200k_tokens_batches?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
@@ -56409,7 +60955,69 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Background */
+                    background?: boolean | null;
+                    /** Context Management */
+                    context_management?: components["schemas"]["ContextManagementEntry"][] | null;
+                    /** Include */
+                    include?: ("file_search_call.results" | "web_search_call.results" | "web_search_call.action.sources" | "message.input_image.image_url" | "computer_call_output.output.image_url" | "code_interpreter_call.outputs" | "reasoning.encrypted_content" | "message.output_text.logprobs")[] | null;
+                    /** Input */
+                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
+                    /** Instructions */
+                    instructions?: string | null;
+                    /** Max Output Tokens */
+                    max_output_tokens?: number | null;
+                    /** Max Tool Calls */
+                    max_tool_calls?: number | null;
+                    /** Metadata */
+                    metadata?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /** Model */
+                    model: string;
+                    /** Parallel Tool Calls */
+                    parallel_tool_calls?: boolean | null;
+                    /** Partial Images */
+                    partial_images?: number | null;
+                    /** Previous Response Id */
+                    previous_response_id?: string | null;
+                    prompt?: components["schemas"]["PromptObject"] | null;
+                    /** Prompt Cache Key */
+                    prompt_cache_key?: string | null;
+                    prompt_cache_options?: components["schemas"]["PromptCacheOptions"] | null;
+                    /** Prompt Cache Retention */
+                    prompt_cache_retention?: string | null;
+                    reasoning?: components["schemas"]["Reasoning"] | null;
+                    /** Safety Identifier */
+                    safety_identifier?: string | null;
+                    /** Service Tier */
+                    service_tier?: string | null;
+                    /** Store */
+                    store?: boolean | null;
+                    /** Stream */
+                    stream?: boolean | null;
+                    stream_options?: components["schemas"]["ResponsesAPIStreamOptions"] | null;
+                    /** Temperature */
+                    temperature?: number | null;
+                    text?: components["schemas"]["ResponseTextConfigParam"] | null;
+                    /** Tool Choice */
+                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
+                    /** Tools */
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+                    /** Top Logprobs */
+                    top_logprobs?: number | null;
+                    /** Top P */
+                    top_p?: number | null;
+                    /** Truncation */
+                    truncation?: ("auto" | "disabled") | null;
+                    /** User */
+                    user?: string | null;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -56417,7 +61025,8 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ResponsesAPIResponse"];
+                    "text/event-stream": string;
                 };
             };
         };
@@ -56479,7 +61088,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ResponsesAPIResponse"];
                 };
             };
             /** @description Validation Error */
@@ -56510,7 +61119,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeleteResponseResult"];
                 };
             };
             /** @description Validation Error */
@@ -56572,7 +61181,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ResponseItemList"];
                 };
             };
             /** @description Validation Error */
@@ -59603,7 +64212,69 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Background */
+                    background?: boolean | null;
+                    /** Context Management */
+                    context_management?: components["schemas"]["ContextManagementEntry"][] | null;
+                    /** Include */
+                    include?: ("file_search_call.results" | "web_search_call.results" | "web_search_call.action.sources" | "message.input_image.image_url" | "computer_call_output.output.image_url" | "code_interpreter_call.outputs" | "reasoning.encrypted_content" | "message.output_text.logprobs")[] | null;
+                    /** Input */
+                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
+                    /** Instructions */
+                    instructions?: string | null;
+                    /** Max Output Tokens */
+                    max_output_tokens?: number | null;
+                    /** Max Tool Calls */
+                    max_tool_calls?: number | null;
+                    /** Metadata */
+                    metadata?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /** Model */
+                    model: string;
+                    /** Parallel Tool Calls */
+                    parallel_tool_calls?: boolean | null;
+                    /** Partial Images */
+                    partial_images?: number | null;
+                    /** Previous Response Id */
+                    previous_response_id?: string | null;
+                    prompt?: components["schemas"]["PromptObject"] | null;
+                    /** Prompt Cache Key */
+                    prompt_cache_key?: string | null;
+                    prompt_cache_options?: components["schemas"]["PromptCacheOptions"] | null;
+                    /** Prompt Cache Retention */
+                    prompt_cache_retention?: string | null;
+                    reasoning?: components["schemas"]["Reasoning"] | null;
+                    /** Safety Identifier */
+                    safety_identifier?: string | null;
+                    /** Service Tier */
+                    service_tier?: string | null;
+                    /** Store */
+                    store?: boolean | null;
+                    /** Stream */
+                    stream?: boolean | null;
+                    stream_options?: components["schemas"]["ResponsesAPIStreamOptions"] | null;
+                    /** Temperature */
+                    temperature?: number | null;
+                    text?: components["schemas"]["ResponseTextConfigParam"] | null;
+                    /** Tool Choice */
+                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
+                    /** Tools */
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+                    /** Top Logprobs */
+                    top_logprobs?: number | null;
+                    /** Top P */
+                    top_p?: number | null;
+                    /** Truncation */
+                    truncation?: ("auto" | "disabled") | null;
+                    /** User */
+                    user?: string | null;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -59611,7 +64282,8 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ResponsesAPIResponse"];
+                    "text/event-stream": string;
                 };
             };
         };
@@ -59673,7 +64345,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ResponsesAPIResponse"];
                 };
             };
             /** @description Validation Error */
@@ -59704,7 +64376,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeleteResponseResult"];
                 };
             };
             /** @description Validation Error */
@@ -59766,7 +64438,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ResponseItemList"];
                 };
             };
             /** @description Validation Error */
@@ -61067,6 +65739,46 @@ export interface operations {
             };
         };
     };
+    get_spend_capture_rate_spend_capture_rate_get: {
+        parameters: {
+            query: {
+                /** @description First UTC day of the range, YYYY-MM-DD */
+                start_date: string;
+                /** @description Last UTC day of the range, YYYY-MM-DD, inclusive */
+                end_date: string;
+                /** @description Provider whose bill to compare against; needs OPENAI_ADMIN_KEY set on the proxy */
+                provider?: "openai";
+                /** @description Ratio under which the report flags below_threshold */
+                threshold?: number;
+                /** @description Scope the OpenAI bill to these project ids; omit to compare against the whole organization. Captured spend is never scoped, so pass every project LiteLLM's OpenAI keys belong to */
+                project_ids?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureRateReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     spend_key_fn_spend_keys_get: {
         parameters: {
             query?: never;
@@ -62300,6 +67012,81 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    search_team_daily_activity_keys_team_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                /** @description Exact token hash, or a case-insensitive substring of the key alias or owning user id */
+                search: string;
+                team_ids?: string | null;
+                start_date?: string | null;
+                end_date?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_team_daily_activity_export_team_daily_activity_export_get: {
+        parameters: {
+            query?: {
+                start_date?: string | null;
+                end_date?: string | null;
+                export_type?: "daily" | "daily_with_keys" | "daily_with_users" | "daily_with_models";
+                format?: "csv" | "json";
+                team_id?: string | null;
+                exclude_team_ids?: string | null;
+                timezone?: number | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["TeamDailyActivityExportResponse"];
+                    "text/csv": unknown;
                 };
             };
             /** @description Validation Error */
@@ -64443,6 +69230,48 @@ export interface operations {
             };
         };
     };
+    search_user_daily_activity_keys_user_daily_activity_aggregated_search_get: {
+        parameters: {
+            query: {
+                /** @description Matches keys whose hash equals the value, or whose key alias or user ID contains it (case-insensitive) */
+                search: string;
+                /** @description Start date in YYYY-MM-DD format */
+                start_date?: string | null;
+                /** @description End date in YYYY-MM-DD format */
+                end_date?: string | null;
+                /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
+                user_id?: string | null;
+                /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
+                timezone?: number | null;
+                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
+                include_current_utc_day?: boolean;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     delete_user_user_delete_post: {
         parameters: {
             query?: never;
@@ -65374,6 +70203,37 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["AgentResponse"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    trigger_agent_kill_switch_v1_agents__agent_id__kill_switch_post: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                agent_id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["AgentKillSwitchResult"];
                 };
             };
             /** @description Validation Error */
@@ -68717,7 +73577,69 @@ export interface operations {
             path?: never;
             cookie?: never;
         };
-        requestBody?: never;
+        requestBody: {
+            content: {
+                "application/json": {
+                    /** Background */
+                    background?: boolean | null;
+                    /** Context Management */
+                    context_management?: components["schemas"]["ContextManagementEntry"][] | null;
+                    /** Include */
+                    include?: ("file_search_call.results" | "web_search_call.results" | "web_search_call.action.sources" | "message.input_image.image_url" | "computer_call_output.output.image_url" | "code_interpreter_call.outputs" | "reasoning.encrypted_content" | "message.output_text.logprobs")[] | null;
+                    /** Input */
+                    input: string | (components["schemas"]["EasyInputMessageParam"] | components["schemas"]["ResponsesAPIRequestParams_Message"] | components["schemas"]["ResponseOutputMessageParam"] | components["schemas"]["ResponseFileSearchToolCallParam"] | components["schemas"]["ResponseComputerToolCallParam"] | components["schemas"]["ComputerCallOutput"] | components["schemas"]["ResponseFunctionWebSearchParam"] | components["schemas"]["ResponseFunctionToolCallParam"] | components["schemas"]["FunctionCallOutput"] | components["schemas"]["ToolSearchCall"] | components["schemas"]["ResponseToolSearchOutputItemParamParam"] | components["schemas"]["ResponseReasoningItemParam"] | components["schemas"]["ResponseCompactionItemParamParam"] | components["schemas"]["ResponsesAPIRequestParams_ImageGenerationCall"] | components["schemas"]["ResponseCodeInterpreterToolCallParam"] | components["schemas"]["LocalShellCall"] | components["schemas"]["LocalShellCallOutput"] | components["schemas"]["ShellCall"] | components["schemas"]["ShellCallOutput"] | components["schemas"]["ApplyPatchCall"] | components["schemas"]["ApplyPatchCallOutput"] | components["schemas"]["McpListTools"] | components["schemas"]["McpApprovalRequest"] | components["schemas"]["ResponsesAPIRequestParams_McpApprovalResponse"] | components["schemas"]["McpCall"] | components["schemas"]["ResponseCustomToolCallOutputParam"] | components["schemas"]["ResponseCustomToolCallParam"] | components["schemas"]["ItemReference"])[];
+                    /** Instructions */
+                    instructions?: string | null;
+                    /** Max Output Tokens */
+                    max_output_tokens?: number | null;
+                    /** Max Tool Calls */
+                    max_tool_calls?: number | null;
+                    /** Metadata */
+                    metadata?: {
+                        [key: string]: unknown;
+                    } | null;
+                    /** Model */
+                    model: string;
+                    /** Parallel Tool Calls */
+                    parallel_tool_calls?: boolean | null;
+                    /** Partial Images */
+                    partial_images?: number | null;
+                    /** Previous Response Id */
+                    previous_response_id?: string | null;
+                    prompt?: components["schemas"]["PromptObject"] | null;
+                    /** Prompt Cache Key */
+                    prompt_cache_key?: string | null;
+                    prompt_cache_options?: components["schemas"]["PromptCacheOptions"] | null;
+                    /** Prompt Cache Retention */
+                    prompt_cache_retention?: string | null;
+                    reasoning?: components["schemas"]["Reasoning"] | null;
+                    /** Safety Identifier */
+                    safety_identifier?: string | null;
+                    /** Service Tier */
+                    service_tier?: string | null;
+                    /** Store */
+                    store?: boolean | null;
+                    /** Stream */
+                    stream?: boolean | null;
+                    stream_options?: components["schemas"]["ResponsesAPIStreamOptions"] | null;
+                    /** Temperature */
+                    temperature?: number | null;
+                    text?: components["schemas"]["ResponseTextConfigParam"] | null;
+                    /** Tool Choice */
+                    tool_choice?: ("none" | "auto" | "required") | components["schemas"]["ToolChoiceAllowedParam"] | components["schemas"]["ToolChoiceTypesParam"] | components["schemas"]["ToolChoiceFunctionParam"] | components["schemas"]["ToolChoiceMcpParam"] | components["schemas"]["ToolChoiceCustomParam"] | components["schemas"]["ToolChoiceApplyPatchParam"] | components["schemas"]["ToolChoiceShellParam"] | null;
+                    /** Tools */
+                    tools?: (components["schemas"]["FunctionToolParam"] | components["schemas"]["FileSearchToolParam"] | components["schemas"]["openai__types__responses__computer_tool_param__ComputerToolParam"] | components["schemas"]["ComputerUsePreviewToolParam"] | components["schemas"]["WebSearchToolParam"] | components["schemas"]["Mcp"] | components["schemas"]["CodeInterpreter"] | components["schemas"]["ImageGeneration"] | components["schemas"]["LocalShell"] | components["schemas"]["FunctionShellToolParam"] | components["schemas"]["CustomToolParam"] | components["schemas"]["NamespaceToolParam"] | components["schemas"]["ToolSearchToolParam"] | components["schemas"]["WebSearchPreviewToolParam"] | components["schemas"]["ApplyPatchToolParam"] | components["schemas"]["litellm__types__llms__openai__ComputerToolParam"] | components["schemas"]["ShellToolParam"])[] | null;
+                    /** Top Logprobs */
+                    top_logprobs?: number | null;
+                    /** Top P */
+                    top_p?: number | null;
+                    /** Truncation */
+                    truncation?: ("auto" | "disabled") | null;
+                    /** User */
+                    user?: string | null;
+                };
+            };
+        };
         responses: {
             /** @description Successful Response */
             200: {
@@ -68725,7 +73647,8 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ResponsesAPIResponse"];
+                    "text/event-stream": string;
                 };
             };
         };
@@ -68787,7 +73710,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ResponsesAPIResponse"];
                 };
             };
             /** @description Validation Error */
@@ -68818,7 +73741,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["DeleteResponseResult"];
                 };
             };
             /** @description Validation Error */
@@ -68880,7 +73803,7 @@ export interface operations {
                     [name: string]: unknown;
                 };
                 content: {
-                    "application/json": unknown;
+                    "application/json": components["schemas"]["ResponseItemList"];
                 };
             };
             /** @description Validation Error */

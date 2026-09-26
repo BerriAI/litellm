@@ -137,7 +137,7 @@ def add_otel_trace_id_to_request(
         return
     data["litellm_trace_id"] = trace_id  # rebind-ok: data is an out-param
     if isinstance(metadata, dict):
-        metadata["trace_id"] = trace_id  # rebind-ok: metadata is the request's own out-param dict
+        metadata["trace_id"] = trace_id
 
 
 def _session_id_from_baggage(baggage: str) -> str | None:
@@ -1603,13 +1603,19 @@ class LiteLLMProxyRequestSetup:
         return data
 
     @staticmethod
+    def get_logged_api_key(user_api_key_dict: UserAPIKeyAuth) -> str | None:
+        if user_api_key_dict.is_session_token and user_api_key_dict.key_alias:
+            return user_api_key_dict.key_alias
+        return user_api_key_dict.api_key
+
+    @staticmethod
     def get_sanitized_user_information_from_key(
         user_api_key_dict: UserAPIKeyAuth,
     ) -> StandardLoggingUserAPIKeyMetadata:
         stripped_metadata: Final = strip_callback_config(user_api_key_dict.metadata)
         auth_metadata: Final = cast("dict[str, str] | None", stripped_metadata)  # cast-ok: metadata is free-form JSON
         user_api_key_logged_metadata: Final = StandardLoggingUserAPIKeyMetadata(
-            user_api_key_hash=user_api_key_dict.api_key,  # just the hashed token
+            user_api_key_hash=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
             user_api_key_alias=user_api_key_dict.key_alias,
             user_api_key_spend=user_api_key_dict.spend,
             user_api_key_max_budget=user_api_key_dict.max_budget,
@@ -1647,7 +1653,7 @@ class LiteLLMProxyRequestSetup:
             user_api_key_dict=user_api_key_dict
         )
         data[_metadata_variable_name].update(user_api_key_logged_metadata)
-        data[_metadata_variable_name]["user_api_key"] = user_api_key_dict.api_key  # this is just the hashed token
+        data[_metadata_variable_name]["user_api_key"] = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict)
 
         # Key-owned agent_id for spend attribution; keep existing (e.g. from header) if key has none
         _key_agent_id: Final = getattr(user_api_key_dict, "agent_id", None)
@@ -1923,6 +1929,8 @@ class LiteLLMProxyRequestSetup:
 
 def refresh_proxy_server_request_body_snapshot(
     data: MutableMapping[str, object],
+    *,
+    guardrails_applied: bool = False,
 ) -> None:
     """
     Re-snapshot ``data["proxy_server_request"]["body"]`` from the current state of ``data``.
@@ -1938,13 +1946,27 @@ def refresh_proxy_server_request_body_snapshot(
     ``Logging`` instance, so it must be excluded here the same way ``secret_fields``
     and ``proxy_server_request`` are.
     """
-    proxy_server_request = data.get("proxy_server_request")
+    from litellm.integrations.shadow_eval_logger import GuardrailRequestSnapshot
+    from litellm.litellm_core_utils.litellm_logging import Logging
+
+    logging_obj: Final = data.get("litellm_logging_obj")
+    if isinstance(logging_obj, Logging):
+        logging_obj.shadow_eval_request_snapshot = None
+    proxy_server_request: Final = data.get("proxy_server_request")
     if not isinstance(proxy_server_request, dict):
         return
-    _body_snapshot_exclude = (
+    _body_snapshot_exclude: Final = (
         frozenset({"secret_fields", "proxy_server_request", "litellm_logging_obj"}) | _TRANSPORT_ONLY_CREDENTIAL_KEYS
     )
-    proxy_server_request["body"] = {k: v for k, v in data.items() if k not in _body_snapshot_exclude}
+    body: Final = {  # mutable-ok: audit JSON serialization requires a dict with shared nested messages
+        k: v for k, v in data.items() if k not in _body_snapshot_exclude
+    }
+    proxy_server_request["body"] = body
+    if guardrails_applied and isinstance(logging_obj, Logging):
+        metadata: Final = data.get(get_metadata_variable_name_from_kwargs(data))
+        logging_obj.shadow_eval_request_snapshot = GuardrailRequestSnapshot.capture(
+            body, metadata if isinstance(metadata, Mapping) else MappingProxyType({})
+        )
 
 
 async def add_litellm_data_to_request(
@@ -3126,11 +3148,7 @@ async def move_guardrails_to_metadata(
     - Moves include_guardrail_response into request metadata before provider dispatch
     """
     if "include_guardrail_response" in data:
-        data[_metadata_variable_name][
-            "include_guardrail_response"
-        ] = (  # rebind-ok: pre-call hooks mutate the shared request dict in place
-            data.pop("include_guardrail_response") is True
-        )
+        data[_metadata_variable_name]["include_guardrail_response"] = data.pop("include_guardrail_response") is True
 
     # Early-out: skip all guardrails processing when nothing is configured
     key_metadata: Final = user_api_key_dict.metadata

@@ -51,8 +51,8 @@ help:
 	@echo "  make test-unit-core-utils - Run core utils tests (~32 files)"
 	@echo "  make test-unit-other    - Run other tests (caching, responses, etc., ~69 files)"
 	@echo "  make test-unit-root     - Run root-level tests (~34 files)"
-	@echo "  make test-proxy-unit-a  - Run proxy_unit_tests (a-o, ~20 files)"
-	@echo "  make test-proxy-unit-b  - Run proxy_unit_tests (p-z, ~28 files)"
+	@echo "  make test-proxy-unit-a  - Run tests/unit/proxy (a-o)"
+	@echo "  make test-proxy-unit-b  - Run tests/unit/proxy (p-z)"
 	@echo "  make test-integration   - Run integration tests"
 	@echo "  make test-unit-helm     - Run helm unit tests"
 	@echo "  make test-rust-extension - Build the Rust extension and run its public Python tests"
@@ -301,7 +301,7 @@ test-rust-extension:
 	UV_PROJECT_ENVIRONMENT="$$temporary/venv" $(UV) sync --python 3.12 --frozen --no-install-project --all-groups --all-extras && \
 	$(UV) pip install --python "$$temporary/venv/bin/python" --no-deps "$$1" && \
 	"$$temporary/venv/bin/python" -I -m mypy.stubtest \
-		--mypy-config-file tests/test_litellm/rust_bridge/stubtest.ini \
+		--mypy-config-file tests/unit/rust_bridge/stubtest.ini \
 		litellm.rust_bridge._native && \
 	LITELLM_RUST=1 LITELLM_LOCAL_MODEL_COST_MAP=True \
 	"$$temporary/venv/bin/python" -I -m pytest --import-mode=importlib -m requires_rust_extension tests/test_litellm_rust
@@ -314,7 +314,7 @@ test-unit: install-test-deps
 
 # Matrix test targets (matching CI workflow groups)
 test-unit-llms: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/llms --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/llms --tb=short -vv -n 4 --durations=20
 
 test-unit-proxy-guardrails: install-test-deps
 	$(UV_RUN) pytest tests/test_litellm/proxy/guardrails tests/test_litellm/proxy/management_endpoints tests/test_litellm/proxy/management_helpers --tb=short -vv -n 4 --durations=20
@@ -326,23 +326,23 @@ test-unit-proxy-misc: install-test-deps
 	$(UV_RUN) pytest tests/test_litellm/proxy/_experimental tests/test_litellm/proxy/agent_endpoints tests/test_litellm/proxy/anthropic_endpoints tests/test_litellm/proxy/common_utils tests/test_litellm/proxy/discovery_endpoints tests/test_litellm/proxy/experimental tests/test_litellm/proxy/google_endpoints tests/test_litellm/proxy/health_endpoints tests/test_litellm/proxy/image_endpoints tests/test_litellm/proxy/middleware tests/test_litellm/proxy/openai_files_endpoint tests/test_litellm/proxy/pass_through_endpoints tests/test_litellm/proxy/prompts tests/test_litellm/proxy/public_endpoints tests/test_litellm/proxy/response_api_endpoints tests/test_litellm/proxy/shutdown tests/test_litellm/proxy/spend_tracking tests/test_litellm/proxy/ui_crud_endpoints tests/test_litellm/proxy/vector_store_endpoints tests/test_litellm/proxy/test_*.py --tb=short -vv -n 4 --durations=20
 
 test-unit-integrations: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/integrations --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/integrations --tb=short -vv -n 4 --durations=20
 
 test-unit-core-utils: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/litellm_core_utils --tb=short -vv -n 2 --durations=20
+	$(UV_RUN) pytest tests/unit/litellm_core_utils --tb=short -vv -n 2 --durations=20
 
 test-unit-other: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/caching tests/test_litellm/responses tests/test_litellm/secret_managers tests/test_litellm/vector_stores tests/test_litellm/a2a_protocol tests/test_litellm/anthropic_interface tests/test_litellm/completion_extras tests/test_litellm/containers tests/test_litellm/enterprise tests/test_litellm/experimental_mcp_client tests/test_litellm/google_genai tests/test_litellm/images tests/test_litellm/interactions tests/test_litellm/passthrough tests/test_litellm/router_strategy tests/test_litellm/router_utils tests/test_litellm/types --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/caching tests/unit/responses tests/unit/secret_managers tests/unit/vector_stores tests/unit/a2a_protocol tests/test_litellm/anthropic_interface tests/unit/completion_extras tests/unit/containers tests/unit/enterprise tests/unit/experimental_mcp_client tests/unit/google_genai tests/unit/images tests/unit/interactions tests/test_litellm/interactions tests/test_litellm/passthrough tests/unit/router_strategy tests/unit/router_utils tests/unit/types --tb=short -vv -n 4 --durations=20
 
 test-unit-root: install-test-deps
-	$(UV_RUN) pytest tests/test_litellm/test_*.py --tb=short -vv -n 4 --durations=20
+	$(UV_RUN) pytest tests/unit/test_*.py tests/test_litellm/test_*.py --tb=short -vv -n 4 --durations=20
 
-# Proxy unit tests (tests/proxy_unit_tests split alphabetically)
+# Proxy unit tests (tests/unit/proxy split alphabetically)
 test-proxy-unit-a: install-test-deps
-	$(UV_RUN) pytest tests/proxy_unit_tests/test_[a-o]*.py --tb=short -vv -n 2 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy --ignore-glob='tests/unit/proxy/test_[p-z]*.py' --tb=short -vv -n 2 --durations=20
 
 test-proxy-unit-b: install-test-deps
-	$(UV_RUN) pytest tests/proxy_unit_tests/test_[p-z]*.py --tb=short -vv -n 2 --durations=20
+	$(UV_RUN) pytest tests/unit/proxy/test_[p-z]*.py tests/unit/skills --tb=short -vv -n 2 --durations=20
 
 test-integration: install-test-deps
 	$(UV_RUN) pytest tests/ -k "not test_litellm"

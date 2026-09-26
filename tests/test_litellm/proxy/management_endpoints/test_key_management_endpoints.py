@@ -18020,6 +18020,199 @@ async def test_regenerate_key_non_admin_permissions_rejected_before_enterprise_g
     assert "Enterprise" not in str(exc.value.message)
 
 
+@pytest.mark.asyncio
+async def test_generate_key_non_admin_disable_global_guardrails_rejected(monkeypatch):
+    """`_common_key_generation_helper` rejects a non-admin setting
+    `disable_global_guardrails` on the request body."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        max_budget=100.0,
+    )
+    request = GenerateKeyRequest(disable_global_guardrails=True)
+    with pytest.raises(HTTPException) as exc_info:
+        await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert exc_info.value.status_code == 403
+    assert "disable_global_guardrails" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_generate_key_non_admin_metadata_disable_global_guardrails_rejected(monkeypatch):
+    """`_common_key_generation_helper` rejects a non-admin smuggling
+    `disable_global_guardrails` under `metadata`."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        None,
+        raising=False,
+    )
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        max_budget=100.0,
+    )
+    request = GenerateKeyRequest(metadata={"disable_global_guardrails": True})
+    with pytest.raises(HTTPException) as exc_info:
+        await _common_key_generation_helper(
+            data=request,
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert exc_info.value.status_code == 403
+    assert "disable_global_guardrails" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_generate_key_non_admin_server_default_guardrail_flag_not_treated_as_requested(monkeypatch):
+    """An admin-configured `default_key_generate_params.metadata` containing
+    `disable_global_guardrails: true` must not 403 a non-admin who sent no flag;
+    only caller-sent metadata counts as requesting the opt-out."""
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.key_management_endpoints.litellm.default_key_generate_params",
+        {"metadata": {"disable_global_guardrails": True}},
+        raising=False,
+    )
+    caller = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        user_id="user-1",
+        max_budget=100.0,
+    )
+
+    raised: Exception | None = None
+    try:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(team_id="team-1", models=["gpt-4o"]),
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    except Exception as exc:
+        raised = exc
+    assert not (isinstance(raised, HTTPException) and "disable_global_guardrails" in str(raised.detail)), raised
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _common_key_generation_helper(
+            data=GenerateKeyRequest(
+                team_id="team-1",
+                models=["gpt-4o"],
+                metadata={"disable_global_guardrails": True},
+            ),
+            user_api_key_dict=caller,
+            litellm_changed_by=None,
+            team_table=None,
+        )
+    assert exc_info.value.status_code == 403
+    assert "disable_global_guardrails" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_non_admin_disable_global_guardrails_rejected(monkeypatch):
+    """`_validate_update_key_data` rejects a non-admin when
+    `disable_global_guardrails` is true in the request body."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    data = UpdateKeyRequest(
+        key="sk-alice-personal",
+        disable_global_guardrails=True,
+    )
+
+    with pytest.raises(HTTPException) as exc:
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=_make_personal_key_row_for_alice(),
+            user_api_key_dict=_make_alice_internal_user(),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=MagicMock(),
+        )
+    assert exc.value.status_code == 403
+    assert "disable_global_guardrails" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_update_key_non_admin_resending_stored_disable_global_guardrails_allowed(monkeypatch):
+    """`_validate_update_key_data` must not 403 when a non-admin edit form
+    re-sends `metadata.disable_global_guardrails` that is already stored on
+    the key (the Admin UI edit form round-trips the whole metadata JSON)."""
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.jsonify_object = lambda data: data
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    existing_key_row = _make_personal_key_row_for_alice()
+    existing_key_row.metadata = {"disable_global_guardrails": True}
+    data = UpdateKeyRequest(
+        key="sk-alice-personal",
+        metadata={"disable_global_guardrails": True, "x": 1},
+    )
+
+    raised: HTTPException | None = None
+    try:
+        await _validate_update_key_data(
+            data=data,
+            existing_key_row=existing_key_row,
+            user_api_key_dict=_make_alice_internal_user(),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=mock_prisma_client,
+            user_api_key_cache=MagicMock(),
+        )
+    except HTTPException as exc:
+        raised = exc
+    assert raised is None or "disable_global_guardrails" not in str(raised.detail)
+
+
+@pytest.mark.asyncio
+async def test_regenerate_key_non_admin_disable_global_guardrails_rejected(monkeypatch):
+    """`regenerate_key_fn` rejects a non-admin setting
+    `disable_global_guardrails` once the stored key row is loaded (the
+    already-stored exemption check needs the row's metadata)."""
+    from litellm.proxy._types import RegenerateKeyRequest
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        regenerate_key_fn,
+    )
+
+    existing_key = _make_regenerate_existing_key()
+    mock_prisma_client = AsyncMock()
+    mock_repo = MagicMock()
+    mock_repo.table.find_unique = AsyncMock(return_value=existing_key)
+
+    data = RegenerateKeyRequest(
+        key="sk-alice-personal",
+        disable_global_guardrails=True,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.premium_user", True),
+        patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.VerificationTokenRepository",
+            return_value=mock_repo,
+        ),
+        pytest.raises(ProxyException) as exc,
+    ):
+        await regenerate_key_fn(
+            key=None,
+            data=data,
+            user_api_key_dict=_make_alice_internal_user(),
+            litellm_changed_by=None,
+        )
+    assert int(exc.value.code) == 403
+    assert "disable_global_guardrails" in str(exc.value.message)
+
+
 def test_generate_key_helper_fn_accepts_per_tag_rate_limits():
     """
     Regression: new_user / SSO sign-in forward NewUserRequest fields to
@@ -20738,3 +20931,165 @@ async def test_key_update_evicts_object_permission_before_key_object(monkeypatch
     assert deleted.index(object_permission_cache_key(permission_id)) < deleted.index(
         _hash_token_if_needed("sk-lit5479")
     ), deleted
+
+
+class TestTeamAdminMemberKeyBudgetUpdate:
+    """LIT-5647: a team admin may update budget fields on another member's team key
+    only when the proxy enables the 'member_key_budgets' permission."""
+
+    def _member_key_row(self):
+        return LiteLLM_VerificationToken(
+            token="hashed_member_key",
+            user_id="member-1",
+            team_id="team-1",
+            key_alias="member",
+            models=["m"],
+            max_budget=10.0,
+            metadata={},
+        )
+
+    def _caller(self, user_id="team-admin-1"):
+        return UserAPIKeyAuth(
+            user_id=user_id,
+            user_role=LitellmUserRoles.INTERNAL_USER,
+        )
+
+    def _team(self, members):
+        return LiteLLM_TeamTableCachedObj(team_id="team-1", members_with_roles=members)
+
+    def _setup(self, monkeypatch, team_obj, editable_fields):
+        mock_get_team = AsyncMock(return_value=team_obj)
+        monkeypatch.setattr(
+            "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
+            mock_get_team,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.management_helpers.team_member_permission_checks.get_team_object",
+            mock_get_team,
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.proxy_server.general_settings",
+            {"team_admin_editable_team_fields": editable_fields},
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks",
+            SimpleNamespace(
+                can_team_member_execute_key_management_endpoint=AsyncMock(return_value=None),
+                enforce_member_can_assign_access_groups=MagicMock(return_value=None),
+            ),
+        )
+        monkeypatch.setattr(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_team_key_limits",
+            AsyncMock(return_value=None),
+        )
+
+    @pytest.mark.asyncio
+    async def test_team_admin_updates_member_key_budget_when_enabled(self, monkeypatch):
+        self._setup(
+            monkeypatch,
+            self._team([Member(user_id="team-admin-1", role="admin"), Member(user_id="member-1", role="user")]),
+            ["member_key_budgets"],
+        )
+        admin_check = AsyncMock(return_value=None)
+        monkeypatch.setattr(
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
+            admin_check,
+        )
+        await _validate_update_key_data(
+            data=UpdateKeyRequest(key="sk-member", max_budget=0, budget_duration="30d"),
+            existing_key_row=self._member_key_row(),
+            user_api_key_dict=self._caller(),
+            llm_router=None,
+            premium_user=True,
+            prisma_client=AsyncMock(),
+            user_api_key_cache=MagicMock(),
+        )
+        admin_check.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_team_admin_denied_when_permission_disabled(self, monkeypatch):
+        self._setup(
+            monkeypatch,
+            self._team([Member(user_id="team-admin-1", role="admin"), Member(user_id="member-1", role="user")]),
+            ["tpm_limit"],
+        )
+        with pytest.raises(HTTPException) as exc:
+            await _validate_update_key_data(
+                data=UpdateKeyRequest(key="sk-member", max_budget=0),
+                existing_key_row=self._member_key_row(),
+                user_api_key_dict=self._caller(),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        assert exc.value.status_code == 403
+        assert "member_key_budgets" in str(exc.value.detail)
+        assert "only create keys for themselves" not in str(exc.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_enabled_but_non_budget_field_is_denied(self, monkeypatch):
+        self._setup(
+            monkeypatch,
+            self._team([Member(user_id="team-admin-1", role="admin"), Member(user_id="member-1", role="user")]),
+            ["member_key_budgets"],
+        )
+        with pytest.raises(HTTPException) as exc:
+            await _validate_update_key_data(
+                data=UpdateKeyRequest(key="sk-member", key_alias="renamed"),
+                existing_key_row=self._member_key_row(),
+                user_api_key_dict=self._caller(),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        assert exc.value.status_code == 403
+        assert "'key_alias'" in str(exc.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_ordinary_member_still_denied_on_another_members_key(self, monkeypatch):
+        self._setup(
+            monkeypatch,
+            self._team([Member(user_id="member-2", role="user"), Member(user_id="member-1", role="user")]),
+            ["member_key_budgets"],
+        )
+        with pytest.raises(HTTPException) as exc:
+            await _validate_update_key_data(
+                data=UpdateKeyRequest(key="sk-member", max_budget=0),
+                existing_key_row=self._member_key_row(),
+                user_api_key_dict=self._caller(user_id="member-2"),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        assert exc.value.status_code == 403
+        assert "member_key_budgets" not in str(exc.value.detail)
+
+    @pytest.mark.asyncio
+    async def test_personal_key_owned_by_someone_else_still_denied(self, monkeypatch):
+        self._setup(
+            monkeypatch,
+            self._team([Member(user_id="team-admin-1", role="admin")]),
+            ["member_key_budgets"],
+        )
+        personal_row = LiteLLM_VerificationToken(
+            token="hashed_personal",
+            user_id="member-1",
+            team_id=None,
+            max_budget=10.0,
+            metadata={},
+        )
+        with pytest.raises(HTTPException) as exc:
+            await _validate_update_key_data(
+                data=UpdateKeyRequest(key="sk-personal", max_budget=0),
+                existing_key_row=personal_row,
+                user_api_key_dict=self._caller(),
+                llm_router=None,
+                premium_user=True,
+                prisma_client=AsyncMock(),
+                user_api_key_cache=MagicMock(),
+            )
+        assert exc.value.status_code == 403
+        assert "member_key_budgets" not in str(exc.value.detail)

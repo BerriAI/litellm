@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use futures_util::future::BoxFuture;
 use litellm_core_utils::settings::ProcessEnvironment;
+use litellm_host_python::PythonContext;
 use litellm_secrets::source::SecretSource;
 use litellm_secrets::{
     Error, FailurePolicy, OidcResolver, SecretManagerState, SecretResolver, SecretValue,
@@ -14,8 +15,8 @@ pub(crate) struct ResolvedSecrets {
 }
 
 impl ResolvedSecrets {
-    pub(crate) fn new(snapshot: SecretManagerSnapshot) -> Self {
-        Self::from_state(snapshot.into_state())
+    pub(crate) fn new(snapshot: SecretManagerSnapshot, context: PythonContext) -> Self {
+        Self::from_state(snapshot.into_state(context))
     }
 
     fn from_state(state: Arc<SecretManagerState>) -> Self {

@@ -554,6 +554,50 @@ async fn upload_bytes_async(
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn v3_body_keeps_explicit_null_options_and_drops_unknown_ones() {
+        use crate::base_llm::ocr::{handler::OcrClient, transformation::OcrRequestContext};
+
+        let overrides =
+            serde_json::from_value(json!({"formatting":null,"settings":{},"unknown":true}))
+                .unwrap();
+        let params = ReductoParseV3Config
+            .map_ocr_params(&overrides, "parse-v3")
+            .unwrap();
+        let client = OcrClient::for_test(reqwest::Client::new(), reqwest::Client::new());
+        let connection = OcrConnection::default();
+        let document = serde_json::from_value(
+            json!({"type":"document_url","document_url":"reducto://ready.pdf"}),
+        )
+        .unwrap();
+
+        let body = ReductoParseV3Config
+            .async_transform_ocr_request(
+                "parse-v3",
+                document,
+                &params,
+                &[],
+                OcrRequestContext {
+                    client: &client,
+                    connection: &connection,
+                },
+            )
+            .await
+            .unwrap();
+
+        assert_eq!(
+            serde_json::to_value(body).unwrap(),
+            json!({"input":"reducto://ready.pdf", "formatting":null, "settings":{}})
+        );
+        let absent = ReductoParseV3Config
+            .map_ocr_params(
+                &litellm_core_utils::call_arguments::CallArguments::default(),
+                "parse-v3",
+            )
+            .unwrap();
+        assert_eq!(serde_json::to_value(absent).unwrap(), json!({}));
+    }
+
     #[test]
     fn options_preserve_null_and_select_the_provider_fields() {
         let overrides = serde_json::from_value(json!({

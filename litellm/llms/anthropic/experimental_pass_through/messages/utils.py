@@ -15,6 +15,12 @@ if TYPE_CHECKING:
     from litellm.exceptions import ContentPolicyViolationError
 
 
+INCOMPLETE_STREAM_ERROR_MESSAGE: Final = (
+    "Provider stream ended before emitting a message_stop event; "
+    "the response is incomplete and any partial content (e.g. tool_use input JSON) may be truncated."
+)
+
+
 def get_safeguard_refusal_stop_details(response: object) -> Mapping[str, Any] | None:
     """
     Return the ``stop_details`` of an Anthropic Messages response refused by a
@@ -37,7 +43,7 @@ def _mapping_field(container: object, key: str) -> object | None:
     """One key of a raw provider payload, or None when the payload is not a mapping."""
     if not isinstance(container, Mapping):
         return None
-    return cast(Mapping[str, object], container).get(key)  # cast-ok: raw payload, callers re-check every value
+    return container.get(key)
 
 
 def _mapping_str_field(container: object, key: str) -> str | None:
