@@ -3,6 +3,7 @@ Test for response_api_endpoints/endpoints.py
 """
 
 import unittest
+from collections.abc import Mapping
 from typing import Any, Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -14,6 +15,7 @@ from httpx import Response
 
 import litellm
 from litellm.proxy.proxy_server import app
+from litellm.types.llms.openai import ResponsesAPIResponse
 
 
 @pytest.mark.asyncio
@@ -2193,6 +2195,59 @@ class TestCursorGateRecognizesRoutingGroups:
         assert "reasoning_effort" not in resolved
 
 
+BLOCK_MESSAGE = "Content flagged by policy, response withheld"
+
+
+def _post_blocked_responses(
+    original_response: ResponsesAPIResponse | litellm.ModelResponse | None,
+    payload: Mapping[str, object] | None = None,
+) -> httpx.Response:
+    from litellm.integrations.custom_guardrail import ModifyResponseException
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+
+    exc = ModifyResponseException(
+        message=BLOCK_MESSAGE,
+        model="gpt-4o-mini",
+        request_data={"model": "gpt-4o-mini", "input": "hi"},
+        guardrail_name="zero-usage-regression",
+        original_response=original_response,
+    )
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="sk-test", request_route="/v1/responses"
+    )
+    body = {"model": "gpt-4o-mini", "input": "Write a haiku about token accounting"}
+    if payload:
+        body.update(payload)
+    try:
+        with (
+            patch(
+                "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing.base_process_llm_request",
+                new=AsyncMock(side_effect=exc),
+            ),
+            patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
+        ):
+            client = TestClient(app)
+            return client.post("/v1/responses", json=body, headers={"Authorization": "Bearer sk-1234"})
+    finally:
+        app.dependency_overrides.pop(user_api_key_auth, None)
+
+
+def _assert_blocked_output_item(item: Mapping[str, object], text: str) -> None:
+    assert item["type"] == "message"
+    assert item["id"].startswith("msg_")
+    assert item["role"] == "assistant"
+    assert item["status"] == "completed"
+    assert item["content"][0]["type"] == "output_text"
+    assert item["content"][0]["text"] == text
+
+
+def _sse_data_frames(text: str) -> list[str]:
+    return [line.removeprefix("data: ").strip() for line in text.splitlines() if line.startswith("data: ")]
+
+
 class TestGuardrailBlockedResponsesUsage:
     """Regression tests for https://github.com/BerriAI/litellm/issues/36880.
 
@@ -2202,38 +2257,7 @@ class TestGuardrailBlockedResponsesUsage:
     e.original_response, exactly like /v1/chat/completions already does."""
 
     def _post_blocked_responses(self, original_response):
-        from litellm.integrations.custom_guardrail import ModifyResponseException
-        from litellm.proxy._types import UserAPIKeyAuth
-        from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-
-        exc = ModifyResponseException(
-            message="Content flagged by policy, response withheld",
-            model="gpt-4o-mini",
-            request_data={"model": "gpt-4o-mini", "input": "hi"},
-            guardrail_name="zero-usage-regression",
-            original_response=original_response,
-        )
-        mock_proxy_logging = MagicMock()
-        mock_proxy_logging.post_call_failure_hook = AsyncMock()
-        app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
-            api_key="sk-test", request_route="/v1/responses"
-        )
-        try:
-            with (
-                patch(
-                    "litellm.proxy.response_api_endpoints.endpoints.ProxyBaseLLMRequestProcessing.base_process_llm_request",
-                    new=AsyncMock(side_effect=exc),
-                ),
-                patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging),
-            ):
-                client = TestClient(app)
-                return client.post(
-                    "/v1/responses",
-                    json={"model": "gpt-4o-mini", "input": "Write a haiku about token accounting"},
-                    headers={"Authorization": "Bearer sk-1234"},
-                )
-        finally:
-            app.dependency_overrides.pop(user_api_key_auth, None)
+        return _post_blocked_responses(original_response)
 
     def test_post_call_block_reports_real_upstream_usage(self):
         from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
@@ -2427,6 +2451,66 @@ class TestResponsesInputTokens:
 
         assert response.status_code == 429, response.text
         assert response.json()["error"]["message"] == "rate limited"
+
+
+class TestGuardrailBlockedResponsesShape:
+    """A pre_call block raises ModifyResponseException before any provider call.
+
+    The reply must satisfy the Responses API contract the request selected:
+    stream=true answers SSE ending in one response.completed whose output[0] is
+    a completed assistant message item with output_text content, and a plain
+    POST answers JSON with the same item, both with the usage the blocked call
+    consumed (zero for pre_call)."""
+
+    def test_non_stream_block_is_a_completed_assistant_message(self):
+        response = _post_blocked_responses(None)
+
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("application/json")
+        body = response.json()
+        _assert_blocked_output_item(body["output"][0], BLOCK_MESSAGE)
+        assert body["usage"]["total_tokens"] == 0
+
+    def test_stream_block_answers_sse_with_completed_event(self):
+        response = _post_blocked_responses(None, payload={"stream": True})
+
+        assert response.status_code == 200, response.text
+        assert response.headers["content-type"].startswith("text/event-stream")
+        frames = _sse_data_frames(response.text)
+        assert frames[-1] == "[DONE]"
+        events = [json.loads(frame) for frame in frames[:-1]]
+        types = [event["type"] for event in events]
+        assert "response.created" in types
+        completed = [event for event in events if event["type"] == "response.completed"]
+        assert len(completed) == 1
+        completed_response = completed[0]["response"]
+        _assert_blocked_output_item(completed_response["output"][0], BLOCK_MESSAGE)
+        assert completed_response["usage"]["total_tokens"] == 0
+        delta_text = "".join(event["delta"] for event in events if event["type"] == "response.output_text.delta")
+        assert delta_text == BLOCK_MESSAGE
+
+    def test_stream_block_keeps_upstream_usage(self):
+        from litellm.types.llms.openai import ResponseAPIUsage, ResponsesAPIResponse
+
+        original = ResponsesAPIResponse(
+            id="resp_upstream",
+            created_at=1,
+            model="gpt-4o-mini",
+            object="response",
+            output=[],
+            status="completed",
+            usage=ResponseAPIUsage(input_tokens=14, output_tokens=20, total_tokens=34),
+        )
+
+        response = _post_blocked_responses(original, payload={"stream": True})
+
+        assert response.status_code == 200, response.text
+        frames = _sse_data_frames(response.text)
+        completed = [json.loads(frame) for frame in frames[:-1] if json.loads(frame)["type"] == "response.completed"]
+        usage = completed[0]["response"]["usage"]
+        assert usage["input_tokens"] == 14
+        assert usage["output_tokens"] == 20
+        assert usage["total_tokens"] == 34
 
 
 def test_responses_routes_document_response_models_in_openapi_schema():

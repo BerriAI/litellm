@@ -1,13 +1,11 @@
 import asyncio
 import contextlib
 import json
-import time
-from collections.abc import AsyncIterator, Awaitable, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Mapping, Sequence
 from enum import Enum
 from functools import partial
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NamedTuple, Protocol, TypeAlias, cast, get_args
-from uuid import uuid4
 
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
@@ -21,8 +19,9 @@ from typing_extensions import ReadOnly, TypedDict
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import EMPTY_MAPPING
 from litellm.integrations.custom_guardrail import ModifyResponseException
-from litellm.llms.base_llm.guardrail_translation.utils import (
-    blocked_responses_api_usage as _blocked_responses_api_usage,
+from litellm.llms.openai.responses.guardrail_translation.handler import (
+    OpenAIResponsesHandler,
+    build_blocked_response,
 )
 from litellm.proxy._types import *
 from litellm.proxy.auth.user_api_key_auth import (
@@ -30,7 +29,7 @@ from litellm.proxy.auth.user_api_key_auth import (
     user_api_key_auth,
     user_api_key_auth_websocket,
 )
-from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing
+from litellm.proxy.common_request_processing import ProxyBaseLLMRequestProcessing, create_response
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_set_request_parsed_body,
@@ -440,17 +439,16 @@ async def responses_api(
             request_data=_data,
         )
 
-        violation_text: Final = e.message
-        response_obj: Final = ResponsesAPIResponse(
-            id=f"resp_{uuid4()}",
-            object="response",
-            created_at=int(time.time()),
-            model=e.model or data.get("model"),
-            output=cast(Any, [{"content": [{"type": "text", "text": violation_text}]}]),
-            status="completed",
-            usage=_blocked_responses_api_usage(e.original_response),
-        )
-        return response_obj
+        if data.get("stream") is True:
+            block_chunks: Final = OpenAIResponsesHandler().build_block_sse_chunks(e)
+
+            async def _blocked_stream() -> AsyncGenerator[str, None]:
+                for chunk in block_chunks:
+                    yield chunk.decode()
+                yield "data: [DONE]\n\n"
+
+            return await create_response(generator=_blocked_stream(), media_type="text/event-stream", headers={})
+        return build_blocked_response(e)
     except Exception as e:
         raise await processor._handle_llm_api_exception(
             e=e,
