@@ -87,6 +87,7 @@ def _make_guardrail(**kwargs) -> HeadroomGuardrail:
         api_key=FAKE_API_KEY,
         guardrail_name="headroom",
         default_on=True,
+        frozen_message_count=0,
     )
     defaults.update(kwargs)
     return HeadroomGuardrail(**defaults)
@@ -2435,20 +2436,30 @@ AGENTIC_MESSAGES = [
 ]
 
 
-async def _wire_and_result(guardrail: HeadroomGuardrail, messages: list, returned: list | None = None):
+async def _wire_and_result(
+    guardrail: HeadroomGuardrail,
+    messages: list[dict[str, object]],
+    returned: list[dict[str, object]] | None = None,
+    compress: bool = False,
+    request_data: dict[str, object] | None = None,
+):
     inputs = GenericGuardrailAPIInputs(texts=["x"], structured_messages=json.loads(json.dumps(messages)))
-    sent: dict = {}
+    sent: dict[str, list[dict[str, object]]] = {}
 
     def _echo(**kwargs):
         sent["messages"] = kwargs["json"]["messages"]
-        return _make_compress_response(
-            returned if returned is not None else json.loads(json.dumps(kwargs["json"]["messages"]))
-        )
+        if returned is not None:
+            service_rows = returned
+        elif compress:
+            service_rows = [{**row, "content": "COMPRESSED"} for row in sent["messages"]]
+        else:
+            service_rows = json.loads(json.dumps(sent["messages"]))
+        return _make_compress_response(service_rows)
 
     with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock, side_effect=_echo):
         result = await guardrail.apply_guardrail(
             inputs=inputs,
-            request_data={"model": "claude-sonnet-4-5-20250929"},
+            request_data=request_data or {"model": "claude-sonnet-4-5-20250929"},
             input_type="request",
         )
     return sent["messages"], result
@@ -2569,6 +2580,118 @@ async def test_mid_history_cache_control_row_is_never_sent_for_compression(guard
     assert cached_row not in wire
     assert not any(row.get("tool_call_id") == "old_1" for row in wire)
     assert result["structured_messages"][3] == cached_row
+
+
+IMPLICIT_CACHE_TURN_ONE = [
+    {"role": "system", "content": "You are a helpful assistant. " + "S" * 5000},
+    {"role": "user", "content": "U1 " + "Q" * 5000},
+    {
+        "role": "assistant",
+        "content": "Reading the file now.",
+        "tool_calls": [{"id": "t1", "type": "function", "function": {"name": "Read", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "t1", "content": "F1 " + "F" * 5000},
+    {"role": "user", "content": "U2 " + "Q" * 5000},
+    {
+        "role": "assistant",
+        "content": "Listing now.",
+        "tool_calls": [{"id": "t2", "type": "function", "function": {"name": "Bash", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "t2", "content": "F2 " + "F" * 5000},
+    {"role": "user", "content": "U3 " + "Q" * 5000},
+    {
+        "role": "assistant",
+        "content": "Grepping now.",
+        "tool_calls": [{"id": "t3", "type": "function", "function": {"name": "Grep", "arguments": "{}"}}],
+    },
+    {"role": "tool", "tool_call_id": "t3", "content": "F3 " + "F" * 5000},
+    {"role": "user", "content": "U4 " + "Q" * 5000},
+    {"role": "assistant", "content": "Done reading."},
+    {"role": "user", "content": "U5 " + "Q" * 5000},
+    {"role": "assistant", "content": "Done."},
+    {"role": "user", "content": "live instruction"},
+]
+IMPLICIT_CACHE_TURN_TWO = IMPLICIT_CACHE_TURN_ONE + [
+    {"role": "assistant", "content": "Done."},
+    {"role": "user", "content": "next instruction"},
+]
+GPT_REQUEST_DATA = {"model": "gpt-5.6"}
+
+
+@pytest.mark.asyncio
+async def test_leading_prefix_is_byte_identical_across_turns_without_cache_control():
+    """Rows 0..11 never reach the service on either turn, so the leading bytes a
+    provider's implicit prefix cache keys on stay identical as history grows."""
+    guardrail = HeadroomGuardrail(
+        api_base=FAKE_API_BASE, api_key=FAKE_API_KEY, guardrail_name="headroom", default_on=True
+    )
+    wire_one, result_one = await _wire_and_result(
+        guardrail, IMPLICIT_CACHE_TURN_ONE, compress=True, request_data=GPT_REQUEST_DATA
+    )
+    wire_two, result_two = await _wire_and_result(
+        guardrail, IMPLICIT_CACHE_TURN_TWO, compress=True, request_data=GPT_REQUEST_DATA
+    )
+
+    assert result_one["structured_messages"][:12] == IMPLICIT_CACHE_TURN_ONE[:12]
+    assert result_two["structured_messages"][:12] == IMPLICIT_CACHE_TURN_TWO[:12]
+    assert result_one["structured_messages"][:12] == result_two["structured_messages"][:12]
+
+    for wire in (wire_one, wire_two):
+        wire_json = json.dumps(wire)
+        for row in IMPLICIT_CACHE_TURN_ONE[:12]:
+            assert json.dumps(row)[1:-1] not in wire_json
+        assert "U1 " not in wire_json
+        assert "F1 " not in wire_json
+
+    assert IMPLICIT_CACHE_TURN_ONE[12] in wire_one
+    assert IMPLICIT_CACHE_TURN_ONE[12] in wire_two
+    assert IMPLICIT_CACHE_TURN_ONE[14] in wire_two
+    assert result_two["structured_messages"][12]["content"] == "COMPRESSED"
+    assert result_two["structured_messages"][14]["content"] == "COMPRESSED"
+
+
+@pytest.mark.asyncio
+async def test_frozen_message_count_zero_restores_full_history_compression():
+    guardrail = _make_guardrail(frozen_message_count=0)
+
+    wire, _result = await _wire_and_result(
+        guardrail, IMPLICIT_CACHE_TURN_ONE, compress=True, request_data=GPT_REQUEST_DATA
+    )
+
+    assert IMPLICIT_CACHE_TURN_ONE[1] in wire
+
+
+@pytest.mark.asyncio
+async def test_frozen_prefix_not_applied_when_cache_control_present():
+    """An explicit breakpoint keeps the existing cache-prefix policy: the frozen
+    count does not protect rows beyond it."""
+    guardrail = _make_guardrail(frozen_message_count=12)
+    messages = json.loads(json.dumps(IMPLICIT_CACHE_TURN_ONE))
+    messages[2]["cache_control"] = {"type": "ephemeral"}
+
+    wire, _result = await _wire_and_result(guardrail, messages, compress=True, request_data=GPT_REQUEST_DATA)
+
+    for index in (4, 7, 10):
+        assert IMPLICIT_CACHE_TURN_ONE[index] in wire
+
+
+@pytest.mark.asyncio
+async def test_frozen_message_count_flows_through_initialize_guardrail(monkeypatch: pytest.MonkeyPatch):
+    from litellm.constants import DEFAULT_HEADROOM_FROZEN_MESSAGE_COUNT
+    from litellm.proxy.guardrails.guardrail_hooks.headroom import initialize_guardrail
+    from litellm.types.guardrails import LitellmParams
+
+    monkeypatch.setattr(litellm.logging_callback_manager, "add_litellm_callback", lambda callback: None)
+
+    params = LitellmParams(guardrail="headroom", mode="pre_call", api_base=FAKE_API_BASE, frozen_message_count=3)
+    guardrail = initialize_guardrail(params, {"guardrail_name": "headroom", "litellm_params": params})
+    assert guardrail.frozen_message_count == 3
+
+    default_params = LitellmParams(guardrail="headroom", mode="pre_call", api_base=FAKE_API_BASE)
+    default_guardrail = initialize_guardrail(
+        default_params, {"guardrail_name": "headroom", "litellm_params": default_params}
+    )
+    assert default_guardrail.frozen_message_count == DEFAULT_HEADROOM_FROZEN_MESSAGE_COUNT
 
 
 # ---------------------------------------------------------------------------

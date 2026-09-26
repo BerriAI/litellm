@@ -16,8 +16,14 @@ from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_proxy_logger
-from litellm.compression.compress import get_protected_indices
-from litellm.constants import HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS
+from litellm.compression.compress import (
+    _message_has_cache_control,  # pyright: ignore[reportPrivateUsage]  # shared compression policy helper
+    get_protected_indices,
+)
+from litellm.constants import (
+    DEFAULT_HEADROOM_FROZEN_MESSAGE_COUNT,
+    HTTP_HANDLER_CONNECT_TIMEOUT_SECONDS,
+)
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
@@ -229,8 +235,16 @@ def _retrieval_result_indices(
     )
 
 
+def _frozen_prefix_indices(messages: Sequence[Mapping[str, object]], frozen_message_count: int) -> frozenset[int]:
+    if any(_message_has_cache_control(message) for message in messages):
+        return frozenset()
+    return frozenset(range(min(frozen_message_count, len(messages))))
+
+
 def _protected_indices(
-    messages: Sequence[Mapping[str, object]], extra_retrieve_call_ids: frozenset[str] = frozenset()
+    messages: Sequence[Mapping[str, object]],
+    extra_retrieve_call_ids: frozenset[str] = frozenset(),
+    frozen_message_count: int = 0,
 ) -> frozenset[int]:
     """Indices headroom must not send to the compression service.
 
@@ -248,8 +262,10 @@ def _protected_indices(
     so the model's own earlier tables came back rewritten and it imitated the
     shape. The tool results those turns asked for stay compressible.
     """
-    protected: Final = frozenset(get_protected_indices(messages)) | _retrieval_result_indices(
-        messages, extra_retrieve_call_ids
+    protected: Final = (
+        frozenset(get_protected_indices(messages))
+        | _retrieval_result_indices(messages, extra_retrieve_call_ids)
+        | _frozen_prefix_indices(messages, frozen_message_count)
     )
     return (
         protected
@@ -496,6 +512,7 @@ class HeadroomGuardrail(CustomGuardrail):
         unreachable_fallback: str | None = None,
         timeout: float | None = None,
         ccr_retrieval: bool = True,
+        frozen_message_count: int = DEFAULT_HEADROOM_FROZEN_MESSAGE_COUNT,
     ):
         self.headroom_api_base = (api_base or get_secret_str("HEADROOM_API_BASE") or "").rstrip("/")
         if not self.headroom_api_base:
@@ -510,6 +527,7 @@ class HeadroomGuardrail(CustomGuardrail):
         )
         self.timeout: httpx.Timeout = self._resolve_timeout(timeout)
         self.ccr_retrieval = ccr_retrieval
+        self.frozen_message_count = frozen_message_count
         self.async_handler = get_async_httpx_client(
             llm_provider=httpxSpecialProvider.GuardrailCallback,
         )
@@ -804,7 +822,7 @@ class HeadroomGuardrail(CustomGuardrail):
         # reading the untranslated messages so long tool names can be recovered.
         raw_messages: Final = _REQUEST_DATA_ADAPTER.validate_python(request_data).get("messages")
         raw_retrieve_call_ids: Final = _raw_retrieve_call_ids(raw_messages)
-        protected_indices: Final = _protected_indices(messages, raw_retrieve_call_ids)
+        protected_indices: Final = _protected_indices(messages, raw_retrieve_call_ids, self.frozen_message_count)
         compressible: Final = [m for i, m in enumerate(messages) if i not in protected_indices]
         if not compressible:
             return inputs

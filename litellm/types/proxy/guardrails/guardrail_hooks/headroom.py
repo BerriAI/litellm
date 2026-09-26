@@ -2,6 +2,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+from litellm.constants import DEFAULT_HEADROOM_FROZEN_MESSAGE_COUNT
+
 from .base import GuardrailConfigModel
 
 
@@ -29,6 +31,15 @@ class HeadroomGuardrailConfigModel(GuardrailConfigModel[BaseModel]):
     ccr_retrieval: bool = Field(
         default=True,
         description="Inject the Headroom retrieval tool for hashes declared by the compression service.",
+    )
+    frozen_message_count: int = Field(
+        default=DEFAULT_HEADROOM_FROZEN_MESSAGE_COUNT,
+        ge=0,
+        description=(
+            "Number of leading messages never sent for compression when the request carries no "
+            "cache_control breakpoint, so the prompt prefix stays byte-identical across turns for "
+            "providers with implicit prefix caching (OpenAI, Azure, xAI, Bedrock Mantle). 0 disables."
+        ),
     )
 
     @staticmethod

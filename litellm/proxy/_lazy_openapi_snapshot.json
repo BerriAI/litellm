@@ -12169,6 +12169,13 @@
               "description": "Whether to fail the request if the guardrail encounters an error. Implemented by guardrail='model_armor', 'generic_guardrail_api' and 'crowdstrike_aidr'. True (default) raises the error. False logs a critical error and lets the request proceed, so only a valid guardrail response can block or modify it.",
               "title": "Fail On Error"
             },
+            "frozen_message_count": {
+              "default": 12,
+              "description": "Number of leading messages never sent for compression when the request carries no cache_control breakpoint, so the prompt prefix stays byte-identical across turns for providers with implicit prefix caching (OpenAI, Azure, xAI, Bedrock Mantle). 0 disables.",
+              "minimum": 0.0,
+              "title": "Frozen Message Count",
+              "type": "integer"
+            },
             "grounding_check": {
               "anyOf": [
                 {

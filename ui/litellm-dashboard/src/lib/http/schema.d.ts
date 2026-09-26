@@ -34356,6 +34356,12 @@ export interface components {
              */
             fail_on_error: boolean | null;
             /**
+             * Frozen Message Count
+             * @description Number of leading messages never sent for compression when the request carries no cache_control breakpoint, so the prompt prefix stays byte-identical across turns for providers with implicit prefix caching (OpenAI, Azure, xAI, Bedrock Mantle). 0 disables.
+             * @default 12
+             */
+            frozen_message_count: number;
+            /**
              * Grounding Check
              * @description Enable grounding verification to ensure output is grounded in provided context.
              */
