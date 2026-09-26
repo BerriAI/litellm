@@ -37,23 +37,36 @@ class Wire:
     url: str
     received: SimpleQueue[Request]
     disconnected: SimpleQueue[str]
+    connected: SimpleQueue[str]
 
     def drain(self) -> tuple[Request, ...]:
         return tuple(self.received.get_nowait() for _ in range(self.received.qsize()))
 
+    def connections(self) -> int:
+        return self.connected.qsize()
+
 
 @contextmanager
 def wire_server(
-    respond: Callable[[Request], Reply], tls: ssl.SSLContext | None = None, port: int = 0
+    respond: Callable[[Request], Reply],
+    tls: ssl.SSLContext | None = None,
+    port: int = 0,
+    keep_alive: bool = False,
 ) -> Generator[Wire, None, None]:
-    """Owned TCP peer; requests traverse the real HTTP client and serialization."""
+    """Owned TCP peer; requests traverse the real HTTP client and serialization. With `keep_alive` the
+    peer honours HTTP/1.1 persistent connections so `connections()` counts the client's TCP sessions."""
     received: Final[SimpleQueue[Request]] = SimpleQueue()
     errors: Final[SimpleQueue[Exception]] = SimpleQueue()
     disconnected: Final[SimpleQueue[str]] = SimpleQueue()
+    connected: Final[SimpleQueue[str]] = SimpleQueue()
 
     class Handler(BaseHTTPRequestHandler):
         protocol_version = "HTTP/1.1"
         timeout = 5
+
+        def setup(self) -> None:
+            super().setup()
+            connected.put(f"{self.client_address[0]}:{self.client_address[1]}")
 
         def respond(self) -> None:
             request: Final = Request(
@@ -76,10 +89,13 @@ def wire_server(
                 self.send_header("content-length", str(len(reply.body)))
             else:
                 self.send_header("transfer-encoding", "chunked")
-            self.send_header("connection", "close")
+            if not keep_alive:
+                self.send_header("connection", "close")
             self.end_headers()
             try:
-                if reply.chunks is None:
+                if self.command == "HEAD":
+                    self.wfile.flush()
+                elif reply.chunks is None:
                     self.wfile.write(reply.body)
                 else:
                     for index, chunk in enumerate(reply.chunks):
@@ -98,12 +114,14 @@ def wire_server(
                 disconnected.put(request.target)
             except Exception as error:
                 errors.put(error)
-            self.close_connection = True
+            self.close_connection = not keep_alive
 
         do_POST = respond
         do_PUT = respond
         do_GET = respond
         do_DELETE = respond
+        do_PATCH = respond
+        do_HEAD = respond
 
         def log_message(self, format: str, *args: object) -> None:
             pass
@@ -124,6 +142,7 @@ def wire_server(
                 f"{'https' if tls is not None else 'http'}://127.0.0.1:{server.server_port}",
                 received,
                 disconnected,
+                connected,
             )
         finally:
             server.shutdown()
