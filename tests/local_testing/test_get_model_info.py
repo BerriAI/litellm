@@ -293,10 +293,12 @@ def test_get_model_info_bedrock_cross_region_capability_parity():
     Cross-region inference profiles carry litellm_provider "bedrock_converse", so the
     regional drift check above (which filters on "bedrock") never reaches them.
     """
+    from litellm.llms.bedrock.common_utils import get_bedrock_cross_region_inference_regions
+
     os.environ["LITELLM_LOCAL_MODEL_COST_MAP"] = "True"
     litellm.model_cost = litellm.get_model_cost_map(url="")
 
-    prefixes = ("us.", "eu.", "apac.", "us-gov.")
+    prefixes = tuple(f"{region}." for region in get_bedrock_cross_region_inference_regions())
     checked = 0
 
     for k, v in litellm.model_cost.items():

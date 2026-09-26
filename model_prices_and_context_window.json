@@ -2492,6 +2492,7 @@
         "supports_native_structured_output": false,
         "supports_max_reasoning_effort": true,
         "supports_minimal_reasoning_effort": true,
+        "supports_output_config": true,
         "supports_parallel_tool_use_config": true,
         "prompt_cache_min_tokens": 2048,
         "source": "https://aws.amazon.com/bedrock/pricing/"
