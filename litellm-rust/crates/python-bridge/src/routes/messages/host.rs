@@ -63,6 +63,13 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
             Ok(error)
         }
+        error @ (Error::AlreadyProjected
+        | Error::RequestDecoding(_)
+        | Error::RequestEncoding(_)) => {
+            let error = PyValueError::new_err(error.to_string());
+            error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
+            Ok(error)
+        }
         other => Ok(route_error_to_pyerr(other)),
     }
 }
