@@ -70,11 +70,11 @@ def _import_yaml() -> ModuleType:
         ) from None
 
 
-def _load_yaml_mapping(text: str) -> dict[str, Any]:
+def _load_yaml_mapping(text: str) -> dict[str, Any]:  # mutable-ok: fresh parser-built dict; matches this module's dict[str, Any] convention
     """Parse YAML text, requiring a mapping at the document root."""
-    yaml_mod = _import_yaml()
+    yaml_mod: Final = _import_yaml()
     try:
-        parsed = yaml_mod.safe_load(text)
+        parsed: Final = yaml_mod.safe_load(text)
     except yaml_mod.YAMLError as exc:
         raise ValueError(f"Invalid YAML OpenAPI spec: {exc}") from exc
     if not isinstance(parsed, dict):
@@ -191,19 +191,19 @@ def load_openapi_spec(filepath: str) -> dict[str, Any]:
 def _is_yaml_content(filepath: str, content_type: str | None = None) -> bool:
     """Determine if the content should be parsed as YAML."""
     # Check file extension
-    lower = filepath.lower()
+    lower: Final = filepath.lower()
     if lower.endswith((".yaml", ".yml")):
         return True
     # Check Content-Type header
     return bool(content_type and "yaml" in content_type)
 
 
-def _load_local_openapi_spec(filepath: str) -> dict[str, Any]:
+def _load_local_openapi_spec(filepath: str) -> dict[str, Any]:  # mutable-ok: fresh parser-built dict; matches this module's dict[str, Any] convention
     """Read a local OpenAPI spec file, parsing YAML or JSON."""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
     with open(filepath, "r", encoding="utf-8") as f:
-        content = f.read()
+        content: Final = f.read()
     if _is_yaml_content(filepath):
         return _load_yaml_mapping(content)
     try:
@@ -215,7 +215,7 @@ def _load_local_openapi_spec(filepath: str) -> dict[str, Any]:
             raise json_exc from None
 
 
-def _load_remote_openapi_spec(text: str, as_yaml: bool) -> dict[str, Any]:
+def _load_remote_openapi_spec(text: str, as_yaml: bool) -> dict[str, Any]:  # mutable-ok: fresh parser-built dict; matches this module's dict[str, Any] convention
     """Parse a fetched spec body. Runs in a worker thread: YAML parsing is
     synchronous CPU work with no nesting/alias limits, so it must not run on
     the event loop where a pathological document could stall the proxy."""
@@ -240,10 +240,10 @@ async def load_openapi_spec_async(filepath: str, *, max_bytes: int | None = None
         )
         r.raise_for_status()
 
-        content_type = r.headers.get("content-type", "")
+        content_type: Final = r.headers.get("content-type", "")
         # Try JSON first; fall back to YAML for specs served without
         # proper Content-Type headers (common with raw GitHub URLs).
-        as_yaml = _is_yaml_content(filepath, content_type)
+        as_yaml: Final = _is_yaml_content(filepath, content_type)
         return await asyncio.to_thread(_load_remote_openapi_spec, r.text, as_yaml)
 
     # Local files go through a worker thread: the async path must not
