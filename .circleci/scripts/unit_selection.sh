@@ -88,6 +88,7 @@ legacy_paths() {
     proxy-db-auth-checks)
       echo tests/unit/proxy/auth/test_auth_checks.py
       echo tests/unit/proxy/auth/test_user_api_key_auth.py
+      echo tests/unit/proxy/test_credential_slot_registry.py
       echo tests/unit/proxy/test_deprecated_key_grace_period.py ;;
     proxy-db-budgets)
       echo tests/unit/proxy/auth/test_default_end_user_budget_simple.py
