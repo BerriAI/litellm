@@ -218,9 +218,7 @@ class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
     def _extract_gemini_tts_speaker_configs(
         self,
         voice: Mapping[str, object],
-    ) -> list[
-        VertexTextToSpeechSpeakerVoiceConfig
-    ]:  # mutable-ok: provider request serialization requires a concrete list
+    ) -> list[VertexTextToSpeechSpeakerVoiceConfig]:
         speech_config: Final = self._get_dict_value(voice, "speechConfig", "speech_config") or voice
         multi_speaker_config: Final = self._get_dict_value(
             speech_config,
