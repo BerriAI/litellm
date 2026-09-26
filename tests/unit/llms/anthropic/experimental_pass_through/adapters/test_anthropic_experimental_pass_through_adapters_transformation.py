@@ -5,9 +5,6 @@ from typing import Any, Final, cast
 import pytest
 
 import litellm
-
-
-
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
     TOOL_RESULT_IMAGE_PLACEHOLDER,
     encrypted_reasoning_signature,
@@ -16,6 +13,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     THOUGHT_SIGNATURE_SEPARATOR,
     _bedrock_converse_messages_pt,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import DROP_MID_CONVERSATION_SYSTEM_ENV
 from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
     OPENAI_MAX_TOOL_NAME_LENGTH,
     AnthropicAdapter,
@@ -888,6 +886,43 @@ def test_translate_anthropic_to_openai_converts_claude_code_midturn_system_turn(
     converted = openai_request["messages"][2]
     assert converted["content"][0]["text"] == CONVERTED_SYSTEM_NOTE
     assert converted["content"][1]["text"] == "<system-reminder>Keep answers to one sentence.</system-reminder>"
+
+
+@pytest.mark.parametrize("custom_llm_provider", [None, "hosted_vllm"])
+def test_translate_anthropic_to_openai_drops_midturn_system_when_flag_set(monkeypatch, custom_llm_provider: str | None):
+    """
+    With LITELLM_DROP_MIDTURN_SYSTEM=true the harness reminder is removed before placement, so the
+    outbound request carries neither a system row after index 0 nor the operator-note user turn.
+    """
+    monkeypatch.setenv(DROP_MID_CONVERSATION_SYSTEM_ENV, "true")
+
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={"model": "qwen3.8-27B", **_CLAUDE_CODE_MIDTURN_SYSTEM_REQUEST},
+        custom_llm_provider=custom_llm_provider,
+    )
+
+    assert openai_request["messages"] == [
+        {"role": "system", "content": [{"type": "text", "text": "You are Claude Code."}]},
+        {"role": "user", "content": "say hi"},
+        {"role": "assistant", "content": "Hi.", "thinking_blocks": None},
+        {"role": "user", "content": "say bye"},
+    ]
+
+
+def test_translate_anthropic_to_openai_drop_flag_yields_to_preserve_midturn_system(monkeypatch):
+    """
+    Guardrail and compaction callers pass preserve_midturn_system=True to scan the conversation as
+    sent; the drop flag must not hide the reminder from them.
+    """
+    monkeypatch.setenv(DROP_MID_CONVERSATION_SYSTEM_ENV, "true")
+
+    openai_request, _ = LiteLLMAnthropicMessagesAdapter().translate_anthropic_to_openai(
+        anthropic_message_request={"model": "qwen3.8-27B", **_CLAUDE_CODE_MIDTURN_SYSTEM_REQUEST},
+        custom_llm_provider="hosted_vllm",
+        preserve_midturn_system=True,
+    )
+
+    assert [m["role"] for m in openai_request["messages"]] == ["system", "user", "system", "assistant", "user"]
 
 
 def test_translate_anthropic_to_openai_keeps_midturn_system_when_target_declares_support(monkeypatch):
