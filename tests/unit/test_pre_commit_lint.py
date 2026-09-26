@@ -388,6 +388,7 @@ def test_interrupt_spares_the_invoking_process(tmp_path: Path) -> None:
     )
     try:
         assert _wait_until((hang_dir / "make.started").exists, 10)
+        assert _wait_until((hang_dir / "eslint_report.started").exists, 10)
         os.killpg(proc.pid, signal.SIGINT)
         assert proc.wait(timeout=10) == 0
         assert _wait_until(marker.exists, 5)
