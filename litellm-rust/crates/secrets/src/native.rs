@@ -1,10 +1,13 @@
 use std::sync::Arc;
 
 use litellm_core_utils::settings::Lookup;
+use litellm_http::{HttpClientConfig, HttpClientPool};
 
 use crate::{Error, KeyManagementSettings, KeyManagementSystem, SecretManager};
 
 pub async fn load_native_manager(
+    _pool: &HttpClientPool,
+    _config: &HttpClientConfig,
     system: KeyManagementSystem,
     settings: KeyManagementSettings,
     environment: Arc<dyn Lookup + Send + Sync>,
@@ -29,14 +32,19 @@ pub async fn load_native_manager(
         }
         #[cfg(feature = "azure")]
         (KeyManagementSystem::AzureKeyVault, _, environment, _) => Ok(
-            SecretManager::AzureKeyVault(crate::azure::AzureKeyVault::new(environment)?),
+            SecretManager::AzureKeyVault(crate::azure::AzureKeyVault::new(
+                _pool.client(_config, litellm_http::ClientVariant::Provider)?,
+                environment,
+            )?),
         ),
         #[cfg(feature = "google")]
-        (KeyManagementSystem::GoogleSecretManager, _, environment, enterprise_enabled) => {
-            Ok(SecretManager::GoogleSecretManager(
-                crate::google::GoogleSecretManager::new(environment, enterprise_enabled)?,
-            ))
-        }
+        (KeyManagementSystem::GoogleSecretManager, _, environment, enterprise_enabled) => Ok(
+            SecretManager::GoogleSecretManager(crate::google::GoogleSecretManager::new(
+                _pool.client(_config, litellm_http::ClientVariant::Provider)?,
+                environment,
+                enterprise_enabled,
+            )?),
+        ),
         #[cfg(feature = "google")]
         (KeyManagementSystem::GoogleKms, _, environment, _) => {
             crate::google::load_google_kms(Some(true), environment)
@@ -51,11 +59,14 @@ pub async fn load_native_manager(
             ))
         }
         #[cfg(feature = "cyberark")]
-        (KeyManagementSystem::Cyberark, _, environment, enterprise_enabled) => {
-            Ok(SecretManager::Cyberark(
-                crate::cyberark::CyberArkSecretManager::new(environment, enterprise_enabled)?,
-            ))
-        }
+        (KeyManagementSystem::Cyberark, _, environment, enterprise_enabled) => Ok(
+            SecretManager::Cyberark(crate::cyberark::CyberArkSecretManager::new(
+                _pool,
+                _config,
+                environment,
+                enterprise_enabled,
+            )?),
+        ),
         _ => Err(Error::NativeBackendUnavailable),
     }
 }

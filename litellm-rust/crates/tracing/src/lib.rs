@@ -5,6 +5,7 @@ use std::{
     pin::pin,
 };
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Map, Value};
 use tracing::{
     Dispatch, Event, Subscriber,
@@ -19,6 +20,31 @@ mod redaction;
 pub use processing::{DiagnosticInput, DiagnosticOutput, Policy, Processor};
 pub use redaction::{REDACTED, SecretRedactor};
 pub use tracing::{Level, Metadata, debug, error, info, trace, warn};
+
+pub struct ByteChunk<'a>(&'a [u8]);
+
+impl<'a> ByteChunk<'a> {
+    pub fn new(data: &'a [u8]) -> Self {
+        Self(data)
+    }
+
+    pub fn encoding(&self) -> &'static str {
+        if std::str::from_utf8(self.0).is_ok() {
+            "utf8"
+        } else {
+            "base64"
+        }
+    }
+}
+
+impl fmt::Display for ByteChunk<'_> {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match std::str::from_utf8(self.0) {
+            Ok(text) => formatter.write_str(text),
+            Err(_) => formatter.write_str(&STANDARD.encode(self.0)),
+        }
+    }
+}
 
 pub trait Sink: Send + Sync + 'static {
     fn enabled(&self, metadata: &Metadata<'_>) -> bool;
@@ -42,6 +68,10 @@ impl Logger {
         Self {
             dispatch: Dispatch::new(Registry::default().with(Output(sink))),
         }
+    }
+
+    pub fn install_global(&self) -> Result<(), tracing::dispatcher::SetGlobalDefaultError> {
+        tracing::dispatcher::set_global_default(self.dispatch.clone())
     }
 
     pub fn scope<T>(&self, operation: impl FnOnce() -> T) -> T {
