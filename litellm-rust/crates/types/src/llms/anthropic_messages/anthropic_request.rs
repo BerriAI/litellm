@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use strum::IntoStaticStr;
+
+use crate::{llms::openai::ReasoningEffort, recognized::Recognized};
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(untagged)]
@@ -79,10 +82,117 @@ pub struct AnthropicMessage {
     pub extra: Map<String, Value>,
 }
 
+#[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+#[strum(serialize_all = "lowercase")]
+pub enum EffortLevel {
+    Low,
+    Medium,
+    High,
+    Xhigh,
+    Max,
+}
+
+impl EffortLevel {
+    pub fn as_str(self) -> &'static str {
+        self.into()
+    }
+}
+
+impl From<EffortLevel> for ReasoningEffort {
+    fn from(level: EffortLevel) -> Self {
+        match level {
+            EffortLevel::Low => Self::Low,
+            EffortLevel::Medium => Self::Medium,
+            EffortLevel::High => Self::High,
+            EffortLevel::Xhigh => Self::Xhigh,
+            EffortLevel::Max => Self::Max,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct OutputConfig {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effort: Option<Recognized<EffortLevel>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub format: Option<Value>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+impl OutputConfig {
+    pub fn is_empty(&self) -> bool {
+        self.effort.is_none() && self.format.is_none() && self.extra.is_empty()
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ThinkingDisplay {
+    Summarized,
+    Omitted,
+    Updates,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct EnabledThinking {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub budget_tokens: Option<Recognized<u64>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<Recognized<ThinkingDisplay>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AdaptiveThinking {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub display: Option<Recognized<ThinkingDisplay>>,
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct DisabledThinking {
+    #[serde(flatten)]
+    pub extra: Map<String, Value>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ThinkingConfig {
+    Enabled(EnabledThinking),
+    Adaptive(AdaptiveThinking),
+    Disabled(DisabledThinking),
+}
+
+impl ThinkingConfig {
+    pub fn enabled(budget_tokens: u64) -> Self {
+        Self::Enabled(EnabledThinking {
+            budget_tokens: Some(Recognized::Known(budget_tokens)),
+            ..EnabledThinking::default()
+        })
+    }
+
+    pub fn adaptive(display: Option<ThinkingDisplay>) -> Self {
+        Self::Adaptive(AdaptiveThinking {
+            display: display.map(Recognized::Known),
+            ..AdaptiveThinking::default()
+        })
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct AnthropicMessagesRequest {
     pub model: String,
     pub messages: Vec<AnthropicMessage>,
+    #[serde(flatten)]
+    pub params: AnthropicMessagesOptionalParams,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct AnthropicMessagesOptionalParams {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -104,7 +214,7 @@ pub struct AnthropicMessagesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_choice: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub thinking: Option<Value>,
+    pub thinking: Option<Recognized<ThinkingConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub service_tier: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -116,13 +226,13 @@ pub struct AnthropicMessagesRequest {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub output_format: Option<Value>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub output_config: Option<Value>,
+    pub output_config: Option<Recognized<OutputConfig>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub speed: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub inference_geo: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub reasoning_effort: Option<String>,
+    pub reasoning_effort: Option<Recognized<ReasoningEffort>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub compaction: Option<Value>,
     #[serde(flatten)]
@@ -183,6 +293,33 @@ mod tests {
     }
 
     #[test]
+    fn request_splits_required_fields_from_optional_params() {
+        let body = json!({
+            "model": "m",
+            "messages": [{"role": "user", "content": "hi"}],
+            "max_tokens": 16,
+            "stream": true,
+            "safeguards": [{"type": "dangerous_tool_use"}]
+        });
+        let request: AnthropicMessagesRequest = serde_json::from_value(body.clone()).unwrap();
+
+        assert_eq!(
+            (
+                request.params.max_tokens,
+                request.params.stream,
+                request
+                    .params
+                    .extra
+                    .keys()
+                    .map(String::as_str)
+                    .collect::<Vec<_>>(),
+            ),
+            (Some(16_u64), Some(true), vec!["safeguards"])
+        );
+        assert_eq!(serde_json::to_value(request).unwrap(), body);
+    }
+
+    #[test]
     fn text_constructor_serializes_as_a_text_block() {
         assert_eq!(
             serde_json::to_value(ContentBlock::text("hello")).unwrap(),
@@ -240,7 +377,88 @@ mod tests {
         "safeguards": [{"type": "dangerous_tool_use", "classifier_context": {"v": 1}}],
         "metadata": {"user_id": "u"}
     }))]
+    #[case::typed_thinking_and_output_config(json!({
+        "model": "m",
+        "messages": [],
+        "thinking": {"type": "enabled", "budget_tokens": 2048, "display": "omitted", "block_binding": {"prefix_mismatch_behavior": "drop_block"}},
+        "output_config": {"effort": "xhigh", "format": {"type": "json_schema", "schema": {}}, "task_budget": {"type": "tokens", "total": 4096}}
+    }))]
+    #[case::unrecognized_values_are_kept_verbatim(json!({
+        "model": "m",
+        "messages": [],
+        "reasoning_effort": "turbo",
+        "thinking": {"type": "adaptive", "display": "loud"},
+        "output_config": {"effort": 5}
+    }))]
+    #[case::unrecognized_shapes_are_kept_verbatim(json!({
+        "model": "m",
+        "messages": [],
+        "reasoning_effort": 3,
+        "thinking": {"type": "future", "budget_tokens": 1},
+        "output_config": "bogus"
+    }))]
     fn request_round_trips_unchanged(#[case] request: Value) {
         assert_eq!(round_trip::<AnthropicMessagesRequest>(&request), request);
+    }
+
+    #[rstest]
+    #[case::enabled(
+        json!({"type": "enabled", "budget_tokens": 2048, "display": "omitted"}),
+        ThinkingConfig::Enabled(EnabledThinking {
+            budget_tokens: Some(Recognized::Known(2048)),
+            display: Some(Recognized::Known(ThinkingDisplay::Omitted)),
+            extra: Map::new(),
+        })
+    )]
+    #[case::enabled_without_budget(
+        json!({"type": "enabled"}),
+        ThinkingConfig::Enabled(EnabledThinking::default())
+    )]
+    #[case::enabled_with_unrecognized_budget(
+        json!({"type": "enabled", "budget_tokens": "lots"}),
+        ThinkingConfig::Enabled(EnabledThinking {
+            budget_tokens: Some(Recognized::Unrecognized(json!("lots"))),
+            ..EnabledThinking::default()
+        })
+    )]
+    #[case::adaptive_with_unrecognized_display(
+        json!({"type": "adaptive", "display": "loud"}),
+        ThinkingConfig::Adaptive(AdaptiveThinking {
+            display: Some(Recognized::Unrecognized(json!("loud"))),
+            extra: Map::new(),
+        })
+    )]
+    #[case::disabled_keeps_extra_fields(
+        json!({"type": "disabled", "future": true}),
+        ThinkingConfig::Disabled(DisabledThinking {
+            extra: Map::from_iter([("future".to_string(), json!(true))]),
+        })
+    )]
+    fn thinking_config_parses_every_documented_type_leniently(
+        #[case] thinking: Value,
+        #[case] expected: ThinkingConfig,
+    ) {
+        assert_eq!(
+            serde_json::from_value::<ThinkingConfig>(thinking).unwrap(),
+            expected
+        );
+    }
+
+    #[rstest]
+    fn effort_level_names_match_the_wire(
+        #[values(
+            EffortLevel::Low,
+            EffortLevel::Medium,
+            EffortLevel::High,
+            EffortLevel::Xhigh,
+            EffortLevel::Max
+        )]
+        level: EffortLevel,
+    ) {
+        assert_eq!(serde_json::to_value(level).unwrap(), json!(level.as_str()));
+        assert_eq!(
+            serde_json::to_value(ReasoningEffort::from(level)).unwrap(),
+            json!(level.as_str())
+        );
     }
 }

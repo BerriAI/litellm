@@ -7,11 +7,12 @@ use litellm_types::{
 use serde_json::Value;
 
 use crate::{
+    Error,
     anthropic::messages::streaming_iterator::{
         AnthropicContentBlock, AnthropicContentBlockDelta, AnthropicMessagesStreamEvent,
         AnthropicStreamUsage,
     },
-    base_llm::{base_model_iterator::StreamTransformer, chat::transformation::Error},
+    base_llm::{base_model_iterator::StreamTransformer, chat::streaming::StreamShape},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -38,7 +39,7 @@ pub struct AnthropicContentBlockDeltaEvent {
     pub delta: AnthropicContentBlockDelta,
 }
 
-pub struct AnthropicChatCompletionsStreamTransformer {
+pub struct ModelResponseIterator {
     pub content_blocks: Vec<AnthropicContentBlockDeltaEvent>,
     pub tool_index: i64,
     pub json_mode: bool,
@@ -61,12 +62,8 @@ pub struct AnthropicChatCompletionsStreamTransformer {
     pub container_id: Option<String>,
 }
 
-impl AnthropicChatCompletionsStreamTransformer {
-    pub fn new(
-        _json_mode: bool,
-        _speed: Option<String>,
-        _tool_name_reverse_map: HashMap<String, String>,
-    ) -> Self {
+impl ModelResponseIterator {
+    pub fn new(_shape: StreamShape) -> Self {
         todo!()
     }
 
@@ -150,7 +147,7 @@ impl AnthropicChatCompletionsStreamTransformer {
     }
 }
 
-impl StreamTransformer for AnthropicChatCompletionsStreamTransformer {
+impl StreamTransformer for ModelResponseIterator {
     type Input = AnthropicMessagesStreamEvent;
     type Output = ChatCompletionChunk;
     type Error = Error;

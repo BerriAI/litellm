@@ -73,17 +73,7 @@ impl PythonClient {
 
 /// The `KeyManagementSystem` value as Python spells it.
 fn python_name(system: KeyManagementSystem) -> &'static str {
-    match system {
-        KeyManagementSystem::GoogleKms => "google_kms",
-        KeyManagementSystem::AzureKeyVault => "azure_key_vault",
-        KeyManagementSystem::AwsSecretManager => "aws_secret_manager",
-        KeyManagementSystem::GoogleSecretManager => "google_secret_manager",
-        KeyManagementSystem::HashicorpVault => "hashicorp_vault",
-        KeyManagementSystem::Cyberark => "cyberark",
-        KeyManagementSystem::Local => "local",
-        KeyManagementSystem::AwsKms => "aws_kms",
-        KeyManagementSystem::Custom => "custom",
-    }
+    system.into()
 }
 
 impl ExternalSecretManager for PythonSecretManager {

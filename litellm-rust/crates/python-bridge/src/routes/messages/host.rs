@@ -3,7 +3,7 @@ use std::convert::Infallible;
 use bytes::Bytes;
 use litellm_core::messages::{
     Error,
-    route::{Messages, MessagesCall, MessagesOutput, MessagesStreamHead},
+    route::{Messages, MessagesCall, MessagesOutput, MessagesStreamHead, messages_body},
     types::MessagesShaping,
 };
 use litellm_host_python::{InvokeError, ProtocolHost, from_py, lookup, to_py};
@@ -18,7 +18,7 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::{RustUpstreamError, messages_error_to_pyerr},
+    errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{optional_timeout, python_timeout_seconds},
 };
 
@@ -76,7 +76,7 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
             Ok(error)
         }
-        other => Ok(messages_error_to_pyerr(other)),
+        other => Ok(route_error_to_pyerr(other)),
     }
 }
 
@@ -91,7 +91,11 @@ impl MessagesPythonHost {
         Self { request }
     }
 
-    fn projection(&self, py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<MessagesCall> {
+    fn projection(
+        &self,
+        py: Python<'_>,
+        arguments: &Bound<'_, PyDict>,
+    ) -> PyResult<Result<MessagesCall, Error>> {
         let request = self.request.bind(py);
         let argument = |name: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
             Ok(lookup(arguments, request, name)?.filter(|value| !value.is_none()))
@@ -123,17 +127,20 @@ impl MessagesPythonHost {
             .flatten();
         let custom_llm_provider = string("custom_llm_provider")?;
         let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
-        Ok(MessagesCall {
-            model,
+        let api_key = string("api_key")?;
+        let api_base = string("api_base")?;
+        let extra_headers = self.merged_headers(py, arguments)?;
+        let provider_specific_header = self.provider_specific_header(py, arguments)?;
+        Ok(messages_body(body).map(|body| MessagesCall {
             body,
-            api_key: string("api_key")?,
-            api_base: string("api_base")?,
-            extra_headers: self.merged_headers(py, arguments)?,
-            provider_specific_header: self.provider_specific_header(py, arguments)?,
+            api_key,
+            api_base,
+            extra_headers,
+            provider_specific_header,
             custom_llm_provider,
             timeout: optional_timeout(timeout),
             shaping,
-        })
+        }))
     }
 
     fn merged_headers(
@@ -220,7 +227,8 @@ impl ProtocolHost for MessagesPythonHost {
         arguments: &Bound<'_, PyDict>,
     ) -> Result<MessagesCall, InvokeError<Error>> {
         self.projection(py, arguments)
-            .map_err(|error| InvokeError::Python(self.map_failure(py, error)))
+            .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
+            .map_err(InvokeError::Native)
     }
 
     fn invoke(&mut self, _: Python<'_>, op: Infallible) -> Result<(), InvokeError<Error>> {

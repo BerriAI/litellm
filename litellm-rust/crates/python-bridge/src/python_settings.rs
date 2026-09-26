@@ -1,11 +1,14 @@
 use pyo3::{exceptions::PyModuleNotFoundError, prelude::*};
+use strum::IntoStaticStr;
 
 use crate::coercion::{FieldSpec, ProjectionError};
 
 const MODULE: &str = "litellm.rust_bridge.settings";
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq)]
+#[strum(serialize_all = "snake_case")]
 pub(crate) enum PythonSettings {
+    #[strum(serialize = "http_settings")]
     Http,
     UrlPolicy,
     ProviderDefaults,
@@ -26,13 +29,7 @@ impl Snapshot<'_> {
 
 impl PythonSettings {
     pub(crate) fn name(self) -> &'static str {
-        match self {
-            Self::Http => "http_settings",
-            Self::UrlPolicy => "url_policy",
-            Self::ProviderDefaults => "provider_defaults",
-            Self::SecretManager => "secret_manager",
-            Self::SecretManagerBinding => "secret_manager_binding",
-        }
+        self.into()
     }
 
     pub(crate) fn read(self, py: Python<'_>) -> PyResult<Snapshot<'_>> {

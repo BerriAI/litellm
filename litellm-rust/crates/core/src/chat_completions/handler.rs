@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use litellm_http::{Client, outbound::OutboundRequest, request::truncate_error_body};
-use litellm_llms::base_llm::chat::transformation::ProviderChatResponseData;
+use litellm_llms::base_llm::{auth::resolve_auth, chat::transformation::ProviderChatResponseData};
 use litellm_types::utils::ChatCompletionsResponse;
 use serde_json::Value;
 
@@ -13,10 +13,11 @@ use crate::{
 
 pub(super) async fn execute_chat_completions_provider_call(
     http: &Client,
+    auth: &litellm_auth::AuthServices,
     request: ResolvedChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
     let request = prepare_provider_request(request)?;
-    let outbound = outbound_request(&request).await?;
+    let outbound = outbound_request(auth, &request).await?;
 
     let response = outbound.send(http).await.map_err(|err| {
         // Failing to establish the connection means the request never went out,
@@ -69,28 +70,28 @@ pub(super) fn as_response_error(err: Error) -> Error {
 }
 
 pub(super) async fn outbound_request(
+    auth: &litellm_auth::AuthServices,
     request: &ProviderChatCompletionsRequest,
 ) -> Result<OutboundRequest, Error> {
+    let env_lookup = |key: &str| std::env::var(key).ok();
+    let authenticated = resolve_auth(auth, request.environment.clone(), &env_lookup).await?;
     crate::outbound::outbound_request(
-        &request.auth,
+        authenticated,
         request.url.clone(),
-        request.upstream_headers.clone(),
         &request.body,
         Some(
             request
                 .timeout
                 .unwrap_or(Duration::from_secs(CHAT_COMPLETIONS_TIMEOUT_SECS)),
         ),
-        &request.optional_params,
     )
-    .await
     .map_err(|error| match error {
         // Python drops the caller's copy and prefers a forwarded Authorization
         // over the signature, so leave the request to it.
-        Error::Http(litellm_http::Error::ComputedHeader(_)) => {
+        litellm_http::Error::ComputedHeader(_) => {
             Error::Unsupported("request forwards a header AWS SigV4 computes")
         }
-        other => other,
+        other => Error::Http(other),
     })
 }
 

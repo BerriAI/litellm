@@ -1,4 +1,7 @@
-use litellm_core::messages::{messages, types::MessagesRequest};
+use litellm_core::{
+    Phase,
+    messages::{messages, route::messages_body},
+};
 use litellm_http::transport::Error as TransportError;
 use rstest::rstest;
 
@@ -154,7 +157,7 @@ async fn an_unreadable_success_body_is_an_invalid_response(
     .err()
     .expect("an unreadable body fails");
 
-    assert!(error.is_response(), "{error:?}");
+    assert_eq!(error.phase(), Phase::AfterSend, "{error:?}");
 }
 
 #[rstest]
@@ -175,22 +178,9 @@ async fn a_provider_slower_than_the_timeout_fails_the_call(call: MessagesCall) {
     assert!(matches!(error, Error::Transport(_)), "{error:?}");
 }
 
-fn facade_request(body: Value, api_base: &str) -> MessagesRequest<'_> {
-    MessagesRequest {
-        model: MODEL,
-        body,
-        api_key: Some("sk-ant"),
-        api_base: Some(api_base),
-        custom_llm_provider: Some("anthropic"),
-        extra_headers: None,
-        provider_specific_header: None,
-        timeout: Some(Duration::from_secs(5)),
-        shaping: MessagesShaping::default(),
-    }
-}
-
+#[rstest]
 #[tokio::test]
-async fn the_facade_sends_through_the_injected_http_pool_configuration() {
+async fn the_facade_sends_through_the_injected_http_pool_configuration(call: MessagesCall) {
     let upstream = upstream([message_response()]).await;
     let base = upstream.uri();
     let settings = HttpSettings {
@@ -199,12 +189,13 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration() {
     };
 
     let message = messages(
-        &http_pool(),
+        &support::resources(),
         &Resolution::from(&settings).config,
-        facade_request(
-            json!({"model": MODEL, "max_tokens": 16, "messages": [{"role": "user", "content": "hi"}]}),
-            &base,
-        ),
+        MessagesCall {
+            api_key: Some("sk-ant".into()),
+            api_base: Some(base),
+            ..call
+        },
     )
     .await
     .expect("messages request succeeds");
@@ -215,18 +206,14 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration() {
     assert_eq!(sent.header("user-agent"), Some("host-owned/1"));
 }
 
-#[tokio::test]
-async fn the_facade_rejects_a_body_that_is_not_an_object() {
-    let error = messages(
-        &http_pool(),
-        &http_config(),
-        facade_request(json!([]), UNREACHABLE_BASE),
-    )
-    .await
-    .expect_err("a non-object body is rejected");
+#[rstest]
+#[case::mistyped_param(json!({"model": MODEL, "messages": [], "max_tokens": "16"}))]
+#[case::missing_messages(json!({"model": MODEL, "max_tokens": 16}))]
+fn a_body_that_does_not_parse_is_an_invalid_request(#[case] raw: Value) {
+    let error = messages_body(object(raw)).expect_err("the body is rejected");
 
-    assert_eq!(
-        error,
-        Error::InvalidRequest("messages body must be an object".into())
+    assert!(
+        matches!(&error, Error::InvalidRequest(message) if message.starts_with("invalid Anthropic messages request: ")),
+        "{error:?}"
     );
 }

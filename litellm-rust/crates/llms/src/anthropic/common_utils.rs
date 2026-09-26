@@ -1,5 +1,5 @@
 use litellm_types::llms::anthropic_messages::anthropic_request::{
-    AnthropicMessage, ContentBlock, MessageContent,
+    AnthropicMessage, ContentBlock, EffortLevel, MessageContent,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,39 +24,6 @@ pub mod beta {
     pub const FAST_MODE_2026_02_01: &str = "fast-mode-2026-02-01";
     pub const ADVISOR_TOOL_2026_03_01: &str = "advisor-tool-2026-03-01";
     pub const PER_TURN_CONTROL_2026_07_01: &str = "per-turn-control-2026-07-01";
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum EffortLevel {
-    Low,
-    Medium,
-    High,
-    Xhigh,
-    Max,
-}
-
-impl EffortLevel {
-    pub fn as_str(self) -> &'static str {
-        match self {
-            Self::Low => "low",
-            Self::Medium => "medium",
-            Self::High => "high",
-            Self::Xhigh => "xhigh",
-            Self::Max => "max",
-        }
-    }
-
-    pub fn parse(value: &str) -> Option<Self> {
-        match value {
-            "low" => Some(Self::Low),
-            "medium" => Some(Self::Medium),
-            "high" => Some(Self::High),
-            "xhigh" => Some(Self::Xhigh),
-            "max" => Some(Self::Max),
-            _ => None,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -135,15 +102,11 @@ impl AnthropicModelCapabilities {
         self.supports_output_config || self.effort_tiers.any()
     }
 
-    pub fn effort_level_rejection(&self, effort: &str, model: &str) -> Option<String> {
-        match effort {
-            "max" if !(self.supports_adaptive_thinking || self.effort_tiers.max) => Some(format!(
-                "effort='max' is not supported by this model. Got model: {model}"
-            )),
-            "xhigh" if !self.effort_tiers.xhigh => Some(format!(
-                "effort='xhigh' is not supported by this model. Got model: {model}"
-            )),
-            _ => None,
+    pub fn accepts_effort(&self, level: EffortLevel) -> bool {
+        match level {
+            EffortLevel::Max => self.supports_adaptive_thinking || self.effort_tiers.max,
+            EffortLevel::Xhigh => self.effort_tiers.xhigh,
+            EffortLevel::Low | EffortLevel::Medium | EffortLevel::High => true,
         }
     }
 }
@@ -1330,34 +1293,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::low(EffortLevel::Low, "low")]
-    #[case::medium(EffortLevel::Medium, "medium")]
-    #[case::high(EffortLevel::High, "high")]
-    #[case::xhigh(EffortLevel::Xhigh, "xhigh")]
-    #[case::max(EffortLevel::Max, "max")]
-    fn effort_level_names_agree_across_str_parse_and_serde(
-        #[case] level: EffortLevel,
-        #[case] name: &str,
-    ) {
-        assert_eq!(level.as_str(), name);
-        assert_eq!(EffortLevel::parse(name), Some(level));
-        assert_eq!(serde_json::to_value(level).unwrap(), json!(name));
-        assert_eq!(
-            serde_json::from_value::<EffortLevel>(json!(name)).unwrap(),
-            level
-        );
-    }
-
-    #[rstest]
-    #[case::unknown("ultra")]
-    #[case::minimal_is_not_an_output_config_level("minimal")]
-    #[case::uppercase("HIGH")]
-    #[case::empty("")]
-    fn effort_level_parse_rejects(#[case] value: &str) {
-        assert_eq!(EffortLevel::parse(value), None);
-    }
-
-    #[rstest]
     #[case::minimal_only(tiers(true, false, false, false, false, false), [false, false, false, false, false])]
     #[case::low_only(tiers(false, true, false, false, false, false), [true, false, false, false, false])]
     #[case::medium_only(tiers(false, false, true, false, false, false), [false, true, false, false, false])]
@@ -1450,56 +1385,55 @@ mod tests {
     }
 
     #[rstest]
-    #[case::max_on_adaptive_thinking_model(true, SupportedEffortTiers::default(), "max", None)]
+    #[case::max_on_adaptive_thinking_model(
+        true,
+        SupportedEffortTiers::default(),
+        EffortLevel::Max,
+        true
+    )]
     #[case::max_on_max_tier_model(
         false,
         tiers(false, false, false, false, false, true),
-        "max",
-        None
+        EffortLevel::Max,
+        true
     )]
     #[case::max_on_output_config_only_model(
         false,
         SupportedEffortTiers::default(),
-        "max",
-        Some("effort='max' is not supported by this model. Got model: claude-test")
+        EffortLevel::Max,
+        false
     )]
     #[case::max_on_xhigh_tier_model(
         false,
         tiers(false, false, false, false, true, false),
-        "max",
-        Some("effort='max' is not supported by this model. Got model: claude-test")
+        EffortLevel::Max,
+        false
     )]
     #[case::xhigh_on_xhigh_tier_model(
         false,
         tiers(false, false, false, false, true, false),
-        "xhigh",
-        None
+        EffortLevel::Xhigh,
+        true
     )]
     #[case::xhigh_on_adaptive_thinking_model(
         true,
         SupportedEffortTiers::default(),
-        "xhigh",
-        Some("effort='xhigh' is not supported by this model. Got model: claude-test")
+        EffortLevel::Xhigh,
+        false
     )]
     #[case::xhigh_on_max_tier_model(
         false,
         tiers(false, false, false, false, false, true),
-        "xhigh",
-        Some("effort='xhigh' is not supported by this model. Got model: claude-test")
+        EffortLevel::Xhigh,
+        false
     )]
-    #[case::high_on_unmapped_model(false, SupportedEffortTiers::default(), "high", None)]
-    #[case::low_on_unmapped_model(false, SupportedEffortTiers::default(), "low", None)]
-    #[case::unknown_level_is_left_to_other_validation(
-        false,
-        SupportedEffortTiers::default(),
-        "ultra",
-        None
-    )]
-    fn effort_level_rejection_cases(
+    #[case::high_on_unmapped_model(false, SupportedEffortTiers::default(), EffortLevel::High, true)]
+    #[case::low_on_unmapped_model(false, SupportedEffortTiers::default(), EffortLevel::Low, true)]
+    fn accepts_effort_cases(
         #[case] supports_adaptive_thinking: bool,
         #[case] effort_tiers: SupportedEffortTiers,
-        #[case] effort: &str,
-        #[case] expected: Option<&str>,
+        #[case] level: EffortLevel,
+        #[case] expected: bool,
         unmapped: AnthropicModelCapabilities,
     ) {
         let capabilities = AnthropicModelCapabilities {
@@ -1508,12 +1442,7 @@ mod tests {
             effort_tiers,
             ..unmapped
         };
-        assert_eq!(
-            capabilities
-                .effort_level_rejection(effort, "claude-test")
-                .as_deref(),
-            expected
-        );
+        assert_eq!(capabilities.accepts_effort(level), expected);
     }
 
     #[rstest]

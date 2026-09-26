@@ -8,7 +8,7 @@ use pyo3::{prelude::*, types::PyDict};
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::audio_transcription_error_to_pyerr,
+    errors::route_error_to_pyerr,
     marshal::{RouteOptions, extra_headers_argument, optional_params_argument, optional_timeout},
 };
 
@@ -27,7 +27,7 @@ async fn execute(
         timeout,
     } = options;
     run_audio_transcription(
-        crate::http::pool(),
+        crate::http::resources(),
         &config,
         AudioTranscriptionRequest {
             model: &model,
@@ -72,7 +72,7 @@ pub(crate) fn transcription(
     run_sync(
         py,
         execute(config, audio, optional_params.unwrap_or_default(), options),
-        audio_transcription_error_to_pyerr,
+        route_error_to_pyerr,
     )
 }
 
@@ -105,6 +105,6 @@ pub(crate) fn atranscription<'py>(
     run_async(
         py,
         execute(config, audio, optional_params.unwrap_or_default(), options),
-        audio_transcription_error_to_pyerr,
+        route_error_to_pyerr,
     )
 }

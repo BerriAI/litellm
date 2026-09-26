@@ -1,21 +1,21 @@
 use litellm_core_utils::settings::{Lookup, ProcessEnvironment};
-use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
+use litellm_types::llms::anthropic_messages::anthropic_request::{
+    AnthropicMessagesOptionalParams, AnthropicMessagesRequest,
+};
 use serde_json::{Map, Value, json};
 
 use super::{
-    headers::{authenticate, with_feature_betas},
+    headers::{validate_environment, with_feature_betas},
     thinking::{ThinkingBudgets, ThinkingContext, translate_thinking},
 };
 use crate::{
+    Error,
     anthropic::common_utils::{
         AnthropicModelCapabilities, has_advisor_tool, strip_advisor_blocks,
         strip_encrypted_reasoning_blocks,
     },
-    base_llm::{
-        anthropic_messages::transformation::{
-            BaseAnthropicMessagesConfig, Headers, MessagesTransformContext,
-        },
-        chat::transformation::Error,
+    base_llm::anthropic_messages::transformation::{
+        BaseAnthropicMessagesConfig, Headers, MessagesTransformContext, ValidatedEnvironment,
     },
 };
 
@@ -65,7 +65,7 @@ impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
         request: AnthropicMessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<AnthropicMessagesRequest, Error> {
-        if request.max_tokens.is_none() {
+        if request.params.max_tokens.is_none() {
             return Err(Error::InvalidRequest(
                 "max_tokens is required for Anthropic /v1/messages API".to_string(),
             ));
@@ -73,28 +73,24 @@ impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
         let request = drop_unsupported_params(request, context)?;
         let request = translate_thinking(request, &context.thinking)?;
         let context_management = request
+            .params
             .context_management
             .as_ref()
             .and_then(map_openai_context_management_to_anthropic)
-            .or_else(|| request.context_management.clone());
-        let messages = if has_advisor_tool(request.tools.as_deref()) {
+            .or_else(|| request.params.context_management.clone());
+        let messages = if has_advisor_tool(request.params.tools.as_deref()) {
             request.messages
         } else {
             strip_advisor_blocks(request.messages)
         };
         Ok(AnthropicMessagesRequest {
             messages: strip_encrypted_reasoning_blocks(messages),
-            context_management,
+            params: AnthropicMessagesOptionalParams {
+                context_management,
+                ..request.params
+            },
             ..request
         })
-    }
-
-    fn resolve_api_key(
-        &self,
-        api_key: Option<&str>,
-        env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        resolve_anthropic_api_key(api_key, env_lookup).map_err(Error::from)
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
@@ -106,13 +102,14 @@ impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
         ]
     }
 
-    fn authenticate(
+    fn validate_environment(
         &self,
         headers: Headers,
         api_key: Option<&str>,
+        _model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<Headers, Error> {
-        authenticate(headers, api_key, env_lookup).map_err(Error::from)
+    ) -> Result<ValidatedEnvironment, Error> {
+        validate_environment(headers, api_key, env_lookup).map_err(Error::from)
     }
 
     fn request_headers(&self, headers: Headers, request: &AnthropicMessagesRequest) -> Headers {
@@ -138,17 +135,21 @@ fn drop_unsupported_params(
         }
         Err(unsupported_param(&model, param, &value, hint))
     };
-    let speed = match request.speed.as_deref() {
+    let params = request.params;
+    let speed = match params.speed.as_deref() {
         Some(speed) if !capabilities.supports_speed => {
             reject("speed", format!("'{speed}'"), "")?;
             None
         }
-        _ => request.speed.clone(),
+        _ => params.speed.clone(),
     };
     if capabilities.supports_sampling_params {
-        return Ok(AnthropicMessagesRequest { speed, ..request });
+        return Ok(AnthropicMessagesRequest {
+            params: AnthropicMessagesOptionalParams { speed, ..params },
+            ..request
+        });
     }
-    let temperature = match request.temperature {
+    let temperature = match params.temperature {
         Some(temperature) if temperature != 1.0 => {
             reject(
                 "temperature",
@@ -159,17 +160,20 @@ fn drop_unsupported_params(
         }
         temperature => temperature,
     };
-    if let Some(top_p) = request.top_p {
+    if let Some(top_p) = params.top_p {
         reject("top_p", json!(top_p).to_string(), "")?;
     }
-    if let Some(top_k) = request.top_k {
+    if let Some(top_k) = params.top_k {
         reject("top_k", json!(top_k).to_string(), "")?;
     }
     Ok(AnthropicMessagesRequest {
-        speed,
-        temperature,
-        top_p: None,
-        top_k: None,
+        params: AnthropicMessagesOptionalParams {
+            speed,
+            temperature,
+            top_p: None,
+            top_k: None,
+            ..params
+        },
         ..request
     })
 }
@@ -251,10 +255,14 @@ pub fn resolve_anthropic_api_base(
 mod tests {
     use std::process::Command;
 
+    use litellm_auth::CredentialPlacement;
     use rstest::{fixture, rstest};
 
     use super::*;
-    use crate::anthropic::common_utils::{ENCRYPTED_REASONING_SIGNATURE_PREFIX, beta};
+    use crate::{
+        anthropic::common_utils::{ENCRYPTED_REASONING_SIGNATURE_PREFIX, beta},
+        base_llm::auth::AuthScheme,
+    };
 
     type Env = &'static [(&'static str, &'static str)];
 
@@ -806,25 +814,32 @@ mod tests {
 
     #[test]
     fn config_reports_a_missing_key_as_an_auth_error() {
-        assert_eq!(
-            ANTHROPIC_MESSAGES_CONFIG.resolve_api_key(None, &no_env),
+        assert!(matches!(
+            ANTHROPIC_MESSAGES_CONFIG.validate_environment(vec![], None, "claude", &no_env),
             Err(Error::Auth(litellm_auth::Error::MissingApiKey {
                 provider: "Anthropic",
                 environment_variable: ANTHROPIC_API_KEY_ENV,
             }))
-        );
+        ));
     }
 
     #[test]
     fn config_authenticates_with_the_anthropic_auth_token() {
-        assert_eq!(
-            ANTHROPIC_MESSAGES_CONFIG.authenticate(
+        let validated = ANTHROPIC_MESSAGES_CONFIG
+            .validate_environment(
                 vec![],
                 None,
-                &env(&[("ANTHROPIC_AUTH_TOKEN", "auth-token")])
-            ),
-            Ok(headers(&[("authorization", "Bearer auth-token")]))
-        );
+                "claude",
+                &env(&[("ANTHROPIC_AUTH_TOKEN", "auth-token")]),
+            )
+            .unwrap();
+        assert!(matches!(
+            validated.auth,
+            AuthScheme::Credential {
+                placement: CredentialPlacement::Bearer,
+                ref secret
+            } if secret.expose() == "auth-token"
+        ));
     }
 
     #[test]
@@ -853,11 +868,7 @@ mod tests {
     }
 
     #[test]
-    fn auth_strategy_and_default_headers_match_anthropic() {
-        assert_eq!(
-            ANTHROPIC_MESSAGES_CONFIG.auth_strategy().header_name(),
-            "x-api-key"
-        );
+    fn default_headers_match_anthropic() {
         assert_eq!(
             ANTHROPIC_MESSAGES_CONFIG.default_headers(),
             &[
@@ -874,7 +885,7 @@ mod tests {
             requested.borrow_mut().push(name.to_string());
             None
         };
-        let _ = ANTHROPIC_MESSAGES_CONFIG.authenticate(Vec::new(), None, &record);
+        let _ = ANTHROPIC_MESSAGES_CONFIG.validate_environment(Vec::new(), None, "claude", &record);
         let _ = ANTHROPIC_MESSAGES_CONFIG.get_complete_url(None, "claude", &record);
         let requested = requested.into_inner();
         assert!(!requested.is_empty());

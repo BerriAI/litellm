@@ -6,14 +6,13 @@
 //! credentials, and it resolves the provider, translates the conversation,
 //! calls the provider, and returns a typed OpenAI-shaped response.
 
-mod error;
 pub mod types;
-pub use error::Error;
+pub use crate::error::RouteError as Error;
 mod common_utils;
 pub(crate) mod handler;
 mod prepare;
 use handler::execute_chat_completions_provider_call;
-use litellm_http::{ClientVariant, HttpClientConfig, HttpClientPool};
+use litellm_http::{ClientVariant, HttpClientConfig};
 use litellm_types::utils::ChatCompletionsResponse;
 use prepare::{parse_messages, resolve_provider_config, resolve_request};
 use serde_json::{Map, Value};
@@ -21,13 +20,13 @@ use serde_json::{Map, Value};
 use crate::chat_completions::types::ChatCompletionsRequest;
 
 pub async fn chat_completions(
-    pool: &HttpClientPool,
+    resources: &crate::resources::CoreResources,
     config: &HttpClientConfig,
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
     let request = resolve_request(request)?;
-    let http = pool.client(config, ClientVariant::Provider)?;
-    execute_chat_completions_provider_call(&http, request).await
+    let http = resources.pool.client(config, ClientVariant::Provider)?;
+    execute_chat_completions_provider_call(&http, &resources.auth, request).await
 }
 
 /// Whether the core would accept this request, without resolving credentials or
