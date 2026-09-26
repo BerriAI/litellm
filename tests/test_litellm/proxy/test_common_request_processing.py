@@ -7,6 +7,7 @@ from typing import AsyncGenerator, Callable, Final, Iterator, Literal, Optional,
 from urllib.parse import unquote_plus
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import anthropic
 import httpx
 import pytest
 from fastapi import HTTPException, Request, Response, status
@@ -14,6 +15,7 @@ from fastapi.responses import JSONResponse, StreamingResponse
 
 import litellm
 from litellm._uuid import uuid
+from litellm.anthropic_interface.exceptions import AnthropicErrorSseFrame, anthropic_error_sse_frame
 from litellm.litellm_core_utils.bug_report import (
     DISABLE_ENV_VAR,
     ISSUE_URL_BASE,
@@ -55,6 +57,7 @@ from litellm.proxy.common_request_processing import (
     sse_error_payload,
 )
 from litellm.proxy.common_utils.callback_utils import add_guardrail_to_applied_guardrails_header
+from litellm.proxy.common_utils.sse_keepalive import ANTHROPIC_PING_SSE_CHUNK
 from litellm.proxy.dd_span_tagger import DDSpanTagger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.proxy._types import ProxyErrorTypes, ProxyException
@@ -2543,6 +2546,63 @@ class TestCommonRequestProcessingHelpers:
         assert isinstance(response, JSONResponse)
         assert response.headers["x-litellm-call-id"] == "call-8302"
         assert json.loads(response.body) == {"error": {"code": 403, "message": "forbidden"}}
+
+    async def test_a_stream_that_fails_before_its_first_byte_answers_as_an_anthropic_json_error(self):
+        """A /v1/messages stream whose first chunk is already the error frame has nothing
+        streamed yet, so the failure answers as JSON with the status the upstream gave,
+        the shape Anthropic clients raise their status-specific errors on"""
+
+        async def stream():
+            yield anthropic_error_sse_frame(status_code=503, raw_message="upstream unavailable")
+            yield ANTHROPIC_PING_SSE_CHUNK
+
+        generator: Final = stream()
+        response = await create_response(generator, "text/event-stream", {"x-litellm-call-id": "call-8609"})
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 503
+        assert response.headers["content-type"] == "application/json"
+        assert response.headers["x-litellm-call-id"] == "call-8609"
+        assert json.loads(response.body) == {
+            "type": "error",
+            "error": {"type": "api_error", "message": "upstream unavailable"},
+        }
+        assert generator.ag_frame is None
+
+    async def test_a_stream_that_fails_before_its_first_byte_names_the_call_when_opted_in(self):
+        async def stream():
+            yield anthropic_error_sse_frame(status_code=429, raw_message="slow down")
+
+        response = await create_response(
+            stream(),
+            "text/event-stream",
+            {"x-litellm-call-id": "call-8609"},
+            general_settings={"include_call_id_in_error_body": True},
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 429
+        assert json.loads(response.body) == {
+            "type": "error",
+            "error": {"type": "rate_limit_error", "message": "slow down", "litellm_call_id": "call-8609"},
+        }
+
+    async def test_an_error_event_after_a_keepalive_ping_still_streams(self):
+        """Once a keepalive ping went out the headers are committed, so the error frame
+        streams as an event instead of turning into a JSON answer"""
+
+        async def stream():
+            yield ANTHROPIC_PING_SSE_CHUNK
+            yield anthropic_error_sse_frame(status_code=503, raw_message="upstream unavailable")
+
+        response = await create_response(stream(), "text/event-stream", {})
+
+        assert isinstance(response, StreamingResponse)
+        assert response.status_code == 200
+        assert "".join(await self.consume_stream(response)) == (
+            ANTHROPIC_PING_SSE_CHUNK
+            + 'event: error\ndata: {"type": "error", "error": {"type": "api_error", "message": "upstream unavailable"}}\n\n'
+        )
 
     async def test_create_streaming_response_disables_proxy_buffering(self):
         """Regression for #28384: every StreamingResponse create_response returns
@@ -9955,3 +10015,270 @@ class TestErrorLogCarriesCallId:
         record: Final = caplog.records[-1]
         assert record.litellm_call_id == call_id
         assert call_id in record.getMessage()
+
+
+class TestAnthropicMessagesStreamErrorFrame:
+    """A ``/v1/messages`` stream that fails after the headers are out has to say so with an
+    ``event: error`` frame. Anthropic clients pick events by name, so a bare ``data:`` line is
+    skipped and the request looks like it ended with nothing in it"""
+
+    @staticmethod
+    def _sse_generator_failing_with(failure: Exception) -> AsyncGenerator[str, None]:
+        class FailingUpstream:
+            def __aiter__(self) -> "FailingUpstream":
+                return self
+
+            async def __anext__(self) -> object:
+                raise failure
+
+        ProxyLogging._callback_capabilities_cache.clear()
+        return ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=FailingUpstream(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "claude-sonnet-4-5"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+        )
+
+    @pytest.mark.parametrize(
+        "status_code, expected_error_type",
+        [
+            (429, "rate_limit_error"),
+            (529, "overloaded_error"),
+            (413, "request_too_large"),
+            (500, "api_error"),
+            (502, "api_error"),
+            (400, "invalid_request_error"),
+        ],
+    )
+    async def test_mid_stream_failure_arrives_as_an_anthropic_error_event(
+        self, status_code: int, expected_error_type: str
+    ) -> None:
+        class UpstreamFailure(Exception):
+            def __init__(self) -> None:
+                super().__init__("upstream stopped sending")
+                self.status_code: Final = status_code
+
+        frames: Final = [frame async for frame in self._sse_generator_failing_with(UpstreamFailure())]
+
+        assert len(frames) == 1
+        event_line, data_line, first_blank, second_blank = frames[0].split("\n")
+        assert isinstance(frames[0], AnthropicErrorSseFrame)
+        assert frames[0].status_code == status_code
+        assert event_line == "event: error"
+        assert (first_blank, second_blank) == ("", "")
+        payload: Final = json.loads(data_line.removeprefix("data: "))
+        assert payload["type"] == "error"
+        assert payload["error"]["type"] == expected_error_type
+        assert "upstream stopped sending" in payload["error"]["message"]
+
+    _CONTENT_DELTA_FRAME: Final = (
+        b"event: content_block_delta\n"
+        b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"1\\n2\\n3"}}\n\n'
+    )
+    _TORN_DATA_LINE: Final = (
+        b"event: content_block_delta\n"
+        b'data: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"4'
+    )
+    _PING: Final = ANTHROPIC_PING_SSE_CHUNK.encode()
+
+    @staticmethod
+    def _upstream_failure(status_code: int) -> Exception:
+        class UpstreamFailure(Exception):
+            def __init__(self) -> None:
+                super().__init__("upstream stopped sending")
+                self.status_code: Final = status_code
+
+        return UpstreamFailure()
+
+    @staticmethod
+    def _sse_generator_cut_after(relayed: Sequence[bytes], failure: Exception) -> AsyncGenerator[str, None]:
+        class CutUpstream:
+            def __init__(self) -> None:
+                self._remaining: Final = iter(relayed)
+
+            def __aiter__(self) -> "CutUpstream":
+                return self
+
+            async def __anext__(self) -> object:
+                chunk: Final = next(self._remaining, None)
+                if chunk is None:
+                    raise failure
+                return chunk
+
+        ProxyLogging._callback_capabilities_cache.clear()
+        return ProxyBaseLLMRequestProcessing.async_sse_data_generator(
+            response=CutUpstream(),
+            user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test"),
+            request_data={"model": "claude-sonnet-4-5"},
+            proxy_logging_obj=ProxyLogging(user_api_key_cache=MagicMock()),
+        )
+
+    @staticmethod
+    def _as_bytes(chunk: object) -> bytes:
+        if isinstance(chunk, bytes):
+            return chunk
+        assert isinstance(chunk, str)
+        return chunk.encode()
+
+    async def _wire_bytes(self, relayed: Sequence[bytes]) -> bytes:
+        stream: Final = self._sse_generator_cut_after(relayed, self._upstream_failure(500))
+        return b"".join([self._as_bytes(chunk) async for chunk in stream])
+
+    @staticmethod
+    def _error_frame_after(wire: bytes, relayed: bytes) -> bytes:
+        assert wire.startswith(relayed), f"the wire did not open with {relayed!r}: {wire!r}"
+        return wire.removeprefix(relayed)
+
+    @staticmethod
+    def _assert_error_frame(frame: bytes) -> None:
+        event_line, data_line, first_blank, second_blank = frame.split(b"\n")
+        assert event_line == b"event: error"
+        assert (first_blank, second_blank) == (b"", b"")
+        payload: Final = json.loads(data_line.removeprefix(b"data: "))
+        assert payload["type"] == "error"
+        assert "upstream stopped sending" in payload["error"]["message"]
+
+    @pytest.mark.parametrize(
+        "torn, seal",
+        [
+            (_TORN_DATA_LINE, b"\n" + _PING),
+            (b"event: content_bl", b"\n" + _PING),
+            (b"event: content_block_delta\n", _PING),
+            (b'event: content_block_delta\r\ndata: {"type":"content_block_delta"}\r\n', _PING),
+        ],
+        ids=["mid_data_line", "mid_event_line", "after_a_complete_line", "after_a_crlf_line"],
+    )
+    async def test_a_frame_the_upstream_tore_is_closed_as_a_ping_before_the_error_event(
+        self, torn: bytes, seal: bytes
+    ) -> None:
+        wire: Final = await self._wire_bytes((self._CONTENT_DELTA_FRAME, torn))
+
+        self._assert_error_frame(self._error_frame_after(wire, self._CONTENT_DELTA_FRAME + torn + seal))
+
+    async def test_a_cut_at_a_frame_boundary_gets_the_error_event_alone(self) -> None:
+        wire: Final = await self._wire_bytes((self._CONTENT_DELTA_FRAME,))
+
+        self._assert_error_frame(self._error_frame_after(wire, self._CONTENT_DELTA_FRAME))
+
+    async def test_a_torn_frame_still_raises_the_error_in_the_anthropic_sdk(self) -> None:
+        wire: Final = await self._wire_bytes((self._CONTENT_DELTA_FRAME, self._TORN_DATA_LINE))
+
+        def serve(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(200, headers={"content-type": "text/event-stream"}, content=wire)
+
+        client: Final = anthropic.Anthropic(
+            api_key="sk-test",
+            base_url="http://proxy.test",
+            http_client=httpx.Client(transport=httpx.MockTransport(serve)),
+            max_retries=0,
+        )
+        with pytest.raises(anthropic.APIStatusError) as raised:
+            for _ in client.messages.create(
+                model="claude-sonnet-4-5", max_tokens=16, messages=[{"role": "user", "content": "count"}], stream=True
+            ):
+                pass
+        body: Final = raised.value.body
+        assert isinstance(body, dict)
+        assert body["type"] == "error"
+        assert "upstream stopped sending" in body["error"]["message"]
+
+    async def test_a_failure_before_the_first_byte_answers_with_its_status_as_json(self) -> None:
+        response: Final = await create_response(
+            self._sse_generator_failing_with(self._upstream_failure(502)), "text/event-stream", {}
+        )
+
+        assert isinstance(response, JSONResponse)
+        assert response.status_code == 502
+        body: Final = json.loads(response.body)
+        assert body["type"] == "error"
+        assert body["error"]["type"] == "api_error"
+        assert "upstream stopped sending" in body["error"]["message"]
+
+    async def test_a_failure_before_the_first_byte_raises_with_its_status_in_the_anthropic_sdk(self) -> None:
+        response: Final = await create_response(
+            self._sse_generator_failing_with(self._upstream_failure(502)), "text/event-stream", {}
+        )
+        assert isinstance(response, JSONResponse)
+
+        def serve(request: httpx.Request) -> httpx.Response:
+            return httpx.Response(response.status_code, headers=dict(response.headers), content=response.body)
+
+        client: Final = anthropic.Anthropic(
+            api_key="sk-test",
+            base_url="http://proxy.test",
+            http_client=httpx.Client(transport=httpx.MockTransport(serve)),
+            max_retries=0,
+        )
+        with pytest.raises(anthropic.APIStatusError) as raised:
+            client.messages.create(
+                model="claude-sonnet-4-5", max_tokens=16, messages=[{"role": "user", "content": "count"}], stream=True
+            )
+        assert raised.value.status_code == 502
+        body: Final = raised.value.body
+        assert isinstance(body, dict)
+        assert body["type"] == "error"
+        assert "upstream stopped sending" in body["error"]["message"]
+
+
+class TestStreamingContainerOwnershipRecordedBeforeDone:
+    """Regression for LIT-8612: the OpenAI SDK closes the connection at
+    ``data: [DONE]`` and starlette cancels the body task, so an ownership row
+    written after the SSE generator is exhausted never lands. The row must be
+    written before the chunk carrying ``response.completed`` is handed to the
+    client."""
+
+    CHUNKS: Final = (
+        'data: {"type":"response.created"}\n\n',
+        'data: {"type":"response.output_text.delta"}\n\n',
+        'data: {"type":"response.completed"}\n\n',
+        "data: [DONE]\n\n",
+    )
+    TERMINAL_INDEX: Final = 2
+
+    @staticmethod
+    def _completed_event() -> SimpleNamespace:
+        return SimpleNamespace(
+            type="response.completed",
+            response=SimpleNamespace(
+                id="resp_lit8612",
+                output=[SimpleNamespace(type="code_interpreter_call", container_id="cntr_lit8612")],
+            ),
+        )
+
+    async def _sse(self, stream: SimpleNamespace, populate_at: int) -> AsyncGenerator[str, None]:
+        for index, chunk in enumerate(self.CHUNKS):
+            if index == populate_at:
+                stream.completed_response = self._completed_event()
+            yield chunk
+        if populate_at == len(self.CHUNKS):
+            stream.completed_response = self._completed_event()
+
+    async def _await_counts_per_chunk(self, populate_at: int) -> tuple[tuple[tuple[str, int], ...], AsyncMock]:
+        stream: Final = SimpleNamespace(completed_response=None, _hidden_params={"custom_llm_provider": "azure"})
+        recorder: Final = AsyncMock(return_value=None)
+        with patch(
+            "litellm.proxy.container_endpoints.ownership.record_container_owners_from_responses_response", recorder
+        ):
+            wrapped: Final = ProxyBaseLLMRequestProcessing._wrap_responses_stream_for_container_ownership(
+                original_stream_response=stream,
+                wrapped_generator=self._sse(stream, populate_at),
+                user_api_key_dict=ProxyUserAPIKeyAuth(api_key="sk-test", team_id="team-1"),
+            )
+            observed: Final = tuple([(chunk, recorder.await_count) async for chunk in wrapped])
+        return observed, recorder
+
+    async def test_row_is_written_before_the_terminal_chunk_reaches_the_client(self) -> None:
+        observed, recorder = await self._await_counts_per_chunk(populate_at=self.TERMINAL_INDEX)
+
+        assert tuple(chunk for chunk, _ in observed) == self.CHUNKS
+        assert tuple(count for _, count in observed) == (0, 0, 1, 1)
+        recorder.assert_awaited_once()
+        assert recorder.await_args.kwargs["response"].output[0].container_id == "cntr_lit8612"
+        assert recorder.await_args.kwargs["user_api_key_dict"].team_id == "team-1"
+
+    async def test_row_is_still_written_when_the_iterator_completes_only_at_exhaustion(self) -> None:
+        observed, recorder = await self._await_counts_per_chunk(populate_at=len(self.CHUNKS))
+
+        assert tuple(chunk for chunk, _ in observed) == self.CHUNKS
+        assert tuple(count for _, count in observed) == (0, 0, 0, 0)
+        recorder.assert_awaited_once()

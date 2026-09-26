@@ -70,15 +70,11 @@ def _error_status_and_message(exc: Exception) -> tuple[int, str]:
 
 def _mid_stream_error_sse_event(exc: Exception) -> bytes:
     from litellm.anthropic_interface.exceptions.exception_mapping_utils import (
-        AnthropicExceptionMapping,
+        anthropic_error_sse_frame,
     )
 
     status_code, message = _error_status_and_message(exc)
-    error_response = AnthropicExceptionMapping.transform_to_anthropic_error(
-        status_code=status_code,
-        raw_message=message,
-    )
-    return f"event: error\ndata: {json.dumps(error_response)}\n\n".encode()
+    return anthropic_error_sse_frame(status_code=status_code, raw_message=message).encode()
 
 
 def _delta_payload_field(delta_type: StreamingContentBlockDeltaType) -> str:

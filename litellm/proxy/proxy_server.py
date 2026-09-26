@@ -476,6 +476,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     project_spend_counter_key,
     tag_cache_key,
 )
+from litellm.proxy.common_utils.validation_error_body import public_validation_errors
 from litellm.proxy.config_resolvers import (
     FieldSource,
     SettingsStore,
@@ -551,7 +552,6 @@ from litellm.proxy.hooks.proxy_track_cost_callback import _ProxyDBLogger, run_sp
 from litellm.proxy.image_endpoints.endpoints import router as image_router
 from litellm.proxy.list_api.common import (
     ManagementProblem,
-    ValidationErrorDetail,
     problem_response,
     request_validation_problem,
 )
@@ -1983,16 +1983,14 @@ class _ExceptionRow(TypedDict, total=False):
 
 @app.exception_handler(RequestValidationError)
 async def otel_request_validation_exception_handler(request: Request, exc: RequestValidationError):
+    public_errors: Final = public_validation_errors(exc.errors())
+    public_exc: Final = RequestValidationError(public_errors).with_traceback(exc.__traceback__)
     if request.url.path.startswith(MANAGEMENT_V1_PREFIX):
-        validation_errors: Final[Sequence[ValidationErrorDetail]] = exc.errors()
-        problem: Final = request_validation_problem(validation_errors)
-        _close_dangling_otel_server_span(request, problem.status, exc=exc)
+        problem: Final = request_validation_problem(public_errors)
+        _close_dangling_otel_server_span(request, problem.status, exc=public_exc)
         return problem_response(problem)
-    _close_dangling_otel_server_span(request, 422, exc=exc)
-    return JSONResponse(
-        status_code=422,
-        content={"detail": jsonable_encoder(exc.errors())},
-    )
+    _close_dangling_otel_server_span(request, 422, exc=public_exc)
+    return JSONResponse(status_code=422, content={"detail": public_errors})
 
 
 @app.exception_handler(Exception)
@@ -6341,6 +6339,11 @@ class ProxyConfig:
         general_settings = config.get("general_settings", {})
         if general_settings is None:
             general_settings = {}
+
+        if general_settings.get("mcp_advertised_versions") is not None:
+            from litellm.types.mcp import MCPAdvertisedVersions
+
+            TypeAdapter(MCPAdvertisedVersions).validate_python(general_settings["mcp_advertised_versions"])
 
         if os.getenv("NUM_WORKERS", "1") != "1" and redis_usage_cache is None:
             warn_login_counters_are_per_worker(os.getenv("NUM_WORKERS", "1"))
