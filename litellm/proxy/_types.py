@@ -3342,6 +3342,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         ),
     )
     invoked_agent_id: str | None = Field(default=None, exclude=True)
+    invoked_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
     agent_invocation_cost: float | None = Field(default=None, exclude=True)
     billing_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
     managed_agent_policy: AgentResponse | None = Field(default=None, exclude=True)
@@ -3393,6 +3394,7 @@ class UserAPIKeyAuth(LiteLLM_VerificationTokenView):  # the expected response ob
         values.pop("managed_agent_context", None)
         values.pop("managed_agent_policy", None)
         values.pop("invoked_agent_id", None)
+        values.pop("invoked_agent_policy", None)
         values.pop("agent_invocation_cost", None)
         values.pop("billing_agent_policy", None)
         if values.get("api_key") is not None:
