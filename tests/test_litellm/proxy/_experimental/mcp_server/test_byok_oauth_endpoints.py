@@ -903,6 +903,61 @@ def test_authorize_post_accepts_ui_session_cookie(unauthenticated_client):
     assert _byok_auth_codes[code]["user_id"] == "browser-user-42"
 
 
+def test_authorize_post_rejects_cookie_with_revoked_session_key(unauthenticated_client):
+    """The cookie JWT stays signature-valid until ``exp``, but logout /
+    password-change revocation deletes the DB-backed session key sealed
+    inside it. A cookie whose embedded key no longer resolves must not
+    authorize BYOK writes."""
+    import jwt as _jwt
+
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "test-master-key"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_key_object",
+            new=AsyncMock(side_effect=Exception("key not found")),
+        ),
+    ):
+        cookie_jwt = _jwt.encode(
+            {
+                "user_id": "browser-user-42",
+                "key": "sk-revoked-session-key",
+                "login_method": "sso",
+                "exp": int(time.time()) + 3600,
+            },
+            "test-master-key",
+            algorithm="HS256",
+        )
+        resp = _authorize_post_with_cookie(unauthenticated_client, cookie_jwt)
+    assert resp.status_code == 401
+
+
+def test_authorize_post_accepts_cookie_with_live_session_key(unauthenticated_client):
+    """A cookie whose embedded session key still resolves keeps working."""
+    import jwt as _jwt
+
+    with (
+        patch("litellm.proxy.proxy_server.master_key", "test-master-key"),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch(
+            "litellm.proxy.auth.auth_checks.get_key_object",
+            new=AsyncMock(return_value=UserAPIKeyAuth(user_id="browser-user-42")),
+        ),
+    ):
+        cookie_jwt = _jwt.encode(
+            {
+                "user_id": "browser-user-42",
+                "key": "sk-live-session-key",
+                "login_method": "sso",
+                "exp": int(time.time()) + 3600,
+            },
+            "test-master-key",
+            algorithm="HS256",
+        )
+        resp = _authorize_post_with_cookie(unauthenticated_client, cookie_jwt)
+    assert resp.status_code == 302
+
+
 def test_authorize_post_rejects_cookie_signed_with_wrong_key(unauthenticated_client):
     """A cookie JWT signed with a different key than the proxy's master_key
     must not grant access — otherwise an attacker who can forge a JWT

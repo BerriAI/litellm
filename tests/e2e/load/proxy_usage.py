@@ -160,5 +160,5 @@ class ProxyUsageSampler:
         """
         with self._lock:
             taken = tuple(self._samples)
-            self._samples = [taken[-1]] if taken else []  # rebind-ok: drains the buffer under the lock
+            self._samples = [taken[-1]] if taken else []
         return UsageWindow(samples=taken)

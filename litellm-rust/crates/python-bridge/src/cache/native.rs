@@ -92,7 +92,7 @@ impl NativeResponseCache {
         ))
     }
 
-    pub async fn s3(config: S3CacheConfig, http: reqwest::Client) -> Self {
+    pub async fn s3(config: S3CacheConfig, http: litellm_http::Client) -> Self {
         let runtime = tokio::runtime::Handle::current();
         let backend = S3Cache::new(config, http, ResponseCacheCodec, runtime);
         let identity = BackendIdentity::S3 {
@@ -112,7 +112,7 @@ impl NativeResponseCache {
         Ok(Self::exact(ResponseCache::new(Arc::new(backend)), identity))
     }
 
-    pub fn gcs(config: GcsConfig, client: reqwest::Client, token: Option<String>) -> Self {
+    pub fn gcs(config: GcsConfig, client: litellm_http::Client, token: Option<String>) -> Self {
         let backend = match token {
             Some(token) => GcsCache::with_token_source(
                 config,
@@ -133,7 +133,7 @@ impl NativeResponseCache {
     pub async fn azure_blob(
         account_url: &str,
         container: &str,
-        http: reqwest::Client,
+        http: litellm_http::Client,
     ) -> Result<Self, Error> {
         let backend = AzureBlobCache::connect(
             account_url,
@@ -242,7 +242,7 @@ impl NativeResponseCache {
 
     pub async fn qdrant_semantic(
         config: QdrantSemanticCacheConfig,
-        client: reqwest::Client,
+        client: litellm_http::Client,
         runtime: tokio::runtime::Handle,
     ) -> Result<Self, Error> {
         let qdrant = qdrant_client::Qdrant::from_url(&config.grpc_url)
@@ -470,7 +470,7 @@ impl NativeResponseCache {
         match self {
             Self::Exact(_) | Self::QdrantSemantic(_) => {
                 let service = self.clone();
-                litellm_host_python::run_async(
+                crate::logger::run_async(
                     py,
                     async move {
                         service
@@ -495,7 +495,7 @@ impl NativeResponseCache {
         match self {
             Self::Exact(_) | Self::QdrantSemantic(_) => {
                 let service = self.clone();
-                litellm_host_python::run_async(
+                crate::logger::run_async(
                     py,
                     async move { service.async_lookup(&request, now()).await },
                     super::cache_error,
@@ -550,7 +550,7 @@ impl NativeResponseCache {
         match self {
             Self::Exact(_) | Self::QdrantSemantic(_) => {
                 let service = self.clone();
-                litellm_host_python::run_async(
+                crate::logger::run_async(
                     py,
                     async move { service.async_store(&request, response, now()).await },
                     super::cache_error,
@@ -619,7 +619,7 @@ impl NativeResponseCache {
         match self {
             Self::Exact(_) | Self::QdrantSemantic(_) => {
                 let service = self.clone();
-                litellm_host_python::run_async(
+                crate::logger::run_async(
                     py,
                     async move { service.async_store_batch(entries, now()).await },
                     super::cache_error,

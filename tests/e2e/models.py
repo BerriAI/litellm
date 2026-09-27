@@ -598,6 +598,16 @@ class CountTokensResponse(BaseModel):
     input_tokens: int
 
 
+class AnthropicErrorBody(BaseModel):
+    type: str
+    message: str
+
+
+class AnthropicErrorEvent(BaseModel):
+    type: Literal["error"]
+    error: AnthropicErrorBody
+
+
 # ---------- mcp servers ----------
 
 
@@ -937,10 +947,18 @@ class GuardrailRunRecord(BaseModel):
     guardrail_response: object | None = None
 
 
+class SpendLogErrorInformation(BaseModel):
+    error_code: str | None = None
+    error_class: str | None = None
+    error_message: str | None = None
+    normalized_error: str | None = None
+
+
 class SpendLogMetadata(BaseModel):
     user_api_key_alias: str | None = None
     applied_guardrails: list[str] | None = None
     guardrail_information: list[GuardrailRunRecord] | None = None
+    error_information: SpendLogErrorInformation | None = None
 
 
 class SpendLogRow(BaseModel):
@@ -952,6 +970,7 @@ class SpendLogRow(BaseModel):
     cache_hit: str | None = None
     call_type: str | None = None
     custom_llm_provider: str | None = None
+    model_id: str | None = None
     team_id: str | None = None
     user: str | None = None
     end_user: str | None = None
@@ -1188,7 +1207,7 @@ class LiteLLMParamsBody(BaseModel):
     """POST /model/new litellm_params: `model` is the only required field; `api_key`
     et al may be an `os.environ/FOO` reference the proxy resolves at call time.
     The `*_cost_per_token` / `*_token_cost` fields register a per-deployment custom
-    pricing override (the cache and `_priority` rates only apply when both base
+    pricing override (the cache and service-tier rates only apply when both base
     rates are set, which is what makes the proxy register the deployment's full
     pricing entry); left None (and dropped from the body) the deployment keeps the
     backend's canonical rate."""
@@ -1224,6 +1243,12 @@ class LiteLLMParamsBody(BaseModel):
     cache_creation_input_token_cost: float | None = None
     input_cost_per_token_priority: float | None = None
     output_cost_per_token_priority: float | None = None
+    input_cost_per_token_balanced: float | None = None
+    output_cost_per_token_balanced: float | None = None
+    cache_read_input_token_cost_balanced: float | None = None
+    input_cost_per_token_flex: float | None = None
+    output_cost_per_token_flex: float | None = None
+    cache_read_input_token_cost_flex: float | None = None
     extra_headers: dict[str, str] | None = None
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
@@ -1417,6 +1442,7 @@ class TeamNewBody(BaseModel):
     team_id: str | None = None
     organization_id: str | None = None
     metadata: TeamMetadata | None = None
+    model_aliases: dict[str, str] | None = None
 
 
 class TeamNewResponse(BaseModel):

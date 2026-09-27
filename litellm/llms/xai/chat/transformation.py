@@ -296,7 +296,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         except Exception as e:
             verbose_logger.debug("Error extracting X.AI web search usage: %s", e)
 
-        self._fold_reasoning_tokens_into_completion(response)
+        self.fold_reasoning_tokens_into_completion(response)
         self._normalize_openai_compatible_usage_totals(getattr(response, "usage", None))
         restated_usage: Final = _usage_restated_from_xai_ticks(getattr(response, "usage", None))
         if restated_usage is not None:
@@ -304,7 +304,7 @@ class XAIChatConfig(OpenAIGPTConfig):
         return response
 
     @staticmethod
-    def _fold_reasoning_tokens_into_completion(
+    def fold_reasoning_tokens_into_completion(
         target: ModelResponse | Usage | dict[str, Any] | None,
     ) -> None:
         """Reconcile xAI Usage to the OpenAI invariant.
@@ -426,7 +426,7 @@ class XAIChatCompletionStreamingHandler(OpenAIChatCompletionStreamingHandler):
             chunk["choices"] = [{"index": 0, "delta": {}, "finish_reason": None}]
 
         if "usage" in chunk and chunk["usage"] is not None:
-            XAIChatConfig._fold_reasoning_tokens_into_completion(chunk["usage"])
+            XAIChatConfig.fold_reasoning_tokens_into_completion(chunk["usage"])
             XAIChatConfig._normalize_openai_compatible_usage_totals(chunk["usage"])
 
         parsed_chunk: Final = super().chunk_parser(chunk)

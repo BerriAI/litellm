@@ -10,6 +10,7 @@ import re
 from typing import Final
 
 from litellm.constants import MINIMUM_CUSTOM_KEY_LENGTH
+from litellm.rust_bridge import diagnostics
 
 REDACTED: Final = "REDACTED"
 
@@ -87,9 +88,13 @@ def _build_secret_patterns() -> "re.Pattern[str]":
 _SECRET_RE: Final = _build_secret_patterns()
 
 
+def _python_redact_string(value: str) -> str:
+    return _SECRET_RE.sub(REDACTED, value)
+
+
 def redact_string(value: str) -> str:
     """Scrub known secret/credential patterns from *value* and return the result."""
-    return _SECRET_RE.sub(REDACTED, value)
+    return diagnostics.run(lambda native: native.redact_text(value), lambda: _python_redact_string(value))
 
 
 _UNIX_SYSTEM_PATH: Final = r"/(?:etc|var|opt|usr|home|root|private|Users|tmp|mnt|srv)/[^\s'\"\)\]}>,]+"
@@ -105,15 +110,21 @@ _INTERNAL_DETAIL_RE: Final = re.compile(
 _TRACEBACK_MARKER: Final = "Traceback (most recent call last):"
 
 
-def redact_internal_details(value: str) -> str:
+def _python_redact_internal_details(value: str) -> str:
     """Drop an embedded traceback and scrub filesystem paths and internal hostnames,
     on top of redact_string(). For client-facing messages only: server logs keep this detail."""
     marker_index: Final = value.find(_TRACEBACK_MARKER)
     without_traceback: Final = value[:marker_index].rstrip() if marker_index != -1 else value
-    return _INTERNAL_DETAIL_RE.sub(REDACTED, redact_string(without_traceback))
+    return _INTERNAL_DETAIL_RE.sub(REDACTED, _python_redact_string(without_traceback))
 
 
-def redact_structured_value(key: str | None, value: str) -> str:
+def redact_internal_details(value: str) -> str:
+    return diagnostics.run(
+        lambda native: native.redact_client_message(value), lambda: _python_redact_internal_details(value)
+    )
+
+
+def _python_redact_structured_value(key: str | None, value: str) -> str:
     """Scrub *value* as it appeared under *key* inside a structured record.
 
     redact_string() replaces a whole ``key: value`` span with REDACTED, which is
@@ -122,8 +133,15 @@ def redact_structured_value(key: str | None, value: str) -> str:
     repr would, so the key-name patterns still fire, but collapses only the value
     so the caller's structure survives.
     """
-    scrubbed: Final = redact_string(value)
+    scrubbed: Final = _python_redact_string(value)
     if scrubbed != value or key is None:
         return scrubbed
     rendered: Final = f"'{key}': '{value}'"
-    return REDACTED if redact_string(rendered) != rendered else value
+    return REDACTED if _python_redact_string(rendered) != rendered else value
+
+
+def redact_structured_value(key: str | None, value: str) -> str:
+    return diagnostics.run(
+        lambda native: native.redact_structured_text(key, value),
+        lambda: _python_redact_structured_value(key, value),
+    )
