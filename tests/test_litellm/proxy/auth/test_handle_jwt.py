@@ -8091,8 +8091,8 @@ async def test_delegated_jwt_uses_granting_team_policy_before_route_authorizatio
         cache,
         LiteLLM_JWTAuth(
             team_allowed_routes=["/chat/completions" if team_route_allowed else "/embeddings"],
-            team_id_jwt_field="team",
-            team_alias_jwt_field="team_alias",
+            team_id_jwt_field="team" if team_claim is not None else None,
+            team_alias_jwt_field="team_alias" if team_claim is not None else None,
             fallback_to_db_teams=db_fallback,
         ),
     )
