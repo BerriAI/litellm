@@ -3060,6 +3060,34 @@
     "default_model_placeholder": "scx-ai/GLM-5.2"
   },
   {
+    "provider": "WALLABY",
+    "provider_display_name": "Wallaby",
+    "litellm_provider": "wallaby",
+    "credential_fields": [
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.wallabytoken.com/v1",
+        "tooltip": null,
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": null,
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      }
+    ],
+    "default_model_placeholder": "wallaby/kimi-k3"
+  },
+  {
     "provider": "Snowflake",
     "provider_display_name": "Snowflake",
     "litellm_provider": "snowflake",
