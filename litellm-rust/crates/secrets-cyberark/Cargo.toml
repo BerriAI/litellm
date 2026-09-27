@@ -8,6 +8,7 @@ repository.workspace = true
 [dependencies]
 litellm-secrets-types.workspace = true
 litellm-core-utils.workspace = true
+litellm-http.workspace = true
 base64.workspace = true
 moka.workspace = true
 reqwest.workspace = true
@@ -19,7 +20,10 @@ percent-encoding = "2.3"
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
+rcgen = "0.14.10"
 rstest.workspace = true
+tempfile = "3.27.0"
 tokio.workspace = true
 wiremock = "0.6.5"
 serde.workspace = true

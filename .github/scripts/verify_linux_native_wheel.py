@@ -214,7 +214,7 @@ def main(
     native_module: Final = load_native_module(native_path)
     native_module_loads: Final = native_module is not None
     panic_test_hook_absent: Final = native_module is not None and not hasattr(native_module, "_panic_for_test")
-    native_size_limit: Final = 35_000_000
+    native_size_limit: Final = 40_000_000
     native_size_within_limit: Final = native_member.file_size <= native_size_limit
     validations: Final = (
         (f"Python tag is {EXPECTED_PYTHON_TAG}", python_tag == EXPECTED_PYTHON_TAG),

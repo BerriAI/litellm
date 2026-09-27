@@ -1687,7 +1687,7 @@ class WebSearchInterceptionLogger(CustomLogger):
             **user_api_key_metadata,
             **parent_correlation.as_search_metadata(),
             "model_group": search_tool_name,
-            "user_api_key": user_api_key_auth.api_key,
+            "user_api_key": LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_auth),
             "user_api_key_auth": user_api_key_auth,
         }
 
@@ -1849,7 +1849,7 @@ class WebSearchInterceptionLogger(CustomLogger):
         for tool_call in tool_calls:
             # Handle both Anthropic-style input and OpenAI-style function.arguments
             query = None
-            tool_args: dict | None = None  # mutable-ok: the tool call's own arguments dict
+            tool_args: dict[str, object] | None = None  # mutable-ok: the tool call's own arguments dict
             if "input" in tool_call and isinstance(tool_call["input"], dict):
                 tool_args = tool_call["input"]
                 query = tool_args.get("query")

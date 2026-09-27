@@ -42,10 +42,9 @@ litellm-auth-aws.workspace = true
 litellm-callbacks-legacy-python.workspace = true
 litellm-core.workspace = true
 litellm-core-utils.workspace = true
-litellm-auth-gcp.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
-litellm-secrets = { workspace = true, features = ["aws"] }
+litellm-secrets = { workspace = true, features = ["aws", "azure", "google", "hashicorp", "cyberark"] }
 litellm-secrets-types.workspace = true
 litellm-types.workspace = true
 litellm-host-python.workspace = true
@@ -55,11 +54,14 @@ pyo3-async-runtimes.workspace = true
 reqwest.workspace = true
 redis = { version = "1.7.0", features = ["tls-rustls"] }
 serde_json.workspace = true
+strum.workspace = true
+veil.workspace = true
 thiserror.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 url.workspace = true
 
 [dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
 litellm-secrets-aws.workspace = true
 serde.workspace = true
 serde_with.workspace = true

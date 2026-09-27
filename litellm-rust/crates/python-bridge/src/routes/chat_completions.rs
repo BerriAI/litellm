@@ -1,9 +1,13 @@
+use pyo3::types::{PyDict, PyTuple};
+
+use crate::errors::RustBridgeDeclined;
 use crate::logger::{run_async, run_sync};
 use litellm_core::chat_completions::{
     Error, chat_completions as run_chat_completions, chat_completions_decline_reason,
     types::ChatCompletionsRequest,
 };
 use litellm_host_python::from_py_argument;
+use litellm_http::HttpClientConfig;
 use litellm_types::utils::ChatCompletionsResponse;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
@@ -17,6 +21,7 @@ use crate::{
 };
 
 async fn execute(
+    config: HttpClientConfig,
     messages: Vec<Value>,
     optional_params: Map<String, Value>,
     options: RouteOptions,
@@ -29,16 +34,20 @@ async fn execute(
         extra_headers,
         timeout,
     } = options;
-    run_chat_completions(ChatCompletionsRequest {
-        model: &model,
-        messages: Value::Array(messages),
-        optional_params,
-        api_key: api_key.as_deref(),
-        api_base: api_base.as_deref(),
-        custom_llm_provider: custom_llm_provider.as_deref(),
-        extra_headers,
-        timeout,
-    })
+    run_chat_completions(
+        crate::http::resources(),
+        &config,
+        ChatCompletionsRequest {
+            model: &model,
+            messages: Value::Array(messages),
+            optional_params,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
+            timeout,
+        },
+    )
     .await
 }
 
@@ -84,9 +93,15 @@ pub(crate) fn chat_completions(
         extra_headers,
         timeout: optional_timeout(timeout_seconds),
     };
+    let config = crate::http::call_config(py, &PyDict::new(py), false)?;
     run_sync(
         py,
-        execute(messages, optional_params.unwrap_or_default(), options),
+        execute(
+            config,
+            messages,
+            optional_params.unwrap_or_default(),
+            options,
+        ),
         chat_completions_error_to_pyerr,
     )
 }
@@ -116,16 +131,71 @@ pub(crate) fn achat_completions<'py>(
         extra_headers,
         timeout: optional_timeout(timeout_seconds),
     };
+    let config = crate::http::call_config(py, &PyDict::new(py), true)?;
     run_async(
         py,
-        execute(messages, optional_params.unwrap_or_default(), options),
+        execute(
+            config,
+            messages,
+            optional_params.unwrap_or_default(),
+            options,
+        ),
         chat_completions_error_to_pyerr,
     )
 }
 
+#[pyfunction]
+#[pyo3(signature = (request, args, kwargs))]
+pub(crate) fn completion(
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    drop((request, args, kwargs));
+    Err(RustBridgeDeclined::new_err(
+        "native chat completions route is not implemented",
+    ))
+}
+
+#[pyfunction]
+#[pyo3(signature = (request, args, kwargs))]
+pub(crate) fn acompletion(
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    drop((request, args, kwargs));
+    Err(RustBridgeDeclined::new_err(
+        "native chat completions route is not implemented",
+    ))
+}
+
 #[cfg(test)]
 mod tests {
-    use pyo3::{prelude::*, types::PyList};
+    use pyo3::{
+        prelude::*,
+        types::{PyDict, PyList, PyTuple},
+    };
+
+    use crate::errors::RustBridgeDeclined;
+
+    #[test]
+    fn both_entrypoints_decline_before_provider_execution() {
+        Python::initialize();
+        Python::attach(|py| {
+            let request = PyDict::new(py);
+            let args = PyTuple::empty(py);
+            let kwargs = PyDict::new(py);
+
+            for entrypoint in [super::completion, super::acompletion] {
+                let error = entrypoint(request.clone().into_any(), args.clone(), kwargs.clone())
+                    .expect_err(
+                        "native chat completions must decline until a route machine exists",
+                    );
+                assert!(error.is_instance_of::<RustBridgeDeclined>(py));
+            }
+        });
+    }
 
     #[test]
     fn chat_completions_decline_keeps_existing_reasons() {

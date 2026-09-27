@@ -994,11 +994,11 @@ async def test_commit_spend_updates_to_db_writes_team_member_spend_in_one_roster
     assert lock_statement is _TEAM_ADVISORY_LOCK_SQL
     assert locked_team_id == team_id
     assert "pg_advisory_xact_lock(hashtext($1))" in lock_statement
-    statement, user_ids, team_ids, costs = spend_call.args
+    statement, members = spend_call.args
     assert statement is _TEAM_MEMBER_SPEND_SQL
-    assert (list(user_ids), list(team_ids), list(costs)) == ([user_id], [team_id], [response_cost])
+    assert json.loads(members) == [{"user_id": user_id, "team_id": team_id, "cost": response_cost}]
     assert 'INSERT INTO "LiteLLM_TeamMembership"' in statement
-    assert "members_with_roles @> jsonb_build_array(jsonb_build_object('user_id', p.user_id))" in statement
+    assert "members_with_roles @> jsonb_build_array(jsonb_build_object('user_id', member.user_id))" in statement
     assert "ON CONFLICT (user_id, team_id) DO UPDATE" in statement
     assert 'spend = "LiteLLM_TeamMembership".spend + EXCLUDED.spend' in statement
     assert 'total_spend = "LiteLLM_TeamMembership".total_spend + EXCLUDED.total_spend' in statement
@@ -1007,7 +1007,7 @@ async def test_commit_spend_updates_to_db_writes_team_member_spend_in_one_roster
 @pytest.mark.asyncio
 async def test_commit_spend_updates_to_db_orders_team_member_rows_by_team_then_user():
     """
-    The member spend statement touches rows in the order of its input arrays, so the batch
+    The member spend statement touches rows in the order of its input rows, so the batch
     is handed over sorted by (team_id, user_id), with each cost kept next to its member, and
     each distinct team is locked once, in `sorted(team_ids)` order, the order /team/delete
     locks in, so a concurrent flush and delete cannot deadlock. `eng` and `eng2` pin that:
@@ -1034,13 +1034,13 @@ async def test_commit_spend_updates_to_db_orders_team_member_rows_by_team_then_u
     )
 
     *lock_calls, spend_call = mock_transaction.execute_raw.await_args_list
-    _statement, user_ids, team_ids, costs = spend_call.args
+    _statement, members = spend_call.args
     assert [lock_call.args for lock_call in lock_calls] == [
         (_TEAM_ADVISORY_LOCK_SQL, "eng"),
         (_TEAM_ADVISORY_LOCK_SQL, "eng-b"),
         (_TEAM_ADVISORY_LOCK_SQL, "eng2"),
     ]
-    assert list(zip(team_ids, user_ids, costs)) == [
+    assert [(row["team_id"], row["user_id"], row["cost"]) for row in json.loads(members)] == [
         ("eng", "user_x", 0.3),
         ("eng", "user_y", 0.2),
         ("eng-b", "user_x", 0.4),
@@ -4501,3 +4501,241 @@ async def test_tag_batch_drained_from_redis_and_cancelled_mid_flight_is_restored
     await asyncio.wait_for(db.rolled_back.wait(), timeout=5)
     assert db.transaction_outcomes == ["rollback"]
     assert _daily_upserts(db, "LiteLLM_DailyTagSpend") == []
+
+
+class _CommittingDailySpendFakeDB(_DailySpendFakeDB):
+    """Runs the daily upsert at once but holds the COMMIT until released. A COMMIT that has left
+    the client lands on the server whether or not the client keeps waiting for the reply."""
+
+    def __init__(self) -> None:
+        super().__init__(failing_table=None)
+        self.committing = asyncio.Event()
+        self.commit_release = asyncio.Event()
+        self.transaction_outcomes: list[str] = []
+
+    @asynccontextmanager
+    async def _tx(self) -> AsyncIterator["_CommittingDailySpendFakeDB"]:
+        try:
+            yield self
+        except BaseException:
+            self.transaction_outcomes.append("rollback")
+            raise
+        self.committing.set()
+        try:
+            await self.commit_release.wait()
+        finally:
+            self.transaction_outcomes.append("commit")
+
+
+@pytest.mark.parametrize(("queue_name", "entity_type", "entity_id_field", "table"), _DAILY_SPEND_ENTITIES)
+@pytest.mark.asyncio
+async def test_cancel_that_lands_while_the_daily_batch_is_committing_waits_for_the_commit_and_does_not_requeue_it(
+    queue_name: str, entity_type: str, entity_id_field: str, table: str
+):
+    """Shutdown cancels the tick after the COMMIT has left for Postgres. The server finishes that
+    commit whatever the client does, so putting the batch back on the queue makes the final flush
+    write the same spend a second time. The tick has to wait for the commit's outcome instead."""
+    db_writer = DBSpendUpdateWriter()
+    queue = _DAILY_SPEND_QUEUES[queue_name](db_writer)
+    await queue.add_update({"key-a": _daily_entity_txn(entity_id_field)})
+    await queue.add_update({"key-a": _daily_entity_txn(entity_id_field)})
+    db = _CommittingDailySpendFakeDB()
+
+    def flush(prisma_db: _DailySpendFakeDB):
+        return db_writer._flush_daily_spend_queue(
+            queue=queue,
+            entity_type=entity_type,
+            commit=_DAILY_SPEND_COMMITS[entity_type],
+            n_retry_times=0,
+            prisma_client=_WindowSpendFakePrisma(prisma_db),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    tick = asyncio.ensure_future(flush(db))
+    await asyncio.wait_for(db.committing.wait(), timeout=5)
+    tick.cancel()
+    finished, _ = await asyncio.wait({tick}, timeout=0.2)
+    assert finished == {tick}, "the cancelled tick must hand the in-flight commit's outcome to the next flush"
+    with pytest.raises(asyncio.CancelledError):
+        tick.result()
+    assert len(queue.interrupted_commits) == 1
+
+    db.commit_release.set()
+    await queue.settle_interrupted_commits()
+
+    assert db.transaction_outcomes == ["commit"]
+    (upsert,) = _daily_upserts(db, table)
+    assert _row_values(upsert, "api_requests") == [2]
+    assert queue.update_queue.empty(), "a batch whose COMMIT already left for the server must not be requeued"
+
+    final_db = _DailySpendFakeDB(failing_table=None)
+    await flush(final_db)
+    assert _daily_upserts(final_db, table) == [], "the final flush must not write the committed batch again"
+
+
+@pytest.mark.asyncio
+async def test_tag_batch_drained_from_redis_and_cancelled_while_committing_is_not_restored():
+    """Same in-flight COMMIT as the in-memory path, but the drained rows live in Redis. Restoring
+    them after the server committed writes the tag spend twice on the next tick."""
+    db_writer = DBSpendUpdateWriter()
+    drained = {"key-a": cast(DailyTagSpendTransaction, _daily_entity_txn("tag"))}
+    redis_buffer = _DrainedTagRedisBuffer(drained)
+    db_writer.redis_update_buffer = cast(RedisUpdateBuffer, redis_buffer)
+    db = _CommittingDailySpendFakeDB()
+
+    tick = asyncio.ensure_future(
+        db_writer._drain_and_commit_daily_tag_spend_from_redis(
+            prisma_client=_WindowSpendFakePrisma(db),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+    )
+    await asyncio.wait_for(db.committing.wait(), timeout=5)
+    tick.cancel()
+    finished, _ = await asyncio.wait({tick}, timeout=0.2)
+    assert finished == {tick}, "the cancelled drain must hand the in-flight commit's outcome to the next drain"
+    with pytest.raises(asyncio.CancelledError):
+        tick.result()
+    assert len(db_writer.interrupted_tag_commits) == 1
+
+    db.commit_release.set()
+    (settle,) = tuple(db_writer.interrupted_tag_commits)
+    await settle
+
+    assert db.transaction_outcomes == ["commit"]
+    assert redis_buffer.restored == [], (
+        "a tag batch whose COMMIT already left for the server must not be restored to Redis"
+    )
+
+
+class _CommitFailingDailySpendFakeDB(_CommittingDailySpendFakeDB):
+    """COMMIT leaves for the server but the reply comes back as a failure."""
+
+    @asynccontextmanager
+    async def _tx(self) -> AsyncIterator["_CommitFailingDailySpendFakeDB"]:
+        yield self
+        self.committing.set()
+        await self.commit_release.wait()
+        self.transaction_outcomes.append("commit_failed")
+        raise Exception("connection reset")
+
+
+@pytest.mark.asyncio
+async def test_cancel_while_committing_requeues_the_batch_when_the_commit_itself_fails():
+    """Waiting for the in-flight commit's outcome must not swallow a real commit failure:
+    the batch still goes back on the queue and the next flush writes it once."""
+    db_writer = DBSpendUpdateWriter()
+    queue = db_writer.daily_spend_update_queue
+    await queue.add_update({"key-a": _daily_txn()})
+    await queue.add_update({"key-a": _daily_txn()})
+    db = _CommitFailingDailySpendFakeDB()
+
+    def flush(prisma_db: _DailySpendFakeDB):
+        return db_writer._flush_daily_spend_queue(
+            queue=queue,
+            entity_type="user",
+            commit=DBSpendUpdateWriter.update_daily_user_spend,
+            n_retry_times=0,
+            prisma_client=_WindowSpendFakePrisma(prisma_db),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    tick = asyncio.ensure_future(flush(db))
+    await asyncio.wait_for(db.committing.wait(), timeout=5)
+    tick.cancel()
+    finished, _ = await asyncio.wait({tick}, timeout=0.2)
+    assert finished == {tick}, "the cancelled tick must not eat the shutdown budget waiting on the commit"
+    with pytest.raises(asyncio.CancelledError):
+        tick.result()
+
+    db.commit_release.set()
+    await queue.settle_interrupted_commits()
+
+    assert db.transaction_outcomes == ["commit_failed"]
+    assert not queue.update_queue.empty(), "a batch whose COMMIT came back failed must be requeued"
+
+    final_db = _DailySpendFakeDB(failing_table=None)
+    await flush(final_db)
+    (upsert,) = _daily_upserts(final_db, "LiteLLM_DailyUserSpend")
+    assert _row_values(upsert, "api_requests") == [2]
+    assert queue.update_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_flush_that_lands_before_the_interrupted_commit_resolves_still_writes_a_failed_batch_once():
+    """The cancelled tick returns right away, so a COMMIT can still be in flight when the
+    shutdown flush runs. If that commit later fails, the flush must first settle it, pick the
+    requeued rows back up, and write them exactly once instead of losing them."""
+    db_writer = DBSpendUpdateWriter()
+    queue = db_writer.daily_spend_update_queue
+    await queue.add_update({"key-a": _daily_txn()})
+    await queue.add_update({"key-a": _daily_txn()})
+    db = _CommitFailingDailySpendFakeDB()
+
+    def flush(prisma_db: _DailySpendFakeDB):
+        return db_writer._flush_daily_spend_queue(
+            queue=queue,
+            entity_type="user",
+            commit=DBSpendUpdateWriter.update_daily_user_spend,
+            n_retry_times=0,
+            prisma_client=_WindowSpendFakePrisma(prisma_db),
+            proxy_logging_obj=MagicMock(),
+        )
+
+    tick = asyncio.ensure_future(flush(db))
+    await asyncio.wait_for(db.committing.wait(), timeout=5)
+    tick.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(tick, timeout=5)
+    assert db.transaction_outcomes == [], "the COMMIT is still on the wire when the shutdown flush starts"
+
+    final_db = _DailySpendFakeDB(failing_table=None)
+    shutdown_flush = asyncio.ensure_future(flush(final_db))
+    finished, _ = await asyncio.wait({shutdown_flush}, timeout=0.2)
+    assert finished == set(), "the shutdown flush must wait for the interrupted commit's outcome"
+    assert _daily_upserts(final_db, "LiteLLM_DailyUserSpend") == []
+
+    db.commit_release.set()
+    await asyncio.wait_for(shutdown_flush, timeout=5)
+
+    (upsert,) = _daily_upserts(final_db, "LiteLLM_DailyUserSpend")
+    assert _row_values(upsert, "api_requests") == [2]
+    assert queue.update_queue.empty()
+
+
+@pytest.mark.asyncio
+async def test_shutdown_drain_that_lands_before_the_interrupted_tag_commit_resolves_restores_a_failed_batch():
+    """Same ordering for the Redis tag path: the shutdown drain must settle the interrupted
+    commit before the destructive drain, or a commit that fails late is never restored."""
+    db_writer = DBSpendUpdateWriter()
+    drained = {"key-a": cast(DailyTagSpendTransaction, _daily_entity_txn("tag"))}
+    redis_buffer = _DrainedTagRedisBuffer(drained)
+    db_writer.redis_update_buffer = cast(RedisUpdateBuffer, redis_buffer)
+    db = _CommitFailingDailySpendFakeDB()
+
+    def drain(prisma_db: _DailySpendFakeDB):
+        return db_writer._drain_and_commit_daily_tag_spend_from_redis(
+            prisma_client=_WindowSpendFakePrisma(prisma_db),
+            n_retry_times=0,
+            proxy_logging_obj=MagicMock(),
+        )
+
+    tick = asyncio.ensure_future(drain(db))
+    await asyncio.wait_for(db.committing.wait(), timeout=5)
+    tick.cancel()
+    with pytest.raises(asyncio.CancelledError):
+        await asyncio.wait_for(tick, timeout=5)
+    assert db.transaction_outcomes == []
+
+    final_db = _DailySpendFakeDB(failing_table=None)
+    shutdown_drain = asyncio.ensure_future(drain(final_db))
+    finished, _ = await asyncio.wait({shutdown_drain}, timeout=0.2)
+    assert finished == set(), "the shutdown drain must wait for the interrupted commit's outcome"
+    assert _daily_upserts(final_db, "LiteLLM_DailyTagSpend") == []
+
+    db.commit_release.set()
+    await asyncio.wait_for(shutdown_drain, timeout=5)
+
+    assert redis_buffer.restored == [drained], "a tag batch whose COMMIT came back failed must be restored to Redis"
+    (upsert,) = _daily_upserts(final_db, "LiteLLM_DailyTagSpend")
+    assert _row_values(upsert, "api_requests") == [1]

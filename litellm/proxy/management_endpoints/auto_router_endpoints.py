@@ -1448,7 +1448,7 @@ def _target_labels(
     """Display labels by (target_type, target_id): a key's (alias, masked name), a
     team's (alias, None), a user's (email, None)."""
     return MappingProxyType(
-        {  # mutable-ok: MappingProxyType needs a dict to wrap
+        {
             key: value
             for key, value in chain(
                 ((("key", row.token), (row.key_alias, row.key_name)) for row in key_rows),
@@ -1548,7 +1548,7 @@ async def _shadow_eval_results(
         await _query_raw(prisma_client, _ATTEMPT_AGG_BY_LEG_SQL, leg_ids) or ()
     )
     verdicts_by_target: Final[Mapping[tuple[str, str], ShadowEvalSlice]] = MappingProxyType(
-        {  # mutable-ok: MappingProxyType needs a dict to wrap
+        {
             target_by_leg[slice.group]: slice.model_copy(
                 update={"group": target_by_leg[slice.group][1]}  # mutable-ok: pydantic update payload
             )
@@ -1760,7 +1760,7 @@ async def start_shadow_eval(
                     "id": leg_id,
                     "target_type": target_type,
                     "target_id": target_id,
-                }  # mutable-ok: Prisma payload
+                }
                 for leg_id, (target_type, target_id) in zip(leg_ids, requested_targets)
             ]
         )
