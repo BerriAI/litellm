@@ -551,6 +551,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
             GoogleAIStudioTokenCounter,
         )
         from litellm.llms.gemini.count_tokens.transformation import (
+            DeploymentPromptSettings,
             GeminiCountTokensPayload,
             build_count_tokens_payload,
         )
@@ -566,6 +567,7 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
                 system=system,
                 tools=(*(litellm_params.get("tools") or ()), *(tools or ())) or None,
                 message_format=message_format,
+                settings=DeploymentPromptSettings.model_validate(litellm_params),
             )
             if contents is None
             else GeminiCountTokensPayload(

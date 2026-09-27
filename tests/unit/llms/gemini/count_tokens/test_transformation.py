@@ -15,6 +15,7 @@ from litellm.llms.anthropic.pass_through.messages import handler as anthropic_me
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.common_utils import GoogleAIStudioTokenCounter
 from litellm.llms.gemini.count_tokens.transformation import (
+    DeploymentPromptSettings,
     GeminiCountTokensPayload,
     build_count_tokens_payload,
 )
@@ -528,6 +529,93 @@ async def test_count_payload_puts_a_separate_system_prompt_where_chat_completion
     assert _as_wire(payload) == _counted_part_of(sent[-1])
 
 
+
+_SYSTEM_AND_ASK: Final = ({"role": "system", "content": "Be terse."}, {"role": "user", "content": "hello"})
+_DEPLOYMENT_PROMPT_CASES: Final = (
+    pytest.param({"litellm_system_prompt": "You are a pirate."}, _SYSTEM_AND_ASK, id="litellm-system-prompt"),
+    pytest.param({"supports_system_message": False}, _SYSTEM_AND_ASK, id="no-system-message-support"),
+    pytest.param({}, ({"role": "developer", "content": "Be terse."}, _SYSTEM_AND_ASK[1]), id="developer-role"),
+    pytest.param(
+        {},
+        ({"role": "user", "content": "hi"}, {"content": "hello"}, {"role": "user", "content": "again"}),
+        id="role-less-assistant-turn",
+    ),
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(("deployment_params", "messages"), _DEPLOYMENT_PROMPT_CASES)
+async def test_count_payload_applies_the_prompt_steps_chat_completions_runs_first(
+    local_model_cost_map, deployment_params, messages
+):
+    sent: list[dict[str, object]] = []  # mutable-ok: the fake upstream appends each captured body
+    await acompletion(
+        model="gemini/gemini-2.5-flash",
+        api_key="fake-gemini-key",
+        client=_capturing_client(sent),
+        max_tokens=16,
+        messages=copy.deepcopy(list(messages)),
+        **deployment_params,
+    )
+
+    payload = await build_count_tokens_payload(
+        model="gemini-2.5-flash",
+        messages=messages,
+        system=None,
+        tools=None,
+        message_format="openai",
+        settings=DeploymentPromptSettings(**deployment_params),
+    )
+
+    assert _as_wire(payload) == _counted_part_of(sent[-1])
+
+
+_COMPACTED_HISTORY: Final = (
+    {"role": "user", "content": "old question the summary covers"},
+    {"role": "assistant", "content": [{"type": "compaction", "content": "Summary of earlier turns."}]},
+    {"role": "user", "content": "new question"},
+)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("deployment_params", "request_body"),
+    (
+        pytest.param({}, {"messages": _COMPACTED_HISTORY}, id="client-compaction-block"),
+        pytest.param({}, {"system": "Be terse.", "messages": _COMPACTED_HISTORY}, id="compaction-with-system"),
+        pytest.param(
+            {"litellm_system_prompt": "You are a pirate."},
+            {"system": "Be terse.", "messages": [_ASK]},
+            id="litellm-system-prompt",
+        ),
+        pytest.param({"supports_system_message": False}, {"system": "Be terse.", "messages": [_ASK]}, id="no-system"),
+    ),
+)
+async def test_anthropic_count_payload_applies_the_steps_v1_messages_runs_first(
+    local_model_cost_map, deployment_params, request_body
+):
+    sent: list[dict[str, object]] = []  # mutable-ok: the fake upstream appends each captured body
+    await anthropic_messages_handler.anthropic_messages(
+        max_tokens=16,
+        model="gemini/gemini-2.5-flash",
+        custom_llm_provider="gemini",
+        api_key="fake-gemini-key",
+        client=_capturing_client(sent),
+        **copy.deepcopy(request_body),
+        **deployment_params,
+    )
+
+    payload = await build_count_tokens_payload(
+        model="gemini-2.5-flash",
+        messages=request_body["messages"],
+        system=request_body.get("system"),
+        tools=None,
+        message_format="anthropic",
+        settings=DeploymentPromptSettings(**deployment_params),
+    )
+
+    assert _as_wire(payload) == _counted_part_of(sent[-1])
+
 _DEPLOYMENT_TOOL: Final = {
     "type": "function",
     "function": {
@@ -683,6 +771,35 @@ async def test_remote_image_is_fetched_without_blocking_the_event_loop(monkeypat
     assert payload.contents[0]["parts"][1]["inline_data"]["data"] == _PNG
     assert ticks_while_fetching and ticks_while_fetching[0] >= 10, ticks_while_fetching
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("message_format", ("anthropic", "openai"))
+async def test_message_translation_runs_off_the_event_loop(monkeypatch, message_format):
+    from litellm.llms.gemini.count_tokens import transformation as count_transformation
+
+    translation_threads: list[int] = []  # mutable-ok: the wrappers record the thread each step ran on
+
+    def recording(function):
+        def wrapper(*args, **kwargs):
+            translation_threads.append(threading.get_ident())
+            return function(*args, **kwargs)
+
+        return wrapper
+
+    for step in ("validate_and_fix_openai_messages", "_transform_system_message"):
+        monkeypatch.setattr(count_transformation, step, recording(getattr(count_transformation, step)))
+
+    await build_count_tokens_payload(
+        model="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hello"}],
+        system="Be terse.",
+        tools=None,
+        message_format=message_format,
+    )
+
+    assert len(translation_threads) == 2
+    assert threading.get_ident() not in translation_threads
 
 _EXTENSIONLESS_GS_URI: Final = "gs://private-bucket/uploads/cat"
 

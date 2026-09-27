@@ -237,6 +237,40 @@ class TestGoogleAIStudioTokenCounter:
         ]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "deployment_params, counted_system, counted_first_user_text",
+        [
+            ({"litellm_system_prompt": "You are a pirate."}, "You are a pirate.\n\nBe terse.", "hello"),
+            ({"supports_system_message": False}, None, "Be terse. hello"),
+        ],
+    )
+    async def test_count_tokens_applies_the_deployment_prompt_settings(
+        self, deployment_params, counted_system, counted_first_user_text
+    ):
+        import httpx
+
+        recorded: list[httpx.Request] = []
+
+        def _handler(request: httpx.Request) -> httpx.Response:
+            recorded.append(request)
+            return httpx.Response(200, json={"totalTokens": 3})
+
+        await GoogleAIStudioTokenCounter().count_tokens(
+            model_to_use="gemini-2.5-flash",
+            messages=[{"role": "system", "content": "Be terse."}, {"role": "user", "content": "hello"}],
+            contents=None,
+            deployment={"litellm_params": {"api_key": "test-key", **deployment_params}},
+            request_model="gemini/gemini-2.5-flash",
+            client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+        )
+
+        body = json.loads(recorded[-1].content)
+        request_body = body.get("generateContentRequest", body)
+        system_parts = request_body.get("systemInstruction", {}).get("parts", [])
+        assert (system_parts[0]["text"] if system_parts else None) == counted_system
+        assert request_body["contents"][0]["parts"][0]["text"] == counted_first_user_text
+
+    @pytest.mark.asyncio
     async def test_count_tokens_returns_none_without_contents_or_messages(self):
         token_counter = GoogleAIStudioTokenCounter()
 
