@@ -6,18 +6,32 @@ retry loop and swaps the payload for OTLP/JSON (enums as integers, ids as hex).
 
 import base64
 import json
+import threading
 from collections.abc import Mapping, Sequence
+from contextvars import ContextVar
 from types import MappingProxyType
 from typing import Final, TypeAlias
 
 import requests
 from google.protobuf.json_format import MessageToDict
 from opentelemetry.exporter.otlp.proto.common.trace_encoder import encode_spans
+from opentelemetry.exporter.otlp.proto.http import trace_exporter as _http_trace_exporter
 from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
 from opentelemetry.sdk.trace import ReadableSpan
+from opentelemetry.sdk.trace.export import SpanExportResult
 
 JSON_CONTENT_TYPE: Final = "application/json"
 _HEX_ID_KEYS: Final = frozenset({"traceId", "spanId", "parentSpanId"})
+# SDK 1.44 serializes inside OTLPSpanExporter.export and no longer calls
+# _serialize_spans. The protobuf encode_spans name is the only seam left, and a
+# context flag keeps a concurrent protobuf export on another thread on protobuf.
+_EXPORT_JSON: Final[ContextVar[bool]] = ContextVar("litellm_otlp_json_export", default=False)
+_JSON_HOOK_LOCK: Final = threading.Lock()
+
+
+class _JsonPayloadHook:
+    installed: bool = False
+
 
 _JsonValue: TypeAlias = "Mapping[str, _JsonValue] | Sequence[_JsonValue] | str | int | float | bool | None"
 _JsonObject: TypeAlias = Mapping[str, "_JsonValue"]
@@ -55,6 +69,27 @@ def _hex_resource_spans(resource: _JsonObject) -> _JsonObject:
     return MappingProxyType({**resource, "scopeSpans": scope_spans})
 
 
+def _install_json_payload_hook() -> None:
+    with _JSON_HOOK_LOCK:
+        if _JsonPayloadHook.installed:
+            return
+        protobuf_encode: Final = _http_trace_exporter.encode_spans
+
+        def encode_spans(spans: Sequence[ReadableSpan]) -> object:
+            if not _EXPORT_JSON.get():
+                return protobuf_encode(spans)
+            payload: Final = encode_spans_json(spans)
+
+            class _JsonMessage:
+                def SerializePartialToString(self) -> bytes:
+                    return payload
+
+            return _JsonMessage()
+
+        _http_trace_exporter.encode_spans = encode_spans
+        _JsonPayloadHook.installed = True
+
+
 def encode_spans_json(spans: Sequence[ReadableSpan]) -> bytes:
     payload: Final[_JsonObject] = MessageToDict(encode_spans(spans), use_integers_for_enums=True)
     resource_spans: Final = tuple(_hex_resource_spans(resource) for resource in _objects(payload, "resourceSpans"))
@@ -72,6 +107,11 @@ class OTLPJsonSpanExporter(OTLPSpanExporter):
     ) -> None:
         super().__init__(endpoint=endpoint, headers=headers, certificate_file=certificate_file, session=session)
         self._session.headers["Content-Type"] = JSON_CONTENT_TYPE
+        _install_json_payload_hook()
 
-    def _serialize_spans(self, spans: Sequence[ReadableSpan]) -> bytes:
-        return encode_spans_json(spans)
+    def export(self, spans: Sequence[ReadableSpan]) -> SpanExportResult:
+        token: Final = _EXPORT_JSON.set(True)
+        try:
+            return super().export(spans)
+        finally:
+            _EXPORT_JSON.reset(token)
