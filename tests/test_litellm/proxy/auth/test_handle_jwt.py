@@ -8052,3 +8052,75 @@ def test_managed_issuer_requires_configured_audience_validation(
         ),
     )
     assert handler.managed_issuer_is_trusted(issuer) is expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team_route_allowed", [True, False])
+async def test_delegated_jwt_uses_granting_team_policy_before_route_authorization(
+    monkeypatch: pytest.MonkeyPatch, team_route_allowed: bool
+) -> None:
+    from litellm.proxy.agent_endpoints.auth import agent_permission_handler
+    from litellm.proxy.auth import handle_jwt
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.types.proxy.agent_identity import ManagedAgentContext
+
+    issuer: Final = "https://login.microsoftonline.com/11111111-1111-4111-8111-111111111111/v2.0"
+    jwks_url: Final = "https://identity.example/delegated-jwks"
+    private_key, jwk = _get_rsa_key_and_jwk("delegated-team")
+    cache: Final = UserApiKeyCache()
+    cache.set_cache(f"litellm_jwt_auth_keys_{jwks_url}", [jwk])
+    monkeypatch.setenv("JWT_PUBLIC_KEY_URL", jwks_url)
+    monkeypatch.setenv("JWT_ISSUER", issuer)
+    monkeypatch.setenv("JWT_AUDIENCE", "gateway")
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentidentity.update_many = AsyncMock(return_value=1)
+    handler: Final = JWTHandler()
+    handler.update_environment(
+        database,
+        cache,
+        LiteLLM_JWTAuth(team_allowed_routes=["/chat/completions" if team_route_allowed else "/embeddings"]),
+    )
+    context: Final = ManagedAgentContext(
+        agent_id="delegated-agent", binding_revision="revision", mode="delegated", user_id="human"
+    )
+    monkeypatch.setattr(handle_jwt, "resolve_managed_agent", AsyncMock(return_value=context))
+    monkeypatch.setattr(
+        agent_permission_handler,
+        "_verified_human_agent_sources",
+        AsyncMock(return_value=(("granting-team", frozenset(("delegated-agent",))),)),
+    )
+    team: Final = LiteLLM_TeamTable(team_id="granting-team", models=["allowed-model"], max_budget=5)
+    load_team: Final = AsyncMock(return_value=team)
+    monkeypatch.setattr(handle_jwt, "get_team_object", load_team)
+    monkeypatch.setattr(
+        handle_jwt,
+        "get_user_object",
+        AsyncMock(return_value=LiteLLM_UserTable(user_id="human", teams=["granting-team", "other-team"])),
+    )
+    monkeypatch.setattr(handle_jwt, "get_team_membership", AsyncMock(return_value=None))
+    token: Final = _encode_rsa_jwt(private_key, issuer, "gateway", "delegated-team", {"sub": "human"})
+    pending: Final = JWTAuthManager.authorize_jwt(
+        api_key=token,
+        jwt_handler=handler,
+        request_data={"model": "allowed-model"},
+        general_settings={},
+        route="/chat/completions",
+        request_method="POST",
+        prisma_client=database,
+        user_api_key_cache=cache,
+        parent_otel_span=None,
+        proxy_logging_obj=MagicMock(),
+    )
+    if not team_route_allowed:
+        with pytest.raises(HTTPException) as failure:
+            await pending
+        assert failure.value.status_code == 403
+        assert "granting team" in failure.value.detail
+        load_team.assert_not_awaited()
+        return
+    result: Final = await pending
+    assert result["team_id"] == "granting-team"
+    assert result["team_object"] == team
+    assert result["user_id"] == "human"
+    assert result["managed_agent_context"] == context
+    assert load_team.call_args_list[0].kwargs["check_db_only"] is True
