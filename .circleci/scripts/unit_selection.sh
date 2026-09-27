@@ -46,6 +46,7 @@ legacy_paths() {
       echo tests/unit/google_genai
       echo tests/unit/router_strategy
       echo tests/unit/router_utils
+      echo tests/unit/proxy/common_utils/test_cache_aware_routing.py
       echo tests/unit/enterprise/enterprise_callbacks/send_emails
       echo tests/unit/enterprise/proxy/test_afile_retrieve_returns_unified_id.py
       echo tests/unit/enterprise/proxy/test_batch_retrieve_input_file_id.py
