@@ -69,6 +69,9 @@ const CONVERSE_PATH_SUFFIX: &str = "/converse";
 #[derive(Deserialize)]
 pub(crate) struct ConverseResponse {
     output: ConverseOutput,
+    // Converse always reports usage, but the transcription route tolerates its
+    // absence; the chat transform checks for the field itself.
+    #[serde(default)]
     usage: ConverseUsage,
     #[serde(rename = "stopReason")]
     stop_reason: Option<String>,
@@ -104,7 +107,7 @@ impl<'de> Deserialize<'de> for ConverseContentBlock {
     }
 }
 
-#[derive(Deserialize)]
+#[derive(Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct ConverseUsage {
     input_tokens: u64,
