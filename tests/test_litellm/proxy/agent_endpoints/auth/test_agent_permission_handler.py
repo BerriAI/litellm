@@ -774,7 +774,9 @@ async def test_strict_legacy_group_grants_ignore_stale_replica(monkeypatch: pyte
     from litellm.proxy.agent_endpoints import agent_registry
     from litellm.types.agents import AgentResponse
 
-    stale: Final = AgentResponse(agent_id="revoked", agent_name="Revoked", agent_card_params={})
+    stale: Final = AgentResponse(
+        agent_id="revoked", agent_name="Revoked", agent_card_params={}, agent_access_groups=["group"]
+    )
     registry: Final = AgentRegistry()
     registry.register_agent(stale)
     database: Final = MagicMock()
@@ -885,3 +887,31 @@ async def test_delegation_without_a_verified_human_never_grants_agents(grant: bo
     auth.managed_agent_context = ManagedAgentContext(agent_id="actor", mode="delegated")
     assert await AgentRequestHandler.resolve_agent_access(auth) == RestrictedAgentAccess(frozenset())
     assert await verified_human_agent_grants(None) == frozenset()
+
+
+@pytest.mark.asyncio
+async def test_strict_legacy_group_grants_preserve_config_agents(monkeypatch: pytest.MonkeyPatch) -> None:
+    from unittest.mock import MagicMock
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints import agent_registry
+
+    registry: Final = AgentRegistry()
+    registry.load_agents_from_config(
+        [
+            {
+                "agent_name": "Configured",
+                "agent_card_params": {"name": "Configured", "url": "http://localhost", "version": "1.0.0"},
+                "agent_access_groups": ["group"],
+            }
+        ]
+    )
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_many = AsyncMock(return_value=[])
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+
+    assert await AgentRequestHandler._get_agents_from_access_groups(["group"], check_db_only=True) == [
+        _agent_id(registry, "Configured")
+    ]
+    assert await AgentRequestHandler._get_agents_from_access_groups(["other"], check_db_only=True) == []

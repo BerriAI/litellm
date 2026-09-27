@@ -444,8 +444,14 @@ class AgentRequestHandler:
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
         from litellm.proxy.proxy_server import prisma_client
 
+        configured_ids: Final = frozenset(global_agent_registry.config_agent_legacy_ids.values())
         config_agent_ids: Final = AgentRequestHandler._get_config_agent_ids_for_access_groups(
-            global_agent_registry.agent_list, access_groups
+            tuple(
+                agent
+                for agent in global_agent_registry.agent_list
+                if not check_db_only or agent.agent_id in configured_ids
+            ),
+            access_groups,
         )
 
         # Use the helper for DB agents
