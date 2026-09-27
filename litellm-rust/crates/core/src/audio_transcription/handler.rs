@@ -1,22 +1,33 @@
-use litellm_http::request::truncate_error_body;
+use std::time::Duration;
+
+use litellm_http::{Client, request::truncate_error_body};
+use litellm_llms::base_llm::auth::resolve_auth;
 use serde_json::Value;
 
-use super::{Error, client::http_client};
-use crate::audio_transcription::types::ProviderAudioTranscriptionRequest;
+use super::Error;
+use crate::{
+    audio_transcription::types::ProviderAudioTranscriptionRequest,
+    constants::AUDIO_TRANSCRIPTION_TIMEOUT_SECS,
+};
 
 pub async fn execute_audio_transcription_provider_call(
+    http: &Client,
+    auth: &litellm_auth::AuthServices,
     request: ProviderAudioTranscriptionRequest,
 ) -> Result<Value, Error> {
-    let response = crate::outbound::outbound_request::<Error>(
-        &request.auth,
+    let env_lookup = |key: &str| std::env::var(key).ok();
+    let authenticated = resolve_auth(auth, request.environment.clone(), &env_lookup).await?;
+    let response = crate::outbound::outbound_request(
+        authenticated,
         request.url.clone(),
-        request.upstream_headers.clone(),
         &request.body,
-        request.timeout,
-        &request.optional_params,
-    )
-    .await?
-    .send(http_client())
+        Some(
+            request
+                .timeout
+                .unwrap_or(Duration::from_secs(AUDIO_TRANSCRIPTION_TIMEOUT_SECS)),
+        ),
+    )?
+    .send(http)
     .await
     .map_err(|error| {
         Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
