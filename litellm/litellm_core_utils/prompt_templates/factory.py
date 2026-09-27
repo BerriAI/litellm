@@ -2489,9 +2489,9 @@ def anthropic_messages_pt(
                     ):
                         cached_user_content: AnthropicMessagesUserMessageValues = copy.copy(user_content[-1])
                         add_cache_control_to_content(
-                            anthropic_content_element=cast(
+                            anthropic_content_element=cast(  # cast-ok: copied TypedDict is a dict
                                 dict[str, object], cached_user_content
-                            ),  # cast-ok: copied TypedDict is a dict
+                            ),
                             original_content_element=user_message_types_block,
                         )
                         user_content[-1] = cached_user_content
@@ -2795,9 +2795,9 @@ def anthropic_messages_pt(
             ):
                 cached_assistant_content: AnthropicMessagesAssistantMessageValues = copy.copy(assistant_content[-1])
                 add_cache_control_to_content(
-                    anthropic_content_element=cast(
+                    anthropic_content_element=cast(  # cast-ok: copied TypedDict is a dict
                         dict[str, object], cached_assistant_content
-                    ),  # cast-ok: copied TypedDict is a dict
+                    ),
                     original_content_element=assistant_content_block,
                 )
                 assistant_content[-1] = cached_assistant_content
