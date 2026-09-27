@@ -11,6 +11,7 @@ use super::{
     types::{ProviderResponsesRequest, ResponsesCall},
 };
 
+#[tracing::instrument(name = "litellm.prepare", level = "debug", skip_all)]
 pub(super) async fn prepare(
     call: ResponsesCall,
     secrets: &dyn SecretSource,

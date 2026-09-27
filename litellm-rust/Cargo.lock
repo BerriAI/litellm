@@ -3395,6 +3395,7 @@ dependencies = [
  "time",
  "tokio",
  "tokio-tungstenite",
+ "tracing",
  "url",
  "veil",
  "wiremock",
@@ -3596,6 +3597,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",
+ "tracing",
  "veil",
  "webpki-roots",
 ]
@@ -3698,6 +3700,7 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "tokio-tungstenite",
+ "tracing",
  "url",
  "veil",
  "wiremock",

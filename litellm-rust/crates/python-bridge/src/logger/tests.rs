@@ -66,6 +66,19 @@ fn warning(py: Python<'_>) {
     });
 }
 
+#[tracing::instrument(name = "litellm.route", skip_all, fields(route = "fixture", outcome))]
+async fn traced_operation(_secret: &str) -> PyResult<()> {
+    tokio::task::yield_now().await;
+    tracing::info!("inside route");
+    tracing::Span::current().record("outcome", "success");
+    Ok(())
+}
+
+#[pyfunction]
+fn span_warning(py: Python<'_>) -> PyResult<Bound<'_, PyAny>> {
+    super::run_async_value(py, traced_operation("private-key-sentinel"))
+}
+
 #[pyfunction]
 fn levels(py: Python<'_>) {
     super::capture(py).scope(|| {
@@ -109,7 +122,7 @@ fn http_warning(py: Python<'_>) -> PyResult<()> {
     crate::http::call_config(py, &PyDict::new(py), false).map(|_| ())
 }
 
-#[test]
+#[rstest::rstest]
 fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication() {
     if std::env::var_os("LITELLM_LOGGER_TEST_PROCESS").is_none() {
         let output = Command::new(std::env::current_exe().unwrap())
@@ -155,6 +168,9 @@ fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication
             .unwrap();
         locals
             .set_item("warning", wrap_pyfunction!(warning, py).unwrap())
+            .unwrap();
+        locals
+            .set_item("span_warning", wrap_pyfunction!(span_warning, py).unwrap())
             .unwrap();
         locals
             .set_item(
@@ -262,6 +278,25 @@ try:
         ('trace', logging.DEBUG), ('debug', logging.DEBUG), ('info', logging.INFO),
         ('warn', logging.WARNING), ('error', logging.ERROR),
     ]
+
+    before_spans = len(capture.records)
+    async def traced_request():
+        session = session_id_var.set('span-session')
+        trace = trace_id_var.set('span-trace')
+        try:
+            await span_warning()
+        finally:
+            trace_id_var.reset(trace)
+            session_id_var.reset(session)
+    asyncio.run(traced_request())
+    span_records = capture.records[before_spans:]
+    assert [r.getMessage() for r in span_records] == ['inside route', 'span closed']
+    assert all(r.session_id == 'span-session' and r.trace_id == 'span-trace' for r in span_records)
+    assert all(r.rust_fields['route'] == 'fixture' for r in span_records)
+    assert span_records[1].rust_fields['outcome'] == 'success'
+    assert span_records[1].rust_fields['span_name'] == 'litellm.route'
+    assert span_records[1].rust_fields['duration_ms'] >= 0
+    assert 'private-key-sentinel' not in repr([r.rust_fields for r in span_records])
 
     before = len(capture.records)
     litellm.ssl_ecdh_curve = 'logger-test-unsupported-curve'

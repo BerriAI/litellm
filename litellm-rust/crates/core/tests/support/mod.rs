@@ -350,3 +350,41 @@ where
         self.events.0.lock().unwrap().push(event.clone());
     }
 }
+
+#[derive(Clone, Default)]
+pub struct TraceCapture(Arc<Mutex<Vec<Value>>>);
+
+impl TraceCapture {
+    pub fn logger(&self) -> litellm_tracing::Logger {
+        litellm_tracing::Logger::new(self.clone())
+    }
+
+    pub fn records(&self) -> Vec<Value> {
+        self.0.lock().unwrap().clone()
+    }
+
+    pub fn summaries(&self, name: &str) -> Vec<Value> {
+        self.records()
+            .into_iter()
+            .filter(|record| record["span_name"] == name)
+            .collect()
+    }
+}
+
+impl litellm_tracing::Sink for TraceCapture {
+    fn enabled(&self, metadata: &litellm_tracing::Metadata<'_>) -> bool {
+        metadata.target().starts_with("litellm_core")
+    }
+
+    fn emit(&self, record: &litellm_tracing::Record) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(Value::Object(record.fields.clone()));
+    }
+}
+
+#[rstest::fixture]
+pub fn traces() -> TraceCapture {
+    TraceCapture::default()
+}
