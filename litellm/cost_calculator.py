@@ -1407,6 +1407,7 @@ def completion_cost(
             region_name=region_name,
         )
 
+        requested_model: Final = model
         potential_model_names: Final = [
             selected_model,
             _get_response_model(completion_response),
@@ -1529,7 +1530,7 @@ def completion_cost(
                 ):
                     ### IMAGE GENERATION COST CALCULATION ###
                     return CostCalculatorUtils.route_image_generation_cost_calculator(
-                        model=model,
+                        model=requested_model if custom_pricing and requested_model else model,
                         custom_llm_provider=custom_llm_provider,
                         completion_response=completion_response,
                         quality=quality,

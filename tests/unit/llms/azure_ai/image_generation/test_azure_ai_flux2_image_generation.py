@@ -14,6 +14,7 @@ from litellm.llms.azure.image_generation.http_utils import azure_deployment_imag
 from litellm.llms.azure_ai.image_generation.flux_transformation import (
     AzureFoundryFluxImageGenerationConfig,
 )
+from litellm.router import Router
 from litellm.types.utils import ImageObject, ImageResponse
 from litellm.utils import _invalidate_model_cost_lowercase_map, get_optional_params_image_gen
 
@@ -251,3 +252,41 @@ def test_flux2_response_preserves_mapped_dimensions():
         encoding=None,
     )
     assert response.size == "2048x1024"
+
+
+@pytest.mark.parametrize("call_type", ("image_generation", "image_edit"))
+@pytest.mark.parametrize("model", ("azure_ai/flux.2-pro", "azure_ai/FLUX.2-flex"))
+@pytest.mark.parametrize("image_token_price", ("input_cost_per_image_token", "output_cost_per_image_token"))
+def test_flux2_deployment_with_image_token_prices_bills_catalog_image_price(
+    call_type: str, model: str, image_token_price: str
+) -> None:
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "flux2",
+                "litellm_params": {
+                    "model": model,
+                    "api_base": "https://example.services.ai.azure.com",
+                    "api_key": "fake-key",
+                    image_token_price: 1e-05,
+                },
+            }
+        ]
+    )
+    deployment_id: Final = router.model_list[0]["model_info"]["id"]
+    response: Final = ImageResponse(data=[ImageObject(b64_json="aW1n")], size="1024x1024")
+
+    def cost(custom_pricing: bool) -> float:
+        return litellm.completion_cost(
+            model=model,
+            completion_response=response,
+            custom_llm_provider="azure_ai",
+            call_type=call_type,
+            custom_pricing=custom_pricing,
+            router_model_id=deployment_id,
+        )
+
+    catalog_cost: Final = cost(custom_pricing=False)
+
+    assert catalog_cost > 0
+    assert cost(custom_pricing=True) == pytest.approx(catalog_cost)

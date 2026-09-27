@@ -875,6 +875,27 @@ def test_completion_cost_image_generation_ignores_deployment_model_info_without_
     assert cost == pytest.approx(0.211)
 
 
+def test_completion_cost_image_generation_prices_base_model_over_deployment_name(
+    _local_model_cost_map: None,
+) -> None:
+    response: Final = ImageResponse(data=[ImageObject(url="https://example.com/img.png")])
+
+    def cost(model: str, base_model: str | None) -> float:
+        return completion_cost(
+            completion_response=response,
+            model=model,
+            base_model=base_model,
+            custom_llm_provider="azure",
+            call_type="image_generation",
+            size="1024x1024",
+        )
+
+    base_model_cost: Final = cost(model="azure/dall-e-3", base_model=None)
+
+    assert base_model_cost > 0
+    assert cost(model="azure/my-dalle-deployment", base_model="azure/dall-e-3") == pytest.approx(base_model_cost)
+
+
 async def test_router_image_generation_bills_litellm_params_output_cost_per_image() -> None:
     from litellm import Router
 
