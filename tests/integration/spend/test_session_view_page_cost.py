@@ -1,8 +1,9 @@
-"""The session-grouped /spend/logs/ui page lists each session once and reads the window at most once.
+"""The session-grouped /spend/logs/ui page lists each session once and reads a bounded slice of the window.
 
-The page itself stops after page_size + 1 sessions; the capped session count is
-the one full pass over the window. Tuple reads come from pg_stat, and the
-ordering, representative and total assertions pin what the page returns.
+The page stops after page_size + 1 sessions and the session count stops once it
+passes the count cap, so a window with fewer sessions than the cap is read at
+most once. Tuple reads come from pg_stat, and the ordering, representative and
+total assertions pin what the page returns.
 """
 
 import os
@@ -288,6 +289,62 @@ def test_session_view_filtered_first_page_stays_bounded(gateway: Gateway, seeded
     assert _data_rows(page)[0]["request_id"] == f"intg-sesswin-{seeded}-m1c"
     assert tuples_read < MAX_TUPLES_PER_PAGE, (
         f"filtered first page read {tuples_read} tuples for a window of {SEED_ROWS} rows and page_size {PAGE_SIZE}"
+    )
+
+
+MANY_SESSIONS_ROWS: Final = 150_000
+MANY_SESSIONS_LEN: Final = 2
+_MANY_BASE: Final = datetime(2003, 3, 1)
+MANY_WINDOW_START: Final = _MANY_BASE.strftime("%Y-%m-%d %H:%M:%S")
+MANY_WINDOW_END: Final = (_MANY_BASE + timedelta(seconds=MANY_SESSIONS_ROWS + 1)).strftime("%Y-%m-%d %H:%M:%S")
+
+
+@pytest.fixture
+def many_sessions(gateway: Gateway) -> Iterator[str]:
+    marker: Final = uuid.uuid4().hex
+    with gateway.scenario() as scenario:
+        scenario.cleanups.callback(_cleanup, marker)
+        _settle_autovacuum()
+        with psycopg.connect(os.environ["DATABASE_URL"], autocommit=True) as connection:
+            connection.execute(
+                'INSERT INTO "LiteLLM_SpendLogs" ('
+                'request_id, call_type, api_key, session_id, "startTime", "endTime", model, metadata, messages, '
+                "response) "
+                "SELECT %s || n, 'acompletion', 'K', %s || '-s-' || (n / %s), ts, ts, 'e2e-sesswin', '{}'::jsonb, "
+                "'{}'::jsonb, '{}'::jsonb "
+                "FROM generate_series(1, %s) AS g(n) "
+                "CROSS JOIN LATERAL (SELECT %s::timestamp + (n || ' seconds')::interval AS ts) AS t",
+                (f"intg-sesswin-{marker}-", marker, MANY_SESSIONS_LEN, MANY_SESSIONS_ROWS, MANY_WINDOW_START),
+            )
+            connection.execute('VACUUM ANALYZE "LiteLLM_SpendLogs"')
+        _wait_for_stats_quiet()
+        yield marker
+
+
+def test_session_view_count_stops_at_the_cap_on_a_window_of_many_sessions(gateway: Gateway, many_sessions: str) -> None:
+    """A window holding far more sessions than the count cap is counted from its newest rows, not grouped whole."""
+    assert MANY_SESSIONS_ROWS // MANY_SESSIONS_LEN > SPEND_LOGS_PAGINATION_COUNT_CAP
+    before: Final = _tuples_read_quiet()
+    page: Final = gateway.get(
+        "/spend/logs/ui",
+        params={
+            "group_by_session": "true",
+            "start_date": MANY_WINDOW_START,
+            "end_date": MANY_WINDOW_END,
+            "sort_by": "startTime",
+            "sort_order": "desc",
+            "page_size": str(PAGE_SIZE),
+            "page": "1",
+        },
+    )
+    tuples_read: Final = _tuples_read_quiet() - before
+
+    assert page["total"] == SPEND_LOGS_PAGINATION_COUNT_CAP
+    assert page["total_is_capped"] is True
+    assert _data_rows(page)[0]["request_id"] == f"intg-sesswin-{many_sessions}-{MANY_SESSIONS_ROWS}"
+    assert tuples_read < MANY_SESSIONS_ROWS // 2, (
+        f"the page read {tuples_read} tuples of a {MANY_SESSIONS_ROWS} row window; the page and the capped count "
+        "must both stop long before the end of a window with more sessions than the cap"
     )
 
 

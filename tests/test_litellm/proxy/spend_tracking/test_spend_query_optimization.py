@@ -520,10 +520,7 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
     footer still claims N (issue #38060).
     """
     from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
-    from litellm.proxy.spend_tracking.spend_management_endpoints import (
-        SPEND_LOGS_PAGINATION_COUNT_CAP,
-        ui_view_spend_logs,
-    )
+    from litellm.proxy.spend_tracking.spend_management_endpoints import ui_view_spend_logs
 
     session_rows = [
         {"session_key": f"req-{index}", "api_key": "k", "last_activity": f"2026-02-16 10:{59 - index:02d}:00"}
@@ -541,6 +538,8 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
                 for row in session_rows
             ]
             return [*first_rows, {**first_rows[-1], "is_edge": True, "batch_rows": 0}]
+        if "newest_rows" in sql_query:
+            return [{"rows_read": 0, "sessions": 60}]
         if "COUNT(*) AS total_count" in sql_query:
             return [{"total_count": 60}]
         if "CROSS JOIN LATERAL" in sql_query or "DISTINCT ON" in sql_query:
@@ -576,12 +575,6 @@ async def test_spend_logs_ui_group_by_session_paginates_sessions(monkeypatch):
     emitted = [call[0] for call in mock_prisma.db.query_raw.call_args_list]
     page_sql = emitted[0][0]
     assert "OFFSET" not in page_sql, "the startTime page must be keyset-selected, not offset-selected"
-
-    count_call = emitted[1]
-    count_sql = count_call[0]
-    assert "COUNT(*) OVER ()" not in count_sql
-    assert "LIMIT" in count_sql and "FROM (" in count_sql, "the grouped count must stay bounded"
-    assert count_call[-1] == SPEND_LOGS_PAGINATION_COUNT_CAP + 1
 
     rep_sql = emitted[2][0]
     assert emitted[2][-2] == [row["session_key"] for row in session_rows[:50]]

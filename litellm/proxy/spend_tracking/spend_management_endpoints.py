@@ -77,6 +77,8 @@ _SESSION_KEY_EXPR: Final = "COALESCE(NULLIF(session_id, ''), request_id)"
 _SESSION_GROUP_KEY_SQL: Final = f"{_SESSION_KEY_EXPR}, api_key"
 _SESSION_WALK_FIRST_BATCH_ROWS: Final = 1000
 _SESSION_WALK_MAX_ROWS: Final = 20000
+_SESSION_COUNT_FIRST_BATCH_ROWS: Final = 50000
+_SESSION_COUNT_MAX_ROWS: Final = 200000
 _MCP_CALL_TYPES_SQL: Final = "('call_mcp_tool', 'list_mcp_tools')"
 _AGENT_CALL_TYPE_SQL: Final = "'asend_message'"
 _BATCH_CALL_TYPES_SQL: Final = "('acreate_batch', 'create_batch', 'aretrieve_batch', 'retrieve_batch')"
@@ -166,6 +168,11 @@ class _TagSpendRow(TypedDict):
 
 class _SpendLogsCountRow(TypedDict):
     total_count: int
+
+
+class _SessionCountBatchRow(TypedDict):
+    rows_read: ReadOnly[int]
+    sessions: ReadOnly[int]
 
 
 class _PgClassRow(TypedDict):
@@ -3320,6 +3327,52 @@ async def _count_grouped_sessions(
     )
 
 
+async def _count_sessions_newest_first(
+    prisma_client: "PrismaClient",
+    window_clause: str,
+    where_clause: str,
+    sql_params: Sequence[object],
+    next_param_index: int,
+    size: int = _SESSION_COUNT_FIRST_BATCH_ROWS,
+) -> tuple[int, bool] | None:
+    """Count sessions in the newest ``size`` rows of the window, stopping as soon as the count cap is passed or the
+    window runs out. None when the sessions are too long to settle within ``_SESSION_COUNT_MAX_ROWS`` rows."""
+    count_query: Final = f"""
+        WITH newest_rows AS MATERIALIZED (
+            SELECT {_SESSION_KEY_EXPR} AS session_key,
+                   api_key,
+                   COALESCE(({where_clause}), FALSE) AS in_page
+            FROM (
+                SELECT *
+                FROM "LiteLLM_SpendLogs"
+                WHERE {window_clause}
+                ORDER BY "startTime" DESC, request_id DESC
+                LIMIT ${next_param_index}
+            ) AS "LiteLLM_SpendLogs"
+        )
+        SELECT (SELECT COUNT(*) FROM newest_rows)::int AS rows_read,
+               (SELECT COUNT(*) FROM (SELECT DISTINCT session_key, api_key FROM newest_rows WHERE in_page) AS s)::int
+                   AS sessions
+    """
+    rows: Final[Sequence[_SessionCountBatchRow]] = await _query_raw(prisma_client, count_query, *sql_params, size)
+    rows_read: Final = rows[0]["rows_read"] if rows else 0
+    sessions: Final = rows[0]["sessions"] if rows else 0
+    if sessions > SPEND_LOGS_PAGINATION_COUNT_CAP:
+        return (SPEND_LOGS_PAGINATION_COUNT_CAP, True)
+    if rows_read < size:
+        return (sessions, False)
+    next_size: Final = (
+        max(2 * size, (SPEND_LOGS_PAGINATION_COUNT_CAP + 1) * rows_read * 5 // (4 * sessions))
+        if sessions
+        else _SESSION_COUNT_MAX_ROWS + 1
+    )
+    if next_size > _SESSION_COUNT_MAX_ROWS:
+        return None
+    return await _count_sessions_newest_first(
+        prisma_client, window_clause, where_clause, sql_params, next_param_index, next_size
+    )
+
+
 async def _ui_session_grouped_spend_logs(
     prisma_client: "PrismaClient",
     window_conditions: Sequence[str],
@@ -3343,7 +3396,7 @@ async def _ui_session_grouped_spend_logs(
     page depth does not degrade the query plan. A newest-first page comes from
     ``_SessionHeadWalk``, which stops after ``page_size + 1`` sessions instead
     of grouping the whole window; ascending and OFFSET pages, and walks that
-    read every ``_SESSION_WALK_BATCH_ROWS`` batch without settling the page, group the
+    read ``_SESSION_WALK_MAX_ROWS`` rows without settling the page, group the
     window instead. A request for ``page > 1``
     without a cursor (the UI jumping straight to the last page, or back to a
     page it never walked through) falls back to ``OFFSET (page - 1) *
@@ -3355,10 +3408,14 @@ async def _ui_session_grouped_spend_logs(
     ``next_session_cursor`` / ``has_more`` while ``total`` counts sessions
     (capped like the flat total). A page that runs out of sessions while still
     holding some is itself the end of the list, so its ``total`` is
-    ``offset + len(page)`` and the grouped count query is skipped; a page that
+    ``offset + len(page)`` and the count is skipped; a page that
     starts past the end says nothing about the total, so that one is counted.
+    The count walks the window newest first like the page and stops once it
+    passes the cap, grouping the whole window only when the sessions are too
+    long for that walk to settle within ``_SESSION_COUNT_MAX_ROWS`` rows.
     """
     where_clause: Final = " AND ".join(sql_conditions) if sql_conditions else "TRUE"
+    window_clause: Final = " AND ".join(window_conditions) if window_conditions else "TRUE"
     cmp_op: Final = "<" if sort_desc else ">"
     direction: Final = "DESC" if sort_desc else "ASC"
 
@@ -3379,7 +3436,7 @@ async def _ui_session_grouped_spend_logs(
     walked_rows: Final = (
         await _SessionHeadWalk(
             prisma_client=prisma_client,
-            window_clause=" AND ".join(window_conditions) if window_conditions else "TRUE",
+            window_clause=window_clause,
             where_clause=where_clause,
             sql_params=tuple(sql_params),
             next_param_index=next_param_index,
@@ -3414,9 +3471,18 @@ async def _ui_session_grouped_spend_logs(
 
     page_starts_inside_the_list: Final = offset == 0 or len(page_rows) > 0
     page_ends_the_list: Final = cursor is None and page_limit > 0 and not has_more and page_starts_inside_the_list
+    counted_newest_first: Final = (
+        None
+        if page_ends_the_list
+        else await _count_sessions_newest_first(
+            prisma_client, window_clause, where_clause, sql_params, next_param_index
+        )
+    )
     total_records, total_is_capped = (
         (offset + len(page_rows), False)
         if page_ends_the_list
+        else counted_newest_first
+        if counted_newest_first is not None
         else await _count_grouped_sessions(prisma_client, where_clause, sql_params, next_param_index)
     )
 
