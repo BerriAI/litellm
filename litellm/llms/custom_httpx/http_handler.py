@@ -740,28 +740,48 @@ class _BrotliDecoder:
             raise httpx.DecodingError("Compressed response ended before the end of the stream")
 
 
+class _CappedStage:
+    """Intermediate stage of a stacked encoding whose total output over the whole response is capped."""
+
+    def __init__(self, stage: _BoundedDecoder, cap: int) -> None:
+        self._stage: Final = stage
+        self._cap: Final = cap
+        self._produced = 0
+
+    def decode(self, data: bytes) -> bytes:
+        allowance: Final = self._cap - self._produced
+        out: Final = self._stage.decode(data, allowance + 1)
+        self._produced += len(out)
+        if len(out) > allowance:
+            raise HTTPResponseLimitError("Response exceeds the configured size limit")
+        return out
+
+    def finish(self) -> None:
+        self._stage.finish()
+
+
 class _ChainedDecoder:
     """Undo stacked Content-Encoding values, last applied first, bounding every intermediate stage."""
 
-    def __init__(self, stages: Sequence[_BoundedDecoder]) -> None:
-        self._stages: Final = tuple(stages)
+    def __init__(self, stages: Sequence[_BoundedDecoder], max_output: int) -> None:
+        *outer, last = stages
+        cap: Final = _encoded_byte_limit(max_output)
+        self._outer: Final = tuple(_CappedStage(stage, cap) for stage in outer)
+        self._last: Final = last
 
     def decode(self, data: bytes, max_output: int) -> bytes:
-        intermediate_cap: Final = _encoded_byte_limit(max_output)
-        *outer, last = self._stages
         passed = data  # rebind-ok: each stage's output feeds the next stage
-        for stage in outer:
-            passed = stage.decode(passed, intermediate_cap + 1)
-            if len(passed) > intermediate_cap:
-                raise HTTPResponseLimitError("Response exceeds the configured size limit")
-        return last.decode(passed, max_output)
+        for stage in self._outer:
+            passed = stage.decode(passed)
+        return self._last.decode(passed, max_output)
 
     def finish(self) -> None:
-        for stage in self._stages:
+        for stage in self._outer:
             stage.finish()
+        self._last.finish()
 
 
-def _bounded_decoder(headers: httpx.Headers) -> _BoundedDecoder:
+def _bounded_decoder(headers: httpx.Headers, max_bytes: int) -> _BoundedDecoder:
     brotli_inflater: Final = _BrotliInflater
     factories: Final[Mapping[str, Callable[[], _BoundedDecoder]]] = MappingProxyType(
         {
@@ -778,11 +798,11 @@ def _bounded_decoder(headers: httpx.Headers) -> _BoundedDecoder:
             "Response size limits require an identity, gzip, deflate, or br encoded response"
         )
     stages: Final = tuple(factories[name]() for name in reversed(encodings))
-    return stages[0] if len(stages) == 1 else _ChainedDecoder(stages)
+    return stages[0] if len(stages) == 1 else _ChainedDecoder(stages, max_bytes)
 
 
 async def _decoded_within(response: httpx.Response, wire: AsyncGenerator[bytes, None], max_bytes: int) -> bytes:
-    decoder: Final = _bounded_decoder(response.headers)
+    decoder: Final = _bounded_decoder(response.headers, max_bytes)
     with BytesIO() as body:
         async for chunk in wire:
             body.write(decoder.decode(chunk, max_bytes + 1 - body.tell()))

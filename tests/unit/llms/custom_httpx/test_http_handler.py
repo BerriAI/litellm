@@ -1443,7 +1443,6 @@ async def test_connection_error_retry_forwards_content(method: str):
         await handler.close()
 
 
-
 @pytest.fixture
 def forward_proxy_server():
     """Plain HTTP forward proxy that records the absolute URIs it is asked to fetch."""
@@ -1574,9 +1573,7 @@ def private_ca_tls_upstream(tmp_path: pathlib.Path):
     ca_pem.write_bytes(cert.public_bytes(serialization.Encoding.PEM))
     key_pem = tmp_path / "key.pem"
     key_pem.write_bytes(
-        key.private_bytes(
-            serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()
-        )
+        key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption())
     )
 
     class OkTlsHandler(BaseHTTPRequestHandler):
@@ -1751,8 +1748,11 @@ async def test_bounded_get_preserves_sdk_redirect_auth_and_query_handling(respx_
     handler = AsyncHTTPHandler()
     try:
         response = await handler.get(
-            "https://example.com/spec.json?original=1", max_response_bytes=100, follow_redirects=True,
-            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"}, timeout=2.0,
+            "https://example.com/spec.json?original=1",
+            max_response_bytes=100,
+            follow_redirects=True,
+            headers={"Authorization": "Bearer sentinel", "Accept-Encoding": "gzip"},
+            timeout=2.0,
         )
     finally:
         await handler.close()
@@ -1965,6 +1965,37 @@ async def test_bounded_get_undoes_stacked_encodings_and_still_caps_the_decoded_s
         tracemalloc.stop()
         await handler.close()
     assert peak < 4 * 1024 * 1024, f"stacked decoder materialized {peak} bytes for a 1 MiB cap"
+
+
+@pytest.mark.asyncio
+async def test_bounded_get_counts_stacked_intermediate_bytes_across_wire_chunks(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    cap: Final = 1024 * 1024
+    outer: Final = zlib.compressobj(wbits=zlib.MAX_WBITS | 16)
+    empty_stored_block: Final = b"\x00\x00\x00\xff\xff"
+    hollow: Final = zlib.compress(b"")[:2] + empty_stored_block * (8 * 180 * 1024) + zlib.compress(b"")[2:]
+    assert zlib.decompress(hollow) == b""
+    segment: Final = len(hollow) // 8 + 1
+    assert segment < cap < len(hollow)
+    wire_chunks: Final = tuple(
+        outer.compress(hollow[start : start + segment]) + outer.flush(zlib.Z_SYNC_FLUSH)
+        for start in range(0, len(hollow), segment)
+    ) + (outer.flush(),)
+
+    class WireStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            for chunk in wire_chunks:
+                yield chunk
+
+    respx_mock.get("https://cdn.example/hollow").respond(
+        200, stream=WireStream(), headers={"content-encoding": "deflate, gzip"}
+    )
+    handler = AsyncHTTPHandler()
+    try:
+        with pytest.raises(HTTPResponseLimitError, match="size limit"):
+            await handler.get("https://cdn.example/hollow", max_response_bytes=cap)
+    finally:
+        await handler.close()
 
 
 @pytest.mark.asyncio
