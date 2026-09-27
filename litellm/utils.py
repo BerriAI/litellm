@@ -295,7 +295,9 @@ from typing_extensions import assert_never
 
 from litellm import utils as litellm_utils
 from litellm.litellm_core_utils.thinking_param_translation import (
-    apply_thinking_param_translation,
+    ThinkingParamsState,
+    thaw_mapping,
+    translate_thinking_params,
 )
 
 # These are lazy loaded via __getattr__
@@ -4335,47 +4337,38 @@ def remove_sensitive_keys_from_dict(d: dict) -> dict:
     return d
 
 
-def _apply_model_info_thinking_translation(
+def _translate_thinking_in_params(
     *,
     model_info: Mapping[str, object] | None,
-    passed_params: dict,
-    non_default_params: dict,
-) -> None:
-    prior_thinking: Final = non_default_params.get("thinking")
-    prior_effort: Final = non_default_params.get("reasoning_effort")
-    existing_extra_raw: Final = passed_params.get("extra_body")
-    existing_extra: Final = existing_extra_raw if isinstance(existing_extra_raw, Mapping) else None
-    translated: Final = apply_thinking_param_translation(
-        model_info=model_info,
-        thinking=prior_thinking,
-        reasoning_effort=prior_effort,
-        existing_extra_body=existing_extra,
+    passed_params: dict,  # mutable-ok: get_optional_params hands over its legacy mutable params
+    non_default_params: dict,  # mutable-ok: get_optional_params hands over its legacy mutable params
+) -> tuple[dict, dict]:  # mutable-ok: get_optional_params keeps mutating both copies downstream
+    existing_extra_body: Final = passed_params.get("extra_body")
+    state: Final = ThinkingParamsState(
+        thinking=non_default_params.get("thinking"),
+        reasoning_effort=non_default_params.get("reasoning_effort"),
+        extra_body=existing_extra_body if isinstance(existing_extra_body, Mapping) else MappingProxyType({}),
     )
-    prior_extra: Final = dict(existing_extra) if existing_extra is not None else {}  # mutable-ok: equality snapshot
-    if (
-        translated.thinking is prior_thinking
-        and translated.reasoning_effort is prior_effort
-        and dict(translated.extra_body) == prior_extra  # mutable-ok: MappingProxyType equality snapshot
-    ):
-        return
-
-    # mutable-ok: get_optional_params already mutates passed_params / non_default_params in place
-    if translated.thinking is None:
-        non_default_params.pop("thinking", None)
-        passed_params["thinking"] = None
-    else:
-        non_default_params["thinking"] = translated.thinking
-        passed_params["thinking"] = translated.thinking
-
-    if translated.reasoning_effort is None:
-        non_default_params.pop("reasoning_effort", None)
-        passed_params["reasoning_effort"] = None
-    else:
-        non_default_params["reasoning_effort"] = translated.reasoning_effort
-        passed_params["reasoning_effort"] = translated.reasoning_effort
-
-    if translated.extra_body:
-        passed_params["extra_body"] = dict(translated.extra_body)  # mutable-ok: openai extra_body is a dict
+    translated: Final = translate_thinking_params(model_info=model_info, state=state)
+    if translated is state:
+        return passed_params, non_default_params
+    thinking_values: Final = MappingProxyType(
+        {"thinking": translated.thinking, "reasoning_effort": translated.reasoning_effort}
+    )
+    untouched_non_default: Final = MappingProxyType(
+        {key: value for key, value in non_default_params.items() if key not in thinking_values}
+    )
+    surviving_thinking_values: Final = MappingProxyType(
+        {key: value for key, value in thinking_values.items() if value is not None}
+    )
+    return (
+        {  # mutable-ok: get_optional_params keeps mutating passed_params downstream
+            **passed_params,
+            **thinking_values,
+            "extra_body": thaw_mapping(translated.extra_body),
+        },
+        {**untouched_non_default, **surviving_thinking_values},  # mutable-ok: _check_valid_arg pops unsupported keys
+    )
 
 
 def pre_process_optional_params(passed_params: dict, non_default_params: dict, custom_llm_provider: str) -> dict:
@@ -4504,14 +4497,14 @@ def get_optional_params(
     **kwargs: object,
 ):
     drop_params = normalize_drop_params(drop_params)  # rebind-ok: config and DB deployments pass "true" as a string
-    passed_params: Final = locals().copy()
-    passed_params.pop("kwargs")
+    untranslated_passed_params: Final = locals().copy()
+    untranslated_passed_params.pop("kwargs")
     special_params: Final = kwargs
     # Remove base_model from passed_params so it doesn't interfere with
     # non_default_params / _check_valid_arg — it's a routing hint, not an
     # OpenAI param.
-    passed_params.pop("base_model", None)
-    model_info_for_translation: Final = passed_params.pop("model_info", None)
+    untranslated_passed_params.pop("base_model", None)
+    untranslated_passed_params.pop("model_info", None)
     provider_config: BaseConfig | None = None
     if custom_llm_provider is not None and custom_llm_provider in [provider.value for provider in LlmProviders]:
         provider_config = ProviderConfigManager.get_provider_chat_config(
@@ -4519,18 +4512,18 @@ def get_optional_params(
             provider=LlmProviders(custom_llm_provider),
             base_model=base_model,
         )
-    non_default_params: Final = pre_process_non_default_params(
-        passed_params=passed_params,
+    untranslated_non_default_params: Final = pre_process_non_default_params(
+        passed_params=untranslated_passed_params,
         special_params=special_params,
         custom_llm_provider=custom_llm_provider,
         additional_drop_params=additional_drop_params,
         model=model,
         provider_config=provider_config,
     )
-    _apply_model_info_thinking_translation(
-        model_info=model_info_for_translation if isinstance(model_info_for_translation, Mapping) else None,
-        passed_params=passed_params,
-        non_default_params=non_default_params,
+    passed_params, non_default_params = _translate_thinking_in_params(
+        model_info=model_info,
+        passed_params=untranslated_passed_params,
+        non_default_params=untranslated_non_default_params,
     )
     optional_params = pre_process_optional_params(
         passed_params=passed_params,
