@@ -2744,6 +2744,23 @@ class JWTAuthManager:
         ):
             JWTAuthManager._raise_team_passthrough_route_denial(route=route)
 
+        if managed is not None:
+            from litellm.proxy.agent_endpoints.auth.agent_permission_handler import resolve_delegated_agent_team
+
+            granting_team: Final = await resolve_delegated_agent_team(
+                managed.user_id, managed.agent_id, team_id, explicit_team=header_team is not None
+            )
+            if granting_team != team_id:
+                team_id = granting_team
+                team_object = await get_team_object(
+                    team_id=team_id,
+                    prisma_client=prisma_client,
+                    user_api_key_cache=user_api_key_cache,
+                    parent_otel_span=parent_otel_span,
+                    proxy_logging_obj=proxy_logging_obj,
+                    check_db_only=True,
+                )
+
         # Extract alias fields for resolution (if configured)
         org_alias: Final = handler.get_org_alias(token=jwt_valid_token, default_value=None)
 
