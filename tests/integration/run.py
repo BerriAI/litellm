@@ -95,7 +95,9 @@ def main() -> int:
     if options.group == "mcp":
         from integration._support.conformance import require_passes, required_conformance_nodes
 
-        required: Final = tuple(node for node in required_conformance_nodes() if node.split("::")[0] in selected)
+        required: Final = tuple(
+            node for node in required_conformance_nodes() if not options.files or node.split("::")[0] in selected
+        )
         if required:
             require_passes(output, required)
     return 0
