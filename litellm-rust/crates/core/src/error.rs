@@ -37,6 +37,8 @@ pub enum RouteError {
     Http(#[from] litellm_http::Error),
     #[error(transparent)]
     Secret(#[from] SecretError),
+    #[error("post-call hook failed: {0}")]
+    PostCallHook(#[source] Arc<RouteError>),
 }
 
 /// Whether the provider had already been called when the route failed. Before the send, a
@@ -47,10 +49,25 @@ pub enum Phase {
     AfterSend,
 }
 
+impl From<litellm_host::machine::MachineFault> for RouteError {
+    fn from(fault: litellm_host::machine::MachineFault) -> Self {
+        use litellm_host::machine::MachineFault;
+        Self::InvalidRequest(match fault {
+            MachineFault::Abandoned => "host driver was abandoned".into(),
+            MachineFault::Protocol(message) => format!("host {message}").into(),
+        })
+    }
+}
+
 impl RouteError {
+    pub(crate) fn post_call(error: Self) -> Self {
+        Self::PostCallHook(Arc::new(error))
+    }
+
     pub fn phase(&self) -> Phase {
         match self {
             Self::InvalidResponse(_)
+            | Self::PostCallHook(_)
             | Self::Transport(TransportError::Http { .. } | TransportError::Network(_)) => {
                 Phase::AfterSend
             }
@@ -78,9 +95,11 @@ impl RouteError {
             | Self::Unsupported(_)
             | Self::Headers(_) => true,
             Self::Auth(error) => !matches!(error, litellm_auth::Error::MissingApiKey { .. }),
-            Self::InvalidResponse(_) | Self::Transport(_) | Self::Http(_) | Self::Secret(_) => {
-                false
-            }
+            Self::InvalidResponse(_)
+            | Self::Transport(_)
+            | Self::Http(_)
+            | Self::Secret(_)
+            | Self::PostCallHook(_) => false,
         }
     }
 }

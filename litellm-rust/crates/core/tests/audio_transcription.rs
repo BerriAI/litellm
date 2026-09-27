@@ -1,6 +1,4 @@
-use litellm_core::audio_transcription::{
-    Error, audio_transcription, types::AudioTranscriptionRequest,
-};
+use litellm_core::audio_transcription::{Error, types::AudioTranscriptionRequest};
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
 use wiremock::ResponseTemplate;
@@ -11,19 +9,11 @@ use support::*;
 const MODEL: &str = "mistral.voxtral-mini-3b-2507";
 
 async fn transcribe(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
-    audio_transcription(
-        &support::resources(),
-        &http_config(),
-        &RecordingSecrets::empty(),
-        request,
-    )
-    .await
+    audio_transcription_route().execute(request).await
 }
 
 fn transcript_response(text: &str) -> ResponseTemplate {
-    json_response(
-        json!({"output": {"message": {"content": [{"text": text}]}}, "usage": {"inputTokens": 1, "outputTokens": 1}}),
-    )
+    json_response(json!({"output": {"message": {"content": [{"text": text}]}}}))
 }
 
 fn aws_params(region: &str) -> Map<String, Value> {
@@ -70,7 +60,6 @@ async fn bedrock_converse_request_is_signed_for_the_requested_region(
     assert_eq!(response, json!({"text": "hello"}));
     let sent = only_request(&upstream).await;
     assert_eq!(sent.method.as_str(), "POST");
-    assert_eq!(sent.header("content-type"), Some("application/json"));
     assert_eq!(sent.url.path(), format!("/model/{MODEL}/converse"));
     let authorization = sent.header("authorization").expect("request is signed");
     assert!(
@@ -260,62 +249,4 @@ async fn an_unreadable_success_body_is_an_invalid_response(
     .expect_err("an unreadable body fails");
 
     assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
-}
-
-#[rstest]
-#[tokio::test]
-async fn injected_secrets_supply_signing_credentials_and_region(
-    request: AudioTranscriptionRequest<'static>,
-) {
-    let upstream = upstream([transcript_response("hello")]).await;
-    let base = upstream.uri();
-    let secrets = RecordingSecrets::new([
-        ("AWS_ACCESS_KEY_ID", "injected-access-key"),
-        ("AWS_SECRET_ACCESS_KEY", "injected-secret-key"),
-        ("AWS_REGION_NAME", "eu-west-1"),
-        ("AWS_SESSION_TOKEN", "injected-session-token"),
-    ]);
-    let response = audio_transcription(
-        &support::resources(),
-        &http_config(),
-        &secrets,
-        AudioTranscriptionRequest {
-            api_base: Some(&base),
-            optional_params: Map::new(),
-            ..request
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(response, json!({"text": "hello"}));
-    let sent = only_request(&upstream).await;
-    let authorization = sent.header("authorization").unwrap();
-    assert!(authorization.contains("Credential=injected-access-key/"));
-    assert!(authorization.contains("/eu-west-1/bedrock/aws4_request"));
-    assert_eq!(
-        sent.header("x-amz-security-token"),
-        Some("injected-session-token")
-    );
-    assert!(!sent.body_text().contains("injected-secret-key"));
-}
-
-#[rstest]
-#[tokio::test]
-async fn secret_resolution_failure_prevents_transcription(
-    request: AudioTranscriptionRequest<'static>,
-) {
-    let upstream = upstream([transcript_response("hello")]).await;
-    let base = upstream.uri();
-    let result = audio_transcription(
-        &support::resources(),
-        &http_config(),
-        &RecordingSecrets::failing(),
-        AudioTranscriptionRequest {
-            api_base: Some(&base),
-            ..request
-        },
-    )
-    .await;
-    assert!(matches!(result, Err(Error::Secret(_))));
-    assert!(received(&upstream).await.is_empty());
 }

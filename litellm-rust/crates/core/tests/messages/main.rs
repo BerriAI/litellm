@@ -1,8 +1,11 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use litellm_core::messages::{
     Error, MessagesCall, MessagesShaping,
-    route::{LocalMessagesHost, MessagesMachine, MessagesOutput, messages_machine},
+    route::{Messages, MessagesMachine, MessagesOutput},
 };
 use litellm_http::{HttpSettings, Resolution};
 use litellm_secrets::source::SecretSource;
@@ -95,16 +98,16 @@ fn headers<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Option<Ma
     )
 }
 
-fn machine(secrets: Arc<dyn SecretSource>) -> MessagesMachine {
-    messages_machine(&support::resources(), &http_config(), secrets)
-        .expect("default HTTP settings build a client")
+fn machine(secrets: Arc<dyn SecretSource>) -> impl FnOnce(MessagesCall) -> MessagesMachine {
+    move |request| messages_route(secrets).machine(request)
 }
 
 async fn run_with(
     secrets: Arc<RecordingSecrets>,
     call: MessagesCall,
 ) -> Result<MessagesOutput, Error> {
-    litellm_host::run::run(machine(secrets), &LocalMessagesHost::new(call)).await
+    let host = LocalMessagesHost::new(call);
+    litellm_host::in_process::run_hosted(machine(secrets)(host.request()?), host.runtime()).await
 }
 
 /// Runs the route with a secret source that knows nothing, so no environment leaks in.
@@ -114,7 +117,67 @@ async fn run(call: MessagesCall) -> Result<MessagesOutput, Error> {
 
 async fn run_message(call: MessagesCall) -> AnthropicMessagesResponse {
     match run(call).await.expect("messages call succeeds") {
-        MessagesOutput::Message(message) => *message,
-        MessagesOutput::Streamed => panic!("a non-streaming call returned a stream"),
+        MessagesOutput::Complete(message) => *message,
+        MessagesOutput::StreamEnded | MessagesOutput::Detached => {
+            panic!("a non-streaming call returned a stream")
+        }
+    }
+}
+
+struct LocalMessagesHost {
+    call: Mutex<Option<MessagesCall>>,
+}
+
+impl LocalMessagesHost {
+    fn new(call: MessagesCall) -> Self {
+        Self {
+            call: Mutex::new(Some(call)),
+        }
+    }
+}
+
+impl LocalMessagesHost {
+    pub fn request(&self) -> Result<MessagesCall, Error> {
+        self.call
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .ok_or_else(|| Error::InvalidRequest("messages request was already projected".into()))
+    }
+    pub fn runtime(&self) -> litellm_host::in_process::Host<'_, (), Self, ()> {
+        litellm_host::in_process::Host {
+            services: &(),
+            hooks: self,
+            stream: &(),
+            observer: Some(self),
+        }
+    }
+}
+
+impl litellm_host::lifecycle::CallObserver for LocalMessagesHost {
+    fn observe(&self, _: litellm_host::event::CallEvent) {}
+}
+impl litellm_host::hooks::RouteHooks<<Messages as litellm_host::protocol::Protocol>::Error>
+    for LocalMessagesHost
+{
+    async fn before_provider_request(
+        &self,
+        wire: litellm_host::event::WireRequest,
+        _: litellm_host::event::RequestContext,
+    ) -> Result<
+        litellm_host::event::WireRequest,
+        <Messages as litellm_host::protocol::Protocol>::Error,
+    > {
+        Ok(wire)
+    }
+    async fn on_event(
+        &self,
+        event: litellm_host::event::MachineEvent,
+    ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
+        litellm_host::lifecycle::CallObserver::observe(
+            self,
+            litellm_host::event::CallEvent::Machine(event),
+        );
+        Ok(())
     }
 }

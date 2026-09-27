@@ -13,20 +13,63 @@ mod request;
 use std::sync::Arc;
 
 use axum::{Router, routing::post};
-use litellm_core::resources::CoreResources;
-use litellm_http::HttpClientConfig;
-use litellm_llms::base_llm::ocr::handler::OcrClient;
+use litellm_core::{
+    audio_transcription::AudioTranscriptionRoute, chat_completions::ChatCompletionsRoute,
+    messages::MessagesRoute, ocr::OcrRoute, resources::CoreResources,
+};
+use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
+use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
 pub use error::Error;
 pub use litellm_router::{Deployment, Router as ModelList};
 
 pub struct Gateway {
+    pub audio_transcription: AudioTranscriptionRoute,
+    pub chat_completions: ChatCompletionsRoute,
+    pub messages: MessagesRoute,
+    pub ocr: OcrRoute,
+    pub models: ModelList,
+    pub secrets: Arc<dyn SecretSource>,
     pub resources: CoreResources,
     pub http: HttpClientConfig,
-    pub secrets: Arc<dyn SecretSource>,
-    pub models: ModelList,
-    pub ocr: OcrClient,
+}
+
+impl Gateway {
+    pub fn new(
+        resources: CoreResources,
+        http: HttpClientConfig,
+        secrets: Arc<dyn SecretSource>,
+        models: ModelList,
+    ) -> Result<Self, litellm_http::Error> {
+        let provider = resources.pool.client(&http, ClientVariant::Provider)?;
+        let auth = resources.auth.clone();
+        Ok(Self {
+            audio_transcription: AudioTranscriptionRoute::new(
+                provider.clone(),
+                auth.clone(),
+                secrets.clone(),
+            ),
+            chat_completions: ChatCompletionsRoute::new(
+                provider.clone(),
+                auth.clone(),
+                secrets.clone(),
+            ),
+            messages: MessagesRoute::new(provider, auth.clone(), secrets.clone()),
+            ocr: OcrRoute::new(OcrClient::new(
+                &resources.pool,
+                &http,
+                UrlPolicy::default(),
+                auth,
+                OcrSettings::default(),
+                secrets.clone(),
+            )?),
+            models,
+            secrets,
+            resources,
+            http,
+        })
+    }
 }
 
 pub fn router(gateway: Arc<Gateway>) -> Router {

@@ -12,8 +12,8 @@ struct DiagnosticMachine;
 impl Protocol for DiagnosticMachine {
     type Response = ();
     type Error = String;
-    type Projection = ();
-    type Op = ();
+    type Request = ();
+    type HostCall = ();
     type Chunk = ();
     type StreamHead = ();
 }

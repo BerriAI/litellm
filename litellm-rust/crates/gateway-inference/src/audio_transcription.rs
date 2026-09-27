@@ -6,7 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_core::audio_transcription::{audio_transcription, types::AudioTranscriptionRequest};
+use litellm_core::audio_transcription::types::AudioTranscriptionRequest;
 use serde_json::{Value, json};
 
 use crate::{Error, Gateway, request};
@@ -38,11 +38,9 @@ async fn handle(gateway: &Gateway, request: Request) -> Result<Value, Error> {
             .cloned()
             .ok_or_else(|| Error::InvalidBody("audio is required".into()))?,
     };
-    Ok(audio_transcription(
-        &gateway.resources,
-        &gateway.http,
-        gateway.secrets.as_ref(),
-        AudioTranscriptionRequest {
+    Ok(gateway
+        .audio_transcription
+        .execute(AudioTranscriptionRequest {
             model: &deployment.model,
             audio,
             api_key: deployment.api_key.as_deref(),
@@ -54,7 +52,6 @@ async fn handle(gateway: &Gateway, request: Request) -> Result<Value, Error> {
                 .filter(|(name, _)| !matches!(name.as_str(), "model" | "audio"))
                 .collect(),
             timeout: deployment.timeout,
-        },
-    )
-    .await?)
+        })
+        .await?)
 }

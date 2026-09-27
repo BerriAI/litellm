@@ -1,18 +1,18 @@
 use std::sync::Arc;
 
-use super::{HostChannel, MachineFault};
-use crate::{host::Reply, protocol::Protocol};
+use super::{HostServices, MachineFault};
+use crate::{protocol::Protocol, protocol::Reply};
 use litellm_auth::{Error, ResolvedCredential, TokenFuture, TokenProvider, TokenProviderHandle};
 
 /// A protocol whose host can mint credentials on the call's behalf.
 pub trait TokenProtocol: Protocol {
-    fn acquire_token_op(reply: Reply<ResolvedCredential>) -> Self::Op;
+    fn acquire_token_op(reply: Reply<ResolvedCredential>) -> Self::HostCall;
 }
 
 /// A [`TokenProvider`] that asks the host for each credential through the call's own
 /// operation channel, so the host answers it on the caller's thread and context.
 pub struct HostTokenProvider<R: Protocol> {
-    channel: HostChannel<R>,
+    channel: HostServices<R>,
 }
 
 impl<R: Protocol> std::fmt::Debug for HostTokenProvider<R> {
@@ -26,7 +26,7 @@ where
     R: TokenProtocol,
     R::Error: From<MachineFault> + std::fmt::Display,
 {
-    pub fn handle(channel: HostChannel<R>) -> TokenProviderHandle {
+    pub fn handle(channel: HostServices<R>) -> TokenProviderHandle {
         TokenProviderHandle::new(Arc::new(Self { channel }))
     }
 }
@@ -39,7 +39,7 @@ where
     fn acquire(&self) -> TokenFuture<'_> {
         Box::pin(async move {
             self.channel
-                .custom_op(R::acquire_token_op)
+                .call(R::acquire_token_op)
                 .await
                 .map_err(|error| Error::CredentialAcquisition(error.to_string().into()))
         })

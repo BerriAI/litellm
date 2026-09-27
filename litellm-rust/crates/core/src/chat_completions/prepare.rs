@@ -1,5 +1,4 @@
 use litellm_auth::SecretValue;
-use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
 use litellm_core_utils::settings::Lookup;
 use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
@@ -9,11 +8,12 @@ use serde_json::Value;
 
 use super::{
     Error,
-    common_utils::{chat_completions_provider_config, string_headers},
+    common_utils::{chat_completions_provider, string_headers},
 };
 use crate::chat_completions::types::{
     ChatCompletionsRequest, ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest,
 };
+use crate::provider::resolve_llm_provider;
 
 pub(super) struct ResolvedProvider {
     pub(super) model: String,
@@ -25,23 +25,13 @@ pub(super) fn resolve_provider_config<'a>(
     model: &'a str,
     custom_llm_provider: Option<&'a str>,
 ) -> Result<ResolvedProvider, Error> {
-    let provider_info = get_custom_llm_provider(model, custom_llm_provider)
-        .or_else(|| {
-            custom_llm_provider.map(|provider| CustomLlmProvider {
-                model,
-                custom_llm_provider: provider,
-            })
-        })
-        .ok_or_else(|| {
-            Error::InvalidProvider(
-                "unable to resolve custom_llm_provider for chat completions request".to_string(),
-            )
-        })?;
-    let config = chat_completions_provider_config(provider_info.custom_llm_provider)
-        .ok_or_else(|| Error::InvalidProvider(provider_info.custom_llm_provider.to_string()))?;
+    let provider_info = resolve_llm_provider(model, custom_llm_provider, "chat completions")?;
+    let config = chat_completions_provider(provider_info.provider)
+        .ok_or_else(|| Error::InvalidProvider(<&str>::from(provider_info.provider).to_string()))?
+        .config();
     Ok(ResolvedProvider {
         model: provider_info.model.to_string(),
-        custom_llm_provider: provider_info.custom_llm_provider.to_string(),
+        custom_llm_provider: <&str>::from(provider_info.provider).to_string(),
         config,
     })
 }

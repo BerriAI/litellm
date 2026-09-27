@@ -16,7 +16,6 @@ use litellm_gateway_inference::{Gateway, ModelList};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
 };
-use litellm_llms::base_llm::ocr::settings::OcrSettings;
 use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
@@ -27,20 +26,12 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, litellm_http::Er
     let client = pool.client(&http, ClientVariant::Provider)?;
     let secrets = Arc::new(EnvironmentSecrets::python_compatible(client));
     let resources = CoreResources::new(pool);
-    let ocr = resources.ocr_client(
-        &http,
-        Default::default(),
-        OcrSettings::default(),
-        secrets.clone(),
-    )?;
-
-    Ok(Arc::new(Gateway {
+    Ok(Arc::new(Gateway::new(
         resources,
         http,
         secrets,
-        models: ModelList::from_model_list(&config.model_list),
-        ocr,
-    }))
+        ModelList::from_model_list(&config.model_list),
+    )?))
 }
 
 pub fn router(inference: Arc<Gateway>, config: &Config) -> Router {

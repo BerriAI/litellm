@@ -207,8 +207,5 @@ impl ExecutionBody for SemanticExecution {
 }
 
 pub(super) fn drive(py: Python<'_>, body: SemanticExecution) -> PyResult<Bound<'_, PyAny>> {
-    let execution = Py::new(py, Execution::new(body))?;
-    py.import("litellm.rust_bridge.lifecycle")?
-        .getattr("drive")?
-        .call1((execution,))
+    Execution::new(body).into_coroutine(py)
 }
