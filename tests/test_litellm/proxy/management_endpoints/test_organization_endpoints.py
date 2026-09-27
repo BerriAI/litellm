@@ -647,7 +647,6 @@ async def test_organization_member_add_budget_omission_and_null_leave_budget_uns
     from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
 
     user = LiteLLM_UserTable(user_id="user-1", user_role="internal_user")
-
     async def create_membership(data):
         return LiteLLM_OrganizationMembershipTable(
             user_id="user-1",
