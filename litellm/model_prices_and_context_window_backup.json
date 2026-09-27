@@ -63974,7 +63974,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -63990,7 +63991,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -64007,7 +64009,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -64024,7 +64027,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -64041,7 +64045,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -64057,7 +64062,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -64073,7 +64079,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
@@ -64091,6 +64098,9 @@
         "output_cost_per_second_480p": 0.05,
         "output_cost_per_second_720p": 0.07,
         "source": "https://docs.x.ai/docs/models/grok-imagine-video",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
         "supported_modalities": [
             "text",
             "image",
@@ -64109,6 +64119,9 @@
         "output_cost_per_second_480p": 0.08,
         "output_cost_per_second_720p": 0.14,
         "source": "https://docs.x.ai/docs/models/grok-imagine-video-1.5",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
         "supported_modalities": [
             "text",
             "image",
@@ -64144,6 +64157,9 @@
         "output_cost_per_second_480p": 0.08,
         "output_cost_per_second_720p": 0.14,
         "source": "https://docs.x.ai/docs/models/grok-imagine-video-1.5",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
         "supported_modalities": [
             "text",
             "image",
@@ -64162,6 +64178,9 @@
         "output_cost_per_second_480p": 0.08,
         "output_cost_per_second_720p": 0.14,
         "source": "https://docs.x.ai/docs/models/grok-imagine-video-1.5",
+        "supported_endpoints": [
+            "/v1/videos"
+        ],
         "supported_modalities": [
             "text",
             "image",
@@ -64206,7 +64225,8 @@
         "mode": "image_generation",
         "source": "https://docs.x.ai/docs/models",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supported_modalities": [
             "text",
