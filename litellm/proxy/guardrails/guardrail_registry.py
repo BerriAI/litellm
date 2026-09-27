@@ -37,6 +37,9 @@ from litellm.proxy.guardrails.guardrail_hooks.presidio import (
 from litellm.proxy.guardrails.guardrail_hooks.tool_permission import (
     ToolPermissionGuardrail,
 )
+from litellm.proxy.guardrails.guardrail_hooks.ztds import (
+    ZTDSGuardrail,
+)
 from litellm.proxy.types_utils.utils import get_instance_fn
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.prisma_protocols import TableActions
@@ -60,6 +63,7 @@ from .guardrail_initializers import (
     initialize_lakera_v2,
     initialize_presidio,
     initialize_tool_permission,
+    initialize_ztds,
 )
 
 if TYPE_CHECKING:
@@ -86,6 +90,7 @@ guardrail_initializer_registry: Final = {
     SupportedGuardrailIntegrations.TOOL_PERMISSION.value: initialize_tool_permission,
     SupportedGuardrailIntegrations.GRAYSWAN.value: initialize_grayswan,
     SupportedGuardrailIntegrations.LLM_AS_A_JUDGE.value: initialize_llm_as_a_judge,
+    SupportedGuardrailIntegrations.ZTDS.value: initialize_ztds,
 }
 
 CONFIG_GUARDRAIL_ID_NAMESPACE: Final = uuid.UUID("625f63f4-935a-50e5-98b5-fbe77babc74a")
@@ -99,6 +104,7 @@ guardrail_class_registry: Final[dict[str, type[CustomGuardrail]]] = {
     SupportedGuardrailIntegrations.LAKERA_V2.value: LakeraAIGuardrail,
     SupportedGuardrailIntegrations.PRESIDIO.value: _OPTIONAL_PresidioPIIMasking,
     SupportedGuardrailIntegrations.TOOL_PERMISSION.value: ToolPermissionGuardrail,
+    SupportedGuardrailIntegrations.ZTDS.value: ZTDSGuardrail,
 }
 
 
