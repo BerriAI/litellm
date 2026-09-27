@@ -1,3 +1,4 @@
+pub mod route;
 pub mod types;
 pub use crate::error::RouteError as Error;
 mod common_utils;

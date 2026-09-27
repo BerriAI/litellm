@@ -14,7 +14,7 @@ use litellm_secrets::{SecretValue, source::SecretSource};
 use serde_json::Value;
 use tower::ServiceExt;
 
-struct NoSecrets;
+pub struct NoSecrets;
 
 impl SecretSource for NoSecrets {
     fn get_secret_str<'a>(

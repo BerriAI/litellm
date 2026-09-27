@@ -1,44 +1,44 @@
 use std::sync::Arc;
 
-use axum::{
-    Json,
-    extract::{Request, State},
-    response::{IntoResponse, Response},
-};
+use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use litellm_auth::SecretValue;
 use litellm_core::ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
 use litellm_llms::base_llm::ocr::transformation::OcrDocument;
 use serde_json::Value;
 
-use crate::{Error, Gateway, request};
+use crate::{
+    Error, Gateway,
+    request::{self, InferenceBody},
+};
 
-pub(crate) async fn create(State(gateway): State<Arc<Gateway>>, request: Request) -> Response {
-    match handle(&gateway, request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => error.openai_response(),
-    }
+pub(crate) async fn create(
+    State(gateway): State<Arc<Gateway>>,
+    headers: HeaderMap,
+    body: InferenceBody,
+) -> Result<impl IntoResponse, Error> {
+    handle(&gateway, &headers, body).await.map(Json)
 }
 
-async fn handle(gateway: &Gateway, request: Request) -> Result<Value, Error> {
-    let header_format = request
-        .headers()
+async fn handle(
+    gateway: &Gateway,
+    headers: &HeaderMap,
+    InferenceBody {
+        fields: body,
+        upload,
+    }: InferenceBody,
+) -> Result<Value, Error> {
+    let header_format = headers
         .get("x-req-format")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let (body, upload) = request::parse(request).await?;
-    let deployment = request::deployment(gateway, &body)?;
+    let deployment = request::resolve_deployment(gateway, &body)?;
     let document = match upload {
         Some(upload) => OcrDocumentInput::Bytes {
             bytes: upload.bytes,
             file_name: upload.file_name,
             mime_type: upload.mime_type,
         },
-        None => OcrDocument::try_from(
-            body.get("document")
-                .cloned()
-                .ok_or_else(|| Error::InvalidBody("document is required".into()))?,
-        )?
-        .into(),
+        None => OcrDocument::try_from(body.get("document").cloned().unwrap_or_default())?.into(),
     };
     let format = body
         .get("req_format")
