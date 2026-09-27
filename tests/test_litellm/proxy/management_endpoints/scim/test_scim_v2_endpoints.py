@@ -6940,23 +6940,25 @@ async def test_legacy_user_routes_cannot_join_a_source_owned_team(
     monkeypatch.setattr(scim_v2, "_handle_team_membership_changes", roster)
     user: Final = SCIMUser(schemas=[], userName="new-user", groups=[SCIMUserGroup(value="directory-team")])
     auth: Final = UserAPIKeyAuth(token="legacy-hash")
+    pending: Final = (
+        scim_v2.create_user(user=user, auth=auth)
+        if route == "create"
+        else scim_v2.update_user(user_id="ordinary-user", user=user, auth=auth)
+        if route == "replace"
+        else scim_v2.patch_user(
+            user_id="ordinary-user",
+            patch_ops=SCIMPatchOp(
+                Operations=[
+                    SCIMPatchOperation(
+                        op=route.removeprefix("patch-"), path="groups", value=[{"value": "directory-team"}]
+                    )
+                ]
+            ),
+            auth=auth,
+        )
+    )
     with pytest.raises((HTTPException, ProxyException)) as failure:
-        if route == "create":
-            await scim_v2.create_user(user=user, auth=auth)
-        elif route == "replace":
-            await scim_v2.update_user(user_id="ordinary-user", user=user, auth=auth)
-        else:
-            await scim_v2.patch_user(
-                user_id="ordinary-user",
-                patch_ops=SCIMPatchOp(
-                    Operations=[
-                        SCIMPatchOperation(
-                            op=route.removeprefix("patch-"), path="groups", value=[{"value": "directory-team"}]
-                        )
-                    ]
-                ),
-                auth=auth,
-            )
+        await pending
     status: Final = failure.value.status_code if isinstance(failure.value, HTTPException) else failure.value.code
     assert str(status) == "403"
     create.assert_not_awaited()
