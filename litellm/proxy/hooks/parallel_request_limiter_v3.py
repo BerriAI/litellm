@@ -3095,9 +3095,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 if agent_id == user_api_key_dict.agent_id
                 else user_api_key_dict.invoked_agent_policy
             )
-            descriptors.extend(
-                self._create_agent_rate_limit_descriptors(agent_id=agent_id, data=data, policy=policy)
-            )
+            descriptors.extend(self._create_agent_rate_limit_descriptors(agent_id=agent_id, data=data, policy=policy))
 
         return descriptors
 
