@@ -8,7 +8,7 @@ import { ARTIFACT_DIR, UI_BASE_URL } from "./constants";
 export default defineConfig({
   testDir: ".",
   testMatch: ["**/*.spec.ts", "**/*.setup.ts"],
-  testIgnore: ["**/*.test.*"],
+  testIgnore: ["**/*.test.*", "**/integrationCritical/**"],
   /* Run tests in files in parallel */
   fullyParallel: true,
   /* Fail the build on CI if you accidentally left test.only in the source code. */

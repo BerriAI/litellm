@@ -209,7 +209,7 @@ describe("localized login", () => {
     (useUIConfig as ReturnType<typeof vi.fn>).mockReturnValue({ data: { sso_configured: false }, isLoading: false });
     const user = userEvent.setup();
     renderLoginPage();
-    await user.click(await screen.findByRole("button", { name: "Login", exact: true }));
+    await user.click(await screen.findByRole("button", { name: "Login" }));
     expect(await screen.findByText("Please enter your username")).toBeInTheDocument();
     await user.click(screen.getByRole("button", { name: "Language" }));
     await user.click(await screen.findByRole("menuitemradio", { name: "简体中文" }));
@@ -218,7 +218,7 @@ describe("localized login", () => {
     expect(mockMutate).not.toHaveBeenCalled();
     fireEvent.change(screen.getByLabelText("用户名"), { target: { value: "admin" } });
     fireEvent.change(screen.getByLabelText("密码"), { target: { value: "opaque-password" } });
-    await user.click(screen.getByRole("button", { name: "登录", exact: true }));
+    await user.click(screen.getByRole("button", { name: "登录" }));
     await waitFor(() => expect(mockMutate).toHaveBeenCalledTimes(1));
     expect(mockMutate.mock.calls[0][0]).toStrictEqual({ username: "admin", password: "opaque-password", useV3: false });
     expect(screen.getByText("MASTER_KEY")).toBeInTheDocument();

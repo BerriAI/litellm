@@ -1,5 +1,6 @@
 import { z } from "zod/v4";
 import { MCPServer, MCPToolset } from "../mcp_tools/types";
+import { MCP_ALL_TOOLS_WILDCARD } from "../mcp_tools/constants";
 
 // Mirrors the backend resolver's union (direct + access_group + tool_perm + toolset), so the
 // editor shows exactly the servers this permission level entitles.
@@ -54,6 +55,19 @@ const accessGroupNamesOf = (server: MCPServer): readonly string[] =>
     return [typeof parsed.data === "string" ? parsed.data : parsed.data.name];
   });
 
+// The server catalog can be trimmed to the caller's grants, so the unfiltered group registry
+// (GET /v1/mcp/access_groups) has to agree before a group is called empty.
+export const emptyMcpAccessGroups = (
+  allServers: readonly MCPServer[],
+  populatedAccessGroups: readonly string[],
+  selectedAccessGroups: readonly string[],
+): readonly string[] =>
+  selectedAccessGroups.filter(
+    (group) =>
+      !populatedAccessGroups.includes(group) &&
+      !allServers.some((server) => accessGroupNamesOf(server).includes(group)),
+  );
+
 // Which servers an identifier names, with the same precedence the backend's expand_permission_list
 // applies: a string that is a registry server id names exactly that server, and only a string that
 // is not falls back to server_name/alias, which can name several. Matching all three fields at once
@@ -107,6 +121,12 @@ export const mcpAllowedToolsFor = (
   if (keys.length === 0) return undefined;
   return [...new Set(keys.flatMap((key) => toolPermissions[key] ?? []))];
 };
+
+// An allowed-tools union carrying the wildcard grants every current and future tool on the
+// server; `undefined` (no entry at all) is unrestricted for a different reason and is not a
+// wildcard grant the editor should expand.
+export const mcpGrantsAllTools = (allowed: readonly string[] | undefined): boolean =>
+  allowed !== undefined && allowed.includes(MCP_ALL_TOOLS_WILDCARD);
 
 // Tool names the given toolsets grant on this server, `undefined` when they grant none.
 const mcpToolsetToolsFor = (

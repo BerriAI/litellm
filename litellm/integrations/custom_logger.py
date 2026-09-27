@@ -3,12 +3,13 @@
 import re
 import traceback
 from collections.abc import AsyncGenerator, Mapping, Sequence
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Optional
 
 from pydantic import BaseModel
 
 from litellm._logging import verbose_logger
-from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH_SENSITIVE_DATA_MASKER, EMPTY_MAPPING
 from litellm.types.integrations.argilla import ArgillaItem
 from litellm.types.integrations.custom_logger import AgenticLoopPlan
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionRequest
@@ -117,6 +118,7 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         alias_map: Final = {
             "langfuse_otel": "langfuse",
+            "s3_v2": "s3",
         }
         lookup_name: Final = alias_map.get(normalized_name, normalized_name)
 
@@ -419,6 +421,24 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     ):  # raise exception if invalid, return a str for the user to receive - if rejected, or return a modified dictionary for passing into litellm
         pass
 
+    async def async_filter_listed_models(
+        self,
+        user_api_key_dict: UserAPIKeyAuth,
+        model_names: Sequence[str],
+    ) -> Sequence[str]:
+        """Runs on the model listing routes (`/v1/models`, `/v1/models/{id}`, `/model/info`,
+        `/model_group/info`) with the public model names the route would otherwise return, so a
+        lookup of one model may offer just that name: decide per name, never by position in the
+        sequence. Return the names to keep as a sequence of strings; a name left out disappears
+        from every listing, any alias of it offered in the same call goes with it, and
+        `/v1/models/{id}` answers 404 for it, exactly as for a model that does not exist. Names
+        outside `model_names` are ignored, so a callback can only narrow the listing, never widen
+        it. Under `use_team_public_model_name: false`, `/v1/models` and `/model_group/info` list a
+        team model by its internal routing name while `/model/info` keeps its public name, so hide
+        both names to hide it on every route.
+        """
+        return model_names
+
     async def async_post_call_response_headers_hook(
         self,
         data: dict,
@@ -572,11 +592,10 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
 
         Useful if you want to modify the standard logging payload after the MCP tool call is made.
 
-        To change what the caller sends back to the MCP client, mutate ``response_obj``
-        in place: every call site discards the returned object, because the
-        dispatcher unwraps it to ``mcp_tool_call_response`` (a raw content list, not
-        a ``CallToolResult``) which the tool-call paths cannot forward. Guardrails
-        that mask or reject tool output should use ``post_mcp_call`` instead.
+        Modify ``mcp_tool_call_response`` in place or return a replacement response
+        object to change what the caller sends back to the MCP client. Content rewrites
+        discard stale structured output and mark those results as tool errors.
+        Use ``post_mcp_call`` guardrails for schema-preserving structured redaction.
         """
         return None
 
@@ -821,46 +840,33 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
     def truncate_standard_logging_payload_content(
         self,
         standard_logging_object: StandardLoggingPayload,
-    ):
+    ) -> StandardLoggingPayload:
         """
-        Truncate error strings and message content in logging payload
+        Return a copy of the logging payload with error_str, messages, and response truncated
 
         Some loggers like DataDog/ GCS Bucket have a limit on the size of the payload. (1MB)
 
-        This function truncates the error string and the message content if they exceed a certain length.
+        Every callback of a request shares one standard logging object, so the payload passed in is left
+        untouched and the callbacks that run later (the prompt caching router check, spend logs) still see
+        the original fields.
         """
-        MAX_STR_LENGTH: Final = 10_000
+        max_str_length: Final = 10_000
+        candidates: Final = {
+            field: self._truncate_field(field_value=standard_logging_object.get(field), max_length=max_str_length)
+            for field in ("error_str", "messages", "response")
+        }
+        truncated_fields: Final = {field: text for field, text in candidates.items() if text is not None}
+        return {**standard_logging_object, **truncated_fields}
 
-        # Truncate fields that might exceed max length
-        fields_to_truncate: Final = ["error_str", "messages", "response"]
-        for field in fields_to_truncate:
-            self._truncate_field(
-                standard_logging_object=standard_logging_object,
-                field_name=field,
-                max_length=MAX_STR_LENGTH,
-            )
-
-    def _truncate_field(
-        self,
-        standard_logging_object: StandardLoggingPayload,
-        field_name: str,
-        max_length: int,
-    ) -> None:
+    def _truncate_field(self, field_value: object, max_length: int) -> str | None:
         """
-        Helper function to truncate a field in the logging payload
+        Return the truncated text of a field that exceeds max_length, or None when the field fits
 
-        This converts the field to a string and then truncates it if it exceeds the max length.
-
-        Why convert to string ?
-        1. User was sending a poorly formatted list for `messages` field, we could not predict where they would send content
-            - Converting to string and then truncating the logged content catches this
-        2. We want to avoid modifying the original `messages`, `response`, and `error_str` in the logging payload since these are in kwargs and could be returned to the user
+        The field is measured as a string because users send poorly formatted lists for `messages`, so there is
+        no fixed place the content would be.
         """
-        field_value: Final[object] = standard_logging_object.get(field_name)
-        if field_value:
-            str_value: Final = str(field_value)
-            if len(str_value) > max_length:
-                standard_logging_object[field_name] = self._truncate_text(text=str_value, max_length=max_length)
+        text: Final = str(field_value or "")
+        return self._truncate_text(text=text, max_length=max_length) if len(text) > max_length else None
 
     def _truncate_text(self, text: str, max_length: int) -> str:
         """Truncate text if it exceeds max_length"""
@@ -885,22 +891,25 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
             return LITELLM_METADATA_FIELD
         return OLD_LITELLM_METADATA_FIELD
 
+    def redacts_messages_itself(self) -> bool:
+        return False
+
     def redact_standard_logging_payload_from_model_call_details(self, model_call_details: dict) -> dict:
         """
         Redacts or excludes fields from StandardLoggingPayload before callbacks receive it.
 
         This method handles two features:
-        1. turn_off_message_logging: When True, redacts messages and responses
+        1. turn_off_message_logging: When True, redacts messages and responses (unless the callback
+           redacts them itself, see `redacts_messages_itself`)
         2. standard_logging_payload_excluded_fields: Removes specified fields entirely
 
         Return a modified copy of the provided logging payload.
 
         This is useful for logging payloads that contain sensitive information.
         """
-        from copy import copy
-
         import litellm
         from litellm import Choices, Message, ModelResponse
+        from litellm.litellm_core_utils.classifier_logging import CLASSIFIER_AUDIT_FIELDS, without_classifier_audit
 
         turn_off_message_logging: Final[bool] = getattr(self, "turn_off_message_logging", False)
         excluded_fields: Final[list[str] | None] = getattr(litellm, "standard_logging_payload_excluded_fields", None)
@@ -909,30 +918,25 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
         if turn_off_message_logging is False and not excluded_fields:
             return model_call_details
 
-        # Only make a shallow copy of the top-level dict to avoid deepcopy issues
-        # with complex objects like AuthenticationError that may be present
-        model_call_details_copy: Final = copy(model_call_details)
         standard_logging_object: Final = model_call_details.get("standard_logging_object")
         if standard_logging_object is None:
-            return model_call_details_copy
+            return model_call_details.copy()
 
         # Make a copy of just the standard_logging_object to avoid modifying the original
-        standard_logging_object_copy: Final = copy(standard_logging_object)
-
-        # Handle excluded fields - remove them entirely from the payload
-        if excluded_fields:
-            for field in excluded_fields:
-                if field in standard_logging_object_copy:
-                    del standard_logging_object_copy[field]
+        standard_logging_object_copy: Final = {
+            key: value
+            for key, value in standard_logging_object.items()
+            if key not in (excluded_fields or ()) and not (turn_off_message_logging and key in CLASSIFIER_AUDIT_FIELDS)
+        }
 
         # Handle turn_off_message_logging - redact messages and responses (if not already excluded)
-        if turn_off_message_logging:
+        if turn_off_message_logging and not self.redacts_messages_itself():
             redacted_str: Final = "redacted-by-litellm"
 
-            if "messages" not in (excluded_fields or []) and standard_logging_object_copy.get("messages") is not None:
+            if "messages" not in (excluded_fields or ()) and standard_logging_object_copy.get("messages") is not None:
                 standard_logging_object_copy["messages"] = [Message(content=redacted_str).model_dump()]
 
-            if "response" not in (excluded_fields or []) and standard_logging_object_copy.get("response") is not None:
+            if "response" not in (excluded_fields or ()) and standard_logging_object_copy.get("response") is not None:
                 response: Final = standard_logging_object_copy["response"]
                 # Check if this is a ResponsesAPIResponse (has "output" field)
                 if isinstance(response, dict) and "output" in response:
@@ -956,8 +960,18 @@ class CustomLogger:  # https://docs.litellm.ai/docs/observability/custom_callbac
                     model_response_dict: Final = model_response.model_dump()
                     standard_logging_object_copy["response"] = model_response_dict
 
-        model_call_details_copy["standard_logging_object"] = standard_logging_object_copy
-        return model_call_details_copy
+        params: Final = model_call_details.get("litellm_params")
+        request: Final = params.get("proxy_server_request") if isinstance(params, dict) else None
+        redacted_params: Final = (
+            MappingProxyType({"litellm_params": {**params, "proxy_server_request": without_classifier_audit(request)}})
+            if turn_off_message_logging and isinstance(params, dict) and isinstance(request, dict)
+            else EMPTY_MAPPING
+        )
+        return {
+            **model_call_details,
+            **redacted_params,
+            "standard_logging_object": standard_logging_object_copy,
+        }
 
     async def get_proxy_server_request_from_cold_storage_with_object_key(
         self,

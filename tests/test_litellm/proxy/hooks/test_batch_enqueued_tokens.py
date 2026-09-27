@@ -7,6 +7,7 @@ response-shape helpers the v3 limiter's post-call hooks rely on.
 """
 
 import base64
+import logging
 import socket
 import uuid
 from collections.abc import Mapping, Sequence
@@ -16,6 +17,7 @@ from typing import Final
 import pytest
 
 from litellm.caching.caching import DualCache
+from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
 from litellm.constants import BATCH_ENQUEUED_TOKEN_TTL_SECONDS
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.hooks.batch_enqueued_tokens import (
@@ -439,3 +441,29 @@ async def test_redis_lua_path_full_lifecycle():
     refill = await store.reserve(tokens=50, scopes=(key_scope, team_scope))
     assert isinstance(refill, BatchEnqueuedTokenReservation)
     await store.refund(refill)
+
+
+class _OpenBreakerRedis:
+    def async_register_script(self, script: str):
+        async def refused(keys: Sequence[str], args: Sequence[str | bytes | int | float]) -> object:
+            raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
+
+        return refused
+
+
+@pytest.mark.asyncio
+async def test_an_open_circuit_breaker_keeps_reservations_in_memory_without_a_warning(caplog):
+    scope = _scope(limit=100)
+    store = BatchEnqueuedTokenStore(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=_OpenBreakerRedis(), default_in_memory_ttl=60))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    )
+
+    with caplog.at_level(logging.DEBUG, logger="LiteLLM Proxy"):
+        reservation = await store.reserve(tokens=60, scopes=(scope,))
+        assert isinstance(reservation, BatchEnqueuedTokenReservation)
+        assert reservation.backend == "memory"
+        await store.save_reservation("batch_quiet", reservation)
+        assert await store.pop_reservation("batch_quiet") == reservation
+
+    assert not [record for record in caplog.records if record.levelno >= logging.WARNING]
+    assert sum("circuit breaker is open" in record.getMessage() for record in caplog.records) == 3
