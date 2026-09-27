@@ -11608,6 +11608,21 @@ def test_db_config_sync_keeps_callbacks_it_did_not_register(monkeypatch: pytest.
     assert not {"humanloop", "supabase"} & remaining
 
 
+def test_db_config_sync_restores_a_code_callback_it_replaced(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as ps
+
+    _reset_runtime_callbacks(monkeypatch)
+    litellm.logging_callback_manager.add_litellm_success_callback("langfuse_otel")
+    pc = ps.ProxyConfig()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": ["langfuse_otel"]}})
+    assert "langfuse_otel" not in litellm.success_callback
+    assert "langfuse_otel" in _runtime_callback_names()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
+    assert litellm.success_callback == ["langfuse_otel"]
+
+
 @pytest.mark.asyncio
 async def test_failed_config_load_keeps_callbacks_the_stored_config_registered(monkeypatch: pytest.MonkeyPatch):
     import litellm.proxy.proxy_server as ps

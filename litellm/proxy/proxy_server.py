@@ -26,6 +26,7 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType, UnionType
@@ -4912,6 +4913,34 @@ def _registered_callback_entries() -> tuple[tuple[str, object], ...]:
     return tuple(chain.from_iterable(_callback_list_entries(list_name) for list_name in _CALLBACK_LIST_NAMES))
 
 
+def _entries_missing_from(
+    entries: tuple[tuple[str, object], ...], others: tuple[tuple[str, object], ...]
+) -> tuple[tuple[str, object], ...]:
+    other_ids: Final = frozenset((list_name, id(entry)) for list_name, entry in others)
+    return tuple((list_name, entry) for list_name, entry in entries if (list_name, id(entry)) not in other_ids)
+
+
+@dataclass(frozen=True, slots=True)
+class _DbCallbackRegistration:
+    added: tuple[tuple[str, object], ...] = ()
+    displaced: tuple[tuple[str, object], ...] = ()
+
+
+def _restore_displaced_callback(list_name: str, entry: object) -> None:
+    callback_list: Final = getattr(litellm, list_name)
+    if entry not in callback_list:
+        callback_list.append(entry)
+
+
+def _unregister_db_callback(registration: _DbCallbackRegistration) -> None:
+    for list_name, entry in registration.added:
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            getattr(litellm, list_name), entry, require_self=False
+        )
+    for list_name, entry in registration.displaced:
+        _restore_displaced_callback(list_name, entry)
+
+
 def _configured_db_callbacks(litellm_settings: Mapping[str, object], setting_key: str) -> tuple[tuple[str, str], ...]:
     callbacks: Final = litellm_settings.get(setting_key)
     if not isinstance(callbacks, list):
@@ -4948,9 +4977,7 @@ class ProxyConfig:
         self.litellm_settings: Final[SettingsStore] = SettingsStore("litellm_settings")
         self.environment_variables: Final[SettingsStore] = SettingsStore("environment_variables")
         self._warned_shadowed_keys: frozenset[tuple[Section, str]] = frozenset()
-        self._db_config_callback_entries: Mapping[tuple[str, str], tuple[tuple[str, object], ...]] = MappingProxyType(
-            {}
-        )
+        self._db_config_callback_entries: Mapping[tuple[str, str], _DbCallbackRegistration] = MappingProxyType({})
         self._settings_stores: Final[Mapping[Section, SettingsStore]] = MappingProxyType(
             {
                 "general_settings": self.settings,
@@ -7045,31 +7072,25 @@ class ProxyConfig:
             )
         )
         still_configured: Final = frozenset(configured)
-        for key, entries in self._db_config_callback_entries.items():
+        for key, registration in self._db_config_callback_entries.items():
             if key not in still_configured:
-                for list_name, entry in entries:
-                    litellm.logging_callback_manager.remove_callback_from_list_by_object(
-                        getattr(litellm, list_name), entry, require_self=False
-                    )
+                _unregister_db_callback(registration)
         self._db_config_callback_entries = MappingProxyType(
-            {
-                key: self._db_config_callback_entries.get(key, ()) + self._register_db_config_callback(*key)
-                for key in dict.fromkeys(configured)
-            }
+            {key: self._register_db_config_callback(*key) for key in dict.fromkeys(configured)}
         )
 
-    def _register_db_config_callback(self, setting_key: str, callback: str) -> tuple[tuple[str, object], ...]:
+    def _register_db_config_callback(self, setting_key: str, callback: str) -> _DbCallbackRegistration:
+        previous: Final = self._db_config_callback_entries.get((setting_key, callback), _DbCallbackRegistration())
         before: Final = _registered_callback_entries()
         self._add_callback_from_db_to_in_memory_litellm_callbacks(
             callback=callback,
             event_types=list(_DB_CONFIG_CALLBACK_EVENT_TYPES[setting_key]),
             existing_callbacks=getattr(litellm, setting_key),
         )
-        before_ids: Final = frozenset((list_name, id(entry)) for list_name, entry in before)
-        return tuple(
-            (list_name, entry)
-            for list_name, entry in _registered_callback_entries()
-            if (list_name, id(entry)) not in before_ids
+        after: Final = _registered_callback_entries()
+        return _DbCallbackRegistration(
+            added=previous.added + _entries_missing_from(after, before),
+            displaced=previous.displaced + _entries_missing_from(before, after),
         )
 
     def _encrypt_env_variables(self, environment_variables: dict, new_encryption_key: str | None = None) -> dict:
