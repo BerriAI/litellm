@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import providerFields from "../../../../litellm/proxy/public_endpoints/provider_create_fields.json";
 import {
   Providers,
   getPlaceholder,
@@ -9,6 +10,19 @@ import {
 } from "./provider_info_helpers";
 
 describe("provider_info_helpers", () => {
+  it("resolves the Tsubasa dashboard selection to its models and placeholder", () => {
+    const provider = providerFields.find((entry) => entry.litellm_provider === "tsubasa")!;
+    const models = {
+      "tsubasa/tsubasa-fast": { litellm_provider: provider.litellm_provider },
+      "tsubasa/tsubasa-pro": { litellm_provider: provider.litellm_provider },
+      "openai/gpt-4o": { litellm_provider: "openai" },
+    };
+
+    expect(getProviderModels(provider.provider, models)).toEqual(["tsubasa/tsubasa-fast", "tsubasa/tsubasa-pro"]);
+    expect(getPlaceholder(provider.provider)).toBe(provider.default_model_placeholder);
+    expect(getProviderLogoAndName(provider.litellm_provider).displayName).toBe(provider.provider_display_name);
+  });
+
   describe("getProviderLogoAndName", () => {
     it("should return empty logo and dash display name when providerValue is empty", () => {
       const result = getProviderLogoAndName("");
@@ -195,6 +209,7 @@ describe("provider_info_helpers", () => {
         Providers.PG_VECTOR,
         Providers.PREDIBASE,
         Providers.Sail,
+        Providers.Tsubasa,
         Providers.WANDB,
         Providers.ZAI,
       ];

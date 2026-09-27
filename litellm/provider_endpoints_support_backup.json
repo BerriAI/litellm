@@ -2227,6 +2227,13 @@
         "interactions": true
       }
     },
+    "tsubasa": {
+      "display_name": "Tsubasa (`tsubasa`)",
+      "url": "https://docs.litellm.ai/docs/providers/tsubasa",
+      "endpoints": {
+        "chat_completions": true
+      }
+    },
     "v0": {
       "display_name": "V0 (`v0`)",
       "url": "https://docs.litellm.ai/docs/providers/v0",
