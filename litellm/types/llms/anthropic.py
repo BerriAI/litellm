@@ -754,6 +754,7 @@ class ANTHROPIC_BETA_HEADER_VALUES(str, Enum):
     WEB_FETCH_2025_09_10 = "web-fetch-2025-09-10"
     WEB_SEARCH_2025_03_05 = "web-search-2025-03-05"
     CONTEXT_MANAGEMENT_2025_06_27 = "context-management-2025-06-27"
+    CONTEXT_1M_2025_08_07 = "context-1m-2025-08-07"
     COMPACT_2026_01_12 = "compact-2026-01-12"
     COMPACT_2026_09_04 = "compact-2026-09-04"
     STRUCTURED_OUTPUT_2025_09_25 = "structured-outputs-2025-11-13"

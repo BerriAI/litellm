@@ -25,9 +25,8 @@ from litellm.types.router import GenericLiteLLMParams
 from ...common_utils import (
     AnthropicError,
     AnthropicModelInfo,
+    has_context_1m_suffix,
     merge_anthropic_beta_headers,
-    context_1m_beta_values,
-    context_1m_requested,
     optionally_handle_anthropic_oauth,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
@@ -286,7 +285,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     model=model,
                 ),
             )
-        return self._finalize_messages_headers(headers, optional_params, messages), api_base
+        return self._finalize_messages_headers(headers, optional_params, messages, model=model), api_base
 
     async def avalidate_anthropic_messages_environment(
         self,
@@ -326,7 +325,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     model=model,
                 ),
             )
-        return self._finalize_messages_headers(oauth_headers, optional_params, messages), api_base
+        return self._finalize_messages_headers(oauth_headers, optional_params, messages, model=model), api_base
 
     def _require_auth_header(self, auth_header: Mapping[str, str] | None, model: str) -> Mapping[str, str]:
         if auth_header is None:
@@ -365,6 +364,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         headers: dict,  # mutable-ok: out-param
         optional_params: dict,  # mutable-ok: out-param
         messages: list[Any],  # mutable-ok: mirrors the validate_anthropic_messages_environment contract
+        model: str,
     ) -> dict:  # mutable-ok: out-param
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION
@@ -375,7 +375,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             optional_params=optional_params,
             messages=messages,
             model=model,
-            litellm_params=litellm_params,
         )
 
     @staticmethod
@@ -709,7 +708,6 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         custom_llm_provider: str = "anthropic",
         messages: Sequence[object] = (),
         model: str = "",
-        litellm_params: object = None,
     ) -> dict:
         """
         Auto-inject anthropic-beta headers based on features used.
@@ -720,15 +718,16 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         - output_format: adds 'structured-outputs-2025-11-13'
         - speed: adds 'fast-mode-2026-02-01'
         - a message carrying output_config: adds 'per-turn-control-2026-07-01'
-        - [1m] suffix: adds 'context-1m-2025-08-07'
+        - [1m] model suffix: adds 'context-1m-2025-08-07'
 
         Args:
             headers: Request headers dict
             optional_params: Optional parameters including tools, context_management, output_format, speed
             custom_llm_provider: Provider name for looking up correct tool search header
             messages: Request messages, scanned for per-message output_config
+            model: Requested model name, checked for the [1m] suffix
         """
-        beta_values: Final[set] = set()
+        beta_values: Final[set[str]] = set()
 
         existing_beta: Final = tuple(
             piece.strip()
@@ -742,11 +741,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if requires_native_compaction_beta(custom_llm_provider, optional_params, messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
 
-        beta_values.update(
-            context_1m_beta_values(
-                context_1m_requested(model=model, optional_params=optional_params, litellm_params=litellm_params)
-            )
-        )
+        if has_context_1m_suffix(model):
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_1M_2025_08_07.value)
 
         # Check for context management
         context_management_param: Final = optional_params.get("context_management")
