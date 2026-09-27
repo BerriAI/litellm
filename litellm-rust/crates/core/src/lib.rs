@@ -1,6 +1,3 @@
-mod client;
-pub use client::{CallBuilder, CoreClient};
-
 pub mod audio_transcription;
 pub mod chat_completions;
 pub mod constants;
@@ -8,6 +5,7 @@ pub mod error;
 pub mod messages;
 pub mod ocr;
 mod outbound;
+mod provider;
 pub mod resources;
 pub mod responses;
 

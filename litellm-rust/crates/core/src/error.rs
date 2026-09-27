@@ -54,7 +54,7 @@ impl From<litellm_host::machine::MachineFault> for RouteError {
         use litellm_host::machine::MachineFault;
         Self::InvalidRequest(match fault {
             MachineFault::Abandoned => "host driver was abandoned".into(),
-            MachineFault::Protocol(message) => format!("host {message}"),
+            MachineFault::Protocol(message) => format!("host {message}").into(),
         })
     }
 }

@@ -10,41 +10,40 @@ use super::{
     types::{LiteLLMOcrRequest, OcrDocumentInput, ResolvedOcrRequest},
 };
 
-impl crate::CoreClient {
-    pub fn ocr(&self, request: LiteLLMOcrRequest) -> crate::CallBuilder<'_, LiteLLMOcrRequest> {
-        crate::CallBuilder::new(self, request)
-    }
+#[derive(Clone)]
+pub struct OcrRoute {
+    client: OcrClient,
 }
 
-impl<'a, H: RouteHooks<Error>> std::future::IntoFuture
-    for crate::CallBuilder<'a, LiteLLMOcrRequest, H>
-{
-    type Output = Result<LiteLLMOcrResponse, Error>;
-    type IntoFuture = futures_util::future::BoxFuture<'a, Self::Output>;
-
-    fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move {
-            litellm_host::lifecycle::observe_unary(self.hooks.observer(), async {
-                let client = self.client.ocr_client();
-                execute(client, self.request, self.hooks).await
-            })
-            .await
-        })
+impl OcrRoute {
+    pub fn new(client: OcrClient) -> Self {
+        Self { client }
     }
-}
 
-pub(super) async fn execute(
-    client: Result<OcrClient, litellm_http::Error>,
-    request: LiteLLMOcrRequest,
-    hooks: &impl RouteHooks<Error>,
-) -> Result<LiteLLMOcrResponse, Error> {
-    let client = client?;
-    let caller_document = matches!(&request.document, OcrDocumentInput::Document(_));
-    let prepared = prepare_request_document(request).await?;
-    let execute: futures_util::future::BoxFuture<'_, Result<LiteLLMOcrResponse, Error>> = Box::pin(
-        perform_ocr_request(&client, prepared, hooks, caller_document),
-    );
-    execute.await
+    pub async fn execute(
+        &self,
+        request: LiteLLMOcrRequest,
+        hooks: &impl RouteHooks<Error>,
+    ) -> Result<LiteLLMOcrResponse, Error> {
+        litellm_host::lifecycle::observe_unary(hooks.observer(), self.run(request, hooks)).await
+    }
+
+    pub(super) async fn run(
+        &self,
+        request: LiteLLMOcrRequest,
+        hooks: &impl RouteHooks<Error>,
+    ) -> Result<LiteLLMOcrResponse, Error> {
+        let caller_document = matches!(&request.document, OcrDocumentInput::Document(_));
+        let prepared = prepare_request_document(request).await?;
+        let execute: futures_util::future::BoxFuture<'_, Result<LiteLLMOcrResponse, Error>> =
+            Box::pin(perform_ocr_request(
+                &self.client,
+                prepared,
+                hooks,
+                caller_document,
+            ));
+        execute.await
+    }
 }
 
 async fn prepare_request_document(

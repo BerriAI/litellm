@@ -1,11 +1,3 @@
-//! The `/chat/completions` call, the Rust equivalent of Python's
-//! `litellm.completion()`.
-//!
-//! [`CoreClient::chat_completions`](crate::CoreClient::chat_completions) is the top-level entrypoint: give it a model, the
-//! OpenAI-shaped message list, the provider-mapped optional params, and
-//! credentials, and it resolves the provider, translates the conversation,
-//! calls the provider, and returns a typed OpenAI-shaped response.
-
 pub mod types;
 pub use crate::error::RouteError as Error;
 mod common_utils;
@@ -16,6 +8,16 @@ use prepare::{parse_messages, prepare_provider_request, resolve_provider_config,
 use serde_json::{Map, Value};
 
 use crate::chat_completions::types::ChatCompletionsRequest;
+use litellm_auth::AuthServices;
+use litellm_secrets::source::SecretSource;
+use std::sync::Arc;
+
+#[derive(Clone)]
+pub struct ChatCompletionsRoute {
+    http: litellm_http::Client,
+    auth: Arc<AuthServices>,
+    secrets: Arc<dyn SecretSource>,
+}
 
 /// Whether the core would accept this request, without resolving credentials or
 /// touching the network.
@@ -44,47 +46,38 @@ pub fn chat_completions_decline_reason(
         .map(|reason| reason.0)
 }
 
-impl crate::CoreClient {
-    pub fn chat_completions<'a>(
-        &'a self,
-        request: ChatCompletionsRequest<'a>,
-    ) -> crate::CallBuilder<'a, ChatCompletionsRequest<'a>> {
-        crate::CallBuilder::new(self, request)
+impl ChatCompletionsRoute {
+    pub fn new(
+        http: litellm_http::Client,
+        auth: Arc<AuthServices>,
+        secrets: Arc<dyn SecretSource>,
+    ) -> Self {
+        Self {
+            http,
+            auth,
+            secrets,
+        }
     }
-}
 
-impl<'a, 'r: 'a, H> std::future::IntoFuture
-    for crate::CallBuilder<'a, ChatCompletionsRequest<'r>, H>
-where
-    H: litellm_host::hooks::RouteHooks<Error>,
-{
-    type Output = Result<ChatCompletionsResponse, Error>;
-    type IntoFuture = futures_util::future::BoxFuture<'a, Self::Output>;
-
-    fn into_future(self) -> Self::IntoFuture {
-        Box::pin(async move {
-            litellm_host::lifecycle::observe_unary(self.hooks.observer(), async {
-                let http = self.client.provider_http();
-                execute(
-                    http,
-                    &self.client.resources().auth,
-                    self.request,
-                    self.hooks,
-                )
-                .await
-            })
-            .await
-        })
+    pub async fn execute(
+        &self,
+        request: ChatCompletionsRequest<'_>,
+        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+    ) -> Result<ChatCompletionsResponse, Error> {
+        litellm_host::lifecycle::observe_unary(hooks.observer(), self.run(request, hooks)).await
     }
-}
 
-async fn execute(
-    http: Result<litellm_http::Client, litellm_http::Error>,
-    auth: &litellm_auth::AuthServices,
-    request: ChatCompletionsRequest<'_>,
-    hooks: &impl litellm_host::hooks::RouteHooks<Error>,
-) -> Result<ChatCompletionsResponse, Error> {
-    let http = http?;
-    let prepared = prepare_provider_request(resolve_request(request)?)?;
-    handler::execute(&http, auth, prepared, hooks).await
+    async fn run(
+        &self,
+        request: ChatCompletionsRequest<'_>,
+        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+    ) -> Result<ChatCompletionsResponse, Error> {
+        let resolved = resolve_request(request)?;
+        let snapshot = self
+            .secrets
+            .resolve(&resolved.config.secret_names())
+            .await?;
+        let prepared = prepare_provider_request(resolved, snapshot)?;
+        handler::execute(&self.http, &self.auth, prepared, hooks).await
+    }
 }

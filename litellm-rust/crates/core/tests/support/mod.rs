@@ -7,7 +7,8 @@ use std::sync::{Arc, Mutex};
 
 use futures_util::future::BoxFuture;
 use litellm_http::{
-    HttpClientConfig, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
+    ClientVariant, HttpClientConfig, HttpClientPool, HttpSettings, Resolution,
+    media::PublicDnsResolver,
 };
 use litellm_secrets::{SecretValue, source::SecretSource};
 use serde_json::Value;
@@ -24,13 +25,65 @@ pub fn resources() -> litellm_core::resources::CoreResources {
     litellm_core::resources::CoreResources::new(Arc::new(http_pool()))
 }
 
-#[rstest::fixture]
-pub fn client() -> litellm_core::CoreClient {
-    client_with_secrets(Arc::new(RecordingSecrets::empty()))
+pub fn no_secrets() -> Arc<dyn SecretSource> {
+    Arc::new(RecordingSecrets::empty())
 }
 
-pub fn client_with_secrets(secrets: Arc<dyn SecretSource>) -> litellm_core::CoreClient {
-    litellm_core::CoreClient::new(resources(), http_config(), secrets)
+pub fn provider_http(
+    resources: &litellm_core::resources::CoreResources,
+    config: &HttpClientConfig,
+) -> litellm_http::Client {
+    resources
+        .pool
+        .client(config, ClientVariant::Provider)
+        .unwrap()
+}
+
+pub fn messages_route(secrets: Arc<dyn SecretSource>) -> litellm_core::messages::MessagesRoute {
+    let resources = resources();
+    litellm_core::messages::MessagesRoute::new(
+        provider_http(&resources, &http_config()),
+        resources.auth,
+        secrets,
+    )
+}
+
+pub fn chat_completions_route() -> litellm_core::chat_completions::ChatCompletionsRoute {
+    let resources = resources();
+    litellm_core::chat_completions::ChatCompletionsRoute::new(
+        provider_http(&resources, &http_config()),
+        resources.auth,
+        no_secrets(),
+    )
+}
+
+pub fn audio_transcription_route() -> litellm_core::audio_transcription::AudioTranscriptionRoute {
+    let resources = resources();
+    litellm_core::audio_transcription::AudioTranscriptionRoute::new(
+        provider_http(&resources, &http_config()),
+        resources.auth,
+        no_secrets(),
+    )
+}
+
+pub fn build_ocr_route(
+    resources: &litellm_core::resources::CoreResources,
+    config: &HttpClientConfig,
+    url_policy: litellm_http::media::UrlPolicy,
+    settings: litellm_llms::base_llm::ocr::settings::OcrSettings,
+    secrets: Arc<dyn SecretSource>,
+) -> litellm_core::ocr::OcrRoute {
+    litellm_core::ocr::OcrRoute::new(
+        litellm_llms::base_llm::ocr::handler::OcrClient::new(
+            &resources.pool,
+            config,
+            url_policy,
+            resources.auth.clone(),
+            settings,
+            secrets,
+        )
+        .unwrap(),
+    )
 }
 
 pub fn http_config() -> HttpClientConfig {

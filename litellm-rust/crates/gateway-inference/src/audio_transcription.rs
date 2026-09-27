@@ -39,8 +39,8 @@ async fn handle(gateway: &Gateway, request: Request) -> Result<Value, Error> {
             .ok_or_else(|| Error::InvalidBody("audio is required".into()))?,
     };
     Ok(gateway
-        .core
-        .audio_transcription(AudioTranscriptionRequest {
+        .audio_transcription
+        .execute(AudioTranscriptionRequest {
             model: &deployment.model,
             audio,
             api_key: deployment.api_key.as_deref(),

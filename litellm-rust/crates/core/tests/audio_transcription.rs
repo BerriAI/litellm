@@ -9,7 +9,7 @@ use support::*;
 const MODEL: &str = "mistral.voxtral-mini-3b-2507";
 
 async fn transcribe(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
-    client().audio_transcription(request).await
+    audio_transcription_route().execute(request).await
 }
 
 fn transcript_response(text: &str) -> ResponseTemplate {

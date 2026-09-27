@@ -39,27 +39,20 @@ impl TokenProtocol for Ocr {
 
 pub type OcrMachine = HostedMachine<Ocr>;
 
-impl crate::CoreClient {
-    pub fn ocr_machine(
-        &self,
-    ) -> Result<impl FnOnce(OcrCall) -> OcrMachine + Send + Sync + use<>, litellm_http::Error> {
-        let client = self.ocr_client()?;
-        Ok(move |request| {
-            hosted_call(
-                request,
-                move |projection: OcrCall, services, hooks| async move {
-                    let request = LiteLLMOcrRequest {
-                        azure_ad_token_provider: projection
-                            .caller_token
-                            .then(|| HostTokenProvider::handle(services))
-                            .or(projection.request.azure_ad_token_provider),
-                        ..projection.request
-                    };
-                    super::client::execute(Ok(client), request, &hooks)
-                        .await
-                        .map(CallOutput::Complete)
-                },
-            )
-        })
+impl crate::ocr::OcrRoute {
+    pub fn machine(self, request: OcrCall) -> OcrMachine {
+        hosted_call(
+            request,
+            move |projection: OcrCall, services, hooks| async move {
+                let request = LiteLLMOcrRequest {
+                    azure_ad_token_provider: projection
+                        .caller_token
+                        .then(|| HostTokenProvider::handle(services))
+                        .or(projection.request.azure_ad_token_provider),
+                    ..projection.request
+                };
+                self.run(request, &hooks).await.map(CallOutput::Complete)
+            },
+        )
     }
 }

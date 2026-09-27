@@ -2,9 +2,8 @@ use pyo3::types::{PyDict, PyTuple};
 
 use crate::errors::RustBridgeDeclined;
 use crate::logger::{run_async, run_sync};
-use litellm_core::CoreClient;
 use litellm_core::chat_completions::{
-    Error, chat_completions_decline_reason, types::ChatCompletionsRequest,
+    ChatCompletionsRoute, Error, chat_completions_decline_reason, types::ChatCompletionsRequest,
 };
 use litellm_host_python::from_py_argument;
 use litellm_types::utils::ChatCompletionsResponse;
@@ -20,7 +19,8 @@ use crate::{
 };
 
 async fn execute(
-    client: CoreClient,
+    http: Result<litellm_http::Client, litellm_http::Error>,
+    secrets: std::sync::Arc<dyn litellm_secrets::source::SecretSource>,
     messages: Vec<Value>,
     optional_params: Map<String, Value>,
     options: RouteOptions,
@@ -33,17 +33,20 @@ async fn execute(
         extra_headers,
         timeout,
     } = options;
-    client
-        .chat_completions(ChatCompletionsRequest {
-            model: &model,
-            messages: Value::Array(messages),
-            optional_params,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            timeout,
-        })
+    ChatCompletionsRoute::new(http?, crate::http::resources().auth.clone(), secrets)
+        .execute(
+            ChatCompletionsRequest {
+                model: &model,
+                messages: Value::Array(messages),
+                optional_params,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                timeout,
+            },
+            &(),
+        )
         .await
 }
 
@@ -89,11 +92,13 @@ pub(crate) fn chat_completions(
         extra_headers,
         timeout: optional_timeout(timeout_seconds),
     };
-    let client = crate::http::call_client(py, &PyDict::new(py), false)?;
+    let http = crate::http::provider_client(py, &PyDict::new(py), false)?;
+    let secrets = crate::secrets::source(py)?;
     run_sync(
         py,
         execute(
-            client,
+            http,
+            secrets,
             messages,
             optional_params.unwrap_or_default(),
             options,
@@ -127,11 +132,13 @@ pub(crate) fn achat_completions<'py>(
         extra_headers,
         timeout: optional_timeout(timeout_seconds),
     };
-    let client = crate::http::call_client(py, &PyDict::new(py), true)?;
+    let http = crate::http::provider_client(py, &PyDict::new(py), true)?;
+    let secrets = crate::secrets::source(py)?;
     run_async(
         py,
         execute(
-            client,
+            http,
+            secrets,
             messages,
             optional_params.unwrap_or_default(),
             options,

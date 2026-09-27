@@ -29,20 +29,10 @@ impl Protocol for Messages {
 
 pub type MessagesMachine = HostedMachine<Messages>;
 
-impl crate::CoreClient {
-    pub fn messages_machine(
-        &self,
-    ) -> Result<
-        impl FnOnce(super::MessagesCall) -> MessagesMachine + Send + Sync + use<>,
-        litellm_http::Error,
-    > {
-        let http = self.provider_http()?;
-        let auth = self.resources().auth.clone();
-        let secrets = self.secret_source().clone();
-        Ok(move |request| {
-            hosted_call(request, move |call, _, hooks| async move {
-                super::execute(Ok(http), &auth, secrets.as_ref(), call, &hooks).await
-            })
+impl super::MessagesRoute {
+    pub fn machine(self, request: super::MessagesCall) -> MessagesMachine {
+        hosted_call(request, move |call, _, hooks| async move {
+            self.run(call, &hooks).await
         })
     }
 }

@@ -5,8 +5,8 @@ use litellm_llms::base_llm::ocr::{
 };
 use litellm_secrets::source::Secrets;
 
-use super::provider_config::OcrProvider;
 use crate::ocr::types::{LiteLLMOcrRequest, ResolvedOcrRequest};
+use crate::provider::LlmProviders;
 
 pub(crate) fn prepare_request(
     request: ResolvedOcrRequest,
@@ -16,15 +16,19 @@ pub(crate) fn prepare_request(
 ) -> PreparedOcrRequest {
     let credentials = request.credentials.clone();
     let (preferred_api_key_env, api_base_env) = match request.config.provider() {
-        OcrProvider::Mistral => (
+        LlmProviders::Mistral => (
             Some("MISTRAL_AZURE_API_KEY"),
             Some("MISTRAL_AZURE_API_BASE"),
         ),
-        OcrProvider::AzureAi => (None, Some("AZURE_AI_API_BASE")),
-        OcrProvider::AwsTextract
-        | OcrProvider::Cohere
-        | OcrProvider::Reducto
-        | OcrProvider::VertexAi => (None, None),
+        LlmProviders::AzureAi => (None, Some("AZURE_AI_API_BASE")),
+        LlmProviders::Anthropic
+        | LlmProviders::AwsTextract
+        | LlmProviders::Bedrock
+        | LlmProviders::Cohere
+        | LlmProviders::Openai
+        | LlmProviders::OpenaiLike
+        | LlmProviders::Reducto
+        | LlmProviders::VertexAi => (None, None),
     };
     let secret = |name: &str| secrets.truthy(name);
     let dynamic_api_key = credentials.dynamic_api_key.or_else(|| {

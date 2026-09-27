@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use litellm_host::call::CallOutput;
-use litellm_llms::anthropic::common_utils::AnthropicModelCapabilities;
+use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
 use litellm_types::{
     llms::anthropic_messages::{
         anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
@@ -30,7 +30,7 @@ pub fn messages_body(body: Map<String, Value>) -> Result<AnthropicMessagesReques
 }
 
 pub(super) fn invalid_request(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
+    Error::InvalidRequest(format!("invalid Anthropic messages request: {err}").into())
 }
 
 pub type MessagesResponse =
@@ -50,7 +50,7 @@ pub struct MessagesShaping {
 
 #[cfg(test)]
 mod tests {
-    use litellm_llms::anthropic::common_utils::SupportedEffortTiers;
+    use litellm_llms::base_llm::messages::context::SupportedEffortTiers;
     use rstest::rstest;
     use serde_json::{Value, json};
 

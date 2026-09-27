@@ -153,7 +153,13 @@ async fn missing_credentials_come_from_the_injected_secret_source(
             .copied()
             .chain([("MISTRAL_AZURE_API_BASE", base.as_str())]),
     ));
-    let client = client_with_secrets(source.clone());
+    let route = build_ocr_route(
+        &resources(),
+        &http_config(),
+        Default::default(),
+        Default::default(),
+        source.clone(),
+    );
     let request = decode_request(OcrWireRequest {
         api_key: None,
         api_base: None,
@@ -166,7 +172,7 @@ async fn missing_credentials_come_from_the_injected_secret_source(
     })
     .unwrap();
 
-    client.ocr(request).await.unwrap();
+    route.execute(request, &()).await.unwrap();
 
     assert_eq!(source.requested(), MistralOcrConfig.secret_names());
     assert_eq!(
@@ -183,14 +189,19 @@ async fn the_client_uses_the_injected_http_pool_configuration() {
         user_agent: Some("host-owned/1".into()),
         ..HttpSettings::default()
     };
-    let client = litellm_core::CoreClient::new(
-        resources(),
-        Resolution::from(&settings).config,
-        Arc::new(RecordingSecrets::empty()),
+    let route = build_ocr_route(
+        &resources(),
+        &Resolution::from(&settings).config,
+        Default::default(),
+        Default::default(),
+        no_secrets(),
     );
 
-    client
-        .ocr(ocr_request("mistral/model", &upstream.uri(), json!({})))
+    route
+        .execute(
+            ocr_request("mistral/model", &upstream.uri(), json!({})),
+            &(),
+        )
         .await
         .unwrap();
 

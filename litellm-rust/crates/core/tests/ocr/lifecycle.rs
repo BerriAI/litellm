@@ -289,7 +289,7 @@ async fn the_callers_azure_token_is_acquired_before_before_send_which_can_still_
     };
 
     litellm_host::in_process::run_hosted(
-        ocr_client().ocr_machine().unwrap()(host.request().unwrap()),
+        ocr_route().machine(host.request().unwrap()),
         host.runtime(),
     )
     .await
@@ -347,11 +347,12 @@ async fn direct_execution_uses_hooks_without_a_machine() {
     )])
     .await;
     let events = Arc::new(super::support::CallEvents::default());
-    let client = ocr_client();
+    let route = ocr_route();
     let hooks = Hooks(events.clone());
-    let builder = client
-        .ocr(ocr_request("mistral/model", &upstream.uri(), json!({})))
-        .with_hooks(&hooks);
+    let builder = route.execute(
+        ocr_request("mistral/model", &upstream.uri(), json!({})),
+        &hooks,
+    );
     assert!(events.0.lock().unwrap().is_empty());
     assert!(received(&upstream).await.is_empty());
     let result = builder.await.unwrap();

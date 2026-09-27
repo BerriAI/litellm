@@ -47,16 +47,22 @@ fn run_ocr(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let machine = http::call_client(py, &kwargs, asynchronous)?
-        .with_url_policy(http::url_policy(py)?)
-        .with_ocr_settings(ocr_settings(py)?)
-        .ocr_machine()
-        .map_err(http::client_error)?;
+    let config = http::call_config(py, &kwargs, asynchronous)?;
+    let client = litellm_llms::base_llm::ocr::handler::OcrClient::new(
+        &http::resources().pool,
+        &config,
+        http::url_policy(py)?,
+        http::resources().auth.clone(),
+        ocr_settings(py)?,
+        crate::secrets::source(py)?,
+    )
+    .map_err(http::client_error)?;
+    let route = litellm_core::ocr::OcrRoute::new(client);
     run_legacy_call(
         py,
         if asynchronous { ASYNC_SURFACE } else { SURFACE },
         PublicCall::capture(&request, &args, &kwargs)?,
-        move |request| crate::logger::LoggedMachine::new(machine(request)),
+        move |request| crate::logger::LoggedMachine::new(route.machine(request)),
         OcrPythonHost::new(request.unbind()),
         crate::preflight::sdk_preflight,
         asynchronous,

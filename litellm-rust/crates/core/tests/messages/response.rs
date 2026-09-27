@@ -11,23 +11,23 @@ use super::*;
 #[case::without_hooks(false)]
 #[case::with_hooks(true)]
 #[tokio::test]
-async fn call_builders_defer_execution_until_polled(call: MessagesCall, #[case] with_hooks: bool) {
-    use std::future::IntoFuture;
+async fn calls_defer_execution_until_polled(call: MessagesCall, #[case] with_hooks: bool) {
+    use futures_util::future::BoxFuture;
 
     use litellm_host::event::CallEvent;
 
     let upstream = upstream([message_response()]).await;
     let secrets = Arc::new(RecordingSecrets::new([("ANTHROPIC_API_KEY", "test-key")]));
-    let client = client_with_secrets(secrets.clone());
+    let route = messages_route(secrets.clone());
     let host = RecordingCall::<Messages>::new(MessagesCall {
         api_base: Some(upstream.uri()),
         ..call
     });
-    let builder = client.messages(host.request().unwrap());
-    let future = if with_hooks {
-        builder.with_hooks(&host).into_future()
+    let request = host.request().unwrap();
+    let future: BoxFuture<'_, Result<MessagesResponse, Error>> = if with_hooks {
+        Box::pin(route.execute(request, &host))
     } else {
-        builder.into_future()
+        Box::pin(route.execute(request, &()))
     };
 
     assert!(secrets.requested().is_empty());
@@ -236,16 +236,20 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
         ..HttpSettings::default()
     };
 
-    let response = litellm_core::CoreClient::new(
-        support::resources(),
-        Resolution::from(&settings).config,
-        Arc::new(RecordingSecrets::empty()),
+    let resources = support::resources();
+    let response = litellm_core::messages::MessagesRoute::new(
+        provider_http(&resources, &Resolution::from(&settings).config),
+        resources.auth,
+        no_secrets(),
     )
-    .messages(MessagesCall {
-        api_key: Some("sk-ant".into()),
-        api_base: Some(base),
-        ..call
-    })
+    .execute(
+        MessagesCall {
+            api_key: Some("sk-ant".into()),
+            api_base: Some(base),
+            ..call
+        },
+        &(),
+    )
     .await
     .expect("messages request succeeds");
 

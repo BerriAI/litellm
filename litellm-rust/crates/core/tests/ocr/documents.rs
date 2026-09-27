@@ -192,21 +192,27 @@ async fn configured_client_preserves_document_url_policy(#[case] allowed: bool) 
     let upstream = upstream([pages_response()]).await;
     let document_url = format!("{}/scan.png", documents.uri());
     let authority = documents.address().to_string();
-    let client = client().with_url_policy(litellm_http::media::UrlPolicy {
-        validate: true,
-        allowed_hosts: allowed.then_some(authority).into_iter().collect(),
-    });
+    let route = build_ocr_route(
+        &resources(),
+        &http_config(),
+        litellm_http::media::UrlPolicy {
+            validate: true,
+            allowed_hosts: allowed.then_some(authority).into_iter().collect(),
+        },
+        Default::default(),
+        no_secrets(),
+    );
     let host = LocalOcrHost::new(ocr_request_with_document(
         "azure_ai/model",
         &upstream.uri(),
         json!({"type": "document_url", "document_url": document_url}),
         json!({}),
     ));
-    let machine = client.ocr_machine().unwrap();
-    drop(client);
-    let result =
-        litellm_host::in_process::run_hosted(machine(host.request().unwrap()), host.runtime())
-            .await;
+    let result = litellm_host::in_process::run_hosted(
+        route.machine(host.request().unwrap()),
+        host.runtime(),
+    )
+    .await;
 
     if !allowed {
         assert!(matches!(result, Err(Error::BlockedDocumentUrl)));

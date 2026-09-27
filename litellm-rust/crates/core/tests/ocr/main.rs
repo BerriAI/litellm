@@ -1,4 +1,5 @@
 use litellm_core::ocr::{
+    OcrRoute,
     document::prepare_document,
     route::{Ocr, OcrCall, OcrOp},
     types::{LiteLLMOcrRequest, OcrDocumentInput},
@@ -7,6 +8,7 @@ use litellm_core::ocr::{
 use litellm_host::event::{CallEvent, RequestContext, WireRequest};
 use litellm_llms::base_llm::ocr::{
     error::Error,
+    settings::OcrSettings,
     transformation::{LiteLLMOcrResponse, OcrDocument},
 };
 use serde_json::{Map, Value, json};
@@ -37,24 +39,31 @@ fn object(value: Value) -> Map<String, Value> {
     map
 }
 
-fn ocr_client() -> litellm_core::CoreClient {
-    client().with_url_policy(litellm_http::media::UrlPolicy {
-        validate: false,
-        allowed_hosts: Vec::new(),
-    })
+fn ocr_route() -> OcrRoute {
+    ocr_route_with(OcrSettings::default())
+}
+
+fn ocr_route_with(settings: OcrSettings) -> OcrRoute {
+    build_ocr_route(
+        &resources(),
+        &http_config(),
+        litellm_http::media::UrlPolicy {
+            validate: false,
+            allowed_hosts: Vec::new(),
+        },
+        settings,
+        no_secrets(),
+    )
 }
 
 async fn perform(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
-    ocr_client().ocr(request).await
+    ocr_route().execute(request, &()).await
 }
 
 async fn perform_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Error> {
-    litellm_host::in_process::run_hosted(
-        ocr_client().ocr_machine().unwrap()(host.request()?),
-        host.runtime(),
-    )
-    .await
-    .map(completed)
+    litellm_host::in_process::run_hosted(ocr_route().machine(host.request()?), host.runtime())
+        .await
+        .map(completed)
 }
 
 fn wire(model: &str, base: &str, document: Value, options: Value) -> OcrWireRequest {
@@ -203,7 +212,7 @@ impl litellm_host::services::HostCallHandler<Ocr> for LocalOcrHost {
     async fn handle_host_call(&self, op: OcrOp) -> Result<(), Error> {
         match op {
             OcrOp::AcquireAzureAdToken(_) => {
-                Err(Error::Auth(litellm_auth::Error::AzureTokenAcquisition(
+                Err(Error::Auth(litellm_auth::Error::CredentialAcquisition(
                     "OCR host has no Azure AD token provider".into(),
                 )))
             }

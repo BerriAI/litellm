@@ -99,9 +99,7 @@ fn headers<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Option<Ma
 }
 
 fn machine(secrets: Arc<dyn SecretSource>) -> impl FnOnce(MessagesCall) -> MessagesMachine {
-    client_with_secrets(secrets)
-        .messages_machine()
-        .expect("default HTTP settings build a client")
+    move |request| messages_route(secrets).machine(request)
 }
 
 async fn run_with(

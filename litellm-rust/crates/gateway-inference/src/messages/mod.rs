@@ -50,7 +50,7 @@ async fn handle(gateway: &Gateway, headers: &HeaderMap, body: &[u8]) -> Result<R
         .get(model_name)
         .ok_or_else(|| Error::UnknownModel(model_name.to_owned()))?;
     let call = project(deployment, body, headers)?;
-    match gateway.core.messages(call).await? {
+    match gateway.messages.execute(call, &()).await? {
         MessagesResponse::Complete(message) => Ok(Json(message).into_response()),
         MessagesResponse::Stream { chunks, .. } => Ok(stream(chunks)),
     }

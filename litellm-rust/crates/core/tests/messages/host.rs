@@ -2,7 +2,7 @@ use std::sync::Mutex;
 
 use litellm_core::messages::route::Messages;
 use litellm_host::event::{CallEvent, MachineEvent, RequestContext, WireRequest};
-use litellm_llms::anthropic::common_utils::AnthropicModelCapabilities;
+use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
 use rstest::rstest;
 
 use super::*;

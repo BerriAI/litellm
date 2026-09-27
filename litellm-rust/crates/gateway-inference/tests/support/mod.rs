@@ -7,7 +7,7 @@ use axum::{
     response::Response,
 };
 use futures_util::future::BoxFuture;
-use litellm_core::{CoreClient, resources::CoreResources};
+use litellm_core::resources::CoreResources;
 use litellm_gateway_inference::{Deployment, Gateway, router};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use litellm_secrets::{SecretValue, source::SecretSource};
@@ -30,21 +30,26 @@ pub fn app(model: &str, api_base: &str) -> Router {
     let http = Resolution::from(&HttpSettings::default()).config;
     let secrets = Arc::new(NoSecrets);
     let resources = CoreResources::new(pool);
-    router(Arc::new(Gateway {
-        core: CoreClient::new(resources, http, secrets),
-        models: [(
-            "public/model".into(),
-            Deployment {
-                model: model.into(),
-                api_base: Some(api_base.into()),
-                api_key: Some("test-key".into()),
-                timeout: Some(Duration::from_secs(5)),
-                ..Default::default()
-            },
-        )]
-        .into_iter()
-        .collect(),
-    }))
+    router(Arc::new(
+        Gateway::new(
+            resources,
+            http,
+            secrets,
+            [(
+                "public/model".into(),
+                Deployment {
+                    model: model.into(),
+                    api_base: Some(api_base.into()),
+                    api_key: Some("test-key".into()),
+                    timeout: Some(Duration::from_secs(5)),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+        )
+        .unwrap(),
+    ))
 }
 
 pub async fn post(app: Router, path: &str, body: Value) -> Response {

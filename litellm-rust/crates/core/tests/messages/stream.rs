@@ -291,11 +291,14 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
     #[case] provider: &str,
 ) {
     let upstream = upstream([sse_response()]).await;
-    let response = client()
-        .messages(MessagesCall {
-            custom_llm_provider: Some(provider.into()),
-            ..streaming(call, upstream.uri())
-        })
+    let response = messages_route(no_secrets())
+        .execute(
+            MessagesCall {
+                custom_llm_provider: Some(provider.into()),
+                ..streaming(call, upstream.uri())
+            },
+            &(),
+        )
         .await
         .unwrap();
 
@@ -314,8 +317,8 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
 #[tokio::test]
 async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall) {
     let upstream = upstream([ResponseTemplate::new(429).set_body_string("slow down")]).await;
-    let error = client()
-        .messages(streaming(call, upstream.uri()))
+    let error = messages_route(no_secrets())
+        .execute(streaming(call, upstream.uri()), &())
         .await
         .err()
         .expect("upstream failure is returned by messages()");
@@ -340,10 +343,13 @@ async fn dropping_the_sdk_stream_closes_the_unfinished_upstream(
     let (base, connection) = stalling_upstream().await;
     let response = tokio::time::timeout(
         Duration::from_secs(5),
-        client().messages(MessagesCall {
-            timeout: Some(Duration::from_secs(30)),
-            ..streaming(call, base)
-        }),
+        messages_route(no_secrets()).execute(
+            MessagesCall {
+                timeout: Some(Duration::from_secs(30)),
+                ..streaming(call, base)
+            },
+            &(),
+        ),
     )
     .await
     .expect("messages() returns before the upstream finishes")
@@ -372,11 +378,14 @@ async fn dropping_the_sdk_stream_closes_the_unfinished_upstream(
 #[tokio::test]
 async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesCall) {
     let (base, connection) = stalling_upstream().await;
-    let response = client()
-        .messages(MessagesCall {
-            timeout: Some(Duration::from_millis(300)),
-            ..streaming(call, base)
-        })
+    let response = messages_route(no_secrets())
+        .execute(
+            MessagesCall {
+                timeout: Some(Duration::from_millis(300)),
+                ..streaming(call, base)
+            },
+            &(),
+        )
         .await
         .unwrap();
 
