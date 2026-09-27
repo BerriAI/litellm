@@ -72,7 +72,9 @@ def _import_yaml() -> ModuleType:
         ) from None
 
 
-def _load_yaml_mapping(text: str) -> dict[str, Any]:  # mutable-ok: fresh parser-built dict; matches this module's dict[str, Any] convention
+def _load_yaml_mapping(
+    text: str,
+) -> dict[str, Any]:  # mutable-ok: fresh parser-built dict; matches this module's dict[str, Any] convention
     """Parse YAML text, requiring a mapping at the document root."""
     yaml_mod: Final = _import_yaml()
     try:
@@ -200,7 +202,9 @@ def _is_yaml_content(filepath: str, content_type: str | None = None) -> bool:
     return bool(content_type and "yaml" in content_type)
 
 
-def _load_local_openapi_spec(filepath: str) -> dict[str, Any]:  # mutable-ok: fresh parser-built dict; matches this module's dict[str, Any] convention
+def _load_local_openapi_spec(
+    filepath: str,
+) -> dict[str, Any]:  # mutable-ok: fresh parser-built dict; matches this module's dict[str, Any] convention
     """Read a local OpenAPI spec file, parsing YAML or JSON."""
     if not os.path.exists(filepath):
         raise FileNotFoundError(f"OpenAPI spec not found at {filepath}")
@@ -217,7 +221,9 @@ def _load_local_openapi_spec(filepath: str) -> dict[str, Any]:  # mutable-ok: fr
             raise json_exc from None
 
 
-def _load_remote_openapi_spec(text: str, as_yaml: bool) -> dict[str, Any]:  # mutable-ok: fresh parser-built dict; matches this module's dict[str, Any] convention
+def _load_remote_openapi_spec(
+    text: str, as_yaml: bool
+) -> dict[str, Any]:  # mutable-ok: fresh parser-built dict; matches this module's dict[str, Any] convention
     """Parse a fetched spec body. Runs in a worker thread: YAML parsing is
     synchronous CPU work with no nesting/alias limits, so it must not run on
     the event loop where a pathological document could stall the proxy."""
