@@ -2891,6 +2891,7 @@ dependencies = [
  "http 1.4.2",
  "litellm-auth-types",
  "moka",
+ "rstest",
  "serde_json",
  "sha2 0.10.9",
  "tokio",
@@ -2900,6 +2901,7 @@ dependencies = [
 name = "litellm-auth-types"
 version = "0.1.0"
 dependencies = [
+ "rstest",
  "serde",
  "subtle",
  "thiserror 2.0.19",
@@ -3146,8 +3148,6 @@ dependencies = [
  "reqwest 0.12.28",
  "rstest",
  "rstest_reuse",
- "rustls 0.23.42",
- "rustls-native-certs",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3194,6 +3194,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "proptest",
+ "rstest",
 ]
 
 [[package]]
@@ -3306,6 +3307,7 @@ dependencies = [
 name = "litellm-http"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "http 1.4.2",
  "hyper-util",
  "litellm-core-utils",
@@ -3313,11 +3315,13 @@ dependencies = [
  "reqwest 0.12.28",
  "rstest",
  "rustls 0.23.42",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-tungstenite",
  "veil",
  "webpki-roots",
 ]
@@ -3662,6 +3666,7 @@ dependencies = [
 name = "litellm-token-counter-huggingface"
 version = "0.1.0"
 dependencies = [
+ "rstest",
  "serde_json",
  "thiserror 2.0.19",
  "tokenizers",
@@ -3673,6 +3678,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "once_cell",
+ "rstest",
  "rustc-hash",
  "thiserror 2.0.19",
  "tiktoken-rs",

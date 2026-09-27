@@ -1,26 +1,28 @@
 use bytes::Bytes;
 use futures_util::{StreamExt, stream::BoxStream};
 use litellm_framing::{frames, sse::SseCodec};
+use litellm_types::messages::streaming::MessagesStreamEvent;
 
+use crate::Error;
 pub use crate::base_llm::base_model_iterator::ByteStream;
-use crate::{Error, anthropic::messages::streaming_iterator::AnthropicMessagesStreamEvent};
 
-pub type EventStream = BoxStream<'static, Result<AnthropicMessagesStreamEvent, Error>>;
+pub type EventStream = BoxStream<'static, Result<MessagesStreamEvent, Error>>;
 pub type StreamDecoder = fn(ByteStream) -> EventStream;
 
 pub fn anthropic_sse_event_stream(bytes: ByteStream) -> EventStream {
     Box::pin(frames(bytes, SseCodec::default()).map(|event| {
-        let event = event
-            .map_err(|error| Error::InvalidResponse(format!("stream framing failed: {error}")))?;
+        let event = event.map_err(|error| {
+            Error::InvalidResponse(crate::ErrorDetail::failed("stream framing", error))
+        })?;
         serde_json::from_str(&event.data).map_err(|error| {
-            Error::InvalidResponse(format!("Anthropic stream event is invalid: {error}"))
+            Error::InvalidResponse(crate::ErrorDetail::invalid("Anthropic stream event", error))
         })
     }))
 }
 
-pub fn encode_anthropic_sse(event: &AnthropicMessagesStreamEvent) -> Result<Bytes, Error> {
+pub fn encode_anthropic_sse(event: &MessagesStreamEvent) -> Result<Bytes, Error> {
     let data = serde_json::to_value(event).map_err(|error| {
-        Error::InvalidResponse(format!("Anthropic stream event is invalid: {error}"))
+        Error::InvalidResponse(crate::ErrorDetail::invalid("Anthropic stream event", error))
     })?;
     let name = data
         .get("type")
@@ -36,12 +38,10 @@ pub fn encode_anthropic_sse(event: &AnthropicMessagesStreamEvent) -> Result<Byte
 #[cfg(test)]
 mod tests {
     use futures_util::{StreamExt, TryStreamExt, stream};
+    use litellm_types::messages::streaming::{MessagesContentBlockDelta, MessagesStreamUsage};
     use serde_json::json;
 
     use super::*;
-    use crate::anthropic::messages::streaming_iterator::{
-        AnthropicContentBlockDelta, AnthropicStreamUsage,
-    };
 
     const TEXT_DELTA: &str =
         r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hello"}}"#;
@@ -61,9 +61,9 @@ mod tests {
 
         assert_eq!(
             events,
-            vec![AnthropicMessagesStreamEvent::ContentBlockDelta {
+            vec![MessagesStreamEvent::ContentBlockDelta {
                 index: 0,
-                delta: AnthropicContentBlockDelta::TextDelta {
+                delta: MessagesContentBlockDelta::TextDelta {
                     text: "hello".into(),
                 },
             }]
@@ -84,25 +84,25 @@ mod tests {
 
         assert!(matches!(
             events.as_slice(),
-            [AnthropicMessagesStreamEvent::ContentBlockDelta {
-                delta: AnthropicContentBlockDelta::Citations { .. },
+            [MessagesStreamEvent::ContentBlockDelta {
+                delta: MessagesContentBlockDelta::Citations { .. },
                 ..
             }]
         ));
     }
 
-    fn events() -> Vec<AnthropicMessagesStreamEvent> {
+    fn events() -> Vec<MessagesStreamEvent> {
         vec![
-            AnthropicMessagesStreamEvent::Ping,
-            AnthropicMessagesStreamEvent::ContentBlockDelta {
+            MessagesStreamEvent::Ping,
+            MessagesStreamEvent::ContentBlockDelta {
                 index: 1,
-                delta: AnthropicContentBlockDelta::TextDelta { text: "hi".into() },
+                delta: MessagesContentBlockDelta::TextDelta { text: "hi".into() },
             },
-            AnthropicMessagesStreamEvent::ContentBlockStop { index: 1 },
-            AnthropicMessagesStreamEvent::MessageStop {
-                usage: Some(AnthropicStreamUsage {
+            MessagesStreamEvent::ContentBlockStop { index: 1 },
+            MessagesStreamEvent::MessageStop {
+                usage: Some(MessagesStreamUsage {
                     output_tokens: Some(7),
-                    ..AnthropicStreamUsage::default()
+                    ..MessagesStreamUsage::default()
                 }),
             },
         ]
@@ -127,8 +127,7 @@ mod tests {
     #[test]
     fn an_event_is_named_by_its_type() {
         let encoded =
-            encode_anthropic_sse(&AnthropicMessagesStreamEvent::MessageStop { usage: None })
-                .unwrap();
+            encode_anthropic_sse(&MessagesStreamEvent::MessageStop { usage: None }).unwrap();
 
         assert_eq!(
             encoded,

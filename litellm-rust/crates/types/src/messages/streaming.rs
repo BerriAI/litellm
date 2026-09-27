@@ -2,7 +2,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct AnthropicStreamUsage {
+pub struct MessagesStreamUsage {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub input_tokens: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -18,7 +18,7 @@ pub struct AnthropicStreamUsage {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AnthropicStreamMessage {
+pub struct MessagesStreamMessage {
     pub id: String,
     #[serde(rename = "type")]
     pub message_type: String,
@@ -27,14 +27,14 @@ pub struct AnthropicStreamMessage {
     pub content: Vec<Value>,
     pub stop_reason: Option<String>,
     pub stop_sequence: Option<String>,
-    pub usage: AnthropicStreamUsage,
+    pub usage: MessagesStreamUsage,
     #[serde(flatten)]
     pub extra: Map<String, Value>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum AnthropicContentBlockDelta {
+pub enum MessagesContentBlockDelta {
     TextDelta {
         text: String,
     },
@@ -57,7 +57,7 @@ pub enum AnthropicContentBlockDelta {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AnthropicContentBlock {
+pub struct MessagesContentBlock {
     #[serde(rename = "type")]
     pub block_type: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -83,7 +83,7 @@ pub struct AnthropicContentBlock {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
-pub struct AnthropicMessageDelta {
+pub struct MessagesDelta {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stop_reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -97,7 +97,7 @@ pub struct AnthropicMessageDelta {
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct AnthropicStreamError {
+pub struct MessagesStreamError {
     #[serde(rename = "type")]
     pub error_type: String,
     pub message: String,
@@ -109,34 +109,34 @@ pub struct AnthropicStreamError {
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
-pub enum AnthropicMessagesStreamEvent {
+pub enum MessagesStreamEvent {
     MessageStart {
-        message: AnthropicStreamMessage,
+        message: MessagesStreamMessage,
     },
     ContentBlockStart {
         index: u64,
-        content_block: AnthropicContentBlock,
+        content_block: MessagesContentBlock,
     },
     ContentBlockDelta {
         index: u64,
-        delta: AnthropicContentBlockDelta,
+        delta: MessagesContentBlockDelta,
     },
     ContentBlockStop {
         index: u64,
     },
     MessageDelta {
-        delta: AnthropicMessageDelta,
+        delta: MessagesDelta,
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        usage: Option<AnthropicStreamUsage>,
+        usage: Option<MessagesStreamUsage>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         context_management: Option<Value>,
     },
     MessageStop {
         #[serde(default, skip_serializing_if = "Option::is_none")]
-        usage: Option<AnthropicStreamUsage>,
+        usage: Option<MessagesStreamUsage>,
     },
     Ping,
     Error {
-        error: AnthropicStreamError,
+        error: MessagesStreamError,
     },
 }
