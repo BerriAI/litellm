@@ -1287,6 +1287,7 @@ class VertexAITokenCounter(BaseTokenCounter):
                     original_response=result,
                 )
         else:
+            from litellm.llms.gemini.count_tokens.handler import ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS
             from litellm.llms.vertex_ai.count_tokens.handler import VertexAITokenCounter
             from litellm.llms.vertex_ai.gemini.transformation import (
                 _gemini_convert_messages_with_history,  # pyright: ignore[reportPrivateUsage]  # shared helper already used by gemini/chat, context_caching, and vertex_and_google_ai_studio_gemini
@@ -1300,13 +1301,13 @@ class VertexAITokenCounter(BaseTokenCounter):
                 )
             )
 
-            count_tokens_params: Final = {
-                "model": model_to_use,
-                "contents": resolved_contents,
+            deployment_params: Final = {
+                key: value
+                for key, value in count_tokens_params_request.items()
+                if key not in ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS
             }
-            count_tokens_params_request.update(count_tokens_params)
             result = await VertexAITokenCounter().acount_tokens(
-                **count_tokens_params_request,
+                **(deployment_params | {"model": model_to_use, "contents": resolved_contents}),
             )
 
             if result is not None and "totalTokens" in result:
