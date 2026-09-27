@@ -475,7 +475,7 @@ async def test_sail_chat_rejects_a_metadata_window_that_contradicts_the_tier_bef
 async def test_sail_chat_rejects_an_unknown_metadata_window_before_sending(
     sail_env: None, chat_route: respx.Route, caller_window: object, drop_params: str | None
 ) -> None:
-    with pytest.raises(litellm.UnsupportedParamsError, match="metadata.completion_window") as error:
+    with pytest.raises(litellm.UnsupportedParamsError, match=r"metadata\.completion_window") as error:
         await litellm.acompletion(
             model=MODEL, messages=MESSAGES, metadata={"completion_window": caller_window}, drop_params=drop_params
         )
