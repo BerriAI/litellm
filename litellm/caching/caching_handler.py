@@ -52,7 +52,7 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+    from litellm.llms.anthropic.pass_through.messages.response_cache import (
         AnthropicMessagesStreamCacheWriter,
     )
     from litellm.types.utils import PromptTokensDetailsWrapper
@@ -127,7 +127,7 @@ def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> boo
     spend and callback records. A plain (non-stream) replay logs here, since nothing
     else will.
     """
-    from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+    from litellm.llms.anthropic.pass_through.messages.response_cache import (
         CachedAnthropicMessagesStreamIterator,
     )
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -930,7 +930,7 @@ class LLMCachingHandler:
         elif (
             call_type == CallTypes.anthropic_messages.value or call_type == CallTypes.aanthropic_messages.value
         ) and isinstance(cached_result, dict):
-            from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+            from litellm.llms.anthropic.pass_through.messages.response_cache import (
                 convert_cached_anthropic_messages_result,
             )
 
@@ -1150,7 +1150,7 @@ class LLMCachingHandler:
             return result
         if not isinstance(result, AsyncIterator):
             return result
-        from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+        from litellm.llms.anthropic.pass_through.messages.response_cache import (
             AnthropicMessagesStreamCacheWriter,
         )
 

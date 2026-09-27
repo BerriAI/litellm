@@ -35,7 +35,7 @@ def _run(cmd):
     return subprocess.call(cmd)
 
 
-def main():
+def main(argv):
     wheels = glob.glob(os.path.join("dist", "*.whl"))
     if not wheels:
         print("::error::no wheel in dist/; run `uv build --wheel --out-dir dist` first")
@@ -51,6 +51,9 @@ def main():
         for n in offenders[:15]:
             print(f"  on-disk {WORST_CASE_PREFIX + len(n):4}  {n}")
         return 1
+    if "--lengths-only" in argv:
+        print(f"ok: every path in {os.path.basename(wheel)} fits MAX_PATH at a {WORST_CASE_PREFIX}-char prefix")
+        return 0
 
     venv = _deep_venv_dir()
     os.makedirs(os.path.dirname(venv), exist_ok=True)
@@ -73,4 +76,4 @@ def main():
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    sys.exit(main(sys.argv[1:]))

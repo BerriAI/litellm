@@ -212,6 +212,15 @@ if [ "$suite" = browser ]; then
   exit 0
 fi
 
+node_files=()
+if [ "${CIRCLE_NODE_TOTAL:-1}" -gt 1 ]; then
+  split="$(.venv/bin/python tests/integration/run.py "$suite" --list \
+    | circleci tests split --split-by=timings --timings-type=filename)"
+  read -r -a node_files <<< "$(printf '%s' "$split" | tr '\n' ' ')"
+  test "${#node_files[@]}" -gt 0
+  printf '%s\n' "${node_files[@]}" > "$results/node-files.txt"
+fi
+
 env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_RUN_ID="$integration_identity" \
   DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
@@ -225,7 +234,7 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_PROXY_DATABASE_URL="$INTEGRATION_PROXY_DATABASE_URL" \
   INTEGRATION_PROXY_READ_REPLICA_URL="$INTEGRATION_PROXY_READ_REPLICA_URL" \
   INTEGRATION_ROUTING="$INTEGRATION_ROUTING" \
-  .venv/bin/python tests/integration/run.py "$suite" --results "$results"
+  .venv/bin/python tests/integration/run.py "$suite" --results "$results" "${node_files[@]}"
 
 if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
   for covered_pid in "$proxy_pid" "$peer_pid"; do
