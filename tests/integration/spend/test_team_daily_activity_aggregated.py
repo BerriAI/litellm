@@ -85,8 +85,12 @@ def test_model_top_keys_ranks_keys_by_spend_on_the_model_not_total_spend(gateway
     """Regression for the per-model Top Keys list: a key that spends more
     globally but less on the model must rank below the model's real top key."""
     with gateway.scenario() as scenario:
-        model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
-        other_model: Final = scenario.model(input_cost_per_token=0.001, output_cost_per_token=0.002)
+        model: Final = scenario.model(
+            model="openai/gpt-4o-mini", input_cost_per_token=0.001, output_cost_per_token=0.002
+        )
+        other_model: Final = scenario.model(
+            model="openai/gpt-4o", input_cost_per_token=0.001, output_cost_per_token=0.002
+        )
         team: Final = scenario.team(models=[model, other_model])
         heavy: Final = scenario.key(team_id=team, models=[model, other_model])
         light: Final = scenario.key(team_id=team, models=[model])
@@ -112,7 +116,7 @@ def test_model_top_keys_ranks_keys_by_spend_on_the_model_not_total_spend(gateway
             "/team/daily/activity/aggregated/model_top_keys",
             params={
                 "team_ids": team,
-                "model": model,
+                "model": "openai/gpt-4o-mini",
                 "start_date": (today - timedelta(days=1)).strftime("%Y-%m-%d"),
                 "end_date": (today + timedelta(days=1)).strftime("%Y-%m-%d"),
                 "timezone": "0",
