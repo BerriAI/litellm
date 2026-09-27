@@ -1,6 +1,6 @@
-"""CI-covered tests for the Nova Canvas conditioned-editing additions (issue #39552).
+"""Tests for the Nova Canvas conditioned-editing additions (issue #39552).
 
-Self-contained mirror of the branch-added tests in
+Self-contained complement to the branch-added tests in
 tests/unit/llms/bedrock/image_edit/test_amazon_nova_canvas_image_edit.py: the
 conditioning guard, conditionImage acceptance/precedence, controlStrength
 coercion/range, mask/maskPrompt rejection, prompt-required, style forwarding,
@@ -693,8 +693,9 @@ def test_aimage_edit_positional_arguments_still_work(monkeypatch):
 
 def test_aimage_edit_none_image_builds_empty_list(monkeypatch):
     """An omitted image must arrive at the handler as [] (empty list), not [None]."""
-    import litellm.images.main as images_main
     from unittest.mock import Mock
+
+    import litellm.images.main as images_main
 
     seen: dict[str, object] = {}
 
@@ -751,8 +752,8 @@ def test_redact_bedrock_headers_for_logging_masks_signed_headers():
 def test_prepare_request_logging_headers_redacted(monkeypatch):
     """pre_call additional_args must carry the redacted copy; the sent request keeps
     the real bearer Authorization header."""
-    from litellm.llms.bedrock.image_edit.handler import BedrockImageEdit
     from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.llms.bedrock.image_edit.handler import BedrockImageEdit
 
     monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-12345")
 
