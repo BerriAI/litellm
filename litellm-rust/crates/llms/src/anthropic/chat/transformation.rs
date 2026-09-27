@@ -137,7 +137,7 @@ impl BaseConfig for AnthropicConfig {
         {
             return Err(Error::Unsupported("non-text response content block"));
         }
-        let text = body
+        let text: String = body
             .content
             .into_iter()
             .map(|block| match block {
