@@ -18,14 +18,10 @@ interface MCPServerSelectorProps {
   disabled?: boolean;
   teamId?: string | null;
   allowNoMcpServers?: boolean;
-  allowAccessGroups?: boolean;
   allowAllProxyMcpServers?: boolean;
 }
 
 const TOOLSET_PREFIX = "toolset:";
-
-const selectableLegacyGroups = (available: string[], selected: string[] = [], allowNew: boolean): string[] =>
-  allowNew ? Array.from(new Set([...available, ...selected])) : selected;
 
 const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   onChange,
@@ -36,24 +32,22 @@ const MCPServerSelector: React.FC<MCPServerSelectorProps> = ({
   disabled = false,
   teamId,
   allowNoMcpServers = false,
-  allowAccessGroups = true,
   allowAllProxyMcpServers = false,
 }) => {
   const { data: mcpServers = [], isLoading: serversLoading } = useMCPServers(teamId);
   const { data: accessGroups = [], isLoading: groupsLoading } = useMCPAccessGroups();
   const { data: toolsets = [], isLoading: toolsetsLoading } = useMCPToolsets();
 
-  const loading = [serversLoading, groupsLoading, toolsetsLoading].some(Boolean);
+  const loading = serversLoading || groupsLoading || toolsetsLoading;
 
-  const selectableGroups = selectableLegacyGroups(accessGroups, value?.accessGroups, allowAccessGroups);
-  const accessGroupSet = new Set(selectableGroups);
+  const accessGroupSet = new Set(accessGroups);
 
   // Combine options: access groups + servers + toolsets
   const options = [
-    ...selectableGroups.map((group) => ({
+    ...accessGroups.map((group) => ({
       label: group,
       value: group,
-      description: allowAccessGroups ? "Access Group" : "Existing legacy MCP group",
+      description: "Access Group",
     })),
     ...mcpServers.map((server) => ({
       label: `${server.server_name || server.server_id} (${server.server_id})`,
