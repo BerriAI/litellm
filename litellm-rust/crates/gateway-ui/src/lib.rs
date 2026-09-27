@@ -1,8 +1,9 @@
 mod assets;
+mod dashboard;
 mod error;
 mod session;
 
-use std::{num::NonZeroU32, path::Path, sync::Arc};
+use std::{num::NonZeroU32, sync::Arc};
 
 use axum::{
     Router,
@@ -16,10 +17,11 @@ use litellm_gateway_auth::UiBackend;
 use tower_http::set_header::SetResponseHeaderLayer;
 use tower_sessions::{SessionManagerLayer, SessionStore, cookie::SameSite};
 
+pub use assets::static_assets;
+pub use dashboard::dashboard_assets;
 pub use error::Error;
 
 pub fn router(
-    directory: impl AsRef<Path>,
     backend: UiBackend,
     store: impl SessionStore + Clone,
     secure_cookies: bool,
@@ -35,6 +37,7 @@ pub fn router(
         login_limit: RateLimiter::direct(Quota::per_minute(NonZeroU32::new(10).unwrap())),
         secure_cookies,
     });
+
     Router::new()
         .route("/v2/login", post(session::login))
         .route("/session/info", get(session::info))
@@ -51,5 +54,4 @@ pub fn router(
             HeaderValue::from_static("no-store"),
         ))
         .with_state(state)
-        .merge(assets::router(directory.as_ref()))
 }

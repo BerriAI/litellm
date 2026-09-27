@@ -1,6 +1,5 @@
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde_json::{Value, json};
-use tempfile::TempDir;
 use time::{Duration, OffsetDateTime};
 
 use axum::{
@@ -23,30 +22,14 @@ use litellm_gateway_auth::UiBackend;
 struct App {
     router: Router,
     store: MemoryStore,
-    directory: TempDir,
 }
 
 #[fixture]
 fn app() -> App {
-    let directory = TempDir::new().unwrap();
-    let export = directory.path().join("public");
-    std::fs::create_dir_all(export.join("login")).unwrap();
-    std::fs::create_dir_all(export.join("_next/static")).unwrap();
-    std::fs::create_dir_all(export.join("assets/logos")).unwrap();
-    std::fs::write(export.join("assets/logos/litellm_logo.jpg"), "logo bytes").unwrap();
-    std::fs::write(export.join("favicon.ico"), "icon bytes").unwrap();
-    std::fs::write(directory.path().join("outside.txt"), "private file").unwrap();
-    std::fs::write(export.join("index.html"), "dashboard").unwrap();
-    std::fs::write(export.join("login/index.html"), "login page").unwrap();
-    std::fs::write(export.join("_next/static/app.js"), "window.app = true;").unwrap();
     let store = MemoryStore::default();
     let backend = UiBackend::new("admin".into(), SecretValue::new("test-password")).unwrap();
-    let router = litellm_gateway_ui::router(export, backend, store.clone(), true);
-    App {
-        router,
-        store,
-        directory,
-    }
+    let router = litellm_gateway_ui::router(backend, store.clone(), true);
+    App { router, store }
 }
 
 async fn body(response: Response) -> Value {
@@ -107,83 +90,6 @@ async fn protected(app: &App, path: &str, method: &str, cookie: &str, csrf: &str
 }
 
 #[rstest]
-#[case::dashboard("/ui/", "dashboard", "text/html")]
-#[case::login("/ui/login/", "login page", "text/html")]
-#[case::asset_alias(
-    "/litellm-asset-prefix/_next/static/app.js",
-    "window.app = true;",
-    "text/javascript"
-)]
-#[case::root_assets("/_next/static/app.js", "window.app = true;", "text/javascript")]
-#[case::nested_assets("/ui/_next/static/app.js", "window.app = true;", "text/javascript")]
-#[case::logo("/get_image", "logo bytes", "image/jpeg")]
-#[case::favicon("/get_favicon", "icon bytes", "image/x-icon")]
-#[tokio::test]
-async fn serves_export_without_auth(
-    app: App,
-    #[case] path: &str,
-    #[case] expected: &str,
-    #[case] mime: &str,
-) {
-    let response = app
-        .router
-        .oneshot(Request::get(path).body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert!(
-        response.headers()[header::CONTENT_TYPE]
-            .to_str()
-            .unwrap()
-            .starts_with(mime)
-    );
-    assert_eq!(
-        to_bytes(response.into_body(), 65536).await.unwrap(),
-        expected
-    );
-}
-
-#[rstest]
-#[case::root("/ui?login=success", "/ui/?login=success")]
-#[case::nested("/ui/login?redirect_to=%2Fui", "/ui/login/?redirect_to=%2Fui")]
-#[tokio::test]
-async fn directory_redirects_preserve_prefix_and_query(
-    app: App,
-    #[case] path: &str,
-    #[case] location: &str,
-) {
-    let response = app
-        .router
-        .oneshot(Request::get(path).body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert!(response.status().is_redirection());
-    assert_eq!(response.headers()[header::LOCATION], location);
-}
-
-#[rstest]
-#[case::missing("/ui/no-such-page")]
-#[case::outside_ui("/v1/models")]
-#[case::traversal("/ui/%2e%2e/outside.txt")]
-#[case::encoded_separator("/ui/..%2foutside.txt")]
-#[tokio::test]
-async fn missing_paths_never_fall_back_to_dashboard(app: App, #[case] path: &str) {
-    let response = app
-        .router
-        .oneshot(Request::get(path).body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::NOT_FOUND);
-    assert!(
-        !to_bytes(response.into_body(), 65536)
-            .await
-            .unwrap()
-            .windows(9)
-            .any(|part| part == b"dashboard")
-    );
-}
-
-#[rstest]
 #[case::root("/.well-known/litellm-ui-config")]
 #[case::compatibility("/litellm/.well-known/litellm-ui-config")]
 #[tokio::test]
@@ -199,33 +105,6 @@ async fn discovery_describes_local_login(app: App, #[case] path: &str) {
     assert_eq!(config["sso_configured"], false);
     assert_eq!(config["hide_default_credentials_hint"], true);
     assert_eq!(config["server_root_path"], "");
-}
-
-#[rstest]
-#[tokio::test]
-async fn logo_discovery_points_to_served_image(app: App) {
-    let response = app
-        .router
-        .clone()
-        .oneshot(Request::get("/get_logo_url").body(Body::empty()).unwrap())
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    let config = body(response).await;
-    let response = app
-        .router
-        .oneshot(
-            Request::get(config["logo_url"].as_str().unwrap())
-                .body(Body::empty())
-                .unwrap(),
-        )
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
-    assert_eq!(
-        to_bytes(response.into_body(), 65536).await.unwrap(),
-        "logo bytes"
-    );
 }
 
 #[rstest]
@@ -598,7 +477,6 @@ async fn changed_password_revokes_sessions_in_shared_store(app: App) {
     let cookie = session_cookie(&original);
     let token = claims(original).await;
     let replaced = litellm_gateway_ui::router(
-        app.directory.path().join("public"),
         UiBackend::new("admin".into(), SecretValue::new("new-password")).unwrap(),
         app.store,
         true,

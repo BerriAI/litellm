@@ -1,8 +1,19 @@
 # Gateway UI
 
-Serves the exported dashboard under `/ui/`, with the `_next` asset aliases used by the Python proxy
+Provides UI login and sessions independently of the frontend build layout
 
-The router takes an asset directory, an authentication backend, a session store, and the cookie security setting. `gateway` owns environment configuration and server startup. `gateway-auth` implements the local administrator backend and the `UiSession` extractor
+`router(backend, store, secure_cookies)` serves login, session, and discovery endpoints without reading files. `static_assets(directory)` mounts any static export under `/ui/`, preserving its file layout and directory redirects. The export must use relative asset URLs or URLs rooted at `/ui/`; missing paths return 404. No framework or asset directory name is assumed
+
+Compose them with Axum:
+
+```rust
+let ui = litellm_gateway_ui::router(backend, store, true)
+    .merge(litellm_gateway_ui::static_assets(directory));
+```
+
+`dashboard_assets(directory)` wraps the generic mount with the existing dashboard's `_next` aliases and branding routes. The `gateway` executable explicitly selects that adapter to preserve existing dashboard URLs. A different frontend can use `static_assets` or supply its own Axum router
+
+`gateway` owns environment configuration and server startup. `gateway-auth` implements the local administrator backend and the `UiSession` extractor. The login response and discovery schema still follow the current dashboard's HTTP contract
 
 Run from `litellm-rust` with an existing dashboard export and a gateway config:
 
@@ -31,7 +42,9 @@ Run the regression suite from `litellm-rust` without a browser, dashboard build,
 cargo test -p litellm-gateway-ui -p litellm-gateway-auth -p litellm-gateway --locked -- --test-threads=1
 ```
 
-`gateway-ui/tests/routes.rs` sends requests through the real Axum router with temporary asset files and an injected session store. It checks static assets and redirects, discovery, login responses and cookie attributes, credential failures and rate limits, JSON validation and body limits, CSRF enforcement, fixed expiry, password changes, session rotation, and logout revocation
+`gateway-ui/tests/routes.rs` tests discovery, login, cookies, validation, rate limits, CSRF, expiry, password changes, session rotation, and logout through the real Axum router with an injected session store and no asset files
+
+`gateway-ui/tests/assets.rs` tests a plain HTML/JavaScript/CSS export without a Next.js directory, including redirects and path traversal rejection. Separate compatibility cases cover the existing dashboard aliases and branding
 
 `gateway-auth/tests/ui.rs` checks credential matching, empty configuration, user lookup, and password-dependent session hashes. `gateway/tests/server.rs` checks optional mounting, the production Moka store, credential isolation from inference, local HTTP cookies, and exclusion of login secrets from logs
 

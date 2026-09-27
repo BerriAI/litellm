@@ -57,12 +57,16 @@ async fn main() -> Result<(), Box<dyn Error>> {
                 .map(|value| value.parse::<bool>())
                 .transpose()?
                 .unwrap_or(true);
-            Some(litellm_gateway_ui::router(
-                std::path::PathBuf::from(directory),
-                backend,
-                tower_sessions_moka_store::MokaStore::new(Some(10_000)),
-                secure_cookies,
-            ))
+            Some(
+                litellm_gateway_ui::router(
+                    backend,
+                    tower_sessions_moka_store::MokaStore::new(Some(10_000)),
+                    secure_cookies,
+                )
+                .merge(litellm_gateway_ui::dashboard_assets(
+                    std::path::PathBuf::from(directory),
+                )),
+            )
         }
         None => None,
     };

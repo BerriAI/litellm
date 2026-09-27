@@ -157,11 +157,11 @@ async fn mounts_ui_without_exposing_credentials_or_authorizing_inference(inferen
     )
     .unwrap();
     let ui = litellm_gateway_ui::router(
-        assets.path(),
         backend,
         tower_sessions_moka_store::MokaStore::new(Some(10_000)),
         false,
-    );
+    )
+    .merge(litellm_gateway_ui::dashboard_assets(assets.path()));
     let app = litellm_gateway::router(inference, &config, Some(ui));
     let page = app
         .clone()
