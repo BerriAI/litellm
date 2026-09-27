@@ -4663,16 +4663,14 @@ class MCPServerManager:
         if not (per_user or mcp_auth_header or extra_headers or stdio_env or subject_token):
             return server.server_id, None
         identity: Final = (
-            (user_api_key_auth.user_id, user_api_key_auth.api_key)
-            if per_user and user_api_key_auth is not None
-            else None
+            (user_api_key_auth.user_id, user_api_key_auth.token) if per_user and user_api_key_auth is not None else None
         )
         material: Final = json.dumps(
             (identity, mcp_auth_header, extra_headers, stdio_env, subject_token, credential_fingerprint),
             sort_keys=True,
             separators=(",", ":"),
         )
-        return server.server_id, hashlib.sha256(material.encode()).hexdigest()
+        return server.server_id, hashlib.sha256(material.encode(), usedforsecurity=False).hexdigest()
 
     async def get_prompts_from_server(
         self,

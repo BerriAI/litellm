@@ -14376,6 +14376,20 @@ def test_discovery_cache_keys_isolate_user_dependent_auth(auth_type: MCPAuth) ->
     assert "first" not in str(first)
     assert "second" not in str(second)
 
+    from litellm.proxy._types import hash_token
+
+    same_user_other_token: Final = manager._discovery_key(
+        server, UserAPIKeyAuth(user_id="first", token=hash_token("sk-second")), None, None, None, None
+    )
+    same_token_no_key: Final = manager._discovery_key(
+        server, UserAPIKeyAuth(user_id="first", token=hash_token("sk-first")), None, None, None, None
+    )
+    with_key: Final = manager._discovery_key(
+        server, UserAPIKeyAuth(user_id="first", api_key="sk-first"), None, None, None, None
+    )
+    assert same_user_other_token != with_key
+    assert same_token_no_key == with_key
+
 
 @pytest.mark.asyncio
 async def test_discovery_cache_retries_cancelled_fetches() -> None:
