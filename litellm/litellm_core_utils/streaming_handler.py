@@ -62,7 +62,11 @@ _SYNC_ITER_EXHAUSTED: Final = object()
 
 _GCHUNK_FIELDS: Final[frozenset[str]] = frozenset(GChunk.__annotations__)
 _GCHUNK_REQUIRED_FIELDS: Final[frozenset[str]] = GChunk.__required_keys__
-_GCHUNK_VALUE_FIELDS: Final[frozenset[str]] = _GCHUNK_REQUIRED_FIELDS | {"tool_use", "provider_specific_fields"}
+_GCHUNK_VALUE_FIELDS: Final[tuple[str, ...]] = (
+    *sorted(_GCHUNK_REQUIRED_FIELDS),
+    "tool_use",
+    "provider_specific_fields",
+)
 _ABSENT_FIELD: Final = object()
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
 
@@ -1220,12 +1224,14 @@ class CustomStreamWrapper:
                     generic_chunk is None or "provider_specific_fields" not in generic_chunk
                 ):
                     raise StopIteration
-            shape_error: Final = None if has_only_generic_fields else generic_chunk_shape_error(chunk)
+            anthropic_response_obj: Final[GChunk] = cast(GChunk, _generic_chunk_fields(chunk))
+            shape_error: Final = (
+                None if has_only_generic_fields else generic_chunk_shape_error(chunk, anthropic_response_obj)
+            )
             if shape_error is not None:
                 raise ValueError(
                     f"Streaming chunk from {self.custom_llm_provider} is not a GenericStreamingChunk: {shape_error}"
                 )
-            anthropic_response_obj: Final[GChunk] = cast(GChunk, _generic_chunk_fields(chunk))
             generic_finish_reason: Final = anthropic_response_obj.get("finish_reason", "")
             completion_obj["content"] = anthropic_response_obj.get("text", "")
             if anthropic_response_obj.get("is_finished", False) and not _has_null_finish_reason(anthropic_response_obj):
@@ -2654,10 +2660,10 @@ def generic_chunk_has_all_required_fields(chunk: dict) -> bool:
     return all(key in _GCHUNK_FIELDS for key in chunk)
 
 
-def generic_chunk_shape_error(chunk: object) -> str | None:
+def generic_chunk_shape_error(chunk: object, read_fields: Mapping[str, object]) -> str | None:
     fields: Final = as_str_mapping(chunk)
     if fields is None:
-        return _chunk_object_shape_error(chunk)
+        return _chunk_object_shape_error(chunk, read_fields)
     unexpected: Final = sorted(key for key in fields if key not in _GCHUNK_FIELDS)
     missing: Final = sorted(_GCHUNK_REQUIRED_FIELDS.difference(fields))
     has_text: Final = isinstance(fields.get("text"), str)
@@ -2670,10 +2676,10 @@ def _has_null_finish_reason(fields: Mapping[str, object]) -> bool:
     return fields.get("finish_reason", "") is None
 
 
-def _chunk_object_shape_error(chunk: object) -> str | None:
+def _chunk_object_shape_error(chunk: object, read_fields: Mapping[str, object]) -> str | None:
     if not isinstance(chunk, _SubscriptableChunk):
         return f"expected a dict, got {type(chunk).__name__}"
-    missing: Final = sorted(_GCHUNK_REQUIRED_FIELDS.difference(_generic_chunk_fields(chunk)))
+    missing: Final = sorted(_GCHUNK_REQUIRED_FIELDS.difference(read_fields))
     return f"{type(chunk).__name__} is missing {missing}" if missing else None
 
 
@@ -2684,7 +2690,7 @@ def _generic_chunk_fields(chunk: object) -> Mapping[str, object]:
     if not isinstance(chunk, _SubscriptableChunk):
         return MappingProxyType({})
     return MappingProxyType(
-        {key: value for key in _GCHUNK_FIELDS if (value := _subscripted_field(chunk, key)) is not _ABSENT_FIELD}
+        {key: value for key in _GCHUNK_VALUE_FIELDS if (value := _subscripted_field(chunk, key)) is not _ABSENT_FIELD}
     )
 
 
