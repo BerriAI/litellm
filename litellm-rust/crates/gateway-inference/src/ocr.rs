@@ -34,7 +34,7 @@ async fn handle(
         .get("x-req-format")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let deployment = request::deployment(gateway, &body)?;
+    let deployment = request::resolve_deployment(gateway, &body)?;
     let document = match upload {
         Some(upload) => OcrDocumentInput::Bytes {
             bytes: upload.bytes,

@@ -1,19 +1,19 @@
 //! `POST /v1/messages`, as the Python proxy's `anthropic_response` serves it.
 
-use std::{convert::Infallible, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     Json,
     body::Bytes,
     extract::State,
-    http::{HeaderMap, StatusCode, header},
+    http::HeaderMap,
     response::{IntoResponse, Response},
 };
 use litellm_core::messages::{
     Error as RouteError, MessagesCall, messages_body,
-    route::{Messages, MessagesStreamHead, messages_machine},
+    route::{Messages, messages_machine},
 };
-use litellm_host_http::StreamAdapter;
+use litellm_host_http::Sse;
 use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
@@ -47,11 +47,12 @@ async fn handle(
     headers: &HeaderMap,
     body: Map<String, Value>,
 ) -> Result<Response, Error> {
-    let deployment = request::deployment(gateway, &body)?;
+    let deployment = request::resolve_deployment(gateway, &body)?;
     let call = project(deployment, body, headers)?;
     let machine = messages_machine(&gateway.resources, &gateway.http, gateway.secrets.clone())
         .map_err(RouteError::from)?;
-    Ok(litellm_host_http::serve(machine, call, (), Json, MessagesHttp).await?)
+    let stream = Sse::<Messages, _>::new(|error| Bytes::from(Error::from(error).sse_frame()));
+    Ok(litellm_host_http::serve(machine, call, (), Json, stream).await?)
 }
 
 fn project(
@@ -92,31 +93,4 @@ fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders>
             extra_headers,
         })
     })
-}
-
-struct MessagesHttp;
-
-impl StreamAdapter for MessagesHttp {
-    type Protocol = Messages;
-
-    async fn custom_op(&self, op: Infallible) -> Result<(), RouteError> {
-        match op {}
-    }
-
-    fn head(&self, _: MessagesStreamHead) -> Result<axum::http::Response<()>, RouteError> {
-        let response = (
-            StatusCode::OK,
-            [(header::CONTENT_TYPE, "text/event-stream")],
-        )
-            .into_response();
-        Ok(response.map(|_| ()))
-    }
-
-    fn chunk(&self, chunk: Bytes) -> Result<Bytes, RouteError> {
-        Ok(chunk)
-    }
-
-    fn stream_error(&self, error: litellm_host_http::Error<RouteError>) -> Bytes {
-        Bytes::from(Error::from(error).sse_frame())
-    }
 }

@@ -7,6 +7,7 @@ mod audio_transcription;
 mod chat_completions;
 mod error;
 pub mod messages;
+mod model_path;
 mod ocr;
 mod request;
 
@@ -19,14 +20,14 @@ use litellm_llms::base_llm::ocr::handler::OcrClient;
 use litellm_secrets::source::SecretSource;
 
 pub use error::Error;
-pub use litellm_router::{Deployment, Router as ModelList};
+pub use litellm_router::{Deployment, Router as ModelRouter};
 pub use request::JsonObject;
 
 pub struct Gateway {
     pub resources: CoreResources,
     pub http: HttpClientConfig,
     pub secrets: Arc<dyn SecretSource>,
-    pub models: ModelList,
+    pub models: ModelRouter,
     pub ocr: OcrClient,
 }
 
@@ -37,11 +38,8 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         .route("/v1/ocr", post(ocr::create))
         .route("/chat/completions", post(chat_completions::create))
         .route("/v1/chat/completions", post(chat_completions::create))
-        .route("/engines/{*path}", post(chat_completions::deployment))
-        .route(
-            "/openai/deployments/{*path}",
-            post(chat_completions::deployment),
-        )
+        .route("/engines/{*path}", post(model_path::dispatch))
+        .route("/openai/deployments/{*path}", post(model_path::dispatch))
         .route("/audio/transcriptions", post(audio_transcription::create))
         .route(
             "/v1/audio/transcriptions",

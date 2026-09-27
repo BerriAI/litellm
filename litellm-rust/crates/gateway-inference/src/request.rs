@@ -74,7 +74,7 @@ fn object(body: &[u8]) -> Result<Map<String, Value>, Error> {
     }
 }
 
-pub(crate) fn deployment<'a>(
+pub(crate) fn resolve_deployment<'a>(
     gateway: &'a Gateway,
     body: &Map<String, Value>,
 ) -> Result<&'a Deployment, Error> {

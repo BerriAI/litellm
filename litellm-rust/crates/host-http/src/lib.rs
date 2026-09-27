@@ -1,5 +1,6 @@
 mod driver;
 mod error;
+mod sse;
 
 use std::future::Future;
 
@@ -8,6 +9,7 @@ use litellm_host::protocol::Protocol;
 
 pub use driver::{serve, serve_unary};
 pub use error::Error;
+pub use sse::Sse;
 
 pub trait StreamAdapter: Send + Sync + 'static {
     type Protocol: Protocol;

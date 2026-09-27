@@ -12,7 +12,7 @@ use http_body_util::BodyExt;
 use litellm_config::Config;
 use litellm_core::resources::CoreResources;
 use litellm_gateway_auth::{Auth, RequireMasterKey};
-use litellm_gateway_inference::{Gateway, ModelList};
+use litellm_gateway_inference::{Gateway, ModelRouter};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
 };
@@ -38,7 +38,7 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, litellm_http::Er
         resources,
         http,
         secrets,
-        models: ModelList::from_model_list(&config.model_list),
+        models: ModelRouter::from_model_list(&config.model_list),
         ocr,
     }))
 }
