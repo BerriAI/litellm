@@ -9,6 +9,21 @@
       "repr": "None",
       "str": "None",
       "truthy": false,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "null",
       "pickle": {
         "0": "4e2e",
@@ -28,6 +43,21 @@
       "repr": "True",
       "str": "True",
       "truthy": true,
+      "int": {
+        "value": "1"
+      },
+      "float": {
+        "value": "1.0"
+      },
+      "lax_int": {
+        "value": "1"
+      },
+      "lax_float": {
+        "value": "1.0"
+      },
+      "lax_bool": {
+        "value": "True"
+      },
       "json": "true",
       "pickle": {
         "0": "4930310a2e",
@@ -47,6 +77,21 @@
       "repr": "False",
       "str": "False",
       "truthy": false,
+      "int": {
+        "value": "0"
+      },
+      "float": {
+        "value": "0.0"
+      },
+      "lax_int": {
+        "value": "0"
+      },
+      "lax_float": {
+        "value": "0.0"
+      },
+      "lax_bool": {
+        "value": "False"
+      },
       "json": "false",
       "pickle": {
         "0": "4930300a2e",
@@ -66,6 +111,21 @@
       "repr": "0",
       "str": "0",
       "truthy": false,
+      "int": {
+        "value": "0"
+      },
+      "float": {
+        "value": "0.0"
+      },
+      "lax_int": {
+        "value": "0"
+      },
+      "lax_float": {
+        "value": "0.0"
+      },
+      "lax_bool": {
+        "value": "False"
+      },
       "json": "0",
       "pickle": {
         "0": "49300a2e",
@@ -85,6 +145,21 @@
       "repr": "-7",
       "str": "-7",
       "truthy": true,
+      "int": {
+        "value": "-7"
+      },
+      "float": {
+        "value": "-7.0"
+      },
+      "lax_int": {
+        "value": "-7"
+      },
+      "lax_float": {
+        "value": "-7.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "-7",
       "pickle": {
         "0": "492d370a2e",
@@ -104,6 +179,21 @@
       "repr": "9223372036854775807",
       "str": "9223372036854775807",
       "truthy": true,
+      "int": {
+        "value": "9223372036854775807"
+      },
+      "float": {
+        "value": "9.223372036854776e+18"
+      },
+      "lax_int": {
+        "value": "9223372036854775807"
+      },
+      "lax_float": {
+        "value": "9.223372036854776e+18"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "9223372036854775807",
       "pickle": {
         "0": "4c393232333337323033363835343737353830374c0a2e",
@@ -123,6 +213,21 @@
       "repr": "-9223372036854775808",
       "str": "-9223372036854775808",
       "truthy": true,
+      "int": {
+        "value": "-9223372036854775808"
+      },
+      "float": {
+        "value": "-9.223372036854776e+18"
+      },
+      "lax_int": {
+        "value": "-9223372036854775808"
+      },
+      "lax_float": {
+        "value": "-9.223372036854776e+18"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "-9223372036854775808",
       "pickle": {
         "0": "4c2d393232333337323033363835343737353830384c0a2e",
@@ -142,6 +247,21 @@
       "repr": "18446744073709551616",
       "str": "18446744073709551616",
       "truthy": true,
+      "int": {
+        "value": "18446744073709551616"
+      },
+      "float": {
+        "value": "1.8446744073709552e+19"
+      },
+      "lax_int": {
+        "value": "18446744073709551616"
+      },
+      "lax_float": {
+        "value": "1.8446744073709552e+19"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "18446744073709551616",
       "pickle": {
         "0": "4c31383434363734343037333730393535313631364c0a2e",
@@ -161,6 +281,21 @@
       "repr": "-1180591620717411303424",
       "str": "-1180591620717411303424",
       "truthy": true,
+      "int": {
+        "value": "-1180591620717411303424"
+      },
+      "float": {
+        "value": "-1.1805916207174113e+21"
+      },
+      "lax_int": {
+        "value": "-1180591620717411303424"
+      },
+      "lax_float": {
+        "value": "-1.1805916207174113e+21"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "-1180591620717411303424",
       "pickle": {
         "0": "4c2d313138303539313632303731373431313330333432344c0a2e",
@@ -180,6 +315,21 @@
       "repr": "0.0",
       "str": "0.0",
       "truthy": false,
+      "int": {
+        "value": "0"
+      },
+      "float": {
+        "value": "0.0"
+      },
+      "lax_int": {
+        "value": "0"
+      },
+      "lax_float": {
+        "value": "0.0"
+      },
+      "lax_bool": {
+        "value": "False"
+      },
       "json": "0.0",
       "pickle": {
         "0": "46302e300a2e",
@@ -199,6 +349,21 @@
       "repr": "-0.0",
       "str": "-0.0",
       "truthy": false,
+      "int": {
+        "value": "0"
+      },
+      "float": {
+        "value": "-0.0"
+      },
+      "lax_int": {
+        "value": "0"
+      },
+      "lax_float": {
+        "value": "-0.0"
+      },
+      "lax_bool": {
+        "value": "False"
+      },
       "json": "-0.0",
       "pickle": {
         "0": "462d302e300a2e",
@@ -218,6 +383,21 @@
       "repr": "0.2",
       "str": "0.2",
       "truthy": true,
+      "int": {
+        "value": "0"
+      },
+      "float": {
+        "value": "0.2"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "0.2"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "0.2",
       "pickle": {
         "0": "46302e320a2e",
@@ -237,6 +417,21 @@
       "repr": "1.0",
       "str": "1.0",
       "truthy": true,
+      "int": {
+        "value": "1"
+      },
+      "float": {
+        "value": "1.0"
+      },
+      "lax_int": {
+        "value": "1"
+      },
+      "lax_float": {
+        "value": "1.0"
+      },
+      "lax_bool": {
+        "value": "True"
+      },
       "json": "1.0",
       "pickle": {
         "0": "46312e300a2e",
@@ -256,6 +451,21 @@
       "repr": "-1.5",
       "str": "-1.5",
       "truthy": true,
+      "int": {
+        "value": "-1"
+      },
+      "float": {
+        "value": "-1.5"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "-1.5"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "-1.5",
       "pickle": {
         "0": "462d312e350a2e",
@@ -275,6 +485,21 @@
       "repr": "0.30000000000000004",
       "str": "0.30000000000000004",
       "truthy": true,
+      "int": {
+        "value": "0"
+      },
+      "float": {
+        "value": "0.30000000000000004"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "0.30000000000000004"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "0.30000000000000004",
       "pickle": {
         "0": "46302e33303030303030303030303030303030340a2e",
@@ -294,6 +519,21 @@
       "repr": "123456789.123",
       "str": "123456789.123",
       "truthy": true,
+      "int": {
+        "value": "123456789"
+      },
+      "float": {
+        "value": "123456789.123"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "123456789.123"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "123456789.123",
       "pickle": {
         "0": "463132333435363738392e3132330a2e",
@@ -313,6 +553,21 @@
       "repr": "1000000000000000.0",
       "str": "1000000000000000.0",
       "truthy": true,
+      "int": {
+        "value": "1000000000000000"
+      },
+      "float": {
+        "value": "1000000000000000.0"
+      },
+      "lax_int": {
+        "value": "1000000000000000"
+      },
+      "lax_float": {
+        "value": "1000000000000000.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "1000000000000000.0",
       "pickle": {
         "0": "46313030303030303030303030303030302e300a2e",
@@ -332,6 +587,21 @@
       "repr": "1e+16",
       "str": "1e+16",
       "truthy": true,
+      "int": {
+        "value": "10000000000000000"
+      },
+      "float": {
+        "value": "1e+16"
+      },
+      "lax_int": {
+        "value": "10000000000000000"
+      },
+      "lax_float": {
+        "value": "1e+16"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "1e+16",
       "pickle": {
         "0": "4631652b31360a2e",
@@ -351,6 +621,21 @@
       "repr": "1.5e+16",
       "str": "1.5e+16",
       "truthy": true,
+      "int": {
+        "value": "15000000000000000"
+      },
+      "float": {
+        "value": "1.5e+16"
+      },
+      "lax_int": {
+        "value": "15000000000000000"
+      },
+      "lax_float": {
+        "value": "1.5e+16"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "1.5e+16",
       "pickle": {
         "0": "46312e35652b31360a2e",
@@ -370,6 +655,21 @@
       "repr": "9999999999999998.0",
       "str": "9999999999999998.0",
       "truthy": true,
+      "int": {
+        "value": "9999999999999998"
+      },
+      "float": {
+        "value": "9999999999999998.0"
+      },
+      "lax_int": {
+        "value": "9999999999999998"
+      },
+      "lax_float": {
+        "value": "9999999999999998.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "9999999999999998.0",
       "pickle": {
         "0": "46393939393939393939393939393939382e300a2e",
@@ -389,6 +689,21 @@
       "repr": "0.0001",
       "str": "0.0001",
       "truthy": true,
+      "int": {
+        "value": "0"
+      },
+      "float": {
+        "value": "0.0001"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "0.0001"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "0.0001",
       "pickle": {
         "0": "46302e303030310a2e",
@@ -408,6 +723,21 @@
       "repr": "1e-05",
       "str": "1e-05",
       "truthy": true,
+      "int": {
+        "value": "0"
+      },
+      "float": {
+        "value": "1e-05"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "1e-05"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "1e-05",
       "pickle": {
         "0": "4631652d30350a2e",
@@ -427,6 +757,21 @@
       "repr": "1.25e-07",
       "str": "1.25e-07",
       "truthy": true,
+      "int": {
+        "value": "0"
+      },
+      "float": {
+        "value": "1.25e-07"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "1.25e-07"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "1.25e-07",
       "pickle": {
         "0": "46312e3235652d30370a2e",
@@ -446,6 +791,21 @@
       "repr": "5e-324",
       "str": "5e-324",
       "truthy": true,
+      "int": {
+        "value": "0"
+      },
+      "float": {
+        "value": "5e-324"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "5e-324"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "5e-324",
       "pickle": {
         "0": "4635652d3332340a2e",
@@ -465,6 +825,21 @@
       "repr": "1.7976931348623157e+308",
       "str": "1.7976931348623157e+308",
       "truthy": true,
+      "int": {
+        "value": "179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368"
+      },
+      "float": {
+        "value": "1.7976931348623157e+308"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "1.7976931348623157e+308"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "1.7976931348623157e+308",
       "pickle": {
         "0": "46312e37393736393331333438363233313537652b3330380a2e",
@@ -484,6 +859,21 @@
       "repr": "1e+22",
       "str": "1e+22",
       "truthy": true,
+      "int": {
+        "value": "10000000000000000000000"
+      },
+      "float": {
+        "value": "1e+22"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "1e+22"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "1e+22",
       "pickle": {
         "0": "4631652b32320a2e",
@@ -503,6 +893,21 @@
       "repr": "inf",
       "str": "inf",
       "truthy": true,
+      "int": {
+        "error": "OverflowError"
+      },
+      "float": {
+        "value": "inf"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "inf"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "Infinity",
       "pickle": {
         "0": "46696e660a2e",
@@ -522,6 +927,21 @@
       "repr": "-inf",
       "str": "-inf",
       "truthy": true,
+      "int": {
+        "error": "OverflowError"
+      },
+      "float": {
+        "value": "-inf"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "-inf"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "-Infinity",
       "pickle": {
         "0": "462d696e660a2e",
@@ -541,6 +961,21 @@
       "repr": "nan",
       "str": "nan",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "nan"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "nan"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "NaN",
       "pickle": {
         "0": "466e616e0a2e",
@@ -560,6 +995,21 @@
       "repr": "1j",
       "str": "1j",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type complex is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a636f6d706c65780a70300a2846302e300a46312e300a7470310a5270320a2e",
@@ -579,6 +1029,21 @@
       "repr": "(-0-1j)",
       "str": "(-0-1j)",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type complex is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a636f6d706c65780a70300a28462d302e300a462d312e300a7470310a5270320a2e",
@@ -598,6 +1063,21 @@
       "repr": "-1j",
       "str": "-1j",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type complex is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a636f6d706c65780a70300a2846302e300a462d312e300a7470310a5270320a2e",
@@ -617,6 +1097,21 @@
       "repr": "(1+2j)",
       "str": "(1+2j)",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type complex is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a636f6d706c65780a70300a2846312e300a46322e300a7470310a5270320a2e",
@@ -636,6 +1131,21 @@
       "repr": "(-1.5-0.5j)",
       "str": "(-1.5-0.5j)",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type complex is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a636f6d706c65780a70300a28462d312e350a462d302e350a7470310a5270320a2e",
@@ -655,6 +1165,21 @@
       "repr": "1e+16j",
       "str": "1e+16j",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type complex is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a636f6d706c65780a70300a2846302e300a4631652b31360a7470310a5270320a2e",
@@ -674,6 +1199,21 @@
       "repr": "''",
       "str": "",
       "truthy": false,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\"",
       "pickle": {
         "0": "560a70300a2e",
@@ -693,6 +1233,21 @@
       "repr": "'plain'",
       "str": "plain",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"plain\"",
       "pickle": {
         "0": "56706c61696e0a70300a2e",
@@ -712,6 +1267,21 @@
       "repr": "\"it's\"",
       "str": "it's",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"it's\"",
       "pickle": {
         "0": "56697427730a70300a2e",
@@ -731,6 +1301,21 @@
       "repr": "'say \"hi\"'",
       "str": "say \"hi\"",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"say \\\"hi\\\"\"",
       "pickle": {
         "0": "5673617920226869220a70300a2e",
@@ -750,6 +1335,21 @@
       "repr": "'both \\' and \"'",
       "str": "both ' and \"",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"both ' and \\\"\"",
       "pickle": {
         "0": "56626f7468202720616e6420220a70300a2e",
@@ -769,6 +1369,21 @@
       "repr": "'back\\\\slash'",
       "str": "back\\slash",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"back\\\\slash\"",
       "pickle": {
         "0": "566261636b5c7530303563736c6173680a70300a2e",
@@ -788,6 +1403,21 @@
       "repr": "'\\t\\n\\r'",
       "str": "\t\n\r",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\\t\\n\\r\"",
       "pickle": {
         "0": "56095c75303030615c75303030640a70300a2e",
@@ -807,6 +1437,21 @@
       "repr": "'\\x00\\x1f\\x7f'",
       "str": "\u0000\u001f\u007f",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\\u0000\\u001f\\u007f\"",
       "pickle": {
         "0": "565c75303030301f7f0a70300a2e",
@@ -826,6 +1471,21 @@
       "repr": "'\\x85\\xa0\\xad'",
       "str": "\u0085\u00a0\u00ad",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\\u0085\\u00a0\\u00ad\"",
       "pickle": {
         "0": "5685a0ad0a70300a2e",
@@ -845,6 +1505,21 @@
       "repr": "'caf\u00e9'",
       "str": "caf\u00e9",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"caf\\u00e9\"",
       "pickle": {
         "0": "56636166e90a70300a2e",
@@ -864,6 +1539,21 @@
       "repr": "'\u65e5\u672c'",
       "str": "\u65e5\u672c",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\\u65e5\\u672c\"",
       "pickle": {
         "0": "565c75363565355c75363732630a70300a2e",
@@ -883,6 +1573,21 @@
       "repr": "'\\u200b\\u2028\\u3000'",
       "str": "\u200b\u2028\u3000",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\\u200b\\u2028\\u3000\"",
       "pickle": {
         "0": "565c75323030625c75323032385c75333030300a70300a2e",
@@ -902,6 +1607,21 @@
       "repr": "'\ud83d\ude00'",
       "str": "\ud83d\ude00",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\\ud83d\\ude00\"",
       "pickle": {
         "0": "565c5530303031663630300a70300a2e",
@@ -921,6 +1641,21 @@
       "repr": "'\\U000e0001\\U0010ffff'",
       "str": "\udb40\udc01\udbff\udfff",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\\udb40\\udc01\\udbff\\udfff\"",
       "pickle": {
         "0": "565c5530303065303030315c5530303130666666660a70300a2e",
@@ -940,6 +1675,21 @@
       "repr": "'\\x08\\x0c'",
       "str": "\b\f",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "\"\\b\\f\"",
       "pickle": {
         "0": "56080c0a70300a2e",
@@ -959,6 +1709,21 @@
       "repr": "b''",
       "str": "b''",
       "truthy": false,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type bytes is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a62797465730a70300a28745270310a2e",
@@ -978,6 +1743,21 @@
       "repr": "b'abc'",
       "str": "b'abc'",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type bytes is not JSON serializable",
       "pickle": {
         "0": "635f636f646563730a656e636f64650a70300a28566162630a70310a566c6174696e310a70320a7470330a5270340a2e",
@@ -997,6 +1777,21 @@
       "repr": "b\"a'b\"",
       "str": "b\"a'b\"",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type bytes is not JSON serializable",
       "pickle": {
         "0": "635f636f646563730a656e636f64650a70300a28566127620a70310a566c6174696e310a70320a7470330a5270340a2e",
@@ -1016,6 +1811,21 @@
       "repr": "b'a\"b\\'c'",
       "str": "b'a\"b\\'c'",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type bytes is not JSON serializable",
       "pickle": {
         "0": "635f636f646563730a656e636f64650a70300a285661226227630a70310a566c6174696e310a70320a7470330a5270340a2e",
@@ -1035,6 +1845,21 @@
       "repr": "b'\\x00\\t\\n\\r\\x7f\\x80\\xff'",
       "str": "b'\\x00\\t\\n\\r\\x7f\\x80\\xff'",
       "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type bytes is not JSON serializable",
       "pickle": {
         "0": "635f636f646563730a656e636f64650a70300a28565c7530303030095c75303030615c75303030647f80ff0a70310a566c6174696e310a70320a7470330a5270340a2e",
@@ -1047,6 +1872,1128 @@
       "view": "b'\\x00\\t\\n\\r\\x7f\\x80\\xff'"
     },
     {
+      "name": "' 12 '",
+      "source": "' 12 '",
+      "literal": true,
+      "plain": true,
+      "repr": "' 12 '",
+      "str": " 12 ",
+      "truthy": true,
+      "int": {
+        "value": "12"
+      },
+      "float": {
+        "value": "12.0"
+      },
+      "lax_int": {
+        "value": "12"
+      },
+      "lax_float": {
+        "value": "12.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\" 12 \"",
+      "pickle": {
+        "0": "56203132200a70300a2e",
+        "1": "58040000002031322071002e",
+        "2": "800258040000002031322071002e",
+        "3": "800358040000002031322071002e",
+        "4": "80049508000000000000008c0420313220942e",
+        "5": "80059508000000000000008c0420313220942e"
+      },
+      "view": "' 12 '"
+    },
+    {
+      "name": "'+5'",
+      "source": "'+5'",
+      "literal": true,
+      "plain": true,
+      "repr": "'+5'",
+      "str": "+5",
+      "truthy": true,
+      "int": {
+        "value": "5"
+      },
+      "float": {
+        "value": "5.0"
+      },
+      "lax_int": {
+        "value": "5"
+      },
+      "lax_float": {
+        "value": "5.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"+5\"",
+      "pickle": {
+        "0": "562b350a70300a2e",
+        "1": "58020000002b3571002e",
+        "2": "800258020000002b3571002e",
+        "3": "800358020000002b3571002e",
+        "4": "80049506000000000000008c022b35942e",
+        "5": "80059506000000000000008c022b35942e"
+      },
+      "view": "'+5'"
+    },
+    {
+      "name": "'-4'",
+      "source": "'-4'",
+      "literal": true,
+      "plain": true,
+      "repr": "'-4'",
+      "str": "-4",
+      "truthy": true,
+      "int": {
+        "value": "-4"
+      },
+      "float": {
+        "value": "-4.0"
+      },
+      "lax_int": {
+        "value": "-4"
+      },
+      "lax_float": {
+        "value": "-4.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"-4\"",
+      "pickle": {
+        "0": "562d340a70300a2e",
+        "1": "58020000002d3471002e",
+        "2": "800258020000002d3471002e",
+        "3": "800358020000002d3471002e",
+        "4": "80049506000000000000008c022d34942e",
+        "5": "80059506000000000000008c022d34942e"
+      },
+      "view": "'-4'"
+    },
+    {
+      "name": "'007'",
+      "source": "'007'",
+      "literal": true,
+      "plain": true,
+      "repr": "'007'",
+      "str": "007",
+      "truthy": true,
+      "int": {
+        "value": "7"
+      },
+      "float": {
+        "value": "7.0"
+      },
+      "lax_int": {
+        "value": "7"
+      },
+      "lax_float": {
+        "value": "7.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"007\"",
+      "pickle": {
+        "0": "563030370a70300a2e",
+        "1": "580300000030303771002e",
+        "2": "8002580300000030303771002e",
+        "3": "8003580300000030303771002e",
+        "4": "80049507000000000000008c03303037942e",
+        "5": "80059507000000000000008c03303037942e"
+      },
+      "view": "'007'"
+    },
+    {
+      "name": "'1_000'",
+      "source": "'1_000'",
+      "literal": true,
+      "plain": true,
+      "repr": "'1_000'",
+      "str": "1_000",
+      "truthy": true,
+      "int": {
+        "value": "1000"
+      },
+      "float": {
+        "value": "1000.0"
+      },
+      "lax_int": {
+        "value": "1000"
+      },
+      "lax_float": {
+        "value": "1000.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"1_000\"",
+      "pickle": {
+        "0": "56315f3030300a70300a2e",
+        "1": "5805000000315f30303071002e",
+        "2": "80025805000000315f30303071002e",
+        "3": "80035805000000315f30303071002e",
+        "4": "80049509000000000000008c05315f303030942e",
+        "5": "80059509000000000000008c05315f303030942e"
+      },
+      "view": "'1_000'"
+    },
+    {
+      "name": "'1__0'",
+      "source": "'1__0'",
+      "literal": true,
+      "plain": true,
+      "repr": "'1__0'",
+      "str": "1__0",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"1__0\"",
+      "pickle": {
+        "0": "56315f5f300a70300a2e",
+        "1": "5804000000315f5f3071002e",
+        "2": "80025804000000315f5f3071002e",
+        "3": "80035804000000315f5f3071002e",
+        "4": "80049508000000000000008c04315f5f30942e",
+        "5": "80059508000000000000008c04315f5f30942e"
+      },
+      "view": "'1__0'"
+    },
+    {
+      "name": "'_1'",
+      "source": "'_1'",
+      "literal": true,
+      "plain": true,
+      "repr": "'_1'",
+      "str": "_1",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"_1\"",
+      "pickle": {
+        "0": "565f310a70300a2e",
+        "1": "58020000005f3171002e",
+        "2": "800258020000005f3171002e",
+        "3": "800358020000005f3171002e",
+        "4": "80049506000000000000008c025f31942e",
+        "5": "80059506000000000000008c025f31942e"
+      },
+      "view": "'_1'"
+    },
+    {
+      "name": "'1_'",
+      "source": "'1_'",
+      "literal": true,
+      "plain": true,
+      "repr": "'1_'",
+      "str": "1_",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"1_\"",
+      "pickle": {
+        "0": "56315f0a70300a2e",
+        "1": "5802000000315f71002e",
+        "2": "80025802000000315f71002e",
+        "3": "80035802000000315f71002e",
+        "4": "80049506000000000000008c02315f942e",
+        "5": "80059506000000000000008c02315f942e"
+      },
+      "view": "'1_'"
+    },
+    {
+      "name": "'3.0'",
+      "source": "'3.0'",
+      "literal": true,
+      "plain": true,
+      "repr": "'3.0'",
+      "str": "3.0",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "3.0"
+      },
+      "lax_int": {
+        "value": "3"
+      },
+      "lax_float": {
+        "value": "3.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"3.0\"",
+      "pickle": {
+        "0": "56332e300a70300a2e",
+        "1": "5803000000332e3071002e",
+        "2": "80025803000000332e3071002e",
+        "3": "80035803000000332e3071002e",
+        "4": "80049507000000000000008c03332e30942e",
+        "5": "80059507000000000000008c03332e30942e"
+      },
+      "view": "'3.0'"
+    },
+    {
+      "name": "'3.00'",
+      "source": "'3.00'",
+      "literal": true,
+      "plain": true,
+      "repr": "'3.00'",
+      "str": "3.00",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "3.0"
+      },
+      "lax_int": {
+        "value": "3"
+      },
+      "lax_float": {
+        "value": "3.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"3.00\"",
+      "pickle": {
+        "0": "56332e30300a70300a2e",
+        "1": "5804000000332e303071002e",
+        "2": "80025804000000332e303071002e",
+        "3": "80035804000000332e303071002e",
+        "4": "80049508000000000000008c04332e3030942e",
+        "5": "80059508000000000000008c04332e3030942e"
+      },
+      "view": "'3.00'"
+    },
+    {
+      "name": "'3.5'",
+      "source": "'3.5'",
+      "literal": true,
+      "plain": true,
+      "repr": "'3.5'",
+      "str": "3.5",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "3.5"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "3.5"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"3.5\"",
+      "pickle": {
+        "0": "56332e350a70300a2e",
+        "1": "5803000000332e3571002e",
+        "2": "80025803000000332e3571002e",
+        "3": "80035803000000332e3571002e",
+        "4": "80049507000000000000008c03332e35942e",
+        "5": "80059507000000000000008c03332e35942e"
+      },
+      "view": "'3.5'"
+    },
+    {
+      "name": "' 0.5 '",
+      "source": "' 0.5 '",
+      "literal": true,
+      "plain": true,
+      "repr": "' 0.5 '",
+      "str": " 0.5 ",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "0.5"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "0.5"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\" 0.5 \"",
+      "pickle": {
+        "0": "5620302e35200a70300a2e",
+        "1": "580500000020302e352071002e",
+        "2": "8002580500000020302e352071002e",
+        "3": "8003580500000020302e352071002e",
+        "4": "80049509000000000000008c0520302e3520942e",
+        "5": "80059509000000000000008c0520302e3520942e"
+      },
+      "view": "' 0.5 '"
+    },
+    {
+      "name": "'true'",
+      "source": "'true'",
+      "literal": true,
+      "plain": true,
+      "repr": "'true'",
+      "str": "true",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "value": "True"
+      },
+      "json": "\"true\"",
+      "pickle": {
+        "0": "56747275650a70300a2e",
+        "1": "58040000007472756571002e",
+        "2": "800258040000007472756571002e",
+        "3": "800358040000007472756571002e",
+        "4": "80049508000000000000008c0474727565942e",
+        "5": "80059508000000000000008c0474727565942e"
+      },
+      "view": "'true'"
+    },
+    {
+      "name": "' Yes '",
+      "source": "' Yes '",
+      "literal": true,
+      "plain": true,
+      "repr": "' Yes '",
+      "str": " Yes ",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\" Yes \"",
+      "pickle": {
+        "0": "5620596573200a70300a2e",
+        "1": "5805000000205965732071002e",
+        "2": "80025805000000205965732071002e",
+        "3": "80035805000000205965732071002e",
+        "4": "80049509000000000000008c052059657320942e",
+        "5": "80059509000000000000008c052059657320942e"
+      },
+      "view": "' Yes '"
+    },
+    {
+      "name": "'off'",
+      "source": "'off'",
+      "literal": true,
+      "plain": true,
+      "repr": "'off'",
+      "str": "off",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "value": "False"
+      },
+      "json": "\"off\"",
+      "pickle": {
+        "0": "566f66660a70300a2e",
+        "1": "58030000006f666671002e",
+        "2": "800258030000006f666671002e",
+        "3": "800358030000006f666671002e",
+        "4": "80049507000000000000008c036f6666942e",
+        "5": "80059507000000000000008c036f6666942e"
+      },
+      "view": "'off'"
+    },
+    {
+      "name": "'2'",
+      "source": "'2'",
+      "literal": true,
+      "plain": true,
+      "repr": "'2'",
+      "str": "2",
+      "truthy": true,
+      "int": {
+        "value": "2"
+      },
+      "float": {
+        "value": "2.0"
+      },
+      "lax_int": {
+        "value": "2"
+      },
+      "lax_float": {
+        "value": "2.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"2\"",
+      "pickle": {
+        "0": "56320a70300a2e",
+        "1": "58010000003271002e",
+        "2": "800258010000003271002e",
+        "3": "800358010000003271002e",
+        "4": "80049505000000000000008c0132942e",
+        "5": "80059505000000000000008c0132942e"
+      },
+      "view": "'2'"
+    },
+    {
+      "name": "1",
+      "source": "1",
+      "literal": true,
+      "plain": true,
+      "repr": "1",
+      "str": "1",
+      "truthy": true,
+      "int": {
+        "value": "1"
+      },
+      "float": {
+        "value": "1.0"
+      },
+      "lax_int": {
+        "value": "1"
+      },
+      "lax_float": {
+        "value": "1.0"
+      },
+      "lax_bool": {
+        "value": "True"
+      },
+      "json": "1",
+      "pickle": {
+        "0": "49310a2e",
+        "1": "4b012e",
+        "2": "80024b012e",
+        "3": "80034b012e",
+        "4": "80044b012e",
+        "5": "80054b012e"
+      },
+      "view": "1"
+    },
+    {
+      "name": "'.5'",
+      "source": "'.5'",
+      "literal": true,
+      "plain": true,
+      "repr": "'.5'",
+      "str": ".5",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "0.5"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "0.5"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\".5\"",
+      "pickle": {
+        "0": "562e350a70300a2e",
+        "1": "58020000002e3571002e",
+        "2": "800258020000002e3571002e",
+        "3": "800358020000002e3571002e",
+        "4": "80049506000000000000008c022e35942e",
+        "5": "80059506000000000000008c022e35942e"
+      },
+      "view": "'.5'"
+    },
+    {
+      "name": "'5.'",
+      "source": "'5.'",
+      "literal": true,
+      "plain": true,
+      "repr": "'5.'",
+      "str": "5.",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "5.0"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "5.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"5.\"",
+      "pickle": {
+        "0": "56352e0a70300a2e",
+        "1": "5802000000352e71002e",
+        "2": "80025802000000352e71002e",
+        "3": "80035802000000352e71002e",
+        "4": "80049506000000000000008c02352e942e",
+        "5": "80059506000000000000008c02352e942e"
+      },
+      "view": "'5.'"
+    },
+    {
+      "name": "'1e3'",
+      "source": "'1e3'",
+      "literal": true,
+      "plain": true,
+      "repr": "'1e3'",
+      "str": "1e3",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "1000.0"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "1000.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"1e3\"",
+      "pickle": {
+        "0": "563165330a70300a2e",
+        "1": "580300000031653371002e",
+        "2": "8002580300000031653371002e",
+        "3": "8003580300000031653371002e",
+        "4": "80049507000000000000008c03316533942e",
+        "5": "80059507000000000000008c03316533942e"
+      },
+      "view": "'1e3'"
+    },
+    {
+      "name": "'1_0.5'",
+      "source": "'1_0.5'",
+      "literal": true,
+      "plain": true,
+      "repr": "'1_0.5'",
+      "str": "1_0.5",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "10.5"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "10.5"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"1_0.5\"",
+      "pickle": {
+        "0": "56315f302e350a70300a2e",
+        "1": "5805000000315f302e3571002e",
+        "2": "80025805000000315f302e3571002e",
+        "3": "80035805000000315f302e3571002e",
+        "4": "80049509000000000000008c05315f302e35942e",
+        "5": "80059509000000000000008c05315f302e35942e"
+      },
+      "view": "'1_0.5'"
+    },
+    {
+      "name": "'1e1_0'",
+      "source": "'1e1_0'",
+      "literal": true,
+      "plain": true,
+      "repr": "'1e1_0'",
+      "str": "1e1_0",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "10000000000.0"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "10000000000.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"1e1_0\"",
+      "pickle": {
+        "0": "563165315f300a70300a2e",
+        "1": "58050000003165315f3071002e",
+        "2": "800258050000003165315f3071002e",
+        "3": "800358050000003165315f3071002e",
+        "4": "80049509000000000000008c053165315f30942e",
+        "5": "80059509000000000000008c053165315f30942e"
+      },
+      "view": "'1e1_0'"
+    },
+    {
+      "name": "'inf'",
+      "source": "'inf'",
+      "literal": true,
+      "plain": true,
+      "repr": "'inf'",
+      "str": "inf",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "inf"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "inf"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"inf\"",
+      "pickle": {
+        "0": "56696e660a70300a2e",
+        "1": "5803000000696e6671002e",
+        "2": "80025803000000696e6671002e",
+        "3": "80035803000000696e6671002e",
+        "4": "80049507000000000000008c03696e66942e",
+        "5": "80059507000000000000008c03696e66942e"
+      },
+      "view": "'inf'"
+    },
+    {
+      "name": "'-Infinity'",
+      "source": "'-Infinity'",
+      "literal": true,
+      "plain": true,
+      "repr": "'-Infinity'",
+      "str": "-Infinity",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "-inf"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "-inf"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"-Infinity\"",
+      "pickle": {
+        "0": "562d496e66696e6974790a70300a2e",
+        "1": "58090000002d496e66696e69747971002e",
+        "2": "800258090000002d496e66696e69747971002e",
+        "3": "800358090000002d496e66696e69747971002e",
+        "4": "8004950d000000000000008c092d496e66696e697479942e",
+        "5": "8005950d000000000000008c092d496e66696e697479942e"
+      },
+      "view": "'-Infinity'"
+    },
+    {
+      "name": "'nan'",
+      "source": "'nan'",
+      "literal": true,
+      "plain": true,
+      "repr": "'nan'",
+      "str": "nan",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "nan"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "nan"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"nan\"",
+      "pickle": {
+        "0": "566e616e0a70300a2e",
+        "1": "58030000006e616e71002e",
+        "2": "800258030000006e616e71002e",
+        "3": "800358030000006e616e71002e",
+        "4": "80049507000000000000008c036e616e942e",
+        "5": "80059507000000000000008c036e616e942e"
+      },
+      "view": "'nan'"
+    },
+    {
+      "name": "'NaN'",
+      "source": "'NaN'",
+      "literal": true,
+      "plain": true,
+      "repr": "'NaN'",
+      "str": "NaN",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "nan"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "nan"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"NaN\"",
+      "pickle": {
+        "0": "564e614e0a70300a2e",
+        "1": "58030000004e614e71002e",
+        "2": "800258030000004e614e71002e",
+        "3": "800358030000004e614e71002e",
+        "4": "80049507000000000000008c034e614e942e",
+        "5": "80059507000000000000008c034e614e942e"
+      },
+      "view": "'NaN'"
+    },
+    {
+      "name": "'0x10'",
+      "source": "'0x10'",
+      "literal": true,
+      "plain": true,
+      "repr": "'0x10'",
+      "str": "0x10",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"0x10\"",
+      "pickle": {
+        "0": "56307831300a70300a2e",
+        "1": "58040000003078313071002e",
+        "2": "800258040000003078313071002e",
+        "3": "800358040000003078313071002e",
+        "4": "80049508000000000000008c0430783130942e",
+        "5": "80059508000000000000008c0430783130942e"
+      },
+      "view": "'0x10'"
+    },
+    {
+      "name": "'abc'",
+      "source": "'abc'",
+      "literal": true,
+      "plain": true,
+      "repr": "'abc'",
+      "str": "abc",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "error": "ValueError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "\"abc\"",
+      "pickle": {
+        "0": "566162630a70300a2e",
+        "1": "580300000061626371002e",
+        "2": "8002580300000061626371002e",
+        "3": "8003580300000061626371002e",
+        "4": "80049507000000000000008c03616263942e",
+        "5": "80059507000000000000008c03616263942e"
+      },
+      "view": "'abc'"
+    },
+    {
+      "name": "b'12'",
+      "source": "b'12'",
+      "literal": true,
+      "plain": true,
+      "repr": "b'12'",
+      "str": "b'12'",
+      "truthy": true,
+      "int": {
+        "value": "12"
+      },
+      "float": {
+        "value": "12.0"
+      },
+      "lax_int": {
+        "value": "12"
+      },
+      "lax_float": {
+        "value": "12.0"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json_error": "Object of type bytes is not JSON serializable",
+      "pickle": {
+        "0": "635f636f646563730a656e636f64650a70300a285631320a70310a566c6174696e310a70320a7470330a5270340a2e",
+        "1": "635f636f646563730a656e636f64650a71002858020000003132710158060000006c6174696e3171027471035271042e",
+        "2": "8002635f636f646563730a656e636f64650a710058020000003132710158060000006c6174696e3171028671035271042e",
+        "3": "80034302313271002e",
+        "4": "800495060000000000000043023132942e",
+        "5": "800595060000000000000043023132942e"
+      },
+      "view": "b'12'"
+    },
+    {
+      "name": "b' 1.5 '",
+      "source": "b' 1.5 '",
+      "literal": true,
+      "plain": true,
+      "repr": "b' 1.5 '",
+      "str": "b' 1.5 '",
+      "truthy": true,
+      "int": {
+        "error": "ValueError"
+      },
+      "float": {
+        "value": "1.5"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "1.5"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json_error": "Object of type bytes is not JSON serializable",
+      "pickle": {
+        "0": "635f636f646563730a656e636f64650a70300a285620312e35200a70310a566c6174696e310a70320a7470330a5270340a2e",
+        "1": "635f636f646563730a656e636f64650a710028580500000020312e3520710158060000006c6174696e3171027471035271042e",
+        "2": "8002635f636f646563730a656e636f64650a7100580500000020312e3520710158060000006c6174696e3171028671035271042e",
+        "3": "8003430520312e352071002e",
+        "4": "8004950900000000000000430520312e3520942e",
+        "5": "8005950900000000000000430520312e3520942e"
+      },
+      "view": "b' 1.5 '"
+    },
+    {
+      "name": "3.9",
+      "source": "3.9",
+      "literal": true,
+      "plain": true,
+      "repr": "3.9",
+      "str": "3.9",
+      "truthy": true,
+      "int": {
+        "value": "3"
+      },
+      "float": {
+        "value": "3.9"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "3.9"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "3.9",
+      "pickle": {
+        "0": "46332e390a2e",
+        "1": "47400f3333333333332e",
+        "2": "800247400f3333333333332e",
+        "3": "800347400f3333333333332e",
+        "4": "8004950a0000000000000047400f3333333333332e",
+        "5": "8005950a0000000000000047400f3333333333332e"
+      },
+      "view": "3.9"
+    },
+    {
+      "name": "-3.9",
+      "source": "-3.9",
+      "literal": true,
+      "plain": true,
+      "repr": "-3.9",
+      "str": "-3.9",
+      "truthy": true,
+      "int": {
+        "value": "-3"
+      },
+      "float": {
+        "value": "-3.9"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "-3.9"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "-3.9",
+      "pickle": {
+        "0": "462d332e390a2e",
+        "1": "47c00f3333333333332e",
+        "2": "800247c00f3333333333332e",
+        "3": "800347c00f3333333333332e",
+        "4": "8004950a0000000000000047c00f3333333333332e",
+        "5": "8005950a0000000000000047c00f3333333333332e"
+      },
+      "view": "-3.9"
+    },
+    {
+      "name": "2.5",
+      "source": "2.5",
+      "literal": true,
+      "plain": true,
+      "repr": "2.5",
+      "str": "2.5",
+      "truthy": true,
+      "int": {
+        "value": "2"
+      },
+      "float": {
+        "value": "2.5"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "value": "2.5"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
+      "json": "2.5",
+      "pickle": {
+        "0": "46322e350a2e",
+        "1": "4740040000000000002e",
+        "2": "80024740040000000000002e",
+        "3": "80034740040000000000002e",
+        "4": "8004950a000000000000004740040000000000002e",
+        "5": "8005950a000000000000004740040000000000002e"
+      },
+      "view": "2.5"
+    },
+    {
       "name": "[]",
       "source": "[]",
       "literal": true,
@@ -1054,6 +3001,21 @@
       "repr": "[]",
       "str": "[]",
       "truthy": false,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "[]",
       "pickle": {
         "0": "286c70300a2e",
@@ -1073,6 +3035,21 @@
       "repr": "[1, 'a', None, True]",
       "str": "[1, 'a', None, True]",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "[1, \"a\", null, true]",
       "pickle": {
         "0": "286c70300a49310a6156610a70310a614e614930310a612e",
@@ -1092,6 +3069,21 @@
       "repr": "()",
       "str": "()",
       "truthy": false,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "[]",
       "pickle": {
         "0": "28742e",
@@ -1111,6 +3103,21 @@
       "repr": "(1,)",
       "str": "(1,)",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "[1]",
       "pickle": {
         "0": "2849310a7470300a2e",
@@ -1130,6 +3137,21 @@
       "repr": "(1, (2, 3))",
       "str": "(1, (2, 3))",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "[1, [2, 3]]",
       "pickle": {
         "0": "2849310a2849320a49330a7470300a7470310a2e",
@@ -1149,6 +3171,21 @@
       "repr": "{}",
       "str": "{}",
       "truthy": false,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "{}",
       "pickle": {
         "0": "286470300a2e",
@@ -1168,6 +3205,21 @@
       "repr": "{'a': 1, 'b': [1.0, 2.5]}",
       "str": "{'a': 1, 'b': [1.0, 2.5]}",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "{\"a\": 1, \"b\": [1.0, 2.5]}",
       "pickle": {
         "0": "286470300a56610a70310a49310a7356620a70320a286c70330a46312e300a6146322e350a61732e",
@@ -1187,6 +3239,21 @@
       "repr": "{'z': 1, 'a': 2, 'm': 3}",
       "str": "{'z': 1, 'a': 2, 'm': 3}",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "{\"z\": 1, \"a\": 2, \"m\": 3}",
       "pickle": {
         "0": "286470300a567a0a70310a49310a7356610a70320a49320a73566d0a70330a49330a732e",
@@ -1206,6 +3273,21 @@
       "repr": "{1: 'bool', 2.5: 'float', None: 'none'}",
       "str": "{1: 'bool', 2.5: 'float', None: 'none'}",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "{\"1\": \"bool\", \"2.5\": \"float\", \"null\": \"none\"}",
       "pickle": {
         "0": "286470300a49310a56626f6f6c0a70310a7346322e350a56666c6f61740a70320a734e566e6f6e650a70330a732e",
@@ -1225,6 +3307,21 @@
       "repr": "{(1, 2): 'tuple key'}",
       "str": "{(1, 2): 'tuple key'}",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "keys must be str, int, float, bool or None, not tuple",
       "pickle": {
         "0": "286470300a2849310a49320a7470310a567475706c65206b65790a70320a732e",
@@ -1244,6 +3341,21 @@
       "repr": "{'nested': {'deeper': {'deepest': [{}]}}}",
       "str": "{'nested': {'deeper': {'deepest': [{}]}}}",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "{\"nested\": {\"deeper\": {\"deepest\": [{}]}}}",
       "pickle": {
         "0": "286470300a566e65737465640a70310a286470320a566465657065720a70330a286470340a56646565706573740a70350a286c70360a286470370a617373732e",
@@ -1263,6 +3375,21 @@
       "repr": "{1}",
       "str": "{1}",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type set is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a7365740a70300a28286c70310a49310a617470320a5270330a2e",
@@ -1282,6 +3409,21 @@
       "repr": "set()",
       "str": "set()",
       "truthy": false,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type set is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a7365740a70300a28286c70310a7470320a5270330a2e",
@@ -1301,6 +3443,21 @@
       "repr": "frozenset({1})",
       "str": "frozenset({1})",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json_error": "Object of type frozenset is not JSON serializable",
       "pickle": {
         "0": "635f5f6275696c74696e5f5f0a66726f7a656e7365740a70300a28286c70310a49310a617470320a5270330a2e",
@@ -1320,6 +3477,21 @@
       "repr": "[[[[[[[[[[1]]]]]]]]]]",
       "str": "[[[[[[[[[[1]]]]]]]]]]",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "[[[[[[[[[[1]]]]]]]]]]",
       "pickle": {
         "0": "286c70300a286c70310a286c70320a286c70330a286c70340a286c70350a286c70360a286c70370a286c70380a286c70390a49310a616161616161616161612e",
@@ -1339,6 +3511,21 @@
       "repr": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
       "str": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[[1]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]]",
       "pickle": {
         "0": "286c70300a286c70310a286c70320a286c70330a286c70340a286c70350a286c70360a286c70370a286c70380a286c70390a286c7031300a286c7031310a286c7031320a286c7031330a286c7031340a286c7031350a286c7031360a286c7031370a286c7031380a286c7031390a286c7032300a286c7032310a286c7032320a286c7032330a286c7032340a286c7032350a286c7032360a286c7032370a286c7032380a286c7032390a286c7033300a286c7033310a286c7033320a286c7033330a286c7033340a286c7033350a286c7033360a286c7033370a286c7033380a286c7033390a286c7034300a286c7034310a286c7034320a286c7034330a286c7034340a286c7034350a286c7034360a286c7034370a286c7034380a286c7034390a286c7035300a286c7035310a286c7035320a286c7035330a286c7035340a286c7035350a286c7035360a286c7035370a286c7035380a286c7035390a286c7036300a286c7036310a286c7036320a286c7036330a286c7036340a286c7036350a286c7036360a286c7036370a286c7036380a286c7036390a286c7037300a286c7037310a286c7037320a286c7037330a286c7037340a286c7037350a286c7037360a286c7037370a286c7037380a286c7037390a286c7038300a286c7038310a286c7038320a286c7038330a286c7038340a286c7038350a286c7038360a286c7038370a286c7038380a286c7038390a286c7039300a286c7039310a286c7039320a286c7039330a286c7039340a286c7039350a286c7039360a286c7039370a286c7039380a286c7039390a286c703130300a286c703130310a286c703130320a286c703130330a286c703130340a286c703130350a286c703130360a286c703130370a286c703130380a286c703130390a286c703131300a286c703131310a286c703131320a286c703131330a286c703131340a286c703131350a286c703131360a286c703131370a286c703131380a286c703131390a286c703132300a286c703132310a286c703132320a286c703132330a286c703132340a286c703132350a286c703132360a286c703132370a286c703132380a286c703132390a286c703133300a286c703133310a286c703133320a286c703133330a286c703133340a286c703133350a286c703133360a286c703133370a286c703133380a286c703133390a286c703134300a286c703134310a286c703134320a286c703134330a286c703134340a286c703134350a286c703134360a286c703134370a286c703134380a286c703134390a49310a6161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161616161612e",
@@ -1358,6 +3545,21 @@
       "repr": "{'timestamp': 1726000000.123, 'response': '{\"id\": \"chatcmpl-1\", \"object\": \"chat.completion\"}'}",
       "str": "{'timestamp': 1726000000.123, 'response': '{\"id\": \"chatcmpl-1\", \"object\": \"chat.completion\"}'}",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "{\"timestamp\": 1726000000.123, \"response\": \"{\\\"id\\\": \\\"chatcmpl-1\\\", \\\"object\\\": \\\"chat.completion\\\"}\"}",
       "pickle": {
         "0": "286470300a5674696d657374616d700a70310a46313732363030303030302e3132330a7356726573706f6e73650a70320a567b226964223a202263686174636d706c2d31222c20226f626a656374223a2022636861742e636f6d706c6574696f6e227d0a70330a732e",
@@ -1377,6 +3579,21 @@
       "repr": "{'model': 'gpt-4o', 'messages': [{'role': 'user', 'content': 'hi'}], 'temperature': 0.2, 'stream': False}",
       "str": "{'model': 'gpt-4o', 'messages': [{'role': 'user', 'content': 'hi'}], 'temperature': 0.2, 'stream': False}",
       "truthy": true,
+      "int": {
+        "error": "TypeError"
+      },
+      "float": {
+        "error": "TypeError"
+      },
+      "lax_int": {
+        "error": "ValueError"
+      },
+      "lax_float": {
+        "error": "ValueError"
+      },
+      "lax_bool": {
+        "error": "ValueError"
+      },
       "json": "{\"model\": \"gpt-4o\", \"messages\": [{\"role\": \"user\", \"content\": \"hi\"}], \"temperature\": 0.2, \"stream\": false}",
       "pickle": {
         "0": "286470300a566d6f64656c0a70310a566770742d346f0a70320a73566d657373616765730a70330a286c70340a286470350a56726f6c650a70360a56757365720a70370a7356636f6e74656e740a70380a5668690a70390a7361735674656d70657261747572650a7031300a46302e320a735673747265616d0a7031310a4930300a732e",

@@ -1,5 +1,13 @@
 use crate::MAX_DEPTH;
 
+/// The CPython exception class a failed conversion raises.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, strum::Display, strum::IntoStaticStr)]
+pub enum PythonException {
+    TypeError,
+    ValueError,
+    OverflowError,
+}
+
 /// A failure to read or write a Python format. Messages quote CPython's own wording where
 /// the Python side raises (`TypeError`, `ValueError`), so callers can log them as is.
 #[derive(Debug, thiserror::Error)]
@@ -22,4 +30,18 @@ pub enum Error {
     IntegerOutOfRange,
     #[error("Object of type {0} cannot be pickled as plain data")]
     NotPicklable(&'static str),
+    #[error("{exception}: {message}")]
+    Conversion {
+        exception: PythonException,
+        message: String,
+    },
+}
+
+impl Error {
+    pub(crate) fn conversion(exception: PythonException, message: impl Into<String>) -> Self {
+        Self::Conversion {
+            exception,
+            message: message.into(),
+        }
+    }
 }

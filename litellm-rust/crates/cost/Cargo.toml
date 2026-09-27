@@ -5,10 +5,21 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+litellm-python-compat = { path = "../python-compat" }
+litellm-token-counter = { path = "../token-counter", default-features = false }
+fancy-regex.workspace = true
+jiff = "=0.2.37"
+regex = "=1.13.1"
+strum.workspace = true
+thiserror.workspace = true
+
 [dev-dependencies]
 criterion.workspace = true
 proptest.workspace = true
+rstest.workspace = true
 
-[[bench]]
-name = "calculate"
-harness = false
+[lints.clippy]
+disallowed-types = "deny"

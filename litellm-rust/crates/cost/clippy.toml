@@ -1,0 +1,3 @@
+disallowed-types = [
+    { path = "serde_json::Value", reason = "wire.rs owns serde_json::Value in litellm-cost; cost code reads typed inputs (ModelPricing, UsageInput)" },
+]
