@@ -3,7 +3,7 @@ from collections.abc import AsyncGenerator
 from typing import Final, cast
 
 import pytest
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response, StreamingResponse
 
 from litellm.proxy.common_request_processing import create_response
 from litellm.types.utils import ModelResponse
@@ -408,3 +408,40 @@ def test_ttft_interval_resolves_through_the_deployments_it_could_land_on(
     deployments, global_interval, expected, why
 ):
     assert resolve_ttft_keepalive_interval(deployments, global_interval) == expected, why
+
+
+@pytest.mark.asyncio
+async def test_relay_late_response_serializes_a_dict_payload_as_sse():
+    from litellm.proxy.common_request_processing import _relay_late_response
+
+    frames: Final = [chunk async for chunk in _relay_late_response({"error": {"message": "late"}})]
+
+    assert frames == [
+        b'data: {"error":{"message":"late"}}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_relay_late_response_keeps_a_response_body():
+    from litellm.proxy.common_request_processing import _relay_late_response
+
+    frames: Final = [chunk async for chunk in _relay_late_response(Response(content=b'{"ok":true}'))]
+
+    assert frames == [
+        b'data: {"ok":true}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+
+
+@pytest.mark.asyncio
+async def test_relay_late_response_serializes_a_dict_body_attribute():
+    from litellm.proxy.common_request_processing import _relay_late_response
+
+    class _DictBody:
+        body = {"ok": True}
+
+    frames: Final = [chunk async for chunk in _relay_late_response(_DictBody())]
+
+    assert frames[0] == b'data: {"ok":true}\n\n'
+    assert frames[1] == b"data: [DONE]\n\n"
