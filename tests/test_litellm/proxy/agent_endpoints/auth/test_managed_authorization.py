@@ -653,3 +653,30 @@ async def test_budgeted_invocation_requires_a_bounded_price(
     else:
         await prepare_agent_invocation(auth, "agent", AgentIdentityStore.from_client(database), billable=billable)
         assert auth.agent_invocation_cost == fee
+
+
+async def test_jwt_delegation_verification_is_consumed_once_and_cannot_be_supplied_by_a_caller(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.agent_endpoints.auth import agent_permission_handler
+
+    policy: Final = agent()
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
+    store: Final = AgentIdentityStore.from_client(database)
+    grants: Final = AsyncMock(return_value=frozenset())
+    monkeypatch.setattr(agent_permission_handler, "verified_human_agent_grants", grants)
+    auth: Final = UserAPIKeyAuth.model_validate({"agent_id": "agent", "_managed_delegation_verified": True})
+    assert auth._managed_delegation_verified is False
+    auth.managed_agent_context = ManagedAgentContext(
+        agent_id="agent", binding_revision="current", mode="delegated", user_id="human"
+    )
+    auth._managed_delegation_verified = True
+    assert "_managed_delegation_verified" not in auth.model_dump()
+    await admit_managed_actor(auth, store)
+    grants.assert_not_awaited()
+    assert auth._managed_delegation_verified is False
+    with pytest.raises(HTTPException) as failure:
+        await admit_managed_actor(auth, store)
+    assert failure.value.status_code == 403
+    grants.assert_awaited_once_with("human", None)
