@@ -8,6 +8,7 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 interface AdvancedDatePickerProps {
   value: DateRangePickerValue;
   onValueChange: (value: DateRangePickerValue, presetShortLabel: string | null) => void;
+  presetShortLabel?: string | null;
   label?: string;
   className?: string;
   showTimeRange?: boolean;
@@ -78,6 +79,7 @@ export function matchRelativeTimeOption(value: DateRangePickerValue): RelativeTi
 const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
   value,
   onValueChange,
+  presetShortLabel = null,
   label = "Select Time Range",
   className,
   showTimeRange = true,
@@ -136,7 +138,8 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
       setEndDate(moment(value.to).format("YYYY-MM-DD"));
     }
     setTempValue(value);
-  }, [value]);
+    setPickedPreset(presetShortLabel ?? null);
+  }, [value, presetShortLabel]);
 
   // Close dropdown when clicking outside
   useEffect(() => {
@@ -270,7 +273,7 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
     // Reset selected option
     const matchingOption = getMatchingOption(value);
     setSelectedOption(matchingOption);
-    setPickedPreset(null);
+    setPickedPreset(presetShortLabel ?? null);
 
     setIsOpen(false);
   };

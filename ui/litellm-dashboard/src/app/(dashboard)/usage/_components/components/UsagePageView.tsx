@@ -493,7 +493,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               isOrgAdmin={isOrgAdmin}
             />
             <div className="flex items-center gap-2">
-              <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+              <AdvancedDatePicker
+                value={dateValue}
+                onValueChange={handleDateChange}
+                presetShortLabel={urlParams.range}
+              />
               <Button variant="outline" onClick={() => void copyToClipboard(window.location.href, "Link copied")}>
                 <Link2 />
                 Copy Share Link

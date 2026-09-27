@@ -195,6 +195,54 @@ describe("AdvancedDatePicker", () => {
     });
   });
 
+  it("resets the preset label when the parent switches to a custom range", async () => {
+    const { container, rerender } = render(
+      <AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />,
+    );
+
+    openDropdown(container);
+    fireEvent.click(screen.getByText("Today"));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "today");
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "today");
+    });
+
+    mockOnValueChange.mockClear();
+    const customValue = {
+      from: new Date("2025-02-01T00:00:00.000Z"),
+      to: new Date("2025-02-10T23:59:59.999Z"),
+    };
+    rerender(<AdvancedDatePicker value={customValue} onValueChange={mockOnValueChange} presetShortLabel={null} />);
+
+    openDropdown(container);
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), null);
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), null);
+    });
+  });
+
+  it("preserves the parent preset label when applying an unchanged range", async () => {
+    const value = {
+      from: moment().subtract(30, "days").startOf("day").toDate(),
+      to: moment().endOf("day").toDate(),
+    };
+    const { container } = render(
+      <AdvancedDatePicker value={value} onValueChange={mockOnValueChange} presetShortLabel="30d" />,
+    );
+
+    openDropdown(container);
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "30d");
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "30d");
+    });
+  });
+
   it("should select relative time option", () => {
     const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
 
