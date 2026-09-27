@@ -1,3 +1,4 @@
+import base64
 from unittest.mock import MagicMock, patch
 
 import httpx
@@ -132,6 +133,24 @@ def test_transform_bytes_to_data_uri_and_response():
     )
     assert response.data is not None
     assert response.data[0].url == "https://imgen.x.ai/edited.jpeg"
+
+
+def test_transform_duck_typed_reader_to_data_uri():
+    from litellm.llms.xai.image_edit.transformation import XAIImageEditConfig
+
+    class Reader:
+        def read(self) -> bytes:
+            return b"\x89PNG\r\n\x1a\nfakepng"
+
+    data, _ = XAIImageEditConfig().transform_image_edit_request(
+        model="grok-imagine-image",
+        prompt="make it night",
+        image=Reader(),
+        image_edit_optional_request_params={},
+        litellm_params=GenericLiteLLMParams(),
+        headers={},
+    )
+    assert data["image"]["url"] == "data:image/png;base64," + base64.b64encode(b"\x89PNG\r\n\x1a\nfakepng").decode()
 
 
 def test_transform_http_url_passthrough():

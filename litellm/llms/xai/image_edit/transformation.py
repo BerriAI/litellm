@@ -1,6 +1,6 @@
 import base64
 from io import BufferedReader, BytesIO
-from typing import TYPE_CHECKING, Final
+from typing import TYPE_CHECKING, Final, Protocol, runtime_checkable
 
 import httpx
 from httpx._types import RequestFiles
@@ -30,6 +30,11 @@ _SIZE_TO_ASPECT_RATIO: Final = {  # mutable-ok: provider JSON body and base-clas
     "1080x1920": "9:16",
 }
 _XAI_NATIVE_PARAMS: Final = frozenset({"aspect_ratio", "n", "resolution"})
+
+
+@runtime_checkable
+class _Readable(Protocol):
+    def read(self) -> bytes | str: ...
 
 
 def _read_seekable(image: BytesIO | BufferedReader) -> bytes:
@@ -222,11 +227,12 @@ class XAIImageEditConfig(BaseImageEditConfig):
         if isinstance(image, str):
             return {"url": image}  # mutable-ok: provider JSON body and base-class dict signature
         if isinstance(image, dict):
-            if image.get("url"):
-                return {"url": str(image["url"])}  # mutable-ok: provider JSON body and base-class dict signature
-            if image.get("file_id"):
-                file_id: Final = str(image["file_id"])
-                return {"file_id": file_id}  # mutable-ok: provider JSON body and base-class dict signature
+            url: Final = image.get("url")
+            if url:
+                return {"url": str(url)}  # mutable-ok: provider JSON body and base-class dict signature
+            file_id: Final = image.get("file_id")
+            if file_id:
+                return {"file_id": str(file_id)}  # mutable-ok: provider JSON body and base-class dict signature
 
         mime: Final = ImageEditRequestUtils.get_image_content_type(image)
         encoded: Final = base64.b64encode(self._read_all_bytes(image)).decode("utf-8")
@@ -239,7 +245,7 @@ class XAIImageEditConfig(BaseImageEditConfig):
             return bytes(image)
         if isinstance(image, (BytesIO, BufferedReader)):
             return _read_seekable(image)
-        if hasattr(image, "read"):
+        if isinstance(image, _Readable):
             raw: Final = image.read()
             if isinstance(raw, str):
                 return raw.encode("utf-8")

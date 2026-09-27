@@ -11,8 +11,6 @@ from litellm.litellm_core_utils.url_utils import async_safe_get, encode_url_path
 from litellm.llms.base_llm.videos.transformation import BaseVideoConfig
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
-    HTTPHandler,
-    _get_httpx_client,
     get_async_httpx_client,
 )
 from litellm.llms.xai.common_utils import XAIModelInfo
@@ -248,7 +246,6 @@ class XAIVideoConfig(BaseVideoConfig):
             video_obj.id = encode_video_id_with_provider(video_obj.id, custom_llm_provider, model)
         usage_body: Final = usage if isinstance(usage, dict) else None
         video_obj.usage = usage_body or {}  # mutable-ok: provider JSON body and base-class dict signature
-        video_obj._hidden_params["video_url"] = None
         return video_obj
 
     def _video_resource_url(self, api_base: str, video_id: str) -> str:
@@ -342,8 +339,7 @@ class XAIVideoConfig(BaseVideoConfig):
         url: Final = self._video_cdn_url(raw_response)
         if url is None:
             return raw_response.content
-        httpx_client: Final[HTTPHandler] = _get_httpx_client()
-        video_response: Final = safe_get(httpx_client, url)
+        video_response: Final = safe_get(litellm.module_level_client, url)
         video_response.raise_for_status()
         return video_response.content
 

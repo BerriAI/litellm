@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from typing import Final, Protocol
+from typing import Any, Final, Protocol
 
 import orjson
 
@@ -71,7 +71,7 @@ def get_custom_provider_from_data(data: Mapping[str, object]) -> str | None:
     return None
 
 
-def encode_character_id_in_response(response: object, custom_llm_provider: str, model_id: str | None) -> object:
+def encode_character_id_in_response(response: Any, custom_llm_provider: str, model_id: str | None) -> Any:
     if isinstance(response, dict) and response.get("id"):
         response["id"] = encode_character_id_with_provider(
             character_id=response["id"],
