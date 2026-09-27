@@ -35,6 +35,8 @@ pub struct GeneralSettings {
     pub dangerously_permit_weak_or_unset_master_key: Option<bool>,
     pub plugins: Option<Box<[Object]>>,
     pub coordination_redis: Option<Object>,
+    pub mcp_allowed_hosts: Option<Box<[String]>>,
+    pub mcp_allowed_origins: Box<[String]>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }
@@ -69,6 +71,8 @@ impl Default for GeneralSettings {
             dangerously_permit_weak_or_unset_master_key: None,
             plugins: None,
             coordination_redis: None,
+            mcp_allowed_hosts: None,
+            mcp_allowed_origins: Box::default(),
             additional_fields: AdditionalFields::new(),
         }
     }
@@ -159,6 +163,15 @@ impl fmt::Debug for RouterSettings {
 #[derive(Clone, Default, Deserialize)]
 #[serde(default)]
 pub struct LiteLlmSettings {
+    pub ssl_verify: Option<Flag>,
+    pub ssl_certificate: Option<String>,
+    pub ssl_security_level: Option<String>,
+    pub ssl_ecdh_curve: Option<String>,
+    pub force_ipv4: Option<bool>,
+    pub http2: Option<bool>,
+    pub aiohttp_trust_env: Option<bool>,
+    pub disable_aiohttp_trust_env: Option<bool>,
+    pub disable_aiohttp_transport: Option<bool>,
     pub drop_params: Option<Flag>,
     pub request_timeout: Option<NumberOrString>,
     pub num_retries: Option<u64>,

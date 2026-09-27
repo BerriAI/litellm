@@ -312,3 +312,57 @@ fn debug_output_does_not_expose_config_values(#[case] field: &str, #[case] secre
     let config = Config::from_yaml(&yaml).unwrap();
     assert!(!format!("{config:?}").contains(secret));
 }
+
+#[rstest]
+fn resolves_nested_includes_once_in_breadth_first_order() {
+    let directory = TempDir::new().unwrap();
+    let root = directory.path();
+    std::fs::create_dir(root.join("nested")).unwrap();
+    std::fs::write(root.join("config.yaml"), "include: [nested/first.yaml, second.yaml]\nmodel_list: [{model_name: root, litellm_params: {model: root}}]\n").unwrap();
+    std::fs::write(root.join("nested/first.yaml"), "include: [third.yaml]\nmodel_list: [{model_name: first, litellm_params: {model: first}}]\n").unwrap();
+    std::fs::write(root.join("second.yaml"), "general_settings: {master_key: second}\nmodel_list: [{model_name: second, litellm_params: {model: second}}]\n").unwrap();
+    std::fs::write(root.join("nested/third.yaml"), "include: [../config.yaml]\ngeneral_settings: {master_key: third}\nmodel_list: [{model_name: third, litellm_params: {model: third}}]\n").unwrap();
+
+    let config = Config::load(root.join("config.yaml")).unwrap();
+    assert_eq!(
+        config
+            .model_list
+            .iter()
+            .map(|model| model.model_name.as_str())
+            .collect::<Vec<_>>(),
+        ["root", "first", "second", "third"]
+    );
+    assert_eq!(
+        config.general_settings.master_key.unwrap().expose(),
+        "third"
+    );
+    assert!(config.include.is_empty());
+}
+
+#[rstest]
+fn mcp_config_redacts_nested_credentials_and_preserves_policy_for_validation() {
+    let config = Config::from_yaml("mcp_servers:\n  docs:\n    url: https://example.test/private-secret/mcp\n    authentication_token: upstream-secret\n    static_headers: {x-token: header-secret}\n    env: {TOKEN: env-secret}\n    args: [argument-secret]\n    client_secret: oauth-secret\n    allowed_tools: [search]\n").unwrap();
+    let server = &config.mcp_servers["docs"];
+    assert_eq!(server.allowed_tools.as_deref().unwrap(), ["search"]);
+    assert!(server.unsupported.contains_key("client_secret"));
+    let debug = format!("{config:?}");
+    for secret in [
+        "private-secret",
+        "upstream-secret",
+        "header-secret",
+        "env-secret",
+        "oauth-secret",
+        "argument-secret",
+    ] {
+        assert!(!debug.contains(secret));
+    }
+}
+
+#[rstest]
+#[case::transport("transport: invalid")]
+#[case::auth("auth_type: invalid")]
+#[case::concurrency("max_concurrent_requests: -1")]
+#[case::headers("static_headers: {x-token: [not, a, string]}")]
+fn rejects_invalid_typed_mcp_settings(#[case] setting: &str) {
+    assert!(Config::from_yaml(&format!("mcp_servers:\n  docs:\n    {setting}\n")).is_err());
+}

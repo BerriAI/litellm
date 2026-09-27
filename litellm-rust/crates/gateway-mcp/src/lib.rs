@@ -1,3 +1,4 @@
+mod configured;
 mod error;
 mod legacy;
 mod native;
@@ -11,8 +12,9 @@ use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
 use http::request::Parts;
 use rmcp::{RoleServer, model::*, service::RequestContext};
 
-pub use error::Error;
-pub use native::{NativeGateway, Registry, Server, ServerResolver};
+pub use configured::ConfiguredGateway;
+pub use error::{ConnectError, Error};
+pub use native::{Limits, NativeGateway, Registry, Server, ServerResolver};
 pub use relay::RelayClient;
 pub use rmcp;
 pub use routes::{HttpConfig, router};

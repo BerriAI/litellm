@@ -2,21 +2,45 @@ mod catalog;
 mod registry;
 pub use registry::{Registry, Server, ServerResolver};
 
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use tokio::sync::Semaphore;
 
 use futures_util::future::join_all;
 use rmcp::{model::*, service::PeerRequestOptions};
 
 use crate::{Context, Error, GatewayFuture, Operation, Operations, ToolCatalog};
 
+pub struct Limits {
+    timeout: Duration,
+    concurrency: Option<Semaphore>,
+}
+
+impl Limits {
+    pub fn new(timeout: Duration, concurrency: Option<std::num::NonZeroUsize>) -> Self {
+        Self {
+            timeout,
+            concurrency: concurrency.map(|limit| Semaphore::new(limit.get())),
+        }
+    }
+}
+
 pub struct NativeGateway {
     resolver: Arc<dyn ServerResolver>,
     timeout: Duration,
+    limits: BTreeMap<String, Limits>,
 }
 
 impl NativeGateway {
     pub fn new(resolver: Arc<dyn ServerResolver>, timeout: Duration) -> Self {
-        Self { resolver, timeout }
+        Self {
+            resolver,
+            timeout,
+            limits: BTreeMap::new(),
+        }
+    }
+
+    pub fn with_limits(self, limits: BTreeMap<String, Limits>) -> Self {
+        Self { limits, ..self }
     }
 
     async fn send(
@@ -53,7 +77,29 @@ impl NativeGateway {
         if let Some(policy) = context.parts.extensions.get::<crate::Authorization>() {
             policy.0.authorize(&server.info, Some(&request)).await?;
         }
-        let options = PeerRequestOptions::with_timeout(self.timeout);
+        let limits = self.limits.get(&server.info.server_id);
+        let timeout = limits.map_or(self.timeout, |limits| limits.timeout);
+        let acquire = async {
+            match limits.and_then(|limits| limits.concurrency.as_ref()) {
+                Some(semaphore) => semaphore
+                    .acquire()
+                    .await
+                    .map(Some)
+                    .map_err(|_| Error::Cancelled),
+                None => Ok(None),
+            }
+        };
+        let cancelled = async {
+            match &context.mcp {
+                Some(mcp) => mcp.ct.cancelled().await,
+                None => std::future::pending().await,
+            }
+        };
+        let _permit = tokio::select! {
+            permit = tokio::time::timeout(timeout, acquire) => permit.map_err(|_| Error::Upstream(rmcp::service::ServiceError::Timeout { timeout }))??,
+            () = cancelled => return Err(Error::Cancelled),
+        };
+        let options = PeerRequestOptions::with_timeout(timeout);
         let handle = server
             .peer
             .send_request_with_option(request, options)

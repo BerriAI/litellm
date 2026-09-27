@@ -48,3 +48,25 @@ impl IntoResponse for Error {
         (status, Json(json!({"detail": self.to_string()}))).into_response()
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+pub enum ConnectError {
+    #[error("MCP server {server}: {message}")]
+    Configuration { server: String, message: String },
+    #[error("could not resolve MCP credentials")]
+    Secret(#[from] litellm_secrets::Error),
+    #[error("could not start MCP child process")]
+    Process(#[from] std::io::Error),
+    #[error("could not initialize MCP upstream {server}")]
+    Initialize {
+        server: String,
+        #[source]
+        source: Box<rmcp::service::ClientInitializeError>,
+    },
+    #[error("MCP upstream {0} initialization timed out")]
+    Timeout(String),
+    #[error("MCP upstream startup cancelled")]
+    Cancelled,
+    #[error(transparent)]
+    Registry(#[from] Error),
+}

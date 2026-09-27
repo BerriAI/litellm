@@ -1,11 +1,11 @@
-use litellm_gateway_mcp::{McpServer, NativeGateway, Registry, Server, ServerInfo};
+use litellm_gateway_mcp::{Limits, McpServer, NativeGateway, Registry, Server, ServerInfo};
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
     model::*,
     service::{PeerRequestOptions, RequestContext},
 };
 use rstest::rstest;
-use std::{sync::Arc, time::Duration};
+use std::{collections::BTreeMap, num::NonZeroUsize, sync::Arc, time::Duration};
 use tokio::sync::Notify;
 
 struct Slow {
@@ -50,10 +50,12 @@ impl ServerHandler for Slow {
 }
 
 #[rstest]
-#[case::client_cancel(false)]
-#[case::upstream_timeout(true)]
+#[case::client_cancel(false, false)]
+#[case::upstream_timeout(true, false)]
+#[case::configured_timeout(true, true)]
+#[case::configured_concurrency(false, true)]
 #[tokio::test]
-async fn cancellation_reaches_upstream(#[case] timeout: bool) {
+async fn cancellation_reaches_upstream(#[case] timeout: bool, #[case] configured: bool) {
     let entered = Arc::new(Notify::new());
     let cancelled = Arc::new(Notify::new());
     let upstream_server = Slow {
@@ -86,7 +88,23 @@ async fn cancellation_reaches_upstream(#[case] timeout: bool) {
     } else {
         Duration::from_secs(5)
     };
-    let gateway = McpServer::new(Arc::new(NativeGateway::new(Arc::new(registry), duration)));
+    let native = NativeGateway::new(
+        Arc::new(registry),
+        if configured {
+            Duration::from_secs(5)
+        } else {
+            duration
+        },
+    );
+    let native = if configured {
+        native.with_limits(BTreeMap::from([(
+            "slow".into(),
+            Limits::new(duration, NonZeroUsize::new(1)),
+        )]))
+    } else {
+        native
+    };
+    let gateway = McpServer::new(Arc::new(native));
     let (server, client) = tokio::io::duplex(65536);
     let gateway_task = tokio::spawn(async move {
         gateway
@@ -108,14 +126,43 @@ async fn cancellation_reaches_upstream(#[case] timeout: bool) {
     tokio::time::timeout(Duration::from_secs(2), entered.notified())
         .await
         .unwrap();
+    let queued = if configured && !timeout {
+        let second = client
+            .send_request_with_option(
+                CallToolRequest::new(CallToolRequestParams::new("slow-wait")).into(),
+                PeerRequestOptions::with_timeout(Duration::from_secs(5)),
+            )
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(Duration::from_millis(100), entered.notified())
+                .await
+                .is_err()
+        );
+        Some(second)
+    } else {
+        None
+    };
     if timeout {
-        assert!(handle.await_response().await.is_err());
+        assert!(matches!(
+            handle.await_response().await,
+            Err(rmcp::ServiceError::McpError(_))
+        ));
     } else {
         handle.cancel(None).await.unwrap();
     }
     tokio::time::timeout(Duration::from_secs(2), cancelled.notified())
         .await
         .unwrap();
+    if let Some(queued) = queued {
+        tokio::time::timeout(Duration::from_secs(2), entered.notified())
+            .await
+            .unwrap();
+        queued.cancel(None).await.unwrap();
+        tokio::time::timeout(Duration::from_secs(2), cancelled.notified())
+            .await
+            .unwrap();
+    }
     client.cancel().await.unwrap();
     upstream.cancel().await.unwrap();
     gateway_task.await.unwrap();

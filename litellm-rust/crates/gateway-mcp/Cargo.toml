@@ -9,13 +9,17 @@ repository.workspace = true
 [dependencies]
 axum = { workspace = true, features = ["json", "query"] }
 futures-util.workspace = true
+litellm-config.workspace = true
+litellm-secrets.workspace = true
+litellm-auth-types.workspace = true
+base64.workspace = true
 http.workspace = true
 uuid.workspace = true
 url.workspace = true
 moka.workspace = true
 sha2.workspace = true
 tower = { version = "0.5", features = ["util"] }
-rmcp = { version = "=3.4.1", default-features = false, features = ["server", "client", "elicitation", "transport-streamable-http-server"] }
+rmcp = { version = "=3.4.1", default-features = false, features = ["server", "client", "elicitation", "transport-streamable-http-server", "transport-streamable-http-client", "transport-child-process"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

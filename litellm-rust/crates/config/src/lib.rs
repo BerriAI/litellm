@@ -1,4 +1,6 @@
 mod error;
+mod includes;
+mod mcp;
 mod model;
 mod settings;
 mod value;
@@ -8,6 +10,7 @@ use std::{fmt, path::Path};
 use serde::Deserialize;
 
 pub use error::Error;
+pub use mcp::{McpAuth, McpServer, McpTransport};
 pub use model::{LiteLlmParams, Model};
 pub use settings::{GeneralSettings, LiteLlmSettings, RouterSettings};
 pub use value::{AdditionalFields, Flag, NumberOrString, Object, OneOrMany, Value};
@@ -23,7 +26,7 @@ pub struct Config {
     pub callback_settings: Object,
     pub assistant_settings: Object,
     pub default_vertex_config: Object,
-    pub mcp_servers: Object,
+    pub mcp_servers: std::collections::BTreeMap<String, McpServer>,
     pub credential_list: Box<[Object]>,
     pub guardrails: Box<[Object]>,
     pub prompts: Box<[Object]>,
@@ -82,6 +85,6 @@ impl Config {
     }
 
     pub fn load(path: impl AsRef<Path>) -> Result<Self, Error> {
-        Self::from_yaml(&std::fs::read_to_string(path)?)
+        Ok(serde_yaml_ng::from_value(includes::load(path.as_ref())?)?)
     }
 }
