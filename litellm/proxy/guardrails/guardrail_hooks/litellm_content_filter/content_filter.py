@@ -69,6 +69,24 @@ GAP_WORD_TOKENIZER: Final = re.compile(r"\b\w+\b")
 SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")
 
 
+def _is_word_char_pattern(s: str) -> bool:
+    """
+    Check if a string consists only of word characters (alphanumeric or underscore).
+    
+    Word boundaries (\\b) only work around word characters [a-zA-Z0-9_].
+    Punctuation-only identifiers like ">", "=" require different handling.
+    
+    This is a module-level helper for consistent keyword matching in content filter.
+    
+    Args:
+        s: String to check
+        
+    Returns:
+        True if all characters in s are word characters, False otherwise
+    """
+    return bool(s) and all(c.isalnum() or c == "_" for c in s)
+
+
 WORD_NUMBER_MAP: Final = {
     "zero": "0",
     "oh": "0",
@@ -982,6 +1000,12 @@ class ContentFilterGuardrail(CustomGuardrail):
         This implements logic like: if text contains both an identifier word (e.g., "minor")
         AND a block word (e.g., "romantic"), then block it.
 
+        NOTE on inflected forms: Word boundary matching means base forms like "alter" 
+        will NOT match inflected forms like "alters", "altered", or "altering".
+        This is an intentional trade-off to avoid false positives (e.g., "alter" in 
+        "alternative"). For stronger coverage of SQL keywords, configure multiple 
+        related keywords in your policy.
+
         Args:
             text: Text to check
             exceptions: List of exception phrases to ignore
@@ -1036,8 +1060,13 @@ class ContentFilterGuardrail(CustomGuardrail):
                             identifier_found = identifier
                             break
                     else:
-                        # Single word - use word boundary
-                        pattern = r"\b" + re.escape(identifier) + r"\b"
+                        # Single word - use word boundary for alphanumeric words
+                        # Punctuation-only identifiers (e.g., ">", "=", "!=") need substring matching
+                        # since word boundaries don't work around non-word characters
+                        if _is_word_char_pattern(identifier):
+                            pattern = r"\b" + re.escape(identifier) + r"\b"
+                        else:
+                            pattern = re.escape(identifier)
                         if re.search(pattern, sentence_lower):
                             identifier_found = identifier
                             break
@@ -1055,8 +1084,12 @@ class ContentFilterGuardrail(CustomGuardrail):
                             block_word_found = block_word
                             break
                     else:
-                        # Single word - use word boundary
-                        pattern = r"\b" + re.escape(block_word) + r"\b"
+                        # Single word - use word boundary for alphanumeric words
+                        # Punctuation-only identifiers need substring matching
+                        if _is_word_char_pattern(block_word):
+                            pattern = r"\b" + re.escape(block_word) + r"\b"
+                        else:
+                            pattern = re.escape(block_word)
                         if re.search(pattern, sentence_lower):
                             block_word_found = block_word
                             break
