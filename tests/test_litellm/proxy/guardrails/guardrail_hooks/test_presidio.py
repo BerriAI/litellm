@@ -2835,6 +2835,59 @@ async def test_apply_to_output_streaming_gemini_error_frame_mid_stream_keeps_its
 
 
 @pytest.mark.asyncio
+async def test_apply_to_output_streaming_gemini_content_behind_a_leading_error_frame_is_still_masked():
+    """
+    The stream surface is decided on the whole buffered stream, not on its first frame, so an
+    error frame ahead of content frames does not switch masking off for the content behind it.
+    """
+    frames = [
+        b'data: {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}\n\n',
+        _gemini_frame({"text": "The architect was John Smith."}),
+    ]
+    collected: list[object] = []
+
+    async def mock_stream():
+        for frame in frames:
+            yield frame
+
+    async with TestServer(_fake_presidio_app()) as server:
+        guardrail = _gemini_fake_masking_guardrail(server)
+        await _collect_masked_output(guardrail, mock_stream(), collected)
+        await guardrail._close_http_session()
+
+    masked, error = _gemini_frames(collected)
+    assert masked["candidates"][0]["content"]["parts"] == [{"text": "The architect was <PERSON>."}]
+    assert error == {"error": {"code": 429, "message": "quota", "status": "RESOURCE_EXHAUSTED"}}
+    assert not any(b"John Smith" in chunk for chunk in collected if isinstance(chunk, bytes))
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_error_only_raw_stream_is_forwarded_as_it_arrived():
+    """
+    A post_call chain hands this hook the refusal frames an earlier guardrail emitted. They carry
+    nothing to scan, and withholding or rewriting them would hide the refusal the client is owed.
+    """
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    frames = [
+        b'data: {"error": {"message": "Violated guardrail policy", "type": "guardrail_error"}}\n\n',
+        b"data: [DONE]\n\n",
+    ]
+    collected: list[object] = []
+
+    async def mock_stream():
+        for frame in frames:
+            yield frame
+
+    await _collect_masked_output(guardrail, mock_stream(), collected)
+
+    assert collected == frames
+
+
+@pytest.mark.asyncio
 async def test_apply_to_output_streaming_gemini_every_candidate_is_merged_by_index_and_masked():
     """
     Gemini interleaves every candidate's fragments across frames, so each candidate

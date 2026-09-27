@@ -1446,10 +1446,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
                 elif isinstance(chunk, _SsePreface):
                     yield chunk.raw
                 elif isinstance(chunk, bytes):
-                    if all_chunks or passthrough_due_to_unknown_stream_shape or is_sse_error_stream((chunk,)):
-                        passthrough_due_to_unknown_stream_shape = (
-                            passthrough_due_to_unknown_stream_shape or not all_chunks
-                        )
+                    if all_chunks or passthrough_due_to_unknown_stream_shape:
                         yield chunk
                         continue
                     for masked_chunk in await self._mask_raw_sse_stream(chunk, stream, request_data):
@@ -1492,14 +1489,18 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         """The whole raw SSE stream masked as one response, or a raised refusal when it cannot be read.
 
         Raw frames are buffered to the end because PII can span frames, so no frame is forwarded
-        before the joined text was scanned. A stream carrying a frame the parser cannot read, whose
-        surface is unknown, or that its surface's assembler cannot rebuild, is withheld rather than
-        forwarded unmasked.
+        before the joined text was scanned, and the surface is decided on the whole stream rather
+        than on its first frame. A stream that is nothing but the refusal an earlier guardrail in
+        the chain emitted is forwarded as it arrived. A stream carrying a frame the parser cannot
+        read, whose surface is unknown, or that its surface's assembler cannot rebuild, is withheld
+        rather than forwarded unmasked.
         """
         rest_chunks: Final = tuple([chunk async for chunk in rest])
         chunks: Final = (first_chunk, *rest_chunks)
         if has_unreadable_sse_frames(chunks):
             raise self._withheld_stream_error("could not read every streamed frame")
+        if is_sse_error_stream(chunks):
+            return chunks
         if is_anthropic_sse_stream(chunks):
             return await self._mask_anthropic_sse_stream(chunks, request_data)
         if is_gemini_sse_stream(chunks):
