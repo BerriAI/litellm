@@ -2019,13 +2019,7 @@ class TestToolSupport:
     async def test_gemini_native_tools_without_type_do_not_crash(
         self, generic_guardrail
     ):
-        """Gemini-native tools have no ``type`` key at all (e.g. googleSearch).
-
-        Regression for #42742: GuardrailToolParam required ``type: str``, so
-        validating ``{"googleSearch": {}}`` raised before the guardrail ran and
-        surfaced as a 500 under default_on. The payload must still be forwarded
-        verbatim (no synthetic ``type: null``).
-        """
+        """Gemini-native tools without type are forwarded unchanged."""
         tools = [
             {"googleSearch": {}},
             {"codeExecution": {}},

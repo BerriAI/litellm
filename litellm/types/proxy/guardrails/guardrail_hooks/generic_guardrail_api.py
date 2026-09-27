@@ -1,4 +1,4 @@
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from typing import Any, Final, Literal, cast  # noqa: TID251  # JSON chat rows have no typed constructor across roles
 
 from pydantic import BaseModel, ConfigDict, Field, model_serializer
@@ -15,22 +15,23 @@ from litellm.types.utils import ChatCompletionMessageToolCall
 class GuardrailToolParam(BaseModel):
     """A tool forwarded verbatim to the guardrail for inspection.
 
-    OpenAI-style tools carry a ``type`` (function / code_interpreter / file_search,
-    ...). Provider-native tools such as Gemini ``{"googleSearch": {}}`` have neither
-    ``type`` nor ``function``; ``extra="allow"`` keeps their keys intact so the
-    guardrail still sees the original payload. ``type`` is therefore optional.
+    ``extra="allow"`` keeps provider-specific keys. ``type`` is optional for
+    provider-native tools such as Gemini ``{"googleSearch": {}}``.
     """
 
     model_config = ConfigDict(extra="allow")
     type: str | None = None
 
     @model_serializer(mode="wrap")
-    def _omit_null_type(self, handler):
-        """Keep provider-native tools free of a synthetic ``type: null`` field."""
-        data = handler(self)
-        if isinstance(data, dict) and data.get("type") is None:
-            data.pop("type", None)
-        return data
+    def _omit_null_type(  # noqa: ANN202  # annotating it replaces the model's serialization schema
+        self, handler: Callable[[object], Mapping[str, object]]
+    ):
+        data: Final[Mapping[str, object]] = handler(self)
+        if not isinstance(data, dict) or data.get("type") is not None:
+            return data
+        return {  # mutable-ok: pydantic's json serializer rejects a mapping that is not a dict
+            key: value for key, value in data.items() if key != "type"
+        }
 
 
 class GenericGuardrailAPIMetadata(TypedDict, total=False):
