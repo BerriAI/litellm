@@ -144,6 +144,7 @@ _STR_KEY_DICT_ADAPTER: Final = TypeAdapter(dict[str, object])
 _OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _DICT_ITEMS_LIST_ADAPTER: Final = TypeAdapter(list[dict[object, object]])
 _TEXT_ADAPTER: Final = TypeAdapter(str)
+_THOUGHT_SIGNATURES_ADAPTER: Final = TypeAdapter(list[str])
 _RESPONSES_API_TOOL_CHOICE_ADAPTER: Final = TypeAdapter(ToolChoice)
 
 
@@ -1421,14 +1422,69 @@ class LiteLLMCompletionResponsesConfig:
             # Since guardrails skip None content anyway, we return empty list to exclude it from structured messages
             if content is None:
                 return []
+            signature_fields: Final = (
+                LiteLLMCompletionResponsesConfig._message_thought_signature_fields(
+                    input_item.get("provider_specific_fields")
+                )
+                if _input_item_role(input_item) == "assistant"
+                else None
+            )
+            signed_text: Final = (
+                LiteLLMCompletionResponsesConfig._signed_message_text(content) if signature_fields else None
+            )
             return [
                 GenericChatCompletionMessage(
                     role=_input_item_role(input_item),
-                    content=LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
-                        content
+                    content=(
+                        signed_text
+                        if isinstance(signed_text, str)
+                        else LiteLLMCompletionResponsesConfig._transform_responses_api_content_to_chat_completion_content(
+                            content
+                        )
+                    ),
+                    **(
+                        MappingProxyType({"provider_specific_fields": signature_fields})
+                        if signature_fields
+                        else MappingProxyType({})
                     ),
                 )
             ]
+
+    @staticmethod
+    def _signed_message_text(content: object) -> str | None:
+        if not isinstance(content, list):
+            return None
+        blocks: Final = _OBJECT_LIST_ADAPTER.validate_python(content)
+        if len(blocks) != 1 or not isinstance(blocks[0], Mapping):
+            return None
+        block: Final = _STR_KEY_DICT_ADAPTER.validate_python(blocks[0])
+        text: Final = block.get("text")
+        return text if block.get("type") == "output_text" and isinstance(text, str) else None
+
+    @staticmethod
+    def _with_message_thought_signatures(
+        item: GenericResponseOutputItem,
+        fields: object,
+    ) -> GenericResponseOutputItem:
+        signatures: Final = LiteLLMCompletionResponsesConfig._message_thought_signature_fields(fields)
+        return (
+            item.model_copy(update=MappingProxyType({"provider_specific_fields": signatures})) if signatures else item
+        )
+
+    @staticmethod
+    def _message_thought_signature_fields(
+        fields: object,
+    ) -> dict[str, list[str]] | None:  # mutable-ok: Gemini replay requires JSON dictionaries and arrays
+        if not isinstance(fields, Mapping):
+            return None
+        signatures: Final[object] = _STR_KEY_DICT_ADAPTER.validate_python(fields).get("thought_signatures")
+        if not signatures:
+            return None
+        try:
+            validated: Final = _THOUGHT_SIGNATURES_ADAPTER.validate_python(signatures, strict=True)
+        except ValidationError:
+            return None
+        return {"thought_signatures": validated}  # mutable-ok: Gemini replay requires JSON arrays
 
     @staticmethod
     def _reasoning_text_from_content(input_item: Mapping[str, object]) -> str | None:
@@ -2719,18 +2775,21 @@ class LiteLLMCompletionResponsesConfig:
                 message_output_items.extend(image_generation_items)
             elif choice.message.content is not None:
                 message_output_items.append(
-                    GenericResponseOutputItem(
-                        type="message",
-                        id=f"msg_{uuid.uuid4()}",
-                        status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
-                            choice.finish_reason
+                    LiteLLMCompletionResponsesConfig._with_message_thought_signatures(
+                        GenericResponseOutputItem(
+                            type="message",
+                            id=f"msg_{uuid.uuid4()}",
+                            status=LiteLLMCompletionResponsesConfig._map_chat_completion_finish_reason_to_responses_status(
+                                choice.finish_reason
+                            ),
+                            role=choice.message.role,
+                            content=[
+                                LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
+                                    choice.message
+                                )
+                            ],
                         ),
-                        role=choice.message.role,
-                        content=[
-                            LiteLLMCompletionResponsesConfig._transform_chat_message_to_response_output_text(
-                                choice.message
-                            )
-                        ],
+                        choice.message.provider_specific_fields,
                     )
                 )
         return message_output_items
