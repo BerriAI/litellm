@@ -2377,6 +2377,40 @@ async def test_assistant_message_list_content_cache_control():
 
 
 @pytest.mark.asyncio
+async def test_user_message_list_content_cache_control():
+    """Message-level cache control should survive Bedrock list-content translation."""
+    from litellm.litellm_core_utils.prompt_templates.factory import (
+        BedrockConverseMessagesProcessor,
+        _bedrock_converse_messages_pt,
+    )
+
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "First block"},
+                {"type": "text", "text": "Last block"},
+            ],
+            "cache_control": {"type": "ephemeral"},
+        }
+    ]
+    model = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+
+    result = _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock_converse")
+    async_result = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages,
+        model=model,
+        llm_provider="bedrock_converse",
+    )
+
+    assert result == async_result
+    content = result[0]["content"]
+    assert content[0]["text"] == "First block"
+    assert content[1]["text"] == "Last block"
+    assert content[2]["cachePoint"]["type"] == "default"
+
+
+@pytest.mark.asyncio
 async def test_tool_message_cache_control():
     """Test that tool messages with cache_control generate cachePoint blocks."""
     from litellm.litellm_core_utils.prompt_templates.factory import (

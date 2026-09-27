@@ -1860,6 +1860,30 @@ def add_cache_control_to_content(
     return anthropic_content_element
 
 
+def _apply_message_cache_control_to_last_content_block(
+    converted_content: list[dict],
+    message: dict,
+    original_content: list,
+    start_index: int,
+) -> None:
+    """Apply message-level cache control when list content has no block-level value."""
+    if message.get("cache_control") is None:
+        return
+    if any(
+        isinstance(content_element, dict) and content_element.get("cache_control") is not None
+        for content_element in original_content
+    ):
+        return
+
+    for content_element in reversed(converted_content[start_index:]):
+        if isinstance(content_element, dict):
+            add_cache_control_to_content(
+                anthropic_content_element=content_element,
+                original_content_element=message,
+            )
+            return
+
+
 def _anthropic_content_element_factory(
     image_chunk: GenericImageParsingChunk,
 ) -> AnthropicMessagesImageParam | AnthropicMessagesDocumentParam:
@@ -2407,6 +2431,7 @@ def anthropic_messages_pt(
             ) = messages[msg_i]
             if user_message_types_block["role"] == "user":
                 if isinstance(user_message_types_block["content"], list):
+                    message_content_start = len(user_content)
                     for m in user_message_types_block["content"]:
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
@@ -2478,6 +2503,12 @@ def anthropic_messages_pt(
                                     _file_content_element,
                                 )
                             )
+                    _apply_message_cache_control_to_last_content_block(
+                        converted_content=user_content,
+                        message=user_message_types_block,
+                        original_content=user_message_types_block["content"],
+                        start_index=message_content_start,
+                    )
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
@@ -2680,6 +2711,7 @@ def anthropic_messages_pt(
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
                     assistant_content.extend(thinking_blocks)
                 if _content_is_list and _content_list is not None:
+                    message_content_start = len(assistant_content)
                     for m in _content_list:
                         if not isinstance(m, dict):
                             continue
@@ -2710,6 +2742,12 @@ def anthropic_messages_pt(
                         # Pass through as-is since these are Anthropic-native content types
                         elif m.get("type", "") == "server_tool_use" or m.get("type", "").endswith("_tool_result"):
                             assistant_content.append(m)
+                    _apply_message_cache_control_to_last_content_block(
+                        converted_content=assistant_content,
+                        message=assistant_content_block,
+                        original_content=_content_list,
+                        start_index=message_content_start,
+                    )
                 elif (
                     "content" in assistant_content_block
                     and isinstance(assistant_content_block["content"], str)
@@ -4417,6 +4455,19 @@ class BedrockConverseMessagesProcessor:
                             )
                             if _cache_point_block is not None:
                                 _parts.append(_cache_point_block)
+                    message_cache_control = message_block.get("cache_control")
+                    has_content_cache_control = any(
+                        isinstance(element, dict) and element.get("cache_control") is not None
+                        for element in message_block["content"]
+                    )
+                    if isinstance(message_cache_control, dict) and not has_content_cache_control:
+                        _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
+                            {"cache_control": message_cache_control},
+                            block_type="content_block",
+                            model=model,
+                        )
+                        if _cache_point_block is not None:
+                            _parts.append(_cache_point_block)
                     user_content.extend(_parts)
                 elif message_block["content"] and isinstance(message_block["content"], str):
                     _part = BedrockContentBlock(text=messages[msg_i]["content"])
@@ -4790,6 +4841,19 @@ def _bedrock_converse_messages_pt(
                         )
                         if _cache_point_block is not None:
                             _parts.append(_cache_point_block)
+                message_cache_control = message_block.get("cache_control")
+                has_content_cache_control = any(
+                    isinstance(element, dict) and element.get("cache_control") is not None
+                    for element in message_block["content"]
+                )
+                if isinstance(message_cache_control, dict) and not has_content_cache_control:
+                    _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
+                        {"cache_control": message_cache_control},
+                        block_type="content_block",
+                        model=model,
+                    )
+                    if _cache_point_block is not None:
+                        _parts.append(_cache_point_block)
                 user_content.extend(_parts)
             elif message_block["content"] and isinstance(message_block["content"], str):
                 _part = BedrockContentBlock(text=messages[msg_i]["content"])

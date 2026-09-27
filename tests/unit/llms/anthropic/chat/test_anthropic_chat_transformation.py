@@ -2383,6 +2383,30 @@ def test_translate_system_message_preserves_cache_control():
     assert result[0]["cache_control"] == {"type": "ephemeral"}
 
 
+def test_translate_system_message_applies_message_cache_control_to_last_list_block():
+    """Message-level cache control should apply to the last system content block."""
+    config = AnthropicConfig()
+    cache_control = {"type": "ephemeral"}
+    messages = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "First block"},
+                {"type": "text", "text": "Last block"},
+            ],
+            "cache_control": cache_control,
+        },
+        {"role": "user", "content": "Hello"},
+    ]
+
+    result = config.translate_system_message(messages)
+
+    assert result[0]["text"] == "First block"
+    assert "cache_control" not in result[0]
+    assert result[1]["text"] == "Last block"
+    assert result[1]["cache_control"] == cache_control
+
+
 # ============ Dynamic max_tokens Tests ============
 
 

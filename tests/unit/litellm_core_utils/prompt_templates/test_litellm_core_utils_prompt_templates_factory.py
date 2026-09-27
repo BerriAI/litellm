@@ -228,6 +228,38 @@ def test_anthropic_messages_pt_drops_unsignable_thinking_block(thinking_block):
     )
 
 
+def test_anthropic_messages_pt_applies_message_cache_control_to_last_list_block():
+    """Message-level cache control should survive list-content translation."""
+    cache_control = {"type": "ephemeral"}
+    messages = [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "first user block"},
+                {"type": "text", "text": "last user block"},
+            ],
+            "cache_control": cache_control,
+        },
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "text", "text": "first assistant block"},
+                {"type": "text", "text": "last assistant block"},
+            ],
+            "cache_control": cache_control,
+        },
+    ]
+
+    result = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    user_content = result[0]["content"]
+    assistant_content = result[1]["content"]
+    assert "cache_control" not in user_content[0]
+    assert user_content[1]["cache_control"] == cache_control
+    assert "cache_control" not in assistant_content[0]
+    assert assistant_content[1]["cache_control"] == cache_control
+
+
 def test_anthropic_messages_pt_keeps_signed_thinking_block():
     """A genuine Anthropic round-trip still holds its original signature, so that
     thinking block must be forwarded unchanged (we only drop unsignable blocks).

@@ -1719,6 +1719,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         anthropic_system_message_content["cache_control"] = system_message_block["cache_control"]
                     anthropic_system_message_list.append(anthropic_system_message_content)
                 elif isinstance(message["content"], list):
+                    message_content_start = len(anthropic_system_message_list)
+                    has_content_cache_control = any(
+                        isinstance(content, dict) and content.get("cache_control") is not None
+                        for content in message["content"]
+                    )
                     for _content in message["content"]:
                         # Skip empty text blocks - Anthropic API raises errors for empty text
                         text_value = _content.get("text")
@@ -1739,6 +1744,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                             anthropic_system_message_content["cache_control"] = _content["cache_control"]
 
                         anthropic_system_message_list.append(anthropic_system_message_content)
+
+                    message_cache_control = system_message_block.get("cache_control")
+                    if isinstance(message_cache_control, dict) and not has_content_cache_control:
+                        for content in reversed(anthropic_system_message_list[message_content_start:]):
+                            if isinstance(content, dict):
+                                content["cache_control"] = message_cache_control
+                                break
 
         if len(system_prompt_indices) > 0:
             for idx in reversed(system_prompt_indices):
