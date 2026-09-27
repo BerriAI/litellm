@@ -953,7 +953,7 @@ async def test_max_budget_per_session_limiter_populates_provider():
         )
         mock_registry.stable_agent_id.return_value = "agent-session-budget"
         with patch.object(
-            handler, "_get_current_spend", new=AsyncMock(return_value=5.0)
+            handler, "_get_agent_spend", new=AsyncMock(return_value=5.0)
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await handler.async_pre_call_hook(
@@ -989,7 +989,7 @@ async def test_max_budget_per_session_limiter_unknown_model_falls_back():
         )
         mock_registry.stable_agent_id.return_value = "agent-session-budget"
         with patch.object(
-            handler, "_get_current_spend", new=AsyncMock(return_value=5.0)
+            handler, "_get_agent_spend", new=AsyncMock(return_value=5.0)
         ):
             with pytest.raises(HTTPException) as exc_info:
                 await handler.async_pre_call_hook(
