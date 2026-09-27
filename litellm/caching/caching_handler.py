@@ -24,6 +24,7 @@ from typing import TYPE_CHECKING, Any, Final, Optional, TypeVar
 from pydantic import BaseModel, ConfigDict, ValidationError
 
 import litellm
+from litellm._internal_context import post_response_phase
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.caching.caching import S3Cache
@@ -51,7 +52,7 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-    from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+    from litellm.llms.anthropic.pass_through.messages.response_cache import (
         AnthropicMessagesStreamCacheWriter,
     )
     from litellm.types.utils import PromptTokensDetailsWrapper
@@ -126,7 +127,7 @@ def _should_defer_streaming_cache_hit_callbacks(*, cached_result: object) -> boo
     spend and callback records. A plain (non-stream) replay logs here, since nothing
     else will.
     """
-    from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+    from litellm.llms.anthropic.pass_through.messages.response_cache import (
         CachedAnthropicMessagesStreamIterator,
     )
     from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
@@ -158,7 +159,8 @@ async def _complete_cache_write_despite_cancellation(write_factory: Callable[[],
 
 
 def create_cache_write_task(write_factory: Callable[[], Awaitable[None]]) -> "asyncio.Task[None]":
-    task: Final = asyncio.create_task(_complete_cache_write_despite_cancellation(write_factory))
+    with post_response_phase():
+        task: Final = asyncio.create_task(_complete_cache_write_despite_cancellation(write_factory))
     _PENDING_CACHE_WRITES.add(task)
     task.add_done_callback(_PENDING_CACHE_WRITES.discard)
     return task
@@ -429,6 +431,7 @@ class LLMCachingHandler:
                         kwargs=kwargs,
                         cached_result=cached_result,
                         is_async=False,
+                        custom_llm_provider=custom_llm_provider,
                     )
 
                     if not _should_defer_streaming_cache_hit_callbacks(cached_result=cached_result):
@@ -927,7 +930,7 @@ class LLMCachingHandler:
         elif (
             call_type == CallTypes.anthropic_messages.value or call_type == CallTypes.aanthropic_messages.value
         ) and isinstance(cached_result, dict):
-            from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+            from litellm.llms.anthropic.pass_through.messages.response_cache import (
                 convert_cached_anthropic_messages_result,
             )
 
@@ -1147,7 +1150,7 @@ class LLMCachingHandler:
             return result
         if not isinstance(result, AsyncIterator):
             return result
-        from litellm.llms.anthropic.experimental_pass_through.messages.response_cache import (
+        from litellm.llms.anthropic.pass_through.messages.response_cache import (
             AnthropicMessagesStreamCacheWriter,
         )
 

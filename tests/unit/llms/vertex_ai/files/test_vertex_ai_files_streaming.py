@@ -269,6 +269,7 @@ class TestStreamingPeakMemory:
     measurement removes any garbage the previous run left behind.
     """
 
+    @pytest.mark.no_cover
     def test_streaming_peak_well_below_list_pipeline(self):
         cfg = VertexAIFilesConfig()
         raw = _make_openai_jsonl_bytes(8000)
@@ -345,6 +346,7 @@ class TestPathSourcedStreaming:
         first_labels = json.loads(lines[0])["request"]["labels"]
         assert _get_litellm_batch_custom_id_from_labels(first_labels) == "request-0"
 
+    @pytest.mark.no_cover
     def test_path_source_peak_stays_below_list_pipeline(self, tmp_path):
         cfg = VertexAIFilesConfig()
         path, raw = self._write_jsonl(tmp_path, 8000)

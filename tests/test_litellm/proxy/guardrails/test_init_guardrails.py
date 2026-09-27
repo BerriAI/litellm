@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeCompilationError
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.guardrails import SupportedGuardrailIntegrations
@@ -333,6 +334,27 @@ def test_init_guardrails_v2_skips_invalid_guardrail_instead_of_crashing_boot():
     }
     assert "broken_lakera_advisory" not in guardrail_names
     assert "healthy_presidio" in guardrail_names
+
+
+def test_init_guardrails_v2_stops_boot_when_a_custom_code_guardrail_does_not_compile():
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    all_guardrails = [
+        {
+            "guardrail_name": "custom-code-without-apply-guardrail",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.CUSTOM_CODE.value,
+                "mode": "pre_call",
+                "custom_code": "x = 1\n",
+            },
+        },
+    ]
+
+    with pytest.raises(CustomCodeCompilationError, match="apply_guardrail"):
+        init_guardrails_v2(all_guardrails=all_guardrails)
 
 
 def test_init_guardrails_v2_accepts_during_call_advisory_mode():

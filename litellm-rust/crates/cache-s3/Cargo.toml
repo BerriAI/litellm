@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-http.workspace = true
 litellm-cache.workspace = true
 litellm-auth-aws.workspace = true
 aws-sdk-s3 = { version = "1.146.1", default-features = false, features = ["rustls", "rt-tokio"] }
@@ -19,6 +20,7 @@ reqwest.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
 litellm-cache-testing.workspace = true
 rstest.workspace = true
 wiremock = "0.6.5"

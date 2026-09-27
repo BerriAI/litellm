@@ -36,6 +36,7 @@ from typing import (
     Final,
     Generic,
     Literal,
+    NoReturn,
     Optional,
     Protocol,
     TypeAlias,
@@ -106,7 +107,7 @@ except ImportError:
     raise ImportError("backoff is not installed. Please install it via 'pip install backoff'")
 
 from fastapi import HTTPException, status
-from pydantic import TypeAdapter
+from pydantic import TypeAdapter, ValidationError
 
 import litellm
 import litellm.litellm_core_utils
@@ -201,6 +202,7 @@ from litellm.proxy.db.token_auth import (
     mint_database_token,
     resolve_database_token_auth,
 )
+from litellm.proxy.guardrails.exception_utils import enrich_http_exception_with_guardrail_context
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
     resolve_endpoint_translation,
@@ -463,28 +465,6 @@ def _accepts_litellm_call_info(cb: CustomLogger) -> bool:
         sig: Final = inspect.signature(cb.async_post_call_response_headers_hook)
         _CALLBACK_ACCEPTS_CALL_INFO[key] = "litellm_call_info" in sig.parameters
     return _CALLBACK_ACCEPTS_CALL_INFO[key]
-
-
-def _enrich_http_exception_with_guardrail_context(exc: BaseException, callback: object) -> None:
-    """
-    If `exc` is an HTTPException with a dict `detail`, mutate it in place to
-    add `guardrail_name` and `guardrail_mode` taken from the callback instance.
-
-    Uses setdefault so guardrails that already populate these fields explicitly
-    win over the inferred defaults. No-op for non-HTTPException, non-dict-detail,
-    or callbacks without `guardrail_name`. Never raises.
-    """
-    if not isinstance(exc, HTTPException):
-        return
-    detail: Final = getattr(exc, "detail", None)
-    if not isinstance(detail, dict):
-        return
-    guardrail_name: Final[object] = getattr(callback, "guardrail_name", None)
-    if guardrail_name:
-        detail.setdefault("guardrail_name", guardrail_name)
-    event_hook: Final[object] = getattr(callback, "event_hook", None)
-    if event_hook:
-        detail.setdefault("guardrail_mode", event_hook)
 
 
 def _record_raising_guardrail(request_data: Mapping[str, object], callback: object) -> None:
@@ -974,6 +954,14 @@ def _failure_usage_to_lift(
 _EMPTY_LIFT: Final = MappingProxyType({})
 
 
+def _reached_deployment(litellm_logging_obj: Logging) -> bool:
+    """A provider handoff or a cached response both mean the router selected a deployment."""
+    caching_details: Final = litellm_logging_obj.caching_details
+    return litellm_logging_obj.model_call_details.get("first_api_call_start_time") is not None or (
+        caching_details is not None and caching_details.get("cache_hit") is True
+    )
+
+
 def _stamp_deployment_attribution(
     litellm_params: dict[str, object], model_group: str | None, team_id: str | None, dispatched: bool
 ) -> Mapping[str, object]:
@@ -1128,11 +1116,51 @@ class _CallbackCapabilities:
     # avoids the per-request ``get_custom_logger_compatible_class`` walk for
     # every string entry in ``litellm.callbacks``.
     resolved_callbacks: tuple[object, ...] = field(default_factory=tuple)
+    listed_models_filters: tuple[CustomLogger, ...] = field(default_factory=tuple)
+
+
+def _overrides_hook(callback: CustomLogger, hook_name: str) -> bool:
+    leaf_to_base: Final = takewhile(lambda klass: klass is not CustomLogger, type(callback).__mro__)
+    return any(hook_name in klass.__dict__ for klass in leaf_to_base)
 
 
 def _overrides_moderation_hook(callback: CustomLogger) -> bool:
-    leaf_to_base: Final = takewhile(lambda klass: klass is not CustomLogger, type(callback).__mro__)
-    return any("async_moderation_hook" in klass.__dict__ for klass in leaf_to_base)
+    return _overrides_hook(callback, "async_moderation_hook")
+
+
+_LISTED_MODEL_NAMES: Final = TypeAdapter(tuple[str, ...])
+
+
+@dataclass(frozen=True, slots=True)
+class MalformedListingFilterReturn:
+    callback: str
+    tag: Literal["malformed_listing_filter_return"] = "malformed_listing_filter_return"
+
+
+async def _names_kept_by_listing_callbacks(
+    callbacks: Sequence[CustomLogger],
+    user_api_key_dict: UserAPIKeyAuth,
+    model_names: tuple[str, ...],
+) -> tuple[str, ...] | MalformedListingFilterReturn:
+    if not callbacks or not model_names:
+        return model_names
+    returned: Final = await callbacks[0].async_filter_listed_models(user_api_key_dict, model_names)
+    try:
+        kept: Final = frozenset(_LISTED_MODEL_NAMES.validate_python(returned))
+    except ValidationError:
+        return MalformedListingFilterReturn(callback=type(callbacks[0]).__name__)
+    return await _names_kept_by_listing_callbacks(
+        callbacks[1:], user_api_key_dict, tuple(name for name in model_names if name in kept)
+    )
+
+
+def _raise_malformed_listing_filter_return(error: MalformedListingFilterReturn) -> NoReturn:
+    raise ProxyException(
+        message=f"{error.callback}.async_filter_listed_models must return a sequence of model names",
+        type=ProxyErrorTypes.internal_server_error,
+        param=None,
+        code=500,
+    )
 
 
 class ProxyLogging:
@@ -1919,7 +1947,7 @@ class ProxyLogging:
         except Exception as e:
             status = "error"
             error_type = type(e).__name__
-            _enrich_http_exception_with_guardrail_context(e, callback)
+            enrich_http_exception_with_guardrail_context(e, callback)
             # Re-raise the exception to maintain existing behavior
             raise
         finally:
@@ -2228,7 +2256,7 @@ class ProxyLogging:
             original_exception: Final = result.original_exception
             if original_exception is not None and not _exception_changes_request_flow(original_exception):
                 if callback is not None:
-                    _enrich_http_exception_with_guardrail_context(original_exception, callback)
+                    enrich_http_exception_with_guardrail_context(original_exception, callback)
                 raise original_exception
 
             step_results_serializable: Final = [
@@ -2381,7 +2409,6 @@ class ProxyLogging:
         )
 
         try:
-            # Execute guardrail pipelines before the normal callback loop
             if not skip_guardrails:
                 data, _ = await self._maybe_execute_pipelines(  # rebind-ok: pipeline edits feed the callback loop below
                     data=data,
@@ -2675,7 +2702,7 @@ class ProxyLogging:
         except Exception as e:
             status = "error"
             error_type = type(e).__name__
-            _enrich_http_exception_with_guardrail_context(e, callback)
+            enrich_http_exception_with_guardrail_context(e, callback)
             _record_raising_guardrail(request_data, callback)
             raise
         finally:
@@ -2700,7 +2727,7 @@ class ProxyLogging:
                 yield chunk
         except Exception as e:
             if e is not upstream.failure:
-                _enrich_http_exception_with_guardrail_context(e, callback)
+                enrich_http_exception_with_guardrail_context(e, callback)
                 _record_raising_guardrail(request_data, callback)
             raise
 
@@ -2801,6 +2828,9 @@ class ProxyLogging:
             has_moderation_override=has_moderation_override,
             iterator_overrides=tuple(iterator_overrides),
             resolved_callbacks=tuple(resolved_callbacks),
+            listed_models_filters=tuple(
+                callback for callback in resolved_callbacks if _overrides_hook(callback, "async_filter_listed_models")
+            ),
         )
         # Limit cache to handle test churn without leaking; production
         # callback lists are stable so this rarely grows past 1 entry.
@@ -3325,7 +3355,7 @@ class ProxyLogging:
                 _litellm_params,
                 request_data.get("model"),
                 user_api_key_dict.team_id,
-                dispatched=litellm_logging_obj.model_call_details.get("first_api_call_start_time") is not None,
+                dispatched=_reached_deployment(litellm_logging_obj),
             )
 
             litellm_logging_obj.update_environment_variables(
@@ -3708,6 +3738,18 @@ class ProxyLogging:
             verbose_proxy_logger.exception("Error in post_call_response_headers_hook: %s", str(e))
         return merged_headers
 
+    async def hidden_by_listing_callbacks(
+        self, user_api_key_dict: UserAPIKeyAuth, model_names: Sequence[str]
+    ) -> frozenset[str]:
+        filters: Final = ProxyLogging._callback_capabilities().listed_models_filters
+        if not filters:
+            return frozenset()
+        candidates: Final = tuple(model_names)
+        kept: Final = await _names_kept_by_listing_callbacks(filters, user_api_key_dict, candidates)
+        if isinstance(kept, MalformedListingFilterReturn):
+            _raise_malformed_listing_filter_return(kept)
+        return frozenset(candidates).difference(kept)
+
     @staticmethod
     def _build_litellm_call_info(data: dict, response: object) -> dict[str, object]:
         """
@@ -3949,7 +3991,7 @@ class ProxyLogging:
         request_data: dict,  # mutable-ok: same request-payload shape the hooks mutate
         pipelines: "tuple[tuple[str, GuardrailPipeline], ...]",
         translation: "tuple[str, BaseTranslation]",
-    ) -> "AsyncGenerator[Any, None]":
+    ) -> "AsyncGenerator[object, None]":
         """
         Execute post_call policy pipelines against a streamed response.
 

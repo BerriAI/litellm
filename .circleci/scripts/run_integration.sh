@@ -7,7 +7,15 @@ if [ "${GITHUB_ACTIONS:-}" = true ]; then
 fi
 
 suite="${1:?integration suite required}"
-results="test-results/integration-${suite}"
+mode="${2:-standard}"
+side="${3:-}"
+if [ "$mode" = replica ]; then
+  results="test-results/integration-${suite}-replica"
+elif [ "$mode" = parity ]; then
+  results="test-results/parity-${suite}/${side:?parity side required}"
+else
+  results="test-results/integration-${suite}"
+fi
 mkdir -p "$results"
 integration_identity="$(.venv/bin/python -c 'import uuid; print(uuid.uuid4().hex)')"
 upstream_pid=""
@@ -18,6 +26,7 @@ guard_created=false
 guard_installed=false
 guard6_created=false
 guard6_installed=false
+egress_cgroup=litellm-integration
 cleanup() {
   original_status=$?
   trap - EXIT INT TERM
@@ -39,14 +48,14 @@ cleanup() {
     fi
   done
   if [ "$guard_installed" = true ]; then
-    sudo iptables -D OUTPUT -m owner --uid-owner "$(id -u)" -j integration_only || original_status=1
+    sudo iptables -D OUTPUT -m cgroup --path "$egress_cgroup" -j integration_only || original_status=1
   fi
   if [ "$guard_created" = true ]; then
     sudo iptables -F integration_only || original_status=1
     sudo iptables -X integration_only || original_status=1
   fi
   if [ "$guard6_installed" = true ]; then
-    sudo ip6tables -D OUTPUT -m owner --uid-owner "$(id -u)" -j integration_only || original_status=1
+    sudo ip6tables -D OUTPUT -m cgroup --path "$egress_cgroup" -j integration_only || original_status=1
   fi
   if [ "$guard6_created" = true ]; then
     sudo ip6tables -F integration_only || original_status=1
@@ -80,6 +89,20 @@ export INTEGRATION_ORDER_SEED="$INTEGRATION_SEED"
 
 uv run --no-sync prisma generate --schema litellm/proxy/schema.prisma > "$results/prisma-generate.log" 2>&1
 
+export INTEGRATION_PROXY_DATABASE_URL=""
+export INTEGRATION_PROXY_READ_REPLICA_URL=""
+export INTEGRATION_ROUTING=""
+if [ "$mode" = replica ] || [ "$mode" = parity ]; then
+  .venv/bin/python .circleci/scripts/prepare_replica_roles.py > "$results/prepare-replica-roles.log" 2>&1
+  export INTEGRATION_PROXY_DATABASE_URL="postgresql://litellm_writer:litellm-writer@127.0.0.1:5432/circle_test"
+  export INTEGRATION_PROXY_READ_REPLICA_URL="postgresql://litellm_reader:litellm-reader@127.0.0.1:5432/circle_test"
+fi
+if [ "$mode" = parity ]; then
+  export INTEGRATION_ROUTING=capture
+fi
+
+sudo mkdir -p "/sys/fs/cgroup/$egress_cgroup"
+echo "$$" | sudo tee "/sys/fs/cgroup/$egress_cgroup/cgroup.procs" > /dev/null
 sudo iptables -N integration_only
 guard_created=true
 sudo iptables -A integration_only -o lo -j ACCEPT
@@ -89,13 +112,13 @@ for service in postgres-db redis-cache; do
   sudo iptables -A integration_only -d "$address" -j ACCEPT
 done
 sudo iptables -A integration_only -j REJECT
-sudo iptables -I OUTPUT 1 -m owner --uid-owner "$(id -u)" -j integration_only
+sudo iptables -I OUTPUT 1 -m cgroup --path "$egress_cgroup" -j integration_only
 guard_installed=true
 sudo ip6tables -N integration_only
 guard6_created=true
 sudo ip6tables -A integration_only -o lo -j ACCEPT
 sudo ip6tables -A integration_only -j REJECT
-sudo ip6tables -I OUTPUT 1 -m owner --uid-owner "$(id -u)" -j integration_only
+sudo ip6tables -I OUTPUT 1 -m cgroup --path "$egress_cgroup" -j integration_only
 guard6_installed=true
 
 if curl --noproxy '*' --connect-timeout 2 -s http://198.51.100.1 >/dev/null 2>&1; then
@@ -137,8 +160,12 @@ start_proxy() {
   else
     cost_map_env=("LITELLM_LOCAL_MODEL_COST_MAP=True")
   fi
+  local -a database_env=("DATABASE_URL=${INTEGRATION_PROXY_DATABASE_URL:-$DATABASE_URL}")
+  if [ -n "$INTEGRATION_PROXY_READ_REPLICA_URL" ]; then
+    database_env+=("DATABASE_URL_READ_REPLICA=$INTEGRATION_PROXY_READ_REPLICA_URL")
+  fi
   setsid env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" INTEGRATION_RUN_ID="$integration_identity" \
-    DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
+    "${database_env[@]}" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
     INTEGRATION_UPSTREAM_URL="$INTEGRATION_UPSTREAM_URL" \
     LITELLM_MASTER_KEY="$LITELLM_MASTER_KEY" LITELLM_SALT_KEY="$LITELLM_SALT_KEY" LITELLM_UI_PATH="$LITELLM_UI_PATH" PROXY_BASE_URL="http://127.0.0.1:$port" \
     LITELLM_MODE=PRODUCTION STORE_MODEL_IN_DB=True "${cost_map_env[@]}" \
@@ -185,6 +212,15 @@ if [ "$suite" = browser ]; then
   exit 0
 fi
 
+node_files=()
+if [ "${CIRCLE_NODE_TOTAL:-1}" -gt 1 ]; then
+  split="$(.venv/bin/python tests/integration/run.py "$suite" --list \
+    | circleci tests split --split-by=timings --timings-type=filename)"
+  read -r -a node_files <<< "$(printf '%s' "$split" | tr '\n' ' ')"
+  test "${#node_files[@]}" -gt 0
+  printf '%s\n' "${node_files[@]}" > "$results/node-files.txt"
+fi
+
 env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_RUN_ID="$integration_identity" \
   DATABASE_URL="$DATABASE_URL" REDIS_HOST="$REDIS_HOST" REDIS_PORT="$REDIS_PORT" \
@@ -195,7 +231,10 @@ env -i PATH="$PATH" HOME="$HOME" PYTHONPATH="$PYTHONPATH" \
   INTEGRATION_SEED="$INTEGRATION_SEED" \
   INTEGRATION_ORDER_SEED="$INTEGRATION_ORDER_SEED" \
   LITELLM_LOCAL_MODEL_COST_MAP=True AWS_EC2_METADATA_DISABLED=true DO_NOT_TRACK=1 \
-  .venv/bin/python tests/integration/run.py "$suite" --results "$results"
+  INTEGRATION_PROXY_DATABASE_URL="$INTEGRATION_PROXY_DATABASE_URL" \
+  INTEGRATION_PROXY_READ_REPLICA_URL="$INTEGRATION_PROXY_READ_REPLICA_URL" \
+  INTEGRATION_ROUTING="$INTEGRATION_ROUTING" \
+  .venv/bin/python tests/integration/run.py "$suite" --results "$results" "${node_files[@]}"
 
 if [ "${INTEGRATION_COVERAGE:-0}" = 1 ]; then
   for covered_pid in "$proxy_pid" "$peer_pid"; do

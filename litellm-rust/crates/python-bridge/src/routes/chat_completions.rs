@@ -7,6 +7,7 @@ use litellm_core::chat_completions::{
     types::ChatCompletionsRequest,
 };
 use litellm_host_python::from_py_argument;
+use litellm_http::HttpClientConfig;
 use litellm_types::utils::ChatCompletionsResponse;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
@@ -20,6 +21,7 @@ use crate::{
 };
 
 async fn execute(
+    config: HttpClientConfig,
     messages: Vec<Value>,
     optional_params: Map<String, Value>,
     options: RouteOptions,
@@ -32,16 +34,20 @@ async fn execute(
         extra_headers,
         timeout,
     } = options;
-    run_chat_completions(ChatCompletionsRequest {
-        model: &model,
-        messages: Value::Array(messages),
-        optional_params,
-        api_key: api_key.as_deref(),
-        api_base: api_base.as_deref(),
-        custom_llm_provider: custom_llm_provider.as_deref(),
-        extra_headers,
-        timeout,
-    })
+    run_chat_completions(
+        crate::http::resources(),
+        &config,
+        ChatCompletionsRequest {
+            model: &model,
+            messages: Value::Array(messages),
+            optional_params,
+            api_key: api_key.as_deref(),
+            api_base: api_base.as_deref(),
+            custom_llm_provider: custom_llm_provider.as_deref(),
+            extra_headers,
+            timeout,
+        },
+    )
     .await
 }
 
@@ -87,9 +93,15 @@ pub(crate) fn chat_completions(
         extra_headers,
         timeout: optional_timeout(timeout_seconds),
     };
+    let config = crate::http::call_config(py, &PyDict::new(py), false)?;
     run_sync(
         py,
-        execute(messages, optional_params.unwrap_or_default(), options),
+        execute(
+            config,
+            messages,
+            optional_params.unwrap_or_default(),
+            options,
+        ),
         chat_completions_error_to_pyerr,
     )
 }
@@ -119,9 +131,15 @@ pub(crate) fn achat_completions<'py>(
         extra_headers,
         timeout: optional_timeout(timeout_seconds),
     };
+    let config = crate::http::call_config(py, &PyDict::new(py), true)?;
     run_async(
         py,
-        execute(messages, optional_params.unwrap_or_default(), options),
+        execute(
+            config,
+            messages,
+            optional_params.unwrap_or_default(),
+            options,
+        ),
         chat_completions_error_to_pyerr,
     )
 }
