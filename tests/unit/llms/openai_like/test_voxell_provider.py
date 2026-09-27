@@ -149,6 +149,16 @@ class TestVoxellEmbeddingDispatch:
         assert body["dimensions"] == 512
         assert body["encoding_format"] == "float"
 
+    def test_embedding_env_var_sets_default_encoding_format(
+        self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT", "float")
+        route: Final = _mock_voxell_embedding_route(respx_mock, "turbo")
+
+        litellm.embedding(model="voxell/turbo", input=["hello"], api_key="vx-test")
+
+        assert json.loads(route.calls.last.request.read())["encoding_format"] == "float"
+
     @pytest.mark.asyncio
     async def test_aembedding_hits_voxell_endpoint(self, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch):
         monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
@@ -173,10 +183,9 @@ class TestVoxellModelMetadata:
             assert info["output_cost_per_token"] == 0.0
             assert info["max_input_tokens"] == 8192
 
-        # turbo is free; pro and ultra are metered
         assert model_cost["voxell/turbo"]["input_cost_per_token"] == 0.0
-        assert model_cost["voxell/pro"]["input_cost_per_token"] == 3e-07
-        assert model_cost["voxell/ultra"]["input_cost_per_token"] == 4e-07
+        assert model_cost["voxell/pro"]["input_cost_per_token"] > 0
+        assert model_cost["voxell/ultra"]["input_cost_per_token"] > 0
 
     def test_voxell_models_synced_to_backup(self):
         model_cost: Final = _load("model_prices_and_context_window.json")

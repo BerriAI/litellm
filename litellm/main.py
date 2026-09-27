@@ -7320,10 +7320,19 @@ def embedding(
                 litellm_params={},
             )
         elif JSONProviderRegistry.supports_embeddings(custom_llm_provider):
-            # JSON-configured OpenAI-compatible providers that declare /v1/embeddings.
-            # api_base and api_key were already resolved from providers.json by get_llm_provider.
             if headers is not None and headers != {}:
                 optional_params["extra_headers"] = headers
+
+            json_provider_encoding_format: Final = (
+                encoding_format
+                or optional_params.get("encoding_format")
+                or get_secret_str("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT")
+            )
+            if json_provider_encoding_format is None or json_provider_encoding_format.strip().lower() == "none":
+                optional_params.pop("encoding_format", None)
+            else:
+                optional_params["encoding_format"] = json_provider_encoding_format
+
             response = openai_chat_completions.embedding(
                 model=model,
                 input=input,
