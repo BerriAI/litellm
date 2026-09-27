@@ -1,9 +1,17 @@
+use litellm_types::responses::main::ResponsesApiResponse;
 use litellm_types::responses::streaming_websocket::ResponsesWsEvent;
+use serde_json::{Map, Value};
+
+use litellm_auth::{CredentialPlacement, SecretValue};
 
 use crate::{
     Error,
-    base_llm::responses::transformation::{
-        ResponsesWebSocketProviderConfig, ResponsesWsTransformResult, enforce_model,
+    base_llm::{
+        auth::{AuthScheme, ValidatedEnvironment},
+        responses::transformation::{
+            BaseResponsesApiConfig, ResponsesWebSocketProviderConfig, ResponsesWsTransformResult,
+            enforce_model,
+        },
     },
 };
 
@@ -90,6 +98,98 @@ fn percent_encode(value: &str) -> String {
             }
         })
         .collect()
+}
+
+impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
+    fn secret_names(
+        &self,
+        api_key: Option<&str>,
+        api_base: Option<&str>,
+    ) -> &'static [&'static str] {
+        match (
+            api_key.is_some_and(|key| !key.is_empty()),
+            api_base.is_some_and(|base| !base.is_empty()),
+        ) {
+            (true, true) => &[],
+            (true, false) => &["OPENAI_BASE_URL", "OPENAI_API_BASE"],
+            (false, true) => &["OPENAI_API_KEY"],
+            (false, false) => &["OPENAI_API_KEY", "OPENAI_BASE_URL", "OPENAI_API_BASE"],
+        }
+    }
+
+    fn validate_environment(
+        &self,
+        headers: Vec<(String, String)>,
+        api_key: Option<&str>,
+        lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<ValidatedEnvironment, Error> {
+        let key = api_key
+            .filter(|key| !key.is_empty())
+            .map(str::to_owned)
+            .or_else(|| lookup("OPENAI_API_KEY"))
+            .filter(|key| !key.is_empty())
+            .ok_or(litellm_auth::Error::MissingApiKey {
+                provider: "OpenAI",
+                environment_variable: "OPENAI_API_KEY",
+            })?;
+        Ok(ValidatedEnvironment {
+            headers: litellm_http::request::with_default_headers(
+                headers,
+                &[("content-type", "application/json")],
+            ),
+            auth: AuthScheme::Credential {
+                placement: CredentialPlacement::Bearer,
+                secret: SecretValue::new(key),
+            },
+        })
+    }
+
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> String {
+        let base = api_base
+            .filter(|base| !base.is_empty())
+            .map(str::to_owned)
+            .or_else(|| lookup("OPENAI_BASE_URL"))
+            .or_else(|| lookup("OPENAI_API_BASE"))
+            .unwrap_or_else(|| OPENAI_RESPONSES_DEFAULT_API_BASE.into());
+        format!("{}/responses", base.trim_end_matches('/'))
+    }
+
+    fn transform_responses_api_request(
+        &self,
+        model: &str,
+        input: Value,
+        params: Map<String, Value>,
+    ) -> Result<Value, Error> {
+        if !input.is_string() && !input.is_array() {
+            return Err(Error::InvalidRequest(
+                "responses input must be a string or an array".into(),
+            ));
+        }
+        if params
+            .get("stream")
+            .is_some_and(|stream| !stream.is_boolean())
+        {
+            return Err(Error::InvalidRequest("stream must be a boolean".into()));
+        }
+        Ok(Value::Object(
+            params
+                .into_iter()
+                .chain([
+                    ("model".into(), Value::String(model.into())),
+                    ("input".into(), input),
+                ])
+                .collect(),
+        ))
+    }
+
+    fn transform_response_api_response(&self, body: Value) -> Result<ResponsesApiResponse, Error> {
+        serde_json::from_value(body)
+            .map_err(|error| Error::InvalidResponse(error.to_string().into()))
+    }
 }
 
 #[cfg(test)]
