@@ -51,11 +51,12 @@ _IMAGE_FORMAT_BY_MIME: Final[Mapping[str, BedrockImageFormat]] = MappingProxyTyp
 )
 _CHAT_CALL_TYPES: Final = frozenset({CallTypes.completion.value, CallTypes.acompletion.value})
 _RESPONSES_CALL_TYPES: Final = frozenset({CallTypes.responses.value, CallTypes.aresponses.value})
-_CHAT_UNSCANNABLE_TYPES: Final = frozenset({"file", "input_audio", "video_url", "audio_url", "document"})
+_OPENAI_IMAGE_TYPES: Final = frozenset({"image_url", "input_image", "computer_screenshot"})
+_OPENAI_UNSCANNABLE_TYPES: Final = frozenset(
+    {"file", "input_file", "input_audio", "video_url", "audio_url", "document", "container_upload"}
+)
 _ANTHROPIC_UNSCANNABLE_TYPES: Final = frozenset({"document", "container_upload"})
-_RESPONSES_IMAGE_TYPES: Final = frozenset({"input_image", "computer_screenshot"})
-_RESPONSES_UNSCANNABLE_TYPES: Final = frozenset({"input_file", "input_audio"})
-_CONVERSE_UNSCANNABLE_KEYS: Final = ("document", "video")
+_CONVERSE_UNSCANNABLE_KEYS: Final = ("document", "video", "audio")
 _MAX_IMAGE_BYTES: Final = 4 * 1024 * 1024
 _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
@@ -90,11 +91,11 @@ def _messages_and_classifier(
     data: Mapping[str, object], call_type: str
 ) -> tuple[Sequence[Mapping[str, object]], _BlockClassifier, _NestedToolBlocks]:
     if call_type in _CHAT_CALL_TYPES:
-        return _mappings(data.get("messages")), _classify_chat_block, _no_nested_blocks
+        return _mappings(data.get("messages")), _classify_openai_block, _no_nested_blocks
     if call_type == CallTypes.anthropic_messages.value:
         return _mappings(data.get("messages")), _classify_anthropic_block, _anthropic_tool_result_blocks
     if call_type in _RESPONSES_CALL_TYPES:
-        return _mappings(data.get("input")), _classify_responses_block, _no_nested_blocks
+        return _mappings(data.get("input")), _classify_openai_block, _no_nested_blocks
     if call_type == CallTypes.allm_passthrough_route.value and _is_bedrock_converse(data):
         body: Final = data.get("data")
         messages: Final = _mappings(body.get("messages") if _is_mapping(body) else None)
@@ -166,13 +167,15 @@ def _classify_nothing(block: Mapping[str, object]) -> _Classified:
     return None
 
 
-def _classify_chat_block(block: Mapping[str, object]) -> _Classified:
+def _classify_openai_block(block: Mapping[str, object]) -> _Classified:
     block_type: Final = block.get("type")
-    if block_type == "image_url":
+    if block_type == "image":
+        return _classify_anthropic_block(block)
+    if isinstance(block_type, str) and block_type in _OPENAI_IMAGE_TYPES:
         image_url: Final = block.get("image_url")
         url: Final = image_url.get("url") if _is_mapping(image_url) else image_url
-        return _classify_data_uri(url, "image_url")
-    if isinstance(block_type, str) and block_type in _CHAT_UNSCANNABLE_TYPES:
+        return _classify_data_uri(url, block_type)
+    if isinstance(block_type, str) and block_type in _OPENAI_UNSCANNABLE_TYPES:
         return _Unscannable(block_type)
     return None
 
@@ -185,15 +188,6 @@ def _classify_anthropic_block(block: Mapping[str, object]) -> _Classified:
             return _classify_base64(source.get("media_type"), source.get("data"), "image")
         return _Unscannable("image (url or file source)")
     if isinstance(block_type, str) and block_type in _ANTHROPIC_UNSCANNABLE_TYPES:
-        return _Unscannable(block_type)
-    return None
-
-
-def _classify_responses_block(block: Mapping[str, object]) -> _Classified:
-    block_type: Final = block.get("type")
-    if isinstance(block_type, str) and block_type in _RESPONSES_IMAGE_TYPES:
-        return _classify_data_uri(block.get("image_url"), block_type)
-    if isinstance(block_type, str) and block_type in _RESPONSES_UNSCANNABLE_TYPES:
         return _Unscannable(block_type)
     return None
 

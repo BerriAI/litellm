@@ -106,6 +106,31 @@ TEXT = {"type": "text", "text": "hello"}
             id="chat-empty-base64",
         ),
         pytest.param(
+            _chat(
+                {"type": "image", "source": {"type": "base64", "media_type": "image/png", "data": PNG_B64}},
+                {"type": "input_image", "image_url": f"data:image/jpeg;base64,{JPEG_B64}"},
+                {"type": "input_file", "file_id": "file-1"},
+            ),
+            CallTypes.acompletion.value,
+            [_png_item(), _jpeg_item()],
+            ["input_file"],
+            id="chat-anthropic-and-responses-shaped-parts",
+        ),
+        pytest.param(
+            {"input": [{"role": "user", "content": [{"type": "image_url", "image_url": {"url": "https://x/y.png"}}]}]},
+            CallTypes.aresponses.value,
+            [],
+            ["image_url (remote URL or file id)"],
+            id="responses-chat-shaped-image-url",
+        ),
+        pytest.param(
+            _converse({"audio": {"format": "mp3", "source": {"bytes": PDF_B64}}}),
+            CallTypes.allm_passthrough_route.value,
+            [],
+            ["audio"],
+            id="converse-audio",
+        ),
+        pytest.param(
             _chat(TEXT, {"type": "file", "file": {"file_data": f"data:application/pdf;base64,{PDF_B64}"}}),
             CallTypes.acompletion.value,
             [],
