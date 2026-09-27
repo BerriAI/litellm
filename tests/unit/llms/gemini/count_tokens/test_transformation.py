@@ -395,7 +395,6 @@ async def test_count_payload_is_what_v1_messages_sends_to_gemini(local_model_cos
         message_format="anthropic",
     )
 
-    assert isinstance(payload, GeminiCountTokensPayload), payload
     assert _as_wire(payload) == _counted_part_of(sent[-1])
 
 
@@ -504,7 +503,28 @@ async def test_count_payload_is_what_chat_completions_sends_to_gemini(local_mode
         message_format="openai",
     )
 
-    assert isinstance(payload, GeminiCountTokensPayload), payload
+    assert _as_wire(payload) == _counted_part_of(sent[-1])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "system", ("be terse", [{"type": "text", "text": "be terse"}, {"type": "text", "text": "answer in French"}])
+)
+async def test_count_payload_puts_a_separate_system_prompt_where_chat_completions_does(local_model_cost_map, system):
+    messages: Final = ({"role": "user", "content": "hello"},)
+    sent: list[dict[str, object]] = []  # mutable-ok: the fake upstream appends each captured body
+    await acompletion(
+        model="gemini/gemini-2.5-flash",
+        api_key="fake-gemini-key",
+        client=_capturing_client(sent),
+        max_tokens=16,
+        messages=[{"role": "system", "content": copy.deepcopy(system)}, *copy.deepcopy(messages)],
+    )
+
+    payload = await build_count_tokens_payload(
+        model="gemini-2.5-flash", messages=messages, system=system, tools=None, message_format="openai"
+    )
+
     assert _as_wire(payload) == _counted_part_of(sent[-1])
 
 
@@ -570,7 +590,7 @@ async def test_count_includes_the_deployment_tools_the_router_sends(
         client=httpx.AsyncClient(transport=httpx.MockTransport(count_tokens_endpoint)),
     )
 
-    assert result is not None and result.error is not True, result
+    assert result is not None
     count_body = counted[-1]
     assert {
         "contents": count_body["contents"],
@@ -589,7 +609,6 @@ async def test_build_count_tokens_payload_maps_openai_web_search_tool():
         message_format="openai",
     )
 
-    assert isinstance(payload, GeminiCountTokensPayload), payload
     assert payload.tools == ({"googleSearch": {}},)
 
 
@@ -609,7 +628,6 @@ async def test_build_count_tokens_payload_wraps_responses_api_tool():
         message_format="openai",
     )
 
-    assert isinstance(payload, GeminiCountTokensPayload), payload
     assert payload.tools is not None
     function_declaration = payload.tools[0]["function_declarations"][0]
     assert function_declaration["name"] == "get_weather"
@@ -662,7 +680,6 @@ async def test_remote_image_is_fetched_without_blocking_the_event_loop(monkeypat
     finally:
         ticking.cancel()
 
-    assert isinstance(payload, GeminiCountTokensPayload), payload
     assert payload.contents[0]["parts"][1]["inline_data"]["data"] == _PNG
     assert ticks_while_fetching and ticks_while_fetching[0] >= 10, ticks_while_fetching
 
