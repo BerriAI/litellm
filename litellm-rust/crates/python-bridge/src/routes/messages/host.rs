@@ -241,10 +241,13 @@ impl ProtocolHost for MessagesPythonHost {
 
     fn complete(&mut self, py: Python<'_>, response: MessagesOutput) -> PyResult<Py<PyAny>> {
         match response {
-            MessagesOutput::Message(message) => py
+            MessagesOutput::Message { headers, message } => py
                 .import(ROUTE_HOST_MODULE)?
                 .getattr("response")?
-                .call1((to_py(py, message.as_ref())?,))
+                .call1((
+                    to_py(py, message.as_ref())?,
+                    to_py(py, &headers_to_pairs(&headers))?,
+                ))
                 .map(Bound::unbind),
             MessagesOutput::Streamed => Ok(py.None()),
         }
@@ -253,7 +256,7 @@ impl ProtocolHost for MessagesPythonHost {
     fn head(&mut self, py: Python<'_>, head: MessagesStreamHead) -> PyResult<Py<PyAny>> {
         py.import(ROUTE_HOST_MODULE)?
             .getattr("stream_hidden_params")?
-            .call1((to_py(py, &head.headers)?,))
+            .call1((to_py(py, &headers_to_pairs(&head.headers))?,))
             .map(Bound::unbind)
     }
 
@@ -279,6 +282,18 @@ impl ProtocolHost for MessagesPythonHost {
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.request)
     }
+}
+
+fn headers_to_pairs(headers: &reqwest::header::HeaderMap) -> Vec<(String, String)> {
+    headers
+        .iter()
+        .filter_map(|(name, value)| {
+            value
+                .to_str()
+                .ok()
+                .map(|value| (name.to_string(), value.to_owned()))
+        })
+        .collect()
 }
 
 #[cfg(test)]

@@ -43,7 +43,7 @@ async fn the_credential_and_base_come_from_the_secret_source(
     .await
     .expect("messages call succeeds");
 
-    assert!(matches!(output, MessagesOutput::Message(_)));
+    assert!(matches!(output, MessagesOutput::Message { .. }));
     let request = only_request(&upstream).await;
     assert_eq!(request.url.path(), path);
     assert_eq!(request.header("x-api-key"), Some("sk-from-manager"));

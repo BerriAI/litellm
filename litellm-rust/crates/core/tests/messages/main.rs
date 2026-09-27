@@ -114,7 +114,7 @@ async fn run(call: MessagesCall) -> Result<MessagesOutput, Error> {
 
 async fn run_message(call: MessagesCall) -> AnthropicMessagesResponse {
     match run(call).await.expect("messages call succeeds") {
-        MessagesOutput::Message(message) => *message,
+        MessagesOutput::Message { message, .. } => *message,
         MessagesOutput::Streamed => panic!("a non-streaming call returned a stream"),
     }
 }

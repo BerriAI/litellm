@@ -9,6 +9,7 @@ use litellm_types::{
     },
     utils::ProviderSpecificHeaders,
 };
+use reqwest::header::HeaderMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
@@ -34,9 +35,12 @@ pub(super) fn invalid_request(err: serde_json::Error) -> Error {
 }
 
 pub enum MessagesResponse {
-    Message(Box<AnthropicMessagesResponse>),
+    Message {
+        headers: HeaderMap,
+        message: Box<AnthropicMessagesResponse>,
+    },
     Stream {
-        headers: Vec<(String, String)>,
+        headers: HeaderMap,
         chunks: BoxStream<'static, Result<Bytes, Error>>,
     },
 }

@@ -24,9 +24,13 @@ async fn messages_reaches_the_provider_and_preserves_json_or_sse(#[case] streami
         "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}});
     let sse = "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
     let template = if streaming {
-        ResponseTemplate::new(200).set_body_raw(sse, "text/event-stream")
+        ResponseTemplate::new(200)
+            .insert_header("x-upstream-request-id", "req-stream")
+            .set_body_raw(sse, "text/event-stream")
     } else {
-        ResponseTemplate::new(200).set_body_json(message.clone())
+        ResponseTemplate::new(200)
+            .insert_header("x-upstream-request-id", "req-message")
+            .set_body_json(message.clone())
     };
     let messages = json!([{"role": "user", "content": "hi"}]);
     Mock::given(method("POST")).and(path("/v1/messages"))
@@ -44,8 +48,10 @@ async fn messages_reaches_the_provider_and_preserves_json_or_sse(#[case] streami
     assert_eq!(response.status(), 200);
     if streaming {
         assert_eq!(response.headers()["content-type"], "text/event-stream");
+        assert_eq!(response.headers()["x-upstream-request-id"], "req-stream");
         assert_eq!(to_bytes(response.into_body(), 4096).await.unwrap(), sse);
     } else {
+        assert_eq!(response.headers()["x-upstream-request-id"], "req-message");
         let body = support::json(response).await;
         assert_eq!(body["content"], message["content"]);
         assert_eq!(body["usage"], message["usage"]);
