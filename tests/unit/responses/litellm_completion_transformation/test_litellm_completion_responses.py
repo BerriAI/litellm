@@ -4939,6 +4939,24 @@ class TestBridgedOutputItemIdPrefixes:
             choices=[choice],
         )
 
+    def test_reasoning_item_includes_empty_summary(self):
+        item: Final = self._reasoning_items()[0]
+
+        assert item.model_dump(exclude_none=True) == {
+            "type": "reasoning",
+            "id": item.id,
+            "status": "completed",
+            "role": "assistant",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "thinking about fruit",
+                    "annotations": [],
+                }
+            ],
+            "summary": [],
+        }
+
     def test_reasoning_item_id_uses_rs_prefix(self):
         items = self._reasoning_items()
 
