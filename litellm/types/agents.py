@@ -340,6 +340,9 @@ def agent_spend_filter(counter_key: str) -> "LiteLLM_AgentsTableWhereInput":
 class AgentResponse(BaseModel):
     budget_id: str | None = None
     litellm_budget_table: AgentBudgetState | None = None
+
+    directory_active: bool = True
+    directory_access_group_ids: tuple[str, ...] | None = None
     identity: AgentIdentityBinding | None = None
     identity_managed: bool = False
     enabled: bool = True
