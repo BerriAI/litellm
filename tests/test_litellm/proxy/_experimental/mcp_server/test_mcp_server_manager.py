@@ -14794,7 +14794,7 @@ class TestToolCatalogGuard:
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("cancel_listing", (False, True))
-    async def test_discovery_scans_one_tool_at_a_time(self, catalog_guardrail, cancel_listing: bool):
+    async def test_discovery_scans_in_bounded_batches(self, catalog_guardrail, cancel_listing: bool):
         _, proxy_logging_obj = catalog_guardrail
         upstream: Final = tuple(
             MCPTool(name=f"lookup_{index}", description="Safe lookup", inputSchema={"type": "object"})
@@ -14815,12 +14815,12 @@ class TestToolCatalogGuard:
         )
         try:
             await asyncio.wait_for(started.wait(), timeout=1)
-            assert proxy_logging_obj.pre_call_hook.await_count == 1
+            assert proxy_logging_obj.pre_call_hook.await_count == 8
             if cancel_listing:
                 listing.cancel()
                 with pytest.raises(asyncio.CancelledError):
                     await listing
-                assert proxy_logging_obj.pre_call_hook.await_count == 1
+                assert proxy_logging_obj.pre_call_hook.await_count == 8
             else:
                 release.set()
                 served: Final = await listing

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -51,6 +52,7 @@ _JSON_OBJECT: Final = TypeAdapter(dict[str, object])
 _OPTIONAL_GUARDED: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 _ERROR_DETAIL: Final[TypeAdapter[Mapping[str, object]]] = TypeAdapter(Mapping[str, object])
 _OPTIONAL_TEXT: Final[TypeAdapter[str | None]] = TypeAdapter(str | None)
+_CATALOG_SCAN_BATCH_SIZE: Final = 8
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,12 +156,20 @@ async def scan_tool_descriptions(
     user_api_key_auth: UserAPIKeyAuth | None,
     raw_headers: Mapping[str, str] | None,
 ) -> ToolDescriptionScan:
-    outcomes: Final = tuple(
-        [await _scan_tool(tool, server, proxy_logging_obj, user_api_key_auth, raw_headers) for tool in tools]
+    batches: Final = tuple(
+        [
+            await asyncio.gather(
+                *(
+                    _scan_tool(tool, server, proxy_logging_obj, user_api_key_auth, raw_headers)
+                    for tool in tools[offset : offset + _CATALOG_SCAN_BATCH_SIZE]
+                )
+            )
+            for offset in range(0, len(tools), _CATALOG_SCAN_BATCH_SIZE)
+        ]
     )
     return ToolDescriptionScan(
-        served=tuple(outcome for outcome in outcomes if isinstance(outcome, MCPTool)),
-        blocked=tuple(outcome for outcome in outcomes if isinstance(outcome, BlockedTool)),
+        served=tuple(outcome for batch in batches for outcome in batch if isinstance(outcome, MCPTool)),
+        blocked=tuple(outcome for batch in batches for outcome in batch if isinstance(outcome, BlockedTool)),
     )
 
 
