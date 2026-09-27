@@ -5,6 +5,7 @@ https://datatracker.ietf.org/doc/draft-sibiryakov-ztds-protocol/
 """
 
 import unittest
+
 from litellm.proxy.guardrails.guardrail_hooks.ztds import ZTDSGuardrail
 
 
@@ -58,7 +59,7 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
         session_id = "test-session-1"
         secret = "sk-" + "live12345678901234567890"
         text = f"Contact alice@example.com or write to alice@example.com for secret {secret}."
-        sanitized, token_map = self.guardrail.sanitize_text(text, session_id)
+        sanitized, _ = self.guardrail.sanitize_text(text, session_id)
 
         self.assertNotIn("alice@example.com", sanitized)
         self.assertNotIn(secret, sanitized)
@@ -76,7 +77,7 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
         """Invariant 1: Zero cleartext egress for emails, cards, phones, and API secrets."""
         session_id = "test-session-2"
         text = "Card 4111-2222-3333-4444 call +1-555-019-2834 server 192.168.1.100"
-        sanitized, token_map = self.guardrail.sanitize_text(text, session_id)
+        sanitized, _ = self.guardrail.sanitize_text(text, session_id)
 
         self.assertIn("[CREDIT_CARD_TOKEN_1]", sanitized)
         self.assertIn("[PHONE_TOKEN_1]", sanitized)
@@ -88,7 +89,10 @@ class TestZTDSLiteLLMGuardrail(unittest.IsolatedAsyncioTestCase):
         request_data = {
             "litellm_call_id": "call-101",
             "messages": [
-                {"role": "user", "content": "Please verify user bob@enterprise.corp with IBAN DE89370400440532013000"}
+                {
+                    "role": "user",
+                    "content": "Please verify user bob@enterprise.corp with IBAN DE89370400440532013000",
+                }
             ],
         }
 
