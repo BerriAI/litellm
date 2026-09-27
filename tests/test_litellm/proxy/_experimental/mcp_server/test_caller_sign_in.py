@@ -7,7 +7,9 @@ import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._experimental.mcp_server.caller_sign_in import (
     CallerSignIn,
+    CallerSignInPreflight,
     CallerSignInProvider,
+    SignedIn,
     caller_sign_in_for,
 )
 from litellm.proxy._types import UserAPIKeyAuth
@@ -28,6 +30,11 @@ class _SignInGuardrail(CustomGuardrail):
         if not self.gated:
             return None
         return CallerSignIn(issuers=(self.issuer,), scopes=(self.scope,))
+
+    async def preflight_caller_sign_in(
+        self, server: MCPServer, user_api_key_auth: UserAPIKeyAuth | None, subject_token: str
+    ) -> CallerSignInPreflight:
+        return SignedIn()
 
 
 class _PlainGuardrail(CustomGuardrail):

@@ -17,7 +17,7 @@ from __future__ import annotations
 import itertools
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Protocol, cast, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, assert_never, cast, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
 
@@ -38,12 +38,43 @@ class CallerSignIn:
     scopes: tuple[str, ...]
 
 
+@dataclass(frozen=True, slots=True)
+class SignedIn:
+    """The subject token the caller presented satisfies this provider's sign-in."""
+
+
+@dataclass(frozen=True, slots=True)
+class Rejected:
+    """The caller's identity provider rejected the presented subject token."""
+
+    detail: str
+    claims: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class Unavailable:
+    """The provider could not reach a verdict; ``fail_open`` is the provider's own fallback policy."""
+
+    detail: str
+    fail_open: bool
+
+
+CallerSignInPreflight = SignedIn | Rejected | Unavailable
+
+
 @runtime_checkable
 class CallerSignInProvider(Protocol):
     def caller_sign_in(self, server: MCPServer, user_api_key_auth: UserAPIKeyAuth | None) -> CallerSignIn | None:
         """The sign-in this provider requires of callers hitting ``server``; ``None`` when it does not gate
         the server for this caller (``user_api_key_auth=None`` is the anonymous metadata fetch that follows
         a challenge)."""
+        ...
+
+    async def preflight_caller_sign_in(
+        self, server: MCPServer, user_api_key_auth: UserAPIKeyAuth | None, subject_token: str
+    ) -> CallerSignInPreflight:
+        """Validate ``subject_token`` against this provider at connect time, where a challenge's
+        ``WWW-Authenticate`` still reaches the client."""
         ...
 
 
@@ -121,3 +152,35 @@ def caller_sign_in_for(server: MCPServer, user_api_key_auth: UserAPIKeyAuth | No
     issuers: Final = tuple(dict.fromkeys(itertools.chain.from_iterable(c.issuers for c in contributions)))
     scopes: Final = tuple(dict.fromkeys(itertools.chain.from_iterable(c.scopes for c in contributions)))
     return CallerSignIn(issuers=issuers, scopes=scopes)
+
+
+async def preflight_caller_sign_in(
+    server: MCPServer,
+    user_api_key_auth: UserAPIKeyAuth | None,
+    subject_token: str,
+    *,
+    root_path: str,
+    connected_as: str | None,
+) -> None:
+    """Run every provider's connect-time check against the subject token, so a bearer the IdP will
+    reject surfaces as a challenge here rather than a JSON-RPC error at the first tool call."""
+    from fastapi import HTTPException  # noqa: PLC0415  # lazy: fastapi import stays off the cold path
+
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.adapter import (  # noqa: PLC0415  # lazy: adapter pulls MCP subgraph
+        raise_token_exchange_challenge,
+    )
+
+    for provider in _providers():
+        if provider.caller_sign_in(server, user_api_key_auth) is None:
+            continue
+        match await provider.preflight_caller_sign_in(server, user_api_key_auth, subject_token):
+            case SignedIn():
+                continue
+            case Rejected(detail=_, claims=claims):
+                raise_token_exchange_challenge(server, root_path=root_path, claims=claims, connected_as=connected_as)
+            case Unavailable(detail=detail, fail_open=True):
+                continue
+            case Unavailable(detail=detail, fail_open=False):
+                raise HTTPException(status_code=503, detail=detail)
+            case _ as verdict:
+                assert_never(verdict)

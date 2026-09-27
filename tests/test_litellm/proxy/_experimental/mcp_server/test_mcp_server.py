@@ -11250,3 +11250,92 @@ class TestConnectChallengeResolver:
 
         authenticate: Final = (exc.value.headers or {}).get("WWW-Authenticate") or ""
         assert authenticate.startswith(f'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/{route_name}"')
+
+
+class TestConnectSignInPreflight:
+    """A subject token the provider rejects must fail at connect with the RFC 9728 challenge, not as a
+    JSON-RPC error on every tools/call where ``WWW-Authenticate`` is lost."""
+
+    async def _connect(self, route_names, guardrail, allowed, raw_headers=None):
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        server = _catalog_server()
+        with (
+            patch.object(
+                mcp_operations.global_mcp_server_manager,
+                "get_filtered_registry",
+                return_value={server.server_id: server},
+            ),
+            patch.object(
+                mcp_operations,
+                "_get_allowed_mcp_servers",
+                AsyncMock(return_value=allowed),
+            ),
+        ):
+            await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                scope={"type": "http", "method": "POST", "path": f"/mcp/{route_names[0]}", "headers": []},
+                mcp_servers=list(route_names),
+                oauth2_headers=None,
+                mcp_server_auth_headers=None,
+                user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                client_ip=None,
+                raw_headers=raw_headers
+                or {"x-litellm-api-key": "sk-litellm-virtual-key", "authorization": "Bearer entra.jwt.token"},
+            )
+
+    @pytest.mark.asyncio
+    async def test_rejected_subject_challenges_at_connect(self):
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import Rejected
+
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(
+            guardrail_name="sign-in-stub", preflight_result=Rejected("the Entra OBO exchange was rejected (AADSTS70002)")
+        )
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with pytest.raises(HTTPException) as exc:
+                await self._connect(["catalog"], guardrail, [server])
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 401
+        authenticate: Final = (exc.value.headers or {}).get("WWW-Authenticate") or ""
+        assert 'resource_metadata="/.well-known/oauth-protected-resource/mcp/catalog"' in authenticate
+        assert 'error="invalid_token"' in authenticate
+        assert guardrail.preflight_calls == ["entra.jwt.token"]
+
+    @pytest.mark.asyncio
+    async def test_unavailable_fail_closed_answers_503(self):
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import Unavailable
+
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(
+            guardrail_name="sign-in-stub", preflight_result=Unavailable("the Entra token endpoint could not be reached", fail_open=False)
+        )
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with pytest.raises(HTTPException) as exc:
+                await self._connect(["catalog"], guardrail, [server])
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert exc.value.status_code == 503
+        assert exc.value.detail == "the Entra token endpoint could not be reached"
+
+    @pytest.mark.asyncio
+    async def test_multi_server_connect_never_awaits_the_preflight(self):
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            await self._connect(["catalog", "other"], guardrail, [server])
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        assert guardrail.preflight_calls == []

@@ -1718,13 +1718,17 @@ if MCP_AVAILABLE:
             # JSON-RPC error and the WWW-Authenticate header is lost. OBO keeps its connect gate;
             # guardrail-only gates fire only on a single-server connect the key's grant admits.
             sign_in = caller_sign_in_for(server, user_api_key_auth) if server is not None else None
+            subject_token: Final = (
+                operations.global_mcp_server_manager._extract_subject_token(  # pyright: ignore[reportPrivateUsage]  # the manager owns the subject/admission filter shared with the preflight
+                    oauth2_headers, raw_headers, user_api_key_auth
+                )
+                if server is not None
+                else None
+            )
             if (
                 server
                 and sign_in is not None
-                and operations.global_mcp_server_manager._extract_subject_token(  # pyright: ignore[reportPrivateUsage]  # the manager owns the subject/admission filter shared with the preflight
-                    oauth2_headers, raw_headers, user_api_key_auth
-                )
-                is None
+                and subject_token is None
                 and (
                     (server.auth_type == MCPAuth.oauth2_token_exchange and not oauth2_headers)
                     or await _key_granted_single_server(server, mcp_servers, user_api_key_auth, client_ip)
@@ -1737,8 +1741,26 @@ if MCP_AVAILABLE:
                     get_request_root_path,
                 )
 
-                raise_token_exchange_challenge(
-                    server, root_path=get_request_root_path(), connected_as=server_name
+                raise_token_exchange_challenge(server, root_path=get_request_root_path(), connected_as=server_name)
+            if (
+                server
+                and sign_in is not None
+                and subject_token is not None
+                and await _key_granted_single_server(server, mcp_servers, user_api_key_auth, client_ip)
+            ):
+                from litellm.proxy._experimental.mcp_server.caller_sign_in import (  # noqa: PLC0415  # lazy: provider discovery pulls the guardrail registry
+                    preflight_caller_sign_in,
+                )
+                from litellm.proxy.middleware.per_request_root_path_middleware import (  # noqa: PLC0415  # lazy: middleware imports proxy utils
+                    get_request_root_path,
+                )
+
+                await preflight_caller_sign_in(
+                    server,
+                    user_api_key_auth,
+                    subject_token,
+                    root_path=get_request_root_path(),
+                    connected_as=server_name,
                 )
 
             # Exchange-backed modes (token_exchange's OBO mint, id_jag's stored-assertion mint): run

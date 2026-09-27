@@ -14,7 +14,13 @@ from litellm.exceptions import Timeout as LitellmTimeout
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.secret_redaction import redact_string
-from litellm.proxy._experimental.mcp_server.caller_sign_in import CallerSignIn, caller_sign_in_for
+from litellm.proxy._experimental.mcp_server.caller_sign_in import (
+    CallerSignIn,
+    Rejected,
+    SignedIn,
+    Unavailable,
+    caller_sign_in_for,
+)
 from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
 from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
@@ -1214,3 +1220,62 @@ class TestCallerSignIn:
             "https://login.microsoftonline.com/tenant-abc/v2.0",
         )
         assert sign_in.scopes == ("read", "api://client-xyz/access_as_user")
+
+
+class TestPreflightCallerSignIn:
+    """The connect-time check must give the connect gate a verdict it can challenge on: a rejected
+    subject becomes the RFC 9728 challenge, an unreachable endpoint the guardrail's fallback policy."""
+
+    @pytest.mark.asyncio
+    async def test_ok_exchange_signs_in(self):
+        exchanger: Final = StubTokenExchanger(_obo_ok())
+        guardrail: Final = _make_guardrail(FakeHandler([]), exchanger=exchanger)
+
+        verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
+
+        assert verdict == SignedIn()
+        assert [call[0] for call in exchanger.calls] == [FAKE_ASSERTION]
+
+    @pytest.mark.asyncio
+    async def test_unauthorized_error_rejects_with_the_idp_detail(self):
+        exchanger: Final = StubTokenExchanger(
+            [Error(CredError.of_unauthorized("the provided assertion has expired", claims="step-up"))]
+        )
+        guardrail: Final = _make_guardrail(FakeHandler([]), exchanger=exchanger)
+
+        verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
+
+        assert verdict == Rejected(detail="the provided assertion has expired", claims="step-up")
+
+    @pytest.mark.asyncio
+    async def test_misconfigured_fail_closed_is_unavailable(self):
+        exchanger: Final = StubTokenExchanger([Error(CredError.of_misconfigured("bad client_secret"))])
+        guardrail: Final = _make_guardrail(FakeHandler([]), exchanger=exchanger, unreachable_fallback="fail_closed")
+
+        verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
+
+        assert isinstance(verdict, Unavailable)
+        assert verdict.fail_open is False
+        assert "bad client_secret" in verdict.detail
+
+    @pytest.mark.asyncio
+    async def test_endpoint_unreachable_fail_open_is_unavailable(self):
+        exchanger: Final = StubTokenExchanger(
+            [httpx.ConnectError("refused", request=httpx.Request("POST", "https://example.test"))]
+        )
+        guardrail: Final = _make_guardrail(FakeHandler([]), exchanger=exchanger, unreachable_fallback="fail_open")
+
+        verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), FAKE_ASSERTION)
+
+        assert isinstance(verdict, Unavailable)
+        assert verdict.fail_open is True
+
+    @pytest.mark.asyncio
+    async def test_non_assertion_subject_signs_in_without_exchanging(self):
+        exchanger: Final = StubTokenExchanger()
+        guardrail: Final = _make_guardrail(FakeHandler([]), exchanger=exchanger)
+
+        verdict: Final = await guardrail.preflight_caller_sign_in(_server(), _user(), "opaque-bearer")
+
+        assert verdict == SignedIn()
+        assert exchanger.calls == []

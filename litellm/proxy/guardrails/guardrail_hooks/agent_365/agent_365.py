@@ -31,13 +31,21 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
-from litellm.proxy._experimental.mcp_server.caller_sign_in import CallerSignIn
-from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok
+from litellm.proxy._experimental.mcp_server.caller_sign_in import (
+    CallerSignIn,
+    CallerSignInPreflight,
+    Rejected,
+    SignedIn,
+    Unavailable,
+)
+from litellm.proxy._experimental.mcp_server.outbound_credentials.oauth_token_store import OAuthToken
+from litellm.proxy._experimental.mcp_server.outbound_credentials.result import Error, Ok, Result
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchange_provider import (
     build_token_exchanger,
 )
 from litellm.proxy._experimental.mcp_server.outbound_credentials.token_exchanger import TokenExchanger
 from litellm.proxy._experimental.mcp_server.outbound_credentials.types import (
+    CredError,
     ServerSpec,
     TokenExchangeConfig,
 )
@@ -456,6 +464,50 @@ class Agent365Guardrail(CustomGuardrail):
             issuers=(ENTRA_ISSUER_TEMPLATE.format(tenant_id=self.tenant_id),),
             scopes=(GATEWAY_SCOPE_TEMPLATE.format(client_id=self.client_id),),
         )
+
+    async def _exchange_caller_assertion(self, assertion: str) -> Result[OAuthToken, CredError]:
+        """The one Entra OBO exchange call both the tool-call path and the connect preflight run; a
+        successful result is cached by the exchanger, so the session reuses what the preflight minted."""
+        return await self._token_exchanger.exchange(
+            assertion, self._exchange_server, self._exchange_config, tenant_id=self.tenant_id
+        )
+
+    async def preflight_caller_sign_in(
+        self, server: MCPServer, user_api_key_auth: "UserAPIKeyAuth | None", subject_token: str
+    ) -> CallerSignInPreflight:
+        """The connect-time check the preemptive gate runs: a bearer Entra rejects gets the sign-in
+        challenge here, where ``WWW-Authenticate`` still reaches the client, instead of surfacing as a
+        JSON-RPC error on every tools/call. ``subject_token=None`` stays the challenge gate's job."""
+        assertion: Final = entra_assertion(subject_token)
+        if assertion is None:
+            return SignedIn()
+        try:
+            exchange_result: Final = await self._exchange_caller_assertion(assertion)
+        except (httpx.HTTPError, LitellmTimeout, TimeoutError) as exc:
+            return Unavailable(
+                detail=f"the Entra token endpoint could not be reached ({type(exc).__name__})",
+                fail_open=self.unreachable_fallback == "fail_open",
+            )
+        match exchange_result:
+            case Ok(_):
+                return SignedIn()
+            case Error(error):
+                match error.tag:
+                    case "unauthorized":
+                        return Rejected(detail=error.unauthorized.detail, claims=error.unauthorized.claims)
+                    case "misconfigured":
+                        return Unavailable(
+                            detail=(
+                                f"Entra rejected the gateway's own Agent 365 credentials ({error.misconfigured}); "
+                                "check the guardrail's client_id, client_secret and resource_app_id"
+                            ),
+                            fail_open=self.unreachable_fallback == "fail_open",
+                        )
+                    case _:
+                        return Unavailable(
+                            detail=f"the Entra token exchange failed ({error.summary})",
+                            fail_open=self.unreachable_fallback == "fail_open",
+                        )
 
     async def _post_allowing_error_status(
         self,
