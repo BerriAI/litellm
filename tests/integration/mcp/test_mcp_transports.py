@@ -231,7 +231,7 @@ def test_pinned_revision_pairs_list_and_call_through_gateway(
 
         peer.drain()
         negotiated: Final = asyncio.run(exercise())
-        observed: Final = peer.drain()
+        observed: Final = peer.drain(include_negotiation=True)
         negotiations: Final = tuple(
             (item["negotiation"]["requested"], item["negotiation"]["returned"])
             for item in observed

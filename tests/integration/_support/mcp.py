@@ -44,13 +44,17 @@ class McpPeer:
     spec_path: Path | None = None
     consumed: list[int] = field(default_factory=lambda: [0])
 
-    def drain(self) -> tuple[dict[str, object], ...]:
+    def drain(self, *, include_negotiation: bool = False) -> tuple[dict[str, object], ...]:
         if self.record is not None:
             lines: Final = self.record.read_text().splitlines() if self.record.exists() else []
             fresh: Final = tuple(json.loads(line) for line in lines[self.consumed[0] :])
             self.consumed[0] = len(lines)
-            return fresh
-        return tuple(self.calls.get_nowait() for _ in range(self.calls.qsize()))
+            return tuple(item for item in fresh if include_negotiation or "negotiation" not in item)
+        return tuple(
+            item
+            for item in (self.calls.get_nowait() for _ in range(self.calls.qsize()))
+            if include_negotiation or "negotiation" not in item
+        )
 
     def registration(self) -> dict[str, object]:
         if self.transport == "stdio":

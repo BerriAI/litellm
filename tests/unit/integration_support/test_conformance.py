@@ -1,6 +1,7 @@
 import hashlib
 import json
 import os
+import queue
 from pathlib import Path
 from typing import Final
 from unittest.mock import Mock, patch
@@ -48,6 +49,33 @@ async def test_negotiation_records_preserve_the_peer_call_contract() -> None:
     calls: Final = UPSTREAM_CALLS.validate_python(tuple(records))
     assert len(calls) == 1 and calls[0].headers == {} and calls[0].body == {}
     assert records[0]["negotiation"] == {"requested": "2025-03-26", "returned": "2025-03-26"}
+
+
+@pytest.mark.parametrize("file_backed", (False, True))
+def test_peer_drain_preserves_received_requests(tmp_path: Path, file_backed: bool) -> None:
+    from integration._support.mcp import McpPeer
+
+    request: Final = {"body": {"method": "tools/call"}, "headers": {"authorization": "synthetic"}}
+    negotiation: Final = {"body": {}, "headers": {}, "negotiation": {"requested": "2025-03-26", "returned": "2025-03-26"}}
+    records: Final = (request, negotiation)
+    observed: Final[queue.Queue[dict[str, object]]] = queue.Queue()
+    path: Final = tmp_path / "peer.jsonl" if file_backed else None
+    if path is not None:
+        path.write_text("".join(json.dumps(record) + "\n" for record in records))
+    else:
+        for record in records:
+            observed.put(record)
+    peer: Final = McpPeer("http://peer", observed, record=path)
+    assert peer.drain() == (request,)
+    assert peer.drain() == ()
+    if path is not None:
+        with path.open("a") as sink:
+            sink.write("".join(json.dumps(record) + "\n" for record in records))
+    else:
+        for record in records:
+            observed.put(record)
+    assert peer.drain(include_negotiation=True) == records
+    assert peer.drain(include_negotiation=True) == ()
 
 
 @pytest.mark.parametrize("explicit", (False, True))
