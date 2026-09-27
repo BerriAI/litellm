@@ -1212,11 +1212,14 @@ def _resolve_local_schema_ref(root: Mapping[str, object], ref: str) -> Mapping[s
 
 
 def _inline_root_schema_ref(schema: Mapping[str, object]) -> Mapping[str, object]:
-    """Replace a root-level local ``$ref`` with the schema it points at.
+    """Merge a root-level local ``$ref`` with the schema it points at.
 
-    The glossaries are carried over so refs inside the target still resolve, and
-    the target wins on any key it shares with the root. A root without a ``$ref``,
-    or one pointing outside the document or at a missing name, is returned as is.
+    Per JSON Schema, keys beside a ``$ref`` apply on top of what it references
+    rather than being replaced by it, so ``properties`` and ``required`` union
+    and the local key wins elsewhere. Dropping the siblings instead would lose
+    constraints the caller stated here, such as ``additionalProperties: false``.
+    A root without a ``$ref``, or one pointing outside the document or at a
+    missing name, is returned as is.
     """
     ref: Final = schema.get("$ref")
     if not isinstance(ref, str):
@@ -1224,10 +1227,11 @@ def _inline_root_schema_ref(schema: Mapping[str, object]) -> Mapping[str, object
     target: Final = _resolve_local_schema_ref(schema, ref)
     if target is None:
         return schema
-    glossaries: Final = MappingProxyType(
-        {container: schema[container] for _, container in _LOCAL_SCHEMA_REF_PREFIXES if container in schema}
-    )
-    return MappingProxyType({**glossaries, **target})
+    siblings: Final = MappingProxyType({key: value for key, value in schema.items() if key != "$ref"})
+    properties: Final = MappingProxyType({**_schema_properties(target), **_schema_properties(siblings)})
+    required: Final = sorted(_schema_required_names(target) | _schema_required_names(siblings))
+    required_update: Final = MappingProxyType({"required": required}) if required else _EMPTY_SCHEMA
+    return MappingProxyType({**target, **siblings, "properties": properties, **required_update})
 
 
 def _mergeable_branch(
@@ -1263,6 +1267,18 @@ def _is_object_schema(schema: Mapping[str, object]) -> bool:
     return schema.get("type") == "object" or ("type" not in schema and "properties" in schema)
 
 
+def _distinct_branches(branches: tuple[Mapping[str, object], ...]) -> tuple[Mapping[str, object], ...]:
+    """Collapse branches that resolved to the same object.
+
+    Repeated ``$ref``s share one memoised result, so a schema declaring the same
+    reference thousands of times would otherwise re-merge its properties once per
+    branch. Merging a branch again cannot change the outcome: property merges are
+    idempotent, and so are the union and intersection used for ``required``.
+    """
+    by_identity: Final = MappingProxyType({id(branch): branch for branch in branches})
+    return tuple(by_identity.values())
+
+
 def _flatten_schema_against_root(
     schema: Mapping[str, object],
     root: Mapping[str, object],
@@ -1291,7 +1307,8 @@ def _flatten_schema_against_root(
     if any(branch is None for _, group in raw_branch_groups for branch in group):
         return schema
     branch_groups: Final = tuple(
-        (combinator, tuple(branch for branch in group if branch is not None)) for combinator, group in raw_branch_groups
+        (combinator, _distinct_branches(tuple(branch for branch in group if branch is not None)))
+        for combinator, group in raw_branch_groups
     )
     branches: Final = tuple(branch for _, group in branch_groups for branch in group)
     is_object_schema: Final = _is_object_schema(schema) or (

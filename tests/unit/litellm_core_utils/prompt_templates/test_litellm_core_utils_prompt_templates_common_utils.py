@@ -2010,7 +2010,7 @@ class TestSanitizeInputSchemaForAnthropic:
         "required": ["kind", "b"],
     }
 
-    def _union_root(self, combinator):
+    def _union_root(self, combinator: str) -> dict[str, object]:
         return {"$defs": {"A": self.A, "B": self.B}, combinator: [{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/B"}]}
 
     @pytest.mark.parametrize("combinator", ["anyOf", "oneOf"])
@@ -2026,6 +2026,40 @@ class TestSanitizeInputSchemaForAnthropic:
             "b",
             "kind",
         ], f"a {combinator} root must keep its branches' fields, got {dict(result)}"
+
+    def test_ref_root_keeps_the_keys_declared_beside_it(self):
+        """JSON Schema applies keys beside a ``$ref`` on top of what it references.
+
+        Replacing the root with the target instead would silently drop constraints
+        the caller stated here, such as ``additionalProperties``.
+        """
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            sanitize_input_schema_for_anthropic,
+        )
+
+        result = sanitize_input_schema_for_anthropic(
+            {
+                "$defs": {"A": self.A},
+                "$ref": "#/$defs/A",
+                "properties": {"sibling": {"type": "string"}},
+                "required": ["sibling"],
+                "additionalProperties": False,
+            }
+        )
+
+        assert sorted(result["properties"]) == [
+            "a",
+            "kind",
+            "sibling",
+        ], f"the target's fields and the sibling's must both survive, got {dict(result)}"
+        assert sorted(result["required"]) == [
+            "a",
+            "kind",
+            "sibling",
+        ], f"both required lists must survive, got {dict(result)}"
+        assert result.get("additionalProperties") is False, (
+            f"a constraint stated beside the $ref must not be dropped, got {dict(result)}"
+        )
 
     def test_ref_root_resolves_to_the_schema_it_points_at(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -2084,6 +2118,38 @@ class TestSanitizeInputSchemaForAnthropic:
         result = sanitize_input_schema_for_anthropic({"type": "object", "properties": {"x": nested}})
 
         assert result["properties"]["x"] == nested, f"a nested union must survive verbatim, got {dict(result)}"
+
+    def test_repeating_one_ref_branch_costs_no_more_than_declaring_it_once(self):
+        """Repeated ``$ref``s share one memoised result, so merging them again
+        cannot change the outcome. A schema repeating a reference thousands of
+        times must therefore agree with the same schema declaring it once, which
+        is what stops a compact payload amplifying into per-branch merge work."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            sanitize_input_schema_for_anthropic,
+        )
+
+        defs = {"$defs": {"A": self.A}}
+        once = sanitize_input_schema_for_anthropic({**defs, "anyOf": [{"$ref": "#/$defs/A"}]})
+        many = sanitize_input_schema_for_anthropic({**defs, "anyOf": [{"$ref": "#/$defs/A"}] * 2000})
+
+        assert dict(many) == dict(once), f"repeating a branch must not change the result, got {dict(many)}"
+
+    def test_branches_that_resolved_to_one_object_collapse_to_one(self):
+        """Repeated ``$ref``s share a single memoised result, so the merge only
+        needs to see it once. Collapsing them is what keeps a compact schema
+        repeating one reference from costing work per branch."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            _distinct_branches,
+        )
+
+        shared = {"type": "object", "properties": {"a": {"type": "string"}}}
+        other = {"type": "object", "properties": {"b": {"type": "string"}}}
+
+        result = _distinct_branches((shared, shared, other, shared))
+
+        assert len(result) == 2, f"identical objects should collapse, got {len(result)} branches"
+        assert result[0] is shared, f"the first occurrence should be kept, got {result}"
+        assert result[1] is other, f"distinct branches must survive in order, got {result}"
 
     def test_a_pydantic_union_tool_reaches_anthropic_with_its_arguments(self):
         """The reporter's path: Pydantic emits a root ``anyOf`` over ``$defs``."""
