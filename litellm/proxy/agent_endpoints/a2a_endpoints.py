@@ -45,6 +45,7 @@ from litellm.proxy.common_utils.sse_keepalive import (
     wrap_sse_stream_with_keepalive_pings,
 )
 from litellm.proxy.utils import ProxyLogging, get_custom_url
+from litellm.types.agents import AGENT_CALLER_TEAM_ID_HEADER, AGENT_CALLER_USER_ID_HEADER
 from litellm.types.utils import all_litellm_params
 
 if TYPE_CHECKING:
@@ -172,6 +173,18 @@ async def _resolve_backend_auth_header(
     return await resolve_a2a_hop_auth_header(litellm_params, custom_llm_provider)
 
 
+# Headers the proxy mints itself on the backend call. Forged client copies of
+# these must not be forwarded, but any other x-litellm-* header (e.g. an
+# admin-allowlisted x-litellm-api-key from extra_headers) is valid passthrough.
+_MINTED_A2A_IDENTITY_HEADERS: Final = frozenset(
+    {
+        AGENT_CALLER_USER_ID_HEADER.lower(),
+        AGENT_CALLER_TEAM_ID_HEADER.lower(),
+        "x-litellm-trace-id",
+    }
+)
+
+
 def _forwarding_headers(
     caller_identity: Mapping[str, str],
     request_data: Mapping[str, object],
@@ -179,11 +192,13 @@ def _forwarding_headers(
     backend_auth_header: Mapping[str, str] | None,
 ) -> dict[str, str] | None:
     backend_auth: Final = tuple(backend_auth_header.items()) if backend_auth_header else ()
-    minted_names: Final = frozenset(name.lower() for name, _ in backend_auth)
+    minted_names: Final = frozenset(
+        name.lower() for name, _ in backend_auth
+    ) | _MINTED_A2A_IDENTITY_HEADERS
     passthrough: Final = tuple(
         (name, value)
         for name, value in (agent_extra_headers.items() if agent_extra_headers else ())
-        if not name.lower().startswith("x-litellm-") and name.lower() not in minted_names
+        if name.lower() not in minted_names
     )
     trace_id: Final = request_data.get("litellm_trace_id")
     trace: Final = (("X-LiteLLM-Trace-Id", str(trace_id)),) if trace_id else ()

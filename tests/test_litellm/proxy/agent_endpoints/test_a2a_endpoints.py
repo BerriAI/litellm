@@ -647,6 +647,33 @@ async def test_message_methods_caller_identity_headers_cannot_be_spoofed(method:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_forward_allowlisted_x_litellm_api_key(method: str):
+    """Issue #43450: an x-litellm-* header the admin allowlisted in extra_headers must be
+    forwarded to the backend agent, while forged copies of the proxy-minted identity
+    headers are still stripped."""
+    agent = _make_agent_mock()
+    agent.extra_headers = ["x-litellm-api-key"]
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
+    mock_request.headers = {
+        "x-litellm-api-key": "sk-allowlisted",
+        "x-a2a-test-agent-x-litellm-team-id": "attacker-team",
+    }
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="real-user", team_id="real-team")
+
+    captured = await _invoke_message_method(method, mock_request, user_api_key_dict, agent=agent)
+
+    forwarded_headers = captured.agent_extra_headers or {}
+    assert forwarded_headers.get("x-litellm-api-key") == "sk-allowlisted", (
+        "admin-allowlisted x-litellm-api-key must reach the backend agent"
+    )
+    assert forwarded_headers.get("X-LiteLLM-User-Id") == "real-user"
+    assert forwarded_headers.get("X-LiteLLM-Team-Id") == "real-team", (
+        "proxy-minted team id must not be overridden by a forged client header"
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
 async def test_message_methods_forward_key_bound_identity_not_pre_call_rewrite(method: str):
     from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 
