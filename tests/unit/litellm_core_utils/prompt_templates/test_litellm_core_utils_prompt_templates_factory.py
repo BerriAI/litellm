@@ -185,6 +185,33 @@ async def test_bedrock_assistant_list_preserves_message_cache_control(block_cach
                 assert "toolUse" in blocks[-2]
 
 
+@pytest.mark.asyncio
+async def test_bedrock_assistant_message_cache_point_stays_before_following_assistant_text():
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "cached prefix"}],
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"role": "assistant", "content": [{"type": "text", "text": "uncached suffix"}]},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    expected: Final = [
+        {"text": "cached prefix"},
+        {"cachePoint": {"type": "default"}},
+        {"text": "uncached suffix"},
+    ]
+
+    sync_result: Final = _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    async_result: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages, model=model, llm_provider="bedrock"
+    )
+
+    assert sync_result[-1]["content"] == expected
+    assert async_result[-1]["content"] == expected
+
+
 def _get_gemini_function_response_inline_data_parts(result):
     assert isinstance(result, list), "expected Gemini parts list"
     assert len(result) == 1, "multimodal function responses should stay in one part"
