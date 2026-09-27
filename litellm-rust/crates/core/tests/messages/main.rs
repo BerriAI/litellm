@@ -6,7 +6,7 @@ use litellm_core::messages::{
 };
 use litellm_http::{HttpSettings, Resolution};
 use litellm_secrets::source::SecretSource;
-use litellm_types::llms::messages::{
+use litellm_types::llms::anthropic_messages::{
     anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
 };
 use rstest::fixture;

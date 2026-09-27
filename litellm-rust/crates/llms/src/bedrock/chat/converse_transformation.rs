@@ -88,7 +88,7 @@ struct ConverseMessage {
 #[serde(untagged)]
 enum ConverseContentBlock {
     Text { text: String },
-    Other(Map<String, Value>),
+    Other(serde::de::IgnoredAny),
 }
 
 #[derive(Deserialize)]

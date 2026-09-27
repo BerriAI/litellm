@@ -508,11 +508,11 @@ fn errors_on_a_response_missing_required_fields() {
     );
     assert_eq!(
         transform_response(json!({"usage": {}})).expect_err("no output"),
-        Error::InvalidResponse("invalid Converse response: missing field `output`".to_string())
+        Error::InvalidResponse("invalid Converse response: missing field `output`".into())
     );
     assert_eq!(
         transform_response(json!({"output": {"message": {"content": []}}})).expect_err("no usage"),
-        Error::InvalidResponse("invalid Converse response: missing field `usage`".to_string())
+        Error::InvalidResponse("invalid Converse response: missing field `usage`".into())
     );
 }
 
@@ -524,7 +524,7 @@ fn rejects_malformed_text_and_token_counts() {
     ] {
         assert!(matches!(
             transform_response(response),
-            Err(Error::InvalidResponse(message)) if message.starts_with("invalid Converse response:")
+            Err(Error::InvalidResponse(message)) if message.to_string().starts_with("invalid Converse response:")
         ));
     }
 }
