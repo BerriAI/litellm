@@ -303,13 +303,17 @@ class WebSearchInterceptionLogger(CustomLogger):
         Strip known instructional prefixes so the search backend receives only
         the intended search terms rather than query wrapper keywords.
         """
-        prefix = _CLAUDE_CODE_SEARCH_PREFIX_RE.match(raw_message)
-        cleaned = (raw_message[prefix.end() :] if prefix else raw_message).strip()
-        if prefix and (
-            (cleaned.startswith('"') and cleaned.endswith('"')) or (cleaned.startswith("'") and cleaned.endswith("'"))
+        prefix_match: Final[re.Match[str] | None] = _CLAUDE_CODE_SEARCH_PREFIX_RE.match(raw_message)
+        stripped_prefix: Final[str] = (
+            raw_message[prefix_match.end() :].strip() if prefix_match is not None else raw_message.strip()
+        )
+        if prefix_match is not None and (
+            (stripped_prefix.startswith('"') and stripped_prefix.endswith('"'))
+            or (stripped_prefix.startswith("'") and stripped_prefix.endswith("'"))
         ):
-            cleaned = cleaned[1:-1].strip()
-        return cleaned if (cleaned or prefix) else raw_message.strip()
+            return stripped_prefix[1:-1].strip()
+
+        return stripped_prefix if (stripped_prefix or prefix_match is not None) else raw_message.strip()
 
     async def try_short_circuit_search(
         self,
