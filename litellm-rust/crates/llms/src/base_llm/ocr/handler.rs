@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
-use litellm_auth_gcp::VertexAuth;
+use litellm_auth::AuthServices;
 use litellm_host::event::WireRequest;
 use litellm_http::{
-    ClientVariant, HttpClientConfig, HttpClientPool,
+    Client, ClientVariant, HttpClientConfig, HttpClientPool,
     media::{MediaFetcher, UrlPolicy},
     outbound::{OutboundRequest, RequestSigner},
     transport,
@@ -13,7 +13,6 @@ use litellm_http::{
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::Value;
 
-use crate::base_llm::inference::secrets::SecretSource;
 use crate::base_llm::ocr::{
     error::Error,
     settings::OcrSettings,
@@ -22,6 +21,7 @@ use crate::base_llm::ocr::{
         PreparedOcrRequest, decode_request_value, decode_response,
     },
 };
+use litellm_secrets::source::SecretSource;
 
 /// The route's view of one call, handed to provider code that has to reach the
 /// caller's hooks mid-flight (guardrails on the outgoing body, raw response events).
@@ -33,10 +33,10 @@ pub trait CallHooks<E>: Send + Sync {
 
 #[derive(Clone)]
 pub struct OcrClient {
-    provider_http: reqwest::Client,
-    polling_http: reqwest::Client,
+    provider_http: Client,
+    polling_http: Client,
     document_fetcher: MediaFetcher,
-    vertex_auth: VertexAuth,
+    auth: Arc<AuthServices>,
     settings: OcrSettings,
     secrets: Arc<dyn SecretSource>,
 }
@@ -46,7 +46,7 @@ impl OcrClient {
         pool: &HttpClientPool,
         config: &HttpClientConfig,
         url_policy: UrlPolicy,
-        vertex_auth: VertexAuth,
+        auth: Arc<AuthServices>,
         settings: OcrSettings,
         secrets: Arc<dyn SecretSource>,
     ) -> Result<Self, litellm_http::Error> {
@@ -54,17 +54,17 @@ impl OcrClient {
             provider_http: pool.client(config, ClientVariant::Provider)?,
             polling_http: pool.client(config, ClientVariant::NoRedirect)?,
             document_fetcher: MediaFetcher::new(pool, config, url_policy)?,
-            vertex_auth,
+            auth,
             settings,
             secrets,
         })
     }
 
-    pub fn provider_http(&self) -> &reqwest::Client {
+    pub fn provider_http(&self) -> &Client {
         &self.provider_http
     }
 
-    pub fn polling_http(&self) -> &reqwest::Client {
+    pub fn polling_http(&self) -> &Client {
         &self.polling_http
     }
 
@@ -72,8 +72,8 @@ impl OcrClient {
         &self.document_fetcher
     }
 
-    pub fn vertex_auth(&self) -> &VertexAuth {
-        &self.vertex_auth
+    pub fn auth(&self) -> &AuthServices {
+        &self.auth
     }
 
     pub fn settings(&self) -> &OcrSettings {
@@ -85,17 +85,18 @@ impl OcrClient {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn for_test(provider_http: reqwest::Client, document_http: reqwest::Client) -> Self {
+    pub fn for_test(provider_http: Client, no_redirect_http: Client) -> Self {
         Self {
+            secrets: Arc::new(
+                litellm_secrets::source::EnvironmentSecrets::python_compatible(
+                    provider_http.clone(),
+                ),
+            ),
             provider_http,
-            polling_http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .expect("test polling client builds"),
-            document_fetcher: MediaFetcher::for_test(document_http),
-            vertex_auth: VertexAuth::default(),
+            polling_http: no_redirect_http.clone(),
+            document_fetcher: MediaFetcher::for_test(no_redirect_http),
+            auth: Arc::new(AuthServices::default()),
             settings: OcrSettings::default(),
-            secrets: Arc::new(crate::base_llm::inference::secrets::EnvironmentSecrets),
         }
     }
 
@@ -311,7 +312,7 @@ mod tests {
             let _connection = listener.accept().await.unwrap();
             tokio::time::sleep(Duration::from_secs(1)).await;
         });
-        let error = reqwest::Client::new()
+        let error = litellm_http::Client::plain_for_test()
             .get(format!("http://{address}"))
             .timeout(Duration::from_millis(10))
             .send()

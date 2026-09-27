@@ -1,17 +1,20 @@
 use litellm_auth_aws::{
-    bedrock_model_id_and_region,
+    AwsCredentialSource, bedrock_model_id_and_region,
     constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE},
     resolve_bedrock_region,
 };
 use litellm_core_utils::core_helpers::json_type_name;
 use serde_json::{Map, Value, json};
 
-use crate::base_llm::{
-    audio_transcription::transformation::{
-        AudioTranscriptionRequestData, AudioTranscriptionResponseData,
-        BaseAudioTranscriptionConfig, RequestAuth,
+use crate::{
+    Error,
+    base_llm::{
+        audio_transcription::transformation::{
+            AudioTranscriptionRequestData, AudioTranscriptionResponseData,
+            BaseAudioTranscriptionConfig, Headers, ValidatedEnvironment,
+        },
+        auth::AuthScheme,
     },
-    chat::transformation::Error,
 };
 
 const SUPPORTED_PARAMS: &[&str] = &["language", "prompt", "temperature", "response_format"];
@@ -131,16 +134,28 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         ))
     }
 
-    fn auth_strategy(
+    fn validate_environment(
         &self,
+        headers: Headers,
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<RequestAuth, Error> {
+    ) -> Result<ValidatedEnvironment, Error> {
         let (_, model_region) = bedrock_model_id_and_region(model);
-        Ok(RequestAuth::AwsSigV4 {
-            region: resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup),
-            service: BEDROCK_SERVICE,
+        Ok(ValidatedEnvironment {
+            headers,
+            auth: AuthScheme::AwsSigV4 {
+                region: resolve_bedrock_region(
+                    model_region.as_deref(),
+                    optional_params,
+                    env_lookup,
+                ),
+                service: BEDROCK_SERVICE,
+                credentials: Box::new(AwsCredentialSource::from_params(
+                    optional_params,
+                    env_lookup,
+                )),
+            },
         })
     }
 }

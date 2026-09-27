@@ -18,7 +18,7 @@ from litellm.llms.anthropic.chat.transformation import (
     AnthropicConfig,
 )
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.base_llm.anthropic_messages.transformation import (
@@ -771,7 +771,7 @@ class AmazonAnthropicClaudeMessagesConfig(
             model=model,
         )
         completion_stream: Final = aws_decoder.aiter_bytes(
-            httpx_response.aiter_bytes(chunk_size=aws_decoder.DEFAULT_CHUNK_SIZE)
+            httpx_response.aiter_bytes(), response_headers=httpx_response.headers
         )
         # Convert decoded Bedrock events to Server-Sent Events expected by Anthropic clients.
         return self.bedrock_sse_wrapper(
@@ -798,7 +798,7 @@ class AmazonAnthropicClaudeMessagesConfig(
         merge them from ``message_start`` so logging/cost sees a consistent usage
         object (fixes negative input costs: LIT-2411).
         """
-        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             BaseAnthropicMessagesStreamingIterator,
         )
 
@@ -919,16 +919,6 @@ class AmazonAnthropicClaudeMessagesConfig(
 
 
 class AmazonAnthropicClaudeMessagesStreamDecoder(AWSEventStreamDecoder):
-    def __init__(
-        self,
-        model: str,
-    ) -> None:
-        """
-        Iterator to return Bedrock invoke response in anthropic /messages format
-        """
-        super().__init__(model=model)
-        self.DEFAULT_CHUNK_SIZE = 1024
-
     def _chunk_parser(self, chunk_data: dict) -> GChunk | ModelResponseStream | dict:
         """
         Parse the chunk data into anthropic /messages format

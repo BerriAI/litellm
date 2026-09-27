@@ -60,6 +60,13 @@ def _resolve_model_info(model: str) -> ModelInfo:
     try:
         return get_model_info(model=model, custom_llm_provider="fireworks_ai")
     except Exception:
+        return _resolve_routed_model_info(model)
+
+
+def _resolve_routed_model_info(model: str) -> ModelInfo:
+    try:
+        return get_model_info(model=model.removeprefix("fireworks_ai/"))
+    except Exception:
         base_model: Final = get_base_model_for_pricing(model_name=model)
         return get_model_info(model=base_model, custom_llm_provider="fireworks_ai")
 
@@ -81,7 +88,7 @@ def cost_per_token(model: str, usage: Usage, current_time: datetime | None = Non
     return generic_cost_per_token(
         model=model,
         usage=usage,
-        custom_llm_provider="fireworks_ai",
+        custom_llm_provider=model_info["litellm_provider"],
         model_info=model_info,
         current_time=current_time,
     )

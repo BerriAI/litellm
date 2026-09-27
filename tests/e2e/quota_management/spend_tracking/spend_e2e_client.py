@@ -12,13 +12,15 @@ helpers from one place.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from types import MappingProxyType
 from typing import Final
 
 from e2e_config import unique_marker
 from e2e_http import (
+    AuthHeaders,
     FileUploadForm,
     Headers,
     NoBody,
@@ -35,6 +37,7 @@ from models import (
     ChatMessage,
     ChatMetadata,
     ChatResponse,
+    CustomerInfoParams,
     DateRangeParams,
     EmbedBody,
     EmbedResponse,
@@ -48,6 +51,7 @@ from models import (
     SpendLogsPageParams,
     SpendTagsResponse,
     TagSpend,
+    TeamInfoParams,
     UserDeleteBody,
     UserDeleteResponse,
     UserNewBody,
@@ -57,11 +61,14 @@ from models import (
 from proxy_client import Converged, ProxyClient, await_converged
 from pydantic import BaseModel, Field
 
+METRICS_PATH: Final = "/metrics/"
+
 __all__ = [
     "BatchCreateBody",
+    "BatchObject",
     "CallbackLogMetadata",
     "CallbackLogPayload",
-    "BatchObject",
+    "ClientAttributionHeaders",
     "DailyActivityKeyBreakdown",
     "FileObject",
     "ProbeResult",
@@ -74,6 +81,16 @@ __all__ = [
     "unique_marker",
     "unwrap",
 ]
+
+
+class ClientAttributionHeaders(AuthHeaders):
+    """The attribution headers a coding agent attaches to every call from its own
+    config (Codex CLI's config.toml ``http_headers``, Claude Code's
+    ``ANTHROPIC_CUSTOM_HEADERS``) because it has no body field for the end user."""
+
+    x_litellm_customer_id: str | None = Field(default=None, alias="x-litellm-customer-id")
+    x_litellm_end_user_id: str | None = Field(default=None, alias="x-litellm-end-user-id")
+    x_litellm_tags: str | None = Field(default=None, alias="x-litellm-tags")
 
 
 class GeminiApiKeyHeaders(Headers):
@@ -189,6 +206,7 @@ class DailyActivityKeyMetadata(BaseModel):
 
 class DailyActivityKeyMetrics(BaseModel):
     api_requests: int = 0
+    spend: float = 0.0
 
 
 class DailyActivityKeyBreakdown(BaseModel):
@@ -207,6 +225,18 @@ class DailyActivityRow(BaseModel):
 
 class DailyActivityResponse(BaseModel):
     results: list[DailyActivityRow] = []
+
+
+class TeamInfoSpend(BaseModel):
+    spend: float | None = None
+
+
+class TeamInfoSpendResponse(BaseModel):
+    team_info: TeamInfoSpend
+
+
+class CustomerSpendResponse(BaseModel):
+    spend: float | None = None
 
 
 def _chat_body(
@@ -334,6 +364,67 @@ class SpendClient:
             time.sleep(self.proxy.poll_interval)
         return spend
 
+    def team_spend(self, team_id: str) -> float:
+        return (
+            unwrap(
+                self.proxy.transport.get(
+                    "/team/info",
+                    headers=self.proxy.transport.master,
+                    params=TeamInfoParams(team_id=team_id),
+                    response_type=TeamInfoSpendResponse,
+                )
+            ).team_info.spend
+            or 0.0
+        )
+
+    def poll_team_spend(self, team_id: str, *, minimum: float = 0.0) -> float:
+        outcome: Final = await_converged(
+            lambda: self.team_spend(team_id),
+            converged=lambda spend: spend > minimum,
+            timeout=self.proxy.poll_timeout,
+            interval=self.proxy.poll_interval,
+            now=time.monotonic,
+            sleep=time.sleep,
+        )
+        return outcome.result if isinstance(outcome, Converged) else outcome.last_result
+
+    def customer_spend(self, customer_id: str) -> float:
+        """0.0 until the spend writer has upserted the end-user row, which /customer/info 404s before."""
+        looked_up: Final = self.proxy.transport.get(
+            "/customer/info",
+            headers=self.proxy.transport.master,
+            params=CustomerInfoParams(end_user_id=customer_id),
+            response_type=CustomerSpendResponse,
+        )
+        match looked_up:
+            case Success(data=data):
+                return data.spend or 0.0
+            case _:
+                return 0.0
+
+    def poll_customer_spend(self, customer_id: str, *, minimum: float = 0.0) -> float:
+        outcome: Final = await_converged(
+            lambda: self.customer_spend(customer_id),
+            converged=lambda spend: spend > minimum,
+            timeout=self.proxy.poll_timeout,
+            interval=self.proxy.poll_interval,
+            now=time.monotonic,
+            sleep=time.sleep,
+        )
+        return outcome.result if isinstance(outcome, Converged) else outcome.last_result
+
+    def scrape_metrics(self) -> Mapping[str, ProbeResult]:
+        """GET /metrics/ on every replica in PROXY_REPLICA_URLS, keyed by replica. The
+        counter is per pod, so the union of the replicas is the fleet's exposition; the
+        trailing slash is the mounted app's own path, since bare /metrics answers a 307
+        whose Location drops the port behind a Host-rewriting balancer."""
+        return MappingProxyType(
+            {
+                replica: transport.probe(METRICS_PATH, params=NoBody())
+                for replica, transport in self.proxy.replicas.items()
+            }
+        )
+
     def spend_logs_page(
         self, *, api_key: str | None, page: int, page_size: int
     ) -> SpendLogsPage:
@@ -430,9 +521,12 @@ class SpendClient:
         )
 
     def send_responses(self, key: str, model: str, content: str) -> StreamingResponse:
+        return self.send_responses_with_headers(self.proxy.transport.bearer(key), model, content)
+
+    def send_responses_with_headers(self, headers: AuthHeaders, model: str, content: str) -> StreamingResponse:
         return self.proxy.transport.send(
             "/v1/responses",
-            headers=self.proxy.transport.bearer(key),
+            headers=headers,
             json=ResponsesBody(model=model, input=content),
         )
 
@@ -500,9 +594,21 @@ class SpendClient:
         return self.proxy.transport.probe("/health", params=HealthParams(model=model))
 
     def daily_activity_for_key(self, token: str, *, start: datetime, end: datetime) -> DailyActivityKeyBreakdown | None:
+        return self._key_breakdown("/user/daily/activity", token, start=start, end=end)
+
+    def usage_export_row_for_key(
+        self, token: str, *, start: datetime, end: datetime
+    ) -> DailyActivityKeyBreakdown | None:
+        """The key's row on /user/daily/activity/aggregated, the response the
+        dashboard's Export Usage Data CSV serializes."""
+        return self._key_breakdown("/user/daily/activity/aggregated", token, start=start, end=end)
+
+    def _key_breakdown(
+        self, route: str, token: str, *, start: datetime, end: datetime
+    ) -> DailyActivityKeyBreakdown | None:
         response: Final = unwrap(
             self.proxy.transport.get(
-                "/user/daily/activity",
+                route,
                 headers=self.proxy.transport.master,
                 params=DailyActivityParams(
                     start_date=start.strftime("%Y-%m-%d"),
@@ -520,8 +626,20 @@ class SpendClient:
     def poll_daily_activity_for_key(
         self, token: str, *, start: datetime, end: datetime, min_requests: int
     ) -> DailyActivityKeyBreakdown | None:
+        return self._poll_key_breakdown(lambda: self.daily_activity_for_key(token, start=start, end=end), min_requests)
+
+    def poll_usage_export_row_for_key(
+        self, token: str, *, start: datetime, end: datetime, min_requests: int
+    ) -> DailyActivityKeyBreakdown | None:
+        return self._poll_key_breakdown(
+            lambda: self.usage_export_row_for_key(token, start=start, end=end), min_requests
+        )
+
+    def _poll_key_breakdown(
+        self, fetch: Callable[[], DailyActivityKeyBreakdown | None], min_requests: int
+    ) -> DailyActivityKeyBreakdown | None:
         outcome: Final = await_converged(
-            lambda: self.daily_activity_for_key(token, start=start, end=end),
+            fetch,
             converged=lambda found: found is not None and found.metrics.api_requests >= min_requests,
             timeout=self.proxy.poll_timeout,
             interval=self.proxy.poll_interval,
