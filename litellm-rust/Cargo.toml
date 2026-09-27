@@ -13,6 +13,7 @@ litellm-config = { path = "crates/config" }
 litellm-router = { path = "crates/router" }
 litellm-tracing = { path = "crates/tracing" }
 litellm-core = { path = "crates/core" }
+litellm-gateway-mcp = { path = "crates/gateway-mcp" }
 litellm-gateway = { path = "crates/gateway" }
 litellm-gateway-inference = { path = "crates/gateway-inference" }
 litellm-gateway-auth = { path = "crates/gateway-auth" }
