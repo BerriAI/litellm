@@ -1,4 +1,5 @@
 mod error;
+mod ui;
 
 use std::sync::Arc;
 
@@ -12,7 +13,8 @@ use litellm_secrets::source::SecretSource;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-pub use error::Error;
+pub use error::{Error, UiAuthError};
+pub use ui::{UI_CSRF_KEY, UiAuthSession, UiBackend, UiCredentials, UiSession, UiUser};
 
 #[derive(Clone)]
 pub struct Auth {

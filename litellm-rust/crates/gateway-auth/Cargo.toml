@@ -7,12 +7,16 @@ repository.workspace = true
 
 [dependencies]
 axum.workspace = true
+axum-login.workspace = true
 litellm-auth-types.workspace = true
 litellm-config.workspace = true
 litellm-secrets.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+serde.workspace = true
+tower-sessions.workspace = true
+veil.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true

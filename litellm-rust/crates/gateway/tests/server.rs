@@ -4,6 +4,7 @@ use std::{
 };
 
 use axum::{body::Body, http::Request};
+use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use litellm_config::Config;
 use litellm_gateway_inference::{Error, Gateway};
 use litellm_http::ClientVariant;
@@ -71,7 +72,7 @@ async fn authenticates_before_serving_mounted_inference_routes(
     let address = listener.local_addr().unwrap();
     let (shutdown, stopped) = oneshot::channel();
     let server = tokio::spawn(async move {
-        axum::serve(listener, litellm_gateway::router(inference, &config))
+        axum::serve(listener, litellm_gateway::router(inference, &config, None))
             .with_graceful_shutdown(async move {
                 let _ = stopped.await;
             })
@@ -125,7 +126,7 @@ async fn logs_request_outcome_without_credentials_or_query(inference: Arc<Gatewa
     let logger = Logger::new(LogSink(sender));
 
     let response = logger
-        .instrument(litellm_gateway::router(inference, &config).oneshot(request))
+        .instrument(litellm_gateway::router(inference, &config, None).oneshot(request))
         .await
         .unwrap();
 
@@ -140,4 +141,146 @@ async fn logs_request_outcome_without_credentials_or_query(inference: Arc<Gatewa
     assert!(receiver.try_recv().is_err());
     assert!(!record.to_string().contains("header-secret"));
     assert!(!record.to_string().contains("query-secret"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn mounts_ui_without_exposing_credentials_or_authorizing_inference(inference: Arc<Gateway>) {
+    let config =
+        Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: inference-secret\n")
+            .unwrap();
+    let assets = tempfile::TempDir::new().unwrap();
+    std::fs::write(assets.path().join("index.html"), "dashboard").unwrap();
+    let backend = litellm_gateway_auth::UiBackend::new(
+        "admin".into(),
+        litellm_auth_types::SecretValue::new("ui-password"),
+    )
+    .unwrap();
+    let ui = litellm_gateway_ui::router(
+        assets.path(),
+        backend,
+        tower_sessions_moka_store::MokaStore::new(Some(10_000)),
+        false,
+    );
+    let app = litellm_gateway::router(inference, &config, Some(ui));
+    let page = app
+        .clone()
+        .oneshot(Request::get("/ui/").body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    assert_eq!(page.status().as_u16(), 200);
+    assert_eq!(
+        axum::body::to_bytes(page.into_body(), 65536).await.unwrap(),
+        "dashboard"
+    );
+    let (sender, receiver) = mpsc::channel();
+    let logger = Logger::new(LogSink(sender));
+    let response = logger
+        .instrument(
+            app.clone().oneshot(
+                Request::post("/v2/login")
+                    .header("content-type", "application/json")
+                    .body(Body::from(
+                        json!({"username": "admin", "password": "ui-password"}).to_string(),
+                    ))
+                    .unwrap(),
+            ),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 200);
+    assert!(
+        response
+            .headers()
+            .get_all("set-cookie")
+            .iter()
+            .all(|cookie| !cookie.to_str().unwrap().contains("Secure"))
+    );
+    let cookie = response
+        .headers()
+        .get_all("set-cookie")
+        .iter()
+        .filter_map(|value| value.to_str().unwrap().split(';').next())
+        .collect::<Vec<_>>()
+        .join("; ");
+    let login: Value = serde_json::from_slice(
+        &logger
+            .instrument(axum::body::to_bytes(response.into_body(), 65536))
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let jwt = login["token"].as_str().unwrap();
+    let token: Value = serde_json::from_slice(
+        &URL_SAFE_NO_PAD
+            .decode(jwt.split('.').nth(1).unwrap())
+            .unwrap(),
+    )
+    .unwrap();
+    let csrf = token["key"].as_str().unwrap();
+    let logs = receiver.try_iter().collect::<Vec<_>>();
+    let logged = serde_json::to_string(&logs).unwrap();
+    assert!(!logged.contains("ui-password"));
+    assert!(!logged.contains(jwt));
+    let ui_response = app
+        .clone()
+        .oneshot(
+            Request::get("/session/info")
+                .header("cookie", &cookie)
+                .header("authorization", format!("Bearer {csrf}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(ui_response.status().as_u16(), 200);
+    let inference_response = app
+        .clone()
+        .oneshot(
+            Request::post("/v1/messages")
+                .header("cookie", cookie)
+                .header("authorization", format!("Bearer {csrf}"))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(inference_response.status().as_u16(), 401);
+    let master_response = app
+        .oneshot(
+            Request::get("/session/info")
+                .header("authorization", "Bearer inference-secret")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(master_response.status().as_u16(), 401);
+}
+
+#[rstest]
+#[case::assets("/ui/", "GET")]
+#[case::login("/v2/login", "POST")]
+#[case::session("/session/info", "GET")]
+#[case::discovery("/.well-known/litellm-ui-config", "GET")]
+#[tokio::test]
+async fn ui_routes_are_absent_when_not_mounted(
+    inference: Arc<Gateway>,
+    #[case] path: &str,
+    #[case] method: &str,
+) {
+    let config =
+        Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
+            .unwrap();
+    let response = litellm_gateway::router(inference, &config, None)
+        .oneshot(
+            Request::builder()
+                .method(method)
+                .uri(path)
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status().as_u16(), 404);
 }

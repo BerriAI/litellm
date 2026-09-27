@@ -3,7 +3,9 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use litellm_auth_types::SecretValue;
 use litellm_config::Config;
+use litellm_gateway_auth::UiBackend;
 use litellm_tracing::{Level, Logger, Metadata, Record, Sink};
 use serde_json::json;
 
@@ -44,6 +46,26 @@ async fn main() -> Result<(), Box<dyn Error>> {
     let config_path = std::env::var("LITELLM_CONFIG").unwrap_or_else(|_| "config.yaml".into());
     let config = Config::load(config_path)?;
     let inference = litellm_gateway::build_inference(&config)?;
+    let ui = match std::env::var_os("LITELLM_UI_PATH") {
+        Some(directory) => {
+            let backend = UiBackend::new(
+                std::env::var("UI_USERNAME").unwrap_or_else(|_| "admin".into()),
+                SecretValue::new(std::env::var("UI_PASSWORD")?),
+            )?;
+            let secure_cookies = std::env::var("LITELLM_UI_SECURE_COOKIES")
+                .ok()
+                .map(|value| value.parse::<bool>())
+                .transpose()?
+                .unwrap_or(true);
+            Some(litellm_gateway_ui::router(
+                std::path::PathBuf::from(directory),
+                backend,
+                tower_sessions_moka_store::MokaStore::new(Some(10_000)),
+                secure_cookies,
+            ))
+        }
+        None => None,
+    };
     let host = std::env::var("HOST").unwrap_or_else(|_| "0.0.0.0".into());
     let port = std::env::var("PORT")
         .unwrap_or_else(|_| "4000".into())
@@ -52,6 +74,6 @@ async fn main() -> Result<(), Box<dyn Error>> {
 
     tracing::info!(address = %listener.local_addr()?, models = config.model_list.len(), log_level = %level, "gateway listening");
 
-    axum::serve(listener, litellm_gateway::router(inference, &config)).await?;
+    axum::serve(listener, litellm_gateway::router(inference, &config, ui)).await?;
     Ok(())
 }
