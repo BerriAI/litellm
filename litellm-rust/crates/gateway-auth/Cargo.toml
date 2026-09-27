@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-axum.workspace = true
+axum = { workspace = true, features = ["matched-path"] }
 axum-login.workspace = true
 litellm-auth-types.workspace = true
 litellm-config.workspace = true

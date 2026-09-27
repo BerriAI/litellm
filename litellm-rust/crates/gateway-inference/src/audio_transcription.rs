@@ -1,3 +1,4 @@
+use litellm_gateway_auth::AuthenticatedRequest;
 use std::{path::Path, sync::Arc};
 
 use axum::{Json, extract::State, response::IntoResponse};
@@ -12,19 +13,22 @@ use crate::{
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
+    identity: AuthenticatedRequest,
     body: InferenceBody,
 ) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, body).await.map(Json)
+    handle(&gateway, &identity, body).await.map(Json)
 }
 
 async fn handle(
     gateway: &Gateway,
+    identity: &AuthenticatedRequest,
     InferenceBody {
         fields: body,
         upload,
     }: InferenceBody,
 ) -> Result<Value, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
+    request::authorize_model(identity, deployment, &body).await?;
     let audio = match upload {
         Some(upload) => {
             let format = upload

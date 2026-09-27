@@ -27,6 +27,14 @@ impl SecretSource for NoSecrets {
 }
 
 pub fn app(model: &str, api_base: &str) -> Router {
+    app_with_permissions(model, api_base, litellm_gateway_auth::Permissions::All)
+}
+
+pub fn app_with_permissions(
+    model: &str,
+    api_base: &str,
+    permissions: litellm_gateway_auth::Permissions,
+) -> Router {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let http = Resolution::from(&HttpSettings::default()).config;
     let secrets = Arc::new(NoSecrets);
@@ -57,6 +65,32 @@ pub fn app(model: &str, api_base: &str) -> Router {
         .into_iter()
         .collect(),
     }))
+    .layer(axum::middleware::from_fn_with_state(
+        permissions,
+        test_identity,
+    ))
+}
+
+async fn test_identity(
+    axum::extract::State(permissions): axum::extract::State<litellm_gateway_auth::Permissions>,
+    mut request: axum::extract::Request,
+    next: axum::middleware::Next,
+) -> Response {
+    let auth = litellm_gateway_auth::Auth::new(
+        Arc::new(litellm_gateway_auth::MasterKeyAuthenticator::new(
+            Some(SecretValue::new("test-inbound-key")),
+            Arc::new(NoSecrets),
+        )),
+        Arc::new(TestPermissions(permissions)),
+        Arc::new(litellm_gateway_auth::NoAdditionalPolicy),
+        Arc::new(litellm_gateway_auth::SystemClock),
+    );
+    let identity = auth
+        .authenticate(&SecretValue::new("test-inbound-key"))
+        .await
+        .unwrap();
+    request.extensions_mut().insert(identity);
+    next.run(request).await
 }
 
 pub async fn post(app: Router, path: &str, body: Value) -> Response {
@@ -72,4 +106,20 @@ pub async fn post(app: Router, path: &str, body: Value) -> Response {
 
 pub async fn json(response: Response) -> Value {
     serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap()).unwrap()
+}
+
+struct TestPermissions(litellm_gateway_auth::Permissions);
+
+impl litellm_gateway_auth::IdentityResolver for TestPermissions {
+    fn resolve<'a>(
+        &'a self,
+        identity: &'a litellm_gateway_auth::VerifiedIdentity,
+    ) -> litellm_gateway_auth::AuthFuture<'a, litellm_gateway_auth::ResolvedIdentity> {
+        Box::pin(async move {
+            Ok(litellm_gateway_auth::ResolvedIdentity {
+                principal: identity.principal.clone(),
+                permissions: self.0.clone(),
+            })
+        })
+    }
 }

@@ -162,3 +162,22 @@ async fn hosted_provider_failure_preserves_status_body_and_request_id() {
     assert_eq!(body["error"], error["error"]);
     assert_eq!(body["request_id"], "host-http-request");
 }
+
+#[rstest]
+#[case::messages("/v1/messages")]
+#[case::chat("/v1/chat/completions")]
+#[case::model_path("/engines/path-model/chat/completions")]
+#[case::ocr("/ocr")]
+#[case::transcription("/audio/transcriptions")]
+#[tokio::test]
+async fn model_permissions_prevent_provider_calls(#[case] path: &str) {
+    let upstream = MockServer::start().await;
+    let app = support::app_with_permissions(
+        "anthropic/test-model",
+        &upstream.uri(),
+        litellm_gateway_auth::Permissions::None,
+    );
+    let response = support::post(app, path, json!({"model": "public/model"})).await;
+    assert_eq!(response.status(), 403);
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}

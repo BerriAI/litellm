@@ -50,6 +50,9 @@ impl NativeGateway {
                     .into(),
             );
         }
+        if let Some(policy) = context.parts.extensions.get::<crate::Authorization>() {
+            policy.0.authorize(&server.info, Some(&request)).await?;
+        }
         let options = PeerRequestOptions::with_timeout(self.timeout);
         let handle = server
             .peer
@@ -286,8 +289,14 @@ impl NativeGateway {
 impl Operations for NativeGateway {
     fn authorize(&self, context: Context) -> GatewayFuture<'_, ()> {
         Box::pin(async move {
-            if self.servers(&context).await?.is_empty() {
+            let servers = self.servers(&context).await?;
+            if servers.is_empty() {
                 return Err(Error::Forbidden);
+            }
+            if let Some(policy) = context.parts.extensions.get::<crate::Authorization>() {
+                for server in servers.iter() {
+                    policy.0.authorize(&server.info, None).await?;
+                }
             }
             Ok(())
         })

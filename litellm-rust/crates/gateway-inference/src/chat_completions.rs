@@ -1,3 +1,4 @@
+use litellm_gateway_auth::AuthenticatedRequest;
 use std::sync::Arc;
 
 use axum::{
@@ -14,13 +15,15 @@ use crate::{Error, Gateway, JsonObject, request};
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
+    identity: AuthenticatedRequest,
     JsonObject(body): JsonObject,
 ) -> Result<impl IntoResponse, Error> {
-    handle(&gateway, body).await
+    handle(&gateway, &identity, body).await
 }
 
 pub(crate) async fn create_from_model_path(
     State(gateway): State<Arc<Gateway>>,
+    identity: AuthenticatedRequest,
     Path(model): Path<String>,
     JsonObject(body): JsonObject,
 ) -> Result<impl IntoResponse, Error> {
@@ -31,11 +34,16 @@ pub(crate) async fn create_from_model_path(
             .collect(),
         Some(_) => body,
     };
-    handle(&gateway, body).await
+    handle(&gateway, &identity, body).await
 }
 
-async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response, Error> {
+async fn handle(
+    gateway: &Gateway,
+    identity: &AuthenticatedRequest,
+    body: Map<String, Value>,
+) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
+    request::authorize_model(identity, deployment, &body).await?;
     let messages = body.get("messages").cloned().unwrap_or_default();
     let machine =
         chat_completions_machine(&gateway.resources, &gateway.http).map_err(RouteError::from)?;

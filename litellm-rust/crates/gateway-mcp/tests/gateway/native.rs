@@ -205,3 +205,149 @@ async fn retains_healthy_catalogs_and_reports_failed_servers(#[future] harness: 
     ));
     first.cancel().await.unwrap();
 }
+
+struct ResolvedToolPolicy;
+
+impl litellm_gateway_mcp::OperationAuthorizer for ResolvedToolPolicy {
+    fn authorize<'a>(
+        &'a self,
+        server: &'a litellm_gateway_mcp::ServerInfo,
+        request: Option<&'a ClientRequest>,
+    ) -> litellm_gateway_mcp::GatewayFuture<'a, ()> {
+        Box::pin(async move {
+            match request {
+                Some(ClientRequest::ListToolsRequest(_)) => Ok(()),
+                Some(ClientRequest::CallToolRequest(request))
+                    if server.server_id == "id-alpha-beta"
+                        && request.params.name == "echo-value" =>
+                {
+                    Ok(())
+                }
+                _ => Err(Error::Forbidden),
+            }
+        })
+    }
+}
+
+#[rstest]
+#[case::resolved_alias("alpha-beta-echo-value", true)]
+#[case::different_server("alpha-echo-value", false)]
+#[case::different_tool("alpha-beta-fail", false)]
+#[tokio::test]
+async fn authorizes_resolved_server_and_tool_before_upstream_execution(
+    #[future] harness: Harness,
+    #[case] name: &str,
+    #[case] allowed: bool,
+) {
+    let harness = harness.await;
+    let mut context = context(None);
+    context
+        .parts
+        .extensions
+        .insert(litellm_gateway_mcp::Authorization(std::sync::Arc::new(
+            ResolvedToolPolicy,
+        )));
+    let result = harness
+        .gateway
+        .execute(
+            Operation::CallTool(CallToolRequestParams::new(name.to_owned())),
+            context,
+        )
+        .await;
+    if allowed {
+        assert!(result.is_ok(), "{result:?}");
+    } else {
+        assert!(matches!(result, Err(Error::Forbidden)));
+    }
+    assert_eq!(harness.calls.load(Ordering::SeqCst), usize::from(allowed));
+}
+
+#[rstest]
+#[tokio::test]
+async fn initialize_checks_the_injected_operation_policy(#[future] harness: Harness) {
+    let harness = harness.await;
+    let mut context = context(Some("alpha"));
+    context
+        .parts
+        .extensions
+        .insert(litellm_gateway_mcp::Authorization(std::sync::Arc::new(
+            ResolvedToolPolicy,
+        )));
+    assert!(matches!(
+        harness.gateway.authorize(context).await,
+        Err(Error::Forbidden)
+    ));
+    assert_eq!(harness.calls.load(Ordering::SeqCst), 0);
+}
+
+#[rstest]
+#[case::mcp_allowed(true, true)]
+#[case::mcp_denied(true, false)]
+#[case::rest_allowed(false, true)]
+#[case::rest_denied(false, false)]
+#[tokio::test]
+async fn http_transports_preserve_the_per_request_operation_policy(
+    #[future] harness: Harness,
+    #[case] protocol: bool,
+    #[case] allowed: bool,
+) {
+    use axum::{
+        Extension,
+        body::{Body, to_bytes},
+        http::Request,
+    };
+    use tower::ServiceExt;
+
+    let harness = harness.await;
+    let server = if allowed { "alpha-beta" } else { "alpha" };
+    let (path, body) = if protocol {
+        (
+            "/mcp",
+            json!({"jsonrpc":"2.0", "id":1, "method":"tools/call", "params":{"name":format!("{server}-echo-value")}}),
+        )
+    } else {
+        (
+            "/mcp-rest/tools/call",
+            json!({"server_id":format!("id-{server}"), "name":"echo-value"}),
+        )
+    };
+    let app = harness
+        .app
+        .layer(Extension(litellm_gateway_mcp::Authorization(
+            std::sync::Arc::new(ResolvedToolPolicy),
+        )));
+    let response = app
+        .oneshot(
+            Request::post(path)
+                .header("host", "localhost")
+                .header("content-type", "application/json")
+                .header("accept", "application/json, text/event-stream")
+                .header(
+                    "mcp-protocol-version",
+                    ProtocolVersion::V_2025_11_25.as_str(),
+                )
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        response.status().as_u16(),
+        if protocol || allowed { 200 } else { 403 }
+    );
+    let wire = to_bytes(response.into_body(), 65536).await.unwrap();
+    if protocol {
+        let text = std::str::from_utf8(&wire).unwrap();
+        let json = text
+            .lines()
+            .find_map(|line| line.strip_prefix("data: "))
+            .unwrap();
+        let response: Value = serde_json::from_str(json).unwrap();
+        if allowed {
+            assert!(response.get("result").is_some(), "{response}");
+        } else {
+            assert_eq!(response["error"]["code"], -32003);
+        }
+    }
+    assert_eq!(harness.calls.load(Ordering::SeqCst), usize::from(allowed));
+}

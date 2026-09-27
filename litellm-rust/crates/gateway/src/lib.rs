@@ -1,3 +1,5 @@
+mod auth;
+
 use std::{sync::Arc, time::Instant};
 
 use axum::{
@@ -11,7 +13,7 @@ use http_body_util::BodyExt;
 
 use litellm_config::Config;
 use litellm_core::resources::CoreResources;
-use litellm_gateway_auth::{Auth, RequireMasterKey};
+use litellm_gateway_auth::Auth;
 use litellm_gateway_inference::{Gateway, ModelRouter};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
@@ -46,10 +48,11 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, litellm_http::Er
 pub fn router(inference: Arc<Gateway>, config: &Config, ui: Option<Router>) -> Router {
     let auth = Auth::from_config(config, inference.secrets.clone());
     let inference = litellm_gateway_inference::router(inference)
-        .route_layer(axum::middleware::from_extractor_with_state::<
-            RequireMasterKey,
-            _,
-        >(auth))
+        .route_layer(axum::middleware::from_fn(auth::bind_session_owner))
+        .route_layer(axum::middleware::from_fn_with_state(
+            auth,
+            litellm_gateway_auth::authenticate,
+        ))
         .layer(axum::middleware::from_fn(log_request));
     match ui {
         Some(ui) => inference.merge(ui),

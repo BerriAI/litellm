@@ -6,7 +6,7 @@ mod routes;
 mod server;
 mod sessions;
 
-use std::{collections::BTreeMap, future::Future, pin::Pin};
+use std::{collections::BTreeMap, future::Future, pin::Pin, sync::Arc};
 
 use http::request::Parts;
 use rmcp::{RoleServer, model::*, service::RequestContext};
@@ -73,3 +73,14 @@ pub trait Operations: Send + Sync + 'static {
     fn execute(&self, operation: Operation, context: Context) -> GatewayFuture<'_, ServerResult>;
     fn rest_tools(&self, context: Context) -> GatewayFuture<'_, ToolCatalog>;
 }
+
+pub trait OperationAuthorizer: Send + Sync {
+    fn authorize<'a>(
+        &'a self,
+        server: &'a ServerInfo,
+        request: Option<&'a ClientRequest>,
+    ) -> GatewayFuture<'a, ()>;
+}
+
+#[derive(Clone)]
+pub struct Authorization(pub Arc<dyn OperationAuthorizer>);

@@ -4,7 +4,9 @@ use axum::{Json, extract::State as ExtractState, response::IntoResponse};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use governor::DefaultDirectRateLimiter;
 use jsonwebtoken::{EncodingKey, Header, encode};
-use litellm_gateway_auth::{UI_CSRF_KEY, UiAuthError, UiAuthSession, UiCredentials, UiSession};
+use litellm_gateway_auth::{
+    AccessRequest, UI_CSRF_KEY, UiAction, UiAuthError, UiAuthSession, UiCredentials, UiSession,
+};
 use serde::Serialize;
 use time::{Duration, OffsetDateTime};
 use tower_cookies::{Cookie, Cookies};
@@ -107,6 +109,11 @@ pub async fn login(
 
 pub async fn info(session: Result<UiSession, UiAuthError>) -> Result<impl IntoResponse, Error> {
     let session = session?;
+    session
+        .identity
+        .authorize(AccessRequest::Ui(UiAction::SessionInfo))
+        .await
+        .map_err(|_| UiAuthError::Unauthorized)?;
     Ok(Json(SessionInfo {
         user_id: session.user.username,
         user_role: "proxy_admin",
@@ -118,7 +125,12 @@ pub async fn logout(
     mut auth: UiAuthSession,
     cookies: Cookies,
 ) -> Result<impl IntoResponse, Error> {
-    let _ = validated?;
+    let validated = validated?;
+    validated
+        .identity
+        .authorize(AccessRequest::Ui(UiAction::Logout))
+        .await
+        .map_err(|_| UiAuthError::Unauthorized)?;
     auth.logout().await?;
     cookies.add(
         Cookie::build(("token", ""))
