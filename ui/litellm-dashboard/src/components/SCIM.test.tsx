@@ -9,6 +9,7 @@ import { toast } from "@/lib/toast";
 
 vi.mock("./networking", () => ({
   keyCreateCall: vi.fn(),
+  apiClient: { get: vi.fn().mockResolvedValue([]) },
 }));
 
 vi.mock("@/lib/toast", () => ({
