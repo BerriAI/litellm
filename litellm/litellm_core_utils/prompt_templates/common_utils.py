@@ -1140,10 +1140,17 @@ def sanitize_input_schema_for_anthropic(input_schema: dict) -> "AnthropicInputSc
     (``AnthropicConfig._map_tool_helper``) and Anthropic Messages MCP paths run
     a schema through here so an external MCP schema cannot succeed on one route
     and 400 on the other.
+
+    A root that is a local ``$ref`` or a top-level combinator is resolved into an
+    object first. Without that, ``type: "object"`` and an empty ``properties``
+    are stamped over a schema whose fields live one level down, and the
+    allowlist then drops the combinator: a ``TypeAdapter(Union[A, B])`` tool
+    reaches Anthropic taking no arguments at all. An unresolvable root (external
+    or missing ``$ref``, a branch that cannot merge) is left alone.
     """
     from litellm.types.llms.anthropic import AnthropicInputSchema
 
-    normalized = dict(input_schema) if input_schema else {}
+    normalized = dict(flatten_top_level_schema_combinators(_inline_root_schema_ref(input_schema or {})))
     if normalized.get("type") != "object":
         normalized["type"] = "object"
     if "properties" not in normalized:
@@ -1202,6 +1209,25 @@ def _resolve_local_schema_ref(root: Mapping[str, object], ref: str) -> Mapping[s
         return None
     target: Final = definitions.get(ref[len(prefix) :])
     return target if isinstance(target, dict) else None
+
+
+def _inline_root_schema_ref(schema: Mapping[str, object]) -> Mapping[str, object]:
+    """Replace a root-level local ``$ref`` with the schema it points at.
+
+    The glossaries are carried over so refs inside the target still resolve, and
+    the target wins on any key it shares with the root. A root without a ``$ref``,
+    or one pointing outside the document or at a missing name, is returned as is.
+    """
+    ref: Final = schema.get("$ref")
+    if not isinstance(ref, str):
+        return schema
+    target: Final = _resolve_local_schema_ref(schema, ref)
+    if target is None:
+        return schema
+    glossaries: Final = MappingProxyType(
+        {container: schema[container] for _, container in _LOCAL_SCHEMA_REF_PREFIXES if container in schema}
+    )
+    return MappingProxyType({**glossaries, **target})
 
 
 def _mergeable_branch(

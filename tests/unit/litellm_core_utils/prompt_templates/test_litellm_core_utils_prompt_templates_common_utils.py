@@ -1990,3 +1990,130 @@ class TestMergeConsecutiveSystemMessages:
         )
 
         assert merged == [{"role": "system"}, {"role": "user", "content": "Hi"}]
+
+
+class TestSanitizeInputSchemaForAnthropic:
+    """Anthropic rejects a tool schema whose root is a union or a ``$ref``, so the
+    sanitizer coerces one into an object. Stamping ``type: "object"`` and an empty
+    ``properties`` over a root whose fields live one level down, then dropping the
+    combinator with the allowlist, sent a ``TypeAdapter(Union[A, B])`` tool to
+    Anthropic taking no arguments at all (#43157)."""
+
+    A: Final = {
+        "type": "object",
+        "properties": {"kind": {"type": "string"}, "a": {"type": "string"}},
+        "required": ["kind", "a"],
+    }
+    B: Final = {
+        "type": "object",
+        "properties": {"kind": {"type": "string"}, "b": {"type": "integer"}},
+        "required": ["kind", "b"],
+    }
+
+    def _union_root(self, combinator):
+        return {"$defs": {"A": self.A, "B": self.B}, combinator: [{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/B"}]}
+
+    @pytest.mark.parametrize("combinator", ["anyOf", "oneOf"])
+    def test_union_root_keeps_every_branch_field(self, combinator):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            sanitize_input_schema_for_anthropic,
+        )
+
+        result = sanitize_input_schema_for_anthropic(self._union_root(combinator))
+
+        assert sorted(result["properties"]) == [
+            "a",
+            "b",
+            "kind",
+        ], f"a {combinator} root must keep its branches' fields, got {dict(result)}"
+
+    def test_ref_root_resolves_to_the_schema_it_points_at(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            sanitize_input_schema_for_anthropic,
+        )
+
+        result = sanitize_input_schema_for_anthropic({"$defs": {"A": self.A}, "$ref": "#/$defs/A"})
+
+        assert sorted(result["properties"]) == ["a", "kind"], f"a $ref root must inline its target, got {dict(result)}"
+        assert sorted(result["required"]) == ["a", "kind"], (
+            f"the target's required list must survive, got {dict(result)}"
+        )
+
+    def test_union_required_narrows_to_the_fields_every_branch_demands(self):
+        """Merging branches is lossy by design: only what all of them require stays
+        required, which is the tradeoff OpenAI and Azure already accept via the
+        shared flattening helper."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            sanitize_input_schema_for_anthropic,
+        )
+
+        result = sanitize_input_schema_for_anthropic(self._union_root("anyOf"))
+
+        assert sorted(result.get("required", [])) == ["kind"], (
+            f"only the field both branches require stays required, got {dict(result)}"
+        )
+
+    @pytest.mark.parametrize(
+        "name, schema, expected_properties",
+        [
+            ("plain object", {"type": "object", "properties": {"x": {"type": "string"}}}, ["x"]),
+            ("no-arg tool", {"type": "object", "properties": {}}, []),
+            ("empty schema", {}, []),
+            ("external $ref root", {"$ref": "https://example.com/schema.json"}, []),
+            ("missing $ref target", {"$defs": {}, "$ref": "#/$defs/Nope"}, []),
+        ],
+    )
+    def test_shapes_the_sanitizer_already_handled_are_untouched(self, name, schema, expected_properties):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            sanitize_input_schema_for_anthropic,
+        )
+
+        result = sanitize_input_schema_for_anthropic(schema)
+
+        assert sorted(result["properties"]) == expected_properties, f"{name} should be unchanged, got {dict(result)}"
+        assert result["type"] == "object", f"{name} must still be coerced to an object, got {dict(result)}"
+
+    def test_a_combinator_nested_inside_a_property_is_left_alone(self):
+        """Anthropic accepts nested combinators; only the root shape is a problem."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            sanitize_input_schema_for_anthropic,
+        )
+
+        nested = {"anyOf": [{"type": "string"}, {"type": "integer"}]}
+
+        result = sanitize_input_schema_for_anthropic({"type": "object", "properties": {"x": nested}})
+
+        assert result["properties"]["x"] == nested, f"a nested union must survive verbatim, got {dict(result)}"
+
+    def test_a_pydantic_union_tool_reaches_anthropic_with_its_arguments(self):
+        """The reporter's path: Pydantic emits a root ``anyOf`` over ``$defs``."""
+        from typing import Literal
+
+        from pydantic import BaseModel, TypeAdapter
+
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+
+        class Alpha(BaseModel):
+            kind: Literal["a"]
+            a: str
+
+        class Beta(BaseModel):
+            kind: Literal["b"]
+            b: int
+
+        tool = {
+            "type": "function",
+            "function": {
+                "name": "record",
+                "description": "record an event",
+                "parameters": TypeAdapter(Alpha | Beta).json_schema(),
+            },
+        }
+
+        mapped, _ = AnthropicConfig()._map_tools([tool])
+
+        assert sorted(mapped[0]["input_schema"]["properties"]) == [
+            "a",
+            "b",
+            "kind",
+        ], f"the tool must reach Anthropic with arguments, got {mapped[0]['input_schema']}"
