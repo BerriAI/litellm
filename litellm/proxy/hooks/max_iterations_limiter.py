@@ -184,7 +184,9 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
             return f"{{session_iterations:{session_id}}}:count"
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
-        scope: Final = json.dumps((global_agent_registry.stable_agent_id(agent_id), session_id), separators=(",", ":"))
+        stable_agent_id: Final = global_agent_registry.stable_agent_id(agent_id)
+        canonical_agent_id: Final = stable_agent_id if isinstance(stable_agent_id, str) else agent_id
+        scope: Final = json.dumps((canonical_agent_id, session_id), separators=(",", ":"))
         return f"{{agent_session_iterations:{scope}}}:count"
 
     async def _increment_and_get(self, cache_key: str) -> int:

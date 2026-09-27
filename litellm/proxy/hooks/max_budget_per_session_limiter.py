@@ -210,7 +210,9 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
     def _make_cache_key(self, session_id: str, agent_id: str) -> str:
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
-        scope: Final = json.dumps((global_agent_registry.stable_agent_id(agent_id), session_id), separators=(",", ":"))
+        stable_agent_id: Final = global_agent_registry.stable_agent_id(agent_id)
+        canonical_agent_id: Final = stable_agent_id if isinstance(stable_agent_id, str) else agent_id
+        scope: Final = json.dumps((canonical_agent_id, session_id), separators=(",", ":"))
         return f"{{agent_session_budget:{scope}}}:spend"
 
     async def _get_current_spend(self, cache_key: str) -> float:
