@@ -2,6 +2,7 @@ use std::sync::Arc;
 
 use axum::{Json, body::Bytes, extract::State, response::Response};
 use litellm_core::responses::{route::Responses, types::ResponsesCall};
+use litellm_gateway_auth::AuthenticatedRequest;
 use litellm_host_http::Sse;
 use serde_json::json;
 
@@ -9,9 +10,11 @@ use crate::{Error, Gateway, JsonObject, request};
 
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
+    identity: AuthenticatedRequest,
     JsonObject(body): JsonObject,
 ) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(&gateway, &body)?;
+    request::authorize_model(&identity, deployment, &body).await?;
     let call = ResponsesCall {
         model: deployment.model.clone(),
         input: body.get("input").cloned().unwrap_or_default(),

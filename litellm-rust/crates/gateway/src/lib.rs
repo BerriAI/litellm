@@ -11,7 +11,7 @@ use http_body_util::BodyExt;
 
 use litellm_config::Config;
 use litellm_core::resources::CoreResources;
-use litellm_gateway_auth::{Auth, RequireMasterKey};
+use litellm_gateway_auth::Auth;
 use litellm_gateway_inference::{Gateway, ModelList};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
@@ -37,10 +37,10 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, litellm_http::Er
 pub fn router(inference: Arc<Gateway>, config: &Config) -> Router {
     let auth = Auth::from_config(config, inference.secrets.clone());
     litellm_gateway_inference::router(inference)
-        .route_layer(axum::middleware::from_extractor_with_state::<
-            RequireMasterKey,
-            _,
-        >(auth))
+        .route_layer(axum::middleware::from_fn_with_state(
+            auth,
+            litellm_gateway_auth::authenticate,
+        ))
         .layer(axum::middleware::from_fn(log_request))
 }
 

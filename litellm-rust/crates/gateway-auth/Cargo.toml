@@ -6,13 +6,14 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-axum.workspace = true
+axum = { workspace = true, features = ["matched-path"] }
 litellm-auth-types.workspace = true
 litellm-config.workspace = true
 litellm-secrets.workspace = true
 sha2.workspace = true
 subtle.workspace = true
 thiserror.workspace = true
+serde.workspace = true
 
 [dev-dependencies]
 futures-util.workspace = true
