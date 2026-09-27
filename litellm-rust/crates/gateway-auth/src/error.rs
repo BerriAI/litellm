@@ -49,3 +49,25 @@ impl IntoResponse for Error {
         (self.status(), self.to_string()).into_response()
     }
 }
+
+#[derive(Debug, thiserror::Error)]
+pub enum UiAuthError {
+    #[error("UI_USERNAME and UI_PASSWORD must be nonempty")]
+    Unconfigured,
+    #[error("invalid UI credentials or session")]
+    Unauthorized,
+    #[error("UI authentication unavailable")]
+    Unavailable,
+    #[error("UI session unavailable")]
+    Session(#[from] tower_sessions::session::Error),
+}
+
+impl IntoResponse for UiAuthError {
+    fn into_response(self) -> Response {
+        let status = match self {
+            Self::Unauthorized => StatusCode::UNAUTHORIZED,
+            _ => StatusCode::INTERNAL_SERVER_ERROR,
+        };
+        (status, self.to_string()).into_response()
+    }
+}

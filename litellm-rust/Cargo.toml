@@ -17,6 +17,7 @@ litellm-gateway = { path = "crates/gateway" }
 litellm-gateway-inference = { path = "crates/gateway-inference" }
 litellm-gateway-auth = { path = "crates/gateway-auth" }
 litellm-gateway-management = { path = "crates/gateway-management" }
+litellm-gateway-ui = { path = "crates/gateway-ui" }
 litellm-coroutine = { path = "crates/coroutine" }
 litellm-host = { path = "crates/host" }
 litellm-host-http = { path = "crates/host-http" }
@@ -60,6 +61,8 @@ litellm-python-compat = { path = "crates/python-compat" }
 
 tracing = "0.1"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "multipart"] }
+axum-login = "0.18.0"
+tower-sessions = { version = "0.14.0", features = ["memory-store"] }
 bytes = "1"
 http = "1"
 google-cloud-auth = { version = "1.16.0", default-features = false }
