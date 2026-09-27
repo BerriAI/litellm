@@ -28,6 +28,12 @@ pub enum Error {
     Internal(String),
 }
 
+impl IntoResponse for Error {
+    fn into_response(self) -> Response {
+        self.openai_response()
+    }
+}
+
 impl From<litellm_host_http::Error<RouteError>> for Error {
     fn from(error: litellm_host_http::Error<RouteError>) -> Self {
         match error {

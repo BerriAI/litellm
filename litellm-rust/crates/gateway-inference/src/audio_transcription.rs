@@ -1,25 +1,29 @@
 use std::{path::Path, sync::Arc};
 
-use axum::{
-    Json,
-    extract::{Request, State},
-    response::{IntoResponse, Response},
-};
+use axum::{Json, extract::State};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_core::audio_transcription::{audio_transcription, types::AudioTranscriptionRequest};
 use serde_json::{Value, json};
 
-use crate::{Error, Gateway, request};
+use crate::{
+    Error, Gateway,
+    request::{self, InferenceBody},
+};
 
-pub(crate) async fn create(State(gateway): State<Arc<Gateway>>, request: Request) -> Response {
-    match handle(&gateway, request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => error.openai_response(),
-    }
+pub(crate) async fn create(
+    State(gateway): State<Arc<Gateway>>,
+    body: InferenceBody,
+) -> Result<Json<Value>, Error> {
+    handle(&gateway, body).await.map(Json)
 }
 
-async fn handle(gateway: &Gateway, request: Request) -> Result<Value, Error> {
-    let (body, upload) = request::parse(request).await?;
+async fn handle(
+    gateway: &Gateway,
+    InferenceBody {
+        fields: body,
+        upload,
+    }: InferenceBody,
+) -> Result<Value, Error> {
     let deployment = request::deployment(gateway, &body)?;
     let audio = match upload {
         Some(upload) => {

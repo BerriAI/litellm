@@ -1,10 +1,6 @@
 use std::sync::Arc;
 
-use axum::{
-    Json,
-    extract::{Request, State},
-    response::{IntoResponse, Response},
-};
+use axum::{Json, extract::State, http::HeaderMap};
 use litellm_auth::SecretValue;
 use litellm_core::ocr::{
     client::perform,
@@ -13,22 +9,31 @@ use litellm_core::ocr::{
 use litellm_llms::base_llm::ocr::transformation::OcrDocument;
 use serde_json::Value;
 
-use crate::{Error, Gateway, request};
+use crate::{
+    Error, Gateway,
+    request::{self, InferenceBody},
+};
 
-pub(crate) async fn create(State(gateway): State<Arc<Gateway>>, request: Request) -> Response {
-    match handle(&gateway, request).await {
-        Ok(response) => Json(response).into_response(),
-        Err(error) => error.openai_response(),
-    }
+pub(crate) async fn create(
+    State(gateway): State<Arc<Gateway>>,
+    headers: HeaderMap,
+    body: InferenceBody,
+) -> Result<Json<Value>, Error> {
+    handle(&gateway, &headers, body).await.map(Json)
 }
 
-async fn handle(gateway: &Gateway, request: Request) -> Result<Value, Error> {
-    let header_format = request
-        .headers()
+async fn handle(
+    gateway: &Gateway,
+    headers: &HeaderMap,
+    InferenceBody {
+        fields: body,
+        upload,
+    }: InferenceBody,
+) -> Result<Value, Error> {
+    let header_format = headers
         .get("x-req-format")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    let (body, upload) = request::parse(request).await?;
     let deployment = request::deployment(gateway, &body)?;
     let document = match upload {
         Some(upload) => OcrDocumentInput::Bytes {

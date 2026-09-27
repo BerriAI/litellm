@@ -116,3 +116,44 @@ async fn invalid_ocr_requests_do_not_call_the_provider(#[case] body: Value) {
     assert!(support::json(response).await["error"]["message"].is_string());
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }
+
+#[rstest]
+#[case::missing_boundary("multipart/form-data", "", None)]
+#[case::missing_file(
+    "multipart/form-data; boundary=test",
+    "--test--\r\n",
+    Some("requires a file")
+)]
+#[case::empty_file(
+    "multipart/form-data; boundary=test",
+    "--test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.pdf\"\r\n\r\n\r\n--test--\r\n",
+    Some("uploaded file is empty")
+)]
+#[tokio::test]
+async fn invalid_uploads_use_an_openai_error_envelope(
+    #[case] content_type: &str,
+    #[case] payload: &str,
+    #[case] message: Option<&str>,
+    #[values("/v1/ocr", "/v1/audio/transcriptions")] route: &str,
+) {
+    let upstream = MockServer::start().await;
+    let response = support::app("mistral/test-ocr", &upstream.uri())
+        .oneshot(
+            Request::post(route)
+                .header("content-type", content_type)
+                .body(Body::from(payload.to_owned()))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    let body = support::json(response).await;
+    assert_eq!(body["error"]["type"], "invalid_request_error");
+    assert_eq!(body["error"]["code"], 400);
+    let error_message = body["error"]["message"].as_str().unwrap();
+    assert!(!error_message.is_empty());
+    if let Some(message) = message {
+        assert!(error_message.contains(message));
+    }
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}

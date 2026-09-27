@@ -17,7 +17,7 @@ use litellm_host_http::StreamAdapter;
 use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
-use crate::{Deployment, Error, Gateway};
+use crate::{Deployment, Error, Gateway, JsonObject, request};
 
 /// Client headers Python forwards to Anthropic-speaking providers on every call.
 const ANTHROPIC_API_HEADERS: [&str; 2] = ["anthropic-version", "anthropic-beta"];
@@ -26,32 +26,28 @@ const ANTHROPIC_API_HEADER_PROVIDERS: &str = "anthropic,bedrock,bedrock_mantle,v
 pub async fn create(
     State(gateway): State<Arc<Gateway>>,
     headers: HeaderMap,
-    body: Bytes,
+    body: Result<JsonObject, Error>,
 ) -> Response {
     let request_id = headers
         .get("x-request-id")
         .and_then(|value| value.to_str().ok())
         .map(str::to_owned);
-    match handle(&gateway, &headers, &body).await {
+    let result = match body {
+        Ok(JsonObject(body)) => handle(&gateway, &headers, body).await,
+        Err(error) => Err(error),
+    };
+    match result {
         Ok(response) => response,
         Err(error) => (error.status(), Json(error.body(request_id.as_deref()))).into_response(),
     }
 }
 
-async fn handle(gateway: &Gateway, headers: &HeaderMap, body: &[u8]) -> Result<Response, Error> {
-    let body = match serde_json::from_slice(body) {
-        Ok(Value::Object(body)) => body,
-        Ok(_) => return Err(Error::InvalidBody("expected a JSON object".into())),
-        Err(error) => return Err(Error::InvalidBody(error.to_string())),
-    };
-    let model_name = body
-        .get("model")
-        .and_then(Value::as_str)
-        .ok_or_else(|| Error::InvalidBody("model is required".into()))?;
-    let deployment = gateway
-        .models
-        .get(model_name)
-        .ok_or_else(|| Error::UnknownModel(model_name.to_owned()))?;
+async fn handle(
+    gateway: &Gateway,
+    headers: &HeaderMap,
+    body: Map<String, Value>,
+) -> Result<Response, Error> {
+    let deployment = request::deployment(gateway, &body)?;
     let call = project(deployment, body, headers)?;
     let machine = messages_machine(&gateway.resources, &gateway.http, gateway.secrets.clone())
         .map_err(RouteError::from)?;
