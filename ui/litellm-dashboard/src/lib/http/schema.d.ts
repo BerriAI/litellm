@@ -29424,11 +29424,6 @@ export interface components {
         /** DailySpendMetadata */
         DailySpendMetadata: {
             /**
-             * Api Key Limit
-             * @description When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.
-             */
-            api_key_limit?: number | null;
-            /**
              * Has More
              * @default false
              */
@@ -29438,11 +29433,6 @@ export interface components {
              * @default 1
              */
             page: number;
-            /**
-             * Total Api Keys
-             * @description Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.
-             */
-            total_api_keys?: number | null;
             /**
              * Total Api Requests
              * @default 0
