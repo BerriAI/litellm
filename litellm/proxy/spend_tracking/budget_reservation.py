@@ -352,11 +352,11 @@ async def reserve_budget_for_request(
                     )
                     continue
     except Exception:
-        if increments_applied:
-            await _release_applied_entries_best_effort(
-                entries=applied_entries,
-                default_reserved_cost=reservation_cost,
-            )
+        await _release_incremented_reservation_entries(
+            applied_entries=applied_entries,
+            increments_applied=increments_applied,
+            default_reserved_cost=reservation_cost,
+        )
         raise
 
     if not applied_entries:
@@ -1125,6 +1125,21 @@ async def _counter_can_apply_adjustment(
         return False
 
     return not (adjustment < 0 and current_value + adjustment < -1e-12)
+
+
+async def _release_incremented_reservation_entries(
+    applied_entries: list[dict[str, float | str]],
+    increments_applied: bool,
+    default_reserved_cost: float,
+) -> None:
+    """Reservation entries are only released once their counters were actually incremented: before the shared
+    pipeline commits there is nothing to give back, and a failed pipeline has already invalidated each counter."""
+    if not increments_applied:
+        return
+    await _release_applied_entries_best_effort(
+        entries=applied_entries,
+        default_reserved_cost=default_reserved_cost,
+    )
 
 
 async def _release_applied_entries_best_effort(
