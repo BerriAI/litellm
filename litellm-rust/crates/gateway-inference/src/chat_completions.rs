@@ -1,4 +1,4 @@
-use std::{convert::Infallible, sync::Arc};
+use std::sync::Arc;
 
 use axum::{
     Json,
@@ -8,12 +8,8 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use litellm_core::chat_completions::{
-    Error as RouteError,
-    route::{ChatCompletions, chat_completions_machine},
-    types::ChatCompletionsCall,
+    Error as RouteError, route::chat_completions_machine, types::ChatCompletionsCall,
 };
-use litellm_host_http::HttpAdapter;
-use litellm_types::utils::ChatCompletionsResponse;
 use serde_json::{Map, Value};
 
 use crate::{Error, Gateway, request};
@@ -69,7 +65,7 @@ async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response,
         .ok_or_else(|| Error::InvalidBody("messages is required".into()))?;
     let machine =
         chat_completions_machine(&gateway.resources, &gateway.http).map_err(RouteError::from)?;
-    let response = litellm_host_http::serve(
+    let response = litellm_host_http::serve_unary(
         machine,
         ChatCompletionsCall {
             model: deployment.model.clone(),
@@ -84,35 +80,9 @@ async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response,
             extra_headers: None,
             timeout: deployment.timeout,
         },
-        ChatHttp,
         (),
+        Json,
     )
     .await?;
     Ok(response)
-}
-
-struct ChatHttp;
-
-impl HttpAdapter for ChatHttp {
-    type Protocol = ChatCompletions;
-
-    async fn custom_op(&self, op: Infallible) -> Result<(), RouteError> {
-        match op {}
-    }
-
-    fn complete(&self, response: ChatCompletionsResponse) -> Result<Response, RouteError> {
-        Ok(Json(response).into_response())
-    }
-
-    fn head(&self, head: Infallible) -> Result<axum::http::Response<()>, RouteError> {
-        match head {}
-    }
-
-    fn chunk(&self, chunk: Infallible) -> Result<Bytes, RouteError> {
-        match chunk {}
-    }
-
-    fn stream_error(&self, error: litellm_host_http::Error<RouteError>) -> Bytes {
-        Bytes::from(Error::from(error).sse_frame())
-    }
 }

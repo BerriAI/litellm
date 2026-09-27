@@ -3,7 +3,7 @@ use std::sync::{
     atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 
-use axum::{body::to_bytes, response::Response};
+use axum::{Json, body::to_bytes};
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
 use http::{StatusCode, header::CONTENT_TYPE};
@@ -15,7 +15,7 @@ use litellm_host::{
     machine::MachineFault,
     protocol::Protocol,
 };
-use litellm_host_http::{Error, HttpAdapter, serve};
+use litellm_host_http::{Error, StreamAdapter, serve, serve_unary};
 use rstest::{fixture, rstest};
 use serde_json::json;
 
@@ -47,7 +47,6 @@ impl Protocol for TestProtocol {
 #[derive(Clone, Copy, PartialEq)]
 enum Rejection {
     None,
-    Complete,
     Head,
     Chunk,
     Custom,
@@ -55,7 +54,7 @@ enum Rejection {
 
 struct Adapter(Rejection);
 
-impl HttpAdapter for Adapter {
+impl StreamAdapter for Adapter {
     type Protocol = TestProtocol;
 
     async fn custom_op(&self, reply: Reply<&'static str>) -> Result<(), TestError> {
@@ -64,13 +63,6 @@ impl HttpAdapter for Adapter {
         }
         reply.send("custom");
         Ok(())
-    }
-
-    fn complete(&self, response: Bytes) -> Result<Response, TestError> {
-        if self.0 == Rejection::Complete {
-            return Err(TestError::Adapter);
-        }
-        Ok(Response::new(response.into()))
     }
 
     fn head(&self, content_type: &'static str) -> Result<http::Response<()>, TestError> {
@@ -181,10 +173,17 @@ async fn projection_custom_operations_and_hooks_feed_the_http_response(hooks: Ho
         .await?;
         Ok(CallOutput::Complete(Bytes::from(wire.url)))
     });
-    let response = serve(machine, "projected", Adapter(Rejection::None), hooks)
-        .await
-        .unwrap();
-    assert_eq!(response.status(), StatusCode::OK);
+    let response = serve(
+        machine,
+        "projected",
+        hooks,
+        |value| (StatusCode::CREATED, [("x-converted", "yes")], value),
+        Adapter(Rejection::None),
+    )
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.headers()["x-converted"], "yes");
     assert_eq!(
         to_bytes(response.into_body(), 1024).await.unwrap(),
         "projected/custom"
@@ -233,9 +232,15 @@ async fn body_demand_controls_polling_and_lifecycle(
             chunks,
         })
     });
-    let response = serve(machine, "input", Adapter(Rejection::None), hooks)
-        .await
-        .unwrap();
+    let response = serve(
+        machine,
+        "input",
+        hooks,
+        std::convert::identity,
+        Adapter(Rejection::None),
+    )
+    .await
+    .unwrap();
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     assert_eq!(response.headers()[CONTENT_TYPE], "text/event-stream");
     assert_eq!(polls.load(Ordering::SeqCst), 0);
@@ -295,9 +300,15 @@ async fn stream_failure_emits_one_error_frame_and_stops(
             chunks,
         })
     });
-    let response = serve(machine, "input", Adapter(rejection), hooks)
-        .await
-        .unwrap();
+    let response = serve(
+        machine,
+        "input",
+        hooks,
+        std::convert::identity,
+        Adapter(rejection),
+    )
+    .await
+    .unwrap();
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
     let prefix = if rejection == Rejection::Chunk {
         ""
@@ -320,7 +331,6 @@ async fn stream_failure_emits_one_error_frame_and_stops(
 
 #[rstest]
 #[case::provider(Rejection::None)]
-#[case::response_encoding(Rejection::Complete)]
 #[case::headers(Rejection::Head)]
 #[case::custom_operation(Rejection::Custom)]
 #[tokio::test]
@@ -343,9 +353,15 @@ async fn failures_before_open_return_an_error(hooks: Hooks, #[case] rejection: R
         TestError::Adapter
     };
     assert_eq!(
-        serve(machine, "input", Adapter(rejection), hooks)
-            .await
-            .unwrap_err(),
+        serve(
+            machine,
+            "input",
+            hooks,
+            std::convert::identity,
+            Adapter(rejection)
+        )
+        .await
+        .unwrap_err(),
         Error::Call(expected)
     );
     assert!(matches!(
@@ -377,7 +393,13 @@ async fn cancelling_pending_work_releases_the_machine(hooks: Hooks, #[case] stre
             chunks,
         })
     });
-    let mut response = Box::pin(serve(machine, "input", Adapter(Rejection::None), hooks));
+    let mut response = Box::pin(serve(
+        machine,
+        "input",
+        hooks,
+        std::convert::identity,
+        Adapter(Rejection::None),
+    ));
     if streaming {
         let mut body = response.await.unwrap().into_body().into_data_stream();
         assert!(futures_util::poll!(body.next()).is_pending());
@@ -438,9 +460,15 @@ async fn hook_rejection_stops_execution_and_is_reported_once(
         reject: true,
     };
     assert_eq!(
-        serve(machine, "input", Adapter(Rejection::None), hooks)
-            .await
-            .unwrap_err(),
+        serve(
+            machine,
+            "input",
+            hooks,
+            std::convert::identity,
+            Adapter(Rejection::None)
+        )
+        .await
+        .unwrap_err(),
         Error::Call(TestError::Hook)
     );
     assert!(!continued.load(Ordering::SeqCst));
@@ -484,7 +512,14 @@ async fn invalid_host_operations_fail_without_panicking(hooks: Hooks, #[case] fl
             Ok(HostedCompletion::StreamEnded)
         })
     });
-    let result = serve(machine, "input", Adapter(Rejection::None), hooks).await;
+    let result = serve(
+        machine,
+        "input",
+        hooks,
+        std::convert::identity,
+        Adapter(Rejection::None),
+    )
+    .await;
     if matches!(flow, InvalidFlow::OpenTwice) {
         let body = to_bytes(result.unwrap().into_body(), 1024).await.unwrap();
         assert_eq!(body, "event: error\ndata: Protocol\n\n");
@@ -494,5 +529,130 @@ async fn invalid_host_operations_fail_without_panicking(hooks: Hooks, #[case] fl
     assert!(matches!(
         observer.0.lock().unwrap().as_slice(),
         [CallEvent::Started { .. }, CallEvent::Failed { .. },]
+    ));
+}
+
+struct UnaryProtocol;
+
+impl Protocol for UnaryProtocol {
+    type Response = serde_json::Value;
+    type Error = TestError;
+    type Projection = &'static str;
+    type Op = std::convert::Infallible;
+    type Chunk = std::convert::Infallible;
+    type StreamHead = std::convert::Infallible;
+}
+
+#[rstest]
+#[tokio::test]
+async fn unary_calls_use_into_response_after_hooks_and_before_success(hooks: Hooks) {
+    let observer = hooks.observer.clone();
+    let machine = hosted_call::<UnaryProtocol, _, _>(|request, host| async move {
+        let wire = host
+            .before_send(
+                WireRequest {
+                    url: request.into(),
+                    headers: Vec::new(),
+                    body: json!({}),
+                },
+                RequestContext {
+                    model: "rewritten".into(),
+                    custom_llm_provider: "test".into(),
+                    optional_params: json!({}),
+                    secret_fields: Vec::new(),
+                    api_key: None,
+                },
+            )
+            .await?;
+        host.emit(MachineEvent::ResponseReceived {
+            raw: RawResponse {
+                body: wire.url.clone(),
+            },
+        })
+        .await?;
+        Ok(CallOutput::Complete(json!({"url": wire.url})))
+    });
+    let response = serve_unary(machine, "projected", hooks, |value| {
+        assert!(matches!(
+            observer.0.lock().unwrap().as_slice(),
+            [CallEvent::Started { .. }, CallEvent::Machine(_),]
+        ));
+        (StatusCode::CREATED, [("x-converted", "yes")], Json(value))
+    })
+    .await
+    .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    assert_eq!(response.headers()["x-converted"], "yes");
+    assert_eq!(response.headers()[CONTENT_TYPE], "application/json");
+    let body: serde_json::Value =
+        serde_json::from_slice(&to_bytes(response.into_body(), 1024).await.unwrap()).unwrap();
+    assert_eq!(body, json!({"url": "projected/rewritten"}));
+    assert!(matches!(
+        observer.0.lock().unwrap().as_slice(),
+        [
+            CallEvent::Started { .. },
+            CallEvent::Machine(_),
+            CallEvent::Succeeded { .. },
+        ]
+    ));
+}
+
+#[rstest]
+#[case::provider(false, TestError::Provider)]
+#[case::hook(true, TestError::Hook)]
+#[tokio::test]
+async fn unary_failure_preserves_the_error_without_converting(
+    observer: Arc<Observer>,
+    #[case] reject_hook: bool,
+    #[case] expected: TestError,
+) {
+    let machine = hosted_call::<UnaryProtocol, _, _>(|_, host| async move {
+        host.emit(MachineEvent::ResponseReceived {
+            raw: RawResponse { body: "raw".into() },
+        })
+        .await?;
+        Err(TestError::Provider)
+    });
+    let hooks = Hooks {
+        observer: observer.clone(),
+        reject: reject_hook,
+    };
+    let converted = AtomicBool::new(false);
+    let result = serve_unary(machine, "input", hooks, |value| {
+        converted.store(true, Ordering::SeqCst);
+        Json(value)
+    })
+    .await;
+    assert_eq!(result.unwrap_err(), Error::Call(expected));
+    assert!(!converted.load(Ordering::SeqCst));
+    let events = observer.0.lock().unwrap();
+    assert!(matches!(events.first(), Some(CallEvent::Started { .. })));
+    assert!(matches!(events.last(), Some(CallEvent::Failed { .. })));
+    assert_eq!(events.len(), if reject_hook { 2 } else { 3 });
+}
+
+#[rstest]
+#[tokio::test]
+async fn cancelling_unary_execution_releases_work_without_converting(hooks: Hooks) {
+    let observer = hooks.observer.clone();
+    let released = Arc::new(AtomicBool::new(false));
+    let release = Release(released.clone());
+    let machine = hosted_call::<UnaryProtocol, _, _>(move |_, _| async move {
+        let _release = release;
+        std::future::pending().await
+    });
+    let converted = AtomicBool::new(false);
+    let mut call = Box::pin(serve_unary(machine, "input", hooks, |value| {
+        converted.store(true, Ordering::SeqCst);
+        Json(value)
+    }));
+    assert!(futures_util::poll!(&mut call).is_pending());
+    assert!(!released.load(Ordering::SeqCst));
+    drop(call);
+    assert!(released.load(Ordering::SeqCst));
+    assert!(!converted.load(Ordering::SeqCst));
+    assert!(matches!(
+        observer.0.lock().unwrap().as_slice(),
+        [CallEvent::Started { .. }, CallEvent::Cancelled { .. },]
     ));
 }

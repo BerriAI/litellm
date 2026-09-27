@@ -3,25 +3,19 @@ mod error;
 
 use std::future::Future;
 
-use axum::response::Response;
 use bytes::Bytes;
 use litellm_host::protocol::Protocol;
 
-pub use driver::serve;
+pub use driver::{serve, serve_unary};
 pub use error::Error;
 
-pub trait HttpAdapter: Send + Sync + 'static {
+pub trait StreamAdapter: Send + Sync + 'static {
     type Protocol: Protocol;
 
     fn custom_op(
         &self,
         op: <Self::Protocol as Protocol>::Op,
     ) -> impl Future<Output = Result<(), <Self::Protocol as Protocol>::Error>> + Send;
-
-    fn complete(
-        &self,
-        response: <Self::Protocol as Protocol>::Response,
-    ) -> Result<Response, <Self::Protocol as Protocol>::Error>;
 
     fn head(
         &self,

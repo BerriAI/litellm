@@ -13,8 +13,7 @@ use litellm_core::messages::{
     Error as RouteError, MessagesCall, messages_body,
     route::{Messages, MessagesStreamHead, messages_machine},
 };
-use litellm_host_http::HttpAdapter;
-use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+use litellm_host_http::StreamAdapter;
 use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
@@ -56,7 +55,7 @@ async fn handle(gateway: &Gateway, headers: &HeaderMap, body: &[u8]) -> Result<R
     let call = project(deployment, body, headers)?;
     let machine = messages_machine(&gateway.resources, &gateway.http, gateway.secrets.clone())
         .map_err(RouteError::from)?;
-    Ok(litellm_host_http::serve(machine, call, MessagesHttp, ()).await?)
+    Ok(litellm_host_http::serve(machine, call, (), Json, MessagesHttp).await?)
 }
 
 fn project(
@@ -101,15 +100,11 @@ fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders>
 
 struct MessagesHttp;
 
-impl HttpAdapter for MessagesHttp {
+impl StreamAdapter for MessagesHttp {
     type Protocol = Messages;
 
     async fn custom_op(&self, op: Infallible) -> Result<(), RouteError> {
         match op {}
-    }
-
-    fn complete(&self, response: Box<AnthropicMessagesResponse>) -> Result<Response, RouteError> {
-        Ok(Json(response).into_response())
     }
 
     fn head(&self, _: MessagesStreamHead) -> Result<axum::http::Response<()>, RouteError> {

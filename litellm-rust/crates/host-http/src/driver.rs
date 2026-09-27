@@ -1,45 +1,67 @@
 use std::{convert::Infallible, sync::Arc};
 
-use axum::{body::Body, response::Response};
+use axum::{
+    body::Body,
+    response::{IntoResponse, Response},
+};
 use bytes::Bytes;
 use futures_util::{StreamExt, stream};
 use litellm_host::{
-    call::{CallOutput, HostedCompletion, HostedMachine, observe_call},
+    call::{CallOutput, HostedCompletion, HostedMachine, observe_call, observe_unary},
     hooks::RouteHooks,
     host::{Demand, HostOp, Reply},
     machine::{Machine, MachineFault, MachineStep},
     protocol::Protocol,
 };
 
-use crate::{Error, HttpAdapter};
+use crate::{Error, StreamAdapter};
 
-type ProtocolOf<A> = <A as HttpAdapter>::Protocol;
-type ErrorOf<A> = <ProtocolOf<A> as Protocol>::Error;
-type StepOf<A> =
-    MachineStep<ProtocolOf<A>, HostedCompletion<<ProtocolOf<A> as Protocol>::Response>>;
+type StepOf<P> = MachineStep<P, HostedCompletion<<P as Protocol>::Response>>;
 type Output<E> = CallOutput<Response, http::Response<()>, Bytes, E>;
 
-pub async fn serve<A, H>(
-    machine: HostedMachine<A::Protocol>,
-    request: <A::Protocol as Protocol>::Projection,
-    adapter: A,
+pub async fn serve_unary<P, H, R>(
+    machine: HostedMachine<P>,
+    request: P::Projection,
     hooks: H,
-) -> Result<Response, Error<ErrorOf<A>>>
+    response: impl FnOnce(P::Response) -> R,
+) -> Result<Response, Error<P::Error>>
 where
-    A: HttpAdapter,
-    ErrorOf<A>: From<MachineFault>,
-    H: RouteHooks<ErrorOf<A>> + 'static,
+    P: Protocol<Op = Infallible, Chunk = Infallible, StreamHead = Infallible>,
+    P::Error: From<MachineFault>,
+    H: RouteHooks<P::Error>,
+    R: IntoResponse,
+{
+    let observer = hooks.observer();
+    let mut driver = Driver::new(machine, request, hooks);
+    observe_unary(observer, async move {
+        match driver.advance().await? {
+            MachineStep::Complete(HostedCompletion::Complete(value)) => {
+                Ok(response(value).into_response())
+            }
+            _ => Err(Error::Protocol),
+        }
+    })
+    .await
+}
+
+pub async fn serve<P, A, H, R>(
+    machine: HostedMachine<P>,
+    request: P::Projection,
+    hooks: H,
+    response: impl FnOnce(P::Response) -> R,
+    adapter: A,
+) -> Result<Response, Error<P::Error>>
+where
+    P: Protocol,
+    P::Error: From<MachineFault>,
+    A: StreamAdapter<Protocol = P>,
+    H: RouteHooks<P::Error> + 'static,
+    R: IntoResponse,
 {
     let adapter = Arc::new(adapter);
     let observer = hooks.observer();
-    let driver = Driver {
-        machine,
-        request: Some(request),
-        adapter: adapter.clone(),
-        hooks,
-        demand: None,
-    };
-    match observe_call(observer, driver.start()).await? {
+    let driver = Driver::new(machine, request, hooks);
+    match observe_call(observer, driver.start(adapter.clone(), response)).await? {
         CallOutput::Complete(response) => Ok(response),
         CallOutput::Stream { head, chunks } => {
             let body = chunks.map(move |chunk| {
@@ -50,21 +72,29 @@ where
     }
 }
 
-struct Driver<A: HttpAdapter, H> {
-    machine: HostedMachine<A::Protocol>,
-    request: Option<<A::Protocol as Protocol>::Projection>,
-    adapter: Arc<A>,
+struct Driver<P: Protocol, H> {
+    machine: HostedMachine<P>,
+    request: Option<P::Projection>,
     hooks: H,
     demand: Option<Reply<Demand>>,
 }
 
-impl<A, H> Driver<A, H>
+impl<P, H> Driver<P, H>
 where
-    A: HttpAdapter,
-    ErrorOf<A>: From<MachineFault>,
-    H: RouteHooks<ErrorOf<A>> + 'static,
+    P: Protocol,
+    P::Error: From<MachineFault>,
+    H: RouteHooks<P::Error>,
 {
-    async fn advance(&mut self) -> Result<StepOf<A>, Error<ErrorOf<A>>> {
+    fn new(machine: HostedMachine<P>, request: P::Projection, hooks: H) -> Self {
+        Self {
+            machine,
+            request: Some(request),
+            hooks,
+            demand: None,
+        }
+    }
+
+    async fn advance(&mut self) -> Result<StepOf<P>, Error<P::Error>> {
         if let Some(reply) = self.demand.take() {
             reply.send(Demand::More);
         }
@@ -87,36 +117,55 @@ where
                     self.hooks.emit(event).await.map_err(Error::Call)?;
                     reply.send(());
                 }
+                boundary => return Ok(boundary),
+            }
+        }
+    }
+
+    async fn advance_stream(
+        &mut self,
+        adapter: &impl StreamAdapter<Protocol = P>,
+    ) -> Result<StepOf<P>, Error<P::Error>> {
+        loop {
+            match self.advance().await? {
                 MachineStep::Host(HostOp::Custom(op)) => {
-                    self.adapter.custom_op(op).await.map_err(Error::Call)?
+                    adapter.custom_op(op).await.map_err(Error::Call)?
                 }
                 boundary => return Ok(boundary),
             }
         }
     }
 
-    async fn start(mut self) -> Result<Output<Error<ErrorOf<A>>>, Error<ErrorOf<A>>> {
-        match self.advance().await? {
-            MachineStep::Complete(HostedCompletion::Complete(response)) => self
-                .adapter
-                .complete(response)
-                .map(CallOutput::Complete)
-                .map_err(Error::Call),
+    async fn start<A, R>(
+        mut self,
+        adapter: Arc<A>,
+        response: impl FnOnce(P::Response) -> R,
+    ) -> Result<Output<Error<P::Error>>, Error<P::Error>>
+    where
+        A: StreamAdapter<Protocol = P>,
+        H: 'static,
+        R: IntoResponse,
+    {
+        match self.advance_stream(adapter.as_ref()).await? {
+            MachineStep::Complete(HostedCompletion::Complete(value)) => {
+                Ok(CallOutput::Complete(response(value).into_response()))
+            }
             MachineStep::Host(HostOp::Open(head, reply)) => {
-                let head = self.adapter.head(head).map_err(Error::Call)?;
+                let head = adapter.head(head).map_err(Error::Call)?;
                 self.demand = Some(reply);
-                let chunks = stream::try_unfold(self, |mut driver| async move {
-                    match driver.advance().await? {
-                        MachineStep::Host(HostOp::Deliver(chunk, reply)) => {
-                            let bytes = driver.adapter.chunk(chunk).map_err(Error::Call)?;
-                            driver.demand = Some(reply);
-                            Ok(Some((bytes, driver)))
+                let chunks =
+                    stream::try_unfold((self, adapter), |(mut driver, adapter)| async move {
+                        match driver.advance_stream(adapter.as_ref()).await? {
+                            MachineStep::Host(HostOp::Deliver(chunk, reply)) => {
+                                let bytes = adapter.chunk(chunk).map_err(Error::Call)?;
+                                driver.demand = Some(reply);
+                                Ok(Some((bytes, (driver, adapter))))
+                            }
+                            MachineStep::Complete(HostedCompletion::StreamEnded) => Ok(None),
+                            _ => Err(Error::Protocol),
                         }
-                        MachineStep::Complete(HostedCompletion::StreamEnded) => Ok(None),
-                        _ => Err(Error::Protocol),
-                    }
-                })
-                .boxed();
+                    })
+                    .boxed();
                 Ok(CallOutput::Stream { head, chunks })
             }
             _ => Err(Error::Protocol),

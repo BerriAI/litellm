@@ -14,6 +14,7 @@ litellm-host.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
+axum = { workspace = true, features = ["json"] }
 rstest.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
