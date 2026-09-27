@@ -951,7 +951,7 @@ def _count_content_list(
         )
 
 
-def _format_function_definitions(tools: Sequence[Mapping[str, object]]) -> str:
+def _format_function_definitions(tools: Sequence[object]) -> str:
     """Formats tool definitions in the format that OpenAI appears to use.
     Based on https://github.com/forestwanglin/openai-java/blob/main/jtokkit/src/main/java/xyz/felh/openai/jtokkit/utils/TikTokenUtils.java
     """
@@ -959,7 +959,9 @@ def _format_function_definitions(tools: Sequence[Mapping[str, object]]) -> str:
     lines.append("namespace functions {")
     lines.append("")
     for tool in tools:
-        for function in _function_definitions_for_tool(tool):
+        if not isinstance(tool, Mapping):
+            continue
+        for function in _function_definitions_for_tool(cast(Mapping[str, object], tool)):
             lines.extend(_format_single_function_definition(function))
     lines.append("} // namespace functions")
     return "\n".join(lines)

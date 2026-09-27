@@ -486,6 +486,34 @@ def test_token_counter_counts_gemini_function_declarations():
     assert openai_tokens == gemini_tokens == camel_case_tokens
 
 
+def test_token_counter_skips_non_mapping_tools():
+    openai_tool: Final = {
+        "type": "function",
+        "function": {
+            "name": "lookup_weather",
+            "description": "Find current weather conditions for a location",
+            "parameters": {
+                "type": "object",
+                "properties": {"location": {"type": "string", "description": "City and region"}},
+                "required": ["location"],
+            },
+        },
+    }
+    messages: Final = [{"role": "user", "content": "What's the weather?"}]
+    valid_tokens: Final = token_counter_new(
+        model="gemini-2.5-pro",
+        messages=messages,
+        tools=[openai_tool],
+    )
+    mixed_tokens: Final = token_counter_new(
+        model="gemini-2.5-pro",
+        messages=messages,
+        tools=["bad", None, openai_tool],
+    )
+
+    assert mixed_tokens == valid_tokens
+
+
 class NeedsToleranceUpdateError(Exception):
     """Custom exception to mark tests that have improved"""
 
