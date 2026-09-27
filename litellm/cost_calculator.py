@@ -696,7 +696,7 @@ def cost_per_token(
             data_residency=data_residency,
         )
     elif custom_llm_provider == "databricks":
-        return databricks_cost_per_token(model=model, usage=usage_block)
+        return databricks_cost_per_token(model=model, usage=usage_block, service_tier=service_tier)
     elif custom_llm_provider == "fireworks_ai":
         return fireworks_ai_cost_per_token(model=model, usage=usage_block)
     elif custom_llm_provider == "azure":
