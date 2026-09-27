@@ -5116,8 +5116,19 @@ _CALLBACK_LIST_NAMES: Final = (
 )
 
 
+def _callback_list_entries(list_name: str) -> tuple[tuple[str, object], ...]:
+    return tuple((list_name, entry) for entry in getattr(litellm, list_name))
+
+
 def _registered_callback_entries() -> tuple[tuple[str, object], ...]:
-    return tuple((list_name, entry) for list_name in _CALLBACK_LIST_NAMES for entry in getattr(litellm, list_name))
+    return tuple(chain.from_iterable(_callback_list_entries(list_name) for list_name in _CALLBACK_LIST_NAMES))
+
+
+def _configured_db_callbacks(litellm_settings: Mapping[str, object], setting_key: str) -> tuple[tuple[str, str], ...]:
+    callbacks: Final = litellm_settings.get(setting_key)
+    if not isinstance(callbacks, list):
+        return ()
+    return tuple((setting_key, callback) for callback in callbacks if isinstance(callback, str))
 
 
 class ProxyConfig:
@@ -7274,11 +7285,10 @@ class ProxyConfig:
     def _add_callbacks_from_db_config(self, config_data: dict) -> None:
         litellm_settings: Final = config_data.get("litellm_settings", {}) or {}
         configured: Final = tuple(
-            (setting_key, callback)
-            for setting_key in _DB_CONFIG_CALLBACK_EVENT_TYPES
-            if isinstance(callbacks := litellm_settings.get(setting_key), list)
-            for callback in callbacks
-            if isinstance(callback, str)
+            chain.from_iterable(
+                _configured_db_callbacks(litellm_settings, setting_key)
+                for setting_key in _DB_CONFIG_CALLBACK_EVENT_TYPES
+            )
         )
         still_configured: Final = frozenset(configured)
         for key, entries in self._db_config_callback_entries.items():
