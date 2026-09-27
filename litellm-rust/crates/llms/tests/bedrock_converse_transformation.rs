@@ -8,6 +8,7 @@ use litellm_llms::{
     bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
 };
 use litellm_types::{llms::openai::ChatMessage, utils::ChatCompletionsResponse};
+use rstest::rstest;
 use serde_json::{Map, Value, json};
 
 fn messages(value: Value) -> Vec<ChatMessage> {
@@ -85,6 +86,20 @@ fn places_only_inference_params_in_inference_config() {
         json!({"maxTokens": 64, "temperature": 0.1, "topP": 0.9, "stopSequences": ["STOP"]})
     );
     assert!(body.get("additionalModelRequestFields").is_none());
+}
+
+#[rstest]
+fn request_builder_keeps_null_params_and_filters_configuration() {
+    let body = transform(
+        json!([{"role": "user", "content": "hi"}]),
+        json!({"maxTokens": null, "topP": 0.5, "aws_region_name": "us-east-1", "extension": 1}),
+    );
+    assert_eq!(
+        body["inferenceConfig"],
+        json!({"maxTokens": null, "topP": 0.5})
+    );
+    assert!(body.get("aws_region_name").is_none());
+    assert!(body.get("extension").is_none());
 }
 
 #[test]

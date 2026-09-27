@@ -10,6 +10,7 @@ use litellm_types::{
     llms::openai::ChatMessage,
     utils::{ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse},
 };
+use serde::{Deserialize, Deserializer, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 
 use crate::{
@@ -61,6 +62,89 @@ const CONFIG_PARAMS: &[&str] = &["custom_endpoint", "extra_headers", "max_retrie
 pub struct OpenAILikeChatConfig;
 
 pub const OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG: OpenAILikeChatConfig = OpenAILikeChatConfig;
+
+struct Lenient<T>(Option<T>);
+
+impl<T> Default for Lenient<T> {
+    fn default() -> Self {
+        Self(None)
+    }
+}
+
+impl<'de, T: DeserializeOwned> Deserialize<'de> for Lenient<T> {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        Ok(Self(serde_json::from_value(value).ok()))
+    }
+}
+
+#[derive(Deserialize)]
+struct ResponseBody {
+    #[serde(default)]
+    created: Lenient<u64>,
+    #[serde(default)]
+    model: Lenient<String>,
+    #[serde(default)]
+    choices: Lenient<Vec<Lenient<ResponseChoice>>>,
+    #[serde(default)]
+    usage: Lenient<ResponseUsage>,
+}
+
+#[derive(Deserialize)]
+struct ResponseChoice {
+    #[serde(default)]
+    index: Lenient<u64>,
+    #[serde(default)]
+    message: Lenient<ResponseMessage>,
+    #[serde(default)]
+    finish_reason: Lenient<String>,
+}
+
+#[derive(Deserialize)]
+struct ResponseMessage {
+    #[serde(default)]
+    role: Lenient<String>,
+    content: Option<ResponseContent>,
+    #[serde(default)]
+    tool_calls: Lenient<Vec<Value>>,
+    refusal: Option<Value>,
+}
+
+enum ResponseContent {
+    Text(String),
+    Other,
+}
+
+impl<'de> Deserialize<'de> for ResponseContent {
+    fn deserialize<D: Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        Ok(match Value::deserialize(deserializer)? {
+            Value::String(text) => Self::Text(text),
+            _ => Self::Other,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct ResponseUsage {
+    #[serde(default)]
+    prompt_tokens: Lenient<u64>,
+    #[serde(default)]
+    completion_tokens: Lenient<u64>,
+    #[serde(default)]
+    total_tokens: Lenient<u64>,
+    #[serde(default)]
+    prompt_tokens_details: Lenient<PromptDetails>,
+}
+
+#[derive(Deserialize)]
+struct PromptDetails {
+    #[serde(default)]
+    cached_tokens: Lenient<u64>,
+    #[serde(default)]
+    cache_creation_tokens: Lenient<u64>,
+    #[serde(default)]
+    text_tokens: Lenient<u64>,
+}
 
 impl BaseConfig for OpenAILikeChatConfig {
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
@@ -119,55 +203,52 @@ impl BaseConfig for OpenAILikeChatConfig {
     ) -> Result<ChatCompletionsResponse, Error> {
         let mut body = response.body;
         sanitize_usage(&mut body);
-        let body = body
-            .as_object()
-            .ok_or_else(|| Error::InvalidResponse("chat response is not an object".into()))?;
-
+        if !body.is_object() {
+            return Err(Error::InvalidResponse(
+                "chat response is not an object".into(),
+            ));
+        }
+        let body: ResponseBody = serde_json::from_value(body)
+            .map_err(|error| Error::InvalidResponse(format!("invalid chat response: {error}")))?;
         let choices = body
-            .get("choices")
-            .and_then(Value::as_array)
+            .choices
+            .0
             .ok_or(Error::MissingField("choices"))?
-            .iter()
+            .into_iter()
             .enumerate()
             .map(|(position, choice)| normalize_choice(position, choice))
             .collect::<Result<Vec<_>, _>>()?;
-
-        let usage = body.get("usage").and_then(Value::as_object);
-        let field = |name: &str| {
-            usage
-                .and_then(|usage| usage.get(name))
-                .and_then(Value::as_u64)
-                .unwrap_or(0)
-        };
-        let details = usage.and_then(|usage| usage.get("prompt_tokens_details"));
+        let usage = body.usage.0;
+        let details = usage
+            .as_ref()
+            .and_then(|usage| usage.prompt_tokens_details.0.as_ref());
 
         Ok(ChatCompletionsResponse {
-            created: body
-                .get("created")
-                .and_then(Value::as_u64)
-                .unwrap_or_else(unix_now),
-            model: body
-                .get("model")
-                .and_then(Value::as_str)
-                .unwrap_or(model)
-                .to_string(),
+            created: body.created.0.unwrap_or_else(unix_now),
+            model: body.model.0.unwrap_or_else(|| model.to_string()),
             choices,
             usage: litellm_types::utils::ChatCompletionsUsage {
-                prompt_tokens: field("prompt_tokens"),
-                completion_tokens: field("completion_tokens"),
-                total_tokens: field("total_tokens"),
+                prompt_tokens: usage
+                    .as_ref()
+                    .and_then(|usage| usage.prompt_tokens.0)
+                    .unwrap_or(0),
+                completion_tokens: usage
+                    .as_ref()
+                    .and_then(|usage| usage.completion_tokens.0)
+                    .unwrap_or(0),
+                total_tokens: usage
+                    .as_ref()
+                    .and_then(|usage| usage.total_tokens.0)
+                    .unwrap_or(0),
                 prompt_tokens_details: litellm_types::utils::PromptTokensDetails {
                     cached_tokens: details
-                        .and_then(|d| d.get("cached_tokens"))
-                        .and_then(Value::as_u64)
+                        .and_then(|details| details.cached_tokens.0)
                         .unwrap_or(0),
                     cache_creation_tokens: details
-                        .and_then(|d| d.get("cache_creation_tokens"))
-                        .and_then(Value::as_u64)
+                        .and_then(|details| details.cache_creation_tokens.0)
                         .unwrap_or(0),
                     text_tokens: details
-                        .and_then(|d| d.get("text_tokens"))
-                        .and_then(Value::as_u64)
+                        .and_then(|details| details.text_tokens.0)
                         .unwrap_or(0),
                 },
             },
@@ -224,16 +305,13 @@ fn sanitize_usage(body: &mut Value) {
     }
 }
 
-fn normalize_choice(position: usize, choice: &Value) -> Result<ChatCompletionsChoice, Error> {
-    let message = choice
-        .get("message")
-        .and_then(Value::as_object)
-        .ok_or(Error::MissingField("message"))?;
-    if message
-        .get("tool_calls")
-        .and_then(Value::as_array)
-        .is_some_and(|calls| !calls.is_empty())
-    {
+fn normalize_choice(
+    position: usize,
+    choice: Lenient<ResponseChoice>,
+) -> Result<ChatCompletionsChoice, Error> {
+    let choice = choice.0.ok_or(Error::MissingField("message"))?;
+    let message = choice.message.0.ok_or(Error::MissingField("message"))?;
+    if message.tool_calls.0.is_some_and(|calls| !calls.is_empty()) {
         // Python rewrites the lone tool call into content only under
         // `json_mode`, a request flag `transform_response` cannot see, and the
         // normalized type cannot carry tool calls at all. Declining is
@@ -241,30 +319,22 @@ fn normalize_choice(position: usize, choice: &Value) -> Result<ChatCompletionsCh
         // would fabricate the reply.
         return Err(Error::Unsupported("tool call response"));
     }
-    if message.get("refusal").is_some_and(|value| !value.is_null()) {
+    if message.refusal.is_some() {
         return Err(Error::Unsupported("refusal response"));
     }
-    let content = message.get("content");
-    if content.is_some_and(|value| !value.is_null() && !value.is_string()) {
-        return Err(Error::Unsupported("non-text response content"));
-    }
+    let content = match message.content {
+        Some(ResponseContent::Text(text)) => Some(text),
+        Some(ResponseContent::Other) => {
+            return Err(Error::Unsupported("non-text response content"));
+        }
+        None => None,
+    };
     Ok(ChatCompletionsChoice {
-        index: choice
-            .get("index")
-            .and_then(Value::as_u64)
-            .unwrap_or(position as u64),
+        index: choice.index.0.unwrap_or(position as u64),
         message: ChatCompletionsChoiceMessage {
-            role: message
-                .get("role")
-                .and_then(Value::as_str)
-                .unwrap_or("assistant")
-                .to_string(),
-            content: content.and_then(Value::as_str).map(str::to_string),
+            role: message.role.0.unwrap_or_else(|| "assistant".to_string()),
+            content,
         },
-        finish_reason: choice
-            .get("finish_reason")
-            .and_then(Value::as_str)
-            .unwrap_or("")
-            .to_string(),
+        finish_reason: choice.finish_reason.0.unwrap_or_default(),
     })
 }

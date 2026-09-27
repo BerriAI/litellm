@@ -15,7 +15,8 @@ use litellm_types::{
         ChatCompletionsUsage,
     },
 };
-use serde_json::{Map, Value, json};
+use serde::Serialize;
+use serde_json::{Map, Value};
 
 use crate::{
     Error,
@@ -64,6 +65,39 @@ const CONFIG_PARAMS: &[&str] = &[
 ];
 
 const CONVERSE_PATH_SUFFIX: &str = "/converse";
+
+#[derive(Serialize)]
+struct ConverseTextBlock<'a> {
+    text: &'a str,
+}
+
+#[derive(Serialize)]
+struct ConverseTurn<'a> {
+    role: &'static str,
+    content: Vec<ConverseTextBlock<'a>>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct InferenceConfig<'a> {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_tokens: Option<&'a Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    temperature: Option<&'a Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    top_p: Option<&'a Value>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    stop_sequences: Option<&'a Value>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ConverseRequest<'a> {
+    inference_config: InferenceConfig<'a>,
+    messages: Vec<ConverseTurn<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<Vec<ConverseTextBlock<'a>>>,
+}
 
 pub struct AmazonConverseConfig;
 
@@ -283,40 +317,37 @@ impl BaseConfig for AmazonConverseConfig {
 }
 
 fn converse_body(conversation: &Conversation, optional_params: &Map<String, Value>) -> Value {
-    let messages: Vec<Value> = conversation
+    let messages = conversation
         .turns
         .iter()
-        .map(|turn| {
-            json!({
-                "role": turn.role.as_str(),
-                "content": turn.texts.iter().map(|text| json!({"text": text})).collect::<Vec<_>>(),
-            })
+        .map(|turn| ConverseTurn {
+            role: turn.role.as_str(),
+            content: turn
+                .texts
+                .iter()
+                .map(|text| ConverseTextBlock { text })
+                .collect(),
         })
         .collect();
 
-    let inference_config = Map::from_iter(SUPPORTED_PARAMS.iter().filter_map(|(_, name)| {
-        optional_params
-            .get(*name)
-            .map(|value| ((*name).to_string(), value.clone()))
-    }));
-
-    let system: Vec<Value> = conversation
-        .system
-        .iter()
-        .map(|text| json!({"text": text}))
-        .collect();
-
-    Value::Object(Map::from_iter(
-        [
-            (
-                "inferenceConfig".to_string(),
-                Value::Object(inference_config),
-            ),
-            ("messages".to_string(), json!(messages)),
-        ]
-        .into_iter()
-        .chain((!system.is_empty()).then(|| ("system".to_string(), json!(system)))),
-    ))
+    let system = (!conversation.system.is_empty()).then(|| {
+        conversation
+            .system
+            .iter()
+            .map(|text| ConverseTextBlock { text })
+            .collect()
+    });
+    serde_json::to_value(ConverseRequest {
+        inference_config: InferenceConfig {
+            max_tokens: optional_params.get("maxTokens"),
+            temperature: optional_params.get("temperature"),
+            top_p: optional_params.get("topP"),
+            stop_sequences: optional_params.get("stopSequences"),
+        },
+        messages,
+        system,
+    })
+    .expect("request body serializes")
 }
 
 fn has_blank_text(message: &ChatMessage) -> bool {

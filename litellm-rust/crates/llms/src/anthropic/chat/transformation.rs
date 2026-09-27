@@ -7,7 +7,8 @@ use litellm_types::{
     llms::openai::ChatMessage,
     utils::{ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse},
 };
-use serde_json::{Map, Value, json};
+use serde::Serialize;
+use serde_json::{Map, Value};
 
 use crate::{
     Error,
@@ -47,6 +48,29 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
     ("top_p", "top_p"),
     ("stop", "stop_sequences"),
 ];
+
+#[derive(Serialize)]
+struct RequestTextBlock<'a> {
+    #[serde(rename = "type")]
+    block_type: &'static str,
+    text: &'a str,
+}
+
+#[derive(Serialize)]
+struct RequestTurn<'a> {
+    role: &'static str,
+    content: Vec<RequestTextBlock<'a>>,
+}
+
+#[derive(Serialize)]
+struct MessagesRequest<'a> {
+    model: &'a str,
+    messages: Vec<RequestTurn<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    system: Option<Vec<RequestTextBlock<'a>>>,
+    #[serde(flatten)]
+    optional_params: Map<String, Value>,
+}
 
 pub struct AnthropicConfig;
 
@@ -202,8 +226,11 @@ impl BaseConfig for AnthropicConfig {
     }
 }
 
-fn text_block(text: &str) -> Value {
-    json!({"type": "text", "text": text})
+fn text_block(text: &str) -> RequestTextBlock<'_> {
+    RequestTextBlock {
+        block_type: "text",
+        text,
+    }
 }
 
 fn anthropic_body(
@@ -211,30 +238,28 @@ fn anthropic_body(
     conversation: &Conversation,
     optional_params: Map<String, Value>,
 ) -> Value {
-    let messages: Vec<Value> = conversation
+    let messages = conversation
         .turns
         .iter()
-        .map(|turn| {
-            json!({
-                "role": turn.role.as_str(),
-                "content": turn.texts.iter().map(|text| text_block(text)).collect::<Vec<_>>(),
-            })
+        .map(|turn| RequestTurn {
+            role: turn.role.as_str(),
+            content: turn.texts.iter().map(|text| text_block(text)).collect(),
         })
         .collect();
 
-    let system: Vec<Value> = conversation.system.iter().map(|s| text_block(s)).collect();
+    let system = (!conversation.system.is_empty()).then(|| {
+        conversation
+            .system
+            .iter()
+            .map(|text| text_block(text))
+            .collect()
+    });
 
-    let body = Map::from_iter(
-        [
-            ("model".to_string(), json!(model)),
-            ("messages".to_string(), json!(messages)),
-        ]
-        .into_iter()
-        // Python builds `{"model", "messages", **optional_params}` with
-        // `system` already folded into optional_params, so a caller-supplied
-        // key of the same name wins here too.
-        .chain((!system.is_empty()).then(|| ("system".to_string(), json!(system))))
-        .chain(optional_params),
-    );
-    Value::Object(body)
+    serde_json::to_value(MessagesRequest {
+        model,
+        messages,
+        system,
+        optional_params,
+    })
+    .expect("request body serializes")
 }

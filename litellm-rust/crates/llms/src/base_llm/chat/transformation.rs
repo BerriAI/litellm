@@ -2,6 +2,7 @@ use litellm_types::{
     llms::openai::{ChatMessage, ChatMessageContent},
     utils::ChatCompletionsResponse,
 };
+use serde::Deserialize;
 use serde_json::{Map, Value};
 
 use crate::{
@@ -27,6 +28,43 @@ pub const STREAM_PARAM: &str = "stream";
 /// Message fields that carry no meaning for the upstream body, so their
 /// presence does not make a request untranslatable.
 const IGNORABLE_MESSAGE_FIELDS: &[&str] = &["name"];
+
+enum AcceptedRole {
+    System,
+    User,
+    Assistant,
+}
+
+impl AcceptedRole {
+    fn parse(role: &str) -> Option<Self> {
+        match role {
+            "system" => Some(Self::System),
+            "user" => Some(Self::User),
+            "assistant" => Some(Self::Assistant),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TextPart {
+    #[serde(rename = "type")]
+    block_type: TextPartType,
+    #[serde(rename = "text")]
+    _text: String,
+}
+
+#[derive(Deserialize)]
+enum TextPartType {
+    #[serde(rename = "text")]
+    Text,
+}
+
+fn is_text_part(value: &Value) -> bool {
+    serde_json::from_value::<TextPart>(value.clone())
+        .is_ok_and(|part| matches!(part.block_type, TextPartType::Text))
+}
 
 pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 
@@ -142,7 +180,7 @@ pub fn unsupported_message(message: &ChatMessage) -> Option<Unsupported> {
     {
         return Some(Unsupported("unrecognized message field"));
     }
-    if !matches!(message.role.as_str(), "system" | "user" | "assistant") {
+    if AcceptedRole::parse(&message.role).is_none() {
         return Some(Unsupported("unrecognized message role"));
     }
     match &message.content {
@@ -153,11 +191,7 @@ pub fn unsupported_message(message: &ChatMessage) -> Option<Unsupported> {
         }
         Some(ChatMessageContent::Parts(parts)) => parts
             .iter()
-            .any(|part| {
-                part.get("type").and_then(Value::as_str) != Some("text")
-                    || part.get("text").and_then(Value::as_str).is_none()
-                    || part.as_object().is_some_and(|object| object.len() != 2)
-            })
+            .any(|part| !is_text_part(part))
             .then_some(Unsupported("non-text message content")),
     }
 }

@@ -7,6 +7,7 @@ use litellm_llms::{
     },
 };
 use litellm_types::{llms::openai::ChatMessage, utils::ChatCompletionsResponse};
+use rstest::rstest;
 use serde_json::{Map, Value, json};
 
 fn messages(value: Value) -> Vec<ChatMessage> {
@@ -58,6 +59,19 @@ fn builds_the_messages_body_python_builds() {
             "temperature": 0.2
         })
     );
+}
+
+#[rstest]
+fn optional_params_keep_their_request_body_precedence() {
+    let body = transform(
+        "original",
+        json!([{"role": "system", "content": "original"}, {"role": "user", "content": "hi"}]),
+        json!({"model": "override", "system": "override", "max_tokens": null, "extension": {"key": 1}}),
+    );
+    assert_eq!(body["model"], "override");
+    assert_eq!(body["system"], "override");
+    assert_eq!(body["max_tokens"], Value::Null);
+    assert_eq!(body["extension"], json!({"key": 1}));
 }
 
 #[test]

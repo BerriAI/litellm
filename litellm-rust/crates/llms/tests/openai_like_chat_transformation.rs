@@ -236,6 +236,60 @@ fn normalizes_an_openai_response() {
 }
 
 #[rstest]
+#[case::missing(json!({"message": {"content": "hi"}}))]
+#[case::null(json!({"index": null, "message": {"role": null, "content": "hi"}, "finish_reason": null}))]
+#[case::wrong_shape(json!({"index": "bad", "message": {"role": 4, "content": "hi"}, "finish_reason": []}))]
+fn malformed_optional_response_fields_keep_their_defaults(#[case] choice: Value) {
+    let response = transform_response(json!({"model": 4, "created": "bad", "choices": [choice]}))
+        .expect("response normalizes");
+    assert_eq!(response.model, "some-model");
+    assert_eq!(response.choices[0].index, 0);
+    assert_eq!(response.choices[0].message.role, "assistant");
+    assert_eq!(response.choices[0].finish_reason, "");
+    assert_eq!(response.choices[0].message.content.as_deref(), Some("hi"));
+}
+
+#[rstest]
+#[case::missing(json!({}))]
+#[case::null(json!({"choices": null}))]
+#[case::wrong_shape(json!({"choices": {}}))]
+fn malformed_choices_still_fail_as_missing(#[case] body: Value) {
+    assert_eq!(
+        transform_response(body),
+        Err(Error::MissingField("choices"))
+    );
+}
+
+#[rstest]
+#[case::missing(json!({}))]
+#[case::null(json!({"message": null}))]
+#[case::wrong_shape(json!({"message": []}))]
+fn malformed_message_still_fails_as_missing(#[case] choice: Value) {
+    assert_eq!(
+        transform_response(json!({"choices": [choice]})),
+        Err(Error::MissingField("message"))
+    );
+}
+
+#[rstest]
+fn unknown_response_values_and_extra_fields_preserve_normalization() {
+    let response = transform_response(json!({
+        "choices": [{"message": {"role": "delegate", "content": "hi", "extension": 1},
+            "finish_reason": "custom", "extension": true}],
+        "usage": {"prompt_tokens": "bad", "completion_tokens": 3,
+            "prompt_tokens_details": {"cached_tokens": "bad", "text_tokens": 2}},
+        "extension": {"enabled": true}
+    }))
+    .expect("response normalizes");
+    assert_eq!(response.choices[0].message.role, "delegate");
+    assert_eq!(response.choices[0].finish_reason, "custom");
+    assert_eq!(response.usage.prompt_tokens, 0);
+    assert_eq!(response.usage.completion_tokens, 3);
+    assert_eq!(response.usage.prompt_tokens_details.cached_tokens, 0);
+    assert_eq!(response.usage.prompt_tokens_details.text_tokens, 2);
+}
+
+#[rstest]
 fn null_token_fields_in_usage_become_zero() {
     // `_sanitize_usage_obj`: providers that return null token values break
     // OpenAI clients, so the response is scrubbed at the source.
@@ -339,5 +393,34 @@ fn tool_parameters_decline_before_the_call() {
             json!({"tools": [{"type": "function", "function": {"name": "f"}}]}),
         ),
         Some(Unsupported("unrecognized request parameter"))
+    );
+}
+
+#[rstest]
+#[case::unknown_role(json!({"role": "developer", "content": "hi"}), "unrecognized message role")]
+#[case::wrong_part_type(json!({"role": "user", "content": [{"type": 3, "text": "hi"}]}), "non-text message content")]
+#[case::unknown_part_type(json!({"role": "user", "content": [{"type": "image", "text": "hi"}]}), "non-text message content")]
+#[case::missing_text(json!({"role": "user", "content": [{"type": "text"}]}), "non-text message content")]
+#[case::null_text(json!({"role": "user", "content": [{"type": "text", "text": null}]}), "non-text message content")]
+#[case::extra_part_field(json!({"role": "user", "content": [{"type": "text", "text": "hi", "extension": 1}]}), "non-text message content")]
+#[case::extra_message_field(json!({"role": "user", "content": "hi", "extension": 1}), "unrecognized message field")]
+fn message_gate_preserves_fallback_decisions(
+    #[case] message: Value,
+    #[case] expected: &'static str,
+) {
+    assert_eq!(
+        reason(json!([message]), json!({})),
+        Some(Unsupported(expected))
+    );
+}
+
+#[rstest]
+fn accepted_text_parts_and_name_keep_the_original_request_shape() {
+    let messages =
+        json!([{"role": "user", "name": "caller", "content": [{"type": "text", "text": ""}]}]);
+    assert_eq!(reason(messages.clone(), json!({})), None);
+    assert_eq!(
+        transform("model", messages.clone(), json!({}))["messages"],
+        messages
     );
 }
