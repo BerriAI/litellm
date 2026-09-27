@@ -162,6 +162,68 @@ async def test_delegated_mcp_revokes_warm_human_policy_before_tool_execution(
     client.db.litellm_objectpermissiontable.find_unique.assert_not_called()
 
 
+def _server_row(server_id: str, access_groups: tuple[str, ...]) -> MagicMock:
+    row: Final = MagicMock()
+    row.server_id = server_id
+    row.mcp_access_groups = list(access_groups)
+    return row
+
+
+def _toolset_row(server_id: str, tool_name: str) -> MagicMock:
+    row: Final = MagicMock()
+    row.tools = [{"server_id": server_id, "tool_name": tool_name}]
+    return row
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("change", ["tool", "server", "outage"])
+async def test_autonomous_agent_toolset_and_access_group_revocations_bind_on_the_next_request(
+    monkeypatch: pytest.MonkeyPatch, change: str
+) -> None:
+    """The agent's entitlements are read through the shared toolset and access-group resolvers. Once the
+    writer revokes a tool or drops the server from the group, the next managed request must be denied
+    even though the legacy cache still holds the warm grant and the replica still shows the old rows"""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._experimental.mcp_server import toolset_db
+
+    warm_toolset: Final = _toolset_row("slack", "read")
+    list_toolsets: Final = AsyncMock(return_value=[warm_toolset])
+    monkeypatch.setattr(toolset_db, "list_mcp_toolsets", list_toolsets)
+    client: Final = MagicMock()
+    client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[_server_row("linear", ("grp",))])
+    client.writer_db.litellm_mcpservertable.find_many = AsyncMock(return_value=[_server_row("linear", ("grp",))])
+    monkeypatch.setattr(proxy_server, "prisma_client", client)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", DualCache())
+    permission: Final = LiteLLM_ObjectPermissionTable(
+        object_permission_id="agent-permissions", mcp_toolsets=["ts"], mcp_access_groups=["grp"]
+    )
+    auth: Final = actor(None)
+    assert auth.managed_agent_policy is not None
+    auth.managed_agent_policy = auth.managed_agent_policy.model_copy(
+        update={"object_permission": permission.model_dump()}
+    )
+    auth.requires_fresh_policy = True
+
+    assert set(await MCPRequestHandler.get_allowed_mcp_servers(auth)) == {"slack", "linear"}
+    assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == ["read"]
+
+    if change == "tool":
+        list_toolsets.return_value = [_toolset_row("slack", "other")]
+        assert await MCPRequestHandler.get_allowed_tools_for_server("slack", auth) == ["other"]
+    elif change == "server":
+        client.writer_db.litellm_mcpservertable.find_many.return_value = []
+        assert set(await MCPRequestHandler.get_allowed_mcp_servers(auth)) == {"slack"}
+        assert await MCPRequestHandler.get_allowed_tools_for_server("linear", auth) == []
+    else:
+        list_toolsets.side_effect = RuntimeError("writer unavailable")
+        with pytest.raises(HTTPException) as failure:
+            await MCPRequestHandler.get_allowed_tools_for_server("slack", auth)
+        assert failure.value.status_code == 503
+    for call in list_toolsets.await_args_list:
+        assert call.kwargs["use_writer"] is True, "managed agent toolsets must be read from the writer"
+    client.db.litellm_mcpservertable.find_many.assert_not_called()
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("role", ["proxy_admin", "proxy_admin_viewer", "internal_user"])
 @pytest.mark.parametrize("open_channel", ["none", "operator", "submitted"])
@@ -255,7 +317,9 @@ async def test_absent_agent_policy_and_missing_delegated_subject_grant_no_server
 async def test_tool_policy_outage_after_server_admission_fails_closed(monkeypatch: pytest.MonkeyPatch) -> None:
     permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="human-grant", mcp_servers=["slack"])
     user: Final = LiteLLM_UserTable(user_id="human", teams=[], object_permission=permission)
-    monkeypatch.setattr(auth_checks, "get_user_object", AsyncMock(side_effect=[user, RuntimeError("tool lookup unavailable")]))
+    monkeypatch.setattr(
+        auth_checks, "get_user_object", AsyncMock(side_effect=[user, RuntimeError("tool lookup unavailable")])
+    )
     with pytest.raises(HTTPException) as failure:
         await MCPRequestHandler.get_allowed_tools_for_server("slack", actor(None, delegated=True))
     assert failure.value.status_code == 503
@@ -284,7 +348,9 @@ async def test_manager_preserves_managed_server_grants_across_open_channels(
     auth.user_role = role
     assert not auth.mcp_explicit_grants_only
     access: Final = MCPServerAccess(server_ids=("slack", "open")) if scoped else None
-    assert set(await manager.get_allowed_mcp_servers(auth, access=access)) == ({"slack"} if scoped else {"slack", "linear"})
+    assert set(await manager.get_allowed_mcp_servers(auth, access=access)) == (
+        {"slack"} if scoped else {"slack", "linear"}
+    )
 
 
 @pytest.mark.asyncio

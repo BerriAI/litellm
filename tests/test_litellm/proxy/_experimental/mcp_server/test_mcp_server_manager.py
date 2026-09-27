@@ -11152,6 +11152,72 @@ async def test_resolve_toolset_tool_permissions_single_db_fetch_across_checks():
     list_toolsets_mock.assert_awaited_once()
 
 
+@pytest.mark.asyncio
+async def test_resolve_toolset_tool_permissions_fresh_policy_sees_writer_revocation_past_warm_cache():
+    """A managed agent's tool grant revoked in the writer DB must be gone on the very next fresh
+    request even though the legacy cache still holds the old grant, and the fresh read must go to
+    the writer, not the replica"""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    granted = MagicMock()
+    granted.tools = [{"server_id": "server-a", "tool_name": "echo"}]
+    revoked = MagicMock()
+    revoked.tools = [{"server_id": "server-a", "tool_name": "other"}]
+    list_toolsets_mock = AsyncMock(side_effect=[[granted], [revoked]])
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.toolset_db.list_mcp_toolsets",
+            list_toolsets_mock,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+    ):
+        warm = await manager.resolve_toolset_tool_permissions(toolset_ids=["ts-1"])
+        legacy_after_revoke = await manager.resolve_toolset_tool_permissions(toolset_ids=["ts-1"])
+        fresh_after_revoke = await manager.resolve_toolset_tool_permissions(
+            toolset_ids=["ts-1"], requires_fresh_policy=True
+        )
+
+    assert warm == {"server-a": ["echo"]}
+    assert legacy_after_revoke == warm, "legacy callers keep the cached grant by design"
+    assert fresh_after_revoke == {"server-a": ["other"]}
+    assert list_toolsets_mock.await_count == 2
+    assert list_toolsets_mock.await_args_list[0].kwargs["use_writer"] is False
+    assert list_toolsets_mock.await_args_list[1].kwargs["use_writer"] is True
+
+
+@pytest.mark.asyncio
+async def test_resolve_toolset_tool_permissions_fresh_policy_propagates_db_fault_instead_of_no_grants():
+    """A fresh read that fails must raise so the managed-agent boundary fails closed; the legacy
+    path keeps its swallow-to-empty behaviour"""
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
+        MCPServerManager,
+    )
+
+    manager = MCPServerManager()
+    list_toolsets_mock = AsyncMock(side_effect=RuntimeError("relation does not exist"))
+
+    with (
+        patch(
+            "litellm.proxy._experimental.mcp_server.toolset_db.list_mcp_toolsets",
+            list_toolsets_mock,
+        ),
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.user_api_key_cache", DualCache()),
+    ):
+        legacy = await manager.resolve_toolset_tool_permissions(toolset_ids=["ts-1"])
+        with pytest.raises(RuntimeError, match="relation does not exist"):
+            await manager.resolve_toolset_tool_permissions(toolset_ids=["ts-1"], requires_fresh_policy=True)
+
+    assert legacy == {}
+
+
 class TestMaterializeAuthHeaders:
     """_materialize_auth_headers drives one step of a resolved httpx.Auth's own flow to turn it
     into a header dict for the OpenAPI egress arm, which sends plain headers and cannot carry an

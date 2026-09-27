@@ -2109,6 +2109,8 @@ class MCPRequestHandler:
     @staticmethod
     async def _toolset_tool_permissions(
         object_permission: LiteLLM_ObjectPermissionTable | None,
+        *,
+        requires_fresh_policy: bool = False,
     ) -> Mapping[str, Sequence[str]]:
         """The ``server_id -> tool names`` grants of this permission row's toolsets, empty when it
         declares none. The shared resolver for the team, org, and internal-user levels, so a toolset
@@ -2125,7 +2127,8 @@ class MCPRequestHandler:
         if object_permission is None or not object_permission.mcp_toolsets:
             return _EMPTY_TOOLSET_GRANTS
         resolved: Final = await global_mcp_server_manager.resolve_toolset_tool_permissions(
-            toolset_ids=object_permission.mcp_toolsets
+            toolset_ids=object_permission.mcp_toolsets,
+            requires_fresh_policy=requires_fresh_policy,
         )
         if not resolved:
             raise UnloadableEntitlementError(
@@ -2137,10 +2140,15 @@ class MCPRequestHandler:
     async def _toolset_tools_for_server(
         object_permission: LiteLLM_ObjectPermissionTable | None,
         server_id: str,
+        *,
+        requires_fresh_policy: bool = False,
     ) -> Sequence[str] | None:
         """Tool names this row's toolsets grant on ``server_id``, ``None`` when its toolsets place
         no restriction on that server (it declares no toolsets, or none of them name it)."""
-        return (await MCPRequestHandler._toolset_tool_permissions(object_permission)).get(server_id)
+        grants: Final = await MCPRequestHandler._toolset_tool_permissions(
+            object_permission, requires_fresh_policy=requires_fresh_policy
+        )
+        return grants.get(server_id)
 
     @staticmethod
     def _union_tool_grants(
@@ -2266,9 +2274,12 @@ class MCPRequestHandler:
             # tool-level check sees the key's full effective tool scope
             key_toolset_ids: Final = (key_obj_perm.mcp_toolsets or []) if key_obj_perm else []
             key_toolset_tools: Final = (
-                (await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=key_toolset_ids)).get(
-                    server_id
-                )
+                (
+                    await global_mcp_server_manager.resolve_toolset_tool_permissions(
+                        toolset_ids=key_toolset_ids,
+                        requires_fresh_policy=user_api_key_auth.requires_fresh_policy,
+                    )
+                ).get(server_id)
                 if key_toolset_ids
                 else None
             )
@@ -2282,7 +2293,9 @@ class MCPRequestHandler:
 
             # Tools granted through the team's toolsets restrict this server exactly
             # as the team's direct tool permissions do, mirroring the key path above
-            team_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(team_obj_perm, server_id)
+            team_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(
+                team_obj_perm, server_id, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
+            )
             team_tools: Final = MCPRequestHandler._union_tool_grants(team_direct_tools, team_toolset_tools)
 
             # Apply same inheritance logic as get_allowed_mcp_servers
@@ -2382,7 +2395,9 @@ class MCPRequestHandler:
                 if org_obj_perm and org_obj_perm.mcp_tool_permissions
                 else None
             )
-            org_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(org_obj_perm, server_id)
+            org_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(
+                org_obj_perm, server_id, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
+            )
             org_tools: Final = MCPRequestHandler._union_tool_grants(org_direct_tools, org_toolset_tools)
             if org_tools is not None:
                 allowed_tools = (
@@ -2537,7 +2552,8 @@ class MCPRequestHandler:
 
             # Get MCP servers from access groups
             access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-                key_object_permission.mcp_access_groups or []
+                key_object_permission.mcp_access_groups or [],
+                requires_fresh_policy=user_api_key_auth.requires_fresh_policy,
             )
 
             # servers referenced in tool permissions should also be accessible
@@ -2550,7 +2566,14 @@ class MCPRequestHandler:
             # ceilings as any other key-level grant
             toolset_ids: Final = key_object_permission.mcp_toolsets or []
             toolset_servers: Final = (
-                list((await global_mcp_server_manager.resolve_toolset_tool_permissions(toolset_ids=toolset_ids)).keys())
+                list(
+                    (
+                        await global_mcp_server_manager.resolve_toolset_tool_permissions(
+                            toolset_ids=toolset_ids,
+                            requires_fresh_policy=user_api_key_auth.requires_fresh_policy,
+                        )
+                    ).keys()
+                )
                 if toolset_ids
                 else []
             )
@@ -2625,7 +2648,12 @@ class MCPRequestHandler:
         return list(dict.fromkeys(t for t in user_object.teams if t and t != UI_TEAM_ID))
 
     @staticmethod
-    async def _team_granted_servers(team_obj: LiteLLM_TeamTable, team_access_group_servers: list[str]) -> set[str]:
+    async def _team_granted_servers(
+        team_obj: LiteLLM_TeamTable,
+        team_access_group_servers: list[str],
+        *,
+        requires_fresh_policy: bool = False,
+    ) -> set[str]:
         """The raw MCP-server set a team grants (before any org ceiling): its object_permission (direct
         ``mcp_servers``, the ``all_proxy_servers`` sentinel → the full registry, legacy access groups,
         tool-perm-referenced servers, toolset-referenced servers) unioned with its unified
@@ -2640,13 +2668,17 @@ class MCPRequestHandler:
         if SpecialMCPServerName.all_proxy_servers.value in (object_permissions.mcp_servers or []):
             return set(global_mcp_server_manager.get_registry().keys())
         legacy_access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-            object_permissions.mcp_access_groups or []
+            object_permissions.mcp_access_groups or [],
+            requires_fresh_policy=requires_fresh_policy,
+        )
+        toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(
+            object_permissions, requires_fresh_policy=requires_fresh_policy
         )
         return (
             set(global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or []))
             | set(legacy_access_group_servers)
             | set(global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys())
-            | (await MCPRequestHandler._toolset_tool_permissions(object_permissions)).keys()
+            | toolset_grants.keys()
             | set(team_access_group_servers)
         )
 
@@ -2704,7 +2736,11 @@ class MCPRequestHandler:
                 check_db_only=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
             )
 
-            servers: Final = await MCPRequestHandler._team_granted_servers(team_obj, team_access_group_servers)
+            servers: Final = await MCPRequestHandler._team_granted_servers(
+                team_obj,
+                team_access_group_servers,
+                requires_fresh_policy=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
+            )
             return list(servers)
         except Exception as e:
             if isinstance(e, UnloadableEntitlementError):
@@ -2834,7 +2870,8 @@ class MCPRequestHandler:
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or [])
 
             access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-                object_permissions.mcp_access_groups or []
+                object_permissions.mcp_access_groups or [],
+                requires_fresh_policy=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
             )
 
             tool_perm_servers: Final = list(
@@ -2843,7 +2880,10 @@ class MCPRequestHandler:
 
             # servers referenced by the org's toolset grants are part of the org ceiling,
             # exactly as servers referenced by its inline tool permissions are
-            toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(object_permissions)
+            toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(
+                object_permissions,
+                requires_fresh_policy=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
+            )
 
             all_servers: Final = tuple(
                 {*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants}
@@ -2935,7 +2975,8 @@ class MCPRequestHandler:
 
             # Get MCP servers from access groups
             access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-                object_permission.mcp_access_groups or []
+                object_permission.mcp_access_groups or [],
+                requires_fresh_policy=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
             )
 
             # servers referenced in tool permissions should also be accessible
@@ -3068,13 +3109,17 @@ class MCPRequestHandler:
                 return []
 
             direct_mcp_servers = global_mcp_server_manager.expand_permission_list(object_permissions.mcp_servers or [])
+            fresh: Final = bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy)
             access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-                object_permissions.mcp_access_groups or []
+                object_permissions.mcp_access_groups or [],
+                requires_fresh_policy=fresh,
             )
             tool_perm_servers: Final = list(
                 global_mcp_server_manager.expand_tool_permissions(object_permissions.mcp_tool_permissions).keys()
             )
-            toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(object_permissions)
+            toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(
+                object_permissions, requires_fresh_policy=fresh
+            )
             return tuple({*direct_mcp_servers, *access_group_servers, *tool_perm_servers, *toolset_grants})
         except Exception as e:  # noqa: BLE001  # any resolution fault is an unresolved ceiling, never "no ceiling"
             verbose_logger.warning("Failed to get allowed MCP servers for user: %s", e)
@@ -3208,7 +3253,11 @@ class MCPRequestHandler:
         user_direct_tools: Final = global_mcp_server_manager.expand_tool_permissions(
             object_permissions.mcp_tool_permissions
         ).get(server_id)
-        user_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(object_permissions, server_id)
+        user_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(
+            object_permissions,
+            server_id,
+            requires_fresh_policy=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
+        )
         user_tools: Final = MCPRequestHandler._union_tool_grants(user_direct_tools, user_toolset_tools)
         if user_tools is None:
             return allowed_tools
@@ -3237,7 +3286,9 @@ class MCPRequestHandler:
             return allowed_tools
         try:
             team_obj_perm: Final = await MCPRequestHandler._get_team_object_permission(caller_auth)
-            team_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(team_obj_perm, server_id)
+            team_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(
+                team_obj_perm, server_id, requires_fresh_policy=caller_auth.requires_fresh_policy
+            )
         except Exception as e:  # noqa: BLE001  # an unresolved caller team must deny, not widen
             verbose_logger.warning(
                 "MCP agent caller team tool ceiling unresolvable, denying tools on %r: %s", server_id, e
@@ -3282,7 +3333,11 @@ class MCPRequestHandler:
         end_user_direct_tools: Final = global_mcp_server_manager.expand_tool_permissions(
             object_permissions.mcp_tool_permissions
         ).get(server_id)
-        end_user_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(object_permissions, server_id)
+        end_user_toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(
+            object_permissions,
+            server_id,
+            requires_fresh_policy=bool(user_api_key_auth and user_api_key_auth.requires_fresh_policy),
+        )
         end_user_tools: Final = MCPRequestHandler._union_tool_grants(end_user_direct_tools, end_user_toolset_tools)
         if end_user_tools is None:
             return allowed_tools
@@ -3403,9 +3458,12 @@ class MCPRequestHandler:
                 obj_perm.mcp_servers or []
             )
             access_group_servers: Final = await MCPRequestHandler._get_mcp_servers_from_access_groups(
-                obj_perm.mcp_access_groups or []
+                obj_perm.mcp_access_groups or [],
+                requires_fresh_policy=user_api_key_auth.requires_fresh_policy,
             )
-            toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(obj_perm)
+            toolset_grants: Final = await MCPRequestHandler._toolset_tool_permissions(
+                obj_perm, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
+            )
             return list({*expanded_direct_servers, *access_group_servers, *toolset_grants})
         except Exception as e:
             if user_api_key_auth.managed_agent_policy is not None or isinstance(e, UnloadableEntitlementError):
@@ -3475,7 +3533,9 @@ class MCPRequestHandler:
                 if obj_perm.mcp_tool_permissions
                 else None
             )
-            toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(obj_perm, server_id)
+            toolset_tools: Final = await MCPRequestHandler._toolset_tools_for_server(
+                obj_perm, server_id, requires_fresh_policy=user_api_key_auth.requires_fresh_policy
+            )
             agent_tools: Final = MCPRequestHandler._union_tool_grants(direct_tools, toolset_tools)
             return list(agent_tools) if agent_tools is not None else None
         except Exception as e:
@@ -3497,28 +3557,38 @@ class MCPRequestHandler:
         return server_ids
 
     @staticmethod
-    async def _get_db_server_ids_for_access_groups(prisma_client, access_groups: list[str]) -> set[str]:
+    async def _get_db_server_ids_for_access_groups(
+        prisma_client,
+        access_groups: list[str],
+        *,
+        use_writer: bool = False,
+    ) -> set[str]:
         """
         Helper to get server_ids from DB servers that match any of the given access groups.
         """
         server_ids: Final[set[str]] = set()
         if access_groups and prisma_client is not None:
             try:
-                mcp_servers: Final = await MCPServerRepository(prisma_client).table.find_many(
+                mcp_servers: Final = await MCPServerRepository(prisma_client, use_writer=use_writer).table.find_many(
                     where={"mcp_access_groups": {"hasSome": access_groups}}
                 )
                 for server in mcp_servers:
                     server_ids.add(server.server_id)
             except Exception as e:
+                if use_writer:
+                    raise
                 verbose_logger.debug("Error getting MCP servers from access groups: %s", e)
         return server_ids
 
     @staticmethod
     async def _get_mcp_servers_from_access_groups(
         access_groups: list[str],
+        *,
+        requires_fresh_policy: bool = False,
     ) -> list[str]:
         """
-        Resolve MCP access groups to server IDs by querying BOTH the MCP server table (DB) AND config-loaded servers
+        Resolve MCP access groups to server IDs by querying BOTH the MCP server table (DB) AND config-loaded servers.
+        ``requires_fresh_policy`` reads the writer and propagates a read fault instead of resolving to no servers.
         """
         from litellm.proxy.proxy_server import prisma_client
 
@@ -3534,11 +3604,15 @@ class MCPRequestHandler:
             )
 
             # Use the new helper for DB servers
-            db_server_ids = await MCPRequestHandler._get_db_server_ids_for_access_groups(prisma_client, access_groups)
+            db_server_ids = await MCPRequestHandler._get_db_server_ids_for_access_groups(
+                prisma_client, access_groups, use_writer=requires_fresh_policy
+            )
             server_ids.update(db_server_ids)
 
             return list(server_ids)
         except Exception as e:
+            if requires_fresh_policy:
+                raise
             verbose_logger.warning("Failed to get MCP servers from access groups: %s", e)
             return []
 

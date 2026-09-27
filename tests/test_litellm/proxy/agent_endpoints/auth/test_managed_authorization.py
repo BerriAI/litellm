@@ -437,9 +437,12 @@ def test_managed_realtime_requires_a_model_and_ignores_completion_defaults(route
 
     with pytest.raises(HTTPException, match="explicit or configured model"):
         managed_inference_request(route, {}, {"completion_model": "allowed-default"}, "cli")
-    assert managed_inference_request(
-        route, {"model": "requested"}, {"completion_model": "allowed-default"}, "cli"
-    )["model"] == "requested"
+    assert (
+        managed_inference_request(route, {"model": "requested"}, {"completion_model": "allowed-default"}, "cli")[
+            "model"
+        ]
+        == "requested"
+    )
 
 
 @pytest.mark.parametrize("mode,user", [("autonomous", None), ("delegated", "verified-human")])
@@ -482,3 +485,16 @@ async def test_bound_autonomous_actor_is_admitted_without_a_human() -> None:
     assert auth.managed_agent_policy == agent()
     assert auth.billing_agent_policy == agent()
     assert auth.user_id is None
+
+
+@pytest.mark.asyncio
+async def test_admitted_managed_actor_requires_fresh_policy_so_revocations_bind_next_request() -> None:
+    """Managed MCP grants (toolsets, access groups) are read through the shared resolvers, which only
+    bypass the warm cache and the replica when the subject carries requires_fresh_policy"""
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=agent())
+    auth: Final = UserAPIKeyAuth(agent_id="agent")
+    auth.managed_agent_context = ManagedAgentContext(agent_id="agent", binding_revision="current", mode="autonomous")
+    assert auth.requires_fresh_policy is False
+    await admit_managed_actor(auth, AgentIdentityStore.from_client(database))
+    assert auth.requires_fresh_policy is True
