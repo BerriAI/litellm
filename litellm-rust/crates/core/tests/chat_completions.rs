@@ -162,7 +162,6 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsReq
 #[case::missing_usage(
     r#"{"model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}"#
 )]
-#[rstest::rstest]
 #[case::tool_use_block(r#"{"model":"m","content":[{"type":"tool_use","id":"t","name":"f","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}"#)]
 #[case::not_json("not json")]
 #[tokio::test]

@@ -61,7 +61,9 @@ async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response,
         .get("messages")
         .cloned()
         .ok_or_else(|| Error::InvalidBody("messages is required".into()))?;
-    let response = gateway.core.chat_completions(ChatCompletionsRequest {
+    let response = gateway
+        .core
+        .chat_completions(ChatCompletionsRequest {
             model: &deployment.model,
             messages,
             optional_params: body
@@ -73,6 +75,7 @@ async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response,
             custom_llm_provider: deployment.custom_llm_provider.as_deref(),
             extra_headers: None,
             timeout: deployment.timeout,
-        }).await?;
+        })
+        .await?;
     Ok(Json(response).into_response())
 }
