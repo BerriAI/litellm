@@ -41,6 +41,7 @@ async fn handle(gateway: &Gateway, request: Request) -> Result<Value, Error> {
     Ok(audio_transcription(
         &gateway.resources,
         &gateway.http,
+        gateway.secrets.as_ref(),
         AudioTranscriptionRequest {
             model: &deployment.model,
             audio,

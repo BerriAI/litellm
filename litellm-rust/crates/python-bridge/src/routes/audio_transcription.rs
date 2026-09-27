@@ -4,8 +4,10 @@ use litellm_core::audio_transcription::{
 };
 use litellm_host_python::from_py_argument;
 use litellm_http::HttpClientConfig;
+use litellm_secrets::source::SecretSource;
 use pyo3::{prelude::*, types::PyDict};
 use serde_json::{Map, Value};
+use std::sync::Arc;
 
 use crate::{
     errors::route_error_to_pyerr,
@@ -14,6 +16,7 @@ use crate::{
 
 async fn execute(
     config: HttpClientConfig,
+    secrets: Arc<dyn SecretSource>,
     audio: Value,
     optional_params: Map<String, Value>,
     options: RouteOptions,
@@ -29,6 +32,7 @@ async fn execute(
     run_audio_transcription(
         crate::http::resources(),
         &config,
+        secrets.as_ref(),
         AudioTranscriptionRequest {
             model: &model,
             audio,
@@ -71,7 +75,13 @@ pub(crate) fn transcription(
     let config = crate::http::call_config(py, &PyDict::new(py), false)?;
     run_sync(
         py,
-        execute(config, audio, optional_params.unwrap_or_default(), options),
+        execute(
+            config,
+            crate::secrets::source(py)?,
+            audio,
+            optional_params.unwrap_or_default(),
+            options,
+        ),
         route_error_to_pyerr,
     )
 }
@@ -104,7 +114,13 @@ pub(crate) fn atranscription<'py>(
     let config = crate::http::call_config(py, &PyDict::new(py), true)?;
     run_async(
         py,
-        execute(config, audio, optional_params.unwrap_or_default(), options),
+        execute(
+            config,
+            crate::secrets::source(py)?,
+            audio,
+            optional_params.unwrap_or_default(),
+            options,
+        ),
         route_error_to_pyerr,
     )
 }
