@@ -2605,9 +2605,8 @@ class LiteLLMCompletionResponsesConfig:
                                 for text in (reasoning_content,)
                                 if text
                             ],
-                            summary=[],
                             encrypted_content=encrypted_content,
-                        )
+                        ).model_copy(update={"summary": []})
                     ]
         return []
 
