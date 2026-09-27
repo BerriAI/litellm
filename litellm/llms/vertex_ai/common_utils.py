@@ -1301,13 +1301,14 @@ class VertexAITokenCounter(BaseTokenCounter):
                 )
             )
 
-            deployment_params: Final = {
-                key: value
-                for key, value in count_tokens_params_request.items()
-                if key not in ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS
-            }
             result = await VertexAITokenCounter().acount_tokens(
-                **(deployment_params | {"model": model_to_use, "contents": resolved_contents}),
+                **{
+                    key: value
+                    for key, value in count_tokens_params_request.items()
+                    if key not in ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS | {"model", "contents"}
+                },
+                model=model_to_use,
+                contents=resolved_contents,
             )
 
             if result is not None and "totalTokens" in result:

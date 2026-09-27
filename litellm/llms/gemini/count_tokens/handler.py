@@ -52,34 +52,25 @@ def build_count_tokens_request(
 def _part_without_function_response_id(part: object) -> object:
     if not isinstance(part, dict):
         return part
-    function_response: Final = cast(  # cast-ok: request JSON, keys are strings
-        dict[str, object], part
-    ).get("functionResponse")
+    part_fields: Final = cast(dict[str, object], part)  # cast-ok: request JSON, keys are strings
+    function_response: Final = part_fields.get("functionResponse")
     if not isinstance(function_response, dict):
-        return part
-    return part | {
-        "functionResponse": {
-            key: value
-            for key, value in cast(  # cast-ok: request JSON, keys are strings
-                dict[str, object], function_response
-            ).items()
-            if key != "id" and value is not None
-        }
+        return part_fields
+    response_fields: Final = cast(dict[str, object], function_response)  # cast-ok: request JSON, keys are strings
+    return part_fields | {
+        "functionResponse": {key: value for key, value in response_fields.items() if key != "id" and value is not None}
     }
 
 
 def _content_without_function_response_ids(content: object) -> object:
     if not isinstance(content, dict):
         return content
-    parts: Final = cast(dict[str, object], content).get("parts")  # cast-ok: request JSON, keys are strings
+    content_fields: Final = cast(dict[str, object], content)  # cast-ok: request JSON, keys are strings
+    parts: Final = content_fields.get("parts")
     if not isinstance(parts, list):
-        return content
-    return content | {
-        "parts": [
-            _part_without_function_response_id(part)
-            for part in cast(list[object], parts)  # cast-ok: isinstance already proved a list
-        ]
-    }
+        return content_fields
+    part_list: Final = cast(list[object], parts)  # cast-ok: isinstance already proved a list
+    return content_fields | {"parts": [_part_without_function_response_id(part) for part in part_list]}
 
 
 class GoogleAIStudioTokenCounter:
