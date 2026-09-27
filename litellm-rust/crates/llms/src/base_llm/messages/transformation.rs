@@ -2,19 +2,22 @@ use litellm_types::llms::anthropic_messages::{
     anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
 };
 
-pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
-use crate::{
-    Error, anthropic::messages::thinking::ThinkingContext,
-    base_llm::anthropic_messages::streaming::StreamDecoder,
-};
+use super::context::MessagesTransformContext;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct MessagesTransformContext {
-    pub thinking: ThinkingContext,
-    pub drop_params: bool,
-}
+pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
+use crate::{Error, base_llm::messages::streaming::StreamDecoder};
+
+pub const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
 
 pub trait BaseAnthropicMessagesConfig: Sync {
+    fn shape_request(
+        &self,
+        request: AnthropicMessagesRequest,
+        _reasoning_auto_summary: bool,
+    ) -> Result<AnthropicMessagesRequest, Error> {
+        Ok(request)
+    }
+
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
@@ -68,10 +71,7 @@ pub trait BaseAnthropicMessagesConfig: Sync {
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        &[
-            ("anthropic-version", "2023-06-01"),
-            ("content-type", "application/json"),
-        ]
+        &[("content-type", "application/json")]
     }
 
     fn request_headers(&self, headers: Headers, _request: &AnthropicMessagesRequest) -> Headers {
@@ -83,6 +83,7 @@ pub trait BaseAnthropicMessagesConfig: Sync {
 mod tests {
     use super::*;
     use crate::base_llm::auth::AuthScheme;
+    use rstest::rstest;
 
     struct DefaultsConfig;
 
@@ -126,6 +127,27 @@ mod tests {
         assert_eq!(
             DefaultsConfig.request_headers(headers(&[("x-api-key", "sk")]), &request),
             headers(&[("x-api-key", "sk")])
+        );
+    }
+
+    #[rstest]
+    #[case::disabled(false)]
+    #[case::enabled(true)]
+    fn default_shaping_preserves_provider_policy_inputs(#[case] reasoning_auto_summary: bool) {
+        let request: AnthropicMessagesRequest = serde_json::from_value(serde_json::json!({
+            "model": "test-model",
+            "metadata": {"user_id": 7, "extra": "keep"},
+            "thinking": {"type": "enabled", "budget_tokens": 64},
+            "messages": [{"role": "system", "content": "context"}]
+        }))
+        .unwrap();
+        assert_eq!(
+            DefaultsConfig.shape_request(request.clone(), reasoning_auto_summary),
+            Ok(request)
+        );
+        assert_eq!(
+            DefaultsConfig.default_headers(),
+            &[("content-type", "application/json")]
         );
     }
 

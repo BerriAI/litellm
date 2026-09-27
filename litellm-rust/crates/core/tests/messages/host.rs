@@ -5,7 +5,7 @@ use litellm_host::{
     event::{CallEvent, MachineEvent, RequestContext, WireRequest},
     host::Host,
 };
-use litellm_llms::anthropic::common_utils::AnthropicModelCapabilities;
+use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use rstest::rstest;
 
 use super::*;
@@ -183,9 +183,9 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     let host = RecordingHost::passthrough(authenticated(
         MessagesCall {
             shaping: MessagesShaping {
-                capabilities: AnthropicModelCapabilities {
+                capabilities: MessagesModelCapabilities {
                     supports_sampling_params: false,
-                    ..AnthropicModelCapabilities::default()
+                    ..MessagesModelCapabilities::default()
                 },
                 drop_params: true,
                 ..MessagesShaping::default()

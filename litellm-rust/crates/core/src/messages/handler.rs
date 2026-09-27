@@ -9,11 +9,11 @@ use litellm_host::{
 };
 use litellm_http::transport::Error as TransportError;
 use litellm_llms::base_llm::{
-    anthropic_messages::{
+    auth::{Authenticated, resolve_auth},
+    messages::{
         streaming::{ByteStream, StreamDecoder, encode_anthropic_sse},
         transformation::BaseAnthropicMessagesConfig,
     },
-    auth::{Authenticated, resolve_auth},
 };
 use litellm_tracing::{ByteChunk, debug};
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
@@ -98,8 +98,9 @@ pub(super) async fn execute(
 }
 
 fn serialize_failure(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(format!(
-        "failed to serialize Anthropic messages request: {err}"
+    Error::InvalidRequest(litellm_llms::ErrorDetail::failed(
+        "Anthropic messages request serialization",
+        err,
     ))
 }
 
@@ -142,8 +143,12 @@ fn decode_response(
     model: &str,
     text: &str,
 ) -> Result<AnthropicMessagesResponse, Error> {
-    let response = serde_json::from_str(text)
-        .map_err(|err| Error::InvalidResponse(format!("invalid messages response JSON: {err}")))?;
+    let response = serde_json::from_str(text).map_err(|err| {
+        Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+            "messages response JSON",
+            err,
+        ))
+    })?;
     config
         .transform_anthropic_messages_response(model, response)
         .map_err(Error::from)
@@ -201,7 +206,7 @@ fn log_chunk(provider: &str, stage: &str, data: &Bytes) {
 
 #[cfg(test)]
 mod tests {
-    use litellm_llms::base_llm::anthropic_messages::streaming::anthropic_sse_event_stream;
+    use litellm_llms::base_llm::messages::streaming::anthropic_sse_event_stream;
     use rstest::rstest;
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
 

@@ -25,7 +25,13 @@ const NATIVE: FieldSpec<bool> = FieldSpec::new("native", |field| field.schema_bo
 /// `SecretManagerRule` in `catalog.py` moves the configured system off `PYTHON_ONLY`, then the
 /// native secret manager.
 pub(crate) fn source(py: Python<'_>) -> PyResult<Arc<dyn SecretSource>> {
-    if PythonSettings::SecretManager.read(py)?.read(&NATIVE)? {
+    let Some(settings) = PythonSettings::SecretManager.read_or_unset(py)? else {
+        let client = crate::http::host_client(py, litellm_http::ClientVariant::Provider)?;
+        return Ok(Arc::new(
+            litellm_secrets::source::EnvironmentSecrets::python_compatible(client),
+        ));
+    };
+    if settings.read(&NATIVE)? {
         let context = litellm_host_python::PythonContext::capture(py)?;
         let client = crate::http::host_client(py, litellm_http::ClientVariant::Provider)?;
         return Ok(Arc::new(ResolvedSecrets::new(

@@ -136,7 +136,7 @@ impl litellm_host::host::Host<Ocr> for LocalOcrHost {
     async fn custom_op(&self, op: OcrOp) -> Result<(), Error> {
         match op {
             OcrOp::AcquireAzureAdToken(_) => {
-                Err(Error::Auth(litellm_auth::Error::AzureTokenAcquisition(
+                Err(Error::Auth(litellm_auth::Error::CredentialAcquisition(
                     "OCR host has no Azure AD token provider".into(),
                 )))
             }
