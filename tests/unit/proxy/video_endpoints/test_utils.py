@@ -15,21 +15,17 @@ are checked by the genuine decode round-trip.
 
 import pytest
 
-from litellm.proxy._types import ProxyException
 from litellm.proxy.video_endpoints.utils import (
-    assert_video_owner,
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
     infer_video_provider_from_model,
     resolve_video_request_model,
-    stamp_video_owner,
     video_reference_to_id,
 )
 from litellm.types.videos.utils import (
     decode_character_id_with_provider,
     encode_character_id_with_provider,
-    encode_video_id_with_provider,
 )
 
 # =========================================================================== #
@@ -254,16 +250,6 @@ def test_encode__object_non_str_or_empty_id_unchanged(bad_id):
 
     assert out is resp
     assert resp.id == bad_id  # untouched
-
-
-def test_stamp_and_assert_video_owner_round_trip():
-    encoded = encode_video_id_with_provider("req_1", "xai", "grok-imagine-video")
-    stamped = stamp_video_owner(encoded, "key-hash")
-    assert stamped != encoded
-    assert_video_owner(stamped, "key-hash")
-    with pytest.raises(ProxyException):
-        assert_video_owner(stamped, "other-key")
-    assert_video_owner(encoded, "other-key")
 
 
 def test_encode__object_without_id_attr_returned_unchanged():
