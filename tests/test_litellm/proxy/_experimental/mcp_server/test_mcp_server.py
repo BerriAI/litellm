@@ -1,5 +1,4 @@
 from litellm.proxy._experimental.mcp_server import operations as mcp_operations
-from litellm.proxy._types import UserAPIKeyAuth
 import asyncio
 import contextlib
 import contextvars
