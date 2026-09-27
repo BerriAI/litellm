@@ -2127,7 +2127,9 @@ async def delete_user(
     response_model=tuple[SCIMPlaceholder, ...],
     dependencies=(Depends(user_api_key_auth),),
 )
-async def list_placeholders() -> tuple[SCIMPlaceholder, ...]:
+async def list_placeholders(
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
+) -> tuple[SCIMPlaceholder, ...]:
     """
     List user rows whose id is another account's SSO identity or email.
 
@@ -2139,6 +2141,8 @@ async def list_placeholders() -> tuple[SCIMPlaceholder, ...]:
     its own or owns virtual keys is left out: someone uses that account.
     """
     try:
+        if await _agent_provisioning_service(auth) is not None:
+            raise HTTPException(403, "Provisioning source tokens cannot access global placeholder maintenance")
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
         async with prisma_client.tx() as tx:
             return await UserRepository(prisma_client).find_shadowing_placeholders(tx)
@@ -2167,6 +2171,7 @@ def _placeholder_rejection(placeholder: LiteLLM_UserTable, resolved: tuple[str, 
 )
 async def merge_placeholder(
     user_id: str = Path(..., title="User ID"),
+    auth: Annotated[UserAPIKeyAuth | None, Depends(user_api_key_auth)] = None,
 ) -> SCIMPlaceholderMergeResult:
     """
     Fold a placeholder user into the one account its id names by SSO identity or email.
@@ -2177,6 +2182,8 @@ async def merge_placeholder(
     has an SSO identity of its own, owns virtual keys, or names no account or several.
     """
     try:
+        if await _agent_provisioning_service(auth) is not None:
+            raise HTTPException(403, "Provisioning source tokens cannot access global placeholder maintenance")
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
         placeholder: Final = await _check_user_exists(user_id)
         resolved: Final = tuple(
