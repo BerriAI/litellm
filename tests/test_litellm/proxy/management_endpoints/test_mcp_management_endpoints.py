@@ -349,6 +349,7 @@ class TestListMCPServers:
         ]
         for idx, server in enumerate(mock_servers):
             server.credentials = {"auth_value": f"secret_{idx}"}
+            server.pinned_tools = _leaky_list_server().pinned_tools
             server.env = {"API_KEY": "super-secret"}
             server.static_headers = {"Authorization": "Bearer super-secret"}
             server.mcp_access_groups = ["group-a"]
@@ -402,6 +403,9 @@ class TestListMCPServers:
                 assert server.allowed_tools == []
                 assert server.mcp_access_groups == []
                 assert server.teams == []
+                assert server.pinned_tools is None
+
+            assert all(server.pinned_tools == _leaky_list_server().pinned_tools for server in mock_servers)
 
     @pytest.mark.asyncio
     async def test_list_mcp_servers_combined_config_and_db(self):
@@ -5661,6 +5665,7 @@ async def test_list_mcp_servers_non_admin_url_redacted():
         url="https://actions.zapier.com/mcp/SUPER-SECRET-TOKEN/sse",
     )
     server.static_headers = {"Authorization": "Bearer SUPER-SECRET-TOKEN"}
+    server.pinned_tools = _leaky_list_server().pinned_tools
     server.env = {"API_KEY": "another-secret"}
     server.extra_headers = ["Authorization"]
     server.command = "npx"
@@ -5708,6 +5713,8 @@ async def test_list_mcp_servers_non_admin_url_redacted():
     assert s.authorization_url is None
     assert s.token_url is None
     assert s.registration_url is None
+    assert s.pinned_tools is None
+    assert server.pinned_tools == _leaky_list_server().pinned_tools
 
 
 @pytest.mark.asyncio
@@ -5995,6 +6002,12 @@ def _leaky_list_server() -> "LiteLLM_MCPServerTable":
             {"name": "GLOBAL_KEY", "value": "super-secret", "scope": "global"},
         ],
         credentials={"auth_value": "sk-explicit-credential"},
+        pinned_tools={
+            "restricted_tool": PinnedMCPTool(
+                description="Restricted tool description",
+                input_schema={"type": "object", "properties": {"secret": {"type": "string"}}},
+            ),
+        },
     )
 
 
@@ -6039,6 +6052,8 @@ async def test_list_mcp_servers_sanitized_for_view_only_admin():
     assert sanitized.env == {}
     assert sanitized.env_vars is None
     assert sanitized.credentials is None
+    assert sanitized.pinned_tools is None
+    assert source.pinned_tools == _leaky_list_server().pinned_tools
 
     # The source record must never be mutated by sanitization.
     assert source.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
@@ -6057,6 +6072,7 @@ async def test_list_mcp_servers_full_admin_still_sees_secrets():
     assert raw.url == "https://leaky.example.com/mcp?api_key=sk-embedded-in-url"
     assert raw.static_headers == {"Authorization": "Bearer sk-secret-header"}
     assert raw.credentials is None
+    assert raw.pinned_tools == _leaky_list_server().pinned_tools
 
 
 def _make_env_var_server(

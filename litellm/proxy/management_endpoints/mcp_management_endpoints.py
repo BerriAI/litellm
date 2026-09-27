@@ -756,6 +756,7 @@ if MCP_AVAILABLE:
         """
         sanitized: Final = _redact_mcp_credentials(mcp_server)
         sanitized.credentials = None
+        sanitized.pinned_tools = None
         # URL is the highest-impact vector: many MCP integrations embed
         # the upstream API key directly in the path. spec_path can carry
         # similar tokens in the OpenAPI spec URL.
@@ -800,6 +801,7 @@ if MCP_AVAILABLE:
 
         sanitized: Final = _redact_mcp_credentials(mcp_server)
         sanitized.credentials = None
+        sanitized.pinned_tools = None
 
         # Remove potentially sensitive config + identity fields.
         sanitized.url = None
