@@ -1,28 +1,27 @@
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq, strum::AsRefStr)]
 pub enum ResponsesWsEventType {
+    #[strum(serialize = "response.create")]
     ResponseCreate,
+    #[strum(serialize = "response.created")]
     ResponseCreated,
+    #[strum(serialize = "response.completed")]
     ResponseCompleted,
+    #[strum(serialize = "response.failed")]
     ResponseFailed,
+    #[strum(serialize = "response.incomplete")]
     ResponseIncomplete,
+    #[strum(serialize = "error")]
     Error,
+    #[strum(default, transparent)]
     Other(String),
 }
 
 impl ResponsesWsEventType {
     pub fn as_str(&self) -> &str {
-        match self {
-            Self::ResponseCreate => "response.create",
-            Self::ResponseCreated => "response.created",
-            Self::ResponseCompleted => "response.completed",
-            Self::ResponseFailed => "response.failed",
-            Self::ResponseIncomplete => "response.incomplete",
-            Self::Error => "error",
-            Self::Other(value) => value,
-        }
+        self.as_ref()
     }
 }
 
@@ -79,19 +78,6 @@ impl ResponsesWsEvent {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ResponsesWsTransformResult {
-    pub events: Vec<ResponsesWsEvent>,
-}
-
-impl ResponsesWsTransformResult {
-    pub fn passthrough(event: ResponsesWsEvent) -> Self {
-        Self {
-            events: vec![event],
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResponsesErrorFrame {
     #[serde(rename = "type")]
@@ -120,19 +106,23 @@ pub struct ResponsesErrorBody {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn event_type_round_trips_known_and_unknown_values() {
-        let known: ResponsesWsEventType =
-            serde_json::from_str("\"response.completed\"").expect("valid event type");
-        assert_eq!(known, ResponsesWsEventType::ResponseCompleted);
-        let unknown: ResponsesWsEventType =
-            serde_json::from_str("\"response.output_text.delta\"").expect("valid event type");
-        assert_eq!(
-            unknown,
-            ResponsesWsEventType::Other("response.output_text.delta".to_string())
-        );
+    #[rstest]
+    #[case::known("response.completed", ResponsesWsEventType::ResponseCompleted)]
+    #[case::unknown(
+        "response.output_text.delta",
+        ResponsesWsEventType::Other("response.output_text.delta".to_string())
+    )]
+    fn event_type_round_trips_known_and_unknown_values(
+        #[case] value: &str,
+        #[case] expected: ResponsesWsEventType,
+    ) {
+        let actual: ResponsesWsEventType =
+            serde_json::from_str(&serde_json::to_string(value).unwrap()).expect("valid event type");
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -150,17 +140,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn model_reads_flat_and_nested_create_shapes() {
-        let flat: ResponsesWsEvent =
-            serde_json::from_value(serde_json::json!({"type":"response.create","model":"gpt-5"}))
-                .expect("valid event");
-        let nested: ResponsesWsEvent = serde_json::from_value(serde_json::json!({
-            "type":"response.create",
-            "response":{"model":"gpt-5-mini"}
-        }))
-        .expect("valid event");
-        assert_eq!(flat.model(), Some("gpt-5"));
-        assert_eq!(nested.model(), Some("gpt-5-mini"));
+    #[rstest]
+    #[case::flat(serde_json::json!({"type":"response.create","model":"model-a"}), Some("model-a"))]
+    #[case::nested(serde_json::json!({"type":"response.create","response":{"model":"model-b"}}), Some("model-b"))]
+    fn model_reads_flat_and_nested_create_shapes(
+        #[case] payload: serde_json::Value,
+        #[case] expected: Option<&str>,
+    ) {
+        let event: ResponsesWsEvent = serde_json::from_value(payload).expect("valid event");
+        assert_eq!(event.model(), expected);
     }
 }

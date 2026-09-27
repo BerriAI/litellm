@@ -1,3 +1,4 @@
+use litellm_secrets::source::SecretSource;
 pub mod types;
 pub use crate::error::RouteError as Error;
 mod handler;
@@ -12,9 +13,10 @@ use crate::audio_transcription::types::AudioTranscriptionRequest;
 pub async fn audio_transcription(
     resources: &crate::resources::CoreResources,
     config: &HttpClientConfig,
+    secrets: &dyn SecretSource,
     request: AudioTranscriptionRequest<'_>,
 ) -> Result<Value, Error> {
-    let request = prepare_audio_transcription_provider_call(request)?;
+    let request = prepare_audio_transcription_provider_call(request, secrets).await?;
     let http = resources.pool.client(config, ClientVariant::Provider)?;
     execute_audio_transcription_provider_call(&http, &resources.auth, request).await
 }

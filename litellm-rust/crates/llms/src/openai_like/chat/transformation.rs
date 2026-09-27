@@ -63,6 +63,10 @@ pub struct OpenAILikeChatConfig;
 pub const OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG: OpenAILikeChatConfig = OpenAILikeChatConfig;
 
 impl BaseConfig for OpenAILikeChatConfig {
+    fn secret_names(&self) -> Vec<&'static str> {
+        vec!["OPENAI_LIKE_API_KEY", "OPENAI_LIKE_API_BASE"]
+    }
+
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
     }

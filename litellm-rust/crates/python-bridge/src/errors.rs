@@ -43,8 +43,8 @@ pub(crate) fn chat_completions_error_to_pyerr(error: RouteError) -> PyErr {
         Phase::BeforeSend => RustBridgeDeclined::new_err(error.to_string()),
         Phase::AfterSend => RustUpstreamError::new_err(match error {
             RouteError::Transport(TransportError::Http { status, body }) => (status, body),
-            RouteError::Transport(TransportError::Network(message))
-            | RouteError::InvalidResponse(message) => (0u16, message),
+            RouteError::Transport(TransportError::Network(message)) => (0u16, message),
+            RouteError::InvalidResponse(detail) => (0u16, detail.to_string()),
             other => (0u16, other.to_string()),
         }),
     }

@@ -71,7 +71,7 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
             Ok(error)
         }
         Error::InvalidRequest(message) => {
-            let error = PyValueError::new_err(message);
+            let error = PyValueError::new_err(message.to_string());
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
             Ok(error)
         }
@@ -271,7 +271,7 @@ impl ProtocolHost for MessagesPythonHost {
     }
 
     fn host_error(error: &PyErr) -> Error {
-        Error::InvalidRequest(error.to_string())
+        Error::InvalidRequest(error.to_string().into())
     }
 
     fn close(&mut self, _: Python<'_>) {}

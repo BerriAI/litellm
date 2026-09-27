@@ -11,4 +11,4 @@ pub mod openai_like;
 pub mod reducto;
 pub mod vertex_ai;
 
-pub use error::Error;
+pub use error::{Error, ErrorDetail, ErrorSource};

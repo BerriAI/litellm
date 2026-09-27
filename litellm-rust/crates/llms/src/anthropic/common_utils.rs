@@ -1,15 +1,21 @@
+use crate::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_auth::{CredentialPlacement, SecretValue};
-use litellm_http::request::{has_header, header_value, without_headers};
+use litellm_core_utils::settings::resolve_non_empty;
+use litellm_http::request::{
+    has_header, header_value, header_values, with_header, without_headers,
+};
 use litellm_types::llms::{
     anthropic::{AnthropicBeta, BetaSet},
     anthropic_messages::anthropic_request::{
-        AnthropicMessage, AnthropicTool, ContentBlock, EffortLevel, MessageContent,
+        AnthropicMessage, AnthropicTool, ContentBlock, ContentBlockType, EffortLevel,
+        MessageContent,
     },
 };
 use litellm_types::recognized::Recognized;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 
+use crate::base_llm::messages::transformation::MESSAGES_PATH_SUFFIX;
 use crate::{
     anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX,
     base_llm::auth::{AuthScheme, Headers},
@@ -23,103 +29,33 @@ const BETA_HEADER: &str = "anthropic-beta";
 pub const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";
 pub const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
 pub const DEFAULT_ANTHROPIC_API_BASE: &str = "https://api.anthropic.com";
-pub const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
 pub const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header("x-api-key");
 const API_KEY_HEADER: &str = API_KEY_PLACEMENT.header_name();
 const AUTHORIZATION: &str = CredentialPlacement::Bearer.header_name();
 const DIRECT_BROWSER_ACCESS_HEADER: &str = "anthropic-dangerous-direct-browser-access";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SupportedEffortTiers {
-    #[serde(default)]
-    pub minimal: bool,
-    #[serde(default)]
-    pub low: bool,
-    #[serde(default)]
-    pub medium: bool,
-    #[serde(default)]
-    pub high: bool,
-    #[serde(default)]
-    pub xhigh: bool,
-    #[serde(default)]
-    pub max: bool,
-}
-
-impl SupportedEffortTiers {
-    pub fn any(self) -> bool {
-        self.minimal || self.low || self.medium || self.high || self.xhigh || self.max
+pub fn supports_effort_tier(capabilities: &MessagesModelCapabilities, level: EffortLevel) -> bool {
+    match level {
+        EffortLevel::Low => capabilities.effort_tiers.low,
+        EffortLevel::Medium => capabilities.effort_tiers.medium,
+        EffortLevel::High => capabilities.effort_tiers.high,
+        EffortLevel::Xhigh => capabilities.effort_tiers.xhigh,
+        EffortLevel::Max => capabilities.effort_tiers.max,
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AnthropicModelCapabilities {
-    #[serde(default)]
-    pub supports_reasoning: bool,
-    #[serde(default)]
-    pub supports_adaptive_thinking: bool,
-    #[serde(default)]
-    pub thinking_always_on: bool,
-    #[serde(default)]
-    pub supports_legacy_thinking: bool,
-    #[serde(default)]
-    pub supports_output_config: bool,
-    #[serde(default = "default_true")]
-    pub supports_sampling_params: bool,
-    #[serde(default)]
-    pub supports_speed: bool,
-    #[serde(default)]
-    pub effort_tiers: SupportedEffortTiers,
+pub fn supports_effort_param(capabilities: &MessagesModelCapabilities) -> bool {
+    capabilities.supports_output_config || capabilities.effort_tiers.any()
 }
 
-fn default_true() -> bool {
-    true
-}
-
-impl Default for AnthropicModelCapabilities {
-    fn default() -> Self {
-        Self {
-            supports_reasoning: false,
-            supports_adaptive_thinking: false,
-            thinking_always_on: false,
-            supports_legacy_thinking: false,
-            supports_output_config: false,
-            supports_sampling_params: true,
-            supports_speed: false,
-            effort_tiers: SupportedEffortTiers::default(),
+pub fn accepts_effort(capabilities: &MessagesModelCapabilities, level: EffortLevel) -> bool {
+    match level {
+        EffortLevel::Max => {
+            capabilities.supports_adaptive_thinking || capabilities.effort_tiers.max
         }
+        EffortLevel::Xhigh => capabilities.effort_tiers.xhigh,
+        EffortLevel::Low | EffortLevel::Medium | EffortLevel::High => true,
     }
-}
-
-impl AnthropicModelCapabilities {
-    pub fn supports_effort_tier(&self, level: EffortLevel) -> bool {
-        match level {
-            EffortLevel::Low => self.effort_tiers.low,
-            EffortLevel::Medium => self.effort_tiers.medium,
-            EffortLevel::High => self.effort_tiers.high,
-            EffortLevel::Xhigh => self.effort_tiers.xhigh,
-            EffortLevel::Max => self.effort_tiers.max,
-        }
-    }
-
-    pub fn supports_effort_param(&self) -> bool {
-        self.supports_output_config || self.effort_tiers.any()
-    }
-
-    pub fn accepts_effort(&self, level: EffortLevel) -> bool {
-        match level {
-            EffortLevel::Max => self.supports_adaptive_thinking || self.effort_tiers.max,
-            EffortLevel::Xhigh => self.effort_tiers.xhigh,
-            EffortLevel::Low | EffortLevel::Medium | EffortLevel::High => true,
-        }
-    }
-}
-
-pub fn non_empty(value: Option<&str>) -> Option<&str> {
-    value.map(str::trim).filter(|value| !value.is_empty())
-}
-
-pub fn non_empty_env(env_lookup: &dyn Fn(&str) -> Option<String>, name: &str) -> Option<String> {
-    env_lookup(name).filter(|value| !value.trim().is_empty())
 }
 
 /// An Anthropic OAuth access token, which authenticates as a bearer instead of an `x-api-key`.
@@ -156,13 +92,11 @@ pub fn get_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Option<String> {
-    non_empty(api_key)
-        .map(str::to_string)
-        .or_else(|| non_empty_env(env_lookup, ANTHROPIC_API_KEY_ENV))
+    resolve_non_empty(api_key, env_lookup, &[ANTHROPIC_API_KEY_ENV])
 }
 
 pub fn get_auth_token(env_lookup: &dyn Fn(&str) -> Option<String>) -> Option<String> {
-    non_empty_env(env_lookup, ANTHROPIC_AUTH_TOKEN_ENV)
+    resolve_non_empty(None, env_lookup, &[ANTHROPIC_AUTH_TOKEN_ENV])
 }
 
 /// Python's `AnthropicModelInfo.get_auth_header`, naming the credential instead of building
@@ -206,11 +140,12 @@ pub fn resolve_anthropic_api_base(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> String {
-    non_empty(api_base)
-        .map(str::to_string)
-        .or_else(|| non_empty_env(env_lookup, ANTHROPIC_API_BASE_ENV))
-        .or_else(|| non_empty_env(env_lookup, ANTHROPIC_BASE_URL_ENV))
-        .unwrap_or_else(|| DEFAULT_ANTHROPIC_API_BASE.to_string())
+    resolve_non_empty(
+        api_base,
+        env_lookup,
+        &[ANTHROPIC_API_BASE_ENV, ANTHROPIC_BASE_URL_ENV],
+    )
+    .unwrap_or_else(|| DEFAULT_ANTHROPIC_API_BASE.to_string())
 }
 
 pub fn complete_anthropic_url(
@@ -227,10 +162,8 @@ pub fn complete_anthropic_url(
 }
 
 pub fn existing_betas(headers: &[(String, String)]) -> BetaSet {
-    headers
-        .iter()
-        .filter(|(name, _)| name.eq_ignore_ascii_case(BETA_HEADER))
-        .flat_map(|(_, value)| {
+    header_values(headers, BETA_HEADER)
+        .flat_map(|value| {
             value
                 .parse::<BetaSet>()
                 .unwrap_or_else(|never| match never {})
@@ -246,10 +179,7 @@ pub fn merge_beta_headers(headers: Headers, added: BetaSet) -> Headers {
     if merged.is_empty() {
         return headers;
     }
-    without_headers(headers, &[BETA_HEADER])
-        .into_iter()
-        .chain([(BETA_HEADER.to_string(), merged.to_string())])
-        .collect()
+    with_header(headers, BETA_HEADER, merged.to_string())
 }
 
 /// The outcome of Python's `optionally_handle_anthropic_oauth`.
@@ -326,7 +256,7 @@ pub fn requires_native_compaction_beta(
             .iter()
             .flat_map(AnthropicMessage::blocks)
             .any(|block| {
-                block.is_type("compaction")
+                block.is_type(ContentBlockType::Compaction)
                     && block.signature.as_deref().is_some_and(|s| !s.is_empty())
             })
 }
@@ -336,11 +266,11 @@ fn is_blank(text: Option<&str>) -> bool {
 }
 
 fn is_empty_text_block(block: &ContentBlock) -> bool {
-    block.is_type("text") && is_blank(block.text.as_deref())
+    block.is_type(ContentBlockType::Text) && is_blank(block.text.as_deref())
 }
 
 pub fn is_empty_thinking_block(block: &ContentBlock) -> bool {
-    block.is_type("thinking") && is_blank(block.thinking.as_deref())
+    block.is_type(ContentBlockType::Thinking) && is_blank(block.thinking.as_deref())
 }
 
 fn retain_blocks(
@@ -397,34 +327,37 @@ fn normalized_if_changed(raw_id: Option<&str>) -> Option<String> {
 }
 
 fn sanitize_tool_use_id_block(block: ContentBlock) -> ContentBlock {
-    match block.block_type.as_deref() {
-        Some("tool_use" | "server_tool_use") => match normalized_if_changed(block.id.as_deref()) {
-            Some(id) => ContentBlock {
-                id: Some(id),
-                ..block
-            },
-            None => block,
-        },
-        Some("tool_result") => match normalized_if_changed(block.tool_use_id.as_deref()) {
-            Some(tool_use_id) => ContentBlock {
-                tool_use_id: Some(tool_use_id),
-                ..block
-            },
-            None => block,
-        },
+    match block.block_type.as_ref() {
+        Some(ContentBlockType::ToolUse | ContentBlockType::ServerToolUse) => {
+            match normalized_if_changed(block.id.as_deref()) {
+                Some(id) => ContentBlock {
+                    id: Some(id),
+                    ..block
+                },
+                None => block,
+            }
+        }
+        Some(ContentBlockType::ToolResult) => {
+            match normalized_if_changed(block.tool_use_id.as_deref()) {
+                Some(tool_use_id) => ContentBlock {
+                    tool_use_id: Some(tool_use_id),
+                    ..block
+                },
+                None => block,
+            }
+        }
         _ => block,
     }
 }
 
-fn map_blocks(
-    messages: Vec<AnthropicMessage>,
-    rewrite: impl Fn(Vec<ContentBlock>) -> Vec<ContentBlock>,
-) -> Vec<AnthropicMessage> {
+pub fn sanitize_tool_use_ids(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
     messages
         .into_iter()
         .map(|message| match message.content {
             MessageContent::Blocks(blocks) => AnthropicMessage {
-                content: MessageContent::Blocks(rewrite(blocks)),
+                content: MessageContent::Blocks(
+                    blocks.into_iter().map(sanitize_tool_use_id_block).collect(),
+                ),
                 ..message
             },
             MessageContent::Text(_) => message,
@@ -432,28 +365,31 @@ fn map_blocks(
         .collect()
 }
 
-pub fn sanitize_tool_use_ids(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
-    map_blocks(messages, |blocks| {
-        blocks.into_iter().map(sanitize_tool_use_id_block).collect()
-    })
-}
-
 pub fn strip_provider_specific_fields(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
-    map_blocks(messages, |blocks| {
-        blocks
-            .into_iter()
-            .map(|block| ContentBlock {
-                provider_specific_fields: None,
-                ..block
-            })
-            .collect()
-    })
+    messages
+        .into_iter()
+        .map(|message| match message.content {
+            MessageContent::Blocks(blocks) => AnthropicMessage {
+                content: MessageContent::Blocks(
+                    blocks
+                        .into_iter()
+                        .map(|block| ContentBlock {
+                            provider_specific_fields: None,
+                            ..block
+                        })
+                        .collect(),
+                ),
+                ..message
+            },
+            MessageContent::Text(_) => message,
+        })
+        .collect()
 }
 
 pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
-    let field = match block.block_type.as_deref() {
-        Some("thinking") => block.signature.as_deref(),
-        Some("redacted_thinking") => block.data.as_deref(),
+    let field = match block.block_type.as_ref() {
+        Some(ContentBlockType::Thinking) => block.signature.as_deref(),
+        Some(ContentBlockType::RedactedThinking) => block.data.as_deref(),
         _ => None,
     };
     field.is_some_and(|value| value.starts_with(ENCRYPTED_REASONING_SIGNATURE_PREFIX))
@@ -464,7 +400,7 @@ pub fn strip_encrypted_reasoning_blocks(messages: Vec<AnthropicMessage>) -> Vec<
 }
 
 fn is_advisor_use(block: &ContentBlock) -> bool {
-    block.is_type("server_tool_use")
+    block.is_type(ContentBlockType::ServerToolUse)
         && block.name.as_deref() == Some("advisor")
         && block.id.as_deref().is_some_and(|id| !id.is_empty())
 }
@@ -490,7 +426,7 @@ pub fn strip_advisor_blocks(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMes
             let kept: Vec<ContentBlock> = blocks
                 .iter()
                 .filter(|block| {
-                    let is_result = block.is_type("advisor_tool_result")
+                    let is_result = block.is_type(ContentBlockType::AdvisorToolResult)
                         && block
                             .tool_use_id
                             .as_deref()
@@ -519,6 +455,8 @@ struct ReplayedWebSearchResult {
 #[derive(Deserialize)]
 #[serde(tag = "type")]
 enum ReplayedWebSearchContent {
+    #[serde(rename = "web_search_result")]
+    Result(ReplayedWebSearchResult),
     #[serde(rename = "web_search_tool_result_error")]
     Error {
         #[serde(default)]
@@ -532,7 +470,7 @@ enum WebSearchResults {
 }
 
 fn flattenable_web_search_results(block: &ContentBlock) -> Option<(&str, WebSearchResults)> {
-    if !block.is_type("web_search_tool_result") {
+    if !block.is_type(ContentBlockType::WebSearchToolResult) {
         return None;
     }
     let tool_use_id = block.tool_use_id.as_deref()?;
@@ -540,12 +478,9 @@ fn flattenable_web_search_results(block: &ContentBlock) -> Option<(&str, WebSear
         Value::Array(items) => {
             let results = items
                 .iter()
-                .map(|item| {
-                    (item.get("type").and_then(Value::as_str) == Some("web_search_result"))
-                        .then(|| {
-                            serde_json::from_value::<ReplayedWebSearchResult>(item.clone()).ok()
-                        })
-                        .flatten()
+                .map(|item| match serde_json::from_value(item.clone()).ok()? {
+                    ReplayedWebSearchContent::Result(result) => Some(result),
+                    ReplayedWebSearchContent::Error { .. } => None,
                 })
                 .collect::<Option<Vec<_>>>()?;
             if results
@@ -558,6 +493,7 @@ fn flattenable_web_search_results(block: &ContentBlock) -> Option<(&str, WebSear
         }
         error @ Value::Object(_) => match serde_json::from_value(error.clone()).ok()? {
             ReplayedWebSearchContent::Error { error_code } => WebSearchResults::Error(error_code),
+            ReplayedWebSearchContent::Result(_) => return None,
         },
         _ => return None,
     };
@@ -605,7 +541,7 @@ fn render_web_search_results(query: &str, results: &WebSearchResults) -> String 
 }
 
 fn server_tool_use_query(block: &ContentBlock) -> Option<(&str, &str)> {
-    if !block.is_type("server_tool_use") {
+    if !block.is_type(ContentBlockType::ServerToolUse) {
         return None;
     }
     let id = block.id.as_deref()?;
@@ -655,11 +591,21 @@ fn flatten_web_search_results_in_blocks(blocks: Vec<ContentBlock>) -> Vec<Conten
 pub fn flatten_unencrypted_web_search_results(
     messages: Vec<AnthropicMessage>,
 ) -> Vec<AnthropicMessage> {
-    map_blocks(messages, flatten_web_search_results_in_blocks)
+    messages
+        .into_iter()
+        .map(|message| match message.content {
+            MessageContent::Blocks(blocks) => AnthropicMessage {
+                content: MessageContent::Blocks(flatten_web_search_results_in_blocks(blocks)),
+                ..message
+            },
+            MessageContent::Text(_) => message,
+        })
+        .collect()
 }
 
 #[cfg(test)]
 mod tests {
+    use crate::base_llm::messages::context::SupportedEffortTiers;
     use rstest::{fixture, rstest};
     use serde_json::json;
 
@@ -816,8 +762,8 @@ mod tests {
     }
 
     #[fixture]
-    fn unmapped() -> AnthropicModelCapabilities {
-        AnthropicModelCapabilities::default()
+    fn unmapped() -> MessagesModelCapabilities {
+        MessagesModelCapabilities::default()
     }
 
     #[rstest]
@@ -983,6 +929,9 @@ mod tests {
         {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_01", "content": "ok"}]}
     ]))]
     #[case::id_mentioned_in_text(json!([{"role": "user", "content": [{"type": "text", "text": "id: functions.Bash:0"}]}]))]
+    #[case::unknown_block_type(json!([{"role": "assistant", "content": [
+        {"type": "future_tool_use", "id": "functions.Bash:0", "tool_use_id": "functions.Bash:0"}
+    ]}]))]
     #[case::tool_use_without_id(json!([{"role": "assistant", "content": [{"type": "tool_use", "name": "Bash", "input": {}}]}]))]
     #[case::tool_result_without_tool_use_id(json!([{"role": "user", "content": [{"type": "tool_result", "content": "ok"}]}]))]
     #[case::string_content(json!([{"role": "user", "content": "functions.Bash:0"}]))]
@@ -1422,6 +1371,11 @@ mod tests {
             {"type": "text", "text": "x"}
         ]}
     ]}]))]
+    #[case::error_inside_result_array(json!([{"role": "assistant", "content": [
+        {"type": "web_search_tool_result", "tool_use_id": "s1", "content": [
+            {"type": "web_search_tool_result_error", "error_code": "unavailable"}
+        ]}
+    ]}]))]
     #[case::result_with_null_url(json!([{"role": "assistant", "content": [
         {"type": "web_search_tool_result", "tool_use_id": "s1", "content": [
             {"type": "web_search_result", "url": null, "title": "A"}
@@ -1695,17 +1649,6 @@ mod tests {
     }
 
     #[rstest]
-    #[case::absent(None, None)]
-    #[case::blank(Some(" \t "), None)]
-    #[case::padded(Some("  value "), Some("value"))]
-    fn non_empty_trims_and_drops_blank_values(
-        #[case] value: Option<&str>,
-        #[case] expected: Option<&str>,
-    ) {
-        assert_eq!(non_empty(value), expected);
-    }
-
-    #[rstest]
     #[case::regex_tool(Some(json!([{"type": "tool_search_tool_regex_20251119", "name": "tool_search_tool_regex"}])), true)]
     #[case::bm25_tool(Some(json!([{"type": "tool_search_tool_bm25_20251119", "name": "tool_search_tool_bm25"}])), true)]
     #[case::after_other_tools(
@@ -1777,14 +1720,14 @@ mod tests {
     fn supports_effort_tier_reads_the_matching_flag(
         #[case] effort_tiers: SupportedEffortTiers,
         #[case] expected: [bool; 5],
-        unmapped: AnthropicModelCapabilities,
+        unmapped: MessagesModelCapabilities,
     ) {
-        let capabilities = AnthropicModelCapabilities {
+        let capabilities = MessagesModelCapabilities {
             effort_tiers,
             ..unmapped
         };
         assert_eq!(
-            ALL_LEVELS.map(|level| capabilities.supports_effort_tier(level)),
+            ALL_LEVELS.map(|level| supports_effort_tier(&capabilities, level)),
             expected
         );
     }
@@ -1847,16 +1790,16 @@ mod tests {
         #[case] supports_output_config: bool,
         #[case] effort_tiers: SupportedEffortTiers,
         #[case] expected: bool,
-        unmapped: AnthropicModelCapabilities,
+        unmapped: MessagesModelCapabilities,
     ) {
-        let capabilities = AnthropicModelCapabilities {
+        let capabilities = MessagesModelCapabilities {
             supports_reasoning,
             supports_adaptive_thinking,
             supports_output_config,
             effort_tiers,
             ..unmapped
         };
-        assert_eq!(capabilities.supports_effort_param(), expected);
+        assert_eq!(supports_effort_param(&capabilities), expected);
     }
 
     #[rstest]
@@ -1909,24 +1852,24 @@ mod tests {
         #[case] effort_tiers: SupportedEffortTiers,
         #[case] level: EffortLevel,
         #[case] expected: bool,
-        unmapped: AnthropicModelCapabilities,
+        unmapped: MessagesModelCapabilities,
     ) {
-        let capabilities = AnthropicModelCapabilities {
+        let capabilities = MessagesModelCapabilities {
             supports_output_config: true,
             supports_adaptive_thinking,
             effort_tiers,
             ..unmapped
         };
-        assert_eq!(capabilities.accepts_effort(level), expected);
+        assert_eq!(accepts_effort(&capabilities, level), expected);
     }
 
     #[rstest]
     fn unmapped_model_has_no_reasoning_features_but_accepts_sampling_params(
-        unmapped: AnthropicModelCapabilities,
+        unmapped: MessagesModelCapabilities,
     ) {
         assert_eq!(
             unmapped,
-            AnthropicModelCapabilities {
+            MessagesModelCapabilities {
                 supports_reasoning: false,
                 supports_adaptive_thinking: false,
                 thinking_always_on: false,
@@ -1938,7 +1881,7 @@ mod tests {
             }
         );
         assert_eq!(
-            serde_json::from_value::<AnthropicModelCapabilities>(json!({})).unwrap(),
+            serde_json::from_value::<MessagesModelCapabilities>(json!({})).unwrap(),
             unmapped
         );
     }
@@ -1946,26 +1889,26 @@ mod tests {
     #[rstest]
     #[case::sampling_params_removed(
         json!({"supports_sampling_params": false}),
-        AnthropicModelCapabilities { supports_sampling_params: false, ..AnthropicModelCapabilities::default() }
+        MessagesModelCapabilities { supports_sampling_params: false, ..MessagesModelCapabilities::default() }
     )]
     #[case::fast_mode(
         json!({"supports_speed": true}),
-        AnthropicModelCapabilities { supports_speed: true, ..AnthropicModelCapabilities::default() }
+        MessagesModelCapabilities { supports_speed: true, ..MessagesModelCapabilities::default() }
     )]
     #[case::partial_effort_tiers(
         json!({"supports_reasoning": true, "effort_tiers": {"xhigh": true}}),
-        AnthropicModelCapabilities {
+        MessagesModelCapabilities {
             supports_reasoning: true,
             effort_tiers: tiers(false, false, false, false, true, false),
-            ..AnthropicModelCapabilities::default()
+            ..MessagesModelCapabilities::default()
         }
     )]
     fn capabilities_fill_missing_flags_with_unmapped_defaults(
         #[case] input: Value,
-        #[case] expected: AnthropicModelCapabilities,
+        #[case] expected: MessagesModelCapabilities,
     ) {
         assert_eq!(
-            serde_json::from_value::<AnthropicModelCapabilities>(input).unwrap(),
+            serde_json::from_value::<MessagesModelCapabilities>(input).unwrap(),
             expected
         );
     }

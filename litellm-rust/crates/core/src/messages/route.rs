@@ -42,7 +42,7 @@ impl From<MachineFault> for Error {
     fn from(fault: MachineFault) -> Self {
         Self::InvalidRequest(match fault {
             MachineFault::Abandoned => "messages host driver was abandoned".into(),
-            MachineFault::Protocol(message) => format!("messages {message}"),
+            MachineFault::Protocol(message) => format!("messages {message}").into(),
         })
     }
 }

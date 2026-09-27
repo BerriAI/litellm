@@ -136,7 +136,7 @@ impl AzureAiOcrConfig {
             .or_else(|| nonblank(env_lookup(AZURE_AI_API_BASE_ENV)))
             .ok_or(Error::Auth(litellm_auth::Error::MissingApiBase {
                 provider: "Azure AI",
-                environment_variable: AZURE_AI_API_BASE_ENV,
+                guidance: "Set AZURE_AI_API_BASE environment variable or pass api_base parameter",
             }))
     }
 
@@ -237,13 +237,13 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest]
     fn missing_api_base_is_structured() {
         assert!(matches!(
             AzureAiOcrConfig::resolve_api_base(None, &|_| None),
             Err(Error::Auth(litellm_auth::Error::MissingApiBase {
                 provider: "Azure AI",
-                environment_variable: AZURE_AI_API_BASE_ENV,
+                guidance: "Set AZURE_AI_API_BASE environment variable or pass api_base parameter",
             }))
         ));
     }

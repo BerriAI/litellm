@@ -1,23 +1,13 @@
-use std::{
-    collections::HashMap,
-    io,
-    sync::{Arc, OnceLock},
-    time::Duration,
-};
+use std::{collections::HashMap, sync::Arc, time::Duration};
 
 use futures_util::{SinkExt, StreamExt};
+use litellm_http::websocket::{UpstreamWebSocket, connect_upstream};
 use litellm_types::responses::streaming_websocket::ResponsesWsEventType;
-use rustls::{ClientConfig, RootCertStore};
-use tokio::{net::TcpStream, sync::Mutex};
-use tokio_tungstenite::{
-    Connector, MaybeTlsStream, WebSocketStream, connect_async_tls_with_config,
-    tungstenite::{
-        Message,
-        client::IntoClientRequest,
-        error::TlsError,
-        handshake::client::Response,
-        http::{HeaderName, HeaderValue},
-    },
+use tokio::sync::Mutex;
+use tokio_tungstenite::tungstenite::{
+    Message,
+    client::IntoClientRequest,
+    http::{HeaderName, HeaderValue},
 };
 
 use super::Error;
@@ -33,59 +23,9 @@ pub fn is_terminal_event(event_type: &ResponsesWsEventType) -> bool {
     )
 }
 
-pub type ResponsesUpstreamWs = WebSocketStream<MaybeTlsStream<TcpStream>>;
-
-static TLS_CONFIG: OnceLock<Arc<ClientConfig>> = OnceLock::new();
-
-fn build_tls_config() -> Result<ClientConfig, Box<tokio_tungstenite::tungstenite::Error>> {
-    let native = rustls_native_certs::load_native_certs();
-    let mut store = RootCertStore::empty();
-    let (added, _ignored) = store.add_parsable_certificates(native.certs);
-    if added == 0 {
-        return Err(Box::new(tokio_tungstenite::tungstenite::Error::Io(
-            io::Error::other(format!(
-                "no usable native root certificates: {:?}",
-                native.errors
-            )),
-        )));
-    }
-    ClientConfig::builder_with_provider(Arc::new(rustls::crypto::ring::default_provider()))
-        .with_safe_default_protocol_versions()
-        .map(|builder| builder.with_root_certificates(store).with_no_client_auth())
-        .map_err(|error| {
-            Box::new(tokio_tungstenite::tungstenite::Error::Tls(
-                TlsError::Rustls(error),
-            ))
-        })
-}
-
-fn tls_config() -> Result<Arc<ClientConfig>, Box<tokio_tungstenite::tungstenite::Error>> {
-    if let Some(config) = TLS_CONFIG.get() {
-        return Ok(Arc::clone(config));
-    }
-    let built = Arc::new(build_tls_config()?);
-    Ok(Arc::clone(TLS_CONFIG.get_or_init(|| built)))
-}
-
-pub async fn connect_upstream<R>(
-    request: R,
-) -> Result<(ResponsesUpstreamWs, Response), Box<tokio_tungstenite::tungstenite::Error>>
-where
-    R: IntoClientRequest + Unpin,
-{
-    let request = request.into_client_request().map_err(Box::new)?;
-    let connector = match request.uri().scheme_str() {
-        Some("wss") => Some(Connector::Rustls(tls_config()?)),
-        _ => None,
-    };
-    connect_async_tls_with_config(request, None, false, connector)
-        .await
-        .map_err(Box::new)
-}
-
 #[derive(Clone)]
 pub struct ResponsesWebSocketConnection {
-    socket: Arc<Mutex<Option<ResponsesUpstreamWs>>>,
+    socket: Arc<Mutex<Option<UpstreamWebSocket>>>,
 }
 
 impl ResponsesWebSocketConnection {
@@ -100,9 +40,9 @@ impl ResponsesWebSocketConnection {
         for (name, value) in headers {
             let header_name = name
                 .parse::<HeaderName>()
-                .map_err(|error| Error::InvalidRequest(error.to_string()))?;
+                .map_err(|error| Error::InvalidRequest(error.to_string().into()))?;
             let header_value = HeaderValue::from_str(value)
-                .map_err(|error| Error::InvalidRequest(error.to_string()))?;
+                .map_err(|error| Error::InvalidRequest(error.to_string().into()))?;
             request.headers_mut().insert(header_name, header_value);
         }
         let connect = connect_upstream(request);
@@ -149,7 +89,7 @@ impl ResponsesWebSocketConnection {
             Some(Ok(Message::Text(text))) => Ok(Some(text)),
             Some(Ok(Message::Binary(bytes))) => String::from_utf8(bytes.to_vec())
                 .map(Some)
-                .map_err(|error| Error::InvalidResponse(error.to_string())),
+                .map_err(|error| Error::InvalidResponse(error.to_string().into())),
             Some(Ok(Message::Close(_))) | None => Ok(None),
             Some(Ok(_)) => Ok(None),
             Some(Err(error)) => Err(Error::Transport(litellm_http::transport::Error::Network(

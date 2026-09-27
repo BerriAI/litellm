@@ -125,6 +125,8 @@ pub fn encoding_for_model(model: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
     #[test]
@@ -167,27 +169,23 @@ mod tests {
         assert_eq!(TiktokenTokenizer::from_name("gpt2").unwrap().name(), "gpt2");
     }
 
-    #[test]
-    fn codecs_round_trip_named_encodings() {
-        let encodings = [
-            "cl100k_base",
-            "o200k_base",
-            "o200k_harmony",
-            "p50k_base",
-            "p50k_edit",
-            "r50k_base",
-            "gpt2",
-        ];
+    #[rstest]
+    #[case::cl100k_base("cl100k_base")]
+    #[case::o200k_base("o200k_base")]
+    #[case::o200k_harmony("o200k_harmony")]
+    #[case::p50k_base("p50k_base")]
+    #[case::p50k_edit("p50k_edit")]
+    #[case::r50k_base("r50k_base")]
+    #[case::gpt2("gpt2")]
+    fn codecs_round_trip_named_encodings(#[case] name: &str) {
         let texts = ["hello world", "café 漢字 مرحبا 🙂", "line one\nline two"];
-        for name in encodings {
-            let tokenizer = TiktokenTokenizer::from_name(name).unwrap();
-            for text in texts {
-                assert_eq!(
-                    tokenizer.decode(&tokenizer.encode(text)).unwrap(),
-                    text,
-                    "{name}: {text:?}",
-                );
-            }
+        let tokenizer = TiktokenTokenizer::from_name(name).unwrap();
+        for text in texts {
+            assert_eq!(
+                tokenizer.decode(&tokenizer.encode(text)).unwrap(),
+                text,
+                "{name}: {text:?}",
+            );
         }
     }
 
@@ -229,10 +227,11 @@ mod tests {
         assert!(completions.windows(2).all(|pair| pair[0] < pair[1]));
     }
 
-    #[test]
-    fn encoding_for_model_maps_known_models() {
-        assert_eq!(encoding_for_model("gpt-4o"), Some("o200k_base"));
-        assert_eq!(encoding_for_model("text-davinci-003"), Some("p50k_base"));
-        assert_eq!(encoding_for_model("unknown-model"), None);
+    #[rstest]
+    #[case::gpt_4o("gpt-4o", Some("o200k_base"))]
+    #[case::text_davinci("text-davinci-003", Some("p50k_base"))]
+    #[case::unknown("unknown-model", None)]
+    fn encoding_for_model_maps_known_models(#[case] model: &str, #[case] expected: Option<&str>) {
+        assert_eq!(encoding_for_model(model), expected);
     }
 }

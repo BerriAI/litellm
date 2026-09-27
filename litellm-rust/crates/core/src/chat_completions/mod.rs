@@ -5,6 +5,7 @@
 //! OpenAI-shaped message list, the provider-mapped optional params, and
 //! credentials, and it resolves the provider, translates the conversation,
 //! calls the provider, and returns a typed OpenAI-shaped response.
+use litellm_secrets::source::SecretSource;
 
 pub mod types;
 pub use crate::error::RouteError as Error;
@@ -21,10 +22,13 @@ use crate::chat_completions::types::ChatCompletionsRequest;
 pub async fn chat_completions(
     resources: &crate::resources::CoreResources,
     config: &HttpClientConfig,
+    secrets: &dyn SecretSource,
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
     let http = resources.pool.client(config, ClientVariant::Provider)?;
-    let request = prepare_provider_request(resolve_request(request)?)?;
+    let resolved = resolve_request(request)?;
+    let snapshot = secrets.resolve(&resolved.config.secret_names()).await?;
+    let request = prepare_provider_request(resolved, snapshot)?;
     handler::execute(&http, &resources.auth, request, &()).await
 }
 

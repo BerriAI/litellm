@@ -64,6 +64,7 @@ async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response,
     let response = chat_completions(
         &gateway.resources,
         &gateway.http,
+        gateway.secrets.as_ref(),
         ChatCompletionsRequest {
             model: &deployment.model,
             messages,

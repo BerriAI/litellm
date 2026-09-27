@@ -1,3 +1,4 @@
+use litellm_secrets::source::Secrets;
 use std::time::Duration;
 
 use litellm_llms::base_llm::{
@@ -24,6 +25,7 @@ pub struct ProviderAudioTranscriptionRequest {
     pub url: String,
     pub body: Value,
     pub environment: ValidatedEnvironment,
+    pub secrets: Secrets,
     pub timeout: Option<Duration>,
 }
 

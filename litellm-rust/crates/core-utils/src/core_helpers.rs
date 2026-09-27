@@ -68,27 +68,25 @@ pub fn json_type_name(value: &serde_json::Value) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use rstest::rstest;
 
-    #[test]
-    fn maps_every_reason_the_route_can_observe() {
-        assert_eq!(finish_reason_for("end_turn"), "stop");
-        assert_eq!(finish_reason_for("stop_sequence"), "stop");
-        assert_eq!(finish_reason_for("max_tokens"), "length");
-        assert_eq!(finish_reason_for("refusal"), "content_filter");
-        assert_eq!(finish_reason_for("guardrail_intervened"), "content_filter");
-        // Converse emits these two, and folding them into `stop` would report a
-        // filtered completion as a normal one.
-        assert_eq!(finish_reason_for("content_filtered"), "content_filter");
-        assert_eq!(finish_reason_for("content_filter"), "content_filter");
+    #[rstest]
+    #[case::end_turn("end_turn", "stop")]
+    #[case::stop_sequence("stop_sequence", "stop")]
+    #[case::max_tokens("max_tokens", "length")]
+    #[case::refusal("refusal", "content_filter")]
+    #[case::guardrail_intervened("guardrail_intervened", "content_filter")]
+    #[case::content_filtered("content_filtered", "content_filter")]
+    #[case::content_filter("content_filter", "content_filter")]
+    fn maps_every_reason_the_route_can_observe(#[case] reason: &str, #[case] expected: &str) {
+        assert_eq!(finish_reason_for(reason), expected);
     }
 
-    #[test]
-    fn defaults_an_unmapped_reason_to_stop_like_python() {
-        // Python warns and falls back to `stop` for a reason its own map does
-        // not carry, so only a reason absent from `_FINISH_REASON_MAP` belongs
-        // here.
-        assert_eq!(finish_reason_for("something_new"), "stop");
-        assert_eq!(finish_reason_for(""), "stop");
+    #[rstest]
+    #[case::unknown("something_new")]
+    #[case::empty("")]
+    fn defaults_an_unmapped_reason_to_stop_like_python(#[case] reason: &str) {
+        assert_eq!(finish_reason_for(reason), "stop");
     }
 
     #[test]

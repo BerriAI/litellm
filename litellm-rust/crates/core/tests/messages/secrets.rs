@@ -196,5 +196,11 @@ async fn azure_without_a_base_anywhere_fails_before_sending(call: MessagesCall) 
     .err()
     .expect("azure needs a base");
 
-    assert_eq!(error, Error::Auth(litellm_auth::Error::MissingAzureApiBase));
+    assert_eq!(
+        error,
+        Error::Auth(litellm_auth::Error::MissingApiBase {
+            provider: "Azure",
+            guidance: "Set `api_base` or the AZURE_API_BASE environment variable. Expected format: https://<resource-name>.services.ai.azure.com/anthropic"
+        })
+    );
 }

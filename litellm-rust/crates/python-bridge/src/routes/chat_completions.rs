@@ -1,4 +1,6 @@
+use litellm_secrets::source::SecretSource;
 use pyo3::types::{PyDict, PyTuple};
+use std::sync::Arc;
 
 use crate::errors::RustBridgeDeclined;
 use crate::logger::{run_async, run_sync};
@@ -22,6 +24,7 @@ use crate::{
 
 async fn execute(
     config: HttpClientConfig,
+    secrets: Arc<dyn SecretSource>,
     messages: Vec<Value>,
     optional_params: Map<String, Value>,
     options: RouteOptions,
@@ -37,6 +40,7 @@ async fn execute(
     run_chat_completions(
         crate::http::resources(),
         &config,
+        secrets.as_ref(),
         ChatCompletionsRequest {
             model: &model,
             messages: Value::Array(messages),
@@ -98,6 +102,7 @@ pub(crate) fn chat_completions(
         py,
         execute(
             config,
+            crate::secrets::source(py)?,
             messages,
             optional_params.unwrap_or_default(),
             options,
@@ -136,6 +141,7 @@ pub(crate) fn achat_completions<'py>(
         py,
         execute(
             config,
+            crate::secrets::source(py)?,
             messages,
             optional_params.unwrap_or_default(),
             options,

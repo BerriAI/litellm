@@ -117,7 +117,12 @@ fn string_config(
         None => Ok(ConfigValue::Absent),
         Some(Value::Null) => Ok(ConfigValue::ExplicitNone(source)),
         Some(Value::String(value)) => Ok(ConfigValue::Value(Sourced::new(value.clone(), source))),
-        Some(_) => Err(Error::InvalidFieldType(name.to_string())),
+        Some(_) => Err(Error::InvalidConfiguration(
+            litellm_auth_types::ErrorDetail::InvalidType {
+                field: name.into(),
+                expected: "a string or null",
+            },
+        )),
     }
 }
 

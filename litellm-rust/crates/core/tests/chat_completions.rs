@@ -15,7 +15,13 @@ use support::*;
 const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
 
 async fn complete(request: ChatCompletionsRequest<'_>) -> Result<ChatCompletionsResponse, Error> {
-    chat_completions(&support::resources(), &http_config(), request).await
+    chat_completions(
+        &support::resources(),
+        &http_config(),
+        &RecordingSecrets::empty(),
+        request,
+    )
+    .await
 }
 
 fn object(value: Value) -> Map<String, Value> {
@@ -322,4 +328,165 @@ async fn a_declined_request_fails_the_call_before_sending(
 
     assert_eq!(error, Error::Unsupported("streaming"));
     assert!(received(&upstream).await.is_empty());
+}
+
+#[rstest]
+#[case::source_key(None, "source-key")]
+#[case::explicit_key(Some("explicit-key"), "explicit-key")]
+#[tokio::test]
+async fn injected_secrets_supply_credentials_and_endpoint(
+    request: ChatCompletionsRequest<'static>,
+    #[case] api_key: Option<&'static str>,
+    #[case] expected_key: &str,
+) {
+    let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
+    let secrets = RecordingSecrets::new([
+        ("ANTHROPIC_API_KEY", "source-key"),
+        ("ANTHROPIC_API_BASE", upstream.uri().as_str()),
+    ]);
+    let response = chat_completions(
+        &support::resources(),
+        &http_config(),
+        &secrets,
+        ChatCompletionsRequest {
+            api_key,
+            api_base: None,
+            ..request
+        },
+    )
+    .await
+    .unwrap();
+    let sent = only_request(&upstream).await;
+    assert_eq!(sent.header("x-api-key"), Some(expected_key));
+    assert_eq!(sent.url.path(), "/v1/messages");
+    assert_eq!(
+        response.choices[0].message.content.as_deref(),
+        Some("hello")
+    );
+}
+
+#[rstest]
+#[case::accepted(false)]
+#[case::declined(true)]
+#[tokio::test]
+async fn secret_failure_stops_before_sending_and_declines_skip_resolution(
+    request: ChatCompletionsRequest<'static>,
+    #[case] declined: bool,
+) {
+    let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
+    let base = upstream.uri();
+    let secrets = RecordingSecrets::failing();
+    let result = chat_completions(
+        &support::resources(),
+        &http_config(),
+        &secrets,
+        ChatCompletionsRequest {
+            api_base: Some(&base),
+            optional_params: if declined {
+                object(json!({"stream": true}))
+            } else {
+                request.optional_params.clone()
+            },
+            ..request
+        },
+    )
+    .await;
+    if declined {
+        assert!(matches!(result, Err(Error::Unsupported(_))));
+        assert!(secrets.requested().is_empty());
+    } else {
+        assert!(matches!(result, Err(Error::Secret(_))));
+        assert!(!secrets.requested().is_empty());
+    }
+    assert!(received(&upstream).await.is_empty());
+}
+
+#[rstest]
+#[case::bearer(true)]
+#[case::signed(false)]
+#[tokio::test]
+async fn bedrock_chat_uses_the_injected_credential_source(
+    request: ChatCompletionsRequest<'static>,
+    #[case] bearer: bool,
+) {
+    let upstream = upstream([json_response(json!({
+        "output": {"message": {"content": [{"text": "hello"}]}},
+        "usage": {"inputTokens": 1, "outputTokens": 1}
+    }))])
+    .await;
+    let base = upstream.uri();
+    let secrets = RecordingSecrets::new(
+        [
+            ("AWS_ACCESS_KEY_ID", "injected-access-key"),
+            ("AWS_SECRET_ACCESS_KEY", "injected-secret-key"),
+            ("AWS_REGION_NAME", "eu-west-1"),
+        ]
+        .into_iter()
+        .chain(bearer.then_some(("AWS_BEARER_TOKEN_BEDROCK", "injected-bearer"))),
+    );
+    let response = chat_completions(
+        &support::resources(),
+        &http_config(),
+        &secrets,
+        ChatCompletionsRequest {
+            model: "test-model",
+            custom_llm_provider: Some("bedrock"),
+            api_key: None,
+            api_base: Some(&base),
+            optional_params: Map::new(),
+            ..request
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        response.choices[0].message.content.as_deref(),
+        Some("hello")
+    );
+    let sent = only_request(&upstream).await;
+    let authorization = sent.header("authorization").unwrap();
+    if bearer {
+        assert_eq!(authorization, "Bearer injected-bearer");
+    } else {
+        assert!(authorization.contains("Credential=injected-access-key/"));
+        assert!(authorization.contains("/eu-west-1/bedrock/aws4_request"));
+    }
+    assert!(!sent.body_text().contains("injected-secret-key"));
+}
+
+#[rstest]
+#[tokio::test]
+async fn openai_compatible_chat_resolves_its_injected_endpoint_and_key(
+    request: ChatCompletionsRequest<'static>,
+) {
+    let upstream = upstream([json_response(json!({
+        "id": "test-response",
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2}
+    }))]).await;
+    let secrets = RecordingSecrets::new([
+        ("OPENAI_LIKE_API_BASE", upstream.uri().as_str()),
+        ("OPENAI_LIKE_API_KEY", "injected-key"),
+    ]);
+    let response = chat_completions(
+        &support::resources(),
+        &http_config(),
+        &secrets,
+        ChatCompletionsRequest {
+            model: "test-model",
+            custom_llm_provider: Some("openai_like"),
+            api_key: None,
+            api_base: None,
+            ..request
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        response.choices[0].message.content.as_deref(),
+        Some("hello")
+    );
+    let sent = only_request(&upstream).await;
+    assert_eq!(sent.url.path(), "/chat/completions");
+    assert_eq!(sent.header("authorization"), Some("Bearer injected-key"));
 }

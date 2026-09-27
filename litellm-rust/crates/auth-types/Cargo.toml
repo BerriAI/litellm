@@ -12,4 +12,5 @@ thiserror.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+rstest.workspace = true
 tokio.workspace = true
