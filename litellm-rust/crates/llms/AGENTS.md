@@ -2,7 +2,7 @@ litellm-llms mirrors `litellm/llms/`: base config traits, provider transformatio
 
 ## Python/Rust transformation pairs
 
-Use the base OCR and Mistral OCR pairs as the reference when aligning transformations. Derive `src/<relative_path>.rs` from `litellm/llms/<relative_path>.py`, preserving meaningful basenames such as `messages_transformation`
+Use the base OCR and Mistral OCR pairs as the reference when aligning transformations. Use `src/<provider>/<format>/transformation.rs` for provider transformations. Python paths identify counterparts but do not dictate Rust module names
 
 Keep corresponding operation names and parameter names when their responsibilities match. Rust types retain the Python semantic name with Rust acronym casing (`BaseOCRConfig` / `BaseOcrConfig`, `MistralOCRConfig` / `MistralOcrConfig`). Private Python helpers can drop their leading underscore. Give Rust adapter helpers distinct responsibility names rather than duplicating trait method names
 

@@ -1,2 +1,2 @@
-pub mod anthropic;
+pub mod messages;
 pub mod ocr;
