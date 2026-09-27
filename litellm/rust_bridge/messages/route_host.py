@@ -57,7 +57,7 @@ def response(
         _add_headers_to_response(response_value, dict(httpx.Headers(list(headers)).items()))
     return cast(  # cast-ok: AnthropicMessagesResponse is a TypedDict over the normalized native payload
         AnthropicMessagesResponse,
-        response_value,  # mutable-ok: the public Messages response is a TypedDict the caller may annotate in place
+        response_value,
     )
 
 
