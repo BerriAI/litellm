@@ -45,7 +45,7 @@ describe("agent identity configuration", () => {
   it("rejects incomplete submissions", () => {
     expect(() => buildIdentityParams({ identity_provider: "microsoft_entra" })).toThrow("Enter valid Entra");
   });
-  it("submits identity as top-level settings without changing runtime parameters", () => {
+  it("submits identity and budget as top-level settings without changing runtime parameters", () => {
     const formValues = {
       identity_provider: "microsoft_entra",
       identity_tenant_id: identity.tenant_id,
@@ -53,6 +53,8 @@ describe("agent identity configuration", () => {
       identity_service_principal_id: identity.service_principal_id,
       execution_mode: "both",
       enabled: false,
+      agent_max_budget: 0,
+      agent_budget_duration: "1d",
     };
     const payload = withAgentIdentity({ litellm_params: { model: "runtime" } }, formValues);
     expect(payload.litellm_params).toEqual({ model: "runtime" });
@@ -62,6 +64,7 @@ describe("agent identity configuration", () => {
     });
     expect(payload.execution_mode).toBe("both");
     expect(payload.enabled).toBe(false);
+    expect(payload.budget).toEqual({ max_budget: 0, budget_duration: "1d" });
   });
   it("requires a service principal for autonomous execution", () => {
     const values = {

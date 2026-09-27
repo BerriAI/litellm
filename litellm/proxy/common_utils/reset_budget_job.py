@@ -841,6 +841,7 @@ class ResetBudgetJob:
             _queue_budget_linked_resets(uow.projects, cascade, extra=_SPENT_ROWS_WHERE)
             _queue_enduser_resets(uow.endusers, cascade)
             for budget_id, budget_reset_at in cascade.budget_resets:
+                uow.agents.queue_window_reset(budget_id, budget_reset_at, cascade.rollover_caps.get(budget_id))
                 uow.budgets.queue_window_advance(budget_id=budget_id, budget_reset_at=budget_reset_at)
 
     async def _invalidate_budget_cascade_caches(self, cascade: _BudgetCascade) -> None:
