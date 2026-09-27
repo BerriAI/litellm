@@ -198,6 +198,8 @@ async def test_agent_history_outage_does_not_permit_legacy_fallback() -> None:
     "route,body,expected",
     [
         ("/a2a/agent", {}, "agent"),
+        ("/a2a/agent", {"model": "a2a/nonexistent"}, "agent"),
+        ("/v1/a2a/agent/message/send", {"model": "a2a/other"}, "agent"),
         ("/v1/a2a/agent/", {}, "agent"),
         ("/v1/chat/completions", {"model": "a2a/Readable name"}, "Readable name"),
         ("/v1/chat/completions", {"model": "a2a/"}, None),

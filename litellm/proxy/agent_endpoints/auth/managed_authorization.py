@@ -208,12 +208,12 @@ _INVOCATION_COST: Final = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan
 
 
 def invocation_target(route: str, body: Mapping[str, object]) -> str | None:
-    model: Final = body.get("model")
-    if isinstance(model, str) and model.startswith("a2a/"):
-        return model.removeprefix("a2a/") or None
     components: Final = tuple(route.strip("/").split("/"))
     path: Final = components[1:] if components and components[0] == "v1" else components
-    return path[1] if len(path) >= 2 and path[0] == "a2a" else None
+    if len(path) >= 2 and path[0] == "a2a":
+        return path[1]
+    model: Final = body.get("model")
+    return model.removeprefix("a2a/") or None if isinstance(model, str) and model.startswith("a2a/") else None
 
 
 async def prepare_agent_invocation(
