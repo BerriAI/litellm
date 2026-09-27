@@ -6892,6 +6892,7 @@ async def test_source_token_cannot_read_or_merge_global_placeholders(
     )
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     app: Final = FastAPI()
+    app.add_exception_handler(ProxyException, proxy_server.openai_exception_handler)
     app.include_router(scim_router)
     app.dependency_overrides[_premium_user_check] = lambda: None
     app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
