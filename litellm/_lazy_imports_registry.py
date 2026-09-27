@@ -264,6 +264,7 @@ LLM_CONFIG_NAMES: Final = (
     "NvidiaNimEmbeddingConfig",
     "FeatherlessAIConfig",
     "CerebrasConfig",
+    "NadirConfig",
     "BasetenConfig",
     "SambanovaConfig",
     "SambaNovaEmbeddingConfig",
@@ -741,7 +742,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
     ),
     "CohereChatConfig": (".llms.cohere.chat.transformation", "CohereChatConfig"),
     "AnthropicMessagesConfig": (
-        ".llms.anthropic.experimental_pass_through.messages.transformation",
+        ".llms.anthropic.pass_through.messages.transformation",
         "AnthropicMessagesConfig",
     ),
     "BedrockClaudePlatformMessagesConfig": (
@@ -1061,6 +1062,7 @@ _LLM_CONFIGS_IMPORT_MAP: Final = {
         "FeatherlessAIConfig",
     ),
     "CerebrasConfig": (".llms.cerebras.chat", "CerebrasConfig"),
+    "NadirConfig": (".llms.nadir.chat.transformation", "NadirConfig"),
     "BasetenConfig": (".llms.baseten.chat", "BasetenConfig"),
     "SambanovaConfig": (".llms.sambanova.chat", "SambanovaConfig"),
     "SambaNovaEmbeddingConfig": (

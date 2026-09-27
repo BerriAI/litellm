@@ -1,12 +1,46 @@
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
 
 
+from litellm.proxy.guardrails.guardrail_hooks.custom_code.custom_code_guardrail import CustomCodeCompilationError
 from litellm.proxy.guardrails.guardrail_registry import InMemoryGuardrailHandler
 from litellm.proxy.guardrails.init_guardrails import init_guardrails_v2
 from litellm.types.guardrails import SupportedGuardrailIntegrations
+
+
+def test_init_guardrails_v2_registers_panw_mcp_output_scanner(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.proxy.guardrails import guardrail_registry
+    from litellm.proxy.guardrails.guardrail_hooks.panw_prisma_airs import PanwPrismaAirsHandler
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    monkeypatch.setenv("LITELLM_STRICT_GUARDRAIL_MODES", "true")
+    monkeypatch.setattr(guardrail_registry, "IN_MEMORY_GUARDRAIL_HANDLER", InMemoryGuardrailHandler())
+    init_guardrails_v2(
+        all_guardrails=[
+            {
+                "guardrail_name": "panw-mcp-output",
+                "litellm_params": {
+                    "guardrail": "panw_prisma_airs",
+                    "mode": "post_mcp_call",
+                    "default_on": True,
+                    "api_key": "test-panw-key",
+                    "profile_name": "test-profile",
+                },
+            }
+        ]
+    )
+    scanners: Final = tuple(
+        callback
+        for callback in litellm.callbacks
+        if isinstance(callback, PanwPrismaAirsHandler) and callback.guardrail_name == "panw-mcp-output"
+    )
+    assert len(scanners) == 1, "PANW MCP output scanning must be registered at startup"
+    assert scanners[0].should_run_guardrail({}, GuardrailEventHooks.post_mcp_call) is True
+    assert scanners[0].should_run_guardrail({}, GuardrailEventHooks.post_call) is False
 
 
 def test_initialize_presidio_guardrail():
@@ -333,6 +367,27 @@ def test_init_guardrails_v2_skips_invalid_guardrail_instead_of_crashing_boot():
     }
     assert "broken_lakera_advisory" not in guardrail_names
     assert "healthy_presidio" in guardrail_names
+
+
+def test_init_guardrails_v2_stops_boot_when_a_custom_code_guardrail_does_not_compile():
+    from litellm.proxy.guardrails.guardrail_registry import IN_MEMORY_GUARDRAIL_HANDLER
+
+    IN_MEMORY_GUARDRAIL_HANDLER.IN_MEMORY_GUARDRAILS.clear()
+    IN_MEMORY_GUARDRAIL_HANDLER.guardrail_id_to_custom_guardrail.clear()
+
+    all_guardrails = [
+        {
+            "guardrail_name": "custom-code-without-apply-guardrail",
+            "litellm_params": {
+                "guardrail": SupportedGuardrailIntegrations.CUSTOM_CODE.value,
+                "mode": "pre_call",
+                "custom_code": "x = 1\n",
+            },
+        },
+    ]
+
+    with pytest.raises(CustomCodeCompilationError, match="apply_guardrail"):
+        init_guardrails_v2(all_guardrails=all_guardrails)
 
 
 def test_init_guardrails_v2_accepts_during_call_advisory_mode():
