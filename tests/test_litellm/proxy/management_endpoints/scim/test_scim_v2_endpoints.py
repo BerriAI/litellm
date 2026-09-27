@@ -6877,7 +6877,9 @@ async def test_legacy_listing_hydrates_writer_page_despite_replica_lag(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("method,path", [("GET", "/scim/v2/placeholders"), ("POST", "/scim/v2/placeholders/shadow/merge")])
+@pytest.mark.parametrize(
+    "method,path", [("GET", "/scim/v2/placeholders"), ("POST", "/scim/v2/placeholders/shadow/merge")]
+)
 @pytest.mark.parametrize("enabled", [True, False])
 async def test_source_token_cannot_read_or_merge_global_placeholders(
     monkeypatch: pytest.MonkeyPatch, method: str, path: str, enabled: bool
@@ -6887,9 +6889,7 @@ async def test_source_token_cannot_read_or_merge_global_placeholders(
     from litellm.proxy import proxy_server
 
     database: Final = MagicMock()
-    database.writer_db.litellm_scimsource.find_unique = AsyncMock(
-        return_value=SimpleNamespace(enabled=enabled)
-    )
+    database.writer_db.litellm_scimsource.find_unique = AsyncMock(return_value=SimpleNamespace(enabled=enabled))
     monkeypatch.setattr(proxy_server, "prisma_client", database)
     app: Final = FastAPI()
     app.add_exception_handler(ProxyException, proxy_server.openai_exception_handler)
