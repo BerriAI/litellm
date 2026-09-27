@@ -9,6 +9,7 @@ from litellm._logging import verbose_router_logger
 from litellm.caching.caching import DualCache
 from litellm.caching.redis_cache import log_redis_failure
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.router_utils.batch_utils import is_batch_retrieve_call_type
 
 IN_FLIGHT_COUNT_TTL_SECONDS: Final = 60 * 60
 
@@ -48,6 +49,8 @@ def _request_count_key(model_group: str, deployment_id: str) -> str:
 
 
 def _deployment_ref(kwargs: Mapping[str, object]) -> tuple[str, str] | None:
+    if is_batch_retrieve_call_type(kwargs.get("call_type")):
+        return None
     try:
         call: Final = _CALL_KWARGS.validate_python(kwargs)
     except ValidationError:

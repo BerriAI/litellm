@@ -733,11 +733,11 @@ class TestBlockRequestsForModelsWithoutPricing:
         from litellm.proxy.proxy_server import ProxyConfig
 
         with patch.object(litellm, "block_requests_for_models_without_pricing", False):
-            ProxyConfig()._update_config_fields(
-                current_config={},
-                param_name="litellm_settings",
-                db_param_value={"block_requests_for_models_without_pricing": True},
+            proxy_config = ProxyConfig()
+            db_values = proxy_config._prepared_db_settings_values(
+                "litellm_settings", {"block_requests_for_models_without_pricing": True}
             )
+            proxy_config._apply_litellm_settings_db_values(db_values)
 
             assert litellm.block_requests_for_models_without_pricing is True
 
@@ -975,9 +975,9 @@ class TestEstimateCostCacheAndReasoningTokens:
 
     @pytest.mark.asyncio
     async def test_a_model_without_cache_or_reasoning_prices_estimates_what_the_proxy_bills(self, monkeypatch):
-        """The cost calculator bills cache reads of a cost-map model without cache prices at zero,
-        its cache writes at the input rate, and its reasoning tokens at the output rate. The estimate
-        reports those effective rates."""
+        """The cost calculator bills cache reads and writes of a cost-map model without cache prices
+        at the input rate, and its reasoning tokens at the output rate. The estimate reports those
+        effective rates."""
         monkeypatch.setitem(
             litellm.model_cost,
             A_MAPPED_MODEL,
@@ -986,14 +986,12 @@ class TestEstimateCostCacheAndReasoningTokens:
 
         response = await _estimate_with_cache_and_reasoning(None, model=A_MAPPED_MODEL)
 
-        assert response.cache_read_cost_per_request == 0.0
+        assert response.cache_read_cost_per_request == pytest.approx(CACHE_READ_TOKENS * 5e-6)
         assert response.cache_creation_cost_per_request == pytest.approx(CACHE_CREATION_TOKENS * 5e-6)
         assert response.reasoning_cost_per_request == pytest.approx(REASONING_TOKENS * 6e-6)
-        assert response.input_cost_per_request == pytest.approx((TEXT_INPUT_TOKENS + CACHE_CREATION_TOKENS) * 5e-6)
-        assert response.cost_per_request == pytest.approx(
-            (TEXT_INPUT_TOKENS + CACHE_CREATION_TOKENS) * 5e-6 + OUTPUT_TOKENS * 6e-6
-        )
-        assert response.cache_read_input_token_cost == 0.0
+        assert response.input_cost_per_request == pytest.approx(INPUT_TOKENS * 5e-6)
+        assert response.cost_per_request == pytest.approx(INPUT_TOKENS * 5e-6 + OUTPUT_TOKENS * 6e-6)
+        assert response.cache_read_input_token_cost == pytest.approx(5e-6)
         assert response.cache_creation_input_token_cost == pytest.approx(5e-6)
         assert response.output_cost_per_reasoning_token == pytest.approx(6e-6)
 

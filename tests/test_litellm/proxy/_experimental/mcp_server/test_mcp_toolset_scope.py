@@ -58,6 +58,22 @@ class TestApplyToolsetScope:
         assert set(op.mcp_servers or []) == {"server-a", "server-b"}
         assert op.mcp_tool_permissions == toolset_perms
 
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+        from litellm.proxy._experimental.mcp_server.operations import prepare_context
+
+        manager = MCPServerManager()
+        unscoped_open = await manager.operator_open_server_ids(
+            auth, allow_all_server_ids=["operator-open-outside-toolset"], submitted_server_ids=[]
+        )
+        scoped_open = await manager.operator_open_server_ids(
+            prepare_context(result).user_api_key_auth,
+            allow_all_server_ids=["operator-open-outside-toolset"],
+            submitted_server_ids=[],
+        )
+        assert unscoped_open == {"operator-open-outside-toolset"}
+        assert scoped_open == set()
+        assert auth.mcp_toolset_id is None
+
     @pytest.mark.asyncio
     async def test_admin_creates_object_permission_when_none(self):
         """Admin key with object_permission=None can access any toolset."""
@@ -564,7 +580,7 @@ class TestMCPActiveToolsetContextVar:
                 MagicMock(get_mcp_client_ip=MagicMock(return_value="127.0.0.1")),
             ),
             patch(
-                "litellm.proxy._experimental.mcp_server.server.global_mcp_server_manager",
+                "litellm.proxy._experimental.mcp_server.operations.global_mcp_server_manager",
                 MagicMock(get_mcp_server_by_name=MagicMock(return_value=None)),
             ),
             patch(

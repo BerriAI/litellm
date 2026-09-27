@@ -1,5 +1,2 @@
-mod error;
-pub use error::Error;
-pub mod instrumentation;
-pub mod types;
+pub use crate::error::RouteError as Error;
 pub mod websocket;

@@ -39,7 +39,7 @@ LANGFUSE_TRACE_TAGS: Final = "langfuse.trace.tags"
 
 class LangfuseMapper:
     _LLM_CALL_ATTRS: dict[str, Callable[[LLMCallSpanData], AttrValue | None]] = {
-        "langfuse.observation.type": lambda d: "generation",
+        "langfuse.observation.type": lambda _: "generation",
         "langfuse.observation.model.name": lambda d: d.request_model or None,
         "langfuse.observation.metadata.provider": lambda d: d.provider or None,
         "langfuse.observation.id": lambda d: d.identity.call_id or None,
@@ -68,7 +68,9 @@ class LangfuseMapper:
             collect(LangfuseMapper._MODEL_PARAMS, d.request_params)
         ),
         LANGFUSE_OBSERVATION_INPUT: lambda d: serialize_messages(d.messages_in),
-        LANGFUSE_OBSERVATION_OUTPUT: lambda d: serialize_messages(output_messages(d)),
+        LANGFUSE_OBSERVATION_OUTPUT: lambda d: (
+            d.embedding_output.as_json() if d.embedding_output is not None else serialize_messages(output_messages(d))
+        ),
         "langfuse.observation.usage_details": lambda d: json_if(collect(LangfuseMapper._USAGE_FIELDS, d.usage)),
         "langfuse.observation.cost_details": lambda d: (
             json.dumps({"total": d.response_cost}) if d.response_cost is not None else None

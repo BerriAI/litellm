@@ -105,6 +105,7 @@ def test_convert_mcp_to_llm_format_exposes_caller_identity_on_metadata(proxy_log
         "user_api_key_user_id": "u-1",
         "user_api_key_team_id": "t-1",
         "user_api_key_end_user_id": "eu-1",
+        "guardrails": [],
     }
 
 

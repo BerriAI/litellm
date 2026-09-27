@@ -1,11 +1,12 @@
 import { describe, expect, it } from "vitest";
 
-import { getExportBlockedReason, type UsageFetchState } from "./exportBlockedReason";
+import { getApiKeyTruncation, getExportBlockedReason, type UsageFetchState } from "./exportBlockedReason";
 
 const state = (overrides: Partial<UsageFetchState> = {}): UsageFetchState => ({
   coversRange: true,
   cancelled: false,
   failed: false,
+  apiKeyTruncation: undefined,
   ...overrides,
 });
 
@@ -30,5 +31,32 @@ describe("getExportBlockedReason", () => {
 
     expect(reason).toMatch(/failed to load/i);
     expect(reason).not.toMatch(/stopped/i);
+  });
+
+  it("blocks when the aggregated endpoint dropped keys, since a per-team CSV would miss them", () => {
+    const reason = getExportBlockedReason(state({ apiKeyTruncation: { limit: 100, total: 3000 } }));
+
+    expect(reason).toMatch(/100 highest-spend keys of 3000/);
+    expect(reason).toMatch(/USAGE_TOP_API_KEYS_LIMIT/);
+  });
+
+  it("does not block on truncation when a server export will cover every key", () => {
+    expect(getExportBlockedReason(state({ apiKeyTruncation: null }))).toBeUndefined();
+  });
+});
+
+describe("getApiKeyTruncation", () => {
+  it("reports truncation once the proxy saw more keys than it returned", () => {
+    expect(getApiKeyTruncation(100, 101)).toEqual({ limit: 100, total: 101 });
+  });
+
+  it("stays quiet when exactly the cap exists, since every key is on screen", () => {
+    expect(getApiKeyTruncation(100, 100)).toBeUndefined();
+    expect(getApiKeyTruncation(100, 7)).toBeUndefined();
+  });
+
+  it("stays quiet when the response carries no cap, as the paginated fallback does", () => {
+    expect(getApiKeyTruncation(undefined, undefined)).toBeUndefined();
+    expect(getApiKeyTruncation(100, null)).toBeUndefined();
   });
 });

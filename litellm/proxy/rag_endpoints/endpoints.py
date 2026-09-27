@@ -50,6 +50,7 @@ from litellm.proxy.vector_store_endpoints.endpoints import (
 from litellm.proxy.vector_store_endpoints.utils import (
     assert_user_can_access_vector_store_id,
 )
+from litellm.rag.main import get_ingestion_class
 from litellm.repositories.table_repositories import ManagedVectorStoresRepository
 from litellm.types.utils import ModelResponse
 
@@ -154,6 +155,53 @@ async def _authorize_nested_vector_store_ids(
     )
 
 
+def _ingest_provider_error(vector_store_config: Mapping[str, object]) -> str | None:
+    provider: Final = vector_store_config.get("custom_llm_provider", "openai")
+    if not isinstance(provider, str):
+        return "custom_llm_provider must be a string"
+    try:
+        get_ingestion_class(provider)
+    except ValueError as error:
+        return str(error)
+    return None
+
+
+_MANAGED_STORE_CALLER_OPTIONS: Final = frozenset(
+    {
+        "vector_store_id",
+        "data_source_id",
+        "wait_for_ingestion",
+        "ingestion_timeout",
+        "custom_metadata",
+        "file_description",
+        "max_embedding_requests_per_min",
+    }
+)
+
+
+def _caller_vector_store_options(
+    request_vector_store_config: Mapping[str, object],
+    managed_store: LiteLLM_ManagedVectorStore | None,
+) -> Mapping[str, object]:
+    if managed_store is None:
+        return request_vector_store_config
+    return MappingProxyType(
+        {key: value for key, value in request_vector_store_config.items() if key in _MANAGED_STORE_CALLER_OPTIONS}
+    )
+
+
+def _managed_store_overrides(managed_store: LiteLLM_ManagedVectorStore | None) -> Mapping[str, object]:
+    if managed_store is None:
+        return MappingProxyType({})
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in build_request_data_from_managed_vector_store(managed_store).items()
+            if value is not None
+        }
+    )
+
+
 def _build_file_metadata_entry(
     response: object,
     file_data: tuple[str, bytes, str] | None = None,
@@ -213,6 +261,8 @@ async def _save_vector_store_to_db_from_rag_ingest(
     user_api_key_dict: UserAPIKeyAuth,
     file_data: tuple[str, bytes, str] | None = None,
     file_url: str | None = None,
+    *,
+    store_is_managed: bool = False,
 ) -> None:
     """
     Helper function to save a newly created vector store from RAG ingest to the database.
@@ -220,7 +270,7 @@ async def _save_vector_store_to_db_from_rag_ingest(
     This function:
     - Extracts vector store ID and config from the ingest response
     - Checks if the vector store already exists in the database
-    - Creates a new database entry if it doesn't exist
+    - Creates a new database entry if it doesn't exist and the store is not registry-managed
     - Adds the vector store to the registry
     - Tracks team_id and user_id for access control
 
@@ -229,6 +279,8 @@ async def _save_vector_store_to_db_from_rag_ingest(
         ingest_options: The ingest options containing vector store config
         prisma_client: The Prisma database client
         user_api_key_dict: User API key authentication info
+        store_is_managed: True when the requested id resolved to a managed store, so a missing row means
+            the store is config-registered and must not get a database row
     """
     from litellm.proxy.vector_store_endpoints.management_endpoints import (
         create_vector_store_in_db,
@@ -276,6 +328,10 @@ async def _save_vector_store_to_db_from_rag_ingest(
         existing_vector_store: Final = await ManagedVectorStoresRepository(prisma_client).table.find_unique(
             where={"vector_store_id": vector_store_id}
         )
+
+        if existing_vector_store is None and store_is_managed:
+            verbose_proxy_logger.info("Vector store %s is config-registered, skipping database save", vector_store_id)
+            return
 
         # Only create if it doesn't exist
         if existing_vector_store is None:
@@ -545,20 +601,38 @@ async def rag_ingest(
                 },
             )
 
-        await _authorize_nested_vector_store_ids(
+        resolved_stores: Final = await _authorize_nested_vector_store_ids(
             payload=ingest_options,
             user_api_key_dict=user_api_key_dict,
         )
 
+        request_vector_store_config: Final = ingest_options.get("vector_store", {})
         try:
             is_request_body_safe(
-                request_body=ingest_options.get("vector_store", {}),
+                request_body=request_vector_store_config,
                 general_settings=general_settings,
                 llm_router=llm_router,
                 model="",
             )
         except ValueError as e:
             raise HTTPException(status_code=400, detail={"error": str(e)})
+
+        managed_store: Final = resolved_stores.get(request_vector_store_config.get("vector_store_id"))
+        merged_vector_store_config: Final = {  # mutable-ok: ingestion classes mutate it when loading credentials
+            **_caller_vector_store_options(request_vector_store_config, managed_store),
+            **_managed_store_overrides(managed_store),
+        }
+        merged_ingest_options: Final = {  # mutable-ok: litellm.aingest takes a plain dict payload
+            **ingest_options,
+            "vector_store": merged_vector_store_config,
+        }
+
+        provider_error: Final = _ingest_provider_error(merged_vector_store_config)
+        if provider_error is not None:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": provider_error},  # mutable-ok: FastAPI serializes the detail as JSON
+            )
 
         # Add litellm data
         request_data: dict[str, Any] = {}
@@ -571,11 +645,15 @@ async def rag_ingest(
             proxy_config=proxy_config,
         )
 
-        verbose_proxy_logger.debug("RAG Ingest - options: %s", ingest_options)
+        verbose_proxy_logger.debug(
+            "RAG Ingest - options: %s, custom_llm_provider: %s",
+            ingest_options,
+            merged_vector_store_config.get("custom_llm_provider", "openai"),
+        )
 
         # Call ingest
         response: Final = await litellm.aingest(
-            ingest_options=ingest_options,
+            ingest_options=merged_ingest_options,
             file_data=file_data,
             file_url=file_url,
             file_id=file_id,
@@ -599,6 +677,7 @@ async def rag_ingest(
                 user_api_key_dict=user_api_key_dict,
                 file_data=file_data,
                 file_url=file_url,
+                store_is_managed=managed_store is not None,
             )
         else:
             verbose_proxy_logger.warning(
@@ -745,7 +824,7 @@ async def rag_query(
         merged_retrieval_config: Final = {
             **retrieval_config,
             **store_data,
-        }  # mutable-ok: litellm.aquery requires a plain dict payload
+        }
 
         # Add litellm data
         request_data: dict[str, object] = {}

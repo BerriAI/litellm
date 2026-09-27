@@ -198,6 +198,62 @@ class TestProxyExceptionAnthropicEnvelope:
         assert fallback.status_code == 500
         assert json.loads(fallback.body)["error"]["type"] == "api_error"
 
+    @staticmethod
+    def _call_id_error_response(general_settings, provider_specific_fields=None):
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        from litellm.proxy._types import ProxyException
+
+        request = MagicMock()
+        request.headers = {}
+        exc = ProxyException(
+            message="Rate limit exceeded",
+            type="rate_limit_error",
+            param=None,
+            code=429,
+            headers={"x-litellm-call-id": "call-8302"},
+            provider_specific_fields=provider_specific_fields,
+        )
+        with patch("litellm.proxy.proxy_server.general_settings", general_settings):
+            return ep._anthropic_error_json_response(exc, request)
+
+    def test_anthropic_error_copies_the_call_id_into_the_error_when_opted_in(self):
+        """With include_call_id_in_error_body on, error.litellm_call_id is byte-identical to
+        the x-litellm-call-id header and lives inside the error object, which is what the
+        Anthropic SDK keeps as e.body."""
+        response = self._call_id_error_response({"include_call_id_in_error_body": True})
+
+        assert response.headers["x-litellm-call-id"] == "call-8302"
+        assert json.loads(response.body) == {
+            "type": "error",
+            "error": {
+                "type": "rate_limit_error",
+                "message": "Rate limit exceeded",
+                "litellm_call_id": "call-8302",
+            },
+        }
+
+    def test_anthropic_error_keeps_provider_specific_fields_next_to_the_call_id(self):
+        response = self._call_id_error_response(
+            {"include_call_id_in_error_body": True},
+            provider_specific_fields={"guardrail": "keyword-block"},
+        )
+
+        assert json.loads(response.body)["error"] == {
+            "type": "rate_limit_error",
+            "message": "Rate limit exceeded",
+            "provider_specific_fields": {"guardrail": "keyword-block"},
+            "litellm_call_id": "call-8302",
+        }
+
+    def test_anthropic_error_leaves_the_envelope_alone_when_opted_out(self):
+        response = self._call_id_error_response({})
+
+        assert response.headers["x-litellm-call-id"] == "call-8302"
+        assert json.loads(response.body) == {
+            "type": "error",
+            "error": {"type": "rate_limit_error", "message": "Rate limit exceeded"},
+        }
+
 
 class TestHttpExceptionDictDetail:
     @pytest.mark.asyncio

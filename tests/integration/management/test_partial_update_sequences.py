@@ -5,10 +5,11 @@ from typing import Final
 import pytest
 from hypothesis import strategies as st
 from hypothesis.stateful import RuleBasedStateMachine, invariant, rule, run_state_machine_as_test
-from integration._support.client import Gateway, object_value
-from integration._support.database import read_rows
-from integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 from pydantic import JsonValue
+
+from tests.integration._support.client import Gateway, object_value
+from tests.integration._support.database import read_rows
+from tests.integration._support.generation import LIFECYCLE_SETTINGS, bounded_http_requests
 
 
 def _key_rows(digest: str) -> list[dict[str, JsonValue]]:
@@ -96,7 +97,7 @@ def test_zero_false_and_empty_values_are_not_treated_as_omission(gateway: Gatewa
             "POST", "/v1/chat/completions",
             {"model": models[0], "messages": [{"role": "user", "content": "zero budget"}]}, key=key,
         )
-        assert denied.status_code == 429, denied.text
+        assert denied.status_code == 422, denied.text
         assert denied.json()["error"]["type"] == "budget_exceeded"
         gateway.post("/key/update", {"key": key, "max_budget": 1, "models": [], "metadata": {}})
         info: Final = object_value(gateway.get("/key/info", {"key": key})["info"])
@@ -126,7 +127,7 @@ def test_zero_false_and_empty_values_are_not_treated_as_omission(gateway: Gatewa
             "POST", "/v1/chat/completions",
             {"model": models[0], "messages": [{"role": "user", "content": "updated zero budget"}]}, key=key,
         )
-        assert zero_after_update.status_code == 429, zero_after_update.text
+        assert zero_after_update.status_code == 422, zero_after_update.text
         assert zero_after_update.json()["error"]["type"] == "budget_exceeded"
         gateway.post("/key/update", {"key": key, "max_budget": None})
         assert read_rows(

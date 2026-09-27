@@ -25,7 +25,7 @@ from litellm.types.utils import (
 from .amazon_llama_transformation import AmazonLlamaConfig
 
 if TYPE_CHECKING:
-    import tiktoken
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class AmazonDeepSeekR1Config(AmazonLlamaConfig):
@@ -39,7 +39,7 @@ class AmazonDeepSeekR1Config(AmazonLlamaConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

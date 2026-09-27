@@ -65,6 +65,21 @@ class _MemberRouterGenerationParams(BaseModel):
     stop: str | tuple[str, ...] | None = None
 
 
+class _MemberJevClassifierConfig(BaseModel):
+    """The Jev classifier settings a team member may set. Credentials stay the proxy's own: a member-chosen
+    api_base would receive the proxy's TYPESAFE_API_KEY, and a member-chosen api_key would be sent from the proxy."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    model: str
+    api_key: None = None
+    api_base: None = None
+    timeout_ms: int
+    instructions: str | None = None
+    circuit_breaker_enabled: bool
+    circuit_breaker_cooldown_seconds: float
+
+
 class _MemberComplexityRouterConfig(RequestComplexityRouterConfig):
     model_config = ConfigDict(extra="forbid", arbitrary_types_allowed=True)
 
@@ -113,6 +128,8 @@ def validate_member_auto_router_config(config: Mapping[str, object]) -> RequestC
         for entries in validated.tier_model_configs.values():
             for entry in entries:
                 _MemberRouterGenerationParams.model_validate(entry.litellm_params)
+        if validated.jev_classifier_config is not None:
+            _MemberJevClassifierConfig.model_validate(validated.jev_classifier_config.model_dump())
         return validated
     except ValidationError as exc:
         location: Final = ".".join(str(part) for part in exc.errors()[0]["loc"])
@@ -162,14 +179,23 @@ async def authorize_member_auto_router_dependencies(
             }
         )
     )
-    for model, deployments in (
-        (dependency.model_name, llm_router.get_model_list(model_name=dependency.model_name, team_id=team.team_id))
+    for dependency, model, deployments in (
+        (
+            dependency,
+            dependency.model_name,
+            llm_router.get_model_list(model_name=dependency.model_name, team_id=team.team_id),
+        )
         for dependency in dependencies
     ):
-        if not deployments or any(
-            classify_strategy_router_model(_RouterConfigSource.model_validate(deployment["litellm_params"]).model or "")
-            is not None
-            for deployment in deployments
+        if dependency.role != "evaluation" and (
+            not deployments
+            or any(
+                classify_strategy_router_model(
+                    _RouterConfigSource.model_validate(deployment["litellm_params"]).model or ""
+                )
+                is not None
+                for deployment in deployments
+            )
         ):
             raise HTTPException(status_code=400, detail=f"Auto-router target {model!r} must be a configured model.")
         await can_team_access_model(
