@@ -9,7 +9,7 @@ import threading
 import time
 import weakref
 import zlib
-from collections.abc import AsyncGenerator, AsyncIterable, Callable, Iterable, Iterator, Mapping
+from collections.abc import AsyncGenerator, AsyncIterable, Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import aclosing
 from http.cookiejar import CookieJar, DefaultCookiePolicy
 from io import BytesIO
@@ -563,6 +563,10 @@ class HTTPResponseLimitError(ValueError):
     pass
 
 
+class HTTPResponseEncodingError(HTTPResponseLimitError):
+    pass
+
+
 _WIRE_BODY_HEADERS: Final = frozenset({"content-encoding", "content-length"})
 _ENCODED_OVERHEAD_DIVISOR: Final = 4096
 _ENCODED_OVERHEAD_BYTES: Final = 64
@@ -626,10 +630,20 @@ def _headers_of_the_decoded_body(headers: httpx.Headers) -> httpx.Headers:
     )
 
 
-def _wire_byte_limit(headers: httpx.Headers, max_bytes: int) -> int:
-    if headers.get("content-encoding", "identity").strip().lower() == "identity":
-        return max_bytes
+def _encodings_of(headers: httpx.Headers) -> tuple[str, ...]:
+    declared: Final[str] = headers.get("content-encoding", "identity")
+    names: Final = tuple(name.strip().lower() for name in declared.split(",") if name.strip())
+    return tuple(name for name in names if name != "identity") or ("identity",)
+
+
+def _encoded_byte_limit(max_bytes: int) -> int:
     return max_bytes + max_bytes // _ENCODED_OVERHEAD_DIVISOR + _ENCODED_OVERHEAD_BYTES
+
+
+def _wire_byte_limit(headers: httpx.Headers, max_bytes: int) -> int:
+    if _encodings_of(headers) == ("identity",):
+        return max_bytes
+    return _encoded_byte_limit(max_bytes)
 
 
 async def _wire_bounded(response: httpx.Response, limit: int) -> AsyncGenerator[bytes, None]:
@@ -726,6 +740,27 @@ class _BrotliDecoder:
             raise httpx.DecodingError("Compressed response ended before the end of the stream")
 
 
+class _ChainedDecoder:
+    """Undo stacked Content-Encoding values, last applied first, bounding every intermediate stage."""
+
+    def __init__(self, stages: Sequence[_BoundedDecoder]) -> None:
+        self._stages: Final = tuple(stages)
+
+    def decode(self, data: bytes, max_output: int) -> bytes:
+        intermediate_cap: Final = _encoded_byte_limit(max_output)
+        *outer, last = self._stages
+        passed = data  # rebind-ok: each stage's output feeds the next stage
+        for stage in outer:
+            passed = stage.decode(passed, intermediate_cap + 1)
+            if len(passed) > intermediate_cap:
+                raise HTTPResponseLimitError("Response exceeds the configured size limit")
+        return last.decode(passed, max_output)
+
+    def finish(self) -> None:
+        for stage in self._stages:
+            stage.finish()
+
+
 def _bounded_decoder(headers: httpx.Headers) -> _BoundedDecoder:
     brotli_inflater: Final = _BrotliInflater
     factories: Final[Mapping[str, Callable[[], _BoundedDecoder]]] = MappingProxyType(
@@ -737,10 +772,13 @@ def _bounded_decoder(headers: httpx.Headers) -> _BoundedDecoder:
             **({} if brotli_inflater is None else {"br": lambda: _BrotliDecoder(brotli_inflater())}),
         }
     )
-    factory: Final = factories.get(headers.get("content-encoding", "identity").strip().lower())
-    if factory is None:
-        raise HTTPResponseLimitError("Response size limits require an identity, gzip, deflate, or br encoded response")
-    return factory()
+    encodings: Final = _encodings_of(headers)
+    if any(name not in factories for name in encodings):
+        raise HTTPResponseEncodingError(
+            "Response size limits require an identity, gzip, deflate, or br encoded response"
+        )
+    stages: Final = tuple(factories[name]() for name in reversed(encodings))
+    return stages[0] if len(stages) == 1 else _ChainedDecoder(stages)
 
 
 async def _decoded_within(response: httpx.Response, wire: AsyncGenerator[bytes, None], max_bytes: int) -> bytes:

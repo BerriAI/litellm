@@ -1935,6 +1935,39 @@ async def test_bounded_get_decodes_a_compressed_body_under_the_cap_and_rejects_a
 
 
 @pytest.mark.asyncio
+async def test_bounded_get_undoes_stacked_encodings_and_still_caps_the_decoded_size(respx_mock, monkeypatch):
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    document: Final = b"line %d of the notes\n" * 2000 % tuple(range(2000))
+    stacked: Final = zlib.compress(gzip.compress(document))
+    bomb: Final = gzip.compress(gzip.compress(b"\0" * (64 * 1024 * 1024)))
+    assert len(bomb) < 1024
+
+    class WireStream(httpx.AsyncByteStream):
+        def __init__(self, body: bytes) -> None:
+            self.body: Final = body
+
+        async def __aiter__(self):
+            yield self.body
+
+    for name, body, encoding in (("doc", stacked, "gzip, deflate"), ("bomb", bomb, "gzip, gzip")):
+        respx_mock.get(f"https://cdn.example/{name}").respond(
+            200, stream=WireStream(body), headers={"content-encoding": encoding}
+        )
+    handler = AsyncHTTPHandler()
+    tracemalloc.start()
+    try:
+        served = await handler.get("https://cdn.example/doc", max_response_bytes=len(document))
+        assert served.content == document
+        with pytest.raises(HTTPResponseLimitError, match="size limit"):
+            await handler.get("https://cdn.example/bomb", max_response_bytes=1024 * 1024)
+        _, peak = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+        await handler.close()
+    assert peak < 4 * 1024 * 1024, f"stacked decoder materialized {peak} bytes for a 1 MiB cap"
+
+
+@pytest.mark.asyncio
 async def test_bounded_get_refuses_an_encoding_it_cannot_decode_under_the_cap(respx_mock, monkeypatch):
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
 
