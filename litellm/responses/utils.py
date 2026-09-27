@@ -1,13 +1,15 @@
 import base64
 import re
 from collections.abc import Iterable, Mapping, Sequence
-from typing import Any, Final, Optional, Union, cast, get_type_hints, overload
+from functools import reduce
+from typing import Any, Final, Optional, TypeVar, Union, cast, get_type_hints, overload
 
 from pydantic import BaseModel
 from typing_extensions import TypeIs  # noqa: TID251  # narrows untyped wire payloads without a runtime conversion
 
 import litellm
 from litellm._logging import verbose_logger
+from litellm.litellm_core_utils.dot_notation_indexing import delete_nested_value, is_nested_path
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.types.llms.openai import (
     AllMessageValues,
@@ -25,7 +27,18 @@ from litellm.types.utils import (
     PromptTokensDetailsWrapper,
     SpecialEnums,
     Usage,
+    text_tokens_without_nested_reasoning,
 )
+
+
+def _apply_nested_drop_params(params: dict[str, object], additional_drop_params: list[str] | None) -> dict[str, object]:
+    nested_paths: Final = tuple(path for path in additional_drop_params or () if is_nested_path(path))
+    return reduce(lambda acc, path: delete_nested_value(acc, path), nested_paths, params)
+
+
+def _output_token_detail(details: object, field: str) -> int | None:
+    value: Final = getattr(details, field, None)
+    return value if isinstance(value, int) else None
 
 
 def _is_object_sequence(value: object) -> TypeIs[Sequence[object]]:  # guard-ok: a list is a Sequence of anything
@@ -57,6 +70,9 @@ def _as_input_text_part(part: object) -> object:
     if isinstance(part, dict) and part.get("type") == "text":
         return {**part, "type": "input_text"}  # mutable-ok: fresh part so the caller's block keeps its chat type
     return part
+
+
+_RequestInputT: Final = TypeVar("_RequestInputT")
 
 
 class ResponsesAPIRequestUtils:
@@ -256,20 +272,24 @@ class ResponsesAPIRequestUtils:
         special_params: Final[dict[str, object]] = params.pop("kwargs", {})
 
         additional_drop_params: Final[list[str] | None] = params.pop("additional_drop_params", None)
-        non_default_params: Final = PreProcessNonDefaultParams.base_pre_process_non_default_params(
-            passed_params=params,
-            special_params=special_params,
-            custom_llm_provider=custom_llm_provider,
-            additional_drop_params=additional_drop_params,
-            default_param_values={k: None for k in valid_keys},
-            additional_endpoint_specific_params=["input"],
+        non_default_params: Final = _apply_nested_drop_params(
+            PreProcessNonDefaultParams.base_pre_process_non_default_params(
+                passed_params=params,
+                special_params=special_params,
+                custom_llm_provider=custom_llm_provider,
+                additional_drop_params=additional_drop_params,
+                default_param_values={k: None for k in valid_keys},
+                additional_endpoint_specific_params=["input"],
+            ),
+            additional_drop_params,
         )
 
         # decode previous_response_id if it's a litellm encoded id
-        if "previous_response_id" in non_default_params:
+        previous_response_id: Final = non_default_params.get("previous_response_id")
+        if isinstance(previous_response_id, str):
             decoded_previous_response_id: Final = (
                 ResponsesAPIRequestUtils.decode_previous_response_id_to_original_previous_response_id(
-                    non_default_params["previous_response_id"]
+                    previous_response_id
                 )
             )
             non_default_params["previous_response_id"] = decoded_previous_response_id
@@ -277,7 +297,8 @@ class ResponsesAPIRequestUtils:
         if "metadata" in non_default_params:
             from litellm.utils import add_openai_metadata
 
-            converted_metadata: Final = add_openai_metadata(non_default_params["metadata"])
+            raw_metadata: Final = non_default_params["metadata"]
+            converted_metadata: Final = add_openai_metadata(raw_metadata if _is_object_dict(raw_metadata) else None)
             if converted_metadata is not None:
                 non_default_params["metadata"] = converted_metadata
             else:
@@ -502,7 +523,7 @@ class ResponsesAPIRequestUtils:
         return response
 
     @staticmethod
-    def _restore_encrypted_content_item_ids_in_input(request_input: object) -> Any:
+    def _restore_encrypted_content_item_ids_in_input(request_input: _RequestInputT) -> _RequestInputT:
         """Decode litellm-encoded item IDs in request input back to original IDs.
 
         Called before forwarding the request to the upstream provider so the
@@ -533,6 +554,49 @@ class ResponsesAPIRequestUtils:
                         item["encrypted_content"] = unwrapped
 
         return request_input
+
+    @staticmethod
+    def strip_encrypted_reasoning_from_input(request_input: object) -> None:
+        """Drop reasoning items the routed deployment cannot decrypt, keeping their readable summary.
+
+        Mutates ``request_input`` in place: the router's fallback snapshot shares this
+        list object, so a rebound list would replay the stripped items on the fallback hop.
+        """
+        if not isinstance(request_input, list):
+            return
+        items: Final = cast(list[object], request_input)  # cast-ok: untyped client json
+        stripped: Final = tuple(ResponsesAPIRequestUtils._without_encrypted_reasoning(item) for item in items)
+        items[:] = (item for item in stripped if item is not None)
+
+    @staticmethod
+    def _without_encrypted_reasoning(item: object) -> object | None:
+        if not isinstance(item, dict):
+            return item
+        reasoning: Final = cast(Mapping[str, object], item)  # cast-ok: untyped client json
+        if reasoning.get("type") != "reasoning" or not reasoning.get("encrypted_content"):
+            return reasoning
+        readable: Final = any(
+            ResponsesAPIRequestUtils._has_readable_text(reasoning.get(key)) for key in ("summary", "content")
+        )
+        if not readable:
+            return None
+        kept: Final[dict[str, object]] = {  # mutable-ok: request item rebuilt without the undecryptable keys
+            key: value for key, value in reasoning.items() if key not in ("encrypted_content", "id")
+        }
+        return kept
+
+    @staticmethod
+    def _has_readable_text(value: object) -> bool:
+        """A reasoning item's ``summary``/``content`` carries readable text: a non-empty string, or a
+        list holding at least one block with a non-empty ``text`` field (summary_text / output_text)."""
+        if isinstance(value, str):
+            return bool(value.strip())
+        if isinstance(value, list):
+            return any(
+                isinstance(block, dict) and bool(cast(Mapping[str, object], block).get("text"))  # cast-ok: untyped json
+                for block in value
+            )
+        return False
 
     @staticmethod
     def _build_responses_api_response_id(
@@ -1127,18 +1191,37 @@ class ResponseAPILoggingUtils:
                     audio_tokens=getattr(response_api_usage.input_tokens_details, "audio_tokens", None),
                     text_tokens=getattr(response_api_usage.input_tokens_details, "text_tokens", None),
                     image_tokens=getattr(response_api_usage.input_tokens_details, "image_tokens", None),
+                    cached_tokens_details=getattr(
+                        response_api_usage.input_tokens_details, "cached_tokens_details", None
+                    ),
+                    video_tokens=getattr(response_api_usage.input_tokens_details, "video_tokens", None),
                     cache_write_tokens=getattr(response_api_usage.input_tokens_details, "cache_write_tokens", None),
+                    web_search_requests=getattr(response_api_usage.input_tokens_details, "web_search_requests", None),
+                    google_maps_grounding_requests=getattr(
+                        response_api_usage.input_tokens_details, "google_maps_grounding_requests", None
+                    ),
                 )
         completion_tokens_details: CompletionTokensDetailsWrapper | None = None
         output_tokens_details: Final[OutputTokensDetails | None] = getattr(
             response_api_usage, "output_tokens_details", None
         )
         if output_tokens_details:
+            reasoning_tokens: Final = _output_token_detail(output_tokens_details, "reasoning_tokens")
+            image_tokens: Final = _output_token_detail(output_tokens_details, "image_tokens")
+            audio_tokens: Final = _output_token_detail(output_tokens_details, "audio_tokens")
+            reported_text_tokens: Final = _output_token_detail(output_tokens_details, "text_tokens")
             completion_tokens_details = CompletionTokensDetailsWrapper(
-                reasoning_tokens=getattr(output_tokens_details, "reasoning_tokens", None),
-                image_tokens=getattr(output_tokens_details, "image_tokens", None),
-                text_tokens=getattr(output_tokens_details, "text_tokens", None),
-                audio_tokens=getattr(output_tokens_details, "audio_tokens", None),
+                reasoning_tokens=reasoning_tokens,
+                image_tokens=image_tokens,
+                text_tokens=None
+                if reported_text_tokens is None
+                else text_tokens_without_nested_reasoning(
+                    completion_tokens=completion_tokens,
+                    text_tokens=reported_text_tokens,
+                    reasoning_tokens=reasoning_tokens or 0,
+                    other_modality_tokens=(audio_tokens or 0) + (image_tokens or 0),
+                ),
+                audio_tokens=audio_tokens,
             )
 
         extra_usage_fields: Final = {

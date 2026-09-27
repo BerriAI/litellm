@@ -13,6 +13,7 @@ import { useState } from "react";
 import { describe, expect, it, vi } from "vitest";
 
 import { DataTableSortHeader, type DataTableSortVariant } from "./DataTableSortHeader";
+import { chooseSelectOption } from "../../../../tests/test-utils";
 
 interface Item {
   name: string;
@@ -84,16 +85,13 @@ describe("DataTableSortHeader", () => {
     const user = userEvent.setup();
     render(<SortHeaderHarness variant="dropdown-tristate" />);
 
-    await user.click(screen.getByTestId("sort-trigger-name"));
-    await user.click(await screen.findByText("Descending"));
+    await chooseSelectOption(user, screen.getByTestId("sort-trigger-name"), "Descending", "menuitem");
     expect(screen.getByTestId("sort-trigger-name").querySelector('[data-sort-indicator="desc"]')).not.toBeNull();
 
-    await user.click(screen.getByTestId("sort-trigger-name"));
-    await user.click(await screen.findByText("Ascending"));
+    await chooseSelectOption(user, screen.getByTestId("sort-trigger-name"), "Ascending", "menuitem");
     expect(screen.getByTestId("sort-trigger-name").querySelector('[data-sort-indicator="asc"]')).not.toBeNull();
 
-    await user.click(screen.getByTestId("sort-trigger-name"));
-    await user.click(await screen.findByText("Reset"));
+    await chooseSelectOption(user, screen.getByTestId("sort-trigger-name"), "Reset", "menuitem");
     expect(screen.getByTestId("sort-trigger-name").querySelector('[data-sort-indicator="none"]')).not.toBeNull();
   });
 

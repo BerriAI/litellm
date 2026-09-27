@@ -1,21 +1,28 @@
 import { formatNumberWithCommas } from "@/utils/dataUtils";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import Papa from "papaparse";
-import type { EntityBreakdown, EntitySpendData, EntityType, ExportMetadata, ExportScope } from "./types";
+import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
+import type {
+  EntityBreakdown,
+  EntitySpendData,
+  EntityType,
+  ExportFormat,
+  ExportMetadata,
+  ExportScope,
+  ServerExport,
+} from "./types";
 
 const resolveEntityDisplay = (
   entity: string,
   teamAliasMap: Record<string, string>,
   entityMetadata?: Record<string, any>,
-): { id: string; alias: string } => ({
-  id: entity,
-  alias:
-    teamAliasMap[entity] ||
-    entityMetadata?.team_alias ||
-    entityMetadata?.user_email ||
-    entityMetadata?.user_alias ||
-    entity,
-});
+): { id: string; alias: string } => {
+  const alias =
+    [teamAliasMap[entity], entityMetadata?.team_alias, entityMetadata?.user_email, entityMetadata?.user_alias].find(
+      Boolean,
+    ) ?? entity;
+  return { id: entity, alias };
+};
 
 // Mirrors backend SpendMetrics fields (litellm/types/activity_tracking.py).
 // If the backend adds a field, add it here too.
@@ -165,6 +172,8 @@ export const generateDailyWithKeysData = (
       entityAlias: string;
       keyId: string;
       keyAlias: string | null;
+      userId: string | null;
+      userEmail: string | null;
       metrics: {
         spend: number;
         api_requests: number;
@@ -186,7 +195,7 @@ export const generateDailyWithKeysData = (
 
       // Iterate through each API key in the breakdown
       Object.entries(apiKeyBreakdown).forEach(([keyId, keyData]: [string, any]) => {
-        const keyAlias = keyData?.metadata?.key_alias || null;
+        const keyAlias = keyActivityLabel(keyData?.metadata, "") || null;
 
         // Create unique key for aggregation: Date_EntityID_KeyID
         const uniqueKey = `${day.date}_${entityId}_${keyId}`;
@@ -199,6 +208,8 @@ export const generateDailyWithKeysData = (
             entityAlias,
             keyId,
             keyAlias,
+            userId: keyData?.metadata?.user_id || null,
+            userEmail: keyData?.metadata?.user_email || null,
             metrics: {
               spend: keyData.metrics?.spend || 0,
               api_requests: keyData.metrics?.api_requests || 0,
@@ -235,6 +246,7 @@ export const generateDailyWithKeysData = (
     [`${entityLabel} ID`]: item.entityId,
     "Key Alias": item.keyAlias || "-",
     "Key ID": item.keyId,
+    ...(entityLabel === "User" ? {} : { "User ID": item.userId || "-", "User Email": item.userEmail || "-" }),
     "Spend ($)": formatNumberWithCommas(item.metrics.spend, 4),
     Requests: item.metrics.api_requests,
     "Successful Requests": item.metrics.successful_requests,
@@ -247,6 +259,71 @@ export const generateDailyWithKeysData = (
   }));
 
   return dailyKeyBreakdown.sort((a, b) => new Date(a.Date).getTime() - new Date(b.Date).getTime());
+};
+
+export const generateDailyWithUsersData = (
+  spendData: EntitySpendData,
+  entityLabel: string,
+  teamAliasMap: Record<string, string> = {},
+): any[] => {
+  const aggregatedData: {
+    [key: string]: {
+      Date: string;
+      entityId: string;
+      entityAlias: string;
+      userId: string;
+      userEmail: string | null;
+      keyIds: Set<string>;
+      metrics: Record<(typeof METRIC_KEYS)[number], number>;
+    };
+  } = {};
+
+  spendData.results.forEach((day) => {
+    Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
+      const { id: entityId, alias: entityAlias } = resolveEntityDisplay(entity, teamAliasMap, data.metadata);
+      Object.entries(data.api_key_breakdown || {}).forEach(([keyId, keyData]: [string, any]) => {
+        const userId = keyData?.metadata?.user_id || "Unassigned";
+        const uniqueKey = JSON.stringify([day.date, entityId, userId]);
+        if (!aggregatedData[uniqueKey]) {
+          aggregatedData[uniqueKey] = {
+            Date: day.date,
+            entityId,
+            entityAlias,
+            userId,
+            userEmail: null,
+            keyIds: new Set(),
+            metrics: Object.fromEntries(METRIC_KEYS.map((k) => [k, 0])) as Record<(typeof METRIC_KEYS)[number], number>,
+          };
+        }
+        const bucket = aggregatedData[uniqueKey];
+        bucket.userEmail = bucket.userEmail || keyData?.metadata?.user_email || null;
+        bucket.keyIds.add(keyId);
+        for (const k of METRIC_KEYS) {
+          bucket.metrics[k] += keyData?.metrics?.[k] || 0;
+        }
+      });
+    });
+  });
+
+  return Object.values(aggregatedData)
+    .map((item) => ({
+      Date: item.Date,
+      [entityLabel]: item.entityAlias,
+      [`${entityLabel} ID`]: item.entityId,
+      "User ID": item.userId,
+      "User Email": item.userEmail || "-",
+      Keys: item.keyIds.size,
+      "Spend ($)": formatNumberWithCommas(item.metrics.spend, 4),
+      Requests: item.metrics.api_requests,
+      "Successful Requests": item.metrics.successful_requests,
+      "Failed Requests": item.metrics.failed_requests,
+      "Total Tokens": item.metrics.total_tokens,
+      "Prompt Tokens": item.metrics.prompt_tokens,
+      "Completion Tokens": item.metrics.completion_tokens,
+      "Cache Read Input Tokens": item.metrics.cache_read_input_tokens,
+      "Cache Creation Input Tokens": item.metrics.cache_creation_input_tokens,
+    }))
+    .sort((a, b) => new Date(a.Date).getTime() - new Date(b.Date).getTime());
 };
 
 export const generateDailyWithModelsData = (
@@ -304,7 +381,7 @@ export const generateDailyWithModelsData = (
       const { id, alias } = resolveEntityDisplay(entity, teamAliasMap, dailyEntityMetadata[entity]);
 
       Object.entries(models).forEach(([model, metrics]: [string, any]) => {
-        dailyModelBreakdown.push({
+        const row = {
           Date: day.date,
           [entityLabel]: alias,
           [`${entityLabel} ID`]: id,
@@ -318,7 +395,8 @@ export const generateDailyWithModelsData = (
           "Completion Tokens": metrics.completionTokens,
           "Cache Read Input Tokens": metrics.cacheReadInputTokens,
           "Cache Creation Input Tokens": metrics.cacheCreationInputTokens,
-        });
+        };
+        dailyModelBreakdown.push(row);
       });
     });
   });
@@ -339,6 +417,8 @@ export const generateExportData = (
       return generateDailyWithKeysData(spendData, entityLabel, teamAliasMap);
     case "daily_with_models":
       return generateDailyWithModelsData(spendData, entityLabel, teamAliasMap);
+    case "daily_with_users":
+      return generateDailyWithUsersData(spendData, entityLabel, teamAliasMap);
     default:
       return generateDailyData(spendData, entityLabel, teamAliasMap);
   }
@@ -376,6 +456,28 @@ export const generateMetadata = (
   };
 };
 
+export const downloadBlob = (blob: Blob, fileName: string): void => {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+};
+
+export const handleServerExport = async (
+  serverExport: ServerExport,
+  exportScope: ExportScope,
+  entityType: EntityType,
+  format: ExportFormat,
+): Promise<void> => {
+  const blob = await serverExport(exportScope, format);
+  const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.${format}`;
+  downloadBlob(blob, fileName);
+};
+
 export const handleExportCSV = (
   spendData: EntitySpendData,
   exportScope: ExportScope,
@@ -386,15 +488,8 @@ export const handleExportCSV = (
   const data = generateExportData(spendData, exportScope, entityLabel, teamAliasMap);
   const csv = Papa.unparse(data);
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
   const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.csv`;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  window.URL.revokeObjectURL(url);
+  downloadBlob(blob, fileName);
 };
 
 export const handleExportJSON = (
@@ -414,13 +509,6 @@ export const handleExportJSON = (
   };
   const jsonString = JSON.stringify(exportObject, null, 2);
   const blob = new Blob([jsonString], { type: "application/json" });
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
   const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.json`;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  window.URL.revokeObjectURL(url);
+  downloadBlob(blob, fileName);
 };

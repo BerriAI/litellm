@@ -1,15 +1,5 @@
-/**
- * Tests for EntityUsageExportModal component
- *
- * Validates core export functionality:
- * - Renders modal with correct default state (CSV format, daily scope)
- * - User can select export type (daily vs daily_with_models)
- * - User can switch format (CSV vs JSON)
- * - Export button triggers data generation with correct parameters
- * - Modal closes after successful export
- */
-
 import { describe, it, expect, vi, beforeEach } from "vitest";
+import { screen } from "@testing-library/react";
 import { renderWithProviders } from "../../../tests/test-utils";
 import userEvent from "@testing-library/user-event";
 import EntityUsageExportModal from "./EntityUsageExportModal";
@@ -19,6 +9,7 @@ vi.mock("./utils", () => {
   return {
     handleExportCSV: vi.fn(),
     handleExportJSON: vi.fn(),
+    handleServerExport: vi.fn(async () => undefined),
     generateExportData: vi.fn(() => [{ Date: "2025-10-01" }]),
     generateMetadata: vi.fn(() => ({ meta: true })),
   };
@@ -73,13 +64,13 @@ describe("EntityUsageExportModal", () => {
     const user = userEvent.setup();
     const { handleExportCSV } = await import("./utils");
 
-    const { getByRole } = renderWithProviders(<EntityUsageExportModal {...baseProps} />);
+    renderWithProviders(<EntityUsageExportModal {...baseProps} />);
 
     // Default primary action reflects CSV export
-    expect(getByRole("button", { name: /Export CSV/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Export CSV/i })).toBeInTheDocument();
 
     // Click export
-    await user.click(getByRole("button", { name: /Export CSV/i }));
+    await user.click(screen.getByRole("button", { name: /Export CSV/i }));
 
     // Verifies export function was invoked with correct parameters
     expect(handleExportCSV).toHaveBeenCalledWith(baseProps.spendData, "daily", "Tag", "tag", {});
@@ -97,20 +88,39 @@ describe("EntityUsageExportModal", () => {
     const user = userEvent.setup();
     const { handleExportCSV } = await import("./utils");
 
-    const { getByText, getByRole } = renderWithProviders(<EntityUsageExportModal {...baseProps} />);
+    renderWithProviders(<EntityUsageExportModal {...baseProps} />);
 
     // Choose the alternate export type - click the label to trigger radio
-    const dailyModelLabel = getByText(/Day-by-day by tag and model/i);
+    const dailyModelLabel = screen.getByText(/Day-by-day by tag and model/i);
     await user.click(dailyModelLabel);
 
     // Export with default CSV format
-    const exportBtn = getByRole("button", { name: /Export CSV/i });
+    const exportBtn = screen.getByRole("button", { name: /Export CSV/i });
     await user.click(exportBtn);
 
     // Ensure the selected scope flowed through
     expect(handleExportCSV).toHaveBeenCalledWith(baseProps.spendData, "daily_with_models", "Tag", "tag", {});
 
     // Modal closes after export
+    expect(baseProps.onClose).toHaveBeenCalled();
+  });
+
+  it("routes the export through the server export when one is provided, so truncated key lists still export", async () => {
+    /**
+     * When the spend fetch was capped at the top-N keys, the caller supplies a
+     * serverExport that hits the uncapped export route. The modal must defer to
+     * it instead of generating a CSV from the truncated on-screen data.
+     */
+    const user = userEvent.setup();
+    const { handleExportCSV, handleServerExport } = await import("./utils");
+    const serverExport = vi.fn(async () => new Blob(["csv"]));
+
+    renderWithProviders(<EntityUsageExportModal {...baseProps} entityType="team" serverExport={serverExport} />);
+
+    await user.click(screen.getByRole("button", { name: /Export CSV/i }));
+
+    expect(handleServerExport).toHaveBeenCalledWith(serverExport, "daily", "team", "csv");
+    expect(handleExportCSV).not.toHaveBeenCalled();
     expect(baseProps.onClose).toHaveBeenCalled();
   });
 });

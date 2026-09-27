@@ -7,7 +7,7 @@ import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
 import { useTeams } from "@/app/(dashboard)/hooks/teams/useTeams";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import { all_admin_roles, internalUserRoles } from "@/utils/roles";
-import { canCreateModels } from "@/utils/modelPermissions";
+import { autoRouterCreationScope, canCreateModels } from "@/utils/modelPermissions";
 import BetaBadge from "@/components/BetaBadge";
 import CostOptimizationFeedbackBanner from "@/components/molecules/cost_optimization_feedback_banner";
 import ModelInfoView from "@/components/model_info_view";
@@ -80,7 +80,7 @@ const renderPanel = (key: string) => {
 };
 
 export default function ModelsAndEndpointsPage() {
-  const { accessToken, userRole, userId: userID, premiumUser } = useAuthorized();
+  const { accessToken, userRole, userId: userID, premiumUser, isViewOnly } = useAuthorized();
   const { data: teams } = useTeams();
   const { data: uiSettings } = useUISettings();
   const queryClient = useQueryClient();
@@ -92,7 +92,7 @@ export default function ModelsAndEndpointsPage() {
 
   const isInternalUser = userRole && internalUserRoles.includes(userRole);
   const canCreate = canCreateModels(
-    { userRole, userID },
+    { userRole, userID, isViewOnly },
     {
       teams: teams ?? null,
       disabledForInternalUsers:
@@ -100,25 +100,27 @@ export default function ModelsAndEndpointsPage() {
     },
   );
   const isAdmin = all_admin_roles.includes(userRole);
+  const canViewAutoRouters =
+    autoRouterCreationScope(
+      { userRole, userID, isViewOnly },
+      { teams: teams ?? null, disabledForInternalUsers: false },
+    ) !== "forbidden";
 
   const visibleSlugs = useMemo<Array<"" | ModelTabSlug>>(
     () => [
       "",
       ...(canCreate ? (["add"] as const) : []),
-      ...(isAdmin || canCreate ? (["auto-routers"] as const) : []),
-      ...(isAdmin
-        ? ([
-            "llm-credentials",
-            "pass-through",
-            "health",
-            "retry-settings",
-            "model-group-alias",
-            "access-group-budgets",
-            "price-data",
-          ] as const)
+      ...(isAdmin || canViewAutoRouters ? (["auto-routers"] as const) : []),
+      // effectiveSessionRole reports proxy_admin_viewer as "Admin", so isAdmin alone would show a
+      // viewer these write-only panels; only the raw-role isViewOnly separates them. Health Status
+      // stays: it is the bucket's one read view, and viewers keep read parity with admins.
+      ...(isAdmin && !isViewOnly ? (["llm-credentials", "pass-through"] as const) : []),
+      ...(isAdmin ? (["health"] as const) : []),
+      ...(isAdmin && !isViewOnly
+        ? (["retry-settings", "model-group-alias", "access-group-budgets", "price-data"] as const)
         : []),
     ],
-    [canCreate, isAdmin],
+    [canCreate, canViewAutoRouters, isAdmin, isViewOnly],
   );
 
   const allModelsLabel = isAdmin ? "All Models" : "Your Models";
@@ -148,8 +150,8 @@ export default function ModelsAndEndpointsPage() {
           teamId={teamId}
           onClose={close}
           accessToken={accessToken}
-          is_team_admin={userRole === "Admin"}
-          is_proxy_admin={userRole === "Proxy Admin"}
+          is_team_admin={userRole === "Admin" && !isViewOnly}
+          is_proxy_admin={userRole === "Admin" && !isViewOnly}
           userModels={allModelsOnProxy}
           editTeam={false}
           onUpdate={invalidateModels}
@@ -168,7 +170,9 @@ export default function ModelsAndEndpointsPage() {
             {isAdmin ? (
               <p className="text-sm text-muted-foreground">Add and manage models for the proxy</p>
             ) : (
-              <p className="text-sm text-muted-foreground">Add models for teams you are an admin for.</p>
+              <p className="text-sm text-muted-foreground">
+                View your models and manage routers for teams that allow it.
+              </p>
             )}
           </div>
         </div>
@@ -182,6 +186,7 @@ export default function ModelsAndEndpointsPage() {
             accessToken={accessToken}
             userID={userID}
             userRole={userRole}
+            isViewOnly={isViewOnly}
             onModelUpdate={invalidateModels}
             modelAccessGroups={availableModelAccessGroups}
           />

@@ -1,5 +1,6 @@
 import json
 from datetime import datetime, timezone
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -203,7 +204,7 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
                 "window_duration": "30d",
                 "window_start": "2026-08-01T00:00:00.000000",
                 "spend": 3.0,
-                "request_ids": ["req-1"],
+                "started_at": None,
             }
         ]
     )
@@ -233,13 +234,11 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
         window_spend,
     ) = result
 
-    # Budget window spend from two pods is summed per window, not overwritten,
-    # and both pods' request ids reach the seed exclusion.
+    # Budget window spend from two pods is summed per window, not overwritten.
     assert window_spend is not None
     assert len(window_spend) == 1
     assert window_spend[0]["spend"] == 6.0
     assert window_spend[0]["entity_id"] == "hashed-token"
-    assert window_spend[0]["request_ids"] == ("req-1",)
 
     # Verify db spend was parsed correctly
     assert db_spend is not None
@@ -266,6 +265,51 @@ async def test_get_all_transactions_from_redis_buffer_pipeline(redis_update_buff
 
     popped_keys = [op["key"] for op in mock_redis_cache.async_lpop_pipeline.call_args.kwargs["lpop_list"]]
     assert popped_keys[6] == REDIS_WINDOW_SPEND_UPDATE_BUFFER_KEY
+
+
+@pytest.mark.asyncio
+async def test_org_member_spend_is_summed_across_pods_and_restored_on_rpush_failure(
+    redis_update_buffer: RedisUpdateBuffer, mock_redis_cache: AsyncMock
+):
+    from litellm.proxy._types import Litellm_EntityType
+    from litellm.proxy.db.db_transaction_queue.daily_spend_update_queue import (
+        DailySpendUpdateQueue,
+    )
+    from litellm.proxy.db.db_transaction_queue.spend_update_queue import (
+        SpendUpdateQueue,
+    )
+
+    member_key: Final = "organization_id::org-1::user_id::user-1"
+    pod_json: Final = json.dumps({"org_member_list_transactions": {member_key: 0.25}})
+    mock_redis_cache.async_lpop_pipeline = AsyncMock(
+        return_value=[[pod_json, pod_json], None, None, None, None, None, None]
+    )
+
+    (db_spend, *_rest) = await redis_update_buffer.get_all_transactions_from_redis_buffer_pipeline()
+
+    assert db_spend is not None
+    assert db_spend["org_member_list_transactions"] == {member_key: 0.5}
+
+    mock_redis_cache.async_rpush_pipeline = AsyncMock(side_effect=ConnectionError("redis went away"))
+    spend_queue: Final = SpendUpdateQueue()
+    await spend_queue.add_update(
+        {
+            "entity_type": Litellm_EntityType.ORGANIZATION_MEMBER,
+            "entity_id": member_key,
+            "response_cost": 1.5,
+        }
+    )
+    await redis_update_buffer.store_in_memory_spend_updates_in_redis(
+        spend_update_queue=spend_queue,
+        daily_spend_update_queue=DailySpendUpdateQueue(),
+        daily_team_spend_update_queue=DailySpendUpdateQueue(),
+        daily_org_spend_update_queue=DailySpendUpdateQueue(),
+        daily_end_user_spend_update_queue=DailySpendUpdateQueue(),
+        daily_agent_spend_update_queue=DailySpendUpdateQueue(),
+    )
+
+    restored_spend: Final = await spend_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert restored_spend["org_member_list_transactions"] == {member_key: 1.5}
 
 
 @pytest.mark.asyncio
@@ -326,7 +370,6 @@ async def test_restored_window_spend_transactions_drain_back_unchanged(redis_upd
             window_duration="30d",
             window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
             spend=3.0,
-            request_id="req-1",
             started_at=datetime(2026, 8, 10, 12, 0, tzinfo=timezone.utc),
         ),
     )
@@ -500,7 +543,6 @@ async def test_store_in_memory_spend_updates_pushes_budget_window_spend(redis_up
             window_duration="30d",
             window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
             spend=1.25,
-            request_id="req-1",
             started_at=datetime(2026, 8, 10, 12, 0, 0, tzinfo=timezone.utc),
         )
     )
@@ -526,10 +568,43 @@ async def test_store_in_memory_spend_updates_pushes_budget_window_spend(redis_up
             "window_duration": "30d",
             "window_start": "2026-08-01T00:00:00.000000",
             "spend": 1.25,
-            "request_ids": ["req-1"],
             "started_at": "2026-08-10T12:00:00.000000",
+            "request_ids": [],
         }
     ]
+
+
+@pytest.mark.asyncio
+async def test_budget_window_payloads_keep_request_ids_for_older_workers(redis_update_buffer, mock_redis_cache):
+    """A leader from before the field was dropped indexes request_ids while
+    merging what it popped, and the pop is destructive, so a payload without
+    the key would cost a rolling deploy those increments."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy.db.db_transaction_queue.window_spend_update_queue import (
+        WindowSpendUpdateQueue,
+        build_window_spend_transaction,
+    )
+
+    mock_redis_cache.async_rpush_pipeline = AsyncMock(return_value=[1])
+    window_queue = WindowSpendUpdateQueue()
+    await window_queue.add_update(
+        build_window_spend_transaction(
+            entity_type="key",
+            entity_id="hashed-token",
+            window_duration="30d",
+            window_start=datetime(2026, 8, 1, tzinfo=timezone.utc),
+            spend=1.25,
+        )
+    )
+
+    await redis_update_buffer.restore_transactions_to_redis(
+        window_spend_update_transactions=await window_queue.flush_and_get_aggregated_window_spend_transactions(),
+    )
+
+    rpush_list = mock_redis_cache.async_rpush_pipeline.call_args.kwargs["rpush_list"]
+    restored = json.loads(rpush_list[0]["values"][0])
+    assert [payload["request_ids"] for payload in restored] == [[]]
 
 
 @pytest.mark.asyncio
@@ -576,3 +651,53 @@ async def test_store_in_memory_spend_updates_restores_budget_window_spend_on_rpu
     restored = await window_queue.flush_and_get_aggregated_window_spend_transactions()
     assert [payload["spend"] for payload in restored] == [4.0]
     assert [payload["entity_id"] for payload in restored] == ["team-1"]
+
+
+class _ListRedis:
+    def __init__(self) -> None:
+        self.rows: list[str] = []
+
+    async def async_rpush_and_trim(self, key: str, values: list[str], max_len: int) -> int:
+        self.rows.extend(values)
+        pushed_len = len(self.rows)
+        del self.rows[:-max_len]
+        return pushed_len
+
+    async def async_lpop(self, key: str, count: int | None = None, **kwargs: object) -> list[str] | None:
+        if not self.rows:
+            return None
+        popped = self.rows[:count]
+        del self.rows[:count]
+        return popped
+
+
+@pytest.mark.asyncio
+async def test_store_spend_logs_in_redis_drops_oldest_rows_past_the_cap():
+    redis = _ListRedis()
+    buffer = RedisUpdateBuffer(redis_cache=redis)
+    buffer._should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+
+    assert await buffer.store_spend_logs_in_redis([{"request_id": "old"}, {"request_id": "mid"}], max_rows=2) is True
+    assert await buffer.store_spend_logs_in_redis([{"request_id": "new"}], max_rows=2) is True
+
+    parked = await buffer.get_spend_logs_from_redis_buffer(limit=10)
+    assert [row["request_id"] for row in parked] == ["mid", "new"]
+    assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == ()
+
+
+@pytest.mark.asyncio
+async def test_store_spend_logs_in_redis_reports_failure_without_redis():
+    buffer = RedisUpdateBuffer(redis_cache=None)
+
+    assert await buffer.store_spend_logs_in_redis([{"request_id": "a"}]) is False
+    assert await buffer.get_spend_logs_from_redis_buffer(limit=10) == ()
+
+
+@pytest.mark.asyncio
+async def test_store_spend_logs_in_redis_is_off_unless_transaction_buffering_is_enabled():
+    redis = _ListRedis()
+    buffer = RedisUpdateBuffer(redis_cache=redis)
+    buffer._should_commit_spend_updates_to_redis = MagicMock(return_value=False)
+
+    assert await buffer.store_spend_logs_in_redis([{"request_id": "a"}]) is False
+    assert redis.rows == []

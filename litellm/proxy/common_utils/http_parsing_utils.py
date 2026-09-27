@@ -1,13 +1,19 @@
 import json
 import re
-from collections.abc import Collection
-from typing import Any, Final
+from collections.abc import Collection, Mapping
+from types import MappingProxyType, UnionType
+from typing import Annotated, Any, Final, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
+from typing_extensions import NotRequired, ReadOnly, Required
 
 from litellm._logging import verbose_proxy_logger
-from litellm.constants import MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB
+from litellm.constants import (
+    AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX,
+    CLIENT_REQUESTED_MODEL_SCOPE_KEY,
+    MAX_REQUEST_BODY_SIZE_TO_REPAIR_MB,
+)
 from litellm.proxy._types import ProxyException
 from litellm.proxy.common_utils.callback_utils import (
     get_metadata_variable_name_from_kwargs,
@@ -15,6 +21,8 @@ from litellm.proxy.common_utils.callback_utils import (
 from litellm.types.router import Deployment
 
 _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-urlencoded", "multipart/form-data"})
+
+_ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
 
 
 def _normalize_media_type(content_type: str) -> str:
@@ -35,9 +43,80 @@ def _is_form_content_type(content_type: str) -> bool:
     return _normalize_media_type(content_type) in _FORM_CONTENT_TYPES
 
 
-def _is_json_content_type(content_type: str) -> bool:
+def is_json_content_type(content_type: str) -> bool:
     """True iff the body should be parsed as JSON."""
     return _normalize_media_type(content_type) == "application/json"
+
+
+def _unqualified(annotation: object) -> object:
+    """Which qualifiers ``get_type_hints`` already stripped varies by interpreter version, so peel them all."""
+    if get_origin(annotation) not in _ANNOTATION_QUALIFIERS:
+        return annotation
+    qualified: Final[tuple[object, ...]] = get_args(annotation)
+    return _unqualified(qualified[0])
+
+
+def _union_members(annotation: object) -> tuple[object, ...]:
+    """The non-``None`` members of a union annotation, or the annotation itself when it is not a union."""
+    if get_origin(annotation) not in (Union, UnionType):
+        return (annotation,)
+    members: Final[tuple[object, ...]] = get_args(annotation)
+    return tuple(arg for arg in members if arg is not type(None))
+
+
+def _numeric_form_type(annotation: object) -> type[int] | type[float] | None:
+    """The scalar to parse an ``int``/``float``-typed field as, else ``None``."""
+    unwrapped: Final = _unqualified(annotation)
+    candidates: Final = _union_members(unwrapped)
+    if len(candidates) != 1:
+        return None
+    if candidates[0] is int:
+        return int
+    if candidates[0] is float:
+        return float
+    return None
+
+
+def numeric_form_fields(annotations: Mapping[str, object]) -> Mapping[str, type[int] | type[float]]:
+    """
+    The numeric fields of a request schema, mapped to the scalar to parse them as.
+
+    Only a bare ``int``/``float`` or an optional one qualifies, so container and
+    literal fields are left alone and ``bool`` is excluded on purpose.
+    """
+    return MappingProxyType(
+        {
+            name: scalar
+            for name, annotation in annotations.items()
+            if (scalar := _numeric_form_type(annotation)) is not None
+        }
+    )
+
+
+def _numeric_form_value(value: object, scalar: type[int] | type[float]) -> object:
+    if not isinstance(value, str):
+        return value
+    try:
+        return scalar(value)
+    except ValueError:
+        return value
+
+
+def coerce_numeric_form_fields(
+    parsed_body: Mapping[str, object],
+    numeric_fields: Mapping[str, type[int] | type[float]],
+) -> Mapping[str, object]:
+    """
+    Parse the numeric fields of a form-encoded body back into numbers.
+
+    ``request.form()`` yields every field as a string, so a provider that puts the
+    value in a JSON body would send a string where its API requires a number. A
+    value that will not parse is left as-is for the provider to reject as before.
+    """
+    return {
+        name: _numeric_form_value(value, numeric_fields[name]) if name in numeric_fields else value
+        for name, value in parsed_body.items()
+    }
 
 
 async def _read_request_body(request: Request | None) -> dict:
@@ -118,8 +197,9 @@ async def _read_request_body(request: Request | None) -> dict:
 
                     try:
                         parsed_body = json.loads(body_str)
-                    except json.JSONDecodeError:
-                        # If both orjson and json.loads fail, throw a proper error
+                        json.dumps(parsed_body, ensure_ascii=False).encode("utf-8")
+                    except (json.JSONDecodeError, UnicodeEncodeError):
+                        # json.loads accepts lone surrogate escapes that no provider can encode
                         verbose_proxy_logger.error("Invalid JSON payload received: %s", e)
                         raise ProxyException(
                             message=f"Invalid JSON payload: {e}",
@@ -142,6 +222,26 @@ async def _read_request_body(request: Request | None) -> dict:
         return {}
 
 
+def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
+    """Azure Speech bodies (raw audio, multipart uploads) are forwarded byte for byte, so auth must not consume them."""
+    media_type: Final = _normalize_media_type(content_type)
+    return route.startswith(f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/") and (
+        media_type.startswith("audio/") or media_type == "multipart/form-data"
+    )
+
+
+async def read_raw_json_body(request: Request | None) -> bytes | None:
+    if request is None or _safe_get_request_parsed_body(request=request) is None:
+        return None
+    content_type: Final = _safe_get_request_headers(request=request).get("content-type", "")
+    if _is_form_content_type(content_type):
+        return None
+    try:
+        return await request.body()
+    except RuntimeError:
+        return None
+
+
 def _safe_get_request_parsed_body(request: Request | None) -> dict | None:
     if request is None:
         return None
@@ -149,6 +249,13 @@ def _safe_get_request_parsed_body(request: Request | None) -> dict | None:
         accepted_keys, parsed_body = request.scope["parsed_body"]
         return {key: parsed_body[key] for key in accepted_keys}
     return None
+
+
+def get_client_requested_model(request: Request | None) -> str | None:
+    if request is None or not hasattr(request, "scope"):
+        return None
+    model: Final = request.scope.get(CLIENT_REQUESTED_MODEL_SCOPE_KEY)
+    return model if isinstance(model, str) else None
 
 
 def _safe_get_request_query_params(request: Request | None) -> dict:
@@ -175,6 +282,24 @@ def _safe_set_request_parsed_body(
         verbose_proxy_logger.debug("Unexpected error setting request parsed body - %s", e)
 
 
+def rewrite_request_model(
+    request_data: dict[str, object],  # mutable-ok: the request body is rewritten in place for every downstream reader
+    request: Request | None,
+    model: str,
+) -> None:
+    """Point the auth-time payload, the parsed-body cache, ``request.json()`` and ``request.body()`` at ``model``.
+    The cache and raw body keep only the keys the client sent, not params auth merged into ``request_data``.
+    """
+    request_data["model"] = model
+    if request is None:
+        return
+    cached_body: Final = _safe_get_request_parsed_body(request=request)
+    body: Final = {**cached_body, "model": model} if cached_body is not None else request_data
+    _safe_set_request_parsed_body(request=request, parsed_body=body)
+    request._json = body
+    request._body = orjson.dumps(body)
+
+
 def _safe_get_request_headers(request: Request | None) -> dict:
     """
     [Non-Blocking] Safely get the request headers.
@@ -186,7 +311,7 @@ def _safe_get_request_headers(request: Request | None) -> dict:
     if request is None:
         return {}
     state: Final = getattr(request, "state", None)
-    cached: Final = getattr(state, "_cached_headers", None)
+    cached: Final[object] = getattr(state, "_cached_headers", None)
     if isinstance(cached, dict):
         return cached
     if cached is not None:
@@ -335,7 +460,7 @@ async def get_request_body(request: Request) -> dict[str, Any]:
     """
     if request.method == "POST":
         content_type: Final = request.headers.get("content-type", "")
-        if _is_json_content_type(content_type):
+        if is_json_content_type(content_type):
             return await _read_request_body(request)
         elif _is_form_content_type(content_type):
             return await get_form_data(request)
@@ -344,7 +469,9 @@ async def get_request_body(request: Request) -> dict[str, Any]:
     return {}
 
 
-def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litellm_metadata[") -> dict[str, Any]:
+def extract_nested_form_metadata(
+    form_data: Mapping[str, object], prefix: str = "litellm_metadata["
+) -> dict[str, object]:
     """
     Extract nested metadata from form data with bracket notation.
 
@@ -382,7 +509,7 @@ def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litel
     if not form_data:
         return {}
 
-    metadata: Final[dict[str, Any]] = {}
+    metadata: Final[dict[str, object]] = {}
 
     for key, value in form_data.items():
         # Skip keys that don't start with the prefix
@@ -430,7 +557,7 @@ def extract_nested_form_metadata(form_data: dict[str, Any], prefix: str = "litel
     return metadata
 
 
-def get_tags_from_request_body(request_body: dict) -> list[str]:
+def get_tags_from_request_body(request_body: Mapping[str, object]) -> list[str]:
     """
     Extract tags from request body metadata.
 
@@ -447,12 +574,12 @@ def get_tags_from_request_body(request_body: dict) -> list[str]:
     if isinstance(metadata, str):
         from litellm.litellm_core_utils.safe_json_loads import safe_json_loads
 
-        parsed: Final = safe_json_loads(metadata)
+        parsed: Final[object] = safe_json_loads(metadata)
         metadata = parsed if isinstance(parsed, dict) else {}
     elif not isinstance(metadata, dict):
         metadata = {}
-    tags_in_metadata: Final[Any] = metadata.get("tags", [])
-    tags_in_request_body: Final[Any] = request_body.get("tags", [])
+    tags_in_metadata: Final[object] = metadata.get("tags", [])
+    tags_in_request_body: Final[object] = request_body.get("tags", [])
     combined_tags: Final[list[str]] = []
 
     ######################################

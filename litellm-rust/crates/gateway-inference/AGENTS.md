@@ -1,0 +1,5 @@
+- Expose a mountable Axum router; listener binding, server lifecycle, and shared inbound middleware belong to `gateway`
+- Own the public inference HTTP boundary: endpoint paths, request parsing, model alias resolution, response envelopes, and SSE delivery
+- Delegate inference execution to `core` and provider transformations and authentication to `llms` and the auth crates; do not duplicate them in handlers
+- Use injected deployments, HTTP pools, settings, and secret sources; do not load process configuration or construct independent clients in handlers
+- Test HTTP contracts here, including status codes, forwarded headers, error envelopes, and streaming behavior; keep core and provider tests in their owning crates

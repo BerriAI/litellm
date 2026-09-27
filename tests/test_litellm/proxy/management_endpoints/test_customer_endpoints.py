@@ -83,6 +83,50 @@ def test_update_customer_success(mock_prisma_client, mock_user_api_key_auth):
     assert response.json()["alias"] == "Updated Test User"
 
 
+def test_update_customer_unblock(mock_prisma_client, mock_user_api_key_auth):
+    mock_end_user = LiteLLM_EndUserTable(user_id="test-user-1", blocked=True)
+    updated_mock_end_user = LiteLLM_EndUserTable(user_id="test-user-1", blocked=False)
+
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=mock_end_user)
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=updated_mock_end_user)
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "test-user-1", "blocked": False},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["blocked"] is False
+    update_mock = mock_prisma_client.db.litellm_endusertable.update
+    update_mock.assert_called_once()
+    assert update_mock.call_args.kwargs["data"]["blocked"] is False
+
+
+def test_update_customer_keeps_blocked_when_omitted(mock_prisma_client, mock_user_api_key_auth):
+    """
+    Regression test: updating a blocked customer without supplying `blocked`
+    must NOT reset it to unblocked. `blocked=False` is the model default and
+    should only be applied when explicitly provided by the caller.
+    """
+    mock_end_user = LiteLLM_EndUserTable(user_id="test-user-1", blocked=True)
+    updated_mock_end_user = LiteLLM_EndUserTable(user_id="test-user-1", blocked=True)
+
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=mock_end_user)
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(return_value=updated_mock_end_user)
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "test-user-1", "alias": "Updated Test User"},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200
+    update_mock = mock_prisma_client.db.litellm_endusertable.update
+    update_mock.assert_called_once()
+    assert "blocked" not in update_mock.call_args.kwargs["data"]
+
+
 def test_update_customer_not_found(mock_prisma_client, mock_user_api_key_auth):
     """
     Test that update_end_user raises a 404 ProxyException when user_id does not exist.
@@ -352,6 +396,65 @@ def test_update_customer_response_preserves_budget_id(mock_prisma_client, mock_u
 
     assert response.status_code == 200
     assert response.json()["budget_id"] == "budget-123"
+
+
+@pytest.mark.parametrize(
+    "budget_payload",
+    [{"max_budget": None}, {}],
+    ids=["explicit-null", "omitted"],
+)
+def test_update_customer_budget_omission_and_null_preserve_existing_budget(
+    mock_prisma_client, mock_user_api_key_auth, budget_payload
+):
+    from litellm.proxy._types import LiteLLM_BudgetTable
+
+    class BudgetState:
+        def __init__(self) -> None:
+            self.max_budget: float | None = 100.0
+
+        def store(self, data) -> None:
+            self.max_budget = data.get("max_budget", self.max_budget)
+
+    budget_state = BudgetState()
+
+    def end_user_row():
+        return LiteLLM_EndUserTable(
+            user_id="cust-1",
+            blocked=False,
+            budget_id="budget-1",
+            litellm_budget_table=LiteLLM_BudgetTable(budget_id="budget-1", max_budget=budget_state.max_budget),
+        )
+
+    def response_row():
+        row = MagicMock()
+        row.model_dump.return_value = {
+            "user_id": "cust-1",
+            "blocked": False,
+            "budget_id": "budget-1",
+            "litellm_budget_table": {
+                "budget_id": "budget-1",
+                "max_budget": budget_state.max_budget,
+                "created_at": "2024-01-01T00:00:00",
+            },
+        }
+        return row
+
+    async def update_budget(*, where, data):
+        budget_state.store(data)
+        return LiteLLM_BudgetTable(budget_id="budget-1", max_budget=budget_state.max_budget)
+
+    mock_prisma_client.db.litellm_endusertable.find_first = AsyncMock(return_value=end_user_row())
+    mock_prisma_client.db.litellm_budgettable.update = AsyncMock(side_effect=update_budget)
+    mock_prisma_client.db.litellm_endusertable.update = AsyncMock(side_effect=lambda **_: response_row())
+
+    response = client.post(
+        "/customer/update",
+        json={"user_id": "cust-1", **budget_payload},
+        headers={"Authorization": "Bearer test-key"},
+    )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["litellm_budget_table"]["max_budget"] == 100.0
 
 
 def test_update_customer_response_keeps_nested_budget_server_fields(mock_prisma_client, mock_user_api_key_auth):
@@ -699,9 +802,12 @@ _EXPECTED_CUSTOMER = {
         "max_parallel_requests": None,
         "tpm_limit": None,
         "rpm_limit": None,
+        "tpd_limit": None,
         "model_max_budget": None,
         "budget_duration": "30d",
         "allowed_models": [],
+        "temp_budget_increase": None,
+        "temp_budget_expiry": None,
         "budget_reset_at": "2024-02-01T00:00:00",
         "created_at": "2024-01-01T00:00:00",
     },
@@ -719,6 +825,7 @@ _EXPECTED_CUSTOMER = {
         "blocked_tools": [],
         "search_tools": [],
         "mcp_tool_search_enabled": None,
+        "skills": None,
     },
 }
 

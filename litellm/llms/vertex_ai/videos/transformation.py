@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.chat.transformation import (
         BaseLLMException as _BaseLLMException,
     )
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     BaseLLMException = _BaseLLMException
@@ -70,10 +71,17 @@ def _parse_veo_operation(raw_response: httpx.Response) -> _VeoOperation:
     return operation
 
 
+def veo_video_count_from_parameters(parameters: Mapping[str, object]) -> int | None:
+    sample_count: Final = parameters.get("sampleCount")
+    if isinstance(sample_count, bool) or not isinstance(sample_count, int) or sample_count < 1:
+        return None
+    return sample_count
+
+
 def _build_vertex_video_usage_from_request_data(
     request_data: dict[str, Any] | None,
 ) -> dict[str, float | str]:
-    """Build usage metadata (duration, resolution) for video cost calculation."""
+    """Build usage metadata (duration, resolution, video count) for video cost calculation."""
     usage_data: Final[dict[str, float | str]] = {}
     if not request_data:
         return usage_data
@@ -88,6 +96,9 @@ def _build_vertex_video_usage_from_request_data(
     res: Final = parameters.get("resolution")
     if res is not None and str(res).strip() != "":
         usage_data["video_resolution"] = str(res).strip().lower()
+    video_count: Final = veo_video_count_from_parameters(parameters)
+    if video_count is not None:
+        usage_data["video_count"] = video_count
     return usage_data
 
 
@@ -265,7 +276,9 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         # Extract Vertex AI parameters using safe helpers from VertexBase
         # Use safe_get_* methods that don't mutate litellm_params dict
         # Ensure litellm_params is a dict for type checking
-        params_dict: Final[dict[str, Any]] = cast(dict[str, Any], litellm_params) if litellm_params is not None else {}
+        params_dict: Final[dict[str, object]] = (
+            cast(dict[str, object], litellm_params) if litellm_params is not None else {}
+        )
 
         vertex_project: Final = VertexBase.safe_get_vertex_ai_project(litellm_params=params_dict)
         vertex_credentials: Final = VertexBase.safe_get_vertex_ai_credentials(litellm_params=params_dict)
@@ -479,6 +492,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
+        client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         """
         Transform the Veo operation status response.

@@ -1284,15 +1284,18 @@ def test_model_group_info():
     router = Router(
         model_list=[
             {
-                "model_name": "command-r-plus",
-                "litellm_params": {"model": "cohere.command-r-plus-v1:0"},
+                "model_name": "nova-2-lite",
+                "litellm_params": {"model": "bedrock/amazon.nova-2-lite-v1:0"},
             }
         ]
     )
 
-    response = router.get_model_group_info(model_group="command-r-plus")
+    response = router.get_model_group_info(model_group="nova-2-lite")
 
     assert response is not None
+    assert response.model_group == "nova-2-lite"
+    assert response.providers == ["bedrock"]
+    assert response.max_input_tokens is not None
 
 
 def test_consistent_model_id():
@@ -1552,8 +1555,9 @@ def test_router_timeout():
         {
             "model_name": "gpt-3.5-turbo",
             "litellm_params": {
-                "model": "gpt-3.5-turbo",
-                "api_key": "os.environ/OPENAI_API_KEY",
+                "model": "openai/slow-endpoint",
+                "api_base": FAKE_OPENAI_API_BASE,
+                "api_key": "fake-key",
             },
         }
     ]
@@ -1562,7 +1566,7 @@ def test_router_timeout():
     start_time = time.time()
     try:
         res = router.completion(
-            model="gpt-3.5-turbo", messages=messages, timeout=0.0001
+            model="gpt-3.5-turbo", messages=messages, timeout=0.5
         )
         print(res)
         pytest.fail("this should have timed out")
@@ -2032,8 +2036,8 @@ def test_router_dynamic_cooldown_correct_retry_after_time():
         raise exception
 
     with patch.object(
-        openai_client.embeddings.with_raw_response,
-        "create",
+        openai_client,
+        "post",
         side_effect=_return_exception,
     ):
         new_retry_after_mock_client = MagicMock(return_value=-1)

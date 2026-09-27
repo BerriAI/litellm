@@ -5,8 +5,9 @@ The public guardrail class imports this private mixin from
 while preserving the existing public import path.
 """
 
+from collections.abc import Sequence
 from datetime import datetime
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 from fastapi import HTTPException
 
@@ -23,7 +24,7 @@ if TYPE_CHECKING:
     from .cisco_ai_defense import _ScanContext
 
 
-def _serialize_mcp_content_item(item: object) -> dict[str, Any]:
+def _serialize_mcp_content_item(item: object) -> dict[str, object]:
     """Serialize an MCP content item to a JSON-friendly dict.
 
     Handles raw dicts, MCP SDK Pydantic models, and simple ``.text`` objects.
@@ -33,13 +34,24 @@ def _serialize_mcp_content_item(item: object) -> dict[str, Any]:
     model_dump: Final = getattr(item, "model_dump", None)
     if callable(model_dump):
         try:
-            return dict(model_dump(exclude_none=True))
+            dumped: Final[dict[str, object]] = model_dump(exclude_none=True, by_alias=True)
+            return dict(dumped)
         except TypeError:
-            return dict(model_dump())
+            dumped_fallback: Final[dict[str, object]] = model_dump()
+            return dict(dumped_fallback)
     text: Final = getattr(item, "text", None)
     if isinstance(text, str):
         return {"type": getattr(item, "type", "text"), "text": text}
     return {"type": "text", "text": str(item)}
+
+
+def _source_field(source: object, key: str, snake_key: str) -> object:
+    if isinstance(source, dict):
+        for candidate in (key, snake_key):
+            if candidate in source:
+                return source[candidate]  # pyright: ignore[reportUnknownVariableType]  # dict-shaped sources arrive untyped
+        return None
+    return getattr(source, snake_key, None)
 
 
 class _CiscoAIDefenseMcpMixin:
@@ -57,7 +69,7 @@ class _CiscoAIDefenseMcpMixin:
 
         def should_run_guardrail(self, data: dict, event_type: GuardrailEventHooks) -> bool: ...
 
-        async def _post_inspection(self, url: str, payload: dict[str, Any], surface: str) -> dict[str, Any]: ...
+        async def _post_inspection(self, url: str, payload: dict[str, object], surface: str) -> dict[str, object]: ...
 
         def _handle_api_error(
             self,
@@ -67,16 +79,16 @@ class _CiscoAIDefenseMcpMixin:
             start_time: datetime | None = ...,
             surface: str = ...,
             direction: str = ...,
-        ) -> dict[str, Any]: ...
+        ) -> dict[str, object]: ...
 
         def _finalize_inspection(
             self,
-            inspect_response: dict[str, Any],
+            inspect_response: dict[str, object],
             request_data: dict,
             context: "_ScanContext",
             start_time: datetime,
             response_obj: object = ...,
-        ) -> dict[str, Any]: ...
+        ) -> dict[str, object]: ...
 
     # ------------------------------------------------------------------
     # MCP post-tool hook (dispatcher contract)
@@ -95,7 +107,7 @@ class _CiscoAIDefenseMcpMixin:
         if self.inspection_type != "mcp":
             return None
 
-        request_data: Final[dict[str, Any]] = {}
+        request_data: Final[dict[str, object]] = {}
         for key in (
             "name",
             "litellm_call_id",
@@ -188,9 +200,9 @@ class _CiscoAIDefenseMcpMixin:
 
         original_hidden: Final = getattr(original_response_obj, "hidden_params", None)
         if isinstance(original_hidden, HiddenParams):
-            hidden_params: Any = original_hidden
+            hidden_params: HiddenParams = original_hidden
         else:
-            response_cost: Final = getattr(original_hidden, "response_cost", None)
+            response_cost: Final[float | None] = getattr(original_hidden, "response_cost", None)
             hidden_params = HiddenParams(response_cost=response_cost) if response_cost is not None else HiddenParams()
 
         return MCPPostCallResponseObject(
@@ -200,11 +212,11 @@ class _CiscoAIDefenseMcpMixin:
 
     @staticmethod
     def _replace_mcp_tool_response(response_obj: object, replacement_obj: object) -> bool:
-        replacement: Final = getattr(replacement_obj, "mcp_tool_call_response", None)
+        replacement: Final[list[object] | None] = getattr(replacement_obj, "mcp_tool_call_response", None)
         if replacement is None:
             return False
 
-        inner: Final = getattr(response_obj, "mcp_tool_call_response", None)
+        inner: Final[object | None] = getattr(response_obj, "mcp_tool_call_response", None)
         if inner is not None:
             if _CiscoAIDefenseMcpMixin._replace_mcp_tool_response(inner, replacement_obj):
                 return True
@@ -218,14 +230,14 @@ class _CiscoAIDefenseMcpMixin:
         if isinstance(content, list):
             content[:] = replacement
             structured_replacement: Final = _CiscoAIDefenseMcpMixin._replacement_structured_content(replacement)
-            if hasattr(response_obj, "structuredContent"):
+            if hasattr(response_obj, "structured_content"):
                 try:
-                    setattr(response_obj, "structuredContent", structured_replacement)
+                    setattr(response_obj, "structured_content", structured_replacement)
                 except (AttributeError, TypeError, ValueError):
                     pass
-            if hasattr(response_obj, "isError"):
+            if hasattr(response_obj, "is_error"):
                 try:
-                    setattr(response_obj, "isError", True)
+                    setattr(response_obj, "is_error", True)
                 except (AttributeError, TypeError, ValueError):
                     pass
             return True
@@ -276,7 +288,7 @@ class _CiscoAIDefenseMcpMixin:
         self,
         data: dict,
         user_api_key_dict: UserAPIKeyAuth,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         del user_api_key_dict  # carried via logging metadata, not the wire payload
         url: Final = f"{self.api_base}{self.inspect_path}"
         payload: Final = self._build_mcp_request_payload(data=data)
@@ -312,7 +324,7 @@ class _CiscoAIDefenseMcpMixin:
         response: object,
         user_api_key_dict: UserAPIKeyAuth | None = None,
         redact_response_obj: object = None,
-    ) -> dict[str, Any]:
+    ) -> dict[str, object]:
         del user_api_key_dict  # carried via logging metadata, not the wire payload
         url: Final = f"{self.api_base}{self.inspect_path}"
         payload: Final = self._build_mcp_response_payload(
@@ -349,7 +361,7 @@ class _CiscoAIDefenseMcpMixin:
     def _build_mcp_request_payload(
         self,
         data: dict,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         """Build the JSON-RPC ``tools/call`` envelope sent to ``/inspect/mcp``.
 
         The Cisco AI Defense MCP inspect endpoint expects the JSON-RPC
@@ -390,7 +402,7 @@ class _CiscoAIDefenseMcpMixin:
         self,
         request_data: dict,
         response: object,
-    ) -> dict[str, Any] | None:
+    ) -> dict[str, object] | None:
         """Build the MCP response-inspection body sent to ``/inspect/mcp``."""
         request_payload: Final = self._build_mcp_request_payload(data=request_data)
         if request_payload is None:
@@ -415,7 +427,7 @@ class _CiscoAIDefenseMcpMixin:
         return payload
 
     @staticmethod
-    def _hydrate_mcp_tool_context(request_data: dict[str, Any]) -> None:
+    def _hydrate_mcp_tool_context(request_data: dict[str, object]) -> None:
         metadata = request_data.get("mcp_tool_call_metadata")
         if metadata is None:
             nested: Final = request_data.get("metadata") or request_data.get("litellm_metadata")
@@ -440,7 +452,7 @@ class _CiscoAIDefenseMcpMixin:
             request_data.setdefault("server_name", server_name)
 
     @staticmethod
-    def _normalize_mcp_response(response: object) -> dict[str, Any] | None:
+    def _normalize_mcp_response(response: object) -> dict[str, object] | None:
         """Normalize an MCP tool response into a JSON-RPC envelope.
 
         Handles JSON-RPC dicts, raw content lists, MCP SDK models, and
@@ -486,7 +498,7 @@ class _CiscoAIDefenseMcpMixin:
         model_dump: Final = getattr(response, "model_dump", None)
         if callable(model_dump):
             try:
-                dumped = model_dump(exclude_none=True)
+                dumped = model_dump(exclude_none=True, by_alias=True)
             except TypeError:
                 dumped = model_dump()
             if isinstance(dumped, dict):
@@ -502,12 +514,12 @@ class _CiscoAIDefenseMcpMixin:
 
     @staticmethod
     def _build_mcp_result(
-        content: list[Any],
+        content: Sequence[object],
         source: object = None,
-    ) -> dict[str, Any]:
-        result: Final[dict[str, Any]] = {"content": [_serialize_mcp_content_item(item) for item in content]}
-        for key in ("structuredContent", "isError"):
-            value = source.get(key) if isinstance(source, dict) else getattr(source, key, None)
+    ) -> dict[str, object]:
+        result: Final[dict[str, object]] = {"content": [_serialize_mcp_content_item(item) for item in content]}
+        for key, snake_key in (("structuredContent", "structured_content"), ("isError", "is_error")):
+            value = _source_field(source, key, snake_key)
             if value is not None and (key != "isError" or isinstance(value, bool)):
                 result[key] = value
         return result
@@ -522,7 +534,7 @@ class _CiscoAIDefenseMcpMixin:
         if response_obj is None:
             return False
 
-        inner: Final = getattr(response_obj, "mcp_tool_call_response", None)
+        inner: Final[object | None] = getattr(response_obj, "mcp_tool_call_response", None)
         if inner is not None:
             return _CiscoAIDefenseMcpMixin._set_mcp_tool_response_text(inner, text)
 
@@ -548,30 +560,31 @@ class _CiscoAIDefenseMcpMixin:
             and all(isinstance(item, tuple) and len(item) == 2 and isinstance(item[0], str) for item in response_obj)
         ):
             for index, item in enumerate(response_obj):
-                if item[0] == "structuredContent":
+                if item[0] in ("structuredContent", "structured_content"):
                     response_obj[index] = (item[0], replacement)
                     replaced = True
-        elif hasattr(response_obj, "structuredContent"):
+        elif hasattr(response_obj, "structured_content"):
             try:
-                setattr(response_obj, "structuredContent", replacement)
+                setattr(response_obj, "structured_content", replacement)
                 replaced = True
             except (AttributeError, TypeError, ValueError):
                 pass
         elif isinstance(response_obj, dict):
             result: Final = response_obj.get("result")
-            target: Final[dict[Any, Any]] = result if isinstance(result, dict) else response_obj
-            if "structuredContent" in target:
-                target["structuredContent"] = replacement
+            target: Final[dict[object, object]] = result if isinstance(result, dict) else response_obj
+            structured_key: Final = "structured_content" if "structured_content" in target else "structuredContent"
+            if structured_key in target:
+                target[structured_key] = replacement
                 replaced = True
 
         return replaced
 
     @staticmethod
-    def _coerce_to_content_list(response_obj: object) -> list[Any] | None:
+    def _coerce_to_content_list(response_obj: object) -> list[object] | None:
         """Find the MCP content list inside supported response shapes."""
         if response_obj is None:
             return None
-        inner: Final = getattr(response_obj, "mcp_tool_call_response", None)
+        inner: Final[object | None] = getattr(response_obj, "mcp_tool_call_response", None)
         if inner is not None:
             return _CiscoAIDefenseMcpMixin._coerce_to_content_list(inner)
         content: Final = getattr(response_obj, "content", None)
@@ -594,8 +607,8 @@ class _CiscoAIDefenseMcpMixin:
 
     @staticmethod
     def _extract_sanitized_mcp_arguments(
-        inspect_response: dict[str, Any],
-    ) -> dict[str, Any] | None:
+        inspect_response: dict[str, object],
+    ) -> dict[str, object] | None:
         """Pull sanitized MCP tool-call arguments off the verdict.
 
         Cisco can return them at the top level (``params.arguments``) or

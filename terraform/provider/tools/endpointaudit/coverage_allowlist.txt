@@ -28,9 +28,13 @@ GET /tag/user-agent/per-user-analytics
 GET /tag/wau
 GET /team/daily/activity
 GET /team/daily/activity/aggregated
+GET /team/daily/activity/export
+GET /team/daily/activity/aggregated/search
+GET /team/spend/by_user
 GET /team/spend/report
 GET /user/daily/activity
 GET /user/daily/activity/aggregated
+GET /user/daily/activity/aggregated/search
 GET /user/spend/report
 
 # Admin UI helper endpoints; serve UI forms and caller-scoped views, not desired state
@@ -80,10 +84,12 @@ POST /prompts/test
 POST /search_tools/test_connection
 POST /team/bulk_member_add
 POST /team/{team_id}/member/{user_id}/reset_spend
+POST /team/{team_id}/member/{user_id}/reset_budget
 POST /team/key/bulk_update
 POST /team/permissions_bulk_update
 POST /team/{team_id}/disable_logging
 POST /user/bulk_update
+POST /user/password/change
 
 # Alternate method or path for functionality the provider already manages elsewhere
 GET /credentials/by_model/{model_id}
@@ -91,7 +97,6 @@ GET /guardrails/{guardrail_id}
 GET /prompts/{prompt_id}
 GET /prompts/{prompt_id}/versions
 PATCH /guardrails/{guardrail_id}
-PATCH /model/{model_id}/update
 PATCH /prompts/{prompt_id}
 PATCH /team/{team_id}
 POST /team/model/add

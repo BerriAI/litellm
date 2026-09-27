@@ -26,8 +26,8 @@ const openUploadStep = async () => {
 
 describe("BulkCreateUsersButton", () => {
   it("should render", () => {
-    const { getByText } = render(<BulkCreateUsersButton accessToken="test-token" teams={[]} possibleUIRoles={null} />);
-    expect(getByText("+ Bulk Invite Users")).toBeInTheDocument();
+    render(<BulkCreateUsersButton accessToken="test-token" teams={[]} possibleUIRoles={null} />);
+    expect(screen.getByText("+ Bulk Invite Users")).toBeInTheDocument();
   });
 
   it("parses a CSV chosen through the file input", async () => {

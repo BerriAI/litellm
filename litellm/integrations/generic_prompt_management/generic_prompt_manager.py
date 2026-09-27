@@ -4,6 +4,7 @@ Fetches prompts from any API that implements the /beta/litellm_prompt_management
 """
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final
 
 import httpx
@@ -57,7 +58,7 @@ class GenericPromptManager(CustomPromptManagement):
         api_key: str | None = None,
         timeout: int = 30,
         prompt_id: str | None = None,
-        additional_provider_specific_query_params: dict[str, Any] | None = None,
+        additional_provider_specific_query_params: Mapping[str, object] | None = None,
         **kwargs,
     ):
         """
@@ -349,7 +350,7 @@ class GenericPromptManager(CustomPromptManagement):
     def _apply_variables(
         self,
         prompt_client: PromptManagementClient,
-        variables: dict[str, Any],
+        variables: Mapping[str, object],
     ) -> PromptManagementClient:
         """
         Apply variables to the prompt template.
