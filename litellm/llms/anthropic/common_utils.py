@@ -1609,6 +1609,12 @@ def flatten_unencrypted_web_search_results_in_anthropic_messages(
     return [_flatten_web_search_results_in_message(m) for m in messages]  # mutable-ok: JSON wire format
 
 
+def sanitize_replayed_anthropic_messages(messages: list[_MessageT]) -> list[_MessageT]:  # mutable-ok: list contract
+    return flatten_unencrypted_web_search_results_in_anthropic_messages(
+        sanitize_tool_use_ids_in_anthropic_messages(strip_empty_content_blocks_from_anthropic_messages(messages))
+    )
+
+
 def _without_provider_specific_fields(block: object) -> object:
     if not isinstance(block, dict) or "provider_specific_fields" not in block:
         return block
