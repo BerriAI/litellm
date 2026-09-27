@@ -21,6 +21,8 @@ from unittest.mock import AsyncMock, patch
 import pytest
 
 import litellm
+from litellm.batches.batch_line_item_logging import batch_line_item_claim_cache, log_batch_line_items
+from litellm.caching.caching import DualCache
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.types.utils import LiteLLMBatch, Usage
@@ -118,6 +120,12 @@ class _RecordingLogger(CustomLogger):
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         self.failure_events.append(kwargs)
+
+
+@pytest.fixture(autouse=True)
+def _fresh_line_item_claim_cache():
+    batch_line_item_claim_cache.in_memory_cache.flush_cache()
+    yield
 
 
 @pytest.fixture
@@ -797,3 +805,90 @@ async def test_line_items_native_vertex_rows_are_skipped(recorder):
     assert len(recorder.success_events) == 1
     assert len(recorder.failure_events) == 0
     assert _hidden(recorder.success_events[0]).get("batch_custom_id") is None
+
+
+class _NeverClaimsCache(DualCache):
+    async def async_increment_cache(self, *_args: object, **_kwargs: object) -> None:
+        return None
+
+
+@pytest.mark.asyncio
+async def test_line_items_emit_once_per_batch_id(recorder):
+    file_mock: Final = AsyncMock(side_effect=_file_content)
+    claim_cache: Final = DualCache()
+    parent: Final = _parent_logging()
+    batch: Final = _batch()
+    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        first: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+        second: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+
+    assert first == 2
+    assert second == 0
+    assert len(recorder.success_events) == 1
+    assert len(recorder.failure_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_line_items_claim_is_scoped_to_the_batch_id(recorder):
+    file_mock: Final = AsyncMock(side_effect=_file_content)
+    claim_cache: Final = DualCache()
+    parent: Final = _parent_logging()
+    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        first: Final = await log_batch_line_items(
+            batch=_batch(),
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+        second: Final = await log_batch_line_items(
+            batch=_provider_batch("batch_other", "input-file-1", "output-file-1"),
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+
+    assert first == 2
+    assert second == 1
+    assert len(recorder.success_events) == 2
+    assert len(recorder.failure_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_line_items_emit_when_the_claim_backend_returns_nothing(recorder):
+    file_mock: Final = AsyncMock(side_effect=_file_content)
+    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        emitted: Final = await log_batch_line_items(
+            batch=_batch(),
+            custom_llm_provider="openai",
+            parent=_parent_logging(),
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=_NeverClaimsCache(),
+        )
+
+    assert emitted == 2
+    assert len(recorder.success_events) == 1
+    assert len(recorder.failure_events) == 1

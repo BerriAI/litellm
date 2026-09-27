@@ -239,7 +239,8 @@ def test_completed_batch_emits_paired_request_response_callback_events_per_jsonl
         events: Final = eventually(
             delivered,
             lambda values: (
-                len([e for e in values if e["call_type"] == "aretrieve_batch"]) >= 1
+                len([e for e in values if e["call_type"] == "acreate_batch"]) >= 1
+                and len([e for e in values if e["call_type"] == "aretrieve_batch"]) >= 1
                 and len([e for e in values if _hidden(e).get("batch_custom_id") is not None]) >= len(ALL_CUSTOM_IDS)
             ),
             seconds=40,
@@ -286,3 +287,17 @@ def test_completed_batch_emits_paired_request_response_callback_events_per_jsonl
         assert len(batch_rows) == 1, rows
         assert not any(row["call_type"] == "acompletion" for row in rows), rows
         assert batch_rows[0]["prompt_tokens"] == len(OUTPUT_SUCCESS_IDS) * PROMPT_TOKENS, rows
+
+        repeated_gets: Final = [candidate.request("GET", f"/v1/batches/{batch_id}", key=key) for _ in range(2)]
+        assert all(response.status_code == 200 for response in repeated_gets)
+        events_after_repeats: Final = eventually(
+            delivered,
+            lambda values: len([e for e in values if e["call_type"] == "aretrieve_batch"]) >= 1 + len(repeated_gets),
+            seconds=40,
+        )
+        repeat_line_events: Final = tuple(
+            event for event in events_after_repeats if _hidden(event).get("batch_custom_id") is not None
+        )
+        assert len(repeat_line_events) == len(ALL_CUSTOM_IDS), [
+            (event["call_type"], _hidden(event).get("batch_custom_id")) for event in events_after_repeats
+        ]

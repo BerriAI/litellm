@@ -267,6 +267,10 @@ import litellm
 import litellm._redis
 from litellm import Router
 from litellm._logging import _redact_string, verbose_proxy_logger, verbose_router_logger
+from litellm.batches.batch_line_item_logging import (
+    _LINE_ITEM_CLAIM_TTL_SECONDS,  # pyright: ignore[reportPrivateUsage]  # the claim window is defined next to the cache it expires
+    batch_line_item_claim_cache,
+)
 from litellm.caching.caching import DualCache, RedisCache
 from litellm.caching.redis_cache import RedisCircuitBreakerOpenError, is_redis_timeout_failure
 from litellm.caching.redis_cluster_cache import RedisClusterCache
@@ -4733,8 +4737,8 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     """
     Wires an established coordination Redis into the proxy-level caches that
     consume it directly: the spend counter cache, the CLI SSO login-session
-    cache, the cluster-wide config cache, and (only when opted in) the
-    virtual-key auth cache.
+    cache, the batch line-item claim cache, the cluster-wide config cache,
+    and (only when opted in) the virtual-key auth cache.
 
     The CLI SSO login-session cache is always backed by Redis when available so
     that the browser SSO flow behind `lite login` survives landing on different
@@ -4747,6 +4751,10 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
     cli_sso_session_cache.attach_redis_cache(
         redis_cache,
         default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
+    )
+    batch_line_item_claim_cache.attach_redis_cache(
+        redis_cache,
+        default_redis_ttl=_LINE_ITEM_CLAIM_TTL_SECONDS,
     )
     if enable_redis_auth_cache is True:
         user_api_key_cache.attach_redis_cache(

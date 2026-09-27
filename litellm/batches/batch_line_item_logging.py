@@ -14,6 +14,7 @@ from litellm.batches.batch_utils import (
     _safe_output_line_stats,  # pyright: ignore[reportPrivateUsage]  # same reuse
     _uses_native_vertex_output,  # pyright: ignore[reportPrivateUsage]  # same reuse
 )
+from litellm.caching.caching import DualCache
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import (
     EmbeddingResponse,
@@ -62,6 +63,10 @@ _CALL_TYPE_BY_BATCH_URL: Final = MappingProxyType(
 )
 
 _EMPTY_BODY: Final[Mapping[str, object]] = MappingProxyType({})
+
+_LINE_ITEM_CLAIM_TTL_SECONDS: Final = 30 * 24 * 60 * 60
+
+batch_line_item_claim_cache: Final = DualCache()
 
 
 class _BatchLineFailure(Exception):
@@ -376,6 +381,7 @@ async def log_batch_line_items(
     model_name: str | None,
     litellm_params: dict[str, object] | None,  # mutable-ok: the logging object's shared litellm_params dict
     model_info: ModelInfo | None,
+    claim_cache: DualCache = batch_line_item_claim_cache,
 ) -> int:
     """Emit one callback event per JSONL line of a completed batch (request
     paired with its response/error), behind the opt-in
@@ -390,6 +396,12 @@ async def log_batch_line_items(
             custom_llm_provider,
             batch.id,
         )
+        return 0
+    claim: Final = await claim_cache.async_increment_cache(
+        f"batch_line_items_emitted:{batch.id}", 1, ttl=_LINE_ITEM_CLAIM_TTL_SECONDS
+    )
+    if claim is not None and claim > 1:
+        verbose_logger.debug("batch line items already emitted for batch_id=%s, skipping", batch.id)
         return 0
     emitted = 0  # rebind-ok: loop accumulator for emitted line count
     try:
