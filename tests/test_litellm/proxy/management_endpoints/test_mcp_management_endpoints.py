@@ -9,11 +9,12 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from types import SimpleNamespace
-from typing import Final, List, Optional, cast
+from typing import Final, List, Literal, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 from respx import MockRouter
 from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
@@ -32,6 +33,7 @@ from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
     LiteLLM_MCPServerTable,
     LitellmUserRoles,
+    MakeMCPServersPublicRequest,
     MCPTransport,
     MCPUserCredentialResponse,
     NewMCPServerRequest,
@@ -151,6 +153,161 @@ def patch_proxy_general_settings(settings: dict):
         sys.modules,
         {"litellm.proxy.proxy_server": fake_proxy_server_module},
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("from_db", (False, True))
+@pytest.mark.parametrize(
+    "strict,explicit,expected_public",
+    ((True, True, True), (True, False, False), (False, False, True)),
+)
+async def test_mcp_publication_list_and_detail_derive_current_status(
+    from_db: bool, strict: bool, explicit: bool, expected_public: bool
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager: Final = MCPServerManager()
+    server: Final = MCPServer(
+        server_id="publication-server",
+        name="publication-server",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.api_key,
+        available_on_public_internet=True,
+        mcp_info={
+            "is_public": not expected_public,
+            "is_public_explicit": not explicit,
+            "description": "Keep this description",
+        },
+    )
+    manager.registry = {server.server_id: server} if from_db else {}
+    manager.config_mcp_servers = {} if from_db else {server.server_id: server}
+    record: Final = manager._build_mcp_server_table(server)
+    original_metadata: Final = dict(server.mcp_info or {})
+    admin: Final = generate_mock_user_api_key_auth()
+
+    with (
+        patch("litellm.public_mcp_servers", [server.server_id] if explicit else []),
+        patch("litellm.public_mcp_hub_strict_whitelist", strict),
+        patch.object(mgmt_endpoints, "global_mcp_server_manager", manager),
+        patch.object(mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()),
+        patch.object(mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=record if from_db else None)),
+        patch("litellm.proxy.proxy_server.prisma_client", None),
+        patch("litellm.proxy.proxy_server.general_settings", {"user_mcp_management_mode": "view_all"}),
+    ):
+        listing: Final = await mgmt_endpoints.fetch_all_mcp_servers(
+            user_api_key_dict=admin, team_id=None, connected_app_view=False
+        )
+        detail: Final = await mgmt_endpoints.fetch_mcp_server(
+            request=_make_mock_request(), server_id=server.server_id, user_api_key_dict=admin
+        )
+        assert len(listing) == 1
+        for projected in (listing[0], detail):
+            assert projected.mcp_info == {
+                "is_public": expected_public,
+                "is_public_explicit": explicit,
+                "description": "Keep this description",
+            }
+        assert bool(manager.get_public_mcp_servers()) is expected_public
+
+    assert server.mcp_info == original_metadata
+    assert record.mcp_info == original_metadata
+
+
+@pytest.mark.parametrize("approval_status", ("pending_review", "rejected", "draft", "active"))
+@pytest.mark.parametrize("strict", (False, True))
+def test_mcp_publication_projection_excludes_unregistered_lifecycle_records(
+    approval_status: str, strict: bool
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    record: Final = LiteLLM_MCPServerTable(
+        server_id="unregistered-server",
+        transport=MCPTransport.http,
+        approval_status=approval_status,
+        credentials={"auth_value": "test-secret"},
+        available_on_public_internet=True,
+        mcp_info={"is_public": True, "is_public_explicit": True},
+    )
+    original: Final = record.model_dump()
+    with (
+        patch("litellm.public_mcp_servers", [record.server_id]),
+        patch("litellm.public_mcp_hub_strict_whitelist", strict),
+        patch.object(mgmt_endpoints, "global_mcp_server_manager", MCPServerManager()),
+    ):
+        for project in (
+            mgmt_endpoints._redact_mcp_credentials,
+            mgmt_endpoints._sanitize_mcp_server_for_non_admin,
+            mgmt_endpoints._sanitize_mcp_server_for_virtual_key,
+        ):
+            projected: Final = project(record)
+            assert projected.mcp_info == {"is_public": False, "is_public_explicit": False}
+            assert projected.credentials is None
+    assert record.model_dump() == original
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("previous_ids", (None, ["old-server"]))
+@pytest.mark.parametrize(
+    "selected_ids,save_error,role,error_status",
+    (
+        (["new-server"], None, LitellmUserRoles.PROXY_ADMIN, None),
+        ([], None, LitellmUserRoles.PROXY_ADMIN, None),
+        (["new-server"], HTTPException(400, "Owned by config file"), LitellmUserRoles.PROXY_ADMIN, 400),
+        (["new-server"], RuntimeError("Database write failed"), LitellmUserRoles.PROXY_ADMIN, 500),
+        (["missing-server"], None, LitellmUserRoles.PROXY_ADMIN, 404),
+        (["new-server"], None, LitellmUserRoles.INTERNAL_USER, 403),
+    ),
+)
+async def test_mcp_publication_updates_runtime_only_after_successful_save(
+    previous_ids: list[str] | None,
+    selected_ids: list[str],
+    save_error: HTTPException | RuntimeError | None,
+    role: LitellmUserRoles,
+    error_status: int | None,
+) -> None:
+    import litellm
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    manager: Final = MCPServerManager()
+    server: Final = generate_mock_mcp_server_config_record(server_id="new-server")
+    manager.config_mcp_servers = {server.server_id: server}
+    expected_config: Final = {"litellm_settings": {"drop_params": True, "public_mcp_servers": selected_ids}}
+
+    async def save_config(new_config: Mapping[str, object]) -> None:
+        assert litellm.public_mcp_servers is previous_ids
+        assert new_config == expected_config
+        if save_error is not None:
+            raise save_error
+
+    save: Final = AsyncMock(side_effect=save_config)
+    proxy_config: Final = SimpleNamespace(
+        get_config=AsyncMock(return_value={"litellm_settings": {"drop_params": True}}),
+        save_config=save,
+    )
+    request: Final = MakeMCPServersPublicRequest(mcp_server_ids=selected_ids)
+    caller: Final = generate_mock_user_api_key_auth(user_role=role)
+    with (
+        patch("litellm.public_mcp_servers", previous_ids),
+        patch("litellm.proxy.proxy_server.proxy_config", proxy_config),
+        patch(
+            "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
+            manager,
+        ),
+    ):
+        if error_status is None:
+            response: Final = await mgmt_endpoints.make_mcp_servers_public(request, caller)
+            assert response["public_mcp_servers"] == selected_ids
+            assert litellm.public_mcp_servers == selected_ids
+        else:
+            with pytest.raises(HTTPException) as error:
+                await mgmt_endpoints.make_mcp_servers_public(request, caller)
+            assert error.value.status_code == error_status
+            assert litellm.public_mcp_servers is previous_ids
+
+    if error_status in (403, 404):
+        save.assert_not_awaited()
+    else:
+        save.assert_awaited_once_with(new_config=expected_config)
 
 
 class TestMCPCredentialsTokenExchangeProfile:
@@ -4311,6 +4468,170 @@ async def test_health_discovery_respects_route_restricted_key_grants(
     assert all(row["status"] == expected_status for row in result)
 
 
+@pytest.mark.asyncio
+@pytest.mark.respx(assert_all_called=False)
+@pytest.mark.parametrize("include_reachability", [False, True])
+@pytest.mark.parametrize(
+    ("requested", "expected"),
+    [
+        (None, ("shared", "first", "second")),
+        ((), ("shared", "first", "second")),
+        (("shared", "shared", "denied"), ("shared",)),
+        (("second", "first"), ("first", "second")),
+        (("denied",), ()),
+    ],
+)
+async def test_health_checks_probe_shared_servers_once_across_auth_contexts(
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    requested: tuple[str, ...] | None,
+    expected: tuple[str, ...],
+    include_reachability: bool,
+) -> None:
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager: Final = mcp_server_manager.MCPServerManager()
+    manager.registry = {
+        server_id: MCPServer(
+            server_id=server_id,
+            name=server_id,
+            transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2,
+            url=f"https://mcp.example.test/{server_id}",
+        )
+        for server_id in ("shared", "first", "second", "denied")
+    }
+    routes: Final = {
+        server_id: respx_mock.get(server.url).respond(401)
+        for server_id, server in manager.registry.items()
+    }
+    contexts: Final = [
+        UserAPIKeyAuth(
+            user_role=LitellmUserRoles.INTERNAL_USER,
+            api_key=f"test-health-{index}",
+            object_permission=LiteLLM_ObjectPermissionTable(
+                object_permission_id=f"health-{index}", mcp_servers=list(grants)
+            ),
+        )
+        for index, grants in enumerate((("shared", "first"), ("shared", "second")))
+    ]
+    with (
+        patch.object(
+            mgmt_endpoints, "global_mcp_server_manager", manager
+        ),
+        patch.object(
+            mcp_server_manager, "global_mcp_server_manager", manager
+        ),
+        patch.object(
+            mgmt_endpoints, "build_effective_auth_contexts", AsyncMock(return_value=contexts)
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {"user_mcp_management_mode": "restricted"}),
+    ):
+        result: Final = await mgmt_endpoints.health_check_servers(
+            server_ids=list(requested) if requested is not None else None,
+            user_api_key_dict=contexts[0],
+            include_reachability=include_reachability,
+        )
+
+    expected_status: Final = "reachable" if include_reachability else "unknown"
+    assert sorted(result, key=lambda row: row["server_id"]) == [
+        {"server_id": server_id, "status": expected_status} for server_id in sorted(expected)
+    ]
+    if requested:
+        assert [row["server_id"] for row in result] == list(expected)
+    assert {server_id: route.call_count for server_id, route in routes.items()} == {
+        server_id: int(server_id in expected) for server_id in routes
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("mode", ["restricted", "view_all"])
+@pytest.mark.parametrize("detail", [False, True])
+@pytest.mark.parametrize("flag", [None, "false", "true"])
+async def test_health_reachability_requires_explicit_api_opt_in(
+    respx_mock: MockRouter,
+    monkeypatch: pytest.MonkeyPatch,
+    mode: str,
+    detail: bool,
+    flag: str | None,
+) -> None:
+    from litellm.proxy._experimental.mcp_server import mcp_server_manager
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+
+    class HealthResponse(BaseModel):
+        server_id: str
+        status: str | None
+
+    class LegacyHealthResponse(BaseModel):
+        server_id: str
+        status: Literal["healthy", "unhealthy", "unknown"] | None
+
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    manager: Final = mcp_server_manager.MCPServerManager()
+    server: Final = MCPServer(
+        server_id="health-compatibility",
+        name="health-compatibility",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2,
+        url="https://mcp.example.test/mcp",
+    )
+    manager.registry[server.server_id] = server
+    route: Final = respx_mock.get(server.url).respond(401)
+    caller: Final = UserAPIKeyAuth(
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+        api_key="test-health-compatibility",
+        object_permission=LiteLLM_ObjectPermissionTable(
+            object_permission_id="health-compatibility", mcp_servers=[server.server_id]
+        ),
+    )
+
+    def authenticated_caller() -> UserAPIKeyAuth:
+        return caller
+
+    app: Final = FastAPI()
+    app.include_router(mgmt_endpoints.router)
+    app.dependency_overrides[mgmt_endpoints.user_api_key_auth] = authenticated_caller
+    suffix: Final = server.server_id if detail else "health"
+    query: Final = {} if flag is None else {"include_reachability": flag}
+    with (
+        patch.object(  # test-quality-ok: TQ008 inject the real registry into the legacy route binding
+            mgmt_endpoints, "global_mcp_server_manager", manager
+        ),
+        patch.object(  # test-quality-ok: TQ008 permission resolution uses the shared registry
+            mcp_server_manager, "global_mcp_server_manager", manager
+        ),
+        patch("litellm.proxy.proxy_server.general_settings", {"user_mcp_management_mode": mode}),
+        patch.object(  # test-quality-ok: TQ008 select the config-backed detail path without a database
+            mgmt_endpoints, "get_prisma_client_or_throw", return_value=MagicMock()
+        ),
+        patch.object(  # test-quality-ok: TQ008 a missing database row falls back to the real registry
+            mgmt_endpoints, "get_mcp_server", AsyncMock(return_value=None)
+        ),
+    ):
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=app), base_url="http://gateway") as client:
+            response: Final = await client.get(f"/v1/mcp/server/{suffix}", params=query)
+
+    assert response.status_code == 200, response.text
+    rows: Final = (
+        [HealthResponse.model_validate_json(response.content)]
+        if detail else TypeAdapter(list[HealthResponse]).validate_json(response.content)
+    )
+    expected_status: Final = "reachable" if flag == "true" else "unknown"
+    assert [row.model_dump() for row in rows] == [{"server_id": server.server_id, "status": expected_status}]
+    assert route.call_count == 1
+    legacy_parser: Final = (
+        LegacyHealthResponse.model_validate_json
+        if detail else TypeAdapter(list[LegacyHealthResponse]).validate_json
+    )
+    if flag == "true":
+        with pytest.raises(ValidationError, match="literal_error"):
+            legacy_parser(response.content)
+    else:
+        legacy_parser(response.content)
+
+
 class TestMCPRegistryEndpoint:
     def test_registry_returns_404_when_flag_missing(self):
         client = create_mcp_router_test_client()
@@ -8280,13 +8601,6 @@ def _mock_mcp_resolution_cache() -> MagicMock:
 
 class TestMCPServerResolutionRegressions:
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.RaisesExc(
-            HTTPException, check=lambda error: error.status_code == 403 and "permission" in str(error.detail)
-        ),
-        reason="LIT-3974 change A: detail authorization includes a server granted to the caller's team",
-    )
     async def test_team_granted_database_server_is_visible_to_virtual_key(self) -> None:
         server_id: Final = "lit3974-team-db"
         team_id: Final = "lit3974-team"
@@ -8344,11 +8658,6 @@ class TestMCPServerResolutionRegressions:
             ("key-opt-out", ["no-mcp-servers", "lit3974-target"], ["lit3974-target"], None),
             ("org-ceiling", ["lit3974-target"], ["lit3974-target"], ["lit3974-other"]),
         ],
-    )
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.RaisesExc(pytest.fail.Exception, match="DID NOT RAISE"),
-        reason="LIT-3974 change A: detail authorization enforces key, team, and organization ceilings",
     )
     async def test_database_server_detail_obeys_authz_intersection(
         self,
@@ -8533,13 +8842,6 @@ class TestMCPServerResolutionRegressions:
         assert result.alias == "Target server"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.RaisesExc(
-            HTTPException, check=lambda error: error.status_code == 403 and "permission" in str(error.detail)
-        ),
-        reason="LIT-3974 change A: dashboard detail authorization resolves team grants for config servers",
-    )
     async def test_ui_session_team_grant_resolves_config_server_detail(self) -> None:
         server_id: Final = "lit3974-config-server"
         team_id: Final = "lit3974-ui-team"
@@ -8606,11 +8908,6 @@ class TestMCPServerResolutionRegressions:
         assert result.alias == "Config_server", "config detail must retain its display alias"
 
     @pytest.mark.asyncio
-    @pytest.mark.xfail(
-        strict=True,
-        raises=pytest.RaisesExc(pytest.fail.Exception, match="DID NOT RAISE"),
-        reason="LIT-3974 change B: creation rejects an identifier already owned by a config server",
-    )
     async def test_create_rejects_config_server_identifier_collision(self) -> None:
         server_id: Final = "lit3974-config-collision"
         prisma: Final = _mock_mcp_resolution_prisma_client(
@@ -8905,11 +9202,6 @@ class TestMCPServerResolutionCharacterization:
                 "view_all",
                 False,
                 True,
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(AssertionError, match="view_all detail denied"),
-                    reason="LIT-3974 A: view_all permits redacted catalog detail",
-                ),
             ),
             ("view_all", True, False),
             ("restricted", False, False),
@@ -8967,31 +9259,16 @@ class TestMCPServerResolutionCharacterization:
                 "db_runtime",
                 "denied",
                 False,
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(AssertionError, match="credential metadata visibility"),
-                    reason="LIT-3974 C: revoked grants hide DB metadata without removing credentials",
-                ),
             ),
             pytest.param(
                 "config",
                 "allowed",
                 True,
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(AssertionError, match="credential metadata visibility"),
-                    reason="LIT-3974 C: authorized config credential metadata",
-                ),
             ),
             pytest.param(
                 "config",
                 "admin",
                 True,
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(AssertionError, match="credential metadata visibility"),
-                    reason="LIT-3974 C: admin config credential metadata",
-                ),
             ),
             ("config", "denied", False),
             ("missing", "allowed", False),
@@ -10295,68 +10572,28 @@ class TestMCPServerResolutionCharacterization:
                 "db_runtime",
                 "org object_permission",
                 id="db-runtime-org-object-permission",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(
-                        HTTPException,
-                        check=lambda error: error.status_code == 403 and "permission" in str(error.detail),
-                    ),
-                    reason="LIT-3974 change A: detail authorization includes org object_permission grants",
-                ),
             ),
             pytest.param("config", "org object_permission", id="config-org-object-permission"),
             pytest.param(
                 "db_runtime",
                 "direct user object_permission",
                 id="db-runtime-direct-user-permission",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(
-                        HTTPException,
-                        check=lambda error: error.status_code == 403 and "permission" in str(error.detail),
-                    ),
-                    reason="LIT-3974 change A: detail authorization includes direct user object_permission grants",
-                ),
             ),
             pytest.param(
                 "config",
                 "direct user object_permission",
                 id="config-direct-user-permission",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(
-                        HTTPException,
-                        check=lambda error: error.status_code == 403 and "permission" in str(error.detail),
-                    ),
-                    reason="LIT-3974 change A: detail authorization includes direct user object_permission grants",
-                ),
             ),
             pytest.param(
                 "db_runtime",
                 "allow_all_keys",
                 id="db-runtime-allow-all-keys",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(
-                        HTTPException,
-                        check=lambda error: error.status_code == 403 and "permission" in str(error.detail),
-                    ),
-                    reason="LIT-3974 change A: detail authorization includes allow_all_keys grants",
-                ),
             ),
             pytest.param("config", "allow_all_keys", id="config-allow-all-keys"),
             pytest.param(
                 "db_runtime",
                 "access-group",
                 id="db-runtime-access-group",
-                marks=pytest.mark.xfail(
-                    strict=True,
-                    raises=pytest.RaisesExc(
-                        HTTPException,
-                        check=lambda error: error.status_code == 403 and "permission" in str(error.detail),
-                    ),
-                    reason="LIT-3974 change A: detail authorization includes access-group grants",
-                ),
             ),
             pytest.param("config", "access-group", id="config-access-group"),
         ],

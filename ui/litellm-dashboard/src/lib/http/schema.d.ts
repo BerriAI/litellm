@@ -28326,6 +28326,11 @@ export interface components {
              */
             maximum_autorouter_session_retention_period?: string | null;
             /**
+             * Maximum Daily Tag Spend Retention Period
+             * @description Maximum retention period for per-day tag spend aggregate rows (e.g., '90d'). Rows whose day is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. Only historical tag usage analytics are affected; tag budgets read the lifetime counter.
+             */
+            maximum_daily_tag_spend_retention_period?: string | null;
+            /**
              * Maximum Health Check Retention Period
              * @description Maximum retention period for health-check rows (e.g., '30d'). Rows whose checked_at is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. Set this well above health_check_interval because /health and the UI read the latest row per model.
              */
@@ -32501,10 +32506,10 @@ export interface components {
             } | null;
             /**
              * Status
-             * @description Health status: 'healthy', 'unhealthy', 'unknown'
+             * @description Health status: 'healthy', 'unhealthy', 'unknown', or 'reachable' (requires include_reachability=true; authentication and tools unchecked)
              * @default unknown
              */
-            status: ("healthy" | "unhealthy" | "unknown") | null;
+            status: ("healthy" | "reachable" | "unhealthy" | "unknown") | null;
             /** Subject Token Type */
             subject_token_type?: string | null;
             /** Submitted At */
@@ -72209,6 +72214,8 @@ export interface operations {
             query?: {
                 /** @description Server IDs to check. If not provided, checks all accessible servers. */
                 server_ids?: string[] | null;
+                /** @description Allow the 'reachable' status for responding servers whose authentication is unchecked. */
+                include_reachability?: boolean;
             };
             header?: never;
             path?: never;
@@ -72360,7 +72367,10 @@ export interface operations {
     };
     fetch_mcp_server_v1_mcp_server__server_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Allow the 'reachable' status for responding servers whose authentication is unchecked. */
+                include_reachability?: boolean;
+            };
             header?: never;
             path: {
                 server_id: string;
