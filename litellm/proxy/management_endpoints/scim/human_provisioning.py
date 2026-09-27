@@ -160,10 +160,12 @@ class SourceHumanProvisioner:
         if row.local_id is None:
             raise HTTPException(409, "The human provisioned record is incomplete")
         username: Final = (
-            change.userName
+            change.userName or row.user_name
             if isinstance(change, SCIMUser)
             else reduce(patched_username, change.Operations, row.user_name)
         )
+        if not username:
+            raise HTTPException(400, "userName is required")
         if isinstance(change, SCIMPatchOp):
             validate_human_patch(change)
         local_filter: Final[LiteLLM_UserTableWhereUniqueInput] = {"user_id": row.local_id}
@@ -179,7 +181,11 @@ class SourceHumanProvisioner:
             else await scim_v2.update_user(
                 user_id=row.local_id,
                 user=change.model_copy(
-                    update={"groups": None, "emails": [SCIMUserEmail(value=human_email(change), primary=True)]}
+                    update={
+                        "userName": username,
+                        "groups": None,
+                        "emails": [SCIMUserEmail(value=human_email(change), primary=True)],
+                    }
                 ),
             )
         )

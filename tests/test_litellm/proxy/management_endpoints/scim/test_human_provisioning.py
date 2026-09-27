@@ -11,7 +11,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy.management_endpoints.scim import scim_v2
 from litellm.proxy.management_endpoints.scim.human_provisioning import SourceHumanProvisioner, human_email
 from litellm.proxy.utils import PrismaClient
-from litellm.types.proxy.management_endpoints.scim_v2 import SCIMPatchOp, SCIMUser
+from litellm.types.proxy.management_endpoints.scim_v2 import SCIMPatchOp, SCIMUser, SCIMUserEmail
 
 TENANT: Final = "11111111-1111-4111-8111-111111111111"
 SUBJECT: Final = "22222222-2222-4222-8222-222222222222"
@@ -440,3 +440,36 @@ async def test_existing_native_agent_cannot_be_reclassified_as_human() -> None:
     assert failure.value.status_code == 409
     tx.litellm_usertable.find_unique.assert_not_awaited()
     tx.litellm_scimresource.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_put_without_username_keeps_the_stored_username(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._types import LiteLLM_UserTable
+
+    service, tx, row, user = human_fixture()
+    tx.litellm_usertable.find_unique.return_value = LiteLLM_UserTable(
+        user_id=row.local_id, user_email="human@example.com"
+    )
+    legacy_put: Final = AsyncMock(side_effect=lambda user_id, user: user.model_copy(update={"displayName": "Renamed"}))
+    monkeypatch.setattr(scim_v2, "update_user", legacy_put)
+    result: Final = await service.update(
+        row, user.model_copy(update={"userName": None, "emails": [SCIMUserEmail(value="human@example.com")]})
+    )
+    assert result.userName == "human@example.com"
+    assert result.displayName == "Renamed"
+    assert legacy_put.call_args.kwargs["user"].userName == "human@example.com"
+    stored: Final = tx.litellm_scimresource.update.call_args.kwargs["data"]
+    assert stored["user_name"] == "human@example.com"
+    assert stored["document"].data["userName"] == "human@example.com"
+
+
+@pytest.mark.asyncio
+async def test_put_without_username_on_a_row_without_one_is_rejected(monkeypatch: pytest.MonkeyPatch) -> None:
+    service, tx, row, user = human_fixture()
+    legacy_put: Final = AsyncMock(return_value=user)
+    monkeypatch.setattr(scim_v2, "update_user", legacy_put)
+    with pytest.raises(HTTPException) as failure:
+        await service.update(row.model_copy(update={"user_name": None}), user.model_copy(update={"userName": None}))
+    assert failure.value.status_code == 400
+    legacy_put.assert_not_awaited()
+    tx.litellm_scimresource.update.assert_not_called()

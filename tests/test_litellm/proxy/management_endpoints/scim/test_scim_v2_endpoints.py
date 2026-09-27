@@ -516,6 +516,7 @@ async def test_scim_collection_endpoints_clamp_requested_page_size(
     table.count = AsyncMock(return_value=0)
     mock_prisma_client.db.litellm_usertable = table
     mock_prisma_client.db.litellm_teamtable = table
+    mock_prisma_client.writer_db.litellm_scimresource.find_many = AsyncMock(return_value=[])
     mocker.patch(  # test-quality-ok: HTTP validation requires an in-memory database boundary.
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
         AsyncMock(return_value=mock_prisma_client),
@@ -6627,3 +6628,63 @@ async def test_empty_source_ownership_lookup_never_queries_the_writer(mocker: Mo
     prisma: Final = mocker.MagicMock()
     assert await scim_v2._source_owned_ids(prisma, "Users", ()) == frozenset()
     prisma.writer_db.litellm_scimresource.find_many.assert_not_called()
+
+
+def _not_in(filter_: object) -> frozenset[str]:
+    return frozenset(filter_["not_in"]) if isinstance(filter_, dict) and "not_in" in filter_ else frozenset()
+
+
+def _legacy_listing_prisma(mocker: MockerFixture) -> MagicMock:
+    """Two users and two teams, one of each owned by a provisioning source; the fake tables honour
+    Prisma's ``not_in`` so the route only hides what it actually excludes in the query."""
+    owned_team: Final = LiteLLM_TeamTable(team_id="directory-team", team_alias="directory")
+    resources: Final = (
+        _OwnedResource("scim-human", _OWNED_HUMAN.user_id),
+        _OwnedResource("scim-group", "directory-team"),
+    )
+
+    def _visible(rows: Sequence[object], key: str, where: Mapping[str, object]) -> tuple[object, ...]:
+        return tuple(row for row in rows if getattr(row, key) not in _not_in(where.get(key)))
+
+    users: Final = (_OWNED_HUMAN, _ORDINARY_USER)
+    teams: Final = (owned_team, _LEGACY_TEAM)
+    prisma: Final = mocker.MagicMock()
+    prisma.db.litellm_usertable.find_many = AsyncMock(side_effect=lambda where, **_: _visible(users, "user_id", where))
+    prisma.db.litellm_usertable.count = AsyncMock(side_effect=lambda where: len(_visible(users, "user_id", where)))
+    prisma.db.litellm_teamtable.find_many = AsyncMock(side_effect=lambda where, **_: _visible(teams, "team_id", where))
+    prisma.db.litellm_teamtable.count = AsyncMock(side_effect=lambda where: len(_visible(teams, "team_id", where)))
+    prisma.writer_db.litellm_scimresource.find_many = AsyncMock(
+        side_effect=lambda where: tuple(row for row in resources if row.id.startswith("scim-"))
+    )
+    return prisma
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["Users", "Groups"])
+async def test_legacy_key_listing_does_not_see_source_owned_records(
+    kind: str, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /Users and /Groups from a non-source key hide what GET /{id} already refuses with 403,
+    and totalResults counts only the visible records."""
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    prisma: Final = _legacy_listing_prisma(mocker)
+    monkeypatch.setattr(scim_v2, "_agent_provisioning_service", AsyncMock(return_value=None))
+    monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", AsyncMock(return_value=prisma))
+    monkeypatch.setattr(scim_v2, "_get_team_member_user_ids_from_team", AsyncMock(return_value=[]))
+    monkeypatch.setattr(scim_v2, "_get_team_members_display", AsyncMock(return_value=[]))
+    mocker.patch.object(
+        scim_v2.ScimTransformations,
+        "transform_litellm_user_to_scim_user",
+        AsyncMock(side_effect=lambda user: SCIMUser(schemas=[], id=user.user_id, userName=user.user_id)),
+    )
+    auth: Final = UserAPIKeyAuth(token="legacy-hash")
+
+    listed: Final = (
+        await scim_v2.get_users(startIndex=1, count=10, filter=None, auth=auth)
+        if kind == "Users"
+        else await scim_v2.get_groups(startIndex=1, count=10, filter=None, auth=auth)
+    )
+
+    assert [resource.id for resource in listed.Resources] == ["ordinary-user" if kind == "Users" else "legacy-team"]
+    assert listed.totalResults == 1

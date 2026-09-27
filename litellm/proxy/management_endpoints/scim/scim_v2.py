@@ -475,6 +475,15 @@ async def _source_owned_ids(
     return frozenset(filter(None, chain.from_iterable((resource.id, resource.local_id) for resource in resources)))
 
 
+async def _source_owned_local_ids(auth: UserAPIKeyAuth | None, kind: Literal["Users", "Groups"]) -> tuple[str, ...]:
+    if auth is None:
+        return ()
+    client: Final = await _get_prisma_client_or_raise_exception()
+    table: Final = SCIMResourceRepository(client, use_writer=True).table
+    resources: Final = await table.find_many(where=LiteLLM_SCIMResourceWhereInput(kind=kind))
+    return tuple(sorted(frozenset(resource.local_id for resource in resources if resource.local_id)))
+
+
 async def _assert_legacy_source_access(
     auth: UserAPIKeyAuth | None, kind: Literal["Users", "Groups"], local_id: str
 ) -> None:
@@ -1763,8 +1772,9 @@ async def get_users(
     )
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
+        hidden_user_ids: Final = await _source_owned_local_ids(auth, "Users")
         # Parse filter if provided (basic support)
-        where_conditions: Final[dict[str, object]] = {}
+        where_conditions: Final[dict[str, object]] = {**_hidden_user_filter(hidden_user_ids)}
         if filter:
             # Okta locates users by userName before deprovisioning. LiteLLM
             # exposes SCIM userName from user_email, while older SCIM-created
@@ -2605,10 +2615,43 @@ async def patch_user(
         raise handle_exception_on_proxy(e)
 
 
+class _NotInFilter(TypedDict):
+    not_in: ReadOnly[Sequence[str]]
+
+
+class _UserWhereConditions(TypedDict, total=False):
+    user_id: ReadOnly[_NotInFilter]
+
+
 class _TeamWhereConditions(TypedDict, total=False):
     """The team columns SCIM GET /Groups can filter on, as Prisma where-conditions."""
 
-    team_alias: str
+    team_alias: ReadOnly[str]
+    team_id: ReadOnly[_NotInFilter]
+
+
+def _hidden_user_filter(hidden_user_ids: tuple[str, ...]) -> _UserWhereConditions:
+    if not hidden_user_ids:
+        return _UserWhereConditions()
+    conditions: Final[_UserWhereConditions] = {"user_id": {"not_in": hidden_user_ids}}
+    return conditions
+
+
+def _legacy_team_filter(hidden_team_ids: tuple[str, ...], filter: str | None) -> _TeamWhereConditions:
+    # Very basic filter support - only handling displayName eq
+    team_alias: Final = (
+        filter.split("displayName eq ")[1].strip("\"'") if filter and "displayName eq" in filter else None
+    )
+    if team_alias is None and not hidden_team_ids:
+        return _TeamWhereConditions()
+    if team_alias is None:
+        by_id: Final[_TeamWhereConditions] = {"team_id": {"not_in": hidden_team_ids}}
+        return by_id
+    if not hidden_team_ids:
+        by_alias: Final[_TeamWhereConditions] = {"team_alias": team_alias}
+        return by_alias
+    both: Final[_TeamWhereConditions] = {"team_alias": team_alias, "team_id": {"not_in": hidden_team_ids}}
+    return both
 
 
 # Group Endpoints
@@ -2639,13 +2682,8 @@ async def get_groups(
     )
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
-        # Parse filter if provided (basic support)
-        where_conditions: Final[_TeamWhereConditions] = {}
-        if filter:
-            # Very basic filter support - only handling displayName eq
-            if "displayName eq" in filter:
-                team_alias = filter.split("displayName eq ")[1].strip("\"'")
-                where_conditions["team_alias"] = team_alias
+        hidden_team_ids: Final = await _source_owned_local_ids(auth, "Groups")
+        where_conditions: Final = _legacy_team_filter(hidden_team_ids, filter)
 
         # Get teams from database
         teams: Final = await _table(TeamRepository(prisma_client)).find_many(
