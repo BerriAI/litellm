@@ -1332,7 +1332,7 @@ def test_sync_gemma_stream(_gemma_cached_access_token):
 
     def handle(request):
         captured["body"] = json.loads(request.content)
-        return httpx.Response(200, json=_make_gemma_vertex_response(content="READY", total_tokens=15))
+        return httpx.Response(200, json=_make_gemma_vertex_response(content="READY"))
 
     stream = litellm.completion(
         model="vertex_ai/gemma/test-model",
@@ -1362,7 +1362,7 @@ async def test_async_gemma_responses_stream(_gemma_cached_access_token):
 
     def handle(request):
         captured["body"] = json.loads(request.content)
-        return httpx.Response(200, json=_make_gemma_vertex_response(content="READY", total_tokens=15))
+        return httpx.Response(200, json=_make_gemma_vertex_response(content="READY"))
 
     response = await litellm.aresponses(
         model="vertex_ai/gemma/test-model",
@@ -1380,4 +1380,4 @@ async def test_async_gemma_responses_stream(_gemma_cached_access_token):
     assert "READY" in "".join(event.delta for event in events if isinstance(event, OutputTextDeltaEvent))
     assert isinstance(events[-1], ResponseCompletedEvent)
     assert events[-1].response.usage is not None
-    assert events[-1].response.usage.total_tokens == 15
+    assert events[-1].response.usage.total_tokens == 114
