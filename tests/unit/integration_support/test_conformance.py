@@ -20,7 +20,8 @@ from pydantic import ValidationError
 
 
 @pytest.mark.asyncio
-async def test_negotiation_records_preserve_the_peer_call_contract() -> None:
+async def test_negotiation_records_preserve_the_peer_call_contract(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
     from integration._support.mcp import math_service
     from integration.mcp.test_mcp_user_env_vars import UPSTREAM_CALLS
     from mcp.server.context import ServerRequestContext
@@ -52,7 +53,10 @@ async def test_negotiation_records_preserve_the_peer_call_contract() -> None:
 
 
 @pytest.mark.parametrize("file_backed", (False, True))
-def test_peer_drain_preserves_received_requests(tmp_path: Path, file_backed: bool) -> None:
+def test_peer_drain_preserves_received_requests(
+    tmp_path: Path, file_backed: bool, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
     from integration._support.mcp import McpPeer
 
     request: Final = {"body": {"method": "tools/call"}, "headers": {"authorization": "synthetic"}}
