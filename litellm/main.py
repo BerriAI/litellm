@@ -5616,7 +5616,16 @@ def completion(
                 else kwargs.get("include_server_side_tool_invocations")
             ),
             "safety_identifier": safety_identifier,
-            "service_tier": service_tier,
+            "service_tier": (
+                provider_config.service_tier_for_request_metadata(
+                    service_tier,
+                    metadata,
+                    model=model,
+                    drop_params=litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True,
+                )
+                if provider_config is not None
+                else service_tier
+            ),
             "store": store,
             "prompt_cache_key": prompt_cache_key,
             "allowed_openai_params": allowed_openai_params,

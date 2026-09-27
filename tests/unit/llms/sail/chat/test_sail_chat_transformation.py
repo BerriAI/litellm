@@ -1,3 +1,4 @@
+import json
 import re
 from typing import Final
 
@@ -351,3 +352,156 @@ def test_sail_chat_uses_sail_api_base_env_and_key(
     litellm.completion(model=MODEL, messages=MESSAGES)
 
     assert route.calls.last.request.headers["Authorization"] == "Bearer sail-test-key"
+
+
+CALLER_WINDOW_CASES: Final = [
+    pytest.param("flex", "flex", "_flex", id="flex"),
+    pytest.param("balanced", "balanced", "_balanced", id="balanced"),
+    pytest.param("standard", "balanced", "_balanced", id="standard"),
+    pytest.param("asap", "asap", "", id="asap"),
+    pytest.param("FLEX", "flex", "_flex", id="flex-any-case"),
+]
+
+
+@pytest.mark.parametrize("preview", [False, True], ids=["preview-off", "preview-on"])
+@pytest.mark.parametrize(("caller_window", "window", "column_suffix"), CALLER_WINDOW_CASES)
+@pytest.mark.asyncio
+async def test_sail_chat_accepts_sails_own_metadata_window_and_bills_its_price_columns(
+    sail_env: None,
+    chat_http_path: None,
+    chat_route: respx.Route,
+    spend_capture: SpendCapture,
+    monkeypatch: pytest.MonkeyPatch,
+    preview: bool,
+    caller_window: str,
+    window: str,
+    column_suffix: str,
+) -> None:
+    monkeypatch.setattr(litellm, "enable_preview_features", preview)
+
+    await litellm.acompletion(
+        model=MODEL,
+        messages=MESSAGES,
+        metadata={"completion_window": caller_window},
+        litellm_call_id=spend_capture.call_id,
+    )
+
+    body: Final = sent_body(chat_route)
+    assert "service_tier" not in body
+    assert body["metadata"] == {"completion_window": window}
+    assert await spend_capture.settled_cost() == pytest.approx(cost_at(column_suffix))
+
+
+@pytest.mark.asyncio
+async def test_sail_chat_stream_accepts_sails_own_metadata_window_and_bills_its_price_columns(
+    sail_env: None, respx_mock: respx.MockRouter, spend_capture: SpendCapture
+) -> None:
+    route: Final = respx_mock.post(f"{SAIL_API_BASE}/chat/completions").mock(
+        return_value=httpx.Response(
+            200, content=chat_completion_stream(), headers={"content-type": "text/event-stream"}
+        )
+    )
+
+    stream: Final = await litellm.acompletion(
+        model=MODEL,
+        messages=MESSAGES,
+        metadata={"completion_window": "flex"},
+        stream=True,
+        stream_options={"include_usage": True},
+        litellm_call_id=spend_capture.call_id,
+    )
+    async for _ in stream:
+        pass
+
+    assert _window(sent_body(route)) == "flex"
+    assert await spend_capture.settled_cost() == pytest.approx(cost_at("_flex"))
+
+
+@pytest.mark.parametrize("preview", [False, True], ids=["preview-off", "preview-on"])
+@pytest.mark.asyncio
+async def test_sail_chat_forwards_only_the_callers_metadata_with_a_proxy_shaped_window(
+    sail_env: None,
+    chat_route: respx.Route,
+    spend_capture: SpendCapture,
+    monkeypatch: pytest.MonkeyPatch,
+    preview: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "enable_preview_features", preview)
+    caller: Final = {"completion_window": "flex", "trace_id": "t-1"}
+
+    await litellm.acompletion(
+        model=MODEL,
+        messages=MESSAGES,
+        metadata={**caller, "user_api_key_hash": "h", "requester_metadata": dict(caller)},
+        litellm_call_id=spend_capture.call_id,
+    )
+
+    body: Final = sent_body(chat_route)
+    assert "user_api_key_hash" not in json.dumps(body)
+    assert body["metadata"] == (
+        {"trace_id": "t-1", "completion_window": "flex"} if preview else {"completion_window": "flex"}
+    )
+    assert await spend_capture.settled_cost() == pytest.approx(cost_at("_flex"))
+
+
+@pytest.mark.parametrize(("service_tier", "caller_window"), [("flex", "flex"), ("priority", "asap"), ("auto", "flex")])
+@pytest.mark.asyncio
+async def test_sail_chat_accepts_a_metadata_window_that_agrees_with_the_tier(
+    sail_env: None, chat_route: respx.Route, service_tier: str, caller_window: str
+) -> None:
+    await litellm.acompletion(
+        model=MODEL, messages=MESSAGES, service_tier=service_tier, metadata={"completion_window": caller_window}
+    )
+
+    assert _window(sent_body(chat_route)) == caller_window
+
+
+@pytest.mark.asyncio
+async def test_sail_chat_rejects_a_metadata_window_that_contradicts_the_tier_before_sending(
+    sail_env: None, chat_route: respx.Route
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="select different completion windows") as error:
+        await litellm.acompletion(
+            model=MODEL, messages=MESSAGES, service_tier="balanced", metadata={"completion_window": "flex"}
+        )
+
+    assert error.value.status_code == 400
+    assert not chat_route.called
+
+
+@pytest.mark.parametrize("drop_params", [None, "false"], ids=["unset", "string-false"])
+@pytest.mark.parametrize("caller_window", ["scale", 5])
+@pytest.mark.asyncio
+async def test_sail_chat_rejects_an_unknown_metadata_window_before_sending(
+    sail_env: None, chat_route: respx.Route, caller_window: object, drop_params: str | None
+) -> None:
+    with pytest.raises(litellm.UnsupportedParamsError, match="metadata.completion_window") as error:
+        await litellm.acompletion(
+            model=MODEL, messages=MESSAGES, metadata={"completion_window": caller_window}, drop_params=drop_params
+        )
+
+    assert error.value.status_code == 400
+    assert not chat_route.called
+
+
+@pytest.mark.parametrize("preview", [False, True], ids=["preview-off", "preview-on"])
+@pytest.mark.asyncio
+async def test_sail_chat_drops_an_unknown_metadata_window_under_drop_params_and_bills_asap(
+    sail_env: None,
+    chat_route: respx.Route,
+    spend_capture: SpendCapture,
+    monkeypatch: pytest.MonkeyPatch,
+    preview: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "enable_preview_features", preview)
+
+    await litellm.acompletion(
+        model=MODEL,
+        messages=MESSAGES,
+        metadata={"completion_window": "scale"},
+        drop_params=True,
+        litellm_call_id=spend_capture.call_id,
+    )
+
+    assert _window(sent_body(chat_route)) is None
+    assert await spend_capture.settled_cost() == pytest.approx(cost_at(""))
