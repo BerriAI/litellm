@@ -61,9 +61,10 @@ def owned_proxy(
     *,
     config: Path | None = None,
     remove_environment: tuple[str, ...] = (),
+    workers: int = 1,
 ) -> Iterator[Gateway]:
     with owned_proxy_process(
-        gateway, directory, overrides, config=config, remove_environment=remove_environment
+        gateway, directory, overrides, config=config, remove_environment=remove_environment, workers=workers
     ) as owned:
         yield owned.gateway
 
@@ -76,6 +77,7 @@ def owned_proxy_process(
     *,
     config: Path | None = None,
     remove_environment: tuple[str, ...] = (),
+    workers: int = 1,
 ) -> Iterator[OwnedProxy]:
     with socket.socket() as reserve:
         reserve.bind(("127.0.0.1", 0))
@@ -104,7 +106,7 @@ def owned_proxy_process(
                 "--port",
                 str(port),
                 "--num_workers",
-                "1",
+                str(workers),
                 "--telemetry",
                 "False",
                 "--use_prisma_db_push",
