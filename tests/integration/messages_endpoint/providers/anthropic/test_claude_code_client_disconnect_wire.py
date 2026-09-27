@@ -79,5 +79,7 @@ def test_client_disconnect_mid_stream_still_bills_the_message(gateway: Gateway) 
             return_last_on_timeout=True,
         )
         assert rows and rows[0]["prompt_tokens"] == 12, rows
-        upstream_closed: Final = None if wire.disconnected.empty() else wire.disconnected.get_nowait()
-        assert upstream_closed in (None, "/v1/messages"), upstream_closed
+        assert wire.disconnected.empty(), (
+            "closing the client stream must not abort the upstream call before it finishes; "
+            f"wire recorded a disconnect on {wire.disconnected.get_nowait()}"
+        )

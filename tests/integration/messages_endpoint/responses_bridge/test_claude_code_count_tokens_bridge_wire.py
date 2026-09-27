@@ -16,6 +16,12 @@ def test_count_tokens_on_openai_deployment_returns_token_count(gateway: Gateway)
     def respond(request: Request) -> Reply:
         assert request.method == "POST"
         assert request.target == "/responses/input_tokens", request.target
+        body: Final = cc.JSON_OBJECT.validate_json(request.body)
+        assert body["model"] == cc.OPENAI_BACKEND, body
+        assert body["instructions"] == str(request_body["system"]), body["instructions"]
+        assert len(body["input"]) == 1 and body["input"][0]["role"] == "user", body["input"]
+        assert "cache-bust-" in body["input"][0]["content"], body["input"]
+        assert body["tools"] == request_body["tools"], body["tools"]
         return Reply(body=b'{"object": "response.input_tokens", "input_tokens": 37}')
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
@@ -29,4 +35,5 @@ def test_count_tokens_on_openai_deployment_returns_token_count(gateway: Gateway)
         )
         assert response.status_code == 200, response.text
         payload: Final = cc.JSON_OBJECT.validate_json(response.content)
-        assert isinstance(payload.get("input_tokens"), int), payload
+        assert payload == {"input_tokens": 37}, payload
+        assert len(wire.drain()) == 1
