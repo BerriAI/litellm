@@ -7319,6 +7319,25 @@ def embedding(
                 aembedding=aembedding,
                 litellm_params={},
             )
+        elif JSONProviderRegistry.supports_embeddings(custom_llm_provider):
+            # JSON-configured OpenAI-compatible providers that declare /v1/embeddings.
+            # api_base and api_key were already resolved from providers.json by get_llm_provider.
+            if headers is not None and headers != {}:
+                optional_params["extra_headers"] = headers
+            response = openai_chat_completions.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                max_retries=max_retries,
+                shared_session=shared_session,
+            )
         else:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
         if response is not None and hasattr(response, "_hidden_params") and isinstance(response, EmbeddingResponse):
