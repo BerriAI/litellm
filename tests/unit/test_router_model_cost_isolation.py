@@ -1865,6 +1865,55 @@ def test_reload_keeps_custom_pricing_configured_on_litellm_params_for_a_db_model
         _invalidate_model_cost_lowercase_map()
 
 
+@pytest.mark.timeout(15)
+def test_reload_keeps_cost_map_when_router_starts_with_no_model_list():
+    """
+    An empty proxy config builds Router() with model_list omitted. Deployments
+    added afterwards (DB-stored models) must stay in the cost map across a
+    price data reload. The model is a local provider so add_deployment does
+    not start a remote login.
+    """
+    from litellm.router import _live_routers
+
+    saved_catalog = litellm.model_cost
+    fetched_catalog = copy.deepcopy(litellm.model_cost)
+    model_key = "hosted_vllm/empty-init-priced"
+    deployment_id = "empty-init-priced-id"
+    input_cost = 2e-6
+    output_cost = 1e-5
+    try:
+        router = Router()
+        assert router in _live_routers
+        router.add_deployment(
+            deployment=Deployment(
+                model_name=model_key,
+                litellm_params=LiteLLM_Params(
+                    model=model_key,
+                    api_key="sk-fake",
+                    input_cost_per_token=input_cost,
+                    output_cost_per_token=output_cost,
+                ),
+                model_info=ModelInfo(id=deployment_id),
+            )
+        )
+
+        assert model_key in litellm.model_cost
+        assert deployment_id in litellm.model_cost
+        assert litellm.model_cost[deployment_id]["input_cost_per_token"] == input_cost
+        assert litellm.model_cost[deployment_id]["output_cost_per_token"] == output_cost
+
+        _simulate_price_data_reload(copy.deepcopy(fetched_catalog))
+
+        assert model_key in litellm.model_cost
+        assert deployment_id in litellm.model_cost
+        assert litellm.model_cost[deployment_id]["input_cost_per_token"] == input_cost
+        assert litellm.model_cost[deployment_id]["output_cost_per_token"] == output_cost
+        assert router.model_list
+    finally:
+        litellm.model_cost = saved_catalog
+        _invalidate_model_cost_lowercase_map()
+
+
 def test_replay_live_router_model_cost_rebuilds_every_live_router():
     """
     A process can hold more than one Router, so the rebuild has to fan out across
