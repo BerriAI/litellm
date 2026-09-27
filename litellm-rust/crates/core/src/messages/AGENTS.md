@@ -1,0 +1,6 @@
+- This directory owns provider-independent Messages orchestration
+- Select and invoke provider adapters, but delegate provider-specific authentication, beta selection, payload rewriting, and response interpretation to those adapters
+- Use the shared Messages contracts from `litellm-types`
+- Keep provider policy out of request preparation and transport handlers. Calling a concrete provider helper for every provider is still a policy dependency
+- Preserve the order of validation, normalization, caller-requested parameter removal, and provider transformation when that order affects observable behavior
+- Test provider dispatch, auth precedence, header handling, transformations, and responses through behavior. Do not assert source structure

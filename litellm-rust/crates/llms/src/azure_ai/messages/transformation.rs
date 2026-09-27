@@ -1,4 +1,5 @@
 use litellm_auth::SecretValue;
+use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{has_bearer_auth, has_header};
 use litellm_types::llms::anthropic_messages::{
     anthropic_request::{
@@ -11,7 +12,7 @@ use litellm_types::llms::anthropic_messages::{
 use crate::{
     Error,
     anthropic::{
-        common_utils::{API_KEY_PLACEMENT, MESSAGES_PATH_SUFFIX, non_empty},
+        common_utils::{API_KEY_PLACEMENT, MESSAGES_PATH_SUFFIX},
         messages::transformation::{ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig},
     },
     base_llm::{
@@ -111,24 +112,19 @@ pub fn resolve_azure_api_key(
     api_key: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
-    non_empty(api_key)
-        .map(str::to_string)
-        .or_else(|| env_lookup(AZURE_API_KEY_ENV).filter(|value| !value.trim().is_empty()))
-        .ok_or_else(|| {
-            Error::from(litellm_auth::Error::MissingApiKey {
-                provider: "Azure",
-                environment_variable: AZURE_API_KEY_ENV,
-            })
+    resolve_non_empty(api_key, env_lookup, &[AZURE_API_KEY_ENV]).ok_or_else(|| {
+        Error::from(litellm_auth::Error::MissingApiKey {
+            provider: "Azure",
+            environment_variable: AZURE_API_KEY_ENV,
         })
+    })
 }
 
 pub fn complete_azure_anthropic_url(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
-    let api_base = non_empty(api_base)
-        .map(str::to_string)
-        .or_else(|| env_lookup(AZURE_API_BASE_ENV).filter(|value| !value.trim().is_empty()))
+    let api_base = resolve_non_empty(api_base, env_lookup, &[AZURE_API_BASE_ENV])
         .ok_or_else(|| Error::from(litellm_auth::Error::MissingAzureApiBase))?;
 
     let api_base = api_base.trim_end_matches('/');

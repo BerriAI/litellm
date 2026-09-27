@@ -7,11 +7,11 @@ use litellm_core_utils::{
     get_provider_specific_headers::get_provider_specific_headers,
     settings::Lookup,
 };
+use litellm_http::request::with_default_headers;
 use litellm_llms::{
     anthropic::messages::handler::shape_anthropic_messages_request,
     base_llm::{
-        anthropic_messages::transformation::MessagesTransformContext,
-        auth::{ValidatedEnvironment, with_default_headers},
+        anthropic_messages::transformation::MessagesTransformContext, auth::ValidatedEnvironment,
     },
 };
 use litellm_secrets::source::SecretSource;

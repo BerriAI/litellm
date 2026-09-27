@@ -1,9 +1,7 @@
 use litellm_auth::SecretValue;
 use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
-use litellm_llms::base_llm::{
-    auth::{ValidatedEnvironment, with_default_headers},
-    chat::transformation::BaseConfig,
-};
+use litellm_http::request::with_default_headers;
+use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
 use litellm_types::llms::openai::ChatMessage;
 use serde_json::Value;
 

@@ -1,9 +1,10 @@
 use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
 use litellm_http::request::string_headers;
+use litellm_http::request::with_default_headers;
 use litellm_llms::{
     base_llm::{
         audio_transcription::transformation::BaseAudioTranscriptionConfig,
-        auth::{ValidatedEnvironment, with_default_headers},
+        auth::ValidatedEnvironment,
     },
     bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG,
 };

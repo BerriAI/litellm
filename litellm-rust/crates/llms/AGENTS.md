@@ -19,3 +19,17 @@ For Mistral, `async_transform_ocr_request` uses the base default in both languag
 For non-OCR pairs, order corresponding methods as parameter support/mapping, environment validation, URL construction, request transformation, and response transformation, followed by Rust-only runtime hooks. Auth resolution remains split between configs and route preparation in litellm-core. Chat `supported_openai_param_mappings` describes accepted OpenAI/provider name pairs, unlike Python's `get_supported_openai_params` name list. Audio `map_transcription_params` remains a Rust filtering helper
 
 Azure Messages maps to `llms/azure_ai/anthropic/messages_transformation.py`; Bedrock Converse maps to `llms/bedrock/chat/converse_transformation.py`. `AnthropicConfig`, `AmazonConverseConfig`, and the non-OCR base traits are partial ports. `OpenAiResponsesApiConfig` currently implements only the WebSocket surface. Preserve their acceptance gates, passthrough behavior, and host fallback contracts when aligning layout
+
+## Provider and format boundaries
+
+- These are intended boundaries, not a claim that all existing code already satisfies them
+- Preserve behavior and conceptual boundaries. Python names and layout are reference points, not requirements to reproduce its class hierarchy or helper structure
+- Provider directories own provider behavior. API formats and their public data contracts are independent of the provider that originated them
+- Shared `base_llm` contracts must not import provider implementations or provider-specific transformation policy
+- Config traits represent actual provider contracts. Use composition and existing helpers instead of recreating inheritance with unnecessary traits or delegation layers
+- Providers choose authentication and header policy. Shared auth and HTTP infrastructure apply those decisions
+- Generic configuration lookup belongs in the existing settings utilities, not in a provider directory
+- Closures are idiomatic Rust, but a `Vec<ContentBlock> -> Vec<ContentBlock>` helper is not automatically a useful abstraction
+- Choose traversal for the operation: per-block mapping, filtering, or whole-message processing when blocks depend on one another
+- Add an abstraction only when it clarifies a repeated responsibility
+- Verify observable auth precedence, headers, serialization, passthrough, and transformations, not code structure

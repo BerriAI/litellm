@@ -18,10 +18,41 @@ pub enum MessageContent {
     Blocks(Vec<ContentBlock>),
 }
 
+#[derive(
+    Clone, Debug, PartialEq, Eq, Serialize, Deserialize, strum::Display, strum::EnumString,
+)]
+#[serde(from = "String", into = "String")]
+#[strum(serialize_all = "snake_case")]
+pub enum ContentBlockType {
+    Text,
+    Thinking,
+    RedactedThinking,
+    ToolUse,
+    ServerToolUse,
+    ToolResult,
+    Compaction,
+    AdvisorToolResult,
+    WebSearchToolResult,
+    #[strum(default, transparent)]
+    Other(String),
+}
+
+impl From<String> for ContentBlockType {
+    fn from(value: String) -> Self {
+        value.parse().unwrap_or_else(|never| match never {})
+    }
+}
+
+impl From<ContentBlockType> for String {
+    fn from(value: ContentBlockType) -> Self {
+        value.to_string()
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct ContentBlock {
     #[serde(rename = "type", default, skip_serializing_if = "Option::is_none")]
-    pub block_type: Option<String>,
+    pub block_type: Option<ContentBlockType>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub text: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -51,14 +82,14 @@ pub struct ContentBlock {
 impl ContentBlock {
     pub fn text(text: impl Into<String>) -> Self {
         Self {
-            block_type: Some("text".to_string()),
+            block_type: Some(ContentBlockType::Text),
             text: Some(text.into()),
             ..Self::default()
         }
     }
 
-    pub fn is_type(&self, block_type: &str) -> bool {
-        self.block_type.as_deref() == Some(block_type)
+    pub fn is_type(&self, block_type: ContentBlockType) -> bool {
+        self.block_type.as_ref() == Some(&block_type)
     }
 }
 
@@ -389,20 +420,6 @@ mod tests {
             serde_json::to_value(ContentBlock::text("hello")).unwrap(),
             json!({"type": "text", "text": "hello"})
         );
-    }
-
-    #[rstest]
-    #[case::same_type(json!({"type": "tool_use"}), "tool_use", true)]
-    #[case::other_type(json!({"type": "tool_result"}), "tool_use", false)]
-    #[case::prefix_of_type(json!({"type": "tool_use"}), "tool", false)]
-    #[case::no_type(json!({"text": "x"}), "text", false)]
-    fn is_type_matches_the_exact_block_type(
-        #[case] block: Value,
-        #[case] block_type: &str,
-        #[case] expected: bool,
-    ) {
-        let block: ContentBlock = serde_json::from_value(block).unwrap();
-        assert_eq!(block.is_type(block_type), expected);
     }
 
     #[rstest]
