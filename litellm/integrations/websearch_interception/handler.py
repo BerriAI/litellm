@@ -303,8 +303,11 @@ class WebSearchInterceptionLogger(CustomLogger):
         Strip known instructional prefixes so the search backend receives only
         the intended search terms rather than query wrapper keywords.
         """
-        cleaned = _CLAUDE_CODE_SEARCH_PREFIX_RE.sub("", raw_message).strip()
-        if (cleaned.startswith('"') and cleaned.endswith('"')) or (cleaned.startswith("'") and cleaned.endswith("'")):
+        prefix = _CLAUDE_CODE_SEARCH_PREFIX_RE.match(raw_message)
+        cleaned = (raw_message[prefix.end() :] if prefix else raw_message).strip()
+        if prefix and (
+            (cleaned.startswith('"') and cleaned.endswith('"')) or (cleaned.startswith("'") and cleaned.endswith("'"))
+        ):
             cleaned = cleaned[1:-1].strip()
         return cleaned if cleaned else raw_message.strip()
 
