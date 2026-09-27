@@ -1164,12 +1164,33 @@ async def _aclose_late_response(produced: Response) -> None:
             verbose_proxy_logger.debug("error closing relayed streaming generator: %s", exc)
 
 
-async def _relay_late_response(produced: Response) -> AsyncGenerator[bytes, None]:
+def _late_response_body(produced: object) -> bytes:
+    """Bytes for one SSE data frame.
+
+    A late payload may be a dict, raw bytes, or a Response whose ``body`` is either.
+    """
+    payload: Final = (
+        produced
+        if isinstance(produced, (bytes, bytearray, Mapping))
+        else getattr(produced, "body", produced)
+    )
+    if isinstance(payload, (bytes, bytearray)):
+        raw: Final = bytes(payload)
+        return raw or b"{}"
+    if isinstance(payload, str):
+        text: Final = payload.encode()
+        return text or b"{}"
+    if isinstance(payload, Mapping):
+        return orjson.dumps(payload)
+    return b"{}"
+
+
+async def _relay_late_response(produced: object) -> AsyncGenerator[bytes, None]:
     """Replay a Response that was built after a keepalive had already opened the wire."""
     if not isinstance(produced, StreamingResponse):
         # The status line is already on the wire, so a non-streaming body, an error
         # body included, can only reach the client as an SSE frame.
-        yield b"data: " + (bytes(produced.body) or b"{}") + b"\n\n"
+        yield b"data: " + _late_response_body(produced) + b"\n\n"
         yield b"data: [DONE]\n\n"
         return
 
