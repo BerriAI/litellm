@@ -183,16 +183,16 @@ async fn client_settings_choose_the_api_version_and_the_inch_to_pixel_dpi() {
         "analyzeResult": {"pages": [{"pageNumber": 1, "width": 8.5, "height": 11, "unit": "inch"}]}
     }))])
     .await;
-    let client = ocr_client().with_settings(OcrSettings {
+    let route = ocr_route_with(OcrSettings {
         document_intelligence_api_version: "2099-01-01".into(),
         document_intelligence_dpi: 72,
         ..OcrSettings::default()
     });
 
-    let result =
-        litellm_core::ocr::client::perform(&client, read_request(&upstream.uri(), json!({})))
-            .await
-            .unwrap();
+    let result = route
+        .execute(read_request(&upstream.uri(), json!({})), &())
+        .await
+        .unwrap();
 
     assert_eq!(
         only_request(&upstream)
@@ -347,14 +347,14 @@ async fn the_polling_deadline_bounds_the_retry_delay() {
         ],
     )
     .await;
-    let client = ocr_client().with_settings(OcrSettings {
+    let route = ocr_route_with(OcrSettings {
         poll_timeout: Duration::from_millis(100),
         ..OcrSettings::default()
     });
 
     let error = tokio::time::timeout(
         Duration::from_secs(1),
-        litellm_core::ocr::client::perform(&client, read_request(&upstream.uri(), json!({}))),
+        route.execute(read_request(&upstream.uri(), json!({})), &()),
     )
     .await
     .expect("the deadline cuts the retry delay short")

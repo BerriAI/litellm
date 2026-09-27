@@ -3279,6 +3279,7 @@ dependencies = [
 name = "litellm-host"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "litellm-auth",
  "litellm-coroutine",
  "rstest",

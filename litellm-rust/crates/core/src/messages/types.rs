@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures_util::stream::BoxStream;
-use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
+use litellm_host::call::CallOutput;
+use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
 use litellm_types::{
     llms::anthropic_messages::{
         anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
@@ -30,24 +30,16 @@ pub fn messages_body(body: Map<String, Value>) -> Result<AnthropicMessagesReques
 }
 
 pub(super) fn invalid_request(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(litellm_llms::ErrorDetail::invalid(
-        "Anthropic messages request",
-        err,
-    ))
+    Error::InvalidRequest(format!("invalid Anthropic messages request: {err}").into())
 }
 
-pub enum MessagesResponse {
-    Message(Box<AnthropicMessagesResponse>),
-    Stream {
-        headers: Vec<(String, String)>,
-        chunks: BoxStream<'static, Result<Bytes, Error>>,
-    },
-}
+pub type MessagesResponse =
+    CallOutput<Box<AnthropicMessagesResponse>, super::route::MessagesStreamHead, Bytes, Error>;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesShaping {
     #[serde(default)]
-    pub capabilities: MessagesModelCapabilities,
+    pub capabilities: AnthropicModelCapabilities,
     #[serde(default)]
     pub drop_params: bool,
     #[serde(default)]
@@ -84,9 +76,9 @@ mod tests {
     #[case::partial_capabilities(
         json!({"capabilities": {"supports_reasoning": true}}),
         MessagesShaping {
-            capabilities: MessagesModelCapabilities {
+            capabilities: AnthropicModelCapabilities {
                 supports_reasoning: true,
-                ..MessagesModelCapabilities::default()
+                ..AnthropicModelCapabilities::default()
             },
             ..MessagesShaping::default()
         },
@@ -108,7 +100,7 @@ mod tests {
             "additional_drop_params": ["metadata.user_id", "thinking"]
         }),
         MessagesShaping {
-            capabilities: MessagesModelCapabilities {
+            capabilities: AnthropicModelCapabilities {
                 supports_reasoning: true,
                 supports_adaptive_thinking: true,
                 thinking_always_on: false,

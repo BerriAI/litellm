@@ -10,9 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use futures_util::{StreamExt, stream::BoxStream};
-use litellm_core::messages::{
-    Error as RouteError, MessagesCall, MessagesResponse, messages, messages_body,
-};
+use litellm_core::messages::{Error as RouteError, MessagesCall, MessagesResponse, messages_body};
 use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
@@ -52,15 +50,8 @@ async fn handle(gateway: &Gateway, headers: &HeaderMap, body: &[u8]) -> Result<R
         .get(model_name)
         .ok_or_else(|| Error::UnknownModel(model_name.to_owned()))?;
     let call = project(deployment, body, headers)?;
-    match messages(
-        &gateway.resources,
-        &gateway.http,
-        gateway.secrets.as_ref(),
-        call,
-    )
-    .await?
-    {
-        MessagesResponse::Message(message) => Ok(Json(message).into_response()),
+    match gateway.messages.execute(call, &()).await? {
+        MessagesResponse::Complete(message) => Ok(Json(message).into_response()),
         MessagesResponse::Stream { chunks, .. } => Ok(stream(chunks)),
     }
 }

@@ -1,11 +1,12 @@
+use litellm_host_python::{PythonHostCalls, PythonOwned};
 use std::convert::Infallible;
 
 use bytes::Bytes;
 use litellm_core::messages::{
     Error, MessagesCall, MessagesShaping, messages_body,
-    route::{Messages, MessagesOutput, MessagesStreamHead},
+    route::{Messages, MessagesStreamHead},
 };
-use litellm_host_python::{InvokeError, ProtocolHost, from_py, lookup, to_py};
+use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_types::utils::ProviderSpecificHeaders;
 use pyo3::{
@@ -221,11 +222,11 @@ impl MessagesPythonHost {
     }
 }
 
-impl ProtocolHost for MessagesPythonHost {
+impl PythonBinding for MessagesPythonHost {
     type Protocol = Messages;
     type Failure = PyErr;
 
-    fn project(
+    fn decode_request(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
@@ -235,33 +236,35 @@ impl ProtocolHost for MessagesPythonHost {
             .map_err(InvokeError::Native)
     }
 
-    fn invoke(&mut self, _: Python<'_>, op: Infallible) -> Result<(), InvokeError<Error>> {
-        match op {}
+    fn encode_response(
+        &mut self,
+        py: Python<'_>,
+        response: Box<
+            litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse,
+        >,
+    ) -> PyResult<Py<PyAny>> {
+        py.import(ROUTE_HOST_MODULE)?
+            .getattr("response")?
+            .call1((to_py(py, response.as_ref())?,))
+            .map(Bound::unbind)
     }
 
-    fn complete(&mut self, py: Python<'_>, response: MessagesOutput) -> PyResult<Py<PyAny>> {
-        match response {
-            MessagesOutput::Message(message) => py
-                .import(ROUTE_HOST_MODULE)?
-                .getattr("response")?
-                .call1((to_py(py, message.as_ref())?,))
-                .map(Bound::unbind),
-            MessagesOutput::Streamed => Ok(py.None()),
-        }
-    }
-
-    fn head(&mut self, py: Python<'_>, head: MessagesStreamHead) -> PyResult<Py<PyAny>> {
+    fn encode_stream_head(
+        &mut self,
+        py: Python<'_>,
+        head: MessagesStreamHead,
+    ) -> PyResult<Py<PyAny>> {
         py.import(ROUTE_HOST_MODULE)?
             .getattr("stream_hidden_params")?
             .call1((to_py(py, &head.headers)?,))
             .map(Bound::unbind)
     }
 
-    fn chunk(&mut self, py: Python<'_>, chunk: Bytes) -> PyResult<Py<PyAny>> {
+    fn encode_chunk(&mut self, py: Python<'_>, chunk: Bytes) -> PyResult<Py<PyAny>> {
         Ok(PyBytes::new(py, &chunk).into_any().unbind())
     }
 
-    fn classify(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
+    fn map_error(&self, py: Python<'_>, error: Error) -> PyResult<PyErr> {
         if let Error::Secret(source) = &error
             && let Some(original) = crate::secrets::python_error(py, source.source_error())
         {
@@ -273,9 +276,20 @@ impl ProtocolHost for MessagesPythonHost {
     fn host_error(error: &PyErr) -> Error {
         Error::InvalidRequest(error.to_string().into())
     }
+}
 
+impl PythonHostCalls<Messages> for MessagesPythonHost {
+    fn handle_host_call(
+        &mut self,
+        _: Python<'_>,
+        op: Infallible,
+    ) -> Result<(), InvokeError<Error>> {
+        match op {}
+    }
+}
+
+impl PythonOwned for MessagesPythonHost {
     fn close(&mut self, _: Python<'_>) {}
-
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.request)
     }

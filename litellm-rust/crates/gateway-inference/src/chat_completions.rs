@@ -7,7 +7,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use litellm_core::chat_completions::{chat_completions, types::ChatCompletionsRequest};
+use litellm_core::chat_completions::types::ChatCompletionsRequest;
 use serde_json::{Map, Value};
 
 use crate::{Error, Gateway, request};
@@ -61,24 +61,24 @@ async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response,
         .get("messages")
         .cloned()
         .ok_or_else(|| Error::InvalidBody("messages is required".into()))?;
-    let response = chat_completions(
-        &gateway.resources,
-        &gateway.http,
-        gateway.secrets.as_ref(),
-        ChatCompletionsRequest {
-            model: &deployment.model,
-            messages,
-            optional_params: body
-                .into_iter()
-                .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages" | "stream"))
-                .collect(),
-            api_key: deployment.api_key.as_deref(),
-            api_base: deployment.api_base.as_deref(),
-            custom_llm_provider: deployment.custom_llm_provider.as_deref(),
-            extra_headers: None,
-            timeout: deployment.timeout,
-        },
-    )
-    .await?;
+    let response = gateway
+        .chat_completions
+        .execute(
+            ChatCompletionsRequest {
+                model: &deployment.model,
+                messages,
+                optional_params: body
+                    .into_iter()
+                    .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages" | "stream"))
+                    .collect(),
+                api_key: deployment.api_key.as_deref(),
+                api_base: deployment.api_base.as_deref(),
+                custom_llm_provider: deployment.custom_llm_provider.as_deref(),
+                extra_headers: None,
+                timeout: deployment.timeout,
+            },
+            &(),
+        )
+        .await?;
     Ok(Json(response).into_response())
 }

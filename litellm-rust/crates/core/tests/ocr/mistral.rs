@@ -1,11 +1,8 @@
 use std::sync::Arc;
 
-use litellm_http::{HttpSettings, Resolution, media::UrlPolicy};
+use litellm_http::{HttpSettings, Resolution};
 use litellm_llms::{
-    base_llm::ocr::{
-        settings::OcrSettings,
-        transformation::{BaseOcrConfig, OCR_RESPONSE_MAX_BYTES},
-    },
+    base_llm::ocr::transformation::{BaseOcrConfig, OCR_RESPONSE_MAX_BYTES},
     mistral::ocr::transformation::MistralOcrConfig,
 };
 use rstest::rstest;
@@ -156,7 +153,13 @@ async fn missing_credentials_come_from_the_injected_secret_source(
             .copied()
             .chain([("MISTRAL_AZURE_API_BASE", base.as_str())]),
     ));
-    let client = ocr_client().with_secrets(source.clone());
+    let route = build_ocr_route(
+        &resources(),
+        &http_config(),
+        Default::default(),
+        Default::default(),
+        source.clone(),
+    );
     let request = decode_request(OcrWireRequest {
         api_key: None,
         api_base: None,
@@ -169,9 +172,7 @@ async fn missing_credentials_come_from_the_injected_secret_source(
     })
     .unwrap();
 
-    litellm_core::ocr::client::perform(&client, request)
-        .await
-        .unwrap();
+    route.execute(request, &()).await.unwrap();
 
     assert_eq!(source.requested(), MistralOcrConfig.secret_names());
     assert_eq!(
@@ -188,25 +189,21 @@ async fn the_client_uses_the_injected_http_pool_configuration() {
         user_agent: Some("host-owned/1".into()),
         ..HttpSettings::default()
     };
-    let client = resources()
-        .ocr_client(
-            &Resolution::from(&settings).config,
-            UrlPolicy::default(),
-            OcrSettings::default(),
-            Arc::new(
-                litellm_secrets::source::EnvironmentSecrets::python_compatible(
-                    litellm_http::Client::plain_for_test(),
-                ),
-            ),
-        )
-        .unwrap();
+    let route = build_ocr_route(
+        &resources(),
+        &Resolution::from(&settings).config,
+        Default::default(),
+        Default::default(),
+        no_secrets(),
+    );
 
-    litellm_core::ocr::client::perform(
-        &client,
-        ocr_request("mistral/model", &upstream.uri(), json!({})),
-    )
-    .await
-    .unwrap();
+    route
+        .execute(
+            ocr_request("mistral/model", &upstream.uri(), json!({})),
+            &(),
+        )
+        .await
+        .unwrap();
 
     assert_eq!(
         only_request(&upstream).await.header("user-agent"),

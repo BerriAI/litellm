@@ -117,6 +117,15 @@ pub(crate) fn call_config(
     Ok(resolution.config)
 }
 
+pub(crate) fn provider_client(
+    py: Python<'_>,
+    kwargs: &Bound<'_, PyDict>,
+    asynchronous: bool,
+) -> PyResult<Result<Client, litellm_http::Error>> {
+    let config = call_config(py, kwargs, asynchronous)?;
+    Ok(pool().client(&config, ClientVariant::Provider))
+}
+
 pub(crate) fn host_client(py: Python<'_>, variant: ClientVariant) -> PyResult<Client> {
     let config = call_config(py, &PyDict::new(py), true)?;
     pool().client(&config, variant).map_err(client_error)

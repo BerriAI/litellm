@@ -1,13 +1,10 @@
 use crate::logger::{run_async, run_sync};
 use litellm_core::audio_transcription::{
-    Error, audio_transcription as run_audio_transcription, types::AudioTranscriptionRequest,
+    AudioTranscriptionRoute, Error, types::AudioTranscriptionRequest,
 };
 use litellm_host_python::from_py_argument;
-use litellm_http::HttpClientConfig;
-use litellm_secrets::source::SecretSource;
 use pyo3::{prelude::*, types::PyDict};
 use serde_json::{Map, Value};
-use std::sync::Arc;
 
 use crate::{
     errors::route_error_to_pyerr,
@@ -15,8 +12,8 @@ use crate::{
 };
 
 async fn execute(
-    config: HttpClientConfig,
-    secrets: Arc<dyn SecretSource>,
+    http: Result<litellm_http::Client, litellm_http::Error>,
+    secrets: std::sync::Arc<dyn litellm_secrets::source::SecretSource>,
     audio: Value,
     optional_params: Map<String, Value>,
     options: RouteOptions,
@@ -29,11 +26,8 @@ async fn execute(
         extra_headers,
         timeout,
     } = options;
-    run_audio_transcription(
-        crate::http::resources(),
-        &config,
-        secrets.as_ref(),
-        AudioTranscriptionRequest {
+    AudioTranscriptionRoute::new(http?, crate::http::resources().auth.clone(), secrets)
+        .execute(AudioTranscriptionRequest {
             model: &model,
             audio,
             api_key: api_key.as_deref(),
@@ -42,9 +36,8 @@ async fn execute(
             extra_headers,
             optional_params,
             timeout,
-        },
-    )
-    .await
+        })
+        .await
 }
 
 #[pyfunction]
@@ -72,12 +65,13 @@ pub(crate) fn transcription(
         extra_headers,
         timeout: optional_timeout(timeout_seconds),
     };
-    let config = crate::http::call_config(py, &PyDict::new(py), false)?;
+    let http = crate::http::provider_client(py, &PyDict::new(py), false)?;
+    let secrets = crate::secrets::source(py)?;
     run_sync(
         py,
         execute(
-            config,
-            crate::secrets::source(py)?,
+            http,
+            secrets,
             audio,
             optional_params.unwrap_or_default(),
             options,
@@ -111,12 +105,13 @@ pub(crate) fn atranscription<'py>(
         extra_headers,
         timeout: optional_timeout(timeout_seconds),
     };
-    let config = crate::http::call_config(py, &PyDict::new(py), true)?;
+    let http = crate::http::provider_client(py, &PyDict::new(py), true)?;
+    let secrets = crate::secrets::source(py)?;
     run_async(
         py,
         execute(
-            config,
-            crate::secrets::source(py)?,
+            http,
+            secrets,
             audio,
             optional_params.unwrap_or_default(),
             options,
