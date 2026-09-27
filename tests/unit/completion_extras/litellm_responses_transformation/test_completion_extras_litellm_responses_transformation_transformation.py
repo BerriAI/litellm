@@ -610,25 +610,51 @@ def test_transform_response_recovers_empty_output_from_raw_sse():
     assert result.choices[0].message.content == "Recovered from SSE"
 
 
-def test_transform_response_recovers_all_text_parts_from_raw_sse():
+@pytest.mark.parametrize("nested_citation", [False, True])
+@pytest.mark.parametrize("recovery_path", ["raw_sse", "bridge"])
+def test_transform_response_recovers_text_and_citation_offsets(nested_citation, recovery_path):
+    from copy import deepcopy
+
+    from litellm.completion_extras.litellm_responses_transformation.handler import (
+        ResponsesToCompletionBridgeHandler,
+    )
     from litellm.completion_extras.litellm_responses_transformation.transformation import (
         LiteLLMResponsesTransformationHandler,
     )
 
     handler = LiteLLMResponsesTransformationHandler()
-    raw_sse = "\n".join(
-        [
-            'data: {"type":"response.output_text.done","output_index":0,"content_index":0,"item_id":"msg_from_stream","text":"Hello, "}',
-            'data: {"type":"response.output_text.done","output_index":0,"content_index":1,"item_id":"msg_from_stream","text":"world!"}',
-            'data: {"type":"response.completed","response":{"id":"resp_from_stream","object":"response","created_at":1760144904,"status":"completed","model":"gpt-5.4","output":[]}}',
-            "data: [DONE]",
-            "",
-        ]
+    citation = {"start_index": 0, "end_index": 5, "title": "Source", "url": "https://example.com"}
+    annotation = (
+        {"type": "url_citation", "url_citation": citation} if nested_citation else {"type": "url_citation", **citation}
     )
-    raw_response = _make_empty_responses_api_response()
+    events = (
+        {
+            "type": "response.output_text.done",
+            "output_index": 0,
+            "content_index": 1,
+            "item_id": "msg_from_stream",
+            "text": "world!",
+            "annotations": [annotation],
+        },
+        {
+            "type": "response.output_text.done",
+            "output_index": 0,
+            "content_index": 0,
+            "item_id": "msg_from_stream",
+            "text": "Hello, ",
+            "annotations": [annotation],
+        },
+    )
+    original_events = deepcopy(events)
+    raw_sse = "\n".join(f"data: {json.dumps(event)}" for event in events)
+    raw_response = (
+        ResponsesToCompletionBridgeHandler._coerce_response_object(_make_empty_responses_api_response(), None, events)
+        if recovery_path == "bridge"
+        else _make_empty_responses_api_response()
+    )
     model_response = _make_empty_model_response()
     logging_obj = Mock()
-    logging_obj.model_call_details = {"original_response": raw_sse}
+    logging_obj.model_call_details = {"original_response": raw_sse if recovery_path == "raw_sse" else None}
 
     result = handler.transform_response(
         model="gpt-5.4",
@@ -644,6 +670,14 @@ def test_transform_response_recovers_all_text_parts_from_raw_sse():
 
     assert len(result.choices) == 1
     assert result.choices[0].message.content == "Hello, world!"
+    shifted_citation = {**citation, "start_index": 7, "end_index": 12}
+    shifted_annotation = (
+        {"type": "url_citation", "url_citation": shifted_citation}
+        if nested_citation
+        else {"type": "url_citation", **shifted_citation}
+    )
+    assert result.choices[0].message.annotations == [annotation, shifted_annotation]
+    assert events == original_events
 
 
 def test_transform_response_recovers_output_item_done_from_raw_sse():

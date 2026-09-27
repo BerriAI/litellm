@@ -5,6 +5,7 @@ Handler for transforming /chat/completions api requests to litellm.responses req
 import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
+from itertools import accumulate, chain
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
 
@@ -76,6 +77,16 @@ _CHAT_COMPLETION_FIELDS: Final = frozenset((*ModelResponse.model_fields, "usage"
 _RESPONSES_API_ONLY_FIELDS: Final = frozenset((*Response.model_fields, *ResponsesAPIResponse.model_fields)) - frozenset(
     ChatCompletion.model_fields
 )
+
+
+def _offset_annotation(annotation: Mapping[str, object], offset: int) -> dict[str, object]:
+    citation: Final = annotation.get("url_citation")
+    if isinstance(citation, dict):
+        return {**annotation, "url_citation": _offset_annotation(citation, offset)}
+    return {
+        key: value + offset if key in ("start_index", "end_index") and isinstance(value, int) else value
+        for key, value in annotation.items()
+    }
 
 
 def _provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:
@@ -334,28 +345,29 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Handle message items with output_text content
         if item_type == "message":
             content_list: Final = item.get("content", [])
-            response_text_parts: Final[list[str]] = []
-            message_annotations: Final[list[ChatCompletionAnnotation]] = []
-            has_output_text = False
-            for content_item in content_list:
-                if not isinstance(content_item, dict) or content_item.get("type") != "output_text":
-                    continue
-                has_output_text = True
-                response_text = content_item.get("text", "")
-                response_text_parts.append(response_text if isinstance(response_text, str) else "")
-                annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
-                    content_item.get("annotations", None)
+            text_parts: Final = tuple(
+                part for part in content_list if isinstance(part, dict) and part.get("type") == "output_text"
+            )
+            response_text_parts: Final = tuple(
+                text if isinstance(text := part.get("text"), str) else "" for part in text_parts
+            )
+            offsets: Final = accumulate(map(len, response_text_parts), initial=0)
+            annotation_groups: Final = (
+                tuple(
+                    _offset_annotation(annotation, offset)
+                    for annotation in self._convert_annotations_to_chat_format(part.get("annotations")) or ()
                 )
-                if annotations:
-                    message_annotations.extend(annotations)
+                for part, offset in zip(text_parts, offsets)
+            )
+            message_annotations: Final = list(chain.from_iterable(annotation_groups))
 
-            if has_output_text:
-                msg = Message(
+            if text_parts:
+                msg: Final = Message(
                     role=item.get("role", "assistant"),
                     content="".join(response_text_parts),
                     annotations=message_annotations or None,
                 )
-                choice = Choices(message=msg, finish_reason="stop", index=index)
+                choice: Final = Choices(message=msg, finish_reason="stop", index=index)
                 return choice, index + 1
 
         # function_call / custom_tool_call dicts are intercepted and accumulated by
