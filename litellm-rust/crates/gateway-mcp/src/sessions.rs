@@ -5,7 +5,7 @@ use axum::{
     body::{Body, to_bytes},
     extract::{Request, State},
     http::{Method, StatusCode},
-    response::{IntoResponse, Response},
+    response::IntoResponse,
     routing::any,
 };
 use moka::future::Cache;
@@ -62,7 +62,10 @@ pub(crate) fn transport(server: McpServer, config: StreamableHttpServerConfig) -
     })
 }
 
-async fn dispatch(State(transport): State<Transport>, request: Request) -> Response {
+async fn dispatch(
+    State(transport): State<Transport>,
+    request: Request,
+) -> Result<impl IntoResponse, StatusCode> {
     let owner = fingerprint(&request);
     let session = request
         .headers()
@@ -72,17 +75,16 @@ async fn dispatch(State(transport): State<Transport>, request: Request) -> Respo
     if let Some(session) = &session {
         match transport.owners.get(session).await {
             Some(expected) if expected == owner => (),
-            Some(_) => return StatusCode::FORBIDDEN.into_response(),
-            None => return StatusCode::NOT_FOUND.into_response(),
+            Some(_) => return Err(StatusCode::FORBIDDEN),
+            None => return Err(StatusCode::NOT_FOUND),
         }
     }
     let method = request.method().clone();
     let (request, initialize) = if method == Method::POST && session.is_none() {
         let (parts, body) = request.into_parts();
-        let bytes = match to_bytes(body, 4 * 1024 * 1024).await {
-            Ok(bytes) => bytes,
-            Err(_) => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
-        };
+        let bytes = to_bytes(body, 4 * 1024 * 1024)
+            .await
+            .map_err(|_| StatusCode::PAYLOAD_TOO_LARGE)?;
         let initialize = matches!(serde_json::from_slice::<ClientJsonRpcMessage>(&bytes),
             Ok(ClientJsonRpcMessage::Request(request)) if matches!(request.request, ClientRequest::InitializeRequest(_)));
         (Request::from_parts(parts, Body::from(bytes)), initialize)
@@ -113,7 +115,7 @@ async fn dispatch(State(transport): State<Transport>, request: Request) -> Respo
     {
         transport.owners.invalidate(&session).await;
     }
-    response
+    Ok(response)
 }
 
 pub(crate) fn fingerprint(request: &Request) -> [u8; 32] {

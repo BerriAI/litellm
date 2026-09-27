@@ -3,7 +3,7 @@ use std::sync::Arc;
 use axum::{
     Json,
     extract::{Path, State},
-    response::Response,
+    response::{IntoResponse, Response},
 };
 use litellm_core::chat_completions::{
     Error as RouteError, route::chat_completions_machine, types::ChatCompletionsCall,
@@ -15,7 +15,7 @@ use crate::{Error, Gateway, JsonObject, request};
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
     JsonObject(body): JsonObject,
-) -> Result<Response, Error> {
+) -> Result<impl IntoResponse, Error> {
     handle(&gateway, body).await
 }
 
@@ -23,7 +23,7 @@ pub(crate) async fn create_from_model_path(
     State(gateway): State<Arc<Gateway>>,
     Path(model): Path<String>,
     JsonObject(body): JsonObject,
-) -> Result<Response, Error> {
+) -> Result<impl IntoResponse, Error> {
     let body = if body.get("model").is_some_and(|model| !model.is_null()) {
         body
     } else {

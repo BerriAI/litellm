@@ -2,7 +2,7 @@ use axum::{
     body::Bytes,
     extract::{FromRequest, FromRequestParts, Multipart, OriginalUri, Request},
     http::request::Parts,
-    response::Response,
+    response::IntoResponse,
 };
 use serde_json::{Map, Value};
 
@@ -142,8 +142,8 @@ fn multipart_error(error: axum::extract::multipart::MultipartError) -> Error {
     Error::InvalidBody(error.to_string())
 }
 
-pub(crate) async fn unsupported(OriginalUri(uri): OriginalUri) -> Response {
-    Error::Unsupported(uri.path().to_owned()).openai_response()
+pub(crate) async fn unsupported(OriginalUri(uri): OriginalUri) -> impl IntoResponse {
+    Error::Unsupported(uri.path().to_owned())
 }
 
 #[cfg(test)]

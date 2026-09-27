@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::{Json, extract::State, http::HeaderMap};
+use axum::{Json, extract::State, http::HeaderMap, response::IntoResponse};
 use litellm_auth::SecretValue;
 use litellm_core::ocr::{
     client::perform,
@@ -18,7 +18,7 @@ pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
     headers: HeaderMap,
     body: InferenceBody,
-) -> Result<Json<Value>, Error> {
+) -> Result<impl IntoResponse, Error> {
     handle(&gateway, &headers, body).await.map(Json)
 }
 

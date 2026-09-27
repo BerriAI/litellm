@@ -5,7 +5,7 @@ use axum::{
     extract::{Path, Query, Request, State},
     http::request::Parts,
     middleware::{self, Next},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::{get, post},
 };
 use rmcp::{model::*, transport::streamable_http_server::StreamableHttpServerConfig};
@@ -98,7 +98,7 @@ async fn rest_list(
     State(operations): State<Arc<dyn Operations>>,
     Query(query): Query<ListQuery>,
     parts: Parts,
-) -> Result<Json<ToolList>, Error> {
+) -> Result<impl IntoResponse, Error> {
     let context = Context {
         parts,
         server: query.server_id.or(query.mcp_server_name),
@@ -133,7 +133,7 @@ async fn rest_call(
     State(operations): State<Arc<dyn Operations>>,
     parts: Parts,
     Json(call): Json<ToolCall>,
-) -> Result<Json<ServerResult>, Error> {
+) -> Result<impl IntoResponse, Error> {
     let server = call
         .server_id
         .filter(|id| !id.is_empty())

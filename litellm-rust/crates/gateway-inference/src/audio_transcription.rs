@@ -1,6 +1,6 @@
 use std::{path::Path, sync::Arc};
 
-use axum::{Json, extract::State};
+use axum::{Json, extract::State, response::IntoResponse};
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_core::audio_transcription::{audio_transcription, types::AudioTranscriptionRequest};
 use serde_json::{Value, json};
@@ -13,7 +13,7 @@ use crate::{
 pub(crate) async fn create(
     State(gateway): State<Arc<Gateway>>,
     body: InferenceBody,
-) -> Result<Json<Value>, Error> {
+) -> Result<impl IntoResponse, Error> {
     handle(&gateway, body).await.map(Json)
 }
 

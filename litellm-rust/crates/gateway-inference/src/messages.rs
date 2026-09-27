@@ -25,15 +25,12 @@ pub async fn create(
     RequestId(request_id): RequestId,
     headers: HeaderMap,
     body: Result<JsonObject, Error>,
-) -> Response {
+) -> impl IntoResponse {
     let result = match body {
         Ok(JsonObject(body)) => handle(&gateway, &headers, body).await,
         Err(error) => Err(error),
     };
-    match result {
-        Ok(response) => response,
-        Err(error) => (error.status(), Json(error.body(request_id.as_deref()))).into_response(),
-    }
+    result.map_err(|error| (error.status(), Json(error.body(request_id.as_deref()))))
 }
 
 async fn handle(

@@ -1,6 +1,6 @@
 use std::sync::Arc;
 
-use axum::{Json, extract::State as ExtractState};
+use axum::{Json, extract::State as ExtractState, response::IntoResponse};
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use governor::DefaultDirectRateLimiter;
 use jsonwebtoken::{EncodingKey, Header, encode};
@@ -31,24 +31,24 @@ struct Claims<'a> {
 }
 
 #[derive(Serialize)]
-pub struct LoginResponse {
+struct LoginResponse {
     redirect_url: &'static str,
     token: String,
 }
 
 #[derive(Serialize)]
-pub struct SessionInfo {
+struct SessionInfo {
     user_id: String,
     user_role: &'static str,
 }
 
 #[derive(Serialize)]
-pub struct LogoutResponse {
+struct LogoutResponse {
     message: &'static str,
 }
 
 #[derive(Serialize)]
-pub struct Discovery {
+struct Discovery {
     server_root_path: &'static str,
     proxy_base_url: Option<&'static str>,
     auto_redirect_to_sso: bool,
@@ -64,7 +64,7 @@ pub async fn login(
     session: Session,
     cookies: Cookies,
     Json(credentials): Json<UiCredentials>,
-) -> Result<Json<LoginResponse>, Error> {
+) -> Result<impl IntoResponse, Error> {
     state.login_limit.check().map_err(|_| Error::RateLimited)?;
     let user = auth
         .authenticate(credentials)
@@ -105,7 +105,7 @@ pub async fn login(
     }))
 }
 
-pub async fn info(session: Result<UiSession, UiAuthError>) -> Result<Json<SessionInfo>, Error> {
+pub async fn info(session: Result<UiSession, UiAuthError>) -> Result<impl IntoResponse, Error> {
     let session = session?;
     Ok(Json(SessionInfo {
         user_id: session.user.username,
@@ -117,7 +117,7 @@ pub async fn logout(
     validated: Result<UiSession, UiAuthError>,
     mut auth: UiAuthSession,
     cookies: Cookies,
-) -> Result<Json<LogoutResponse>, Error> {
+) -> Result<impl IntoResponse, Error> {
     let _ = validated?;
     auth.logout().await?;
     cookies.add(
@@ -131,7 +131,7 @@ pub async fn logout(
     }))
 }
 
-pub async fn discovery() -> Json<Discovery> {
+pub async fn discovery() -> impl IntoResponse {
     Json(Discovery {
         server_root_path: "",
         proxy_base_url: None,
