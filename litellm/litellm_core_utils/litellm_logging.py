@@ -60,6 +60,7 @@ from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
+from litellm.integrations.langtrace import langtrace_trace_endpoint
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.classifier_logging import (
@@ -4920,15 +4921,47 @@ def _init_custom_logger_compatible_class(
 
             otel_config = OpenTelemetryConfig(
                 exporter="otlp_http",
-                endpoint="https://langtrace.ai/api/trace",
+                endpoint=langtrace_trace_endpoint(os.getenv("LANGTRACE_API_HOST")),
+                headers=f"x-api-key={os.environ['LANGTRACE_API_KEY']}",
             )
-            os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = f"api_key={os.getenv('LANGTRACE_API_KEY')}"
             for callback in _in_memory_loggers:
                 if isinstance(callback, OpenTelemetry) and callback.callback_name == "langtrace":
                     return callback
             _otel_logger = OpenTelemetry(config=otel_config, callback_name="langtrace")
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger
+
+        elif logging_integration == "signoz":
+            from litellm.integrations.otel.presets.signoz import (
+                SIGNOZ_INGESTION_ENDPOINT_ENV,
+            )
+
+            _signoz_endpoint: Final = os.getenv(SIGNOZ_INGESTION_ENDPOINT_ENV)
+            if not _signoz_endpoint:
+                raise ValueError(f"{SIGNOZ_INGESTION_ENDPOINT_ENV} not found in environment variables")
+
+            _signoz_v2: Final = _maybe_construct_otel_v2("signoz", _in_memory_loggers)
+            if _signoz_v2 is not None:
+                return _signoz_v2
+
+            from litellm.integrations.opentelemetry import (
+                OpenTelemetry,
+                OpenTelemetryConfig,
+            )
+
+            _signoz_base: Final = _signoz_endpoint.rstrip("/")
+            _signoz_key: Final = os.getenv("SIGNOZ_INGESTION_KEY")
+            _signoz_config: Final = OpenTelemetryConfig(
+                exporter="otlp_http",
+                endpoint=(_signoz_base if _signoz_base.endswith("/v1/traces") else f"{_signoz_base}/v1/traces"),
+                headers=(f"signoz-ingestion-key={_signoz_key}" if _signoz_key else None),
+            )
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenTelemetry) and callback.callback_name == "signoz":
+                    return callback
+            _signoz_logger: Final = OpenTelemetry(config=_signoz_config, callback_name="signoz")
+            _in_memory_loggers.append(_signoz_logger)
+            return _signoz_logger
 
         elif logging_integration == "mlflow":
             for callback in _in_memory_loggers:

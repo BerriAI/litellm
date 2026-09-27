@@ -19,7 +19,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.prompt_templates.common_utils import encrypted_reasoning_signature
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.llms.azure_ai.anthropic.transformation import AzureAnthropicConfig
@@ -5783,7 +5783,7 @@ def test_translate_system_message_strips_billing_header_for_bedrock_invoke():
     [
         ("litellm.llms.anthropic.chat.transformation", "AnthropicConfig", False),
         (
-            "litellm.llms.anthropic.experimental_pass_through.messages.transformation",
+            "litellm.llms.anthropic.pass_through.messages.transformation",
             "AnthropicMessagesConfig",
             False,
         ),

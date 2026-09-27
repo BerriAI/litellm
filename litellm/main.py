@@ -38,7 +38,7 @@ import dotenv
 import httpx
 import openai
 from pydantic import BaseModel
-from typing_extensions import overload
+from typing_extensions import assert_never, overload
 
 import litellm
 
@@ -48,6 +48,7 @@ from litellm import client
 # Other utils are imported directly to avoid circular imports
 from litellm.utils import (
     exception_type,
+    filter_out_litellm_params,
     get_litellm_params,
     get_optional_params,
     peek_reasoning_summary_aliases,
@@ -83,6 +84,9 @@ from litellm.litellm_core_utils.get_litellm_params import (
     AWS_CREDENTIAL_KWARGS_KEYS,
     OPTIONAL_KWARGS_KEYS,
     PROVIDER_AFFINITY_HEADER_KWARG_KEY,
+    InvalidControlOption,
+    parse_control_options,
+    with_control_options,
 )
 from litellm.litellm_core_utils.get_provider_specific_headers import (
     ProviderSpecificHeaderUtils,
@@ -127,7 +131,7 @@ from litellm.types.completion import (
     _CompletionDispatchContext,
     _CompletionDispatchResult,
 )
-from litellm.types.litellm_params import RetryStrategy
+from litellm.types.litellm_params import ControlOptions, RetryStrategy
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import (
     CustomPricingLiteLLMParams,
@@ -178,7 +182,7 @@ from litellm.utils import (
 
 from ._logging import verbose_logger
 from .caching.caching import disable_cache, enable_cache, update_cache
-from .litellm_core_utils.core_helpers import safe_deep_copy
+from .litellm_core_utils.core_helpers import normalize_drop_params, safe_deep_copy
 from .litellm_core_utils.fallback_utils import (
     async_completion_with_fallbacks,
     completion_with_fallbacks,
@@ -284,7 +288,6 @@ from .types.utils import (
     LlmProviders,
     PromptTokensDetails,
     ProviderSpecificHeader,
-    all_litellm_params,
 )
 
 ####### ENVIRONMENT VARIABLES ###################
@@ -335,6 +338,21 @@ ovhcloud_transformation: Final = OVHCloudChatConfig()
 lemonade_transformation: Final = LemonadeChatConfig()
 
 MOCK_RESPONSE_TYPE = str | Exception | dict | ModelResponse | ModelResponseStream
+
+
+def _resolve_control_options(kwargs: Mapping[str, object], model: str) -> ControlOptions:
+    control: Final = parse_control_options(kwargs)
+    match control:
+        case ControlOptions():
+            return control
+        case InvalidControlOption(param=param, message=message):
+            if litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True:
+                return ControlOptions()
+            raise litellm.BadRequestError(message=message, model=model, llm_provider=None, body={"param": param})
+        case _:
+            return assert_never(control)
+
+
 ####### COMPLETION ENDPOINTS ################
 
 
@@ -501,6 +519,7 @@ async def acompletion(
 
     loop: Final = asyncio.get_event_loop()
     custom_llm_provider = kwargs.get("custom_llm_provider", None)
+    _ = _resolve_control_options(kwargs, model)
 
     ## PROMPT MANAGEMENT HOOKS ##
     #########################################################
@@ -5230,6 +5249,7 @@ def completion(
     # Responses API config (get_provider_responses_api_config -> None).
     skip_responses_api_bridge: Final = kwargs.pop("_skip_responses_api_bridge", False)
 
+    control_options: Final = _resolve_control_options(kwargs, model)
     skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
     if not skip_mcp_handler and tools:
         from litellm.responses.mcp.chat_completions_handler import acompletion_with_mcp
@@ -5370,7 +5390,6 @@ def completion(
     )
     ######## end of unpacking kwargs ###########
     non_default_params: Final = get_non_default_completion_params(kwargs=kwargs)
-    litellm_params: dict[str, object] = {}  # used to prevent unbound var errors
     ## PROMPT MANAGEMENT HOOKS ##
 
     from litellm.integrations.anthropic_cache_control_hook import (
@@ -5622,7 +5641,7 @@ def completion(
             messages = function_call_prompt(messages=messages, functions=functions_unsupported_model)
 
         # For logging - save the values of the litellm-specific params passed in
-        litellm_params = get_litellm_params(
+        requested_litellm_params: Final = get_litellm_params(
             acompletion=acompletion,
             api_key=api_key,
             force_timeout=force_timeout,
@@ -5670,7 +5689,6 @@ def completion(
             max_retries=max_retries,
             timeout=timeout,
             litellm_request_debug=kwargs.get("litellm_request_debug", False),
-            stream_chunk_size=kwargs.get("stream_chunk_size"),
             tpm=kwargs.get("tpm"),
             rpm=kwargs.get("rpm"),
             use_xai_oauth=kwargs.get("use_xai_oauth", False),
@@ -5683,6 +5701,7 @@ def completion(
                 if key in kwargs
             },
         )
+        litellm_params: Final = with_control_options(requested_litellm_params, control_options)
         if litellm_params.get("provider_affinity_header") is not None:
             try:
                 headers = add_provider_affinity_header(
@@ -6351,15 +6370,8 @@ def embedding(
         "max_retries",
         "encoding_format",
     ]
-    litellm_params: Final = [
-        "aembedding",
-        "extra_headers",
-    ] + all_litellm_params
-
-    default_params: Final = openai_params + litellm_params
-    non_default_params: Final = {
-        k: v for k, v in kwargs.items() if k not in default_params
-    }  # model-specific params - pass them straight to the model/provider
+    default_params: Final = [*openai_params, "aembedding", "extra_headers"]
+    non_default_params: Final = filter_out_litellm_params(kwargs, excluding=default_params)
 
     model, custom_llm_provider, dynamic_api_key, api_base = get_llm_provider(
         model=model,
