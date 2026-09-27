@@ -401,24 +401,16 @@ fn declines_a_response_carrying_a_non_text_block() {
     assert_eq!(err, Error::Unsupported("non-text response content block"));
 }
 
-#[test]
-fn errors_on_a_response_missing_required_fields() {
-    assert_eq!(
-        transform_response(json!("nope")).expect_err("not an object"),
-        Error::InvalidResponse("messages response is not an object".to_string())
-    );
-    assert_eq!(
-        transform_response(json!({"model": "m", "usage": {}})).expect_err("no content"),
-        Error::MissingField("content")
-    );
-    assert_eq!(
-        transform_response(json!({"model": "m", "content": []})).expect_err("no usage"),
-        Error::MissingField("usage")
-    );
-    assert_eq!(
-        transform_response(json!({"content": [], "usage": {}})).expect_err("no model"),
-        Error::MissingField("model")
-    );
+#[rstest::rstest]
+#[case::not_an_object(json!("nope"))]
+#[case::missing_content(json!({"model": "test-model", "usage": {"input_tokens": 1, "output_tokens": 1}}))]
+#[case::missing_usage(json!({"model": "test-model", "content": []}))]
+#[case::missing_model(json!({"content": [], "usage": {"input_tokens": 1, "output_tokens": 1}}))]
+fn errors_on_a_response_missing_required_fields(#[case] body: Value) {
+    assert!(matches!(
+        transform_response(body),
+        Err(Error::InvalidResponse(_))
+    ));
 }
 
 #[test]

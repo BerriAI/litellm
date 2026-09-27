@@ -20,6 +20,10 @@ async fn connects_with_caller_headers_and_exchanges_frames(#[case] path: &'stati
     let address = listener.local_addr().unwrap();
     let server = tokio::spawn(async move {
         let (stream, _) = listener.accept().await.unwrap();
+        #[expect(
+            clippy::result_large_err,
+            reason = "tungstenite requires an unboxed handshake error response"
+        )]
         let mut socket = accept_hdr_async(stream, move |request: &Request, response: Response| {
             assert_eq!(request.uri().path_and_query().unwrap().as_str(), path);
             assert_eq!(request.headers()["authorization"], "Bearer test-key");
