@@ -2750,7 +2750,7 @@ class JWTAuthManager:
             granting_team: Final = await resolve_delegated_agent_team(
                 managed.user_id, managed.agent_id, team_id, explicit_team=header_team is not None
             )
-            if granting_team != team_id:
+            if granting_team is not None and granting_team != team_id:
                 team_id = granting_team
                 team_object = await get_team_object(
                     team_id=team_id,
