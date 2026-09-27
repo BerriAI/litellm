@@ -7,7 +7,7 @@ from .base import GuardrailConfigModel
 AGENT_365_PROD_API_BASE: Final = "https://agent365.svc.cloud.microsoft"
 AGENT_365_PROD_RESOURCE_APP_ID: Final = "ea9ffc3e-8a23-4a7d-836d-234d7c7565c1"
 AGENT_365_SCOPE_NAME: Final = "ThreatProtection.Evaluate.All"
-AGENT_365_DEFAULT_AUTHORITY_HOST: Final = "https://login.microsoftonline.com"
+AGENT_365_TOKEN_URL_TEMPLATE: Final = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
 
 
 class Agent365GuardrailConfigModel(GuardrailConfigModel):
@@ -42,6 +42,7 @@ class Agent365GuardrailConfigModel(GuardrailConfigModel):
             f"Defaults to the production endpoint {AGENT_365_PROD_API_BASE}. "
             "Falls back to the AGENT365_API_BASE environment variable."
         ),
+        json_schema_extra={"ui_hidden": True},
     )
 
     resource_app_id: str | None = Field(
@@ -52,6 +53,7 @@ class Agent365GuardrailConfigModel(GuardrailConfigModel):
             "the Test and PreProd environments use a different id. "
             "Falls back to the AGENT365_RESOURCE_APP_ID environment variable."
         ),
+        json_schema_extra={"ui_hidden": True},
     )
 
     agent_id: str | None = Field(
@@ -60,23 +62,15 @@ class Agent365GuardrailConfigModel(GuardrailConfigModel):
             "Agent identity reported to Agent 365 with every tool evaluation. "
             "When unset, the caller's key alias is used."
         ),
-    )
-
-    authority_host: str | None = Field(
-        default=None,
-        description=(
-            "Microsoft Entra authority host that issues the On-Behalf-Of token, for sovereign clouds. "
-            f"Defaults to {AGENT_365_DEFAULT_AUTHORITY_HOST}. "
-            "Falls back to the AGENT365_AUTHORITY_HOST, then AZURE_AUTHORITY_HOST environment variables."
-        ),
+        json_schema_extra={"ui_hidden": True},
     )
 
     unreachable_fallback: Literal["fail_closed", "fail_open"] = Field(
-        default="fail_closed",
+        default="fail_open",
         description=(
             "Behavior when Agent 365 or Entra is unreachable, times out, returns 5xx, skips the evaluation, or "
-            "rejects the gateway's own client credentials. 'fail_closed' (default) blocks the tool call with HTTP 503. "
-            "'fail_open' allows it, logs an error and records it as Unscanned in the logs and OpenTelemetry. "
+            "rejects the gateway's own client credentials. 'fail_open' (default) allows the tool call, logs an error "
+            "and records it as Unscanned in the logs and OpenTelemetry. 'fail_closed' blocks it with HTTP 503. "
             "Policy blocks, 4xx rejections, throttling and a rejected caller token always block."
         ),
     )

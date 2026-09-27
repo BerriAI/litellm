@@ -1838,6 +1838,11 @@ def _build_field_dict(
     return field_dict
 
 
+def _is_ui_hidden(field: "FieldInfo") -> bool:
+    field_json_schema_extra: Final = field.json_schema_extra
+    return isinstance(field_json_schema_extra, Mapping) and bool(field_json_schema_extra.get("ui_hidden"))
+
+
 def _extract_fields_recursive(
     model: type[BaseModel],
     depth: int = 0,
@@ -1856,6 +1861,9 @@ def _extract_fields_recursive(
 
         # Skip optional_params if it's not meaningfully overridden
         if _should_skip_optional_params(field_name=field_name, field_annotation=field_annotation):
+            continue
+
+        if _is_ui_hidden(field):
             continue
 
         # Handle Optional types and get the actual type
