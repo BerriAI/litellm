@@ -7,6 +7,7 @@ use litellm_llms::{
     },
 };
 use litellm_types::{llms::openai::ChatMessage, utils::ChatCompletionsResponse};
+use rstest::rstest;
 use serde_json::{Map, Value, json};
 
 fn messages(value: Value) -> Vec<ChatMessage> {
@@ -166,22 +167,19 @@ fn accepts_an_explicit_stream_false() {
     );
 }
 
-#[test]
-fn declines_any_param_outside_the_allowlist() {
-    for param in [
-        json!({"tools": []}),
-        json!({"tool_choice": {"type": "auto"}}),
-        json!({"thinking": {"type": "enabled"}}),
-        json!({"system": "injected"}),
-        json!({"metadata": {"user_id": "u1"}}),
-        json!({"output_config": {"effort": "high"}}),
-    ] {
-        assert_eq!(
-            reason(json!([{"role": "user", "content": "hi"}]), param.clone()),
-            Some(Unsupported("unrecognized request parameter")),
-            "expected {param} to decline"
-        );
-    }
+#[rstest]
+#[case::tools(json!({"tools": []}))]
+#[case::tool_choice(json!({"tool_choice": {"type": "auto"}}))]
+#[case::thinking(json!({"thinking": {"type": "enabled"}}))]
+#[case::system(json!({"system": "injected"}))]
+#[case::metadata(json!({"metadata": {"user_id": "u1"}}))]
+#[case::output_config(json!({"output_config": {"effort": "high"}}))]
+fn declines_any_param_outside_the_allowlist(#[case] param: Value) {
+    assert_eq!(
+        reason(json!([{"role": "user", "content": "hi"}]), param.clone()),
+        Some(Unsupported("unrecognized request parameter")),
+        "expected {param} to decline"
+    );
 }
 
 #[test]

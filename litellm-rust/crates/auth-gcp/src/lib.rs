@@ -612,20 +612,15 @@ mod tests {
         );
     }
 
-    #[test]
-    fn request_credentials_require_canonical_token_endpoint() {
-        assert!(
-            validate_request_credentials(r#"{"token_uri":"https://oauth2.googleapis.com/token"}"#)
-                .is_ok()
-        );
-        assert!(matches!(
-            validate_request_credentials(r#"{"token_uri":"http://127.0.0.1/token"}"#),
-            Err(Error::RequestVertexTokenEndpoint)
-        ));
-        assert!(matches!(
-            validate_request_credentials("{}"),
-            Err(Error::RequestVertexTokenEndpoint)
-        ));
+    #[rstest::rstest]
+    #[case::canonical_endpoint(r#"{"token_uri":"https://oauth2.googleapis.com/token"}"#, true)]
+    #[case::noncanonical_endpoint(r#"{"token_uri":"http://127.0.0.1/token"}"#, false)]
+    #[case::missing_endpoint("{}", false)]
+    fn request_credentials_require_canonical_token_endpoint(
+        #[case] credentials: &str,
+        #[case] accepted: bool,
+    ) {
+        assert_eq!(validate_request_credentials(credentials).is_ok(), accepted);
     }
 
     #[tokio::test]

@@ -244,11 +244,12 @@ mod tests {
         assert_eq!(ranks.count_piece(b"aab", &mut MergeScratch::default()), 2);
     }
 
-    #[test]
-    fn malformed_rank_files_are_rejected() {
-        assert!(MergeRanks::parse("IQ==").is_err());
-        assert!(MergeRanks::parse("IQ== x").is_err());
-        assert!(MergeRanks::parse("!!! 1").is_err());
-        assert!(MergeRanks::parse("IQ== 1").is_err());
+    #[rstest::rstest]
+    #[case::missing_rank("IQ==")]
+    #[case::invalid_rank("IQ== x")]
+    #[case::invalid_base64("!!! 1")]
+    #[case::single_byte_rank("IQ== 1")]
+    fn malformed_rank_files_are_rejected(#[case] rank_file: &str) {
+        assert!(MergeRanks::parse(rank_file).is_err());
     }
 }

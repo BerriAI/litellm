@@ -120,19 +120,23 @@ pub struct ResponsesErrorBody {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn event_type_round_trips_known_and_unknown_values() {
-        let known: ResponsesWsEventType =
-            serde_json::from_str("\"response.completed\"").expect("valid event type");
-        assert_eq!(known, ResponsesWsEventType::ResponseCompleted);
-        let unknown: ResponsesWsEventType =
-            serde_json::from_str("\"response.output_text.delta\"").expect("valid event type");
-        assert_eq!(
-            unknown,
-            ResponsesWsEventType::Other("response.output_text.delta".to_string())
-        );
+    #[rstest]
+    #[case::known("response.completed", ResponsesWsEventType::ResponseCompleted)]
+    #[case::unknown(
+        "response.output_text.delta",
+        ResponsesWsEventType::Other("response.output_text.delta".to_string())
+    )]
+    fn event_type_round_trips_known_and_unknown_values(
+        #[case] value: &str,
+        #[case] expected: ResponsesWsEventType,
+    ) {
+        let actual: ResponsesWsEventType =
+            serde_json::from_str(&serde_json::to_string(value).unwrap()).expect("valid event type");
+        assert_eq!(actual, expected);
     }
 
     #[test]
@@ -150,17 +154,14 @@ mod tests {
         );
     }
 
-    #[test]
-    fn model_reads_flat_and_nested_create_shapes() {
-        let flat: ResponsesWsEvent =
-            serde_json::from_value(serde_json::json!({"type":"response.create","model":"gpt-5"}))
-                .expect("valid event");
-        let nested: ResponsesWsEvent = serde_json::from_value(serde_json::json!({
-            "type":"response.create",
-            "response":{"model":"gpt-5-mini"}
-        }))
-        .expect("valid event");
-        assert_eq!(flat.model(), Some("gpt-5"));
-        assert_eq!(nested.model(), Some("gpt-5-mini"));
+    #[rstest]
+    #[case::flat(serde_json::json!({"type":"response.create","model":"model-a"}), Some("model-a"))]
+    #[case::nested(serde_json::json!({"type":"response.create","response":{"model":"model-b"}}), Some("model-b"))]
+    fn model_reads_flat_and_nested_create_shapes(
+        #[case] payload: serde_json::Value,
+        #[case] expected: Option<&str>,
+    ) {
+        let event: ResponsesWsEvent = serde_json::from_value(payload).expect("valid event");
+        assert_eq!(event.model(), expected);
     }
 }
