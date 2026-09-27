@@ -1035,17 +1035,17 @@ def _convert_schema_types(schema, depth=0):
 
                 # For object/array types, include type-specific fields
                 if t in ("object", "array"):
-                    item_schema: dict[str, object] = {"type": t}
+                    object_item_schema: dict[str, object] = {"type": t}
                     # Move type-specific fields into this anyOf item
                     for field in type_specific_fields:
                         if field in schema:
-                            item_schema[field] = deepcopy(schema[field])
-                    any_of.append(item_schema)
+                            object_item_schema[field] = deepcopy(schema[field])
+                    any_of.append(object_item_schema)
                 else:
                     # Keep constraints on the primitive branch. If they stay
                     # on the parent, _filter_anyof_fields drops them because
                     # Vertex only accepts anyOf there.
-                    item_schema: dict[str, object] = {"type": t}
+                    primitive_item_schema: dict[str, object] = {"type": t}
                     fields = set(primitive_common_fields)
                     if t == "string":
                         fields.update(string_specific_fields)
@@ -1053,8 +1053,8 @@ def _convert_schema_types(schema, depth=0):
                         fields.update(numeric_specific_fields)
                     for field in fields:
                         if field in schema:
-                            item_schema[field] = deepcopy(schema[field])
-                    any_of.append(item_schema)
+                            primitive_item_schema[field] = deepcopy(schema[field])
+                    any_of.append(primitive_item_schema)
 
             # Remove fields moved into anyOf branches from the parent.
             fields_moved_into_any_of: Final = (
