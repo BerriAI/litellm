@@ -20,7 +20,6 @@ from litellm.proxy.video_endpoints.utils import (
     encode_character_id_in_response,
     extract_model_from_target_model_names,
     get_custom_provider_from_data,
-    infer_video_provider_from_model,
     resolve_video_request_model,
     video_reference_to_id,
 )
@@ -273,7 +272,7 @@ async def video_status(
     if resolved_model:
         data["model"] = resolved_model
 
-    custom_llm_provider: Final = explicit_provider or infer_video_provider_from_model(resolved_model) or "openai"
+    custom_llm_provider: Final = explicit_provider or (None if resolved_model else "openai")
     if custom_llm_provider:
         data["custom_llm_provider"] = custom_llm_provider
 
