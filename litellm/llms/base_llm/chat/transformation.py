@@ -157,13 +157,9 @@ class BaseConfig(ABC):
         """
         return map_developer_role_to_system_role(messages=messages)
 
-    def service_tier_for_request_metadata(
-        self, service_tier: str | None, metadata: object, model: str, drop_params: bool
+    def service_tier_from_metadata(
+        self, service_tier: str | None, metadata: Mapping[str, object] | None, model: str, drop_params: bool
     ) -> str | None:
-        """The tier billing prices the call at, given the caller's ``metadata``.
-
-        Overridden by providers whose own request body selects the tier through metadata
-        """
         return service_tier
 
     def should_retry_llm_api_inside_llm_translation_on_http_error(

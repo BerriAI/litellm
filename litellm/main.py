@@ -5617,7 +5617,7 @@ def completion(
             ),
             "safety_identifier": safety_identifier,
             "service_tier": (
-                provider_config.service_tier_for_request_metadata(
+                provider_config.service_tier_from_metadata(
                     service_tier,
                     metadata,
                     model=model,

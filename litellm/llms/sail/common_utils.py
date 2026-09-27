@@ -159,11 +159,9 @@ def _caller_completion_window(window: object, *, model: str, drop_params: bool) 
 
 
 def service_tier_for_caller_window(
-    service_tier: str | None, metadata: object, *, model: str, drop_params: bool
+    service_tier: str | None, metadata: Mapping[str, object] | None, *, model: str, drop_params: bool
 ) -> str | None:
-    """Sail's own chat body picks the window with ``metadata.completion_window``,
-    and chat billing reads only ``service_tier``, so the window becomes the tier that selects it."""
-    if not isinstance(metadata, Mapping) or "completion_window" not in metadata:
+    if metadata is None or "completion_window" not in metadata:
         return service_tier
     caller_window: Final = _caller_completion_window(
         metadata["completion_window"], model=model, drop_params=drop_params

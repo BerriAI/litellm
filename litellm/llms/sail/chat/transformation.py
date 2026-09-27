@@ -25,8 +25,8 @@ class SailChatConfig(OpenAIGPTConfig):
         added: Final = tuple(param for param in _ACCEPTED_BY_SAIL if param not in inherited)
         return [*inherited, *added]  # mutable-ok: the base interface returns a list
 
-    def service_tier_for_request_metadata(
-        self, service_tier: str | None, metadata: object, model: str, drop_params: bool
+    def service_tier_from_metadata(
+        self, service_tier: str | None, metadata: Mapping[str, object] | None, model: str, drop_params: bool
     ) -> str | None:
         return service_tier_for_caller_window(service_tier, metadata, model=model, drop_params=drop_params)
 
