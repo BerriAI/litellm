@@ -167,7 +167,15 @@ async def test_unstarted_native_inference_has_no_provider_or_callback_effects(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "options", ({"stream": True}, {"extra_body": {"provider_option": True}}, {"mock_response": "mock"})
+    "options",
+    (
+        {"stream": True},
+        {"extra_body": {"provider_option": True}},
+        {"mock_response": "mock"},
+        {"num_retries": 1},
+        {"use_chat_completions_api": True},
+        {"model_list": []},
+    ),
 )
 async def test_native_inference_declines_unsupported_requests_before_callbacks(
     route: Route,
