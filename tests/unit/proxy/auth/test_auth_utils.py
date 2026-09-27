@@ -3945,47 +3945,56 @@ class TestIsRequestBodySafeBlocksAwsIdentitySelectors:
 
 
 class TestIsRequestBodySafeBlocksXaiOauthTokenFile:
-    """A caller must not select another local xAI OAuth account. Router kwargs
-    override deployment params, so ``xai_oauth_token_file`` in the request body
-    would authenticate as any token file readable on the proxy host.
+    """``xai_oauth_token_file`` picks which OAuth account stored on the proxy host signs the
+    request, and router kwargs override deployment params, so no client-side opt-in may unlock it
     """
 
-    def test_xai_oauth_token_file_is_in_banned_set(self):
-        from litellm.proxy.auth.auth_utils import _BANNED_REQUEST_BODY_PARAMS
-
-        assert "xai_oauth_token_file" in set(_BANNED_REQUEST_BODY_PARAMS)
-
-    def test_xai_oauth_token_file_in_request_body_is_rejected(self):
+    @pytest.mark.parametrize(
+        "request_body",
+        [
+            {"model": "grok-4", "xai_oauth_token_file": "auth-bob.json"},
+            {"model": "grok-4", "extra_body": {"xai_oauth_token_file": "auth-bob.json"}},
+            {"model": "grok-4", "metadata": {"xai_oauth_token_file": "auth-bob.json"}},
+            {"model": "grok-4", "fallbacks": [{"model": "grok-4", "xai_oauth_token_file": "auth-bob.json"}]},
+        ],
+    )
+    def test_rejected_even_under_proxy_wide_opt_in(self, request_body):
         with pytest.raises(ValueError, match="xai_oauth_token_file"):
             is_request_body_safe(
-                request_body={
-                    "model": "grok-4",
-                    "xai_oauth_token_file": "/etc/passwd",
-                },
-                general_settings={},
+                request_body=request_body,
+                general_settings={"allow_client_side_credentials": True},
                 llm_router=None,
                 model="grok-4",
             )
 
-    def test_xai_oauth_token_file_under_extra_body_is_rejected(self):
+    def test_rejected_even_when_deployment_lists_it_as_clientside_configurable(self):
+        from litellm import Router
+
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "grok-4",
+                    "litellm_params": {
+                        "model": "xai/grok-4",
+                        "use_xai_oauth": True,
+                        "xai_oauth_token_file": "auth-alice.json",
+                        "configurable_clientside_auth_params": ["xai_oauth_token_file"],
+                    },
+                }
+            ]
+        )
         with pytest.raises(ValueError, match="xai_oauth_token_file"):
             is_request_body_safe(
-                request_body={
-                    "model": "grok-4",
-                    "extra_body": {"xai_oauth_token_file": "/etc/passwd"},
-                },
+                request_body={"model": "grok-4", "xai_oauth_token_file": "auth-bob.json"},
                 general_settings={},
-                llm_router=None,
+                llm_router=router,
                 model="grok-4",
             )
 
-    def test_xai_oauth_token_file_allowed_under_proxy_wide_opt_in(self):
+    def test_other_banned_params_still_honor_proxy_wide_opt_in(self):
         assert (
             is_request_body_safe(
-                request_body={
-                    "model": "grok-4",
-                    "xai_oauth_token_file": "auth-alice.json",
-                },
+                request_body={"model": "grok-4", "api_base": "https://example.invalid/v1"},
                 general_settings={"allow_client_side_credentials": True},
                 llm_router=None,
                 model="grok-4",
