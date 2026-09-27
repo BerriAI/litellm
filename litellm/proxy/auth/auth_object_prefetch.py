@@ -290,9 +290,13 @@ async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: U
         await cache.redis_cache.async_set_cache_pipeline_with_ttls(payloads)
         return
     batch: Final = plan.batch_for(cache.redis_cache)
-    for cache_key, payload, ttl in payloads:
-        future = batch.set(cache_key, payload, cache.redis_cache.get_ttl(ttl=ttl))
+    futures: Final = tuple(
+        batch.set(cache_key, payload, cache.redis_cache.get_ttl(ttl=ttl)) for cache_key, payload, ttl in payloads
+    )
+    for future in futures:
         future.add_done_callback(_consume_write_back_failure)
+    if futures:
+        await plan.resolve(futures[0])
 
 
 async def _fill_from_db(

@@ -7482,34 +7482,28 @@ def _descriptor(name: str, requests_per_unit: int) -> RateLimitDescriptor:
 
 
 @pytest.mark.asyncio
-async def test_every_descriptor_lua_call_rides_one_pipeline_and_an_over_limit_refunds_the_rest():
-    ok_raw = [0, 1, 1000]
+async def test_an_over_limit_descriptor_stops_later_descriptors_from_incrementing():
     over_raw = [1, 1, 11, 10]
-    pipe = _QueuedPipeline([[ok_raw, ok_raw, over_raw]])
+    pipe = _QueuedPipeline([[over_raw], [[0, 1, 1000]]])
     handler = _pipelined_handler(pipe)
 
-    descriptors = [_descriptor("k1", 10), _descriptor("k2", 10), _descriptor("k3", 10)]
+    descriptors = [_descriptor("k1", 10), _descriptor("k2", 10)]
     response = await handler.atomic_check_and_increment_by_n(
         descriptors=descriptors,
-        increments=[{"requests": 1, "tokens": 0}] * 3,
+        increments=[{"requests": 1, "tokens": 0}] * 2,
     )
 
     assert response["overall_code"] == "OVER_LIMIT"
     evalsha_calls = [c for c in pipe.calls if c[0] == "evalsha"]
-    assert len(evalsha_calls) == 3, "three descriptors, three evalsha in one pipeline"
+    assert len(evalsha_calls) == 1, "the second descriptor's Lua call is never sent after the first rejects"
     assert pipe.execute_count == 1
-    refunded = {key for key, _value in handler._test_redis.refunds}
-    assert refunded == {
-        handler.create_rate_limit_keys("api_key", "k1", "requests"),
-        handler.create_rate_limit_keys("api_key", "k2", "requests"),
-    }
-    assert all(value == -1 for _key, value in handler._test_redis.refunds)
+    assert handler._test_redis.refunds == []
 
 
 @pytest.mark.asyncio
 async def test_a_failed_descriptor_evalsha_refunds_the_applied_and_enforces_in_memory():
     ok_raw = [0, 1, 1000]
-    pipe = _QueuedPipeline([[ok_raw, ConnectionError("lua down")]])
+    pipe = _QueuedPipeline([[ok_raw], [ConnectionError("lua down")]])
     handler = _pipelined_handler(pipe)
 
     descriptors = [_descriptor("k1", 10), _descriptor("k2", 10)]
@@ -7523,4 +7517,4 @@ async def test_a_failed_descriptor_evalsha_refunds_the_applied_and_enforces_in_m
     assert [key for key, _v in handler._test_redis.refunds] == [
         handler.create_rate_limit_keys("api_key", "k1", "requests")
     ]
-    assert pipe.execute_count == 1
+    assert pipe.execute_count == 2

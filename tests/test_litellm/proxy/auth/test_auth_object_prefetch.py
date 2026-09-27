@@ -418,7 +418,7 @@ class PipelinedRedis(CountingRedis):
 
 
 @pytest.mark.asyncio
-async def test_under_a_plan_the_prefetch_is_one_mget_and_the_write_back_rides_the_flush():
+async def test_under_a_plan_the_prefetch_is_one_mget_and_the_write_back_lands_during_auth():
     from litellm.caching.redis_request_plan import redis_request_plan_scope
 
     redis = PipelinedRedis()
@@ -426,10 +426,7 @@ async def test_under_a_plan_the_prefetch_is_one_mget_and_the_write_back_rides_th
     with redis_request_plan_scope() as plan:
         await prefetch_auth_objects(refs=_refs(), user_api_key_cache=_cache(redis), prisma_client=prisma)
 
-        assert plan.rounds == 1
-        assert len(redis.client.pipes) == 1
         first = redis.client.pipes[0]
-        assert first.execute_count == 1
         assert [c[0] for c in first.calls] == ["mget"]
         assert set(first.calls[0][1]) == {
             USER_ID,
@@ -439,19 +436,16 @@ async def test_under_a_plan_the_prefetch_is_one_mget_and_the_write_back_rides_th
             f"org_id:{ORG_ID}",
             f"org_id:{ORG_ID}:with_budget",
         }
-        assert len(redis.client.pipes) == 1, "the write-back must not execute its own round trip"
+        assert json.loads(redis.store[f"team_id:{TEAM_ID}"])["team_id"] == TEAM_ID, (
+            "the write-back must already be in Redis when prefetch returns, not ride the exit flush"
+        )
+        assert {c[1] for pipe in redis.client.pipes for c in pipe.calls if c[0] == "set"} == {
+            USER_ID,
+            f"team_id:{TEAM_ID}",
+            f"{TEAM_ID}_{USER_ID}",
+            f"team_membership:{USER_ID}:{TEAM_ID}",
+            f"org_id:{ORG_ID}",
+            f"org_id:{ORG_ID}:with_budget",
+        }
 
         await plan.flush()
-
-    assert len(redis.client.pipes) == 2
-    second = redis.client.pipes[1]
-    assert second.execute_count == 1
-    assert {c[1] for c in second.calls if c[0] == "set"} == {
-        USER_ID,
-        f"team_id:{TEAM_ID}",
-        f"{TEAM_ID}_{USER_ID}",
-        f"team_membership:{USER_ID}:{TEAM_ID}",
-        f"org_id:{ORG_ID}",
-        f"org_id:{ORG_ID}:with_budget",
-    }
-    assert json.loads(redis.store[f"team_id:{TEAM_ID}"])["team_id"] == TEAM_ID

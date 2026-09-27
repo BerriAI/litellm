@@ -877,3 +877,19 @@ async def test_a_failed_planned_mget_drops_the_key_set_so_the_next_read_retries(
         redis.fail = False
         redis.client.fail = False
         assert await batch.read("spend:key:hashed") == (4.0, True)
+
+
+@pytest.mark.asyncio
+async def test_close_discards_a_never_loaded_declared_mget_so_the_flush_sends_nothing():
+    from litellm.caching.redis_request_plan import redis_request_plan_scope
+
+    redis = PipelinedRedis({"spend:key:hashed": 1.5})
+    with redis_request_plan_scope() as plan:
+        batch = SpendCounterBatch(redis)
+        batch.bind(frozenset({"spend:key:hashed"}))
+        batch.close()
+
+        await plan.flush()
+
+    assert plan.rounds == 0
+    assert all(call[0] != "mget" for pipe in redis.client.pipes for call in pipe.calls)

@@ -534,20 +534,6 @@ class AtomicCounterState(TypedDict):
 DescriptorAtomicGroup: TypeAlias = tuple[list[str], list[int], list[AtomicCounterMeta]]
 
 
-def _later_applied_groups(
-    descriptor_groups: list[DescriptorAtomicGroup],
-    raws: list[list[CacheCounterValue] | Exception],
-    after_index: int,
-) -> list[list[AtomicCounterMeta]]:
-    """Groups after ``after_index`` whose Lua call applied an increment (refund candidates when a
-    batched call is rolled back: with one pipeline the later calls already incremented too)."""
-    return [
-        later_meta
-        for (_k, _a, later_meta), later_raw in zip(descriptor_groups[after_index:], raws[after_index:])
-        if not isinstance(later_raw, Exception) and int(later_raw[0]) != 1
-    ]
-
-
 class CallTypeRateLimiter(Protocol):
     async def async_pre_call_hook(
         self,
@@ -1996,17 +1982,13 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         statuses: Final[list[RateLimitStatus]] = []
         reservation_windows: Final[set[ReservationWindowIdentity]] = set()  # mutable-ok: filled by the group loop
 
-        raws: Final[list[list[CacheCounterValue] | Exception]] = (
-            await self._collect_descriptor_lua_pipelined(descriptor_groups)
-            if self._check_and_increment_by_n_raw_script is not None
-            else await self._collect_descriptor_lua_serial(descriptor_groups)
-        )
-
-        for _idx, ((_keys, _args, meta), raw_or_error) in enumerate(zip(descriptor_groups, raws)):
-            if isinstance(raw_or_error, Exception):
-                e = raw_or_error
+        raw: list[CacheCounterValue]
+        for _idx, (keys, args, meta) in enumerate(descriptor_groups):
+            try:
+                raw = await self._run_descriptor_lua(keys, args)
+            except Exception as e:
                 # Lua failure (timeout, OOM, network partition) leaves Redis
-                # state ambiguous. Refund every applied group so Redis returns
+                # state ambiguous. Refund any prior groups so Redis returns
                 # to its pre-call state, then fall back to in-memory for the
                 # whole call (counters there are independent of Redis).
                 log_redis_failure(
@@ -2017,24 +1999,17 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     f"diverge from Redis until window expires (window_size={self.window_size}s)",
                     e,
                 )
-                await self._refund_applied_descriptor_groups(
-                    [*applied, *_later_applied_groups(descriptor_groups, raws, _idx + 1)]
-                )
+                await self._refund_applied_descriptor_groups(applied)
                 flat_meta: list[AtomicCounterMeta] = [m for _k, _a, group_meta in descriptor_groups for m in group_meta]
                 async with self._check_and_increment_lock:
                     return await self._atomic_check_and_increment_in_memory(
                         per_counter_meta=flat_meta,
                         parent_otel_span=parent_otel_span,
                     )
-            raw = raw_or_error
 
             response = self._build_atomic_response(raw, meta)
             if response["overall_code"] == "OVER_LIMIT":
                 await self._refund_applied_descriptor_groups(applied)
-                if self._check_and_increment_by_n_raw_script is not None:
-                    await self._refund_applied_descriptor_groups(
-                        _later_applied_groups(descriptor_groups, raws, _idx + 1)
-                    )
                 return response
             if len(descriptor_groups) == 1:
                 return response
@@ -2048,45 +2023,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             reservation_windows=frozenset(reservation_windows),
         )
 
-    async def _collect_descriptor_lua_pipelined(
-        self,
-        descriptor_groups: list[DescriptorAtomicGroup],
-    ) -> list[list[CacheCounterValue] | Exception]:
-        """One pipeline for every descriptor's check-and-increment Lua call; per-descriptor
-        results stay positional, failures included."""
+    async def _run_descriptor_lua(self, keys: list[str], args: list[int]) -> list[CacheCounterValue]:
         redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
         script: Final = self._check_and_increment_by_n_raw_script
-        if redis_cache is None or script is None:
-            return []
-        batch: Final = redis_cache.batch()
-        futures: Final = [batch.evalsha(script, keys=keys, args=args) for keys, args, _meta in descriptor_groups]
-        await batch.execute()
-        raws: Final[list[list[CacheCounterValue] | Exception]] = []
-        for future in futures:
-            try:
-                raws.append(await future)
-            except Exception as e:  # noqa: BLE001  # kept positional like a serial-call failure
-                raws.append(e)
-        return raws
-
-    async def _collect_descriptor_lua_serial(
-        self,
-        descriptor_groups: list[DescriptorAtomicGroup],
-    ) -> list[list[CacheCounterValue] | Exception]:
-        """The pre-pipeline path: one Lua call at a time, stopping at the first failure."""
-        raws: Final[list[list[CacheCounterValue] | Exception]] = []
-        for keys, args, _meta in descriptor_groups:
-            try:
-                raws.append(
-                    await self.check_and_increment_by_n_script(  # pyright: ignore[reportOptionalCall]  # sole caller guards it is not None
-                        keys=keys,
-                        args=args,
-                    )
-                )
-            except Exception as e:  # noqa: BLE001  # kept positional like a serial-call failure
-                raws.append(e)
-                break
-        return raws
+        if redis_cache is not None and script is not None:
+            batch: Final = redis_cache.batch()
+            future: Final = batch.evalsha(script, keys=keys, args=args)
+            await batch.execute()
+            return cast(list[CacheCounterValue], await future)  # cast-ok: the script returns the counter list
+        return await self.check_and_increment_by_n_script(  # pyright: ignore[reportOptionalCall]  # sole caller guards it is not None
+            keys=keys,
+            args=args,
+        )
 
     async def _refund_applied_descriptor_groups(
         self,

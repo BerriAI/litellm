@@ -10,6 +10,7 @@ from typing import Final
 from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_batch import RedisBatch
 from litellm.caching.redis_cache import RedisCache
 from litellm.caching.redis_request_plan import RedisRequestPlan, active_redis_request_plan
 from litellm.proxy._types import UserAPIKeyAuth
@@ -42,7 +43,9 @@ class SpendCounterBatch:
         self._keys: frozenset[str] = frozenset()
         self._fetched: frozenset[str] = frozenset()
         self._loaded: Mapping[str, float | None] = _NO_VALUES
-        self._declared: list[tuple[frozenset[str], asyncio.Future[dict[str, object | None]], RedisRequestPlan]] = []
+        self._declared: list[
+            tuple[frozenset[str], asyncio.Future[dict[str, object | None]], RedisBatch, RedisRequestPlan]
+        ] = []
         self._declared_keys: frozenset[str] = frozenset()
 
     @property
@@ -63,13 +66,18 @@ class SpendCounterBatch:
         declarable: Final = counter_keys - self._fetched - self._declared_keys
         if not declarable:
             return
-        future: Final = plan.batch_for(self._redis_cache).mget(sorted(declarable))
-        self._declared.append((declarable, future, plan))
+        batch: Final = plan.batch_for(self._redis_cache)
+        future: Final = batch.mget(sorted(declarable))
+        self._declared.append((declarable, future, batch, plan))
         self._declared_keys = self._declared_keys | declarable
 
     def close(self) -> None:
         """Later reads go to Redis directly; call before any read-then-write on the counters."""
         self._open = False
+        for _, future, batch, _ in self._declared:
+            batch.discard(future)
+        self._declared = []
+        self._declared_keys = frozenset()
 
     async def read(self, counter_key: str) -> tuple[float | None, bool] | None:
         """(value, authoritative) for a bound counter, None when the caller must read Redis itself."""
@@ -107,7 +115,7 @@ class SpendCounterBatch:
             self._declared_keys = frozenset()
             values: dict[str, float | None] = {}
             remaining = pending  # rebind-ok: shrinks by each resolved declared key set
-            for key_set, future, plan in declared:
+            for key_set, future, _batch, plan in declared:
                 if not key_set & pending:
                     continue
                 remaining = remaining - key_set

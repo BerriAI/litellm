@@ -172,6 +172,16 @@ class RedisBatch:
 
         return self._declare(issue)
 
+    def discard(self, future: asyncio.Future[object]) -> None:
+        """Drop a declared-but-unexecuted command; its future is cancelled. No-op once execute() ran."""
+        if self._executed:
+            return
+        for index, (declared, _) in enumerate(self._pending):
+            if declared is future:
+                del self._pending[index]
+                future.cancel()
+                return
+
     async def execute(self) -> None:
         self._executed = True
         declarations: Final = self._pending
@@ -215,6 +225,7 @@ class RedisBatch:
                 )
             )
             return
+        item_error: Final = next((item for item in results if isinstance(item, Exception)), None)
         position = 0
         for (future, _), command in zip(declarations, issued):
             items = results[position : position + command.slot_count]
@@ -233,12 +244,24 @@ class RedisBatch:
             redis_cache._circuit_breaker,
             admission,  # pyright: ignore[reportPrivateUsage]  # same breaker async_batch_get_cache consults
         )
-        asyncio.create_task(
-            redis_cache.service_logger_obj.async_service_success_hook(
-                service=ServiceTypes.REDIS,
-                duration=time.time() - start_time,
-                call_type="redis_batch.execute",
-                start_time=start_time,
-                end_time=time.time(),
+        if item_error is not None:
+            asyncio.create_task(
+                redis_cache.service_logger_obj.async_service_failure_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    error=item_error,
+                    call_type="redis_batch.execute",
+                    start_time=start_time,
+                    end_time=time.time(),
+                )
             )
-        )
+        else:
+            asyncio.create_task(
+                redis_cache.service_logger_obj.async_service_success_hook(
+                    service=ServiceTypes.REDIS,
+                    duration=time.time() - start_time,
+                    call_type="redis_batch.execute",
+                    start_time=start_time,
+                    end_time=time.time(),
+                )
+            )

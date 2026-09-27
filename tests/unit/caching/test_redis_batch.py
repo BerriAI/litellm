@@ -160,3 +160,35 @@ async def test_a_cancelled_pipeline_execute_fails_every_future_and_propagates():
     for future in futures:
         assert future.done()
         assert future.cancelled() or isinstance(future.exception(), asyncio.CancelledError)
+
+
+@pytest.mark.asyncio
+async def test_a_command_error_slot_logs_a_failure_event_not_a_success():
+    cache = _cache(RecordingPipeline(results=[redis.exceptions.ResponseError("WRONGTYPE"), json_value(3)]))
+    batch = RedisBatch(cache)
+
+    bad = batch.get("bad")
+    good = batch.get("good")
+    await batch.execute()
+
+    with pytest.raises(redis.exceptions.ResponseError):
+        bad.result()
+    assert await good == 3
+    await asyncio.sleep(0)
+    assert cache.service_logger_obj.failures == ["redis_batch.execute"]
+    assert cache.service_logger_obj.successes == []
+
+
+@pytest.mark.asyncio
+async def test_discard_drops_the_declaration_and_cancels_its_future():
+    pipe = RecordingPipeline(results=[json_value(1)])
+    batch = RedisBatch(_cache(pipe))
+
+    kept = batch.get("keep")
+    dropped = batch.get("drop")
+    batch.discard(dropped)
+    await batch.execute()
+
+    assert dropped.cancelled()
+    assert pipe.calls == [("get", "keep")]
+    assert await kept == 1
