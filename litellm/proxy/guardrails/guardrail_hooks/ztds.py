@@ -14,7 +14,8 @@ Invariants Enforced:
 
 import re
 import uuid
-from typing import Any, AsyncGenerator, Dict, List, Optional, Tuple
+from collections.abc import AsyncGenerator
+from typing import Any, ClassVar
 
 try:
     from litellm.integrations.custom_guardrail import CustomGuardrail
@@ -34,22 +35,24 @@ class ZTDSGuardrail(CustomGuardrail):
     """
 
     # Comprehensive zero-egress regex patterns for sensitive identifiers
-    PATTERNS: Dict[str, re.Pattern] = {
+    PATTERNS: ClassVar[dict[str, re.Pattern]] = {
         "EMAIL": re.compile(r"\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,24}\b"),
         "IPV4": re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}\b"),
         "IBAN": re.compile(r"\b[A-Z]{2}[0-9]{2}[A-Z0-9]{4}[0-9]{7}([A-Z0-9]?){0,16}\b"),
         "CREDIT_CARD": re.compile(r"\b(?:\d{4}[-\s]?){3}\d{4}\b"),
         "SSN": re.compile(r"\b\d{3}-\d{2}-\d{4}\b"),
         "PHONE": re.compile(r"\b(?:\+?\d{1,3}[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}\b"),
-        "API_SECRET": re.compile(r"\b(?:sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{20,}|eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,})\b"),
+        "API_SECRET": re.compile(
+            r"\b(?:sk-[a-zA-Z0-9]{20,}|ghp_[a-zA-Z0-9]{20,}|eyJ[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,}\.[a-zA-Z0-9_-]{20,})\b"
+        ),
     }
 
     def __init__(
         self,
-        enabled_entities: Optional[List[str]] = None,
+        enabled_entities: list[str] | None = None,
         reverse_on_output: bool = True,
         enforce_zero_egress: bool = True,
-        guardrail_name: Optional[str] = "ztds",
+        guardrail_name: str | None = "ztds",
         **kwargs: Any,
     ):
         super().__init__(guardrail_name=guardrail_name, **kwargs)
@@ -58,11 +61,11 @@ class ZTDSGuardrail(CustomGuardrail):
         self.reverse_on_output = reverse_on_output
         self.enforce_zero_egress = enforce_zero_egress
         # In-memory ephemeral lookup map: {session_id: {token: original_cleartext}}
-        self._session_maps: Dict[str, Dict[str, str]] = {}
+        self._session_maps: dict[str, dict[str, str]] = {}
         # Reverse map for deterministic identical surrogates within session: {session_id: {cleartext: token}}
-        self._entity_maps: Dict[str, Dict[str, str]] = {}
+        self._entity_maps: dict[str, dict[str, str]] = {}
 
-    def sanitize_text(self, text: str, session_id: str) -> Tuple[str, Dict[str, str]]:
+    def sanitize_text(self, text: str, session_id: str) -> tuple[str, dict[str, str]]:
         """
         In-memory single-pass deterministic tokenization.
         Guarantees zero network calls and deterministic surrogate assignment within session scope.
@@ -132,9 +135,9 @@ class ZTDSGuardrail(CustomGuardrail):
         self,
         user_api_key_dict: Any,
         cache: Any,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         call_type: str,
-    ) -> Dict[str, Any]:
+    ) -> dict[str, Any]:
         """
         LiteLLM pre-call hook: intercepts outgoing messages, prompts, and inputs and sanitizes all content.
         Generates an internal random nonce to prevent cross-tenant ID collisions.
@@ -165,10 +168,7 @@ class ZTDSGuardrail(CustomGuardrail):
             if isinstance(prompt, str):
                 data["prompt"], _ = self.sanitize_text(prompt, session_id)
             elif isinstance(prompt, list):
-                data["prompt"] = [
-                    self.sanitize_text(p, session_id)[0] if isinstance(p, str) else p
-                    for p in prompt
-                ]
+                data["prompt"] = [self.sanitize_text(p, session_id)[0] if isinstance(p, str) else p for p in prompt]
 
         # 3. Sanitize input field (moderations, embeddings, responses)
         if "input" in data:
@@ -177,8 +177,7 @@ class ZTDSGuardrail(CustomGuardrail):
                 data["input"], _ = self.sanitize_text(raw_input, session_id)
             elif isinstance(raw_input, list):
                 data["input"] = [
-                    self.sanitize_text(item, session_id)[0] if isinstance(item, str) else item
-                    for item in raw_input
+                    self.sanitize_text(item, session_id)[0] if isinstance(item, str) else item for item in raw_input
                 ]
 
         # Attach ZTDS audit receipt to metadata
@@ -192,7 +191,7 @@ class ZTDSGuardrail(CustomGuardrail):
 
     async def async_post_call_success_hook(
         self,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         user_api_key_dict: Any,
         response: Any,
     ) -> Any:
@@ -209,9 +208,12 @@ class ZTDSGuardrail(CustomGuardrail):
                 # Process standard ModelResponse object
                 if hasattr(response, "choices") and response.choices:
                     for choice in response.choices:
-                        if hasattr(choice, "message") and hasattr(choice.message, "content"):
-                            if isinstance(choice.message.content, str):
-                                choice.message.content = self.restore_text(choice.message.content, session_id)
+                        if (
+                            hasattr(choice, "message")
+                            and hasattr(choice.message, "content")
+                            and isinstance(choice.message.content, str)
+                        ):
+                            choice.message.content = self.restore_text(choice.message.content, session_id)
                 # Process dictionary response fallback
                 elif isinstance(response, dict) and "choices" in response:
                     for choice in response["choices"]:
@@ -225,7 +227,7 @@ class ZTDSGuardrail(CustomGuardrail):
 
     async def async_post_call_failure_hook(
         self,
-        data: Dict[str, Any],
+        data: dict[str, Any],
         user_api_key_dict: Any,
         error: Exception,
     ) -> None:
