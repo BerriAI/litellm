@@ -221,6 +221,7 @@ services = (
         "galileo",
         "newrelic",
         "pointfive",
+        "signoz",
         "sqs",
     ]
     | str
@@ -309,6 +310,7 @@ async def health_services_endpoint(
             "galileo",
             "newrelic",
             "pointfive",
+            "signoz",
             "sqs",
         ]:
             raise HTTPException(
