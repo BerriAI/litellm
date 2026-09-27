@@ -96,10 +96,44 @@ def test_caller_cannot_construct_trusted_subject_or_policy() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_budget_accumulates_across_credentials_and_denies_the_next_admission(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    import litellm
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import check_agent_budget
+
+    counters: Final = DualCache()
+    counters.set_cache("spend:agent:agent", 0.0)
+    counters.set_cache("spend:key:first", 0.0)
+    counters.set_cache("spend:key:second", 0.0)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", counters)
+    policy: Final = agent(spend=0, litellm_budget_table={"budget_id": "budget", "max_budget": 0.5})
+    auth: Final = UserAPIKeyAuth(agent_id="agent")
+    auth.billing_agent_policy = policy
+    await check_agent_budget(auth)
+    await proxy_server.increment_spend_counters(
+        token="first", team_id=None, user_id=None, response_cost=0.3, billing_agent_id="agent"
+    )
+    await check_agent_budget(auth)
+    await proxy_server.increment_spend_counters(
+        token="second", team_id=None, user_id=None, response_cost=0.3, billing_agent_id="agent"
+    )
+    with pytest.raises(litellm.BudgetExceededError):
+        await check_agent_budget(auth)
+    assert await counters.async_get_cache("spend:agent:agent") == pytest.approx(0.6)
+    assert await counters.async_get_cache("spend:key:first") == pytest.approx(0.3)
+    assert await counters.async_get_cache("spend:key:second") == pytest.approx(0.3)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("autonomous", (True, False))
+@pytest.mark.parametrize("billable", (True, False))
 async def test_invocation_prepares_target_fee_for_the_correct_agent(
     monkeypatch: pytest.MonkeyPatch,
     autonomous: bool,
+    billable: bool,
 ) -> None:
     from unittest.mock import AsyncMock, MagicMock
 
@@ -126,11 +160,14 @@ async def test_invocation_prepares_target_fee_for_the_correct_agent(
         caller: Final = agent(agent_id="caller", object_permission=permission.model_dump())
         auth.managed_agent_policy = caller
         auth.billing_agent_policy = caller
-    await prepare_agent_invocation(auth, "agent", AgentIdentityStore.from_client(database))
-    assert auth.agent_invocation_cost == pytest.approx(0.25)
+    await prepare_agent_invocation(auth, "agent", AgentIdentityStore.from_client(database), billable=billable)
+    assert auth.agent_invocation_cost == pytest.approx(0.25 if billable else 0.0)
     assert auth.invoked_agent_id == "agent"
-    assert auth.billing_agent_policy is not None
-    assert auth.billing_agent_policy.agent_id == ("caller" if autonomous else "agent")
+    if autonomous or billable:
+        assert auth.billing_agent_policy is not None
+        assert auth.billing_agent_policy.agent_id == ("caller" if autonomous else "agent")
+    else:
+        assert auth.billing_agent_policy is None
 
 
 @pytest.mark.asyncio
@@ -161,6 +198,8 @@ async def test_agent_history_outage_does_not_permit_legacy_fallback() -> None:
     "route,body,expected",
     [
         ("/a2a/agent", {}, "agent"),
+        ("/a2a/agent", {"model": "a2a/nonexistent"}, "agent"),
+        ("/v1/a2a/agent/message/send", {"model": "a2a/other"}, "agent"),
         ("/v1/a2a/agent/", {}, "agent"),
         ("/v1/chat/completions", {"model": "a2a/Readable name"}, "Readable name"),
         ("/v1/chat/completions", {"model": "a2a/"}, None),
@@ -170,6 +209,23 @@ async def test_agent_history_outage_does_not_permit_legacy_fallback() -> None:
 )
 def test_invocation_routes_resolve_the_same_target(route: str, body: dict[str, object], expected: str | None) -> None:
     assert invocation_target(route, body) == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("managed", [True, False])
+async def test_aggregate_budget_applies_to_entra_tokens_and_unbound_agent_keys(managed: bool) -> None:
+    policy: Final = agent(
+        identity_managed=managed, identity=BINDING if managed else None,
+        litellm_budget_table={"budget_id": "budget", "max_budget": 0.5},
+    )
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=policy)
+    auth: Final = UserAPIKeyAuth(agent_id="agent")
+    if managed:
+        auth.managed_agent_context = ManagedAgentContext(agent_id="agent", binding_revision="current", mode="autonomous")
+    await admit_managed_actor(auth, AgentIdentityStore.from_client(database))
+    assert auth.billing_agent_policy == policy
+    assert auth.managed_agent_policy == (policy if managed else None)
 
 
 @pytest.mark.asyncio
@@ -498,3 +554,92 @@ async def test_admitted_managed_actor_requires_fresh_policy_so_revocations_bind_
     assert auth.requires_fresh_policy is False
     await admit_managed_actor(auth, AgentIdentityStore.from_client(database))
     assert auth.requires_fresh_policy is True
+
+
+@pytest.mark.asyncio
+async def test_new_budget_window_isolated_from_inflight_previous_window_charge(monkeypatch: pytest.MonkeyPatch) -> None:
+    import litellm
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy import proxy_server
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import check_agent_budget
+
+    cache: Final = DualCache()
+    old_key: Final = "spend:agent_window:20260101T000000.000000Z:agent"
+    new_key: Final = "spend:agent_window:20260102T000000.000000Z:agent"
+    cache.set_cache("spend:agent:agent", 10.0)
+    cache.set_cache(old_key, 10.0)
+    cache.set_cache(new_key, 0.0)
+    monkeypatch.setattr(proxy_server, "spend_counter_cache", cache)
+    auth: Final = UserAPIKeyAuth(agent_id="agent")
+    auth.billing_agent_policy = agent(spend=0, litellm_budget_table={
+        "budget_id": "budget", "max_budget": 1.0, "budget_reset_at": "2026-01-02T00:00:00Z",
+    })
+    await check_agent_budget(auth)
+    await proxy_server.increment_spend_counters(
+        token=None, team_id=None, user_id=None, response_cost=0.5,
+        billing_agent_id="agent", billing_agent_counter_key=old_key,
+    )
+    await check_agent_budget(auth)
+    await proxy_server.increment_spend_counters(
+        token=None, team_id=None, user_id=None, response_cost=1.1,
+        billing_agent_id="agent", billing_agent_counter_key=new_key,
+    )
+    with pytest.raises(litellm.BudgetExceededError):
+        await check_agent_budget(auth)
+    assert await cache.async_get_cache(old_key) == 10.5
+    assert await cache.async_get_cache(new_key) == 1.1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("autonomous", [False, True])
+@pytest.mark.parametrize(
+    "pricing,billable,bounded,rejected,fee",
+    [
+        ({"input_cost_per_token": 0.01}, True, True, True, None),
+        ({"output_cost_per_token": 0.01}, True, True, True, None),
+        ({"input_cost_per_token": 0.01}, False, True, False, 0.0),
+        ({"input_cost_per_token": 0.01}, True, False, False, 0.0),
+        ({"input_cost_per_token": 0.0, "output_cost_per_token": 0.0}, True, True, False, 0.0),
+        ({"cost_per_query": 0.25, "output_cost_per_token": 0.01}, True, True, False, 0.25),
+        ({"cost_per_query": 0.0, "output_cost_per_token": 0.01}, True, True, False, 0.0),
+    ],
+)
+async def test_budgeted_invocation_requires_a_bounded_price(
+    monkeypatch: pytest.MonkeyPatch,
+    autonomous: bool,
+    pricing: dict[str, float],
+    billable: bool,
+    bounded: bool,
+    rejected: bool,
+    fee: float | None,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
+
+    budget: Final = {"budget_id": "budget", "max_budget": 1.0} if bounded else None
+    target_budget: Final = {"budget_id": "target-budget", "max_budget": 1.0} if bounded != autonomous else None
+    target: Final = agent(litellm_params=pricing, litellm_budget_table=target_budget)
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(target)
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    permission: Final = LiteLLM_ObjectPermissionTable(object_permission_id="invoke-grant", agents=["agent"])
+    auth: Final = UserAPIKeyAuth(agent_id="caller" if autonomous else None, object_permission=permission)
+    if autonomous:
+        caller: Final = agent(
+            agent_id="caller", object_permission=permission.model_dump(), litellm_budget_table=budget
+        )
+        auth.managed_agent_policy = caller
+        auth.billing_agent_policy = caller
+    if rejected:
+        with pytest.raises(HTTPException) as exc:
+            await prepare_agent_invocation(auth, "agent", AgentIdentityStore.from_client(database), billable=billable)
+        assert exc.value.status_code == 503
+        assert "cost_per_query" in str(exc.value.detail)
+    else:
+        await prepare_agent_invocation(auth, "agent", AgentIdentityStore.from_client(database), billable=billable)
+        assert auth.agent_invocation_cost == fee

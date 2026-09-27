@@ -148,6 +148,8 @@ async def admit_managed_actor(auth: UserAPIKeyAuth, store: AgentIdentityStore | 
             raise_identity_failure(AgentIdentityFailure(message="Agent no longer exists"))
         return
     if not agent.identity_managed:
+        if agent.litellm_budget_table is not None:
+            auth.billing_agent_policy = agent
         return
     if auth.jwt_claims and auth.managed_agent_context is None:
         raise_identity_failure(AgentIdentityFailure(message="A managed agent requires a matching verified identity"))
@@ -184,16 +186,34 @@ def actor_admission_failure(
     return None
 
 
+async def check_agent_budget(auth: UserAPIKeyAuth) -> None:
+    import litellm
+    from litellm.proxy.proxy_server import get_current_spend
+
+    agent: Final = auth.billing_agent_policy
+    if agent is None or agent.litellm_budget_table is None or agent.litellm_budget_table.max_budget is None:
+        return
+    budget: Final = agent.litellm_budget_table.max_budget
+    spend: Final = await get_current_spend(
+        counter_key=agent.budget_counter_key,
+        fallback_spend=agent.spend or 0.0,
+        max_budget=budget,
+        fallback_authoritative=True,
+    )
+    if spend >= budget:
+        raise litellm.BudgetExceededError(current_cost=spend, max_budget=budget, message="Agent budget exceeded")
+
+
 _INVOCATION_COST: Final = TypeAdapter(Annotated[float, Field(ge=0, allow_inf_nan=False)])
 
 
 def invocation_target(route: str, body: Mapping[str, object]) -> str | None:
-    model: Final = body.get("model")
-    if isinstance(model, str) and model.startswith("a2a/"):
-        return model.removeprefix("a2a/") or None
     components: Final = tuple(route.strip("/").split("/"))
     path: Final = components[1:] if components and components[0] == "v1" else components
-    return path[1] if len(path) >= 2 and path[0] == "a2a" else None
+    if len(path) >= 2 and path[0] == "a2a":
+        return path[1]
+    model: Final = body.get("model")
+    return model.removeprefix("a2a/") or None if isinstance(model, str) and model.startswith("a2a/") else None
 
 
 async def prepare_agent_invocation(
@@ -216,19 +236,47 @@ async def prepare_agent_invocation(
     if target is None and registered_managed:
         raise_identity_failure(AgentIdentityFailure(message="Invoked agent no longer exists"))
     effective: Final = target if target is not None else registered
-    if not effective.identity_managed and auth.managed_agent_policy is None:
+    if not effective.identity_managed and effective.litellm_budget_table is None and auth.managed_agent_policy is None:
         return
     if not await AgentRequestHandler.is_agent_allowed(effective.agent_id, auth):
         raise_identity_failure(AgentIdentityFailure(message="The caller is not permitted to invoke this agent"))
     auth.invoked_agent_id = effective.agent_id
     auth.invoked_agent_policy = effective
-    if auth.agent_id is None and effective.identity_managed:
+    if (
+        billable
+        and auth.agent_id is None
+        and (effective.identity_managed or effective.litellm_budget_table is not None)
+    ):
         auth.billing_agent_policy = effective
-    raw_fee: Final = (effective.litellm_params or MappingProxyType({})).get("cost_per_query", 0.0) if billable else 0.0
+    pricing: Final = effective.litellm_params or MappingProxyType({})
+    fixed_fee: Final = pricing.get("cost_per_query")
+    billing_policy: Final = auth.billing_agent_policy
+    bounded: Final = (
+        billing_policy is not None
+        and billing_policy.litellm_budget_table is not None
+        and billing_policy.litellm_budget_table.max_budget is not None
+    )
     try:
-        fee: Final = _INVOCATION_COST.validate_python(raw_fee)
+        fee: Final = _INVOCATION_COST.validate_python(fixed_fee if billable and fixed_fee is not None else 0.0)
+        unbounded_token_price: Final = (
+            billable
+            and bounded
+            and fixed_fee is None
+            and any(
+                _INVOCATION_COST.validate_python(pricing[field]) > 0
+                for field in ("input_cost_per_token", "output_cost_per_token")
+                if pricing.get(field) is not None
+            )
+        )
     except ValidationError:
         raise_identity_failure(
             AgentIdentityFailure(code="policy_unavailable", message="Agent invocation price is invalid")
+        )
+    if unbounded_token_price:
+        raise_identity_failure(
+            AgentIdentityFailure(
+                code="policy_unavailable",
+                message="Budgeted token-priced agent invocations require a fixed cost_per_query before execution",
+            )
         )
     auth.agent_invocation_cost = fee

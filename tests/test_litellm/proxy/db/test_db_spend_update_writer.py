@@ -930,7 +930,7 @@ async def test_commit_spend_updates_to_db_increments_agent_spend():
 
     mock_batcher.litellm_agentstable.update_many.assert_called_once()
     call_kwargs = mock_batcher.litellm_agentstable.update_many.call_args[1]
-    assert call_kwargs["where"] == {"agent_id": agent_id}
+    assert call_kwargs["where"] == {"agent_id": agent_id, "spend_window": None}
     assert call_kwargs["data"] == {"spend": {"increment": response_cost}}
 
 
@@ -1475,7 +1475,8 @@ async def test_add_spend_log_transaction_to_daily_end_user_transaction_skips_whe
 
 
 @pytest.mark.asyncio
-async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agent_id_and_queues_update():
+@pytest.mark.parametrize("billing_agent", [None, "caller-agent"])
+async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agent_id_and_queues_update(billing_agent):
     """
     Ensure agent_id is injected and queued for daily aggregation.
     """
@@ -1487,6 +1488,7 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agen
     payload = {
         "request_id": "req-123",
         "agent_id": agent_id,
+        "billing_agent_id": billing_agent,
         "user": "test-user",
         "startTime": "2024-01-01T12:00:00",
         "api_key": "test-key",
@@ -1506,14 +1508,19 @@ async def test_add_spend_log_transaction_to_daily_agent_transaction_injects_agen
         prisma_client=mock_prisma,
     )
 
+    if billing_agent is None:
+        writer.daily_agent_spend_update_queue.add_update.assert_not_awaited()
+        return
     writer.daily_agent_spend_update_queue.add_update.assert_called_once()
 
     call_args = writer.daily_agent_spend_update_queue.add_update.call_args[1]
     update_dict = call_args["update"]
     assert len(update_dict) == 1
+    charged_agent: Final = billing_agent or agent_id
     for key, transaction in update_dict.items():
-        assert key == f"{agent_id}_2024-01-01_test-key_gpt-4_openai_"
-        assert transaction["agent_id"] == agent_id
+        assert key == f"{charged_agent}_2024-01-01_test-key_gpt-4_openai_"
+        assert transaction["agent_id"] == charged_agent
+        assert transaction["spend"] == 0.3
         assert transaction["date"] == "2024-01-01"
         assert transaction["api_key"] == "test-key"
         assert transaction["model"] == "gpt-4"
@@ -4739,3 +4746,103 @@ async def test_shutdown_drain_that_lands_before_the_interrupted_tag_commit_resol
     assert redis_buffer.restored == [drained], "a tag batch whose COMMIT came back failed must be restored to Redis"
     (upsert,) = _daily_upserts(final_db, "LiteLLM_DailyTagSpend")
     assert _row_values(upsert, "api_requests") == [1]
+
+
+@pytest.mark.asyncio
+async def test_agent_spend_queue_keeps_admission_windows_separate():
+    from litellm.types.agents import agent_budget_counter_key
+
+    writer = DBSpendUpdateWriter()
+    client = MagicMock()
+    old_key = agent_budget_counter_key("window-agent", datetime(2026, 1, 1, tzinfo=timezone.utc))
+    new_key = agent_budget_counter_key("window-agent", datetime(2026, 1, 2, tzinfo=timezone.utc))
+    await writer._update_agent_db(0.4, "window-agent", client, counter_key=old_key)
+    await writer._update_agent_db(0.1, "window-agent", client, counter_key=new_key)
+    await writer._update_agent_db(0.2, "window-agent", client, counter_key=new_key)
+    transactions = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["agent_list_transactions"] == {old_key: 0.4, new_key: pytest.approx(0.3)}
+
+
+@pytest.mark.asyncio
+async def test_agent_admission_window_survives_logging_payload_and_background_queue() -> None:
+    from litellm.proxy.spend_tracking.spend_tracking_utils import get_logging_payload
+    from litellm.types.agents import agent_budget_counter_key
+
+    now: Final = datetime.now(timezone.utc)
+    counter: Final = agent_budget_counter_key("window-agent", now)
+    payload: Final = get_logging_payload(
+        kwargs={
+            "model": "demo-model",
+            "litellm_params": {
+                "metadata": {
+                    "billing_agent_id": "window-agent",
+                    "billing_agent_counter_key": counter,
+                }
+            },
+        },
+        response_obj={},
+        start_time=now,
+        end_time=now,
+    )
+    assert json.loads(payload["metadata"])["billing_agent_counter_key"] == counter
+    writer: Final = DBSpendUpdateWriter()
+    await writer._batch_database_updates(
+        response_cost=0.4,
+        user_id=None,
+        hashed_token=None,
+        team_id=None,
+        org_id=None,
+        end_user_id=None,
+        prisma_client=MagicMock(),
+        litellm_proxy_budget_name=None,
+        payload=payload,
+    )
+    transactions: Final = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["agent_list_transactions"] == {counter: 0.4}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("counter", ["spend:agent:another-agent", "spend:agent_window:malformed:window-agent"])
+async def test_invalid_agent_window_cannot_charge_another_agent(counter: str) -> None:
+    writer: Final = DBSpendUpdateWriter()
+    with pytest.raises(ValueError, match="does not match"):
+        await writer._update_agent_db(0.4, "window-agent", MagicMock(), counter_key=counter)
+    transactions: Final = await writer.spend_update_queue.flush_and_get_aggregated_db_spend_update_transactions()
+    assert transactions["agent_list_transactions"] == {}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "captured_window", [None, datetime(2026, 1, 1, tzinfo=timezone.utc), datetime(2026, 1, 2, tzinfo=timezone.utc)]
+)
+async def test_agent_settlement_charges_only_the_matching_current_window(captured_window):
+    from litellm.types.agents import agent_budget_counter_key
+
+    active_window = datetime(2026, 1, 2, tzinfo=timezone.utc)
+    row = {"agent_id": "window-agent", "spend_window": active_window, "spend": 0.2}
+
+    def apply_update(*, where, data):
+        if all(row[key] == value for key, value in where.items()):
+            row["spend"] += data["spend"]["increment"]
+
+    batcher = MagicMock()
+    batcher.litellm_agentstable.update_many.side_effect = apply_update
+    transaction = AsyncMock()
+    transaction.batch_ = MagicMock(return_value=AsyncMock(__aenter__=AsyncMock(return_value=batcher)))
+    client = MagicMock()
+    client.db.tx.return_value = AsyncMock(__aenter__=AsyncMock(return_value=transaction))
+    key = agent_budget_counter_key("window-agent", captured_window)
+    await DBSpendUpdateWriter._update_entity_spend_in_db(
+        entity_name="Agent",
+        transactions={key: 0.4},
+        table_accessor="litellm_agentstable",
+        where_field="agent_id",
+        n_retry_times=0,
+        prisma_client=client,
+        proxy_logging_obj=MagicMock(),
+    )
+    assert row["spend"] == pytest.approx(0.6 if captured_window == active_window else 0.2)
+    assert batcher.litellm_agentstable.update_many.call_args.kwargs["where"] == {
+        "agent_id": "window-agent",
+        "spend_window": captured_window,
+    }
