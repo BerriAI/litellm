@@ -10,7 +10,7 @@ use axum::{
     },
     routing::{get, post},
 };
-use futures_util::{StreamExt, sink, stream};
+use futures_util::{Stream, StreamExt, sink, stream};
 use moka::future::Cache;
 use rmcp::{ServiceExt, model::*};
 use serde::Deserialize;
@@ -128,62 +128,83 @@ async fn connect(State(state): State<Legacy>, request: Request) -> Response {
     {
         return error.into_response();
     }
+    let connection = start_session(state, owner).await;
+    Sse::new(connection.events())
+        .keep_alive(KeepAlive::default())
+        .into_response()
+}
+
+struct Connection {
+    id: String,
+    output: mpsc::Receiver<ServerJsonRpcMessage>,
+    cancellation: CancellationToken,
+}
+
+async fn start_session(state: Legacy, owner: [u8; 32]) -> Connection {
     let id = Uuid::new_v4().to_string();
     let cancellation = state.shutdown.child_token();
-    let (input, receiver) = mpsc::channel(16);
-    let (sender, output) = mpsc::channel::<ServerJsonRpcMessage>(16);
+    let (input_sender, input_receiver) = mpsc::channel(16);
+    let (output_sender, output_receiver) = mpsc::channel(16);
     state
         .sessions
         .insert(
             id.clone(),
             Session {
-                sender: input,
+                sender: input_sender,
                 owner,
                 cancellation: cancellation.clone(),
             },
         )
         .await;
-    let sink = Box::pin(sink::unfold(sender, |sender, message| async {
-        sender.send(message).await.map_err(std::io::Error::other)?;
-        Ok::<_, std::io::Error>(sender)
-    }));
-    let input = Box::pin(stream::unfold(receiver, |mut receiver| async {
-        receiver.recv().await.map(|message| (message, receiver))
-    }));
-    let worker_id = id.clone();
-    let worker_cancellation = cancellation.clone();
+    let connection = Connection {
+        id: id.clone(),
+        output: output_receiver,
+        cancellation: cancellation.clone(),
+    };
     tokio::spawn(async move {
+        let sink = Box::pin(sink::unfold(output_sender, |sender, message| async move {
+            sender.send(message).await.map_err(std::io::Error::other)?;
+            Ok::<_, std::io::Error>(sender)
+        }));
+        let input = Box::pin(stream::unfold(input_receiver, |mut receiver| async move {
+            receiver.recv().await.map(|message| (message, receiver))
+        }));
         if let Ok(service) = state
             .server
-            .serve_with_ct((sink, input), worker_cancellation)
+            .serve_with_ct((sink, input), cancellation)
             .await
         {
             let _ = service.waiting().await;
         }
-        state.sessions.invalidate(&worker_id).await;
+        state.sessions.invalidate(&id).await;
     });
-    let first = stream::once(async move {
-        Ok::<_, std::io::Error>(
-            Event::default()
-                .event("endpoint")
-                .data(format!("/mcp/sse/messages?session_id={id}")),
-        )
-    });
-    let messages = stream::unfold(
-        (output, cancellation.drop_guard()),
-        |(mut output, guard)| async {
-            output.recv().await.map(|message| {
-                let event = Event::default()
-                    .event("message")
-                    .json_data(message)
-                    .map_err(std::io::Error::other);
-                (event, (output, guard))
-            })
-        },
-    );
-    Sse::new(first.chain(messages))
-        .keep_alive(KeepAlive::default())
-        .into_response()
+    connection
+}
+
+impl Connection {
+    fn events(self) -> impl Stream<Item = Result<Event, std::io::Error>> {
+        let endpoint = Event::default()
+            .event("endpoint")
+            .data(format!("/mcp/sse/messages?session_id={}", self.id));
+        let first = stream::once(async move { Ok(endpoint) });
+        let messages = stream::unfold(
+            (self.output, self.cancellation.drop_guard()),
+            |(mut receiver, guard)| async move {
+                receiver
+                    .recv()
+                    .await
+                    .map(|message| (message_event(message), (receiver, guard)))
+            },
+        );
+        first.chain(messages)
+    }
+}
+
+fn message_event(message: ServerJsonRpcMessage) -> Result<Event, std::io::Error> {
+    Event::default()
+        .event("message")
+        .json_data(message)
+        .map_err(std::io::Error::other)
 }
 
 #[derive(Deserialize)]

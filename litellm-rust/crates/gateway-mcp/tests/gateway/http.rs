@@ -411,6 +411,7 @@ async fn legacy_sse_initializes_calls_tools_and_rejects_other_owners(#[future] h
     }))).await.unwrap();
     assert_eq!(response.status(), StatusCode::ACCEPTED);
     let initialized = events.next().await.unwrap().unwrap();
+    assert_eq!(initialized.event.as_deref(), Some("message"));
     let initialized: Value = serde_json::from_str(&initialized.data.unwrap()).unwrap();
     assert_eq!(
         initialized["result"]["serverInfo"]["name"],
@@ -435,9 +436,32 @@ async fn legacy_sse_initializes_calls_tools_and_rejects_other_owners(#[future] h
         .unwrap()
         .unwrap()
         .unwrap();
+    assert_eq!(called.event.as_deref(), Some("message"));
     let called: Value = serde_json::from_str(&called.data.unwrap()).unwrap();
     let forwarded: Value =
         serde_json::from_str(called["result"]["content"][0]["text"].as_str().unwrap()).unwrap();
     assert_eq!(forwarded["arguments"], json!({"source":"sse"}));
     drop(events);
+    tokio::time::timeout(Duration::from_secs(2), async {
+        loop {
+            let response = harness
+                .app
+                .clone()
+                .oneshot(rpc_request(
+                    &path,
+                    "owner",
+                    None,
+                    json!({"jsonrpc":"2.0","method":"notifications/initialized"}),
+                ))
+                .await
+                .unwrap();
+            if response.status() == StatusCode::NOT_FOUND {
+                break;
+            }
+            assert_eq!(response.status(), StatusCode::ACCEPTED);
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .expect("disconnected SSE session should reject subsequent messages");
 }
