@@ -129,9 +129,11 @@ async def test_agent_budget_accumulates_across_credentials_and_denies_the_next_a
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("autonomous", (True, False))
+@pytest.mark.parametrize("billable", (True, False))
 async def test_invocation_prepares_target_fee_for_the_correct_agent(
     monkeypatch: pytest.MonkeyPatch,
     autonomous: bool,
+    billable: bool,
 ) -> None:
     from unittest.mock import AsyncMock, MagicMock
 
@@ -158,11 +160,14 @@ async def test_invocation_prepares_target_fee_for_the_correct_agent(
         caller: Final = agent(agent_id="caller", object_permission=permission.model_dump())
         auth.managed_agent_policy = caller
         auth.billing_agent_policy = caller
-    await prepare_agent_invocation(auth, "agent", AgentIdentityStore.from_client(database))
-    assert auth.agent_invocation_cost == pytest.approx(0.25)
+    await prepare_agent_invocation(auth, "agent", AgentIdentityStore.from_client(database), billable=billable)
+    assert auth.agent_invocation_cost == pytest.approx(0.25 if billable else 0.0)
     assert auth.invoked_agent_id == "agent"
-    assert auth.billing_agent_policy is not None
-    assert auth.billing_agent_policy.agent_id == ("caller" if autonomous else "agent")
+    if autonomous or billable:
+        assert auth.billing_agent_policy is not None
+        assert auth.billing_agent_policy.agent_id == ("caller" if autonomous else "agent")
+    else:
+        assert auth.billing_agent_policy is None
 
 
 @pytest.mark.asyncio

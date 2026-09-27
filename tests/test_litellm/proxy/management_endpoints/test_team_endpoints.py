@@ -2998,6 +2998,7 @@ async def test_upsert_team_member_budget_table_clears_duration_kept_budget(mock_
     mock_db_client.db.litellm_budgettable.update = AsyncMock(
         side_effect=lambda where, data: SimpleNamespace(**data)
     )
+    mock_db_client.writer_db.litellm_agentstable.find_first = AsyncMock(return_value=None)
 
     result = await TeamMemberBudgetHandler.upsert_team_member_budget_table(
         team_table=team_table,
