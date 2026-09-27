@@ -323,17 +323,13 @@ class QualityRouter(CustomLogger):
         if isinstance(metadata, dict):
             metadata["quality_router_decision"] = decision
 
-    def _savings_fields(self) -> StandardLoggingRoutingDecision:
+    def _add_savings_fields(self, decision: StandardLoggingRoutingDecision) -> None:
         baseline = resolve_baseline(self.litellm_router_instance, self.config.available_models)
         if baseline is None:
-            return {}  # mutable-ok: immutable empty result for unresolved baseline
-        fields: Final[StandardLoggingRoutingDecision] = {
-            "savings_baseline_model": baseline.model,
-            **(
-                {"savings_baseline_deployment_id": baseline.deployment_id} if baseline.deployment_id is not None else {}
-            ),
-        }
-        return fields
+            return
+        decision["savings_baseline_model"] = baseline.model
+        if baseline.deployment_id is not None:
+            decision["savings_baseline_deployment_id"] = baseline.deployment_id
 
     async def async_pre_routing_hook(
         self,
@@ -351,7 +347,6 @@ class QualityRouter(CustomLogger):
             return None
 
         conversation_continuing: Final = conversation_is_continuing(messages)
-        savings_fields: Final = self._savings_fields()
 
         # Extract last user message and last system prompt — same rules as
         # ComplexityRouter.async_pre_routing_hook.
@@ -383,7 +378,7 @@ class QualityRouter(CustomLogger):
                 cause="default_fallback",
                 conversation_continuing=conversation_continuing,
             )
-            default_routing_decision.update(savings_fields)
+            self._add_savings_fields(default_routing_decision)
             return PreRoutingHookResponse(
                 model=self.config.default_model,
                 messages=messages,
@@ -421,7 +416,7 @@ class QualityRouter(CustomLogger):
                 matched_keyword=matched_keyword,
                 conversation_continuing=conversation_continuing,
             )
-            keyword_routing_decision.update(savings_fields)
+            self._add_savings_fields(keyword_routing_decision)
             keyword_quality_tier: Final = self._model_quality.get(routed_model)
             if keyword_quality_tier is not None:
                 keyword_routing_decision["tier"] = str(keyword_quality_tier)
@@ -473,7 +468,7 @@ class QualityRouter(CustomLogger):
             signals=list(signals),  # mutable-ok: routing decision metadata uses a JSON list
             conversation_continuing=conversation_continuing,
         )
-        quality_routing_decision.update(savings_fields)
+        self._add_savings_fields(quality_routing_decision)
         return PreRoutingHookResponse(
             model=routed_model,
             messages=messages,

@@ -222,26 +222,22 @@ class AdaptiveRouter:
             request_type=request_type.value,
             conversation_continuing=conversation_is_continuing(messages),
         )
-        routing_decision.update(self._savings_baseline_fields())
+        self._add_savings_baseline_fields(routing_decision)
         return PreRoutingHookResponse(
             model=chosen_model,
             messages=messages,
             routing_decision=routing_decision,
         )
 
-    def _savings_baseline_fields(self) -> StandardLoggingRoutingDecision:
+    def _add_savings_baseline_fields(self, decision: StandardLoggingRoutingDecision) -> None:
         if self.litellm_router_instance is None:
-            return {}  # mutable-ok: immutable empty result for absent router
+            return
         baseline = resolve_baseline(self.litellm_router_instance, self.config.available_models)
         if baseline is None:
-            return {}  # mutable-ok: immutable empty result for unresolved baseline
-        fields: Final[StandardLoggingRoutingDecision] = {
-            "savings_baseline_model": baseline.model,
-            **(
-                {"savings_baseline_deployment_id": baseline.deployment_id} if baseline.deployment_id is not None else {}
-            ),
-        }
-        return fields
+            return
+        decision["savings_baseline_model"] = baseline.model
+        if baseline.deployment_id is not None:
+            decision["savings_baseline_deployment_id"] = baseline.deployment_id
 
     # ---- Pick model ------------------------------------------------------
 
