@@ -647,6 +647,7 @@ async def test_organization_member_add_budget_omission_and_null_leave_budget_uns
     from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
 
     user = LiteLLM_UserTable(user_id="user-1", user_role="internal_user")
+
     async def create_membership(data):
         return LiteLLM_OrganizationMembershipTable(
             user_id="user-1",
@@ -1176,6 +1177,7 @@ async def _run_legacy_update_organization(
     mock_prisma_client.db.litellm_organizationtable.find_unique = AsyncMock(return_value=existing_org)
     mock_prisma_client.db.litellm_organizationtable.update = AsyncMock(return_value=MagicMock())
     mock_prisma_client.db.litellm_budgettable.update = AsyncMock()
+    mock_prisma_client.writer_db.litellm_agentstable.find_first = AsyncMock(return_value=None)
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr(organization_endpoints, "_verify_org_access", AsyncMock())
