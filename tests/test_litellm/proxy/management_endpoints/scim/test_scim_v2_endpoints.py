@@ -6874,3 +6874,35 @@ async def test_legacy_listing_hydrates_writer_page_despite_replica_lag(
     assert listed.totalResults == listed.itemsPerPage == 1
     prisma.db.litellm_usertable.find_many.assert_not_awaited()
     prisma.db.litellm_teamtable.find_many.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method,path", [("GET", "/scim/v2/placeholders"), ("POST", "/scim/v2/placeholders/shadow/merge")])
+@pytest.mark.parametrize("enabled", [True, False])
+async def test_source_token_cannot_read_or_merge_global_placeholders(
+    monkeypatch: pytest.MonkeyPatch, method: str, path: str, enabled: bool
+) -> None:
+    from types import SimpleNamespace
+
+    from litellm.proxy import proxy_server
+
+    database: Final = MagicMock()
+    database.writer_db.litellm_scimsource.find_unique = AsyncMock(
+        return_value=SimpleNamespace(enabled=enabled)
+    )
+    monkeypatch.setattr(proxy_server, "prisma_client", database)
+    app: Final = FastAPI()
+    app.include_router(scim_router)
+    app.dependency_overrides[_premium_user_check] = lambda: None
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        token="source-token-hash", allowed_routes=["/scim/*"], user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://test") as client:
+        response: Final = await client.request(method, path)
+
+    assert response.status_code == 403, response.text
+    database.writer_db.litellm_scimsource.find_unique.assert_awaited_once_with(where={"key_hash": "source-token-hash"})
+    database.tx.assert_not_called()
+    database.db.litellm_usertable.find_unique.assert_not_called()
+    database.db.litellm_usertable.delete.assert_not_called()
+    database.db.litellm_teammembership.create.assert_not_called()
