@@ -3244,7 +3244,8 @@ async def _authorize_authenticated_request(
                 user_api_key_auth_obj,
                 target_name,
                 store,
-                billable=request_data.get("method")
+                billable=request.method == "POST"
+                and request_data.get("method")
                 in (None, "message/send", "message/stream", "SendMessage", "SendStreamingMessage"),
             )
         await _run_centralized_common_checks(

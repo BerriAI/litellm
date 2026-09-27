@@ -9490,3 +9490,79 @@ async def test_managed_jwt_cannot_be_downgraded_into_virtual_key_mapping(monkeyp
     assert failure.value.code == "403"
     assert "without virtual-key mapping" in failure.value.message
     client.writer_db.litellm_agentstable.find_unique.assert_awaited_once()
+
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "http_method,route,body,billed",
+    [
+        ("GET", "/a2a/agent/.well-known/agent-card.json", {}, False),
+        ("POST", "/a2a/agent", {"jsonrpc": "2.0", "id": "1", "method": "tasks/get", "params": {"id": "t"}}, False),
+        ("POST", "/a2a/agent", {"jsonrpc": "2.0", "id": "1", "method": "message/send", "params": {}}, True),
+        ("POST", "/a2a/agent", {"jsonrpc": "2.0", "id": "1", "method": "message/stream", "params": {}}, True),
+    ],
+)
+async def test_human_agent_discovery_does_not_reserve_target_budget_but_send_and_stream_do(
+    monkeypatch: pytest.MonkeyPatch, http_method: str, route: str, body: dict, billed: bool
+) -> None:
+    from typing import Final
+
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_ObjectPermissionTable
+    from litellm.proxy.agent_endpoints import agent_registry
+    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+    from litellm.types.agents import AgentResponse
+    from litellm.types.proxy.agent_identity import AgentIdentityBinding
+
+    target: Final = AgentResponse(
+        agent_id="agent",
+        agent_name="Agent",
+        agent_card_params={},
+        identity_managed=True,
+        execution_mode="both",
+        litellm_params={"cost_per_query": 0.25},
+        litellm_budget_table={"budget_id": "agent-budget", "max_budget": 10.0},
+        identity=AgentIdentityBinding(
+            agent_id="agent",
+            provider="microsoft_entra",
+            tenant_id="tenant",
+            client_id="client",
+            service_principal_id="principal",
+            issuer="issuer",
+            revision="current",
+        ),
+    )
+    registry: Final = agent_registry.AgentRegistry()
+    registry.register_agent(target)
+    monkeypatch.setattr(agent_registry, "global_agent_registry", registry)
+    database: Final = MagicMock()
+    database.writer_db.litellm_agentstable.find_unique = AsyncMock(return_value=target)
+    for name, value in {
+        **_proxy_attrs_for_centralized_checks(),
+        "prisma_client": database,
+        "proxy_logging_obj": MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
+    }.items():
+        monkeypatch.setattr(proxy_server, name, value)
+    request = _alias_request(route, body)
+    request.scope["method"] = http_method
+    auth: Final = UserAPIKeyAuth(
+        api_key="human-key",
+        user_id="human",
+        object_permission=LiteLLM_ObjectPermissionTable(object_permission_id="grant", agents=["agent"]),
+    )
+    with patch(
+        "litellm.proxy.spend_tracking.budget_reservation.reserve_budget_for_request",
+        new_callable=AsyncMock,
+        return_value=None,
+    ) as reserve:
+        assert await _authorize_authenticated_request(auth, request, body, route, "human-key") is None
+    assert auth.invoked_agent_id == "agent"
+    assert auth.agent_invocation_cost == pytest.approx(0.25 if billed else 0.0), (http_method, body.get("method"))
+    if billed:
+        assert auth.billing_agent_policy is not None and auth.billing_agent_policy.agent_id == "agent"
+    else:
+        assert auth.billing_agent_policy is None, (http_method, body.get("method"))
+    reserve.assert_awaited_once()
+    reserved: Final = reserve.call_args.kwargs["valid_token"]
+    assert reserved is auth and (reserved.billing_agent_policy is not None) is billed, (http_method, body.get("method"))
