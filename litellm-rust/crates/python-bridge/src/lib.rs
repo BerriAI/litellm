@@ -6,6 +6,7 @@ mod errors;
 mod http;
 mod logger;
 mod marshal;
+mod preflight;
 mod python_settings;
 mod routes;
 mod secrets;

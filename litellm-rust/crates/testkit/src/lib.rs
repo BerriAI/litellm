@@ -1,3 +1,9 @@
+#![allow(
+    clippy::disallowed_types,
+    clippy::disallowed_methods,
+    reason = "a dev-only installer tool that never talks to providers"
+)]
+
 mod agent;
 mod error;
 mod install;

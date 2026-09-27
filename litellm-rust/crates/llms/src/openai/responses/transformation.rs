@@ -1,8 +1,8 @@
 use litellm_types::responses::streaming_websocket::{ResponsesWsEvent, ResponsesWsTransformResult};
 
-use crate::base_llm::{
-    chat::transformation::Error,
-    responses::transformation::{ResponsesWebSocketProviderConfig, enforce_model},
+use crate::{
+    Error,
+    base_llm::responses::transformation::{ResponsesWebSocketProviderConfig, enforce_model},
 };
 
 pub struct OpenAiResponsesApiConfig;

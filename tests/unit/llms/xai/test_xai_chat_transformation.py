@@ -16,7 +16,7 @@ from litellm.types.utils import (
 
 
 class TestXAIReasoningTokenFolding:
-    """``_fold_reasoning_tokens_into_completion`` re-aligns xAI Usage to the OpenAI invariant."""
+    """``fold_reasoning_tokens_into_completion`` re-aligns xAI Usage to the OpenAI invariant."""
 
     @staticmethod
     def _make_response(
@@ -45,7 +45,7 @@ class TestXAIReasoningTokenFolding:
             reasoning_tokens=312,
         )
 
-        XAIChatConfig._fold_reasoning_tokens_into_completion(response)
+        XAIChatConfig.fold_reasoning_tokens_into_completion(response)
 
         usage = response.usage
         assert usage.completion_tokens == 322
@@ -59,7 +59,7 @@ class TestXAIReasoningTokenFolding:
             reasoning_tokens=312,
         )
 
-        XAIChatConfig._fold_reasoning_tokens_into_completion(response)
+        XAIChatConfig.fold_reasoning_tokens_into_completion(response)
 
         assert response.usage.completion_tokens == 322
 
@@ -71,7 +71,7 @@ class TestXAIReasoningTokenFolding:
             reasoning_tokens=0,
         )
 
-        XAIChatConfig._fold_reasoning_tokens_into_completion(response)
+        XAIChatConfig.fold_reasoning_tokens_into_completion(response)
 
         assert response.usage.completion_tokens == 10
 
@@ -84,7 +84,7 @@ class TestXAIReasoningTokenFolding:
             reasoning_tokens=312,
         )
 
-        XAIChatConfig._fold_reasoning_tokens_into_completion(response)
+        XAIChatConfig.fold_reasoning_tokens_into_completion(response)
 
         assert response.usage.completion_tokens == 10
         assert response.usage.total_tokens == 999
