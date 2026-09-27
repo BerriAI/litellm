@@ -32,9 +32,12 @@ from ...common_utils import (
     AnthropicError,
     AnthropicModelInfo,
     merge_anthropic_beta_headers,
+    context_1m_beta_values,
+    context_1m_requested,
     optionally_handle_anthropic_oauth,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
+    strip_context_1m_suffix,
     strip_encrypted_reasoning_blocks_from_anthropic_messages,
 )
 from .mid_conversation_system import (
@@ -410,6 +413,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             headers=headers,
             optional_params=optional_params,
             messages=messages,
+            model=model,
+            litellm_params=litellm_params,
         )
 
     @staticmethod
@@ -710,7 +715,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                 drop_non_string_tool_result_texts(messages, getattr(litellm_params, "drop_params", None))
             ),
             max_tokens=max_tokens,
-            model=model,
+            model=strip_context_1m_suffix(model),
             **anthropic_messages_optional_request_params,
         )
         return dict(anthropic_messages_request)
@@ -759,6 +764,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         messages: Sequence[object] = (),
         beta_map_provider: str | None = None,
         drop_params: bool = False,
+        model: str = "",
+        litellm_params: object = None,
     ) -> dict:
         """
         Auto-inject anthropic-beta headers based on features used.
@@ -769,6 +776,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         - output_format: adds 'structured-outputs-2025-11-13'
         - speed: adds 'fast-mode-2026-02-01'
         - a message carrying output_config: adds 'per-turn-control-2026-07-01'
+        - [1m] suffix: adds 'context-1m-2025-08-07'
 
         Args:
             headers: Request headers dict
@@ -791,6 +799,12 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
 
         if requires_native_compaction_beta(custom_llm_provider, optional_params, messages):
             beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
+
+        beta_values.update(
+            context_1m_beta_values(
+                context_1m_requested(model=model, optional_params=optional_params, litellm_params=litellm_params)
+            )
+        )
 
         # Check for context management
         context_management_param: Final = optional_params.get("context_management")
