@@ -6,10 +6,16 @@ from litellm.types.guardrails import SupportedGuardrailIntegrations
 from .agent_365 import Agent365Guardrail
 
 if TYPE_CHECKING:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
     from litellm.types.guardrails import Guardrail, LitellmParams
 
 
-def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail") -> Agent365Guardrail:
+def initialize_guardrail(
+    litellm_params: "LitellmParams",
+    guardrail: "Guardrail",
+    *,
+    async_handler: "AsyncHTTPHandler | None" = None,
+) -> Agent365Guardrail:
     import litellm
     from litellm.secret_managers.main import get_secret_str
 
@@ -57,6 +63,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         client_secret=client_secret,
         request_timeout=litellm_params.timeout if litellm_params.timeout is not None else 10.0,
         unreachable_fallback=litellm_params.unreachable_fallback,
+        async_handler=async_handler,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )

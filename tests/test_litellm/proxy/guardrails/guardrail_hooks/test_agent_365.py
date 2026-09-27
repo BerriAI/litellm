@@ -257,11 +257,10 @@ class TestInitializeGuardrail:
             resource_app_id="00000000-0000-0000-0000-000000000000",
             agent_id="yaml-agent",
         )
-        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
-            guardrail: Final = initialize_guardrail(params, {"guardrail_name": "a365-stale"})
-        assert "ignoring api_base, resource_app_id, agent_id" in caplog.text
         handler: Final = FakeHandler([_token_response(), _allow_response()])
-        guardrail.async_handler = handler
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            guardrail: Final = initialize_guardrail(params, {"guardrail_name": "a365-stale"}, async_handler=handler)
+        assert "ignoring api_base, resource_app_id, agent_id" in caplog.text
         await _run(guardrail, _mcp_data())
         token_call, evaluate_call = handler.calls
         assert token_call.url == TOKEN_URL
