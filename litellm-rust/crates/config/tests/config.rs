@@ -138,6 +138,8 @@ model_list:
     litellm_params:
       model: vertex_ai/test-model
       timeout: os.environ/REQUEST_TIMEOUT
+      tpm: os.environ/TPM_LIMIT
+      rpm: 5
       drop_params: "true"
       vertex_project: test-project
     model_info:
@@ -168,6 +170,11 @@ future_section:
             "os.environ/REQUEST_TIMEOUT".to_string()
         ))
     );
+    assert_eq!(
+        model.litellm_params.tpm,
+        Some(NumberOrString::String("os.environ/TPM_LIMIT".to_string()))
+    );
+    assert_eq!(model.litellm_params.rpm, Some(NumberOrString::Number(5.0)));
     assert_eq!(
         model.litellm_params.drop_params,
         Some(Flag::String("true".to_string()))
