@@ -6504,6 +6504,7 @@ class Router:
             "first_id": None,
             "last_id": None,
             "has_more": False,
+            "next_page_token": None,
         }
 
         for result in results:
@@ -6513,6 +6514,9 @@ class Router:
                     final_results["first_id"] = getattr(result, "first_id")
                 final_results["last_id"] = getattr(result, "last_id")
                 final_results["data"].extend(result.data)
+                page_token = getattr(result, "next_page_token", None)
+                if page_token is not None:
+                    final_results["next_page_token"] = page_token
 
                 ## check 'has_more'
                 if getattr(result, "has_more", False) is True:
