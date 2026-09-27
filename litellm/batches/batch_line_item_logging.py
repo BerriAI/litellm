@@ -397,9 +397,8 @@ async def log_batch_line_items(
             batch.id,
         )
         return 0
-    claim: Final = await claim_cache.async_increment_cache(
-        f"batch_line_items_emitted:{batch.id}", 1, ttl=_LINE_ITEM_CLAIM_TTL_SECONDS
-    )
+    claim_key: Final = f"batch_line_items_emitted:{batch.id}"
+    claim: Final = await claim_cache.async_increment_cache(claim_key, 1, ttl=_LINE_ITEM_CLAIM_TTL_SECONDS)
     if claim is not None and claim > 1:
         verbose_logger.debug("batch line items already emitted for batch_id=%s, skipping", batch.id)
         return 0
@@ -447,4 +446,12 @@ async def log_batch_line_items(
             "batch line item logging failed for batch_id=%s; aggregate logging unaffected",
             batch.id,
         )
+        if emitted == 0:
+            try:
+                await claim_cache.async_delete_cache(claim_key)
+            except Exception:  # noqa: BLE001  # the claim release must never raise; worst case the batch stays claimed
+                verbose_logger.debug(
+                    "batch line item claim release failed for batch_id=%s, claim persists until ttl",
+                    batch.id,
+                )
     return emitted

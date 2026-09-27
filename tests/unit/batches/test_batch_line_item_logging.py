@@ -892,3 +892,75 @@ async def test_line_items_emit_when_the_claim_backend_returns_nothing(recorder):
     assert emitted == 2
     assert len(recorder.success_events) == 1
     assert len(recorder.failure_events) == 1
+
+
+_BROKEN_ERROR_FILE: Final = {**_FILE_BYTES, "error-file-1": "not bytes"}
+
+
+def _broken_error_file_content(file_id: str, **_kwargs):
+    return SimpleNamespace(content=_BROKEN_ERROR_FILE[file_id])
+
+
+@pytest.mark.asyncio
+async def test_line_items_retry_after_a_failed_fanout(recorder):
+    claim_cache: Final = DualCache()
+    batch: Final = _batch()
+    parent: Final = _parent_logging()
+    with patch("litellm.files.main.afile_content", new_callable=AsyncMock, side_effect=ValueError("boom")):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        first: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+    file_mock: Final = AsyncMock(side_effect=_file_content)
+    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        second: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+
+    assert first == 0
+    assert second == 2
+    assert len(recorder.success_events) == 1
+    assert len(recorder.failure_events) == 1
+
+
+@pytest.mark.asyncio
+async def test_line_items_claim_kept_after_partial_emission(recorder):
+    claim_cache: Final = DualCache()
+    batch: Final = _batch()
+    parent: Final = _parent_logging()
+    file_mock: Final = AsyncMock(side_effect=_broken_error_file_content)
+    with patch("litellm.files.main.afile_content", file_mock):  # test-quality-ok: afile_content is the provider boundary; no injection seam for managed file fetch
+        first: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+        second: Final = await log_batch_line_items(
+            batch=batch,
+            custom_llm_provider="openai",
+            parent=parent,
+            model_name="gpt-4o",
+            litellm_params=None,
+            model_info=None,
+            claim_cache=claim_cache,
+        )
+
+    assert first == 1
+    assert second == 0
+    assert len(recorder.success_events) == 1
+    assert len(recorder.failure_events) == 0
