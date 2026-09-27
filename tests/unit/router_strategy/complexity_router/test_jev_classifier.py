@@ -603,7 +603,7 @@ async def test_jev_provider_credentials_never_leave_their_own_environment_pair(
     def respond(sent: httpx.Request) -> httpx.Response:
         assert str(sent.url) == f"{base}/v1/systemone"
         assert sent.headers.get("authorization") == (f"Bearer {key}" if key else None)
-        assert json.loads(sent.content) == request.model_dump(mode="json")
+        assert TypeAdapter(Mapping[str, object]).validate_json(sent.content) == request.model_dump(mode="json")
         return httpx.Response(200, json=answer.model_dump(mode="json"))
 
     handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
