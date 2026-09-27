@@ -290,78 +290,36 @@ class TestMapReasoningEffortDegradation:
             assert result["type"] == "adaptive"
 
 
-class TestApplyOutputConfigDegradation:
-    def test_max_degrades_to_high_when_unsupported(self):
-        with (
-            patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
-                "litellm.llms.anthropic.chat.transformation.AnthropicConfig._validate_effort_for_model",
-                return_value="effort='max' is not supported by this model. Got model: test",
-            ),
-            patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
-                "litellm.llms.anthropic.chat.transformation.AnthropicConfig._is_adaptive_thinking_model",
-                return_value=True,
-            ),
-            patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
-                "litellm.utils.get_model_info",
-                return_value=_mock_model_info(
-                    supports_reasoning=True,
-                    supports_max_reasoning_effort=False,
-                    supports_xhigh_reasoning_effort=False,
-                ),
-            ),
-        ):
-            cfg = AnthropicConfig()
-            data: dict = {}
-            optional_params = {"output_config": {"effort": "max"}}
-            cfg._apply_output_config(data, "test-model", optional_params)
-            assert data["output_config"]["effort"] == "high"
+class TestReasoningEffortAliasOutputConfig:
+    @staticmethod
+    def _transform_alias(reasoning_effort: str) -> dict:
+        config = AnthropicConfig()
+        optional_params = config.map_openai_params(
+            non_default_params={"reasoning_effort": reasoning_effort},
+            optional_params={},
+            model="claude-sonnet-4-6",
+            drop_params=False,
+        )
+        return config.transform_request(
+            model="claude-sonnet-4-6",
+            messages=[{"role": "user", "content": "Hello"}],
+            optional_params={**optional_params, "max_tokens": 1024},
+            litellm_params={},
+            headers={},
+        )
 
-    def test_xhigh_degrades_to_high_when_unsupported(self):
-        with (
-            patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
-                "litellm.llms.anthropic.chat.transformation.AnthropicConfig._validate_effort_for_model",
-                return_value="effort='xhigh' is not supported by this model. Got model: test",
-            ),
-            patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
-                "litellm.llms.anthropic.chat.transformation.AnthropicConfig._is_adaptive_thinking_model",
-                return_value=True,
-            ),
-            patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
-                "litellm.utils.get_model_info",
-                return_value=_mock_model_info(
-                    supports_reasoning=True,
-                    supports_xhigh_reasoning_effort=False,
-                ),
-            ),
-        ):
-            cfg = AnthropicConfig()
-            data: dict = {}
-            optional_params = {"output_config": {"effort": "xhigh"}}
-            cfg._apply_output_config(data, "test-model", optional_params)
-            assert data["output_config"]["effort"] == "high"
+    def test_unsupported_alias_tier_degrades_to_an_accepted_one(self, local_model_cost_map):
+        assert self._transform_alias("xhigh")["output_config"] == {"effort": "high"}
 
-    def test_max_stays_max_when_supported(self):
-        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
-            "litellm.llms.anthropic.chat.transformation.AnthropicConfig._validate_effort_for_model",
-            return_value=None,
-        ):
-            cfg = AnthropicConfig()
-            data: dict = {}
-            optional_params = {"output_config": {"effort": "max"}}
-            cfg._apply_output_config(data, "test-model", optional_params)
-            assert data["output_config"]["effort"] == "max"
+    def test_supported_alias_tier_is_kept(self, local_model_cost_map):
+        assert self._transform_alias("max")["output_config"] == {"effort": "max"}
 
-    def test_no_output_config_is_noop(self):
-        cfg = AnthropicConfig()
-        data: dict = {}
-        cfg._apply_output_config(data, "test-model", {})
-        assert "output_config" not in data
-
-    def test_invalid_effort_value_still_raises(self):
-        with patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
-            "litellm.llms.anthropic.chat.transformation.AnthropicConfig._is_adaptive_thinking_model",
-            return_value=True,
-        ):
-            cfg = AnthropicConfig()
-            with pytest.raises(litellm.exceptions.BadRequestError, match="Invalid effort value"):
-                cfg._apply_output_config({}, "test-model", {"output_config": {"effort": "bogus"}})
+    def test_explicit_unsupported_output_config_effort_is_rejected_not_rewritten(self, local_model_cost_map):
+        with pytest.raises(litellm.exceptions.BadRequestError, match="xhigh"):
+            AnthropicConfig().transform_request(
+                model="claude-sonnet-4-6",
+                messages=[{"role": "user", "content": "Hello"}],
+                optional_params={"max_tokens": 1024, "output_config": {"effort": "xhigh"}},
+                litellm_params={},
+                headers={},
+            )
