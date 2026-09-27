@@ -617,7 +617,8 @@ async def test_budgeted_invocation_requires_a_bounded_price(
     from litellm.proxy.agent_endpoints.auth.managed_authorization import prepare_agent_invocation
 
     budget: Final = {"budget_id": "budget", "max_budget": 1.0} if bounded else None
-    target: Final = agent(litellm_params=pricing, litellm_budget_table=budget)
+    target_budget: Final = {"budget_id": "target-budget", "max_budget": 1.0} if bounded != autonomous else None
+    target: Final = agent(litellm_params=pricing, litellm_budget_table=target_budget)
     registry: Final = agent_registry.AgentRegistry()
     registry.register_agent(target)
     database: Final = MagicMock()
