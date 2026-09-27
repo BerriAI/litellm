@@ -701,7 +701,7 @@ async fn provider_validation_runs_before_caller_parameter_removal(
         json!({"metadata": {"user_id": 7}}),
     ))
     .await;
-    let error = result.err().expect("metadata is validated before removal");
+    let error = result.expect_err("metadata is validated before removal");
     assert!(
         error
             .to_string()
