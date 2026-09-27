@@ -3,6 +3,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from openai.types.responses import ResponseOutputItemDoneEvent
 
 import litellm
 from litellm.completion_extras.litellm_responses_transformation.handler import (
@@ -277,6 +278,50 @@ async def test_collect_response_from_async_stream_recovers_output_items():
     response = await bridge._collect_response_from_stream_async(_AsyncResponsesStream(_empty_responses_response()))
 
     assert response.output == [_output_item_done_event()["item"]]
+
+
+@pytest.mark.parametrize(
+    "terminal_payload",
+    [
+        {"id": "resp_test", "created_at": 0, "output": []},
+        {"output": []},
+    ],
+    ids=["validated-terminal", "partial-terminal"],
+)
+def test_recovery_accepts_sdk_events_and_dictionary_terminals(terminal_payload):
+    event = ResponseOutputItemDoneEvent(**_output_item_done_event(), sequence_number=1)
+
+    response = ResponsesToCompletionBridgeHandler._coerce_response_object(
+        terminal_payload,
+        {"headers": {"x-request-id": "req_test"}},
+        (object(), event),
+    )
+
+    assert response.output == [event.item.model_dump()]
+    assert response._hidden_params["headers"] == {"x-request-id": "req_test"}
+    assert terminal_payload["output"] == []
+
+
+def test_recovery_preserves_complete_response_without_consuming_events():
+    terminal = ResponsesAPIResponse.model_construct(output=[_output_item_done_event()["item"]])
+
+    def unavailable_events():
+        raise AssertionError("Complete terminal output must bypass event recovery")
+        yield
+
+    response = ResponsesToCompletionBridgeHandler._coerce_response_object(terminal, None, unavailable_events())
+
+    assert response is terminal
+    assert response.output == [_output_item_done_event()["item"]]
+
+
+def test_recovery_keeps_empty_terminal_when_no_output_can_be_recovered():
+    terminal = _empty_responses_response()
+
+    response = ResponsesToCompletionBridgeHandler._coerce_response_object(terminal, None, (object(),))
+
+    assert response is terminal
+    assert response.output == []
 
 
 @pytest.mark.asyncio
