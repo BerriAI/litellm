@@ -440,7 +440,7 @@ class TestErrorLogCarriesCallId:
                 "_read_request_body",
                 new=AsyncMock(return_value={"model": "claude-sonnet", "messages": [{"role": "user", "content": "hi"}]}),
             ),
-            patch.object(proxy_server, "token_counter", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
+            patch.object(proxy_server, "count_request_tokens", new=AsyncMock(side_effect=RuntimeError("tokenizer down"))),  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
             caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"),
             pytest.raises(HTTPException) as raised,
         ):

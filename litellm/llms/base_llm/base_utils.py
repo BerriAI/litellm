@@ -29,6 +29,29 @@ class BaseTokenCounter(ABC):
     ) -> TokenCountResponse | None:
         pass
 
+    async def count_anthropic_messages_tokens(
+        self,
+        model_to_use: str,
+        messages: list[dict[str, Any]] | None,
+        contents: list[dict[str, Any]] | None,
+        deployment: dict[str, Any] | None = None,
+        request_model: str = "",
+        tools: list[dict[str, Any]] | None = None,
+        system: object | None = None,
+    ) -> TokenCountResponse | None:
+        """
+        Counts a request in Anthropic Messages format. Override when the provider's count body depends on it.
+        """
+        return await self.count_tokens(
+            model_to_use=model_to_use,
+            messages=messages,
+            contents=contents,
+            deployment=deployment,
+            request_model=request_model,
+            tools=tools,
+            system=system,
+        )
+
     @abstractmethod
     def should_use_token_counting_api(
         self,

@@ -13577,6 +13577,7 @@ from litellm.repositories.table_repositories import (
 )
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
+from litellm.types.utils import CountTokensMessageFormat
 
 
 def _get_provider_token_counter(
@@ -13644,12 +13645,18 @@ async def _try_provider_token_count(
     request_model: str,
     tools: list | None = None,
     system: str | None = None,
+    message_format: CountTokensMessageFormat = "openai",
 ) -> Optional["TokenCountResponse"]:
     """Attempt provider-specific token counting. Returns result on success, None to fall through to local counting."""
     if not provider_counter.should_use_token_counting_api(custom_llm_provider=custom_llm_provider):
         return None
+    count: Final = (
+        provider_counter.count_anthropic_messages_tokens
+        if message_format == "anthropic"
+        else provider_counter.count_tokens
+    )
     try:
-        result: Final = await provider_counter.count_tokens(
+        result: Final = await count(
             model_to_use=model_to_use or "",
             messages=messages,
             contents=contents,
@@ -13706,6 +13713,12 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
     Returns:
         TokenCountResponse
     """
+    return await count_request_tokens(request=request, call_endpoint=call_endpoint, message_format="openai")
+
+
+async def count_request_tokens(
+    request: TokenCountRequest, call_endpoint: bool, message_format: CountTokensMessageFormat
+) -> TokenCountResponse:
     global llm_router
 
     prompt: Final = request.prompt
@@ -13766,6 +13779,7 @@ async def token_counter(request: TokenCountRequest, call_endpoint: bool = False)
             request_model=request.model,
             tools=tools,
             system=system,
+            message_format=message_format,
         )
         if result is not None:
             return result
