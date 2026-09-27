@@ -595,6 +595,7 @@ def _build_control_plane_client(proxy_config: ProxyConfig):
         master_key=proxy_config.api_key,
         control_plane_base_url=proxy_config.base_url,
         replica_urls=(proxy_config.base_url,),
+        control_replica_urls=(proxy_config.base_url,),
     )
 
 
