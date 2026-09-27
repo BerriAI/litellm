@@ -4752,6 +4752,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             tpm_limited_tags=stash.tpm_limited_tags if stash is not None else frozenset(),
             model_group=reconcile_model.group if reconcile_model is not None else None,
         )
+        targets.extend(
+            scope
+            for scope in sorted(reserved_scopes)
+            if scope[0] in ("agent", "agent_session") and scope not in targets
+        )
         charged_targets: Final = (
             [target for target in targets if target[0] != "model_per_team"]
             if self._key_owns_model_tpm_limit_from_request_metadata(request_metadata, reconcile_model)
