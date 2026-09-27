@@ -1,4 +1,4 @@
-use std::{fs, path::Path};
+use std::{collections::BTreeSet, fs, path::Path};
 
 use sqlx::{
     AssertSqlSafe, SqlSafeStr,
@@ -15,9 +15,7 @@ pub const PRISMA_MIGRATIONS_DIR: &str = concat!(
 const MIGRATION_FILENAME: &str = "migration.sql";
 
 pub fn prisma_migrations(directory: &Path) -> Result<Vec<Migration>, Error> {
-    let mut names = migration_names(directory)?;
-    names.sort();
-    names
+    migration_names(directory)?
         .into_iter()
         .zip(1..)
         .map(|(name, version)| {
@@ -34,7 +32,7 @@ pub fn prisma_migrations(directory: &Path) -> Result<Vec<Migration>, Error> {
         .collect()
 }
 
-fn migration_names(directory: &Path) -> Result<Vec<String>, Error> {
+fn migration_names(directory: &Path) -> Result<BTreeSet<String>, Error> {
     let read_error = |source| Error::Read {
         path: directory.to_owned(),
         source,
