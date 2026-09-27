@@ -758,6 +758,9 @@ async def create_file(
             proxy_config=proxy_config,
         )
 
+        if data.get("project") is None and request.headers.get("OpenAI-Project"):
+            data["project"] = request.headers.get("OpenAI-Project")
+
         uploaded_file_info: Final[UploadedFileInfo] = {
             "filename": file.filename,
             "content_type": file.content_type,

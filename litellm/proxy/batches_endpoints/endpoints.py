@@ -268,6 +268,8 @@ async def create_batch(
             "Request received by LiteLLM:\n%s",
             json.dumps(data, indent=4),
         )
+        if data.get("project") is None and request.headers.get("OpenAI-Project"):
+            data["project"] = request.headers.get("OpenAI-Project")
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
