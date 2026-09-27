@@ -1565,6 +1565,21 @@ def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_t
     }
 
 
+def test_token_counter_counts_array_parameter_without_items():
+    messages = [{"role": "user", "content": "tag this"}]
+    tags_tool = {
+        "type": "function",
+        "function": {
+            "name": "set_tags",
+            "parameters": {"type": "object", "properties": {"tags": {"type": "array"}}, "required": ["tags"]},
+        },
+    }
+
+    assert token_counter(model="gpt-4o", messages=messages, tools=[tags_tool]) > token_counter(
+        model="gpt-4o", messages=messages
+    )
+
+
 class _Unprintable:
     def __str__(self) -> str:
         raise AssertionError("opaque block values must be dropped before they are serialized")
@@ -1606,6 +1621,7 @@ def test_uncountable_block_nesting_past_the_depth_limit_is_truncated():
     text = message["content"][0]["text"]
     assert text.endswith('"<truncated>"' + "}" * (DEFAULT_MAX_RECURSE_DEPTH + 1))
     assert "leaf" not in text
+
 
 
 def test_uncountable_block_elides_inline_base64_data_but_keeps_plain_text_data():

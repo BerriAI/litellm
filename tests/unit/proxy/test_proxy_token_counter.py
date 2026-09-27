@@ -1382,3 +1382,25 @@ async def test_gemini_non_json_success_body_surfaces_as_bad_gateway_when_fallbac
         )
 
     assert exc_info.value.code == "502"
+
+
+@pytest.mark.asyncio
+async def test_local_estimate_counts_a_tool_with_an_array_property_without_items(monkeypatch):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+    tags_tool = {
+        "type": "function",
+        "function": {
+            "name": "set_tags",
+            "description": "Set tags",
+            "parameters": {"type": "object", "properties": {"tags": {"type": "array"}}, "required": ["tags"]},
+        },
+    }
+
+    async def count(tools: list[dict[str, object]] | None) -> int:
+        result = await token_counter(
+            request=TokenCountRequest(model="gpt-4o", messages=[{"role": "user", "content": "tag this"}], tools=tools)
+        )
+        return result.total_tokens
+
+    assert await count([tags_tool]) > await count(None)
+
