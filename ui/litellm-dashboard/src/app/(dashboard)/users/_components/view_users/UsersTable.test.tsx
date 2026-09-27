@@ -36,6 +36,7 @@ interface HarnessOverrides {
   rowCount?: number;
   isLoading?: boolean;
   selectionEnabled?: boolean;
+  canViewUserUsage?: boolean;
   onUserClick?: (userId: string, openInEditMode?: boolean) => void;
   onDeleteUser?: (user: UserInfo) => void;
   onResetPassword?: (userId: string) => void;
@@ -51,6 +52,7 @@ function Harness({
   rowCount = 1,
   isLoading = false,
   selectionEnabled = false,
+  canViewUserUsage = true,
   onUserClick = vi.fn(),
   onDeleteUser = vi.fn(),
   onResetPassword = vi.fn(),
@@ -74,6 +76,7 @@ function Harness({
         isLoading={isLoading}
         possibleUIRoles={possibleUIRoles}
         teams={[]}
+        canViewUserUsage={canViewUserUsage}
         sorting={sorting}
         onSortingChange={(updater) => {
           setSorting(updater);
@@ -178,7 +181,7 @@ describe("UsersTable", () => {
     expect(onUserClick).toHaveBeenCalledWith("user-1", true);
   });
 
-  it("links the row menu to that user's usage", async () => {
+  it("links the row menu to that user's usage when allowed", async () => {
     const user = userEvent.setup();
     render(<Harness />);
 
@@ -188,6 +191,15 @@ describe("UsersTable", () => {
       "href",
       "/ui/usage?user=user-1",
     );
+  });
+
+  it("hides the usage link when the viewer cannot view usage", async () => {
+    const user = userEvent.setup();
+    render(<Harness canViewUserUsage={false} />);
+
+    await openRowMenu(user, "user-1");
+
+    expect(screen.queryByRole("menuitem", { name: "View usage" })).not.toBeInTheDocument();
   });
 
   it("delegates delete and reset-password from the row menu", async () => {

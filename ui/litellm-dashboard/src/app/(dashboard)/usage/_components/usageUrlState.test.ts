@@ -94,7 +94,27 @@ describe("date range", () => {
   it("stores a preset as a rolling range key", () => {
     const lastThirtyDays = { from: moment().subtract(30, "days").startOf("day").toDate(), to: new Date() };
 
-    expect(applyPatch("?from=a&to=b", dateRangePatch(lastThirtyDays))).toBe("?range=30d");
+    expect(applyPatch("?from=a&to=b", dateRangePatch(lastThirtyDays, "30d"))).toBe("?range=30d");
+  });
+
+  it("stores a custom range matching today as explicit dates", () => {
+    const today = { from: moment().startOf("day").toDate(), to: moment().endOf("day").toDate() };
+
+    expect(dateRangePatch(today, null)).toEqual({
+      range: null,
+      from: today.from.toISOString(),
+      to: today.to.toISOString(),
+    });
+  });
+
+  it("stores an unknown preset label as explicit dates", () => {
+    const today = { from: moment().startOf("day").toDate(), to: moment().endOf("day").toDate() };
+
+    expect(dateRangePatch(today, "not-a-preset")).toEqual({
+      range: null,
+      from: today.from.toISOString(),
+      to: today.to.toISOString(),
+    });
   });
 
   it("re-resolves a rolling range against the current day", () => {
@@ -106,7 +126,7 @@ describe("date range", () => {
 
   it("round-trips a custom range as the same UTC instants", () => {
     const custom = { from: new Date("2026-01-05T08:00:00.000Z"), to: new Date("2026-01-09T20:30:00.000Z") };
-    const query = applyPatch("?range=7d", dateRangePatch(custom));
+    const query = applyPatch("?range=7d", dateRangePatch(custom, null));
 
     expect(query).toBe("?from=2026-01-05T08:00:00.000Z&to=2026-01-09T20:30:00.000Z");
     expect(dateRangeFromParams(load(query))).toEqual(custom);

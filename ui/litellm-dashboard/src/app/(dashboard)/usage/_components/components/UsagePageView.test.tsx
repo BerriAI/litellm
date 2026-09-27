@@ -29,6 +29,7 @@ beforeAll(() => {
 vi.mock("@/components/networking", () => ({
   userDailyActivityCall: vi.fn(),
   userDailyActivityAggregatedCall: vi.fn(),
+  teamDailyActivityAggregatedCall: vi.fn(),
   gatewayDailyActivityCall: vi.fn(),
   tagListCall: vi.fn(),
 }));
@@ -49,8 +50,10 @@ vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
   default: () => <div>Top Keys</div>,
 }));
 
-vi.mock("./EntityUsage/EntityUsage", () => ({
-  default: ({
+vi.mock("./EntityUsage/EntityUsage", async () => {
+  const React = await import("react");
+  const { teamDailyActivityAggregatedCall } = await import("@/components/networking");
+  const EntityUsage = ({
     entityType,
     entityList,
     selectedEntities,
@@ -60,21 +63,28 @@ vi.mock("./EntityUsage/EntityUsage", () => ({
     entityList: unknown;
     selectedEntities: readonly string[];
     onSelectedEntitiesChange: (ids: readonly string[]) => void;
-  }) => (
-    <div
-      data-testid="entity-usage"
-      data-entity-type={entityType}
-      data-entity-list={JSON.stringify(entityList ?? null)}
-      data-selected={JSON.stringify(selectedEntities)}
-    >
-      Entity Usage
-      <button type="button" onClick={() => onSelectedEntitiesChange(["picked-1", "picked-2"])}>
-        pick entities
-      </button>
-    </div>
-  ),
-  EntityList: [],
-}));
+  }) => {
+    React.useEffect(() => {
+      if (entityType === "team") {
+        void teamDailyActivityAggregatedCall("test-token", new Date(), new Date(), ["team-1"]);
+      }
+    }, [entityType]);
+    return (
+      <div
+        data-testid="entity-usage"
+        data-entity-type={entityType}
+        data-entity-list={JSON.stringify(entityList ?? null)}
+        data-selected={JSON.stringify(selectedEntities)}
+      >
+        Entity Usage
+        <button type="button" onClick={() => onSelectedEntitiesChange(["picked-1", "picked-2"])}>
+          pick entities
+        </button>
+      </div>
+    );
+  };
+  return { default: EntityUsage, EntityList: [] };
+});
 
 vi.mock("./EntityUsage/SpendByProvider", () => ({
   default: () => <div>Spend By Provider</div>,
@@ -116,7 +126,11 @@ vi.mock("@/components/shared/advanced_date_picker", async (importOriginal) => {
   const React = await import("react");
   // The button is how a test drives a range change; the real picker's own UI is
   // not what any test here is asserting on.
-  const AdvancedDatePicker = ({ onValueChange }: { onValueChange?: (value: unknown) => void }) =>
+  const AdvancedDatePicker = ({
+    onValueChange,
+  }: {
+    onValueChange?: (value: unknown, presetShortLabel: string | null) => void;
+  }) =>
     React.createElement(
       "div",
       { "data-testid": "advanced-date-picker" },
@@ -126,7 +140,7 @@ vi.mock("@/components/shared/advanced_date_picker", async (importOriginal) => {
         {
           "data-testid": "pick-a-different-range",
           onClick: () =>
-            onValueChange?.({ from: new Date("2024-01-01T00:00:00Z"), to: new Date("2024-01-08T00:00:00Z") }),
+            onValueChange?.({ from: new Date("2024-01-01T00:00:00Z"), to: new Date("2024-01-08T00:00:00Z") }, null),
         },
         "pick",
       ),
@@ -185,6 +199,7 @@ vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
 describe("UsagePage", () => {
   const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
   const mockUserDailyActivityCall = vi.mocked(networking.userDailyActivityCall);
+  const mockTeamDailyActivityAggregatedCall = vi.mocked(networking.teamDailyActivityAggregatedCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
   const mockUseCustomers = vi.mocked(useCustomers);
@@ -401,6 +416,7 @@ describe("UsagePage", () => {
     } as any);
     mockUserDailyActivityAggregatedCall.mockClear();
     mockUserDailyActivityCall.mockClear();
+    mockTeamDailyActivityAggregatedCall.mockClear();
     mockTagListCall.mockClear();
     mockGatewayDailyActivityCall.mockClear();
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
@@ -826,15 +842,10 @@ describe("UsagePage", () => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
-    const usageSelect = screen.getByTestId("usage-view-select");
     act(() => {
-      fireEvent.change(usageSelect, { target: { value: "team" } });
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: usageView } });
     });
-    expect(screen.getAllByText("Entity Usage").length).toBeGreaterThan(0);
 
-    act(() => {
-      fireEvent.change(usageSelect, { target: { value: usageView } });
-    });
     expect(screen.queryByText("Entity Usage")).not.toBeInTheDocument();
   });
 
@@ -1501,6 +1512,18 @@ describe("UsagePage", () => {
       expect(screen.queryByTestId("entity-usage")).not.toBeInTheDocument();
     });
 
+    it("does not render or fetch a disallowed team view for an internal user", async () => {
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+
+      renderAt("?view=team&team=team-1");
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+      expect(screen.queryByTestId("entity-usage")).not.toBeInTheDocument();
+      expect(mockTeamDailyActivityAggregatedCall).not.toHaveBeenCalled();
+    });
+
     it("never fetches another user's usage for a non-admin who opens their link", async () => {
       const warning = vi.spyOn(toast, "warning");
       mockUseAuthorized.mockReturnValue(nonAdminSession);
@@ -1531,6 +1554,12 @@ describe("UsagePage", () => {
       await waitFor(() => {
         expect(writeText).toHaveBeenCalledWith(window.location.href);
       });
+    });
+
+    it("shows the share link on an entity view", async () => {
+      renderAt("?view=team");
+
+      expect(await screen.findByRole("button", { name: "Copy Share Link" })).toBeInTheDocument();
     });
   });
 });

@@ -427,7 +427,7 @@ export const generateExportData = (
 export const generateMetadata = (
   entityType: EntityType,
   dateRange: DateRangePickerValue,
-  selectedFilters: string[],
+  selectedFilters: readonly string[],
   exportScope: ExportScope,
   spendData: EntitySpendData,
 ): ExportMetadata => {
@@ -450,7 +450,7 @@ export const generateMetadata = (
       from: dateRange.from?.toISOString(),
       to: dateRange.to?.toISOString(),
     },
-    filters_applied: selectedFilters.length > 0 ? selectedFilters : "None",
+    filters_applied: selectedFilters.length > 0 ? [...selectedFilters] : "None",
     export_scope: exportScope,
     summary,
   };
@@ -498,7 +498,7 @@ export const handleExportJSON = (
   entityLabel: string,
   entityType: EntityType,
   dateRange: DateRangePickerValue,
-  selectedFilters: string[],
+  selectedFilters: readonly string[],
   teamAliasMap: Record<string, string> = {},
 ): void => {
   const data = generateExportData(spendData, exportScope, entityLabel, teamAliasMap);

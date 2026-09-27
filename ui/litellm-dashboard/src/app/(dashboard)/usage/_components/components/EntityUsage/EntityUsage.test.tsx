@@ -101,7 +101,7 @@ vi.mock("./TopModelView", () => ({
 }));
 
 vi.mock("./TeamUserSpendCard", () => ({
-  default: ({ teamIds }: { teamIds: string[] }) => <div>{`team-user-spend:${teamIds.join("|")}`}</div>,
+  default: ({ teamIds }: { teamIds: readonly string[] }) => <div>{`team-user-spend:${teamIds.join("|")}`}</div>,
 }));
 
 vi.mock("@/components/EntityUsageExport/EntityUsageExportModal", () => ({
@@ -800,7 +800,7 @@ describe("EntityUsage", () => {
   });
 
   it("defaults Model Activity to public model names and toggles to litellm models", async () => {
-    const { container } = render(<StatefulEntityUsage {...defaultProps} />);
+    render(<StatefulEntityUsage {...defaultProps} />);
 
     await waitFor(() => {
       expect(mockTagDailyActivityCall).toHaveBeenCalled();

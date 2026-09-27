@@ -1,7 +1,7 @@
 import { parseAsNativeArrayOf, parseAsString, type inferParserType } from "nuqs";
 
 import type { EntityType } from "@/components/EntityUsageExport/types";
-import { matchRelativeTimeOption, relativeTimeOptions } from "@/components/shared/advanced_date_picker";
+import { relativeTimeOptions } from "@/components/shared/advanced_date_picker";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import { uiHref } from "@/utils/uiHref";
 import { USAGE_OPTIONS, type UsageOption } from "./components/UsageViewSelect/UsageViewSelect";
@@ -120,9 +120,10 @@ export const dateRangeFromParams = (params: DateParams): DateRangePickerValue | 
   return customRangeFromParams(params.from, params.to);
 };
 
-export const dateRangePatch = (value: DateRangePickerValue): UsageUrlPatch => {
-  const preset = matchRelativeTimeOption(value);
-  if (preset) return { range: preset.shortLabel, from: null, to: null };
+export const dateRangePatch = (value: DateRangePickerValue, presetShortLabel: string | null): UsageUrlPatch => {
+  if (presetShortLabel !== null && relativeTimeOptions.some((option) => option.shortLabel === presetShortLabel)) {
+    return { range: presetShortLabel, from: null, to: null };
+  }
   if (!value.from || !value.to) return { range: null, from: null, to: null };
   return { range: null, from: value.from.toISOString(), to: value.to.toISOString() };
 };

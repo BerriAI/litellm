@@ -25,7 +25,7 @@ export interface EntityUsageExportModalProps {
   entityType: EntityType;
   spendData: EntitySpendData;
   dateRange: DateRangePickerValue;
-  selectedFilters: string[];
+  selectedFilters: readonly string[];
   customTitle?: string;
   teams?: Team[];
   serverExport?: ServerExport;

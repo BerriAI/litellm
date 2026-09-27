@@ -1,5 +1,6 @@
 import { render, screen, fireEvent, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import moment from "moment";
 import { describe, it, expect, vi, beforeEach, beforeAll } from "vitest";
 import AdvancedDatePicker from "./advanced_date_picker";
 
@@ -163,6 +164,34 @@ describe("AdvancedDatePicker", () => {
 
     await waitFor(() => {
       expect(mockOnValueChange).toHaveBeenCalled();
+    });
+  });
+
+  it("passes the clicked preset label when applying", async () => {
+    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+
+    openDropdown(container);
+    fireEvent.click(screen.getByText("Today"));
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), "today");
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), "today");
+    });
+  });
+
+  it("passes a null preset label when typed dates match today", async () => {
+    const { container } = render(<AdvancedDatePicker value={defaultValue} onValueChange={mockOnValueChange} />);
+    const today = moment().format("YYYY-MM-DD");
+
+    openDropdown(container);
+    fireEvent.change(screen.getByDisplayValue("2025-01-01"), { target: { value: today } });
+    fireEvent.change(screen.getByDisplayValue("2025-01-31"), { target: { value: today } });
+    fireEvent.click(screen.getByRole("button", { name: "Apply" }));
+
+    expect(mockOnValueChange).toHaveBeenNthCalledWith(1, expect.anything(), null);
+    await waitFor(() => {
+      expect(mockOnValueChange).toHaveBeenNthCalledWith(2, expect.anything(), null);
     });
   });
 

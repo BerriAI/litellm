@@ -70,7 +70,7 @@ import { TOP_MODEL_LIMITS } from "./EntityUsage/TopModelView";
 import TopKeyView, { type TopKeyItem } from "@/components/UsagePage/components/EntityUsage/TopKeyView";
 import { getGlobalTopKeys } from "./EntityUsage/entityUsageAggregations";
 import UsageAIChatPanel from "./UsageAIChatPanel";
-import { allowedUsageOptions, UsageOption, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
+import { allowedUsageOptions, UsageViewSelect } from "./UsageViewSelect/UsageViewSelect";
 import UserRecordLink from "./UserRecordLink";
 import {
   cleanUsageUrl,
@@ -78,6 +78,7 @@ import {
   dateRangePatch,
   entitySelectionPatch,
   selectedEntitiesFromParams,
+  DEFAULT_USAGE_VIEW,
   usageTabFromParams,
   usageTabPatch,
   usageUrlParsers,
@@ -127,8 +128,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const isAdmin = all_admin_roles.includes(userRole || "");
   const canViewTagUsage = isAdmin || internalUserRoles.includes(userRole || "");
   const isOrgAdmin = useIsOrgAdmin();
-  const canViewOrganizationUsage = hasCapability(userRole, "viewOrganizationUsage", isOrgAdmin);
   const canViewAgentUsage = hasCapability(userRole, "viewAgentUsage");
+  const allowedViews = useMemo(
+    () => allowedUsageOptions(userRole, canViewTagUsage, isOrgAdmin),
+    [userRole, canViewTagUsage, isOrgAdmin],
+  );
 
   const [modelViewType, setModelViewType] = useState<ModelViewType>("groups");
   const [isCloudZeroModalOpen, setIsCloudZeroModalOpen] = useState(false);
@@ -136,12 +140,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const [isAiChatOpen, setIsAiChatOpen] = useState(false);
   const selectedUsageView = usageViewFromParams(urlParams);
   const selectedTab = usageTabFromParams(urlParams);
-  // Org-admin membership is read from the server, so unlike the other usage
-  // views this one can be revoked while the page is open. Derive the view in
-  // render rather than storing it, so the fallback lands on the same paint and
-  // the selector never holds a value it no longer offers.
-  const usageView: UsageOption =
-    selectedUsageView === "organization" && !canViewOrganizationUsage ? "global" : selectedUsageView;
+  const usageView = allowedViews.includes(selectedUsageView) ? selectedUsageView : DEFAULT_USAGE_VIEW;
 
   const [showCredentialBanner, setShowCredentialBanner] = useState(true);
   const [topKeysLimit, setTopKeysLimit] = useState<number>(5);
@@ -151,10 +150,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : urlParams.user;
 
   const { isLoading: organizationsLoading } = useOrganizations();
-  const allowedViews = useMemo(
-    () => allowedUsageOptions(userRole, canViewTagUsage, isOrgAdmin),
-    [userRole, canViewTagUsage, isOrgAdmin],
-  );
   const accessSettled = userRole !== null && !organizationsLoading;
   useEffect(() => {
     if (!accessSettled) return;
@@ -303,11 +298,11 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
 
   // Super responsive date change handler
   const handleDateChange = useCallback(
-    (newValue: DateRangePickerValue) => {
+    (newValue: DateRangePickerValue, presetShortLabel: string | null) => {
       // Instant visual feedback
       setIsDateChanging(true);
 
-      void setUrlParams(dateRangePatch(newValue));
+      void setUrlParams(dateRangePatch(newValue, presetShortLabel));
     },
     [setUrlParams],
   );
@@ -497,7 +492,13 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
               canViewTagUsage={canViewTagUsage}
               isOrgAdmin={isOrgAdmin}
             />
-            <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+            <div className="flex items-center gap-2">
+              <AdvancedDatePicker value={dateValue} onValueChange={handleDateChange} />
+              <Button variant="outline" onClick={() => void copyToClipboard(window.location.href, "Link copied")}>
+                <Link2 />
+                Copy Share Link
+              </Button>
+            </div>
           </div>
           <PaginationStatusAlerts
             isFetchingMore={paginatedResult.isFetchingMore}
@@ -538,10 +539,6 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
                     </TabsTrigger>
                   </TabsList>
                   <div className="flex items-center gap-2">
-                    <Button variant="outline" onClick={() => void copyToClipboard(window.location.href, "Link copied")}>
-                      <Link2 />
-                      Copy Share Link
-                    </Button>
                     <Button variant="outline" onClick={() => setIsAiChatOpen(true)}>
                       <Sparkles />
                       Ask AI
@@ -931,7 +928,7 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
           )}
           {/* Organization Usage Panel */}
 
-          {usageView === "organization" && canViewOrganizationUsage && (
+          {usageView === "organization" && (
             <EntityUsage
               accessToken={accessToken}
               entityType="organization"

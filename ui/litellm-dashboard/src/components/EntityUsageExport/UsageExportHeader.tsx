@@ -27,7 +27,7 @@ interface UsageExportHeaderProps {
   showFilters?: boolean;
   filterLabel?: string;
   filterPlaceholder?: string;
-  selectedFilters?: string[];
+  selectedFilters?: readonly string[];
   onFiltersChange?: (filters: string[]) => void;
   filterOptions?: Array<{ label: string; value: string }>;
   filterSlot?: React.ReactNode;
@@ -85,7 +85,7 @@ const UsageExportHeader: React.FC<UsageExportHeaderProps> = ({
       multiple
       disabled={isFilterDisabled}
       items={optionValues}
-      value={selectedFilters}
+      value={[...selectedFilters]}
       onValueChange={(next: string[]) => onFiltersChange?.(next)}
     >
       <ComboboxChips render={<div ref={anchor} />} className="w-full">

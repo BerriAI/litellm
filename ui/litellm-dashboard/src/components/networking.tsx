@@ -1529,7 +1529,7 @@ export const teamSpendByUserCall = async (
   accessToken: string,
   startTime: Date,
   endTime: Date,
-  teamIds: string[],
+  teamIds: readonly string[],
 ): Promise<TeamUserSpendResponse> =>
   apiClient.get<TeamUserSpendResponse>(`/team/spend/by_user`, {
     accessToken,
