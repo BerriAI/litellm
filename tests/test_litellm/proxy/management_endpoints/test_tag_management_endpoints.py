@@ -1513,3 +1513,338 @@ async def test_add_tag_to_deployment_model_not_found():
 
         assert exc_info.value.status_code == 500
         assert "not found in database" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_get_tag_daily_activity_aggregated_scopes_and_flags():
+    """The aggregated endpoint must apply the same non-admin key scoping as the
+    paginated one and request the per-tag breakdown with the caller's timezone,
+    so the Tag Usage UI gets every day in one response."""
+    from litellm.proxy.management_endpoints import tag_management_endpoints
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity_aggregated,
+    )
+
+    user_key = Mock()
+    user_key.token = "user_key_1"
+    user_api_key_dict = UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch.object(
+            tag_management_endpoints, "get_daily_activity_aggregated", new_callable=AsyncMock
+        ) as mock_aggregated,
+    ):
+        mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[user_key])
+        mock_aggregated.return_value = Mock()
+
+        await get_tag_daily_activity_aggregated(
+            tags="tag-a,tag-b",
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            exclude_tags="tag-c",
+            timezone=480,
+            user_api_key_dict=user_api_key_dict,
+        )
+
+        call_kwargs = mock_aggregated.call_args[1]
+        assert call_kwargs["api_key"] == ["user_key_1"]
+        assert call_kwargs["entity_id"] == ["tag-a", "tag-b"]
+        assert call_kwargs["exclude_entity_ids"] == ["tag-c"]
+        assert call_kwargs["include_entity_breakdown"] is True
+        assert call_kwargs["timezone_offset_minutes"] == 480
+        assert call_kwargs["table_name"] == "litellm_dailytagspend"
+        assert call_kwargs["entity_metadata_field"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_tag_daily_activity_aggregated_scoped_empty_keys_returns_empty():
+    """A scoped caller with no keys must get an empty result without querying."""
+    from litellm.proxy.management_endpoints import tag_management_endpoints
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity_aggregated,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch.object(
+            tag_management_endpoints, "get_daily_activity_aggregated", new_callable=AsyncMock
+        ) as mock_aggregated,
+    ):
+        mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+
+        result = await get_tag_daily_activity_aggregated(
+            tags=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            model=None,
+            api_key=None,
+            exclude_tags=None,
+            timezone=None,
+            user_api_key_dict=UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER),
+        )
+
+        assert result.results == []
+        mock_aggregated.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_search_tag_daily_activity_keys_scopes_where_before_take():
+    """The caller's key and tag scope must sit inside the same SQL WHERE as the
+    LIMIT, so high-spend foreign keys cannot evict an in-scope match."""
+    from litellm.proxy.management_endpoints import tag_management_endpoints
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        search_tag_daily_activity_keys,
+    )
+
+    own_key = Mock()
+    own_key.token = "user_key_1"
+    user_api_key_dict = UserAPIKeyAuth(user_id="user-1", user_role=LitellmUserRoles.INTERNAL_USER)
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch.object(
+            tag_management_endpoints, "get_daily_activity_aggregated", new_callable=AsyncMock
+        ) as mock_aggregated,
+    ):
+        mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[own_key])
+        mock_prisma.db.query_raw = AsyncMock(return_value=[{"token": "user_key_1"}])
+        mock_aggregated.return_value = Mock()
+
+        await search_tag_daily_activity_keys(
+            user_api_key_dict=user_api_key_dict,
+            search="Needle",
+            tags="tag-a",
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            exclude_tags=None,
+            timezone=480,
+        )
+
+        query_raw_args = mock_prisma.db.query_raw.call_args[0]
+        sql, params = query_raw_args[0], query_raw_args[1:]
+        assert 'FROM "LiteLLM_DailyTagSpend" s' in sql
+        assert "EXISTS" in sql
+        assert '"tag" IN (' in sql
+        assert "api_key IN (" in sql
+        assert "LIMIT" in sql
+        assert "tag-a" in params
+        assert "user_key_1" in params
+        assert "Needle" in params
+        assert "%Needle%" in params
+
+        call_kwargs = mock_aggregated.call_args[1]
+        assert call_kwargs["api_key"] == ["user_key_1"]
+        assert call_kwargs["entity_id"] == ["tag-a"]
+        assert call_kwargs["model"] is None
+
+
+@pytest.mark.asyncio
+async def test_search_tag_daily_activity_keys_no_match_returns_empty_without_aggregating():
+    """A term matching no key still owes the standard metadata shape, and the
+    aggregated query must not run."""
+    from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
+    from litellm.proxy.management_endpoints import tag_management_endpoints
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        search_tag_daily_activity_keys,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
+        patch.object(
+            tag_management_endpoints, "get_daily_activity_aggregated", new_callable=AsyncMock
+        ) as mock_aggregated,
+    ):
+        mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
+        mock_prisma.db.query_raw = AsyncMock(return_value=[])
+
+        result = await search_tag_daily_activity_keys(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            search="Needle",
+            tags=None,
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            exclude_tags=None,
+            timezone=None,
+        )
+
+        assert result.results == []
+        assert result.metadata.total_api_keys == 0
+        assert result.metadata.api_key_limit == USAGE_TOP_API_KEYS_LIMIT
+        mock_aggregated.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_get_tag_daily_activity_export_json_and_csv_headers():
+    """Export returns generic entity rows keyed on the tag, and the CSV header
+    uses the tag labels with no alias column."""
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity_export,
+    )
+    from litellm.types.proxy.management_endpoints.common_daily_activity import (
+        DailyActivityExportRow,
+    )
+
+    rows = (
+        DailyActivityExportRow(
+            date="2024-01-02",
+            entity_id="tag-a",
+            api_key="key-1",
+            key_alias="alias-1",
+            user_id="user-1",
+            user_email="u@e.com",
+            keys=1,
+            model=None,
+            spend=1.5,
+            api_requests=2,
+            successful_requests=2,
+            failed_requests=0,
+            total_tokens=30,
+            prompt_tokens=20,
+            completion_tokens=10,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        ),
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client"),
+        patch(
+            "litellm.proxy.management_endpoints.common_daily_activity_routes.get_daily_activity_export_rows",
+            new_callable=AsyncMock,
+            return_value=rows,
+        ) as mock_rows,
+    ):
+        json_response = await get_tag_daily_activity_export(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            export_type="daily_with_keys",
+            format="json",
+            tags="tag-a",
+            exclude_tags=None,
+            timezone_offset=None,
+        )
+        body = json.loads(json_response.body)
+        assert body["data"][0]["entity_id"] == "tag-a"
+        assert body["data"][0]["entity_alias"] is None
+        assert body["metadata"]["entity_ids"] == ["tag-a"]
+
+        csv_response = await get_tag_daily_activity_export(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            export_type="daily_with_keys",
+            format="csv",
+            tags="tag-a",
+            exclude_tags=None,
+            timezone_offset=None,
+        )
+        header = csv_response.body.decode().splitlines()[0]
+        assert header.startswith("Date,Tag,")
+        assert "attachment" in csv_response.headers["content-disposition"]
+        assert "tag_usage_daily_with_keys_" in csv_response.headers["content-disposition"]
+
+        call_kwargs = mock_rows.call_args[1]
+        assert call_kwargs["table_name"] == "litellm_dailytagspend"
+        assert call_kwargs["entity_id_field"] == "tag"
+        assert call_kwargs["alias_metadata_key"] is None
+
+
+@pytest.mark.asyncio
+async def test_get_tag_daily_activity_export_csv_escapes_formula_tag_ids():
+    """A requester-supplied tag id starting with `=` must be apostrophe-prefixed
+    in the CSV so spreadsheet apps cannot evaluate it; plain ids pass through."""
+    from litellm.proxy.management_endpoints.tag_management_endpoints import (
+        get_tag_daily_activity_export,
+    )
+    from litellm.types.proxy.management_endpoints.common_daily_activity import (
+        DailyActivityExportRow,
+    )
+
+    rows = tuple(
+        DailyActivityExportRow(
+            date="2024-01-02",
+            entity_id=entity_id,
+            api_key="key-1",
+            key_alias=None,
+            user_id=None,
+            user_email=None,
+            keys=1,
+            model=None,
+            spend=1.5,
+            api_requests=1,
+            successful_requests=1,
+            failed_requests=0,
+            total_tokens=10,
+            prompt_tokens=5,
+            completion_tokens=5,
+            cache_read_input_tokens=0,
+            cache_creation_input_tokens=0,
+        )
+        for entity_id in ('=HYPERLINK("x")', "prod")
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client"),
+        patch(
+            "litellm.proxy.management_endpoints.common_daily_activity_routes.get_daily_activity_export_rows",
+            new_callable=AsyncMock,
+            return_value=rows,
+        ),
+    ):
+        csv_response = await get_tag_daily_activity_export(
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+            start_date="2024-01-01",
+            end_date="2024-01-31",
+            export_type="daily_with_keys",
+            format="csv",
+            tags=None,
+            exclude_tags=None,
+            timezone_offset=None,
+        )
+
+    import csv
+    import io
+
+    parsed = list(csv.reader(io.StringIO(csv_response.body.decode())))
+    tag_column = parsed[0].index("Tag")
+    tag_values = [line[tag_column] for line in parsed[1:]]
+    assert tag_values == ['\'=HYPERLINK("x")', "prod"]
+
+
+def test_tag_daily_activity_export_reads_timezone_query_param():
+    """The frontend sends `timezone` (the team-route convention); a route that
+    listens for `timezone_offset_minutes` instead silently drops it and exports
+    UTC-shifted day buckets."""
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    from litellm.proxy._types import ProxyException
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.management_endpoints.tag_management_endpoints import router
+    from litellm.proxy.proxy_server import openai_exception_handler
+
+    app = FastAPI()
+    app.include_router(router)
+    app.add_exception_handler(ProxyException, openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client"),
+        patch(
+            "litellm.proxy.management_endpoints.common_daily_activity_routes.get_daily_activity_export_rows",
+            new_callable=AsyncMock,
+            return_value=(),
+        ) as mock_rows,
+    ):
+        response = TestClient(app).get(
+            "/tag/daily/activity/export?start_date=2026-09-20&end_date=2026-09-22&timezone=480&format=json"
+        )
+
+        assert response.status_code == 200
+        assert mock_rows.call_args[1]["timezone_offset_minutes"] == 480

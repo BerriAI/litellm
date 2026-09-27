@@ -28,10 +28,22 @@ import { UsageExportHeader } from "@/components/EntityUsageExport";
 import { getApiKeyTruncation, getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
 import type { EntityType, ServerExport } from "@/components/EntityUsageExport/types";
 import {
+  agentDailyActivityAggregatedCall,
   agentDailyActivityCall,
+  agentDailyActivityExportCall,
+  agentDailyActivityKeySearchCall,
+  customerDailyActivityAggregatedCall,
   customerDailyActivityCall,
+  customerDailyActivityExportCall,
+  customerDailyActivityKeySearchCall,
+  organizationDailyActivityAggregatedCall,
   organizationDailyActivityCall,
+  organizationDailyActivityExportCall,
+  organizationDailyActivityKeySearchCall,
+  tagDailyActivityAggregatedCall,
   tagDailyActivityCall,
+  tagDailyActivityExportCall,
+  tagDailyActivityKeySearchCall,
   teamDailyActivityAggregatedCall,
   teamDailyActivityCall,
   teamDailyActivityExportCall,
@@ -108,7 +120,44 @@ const ENTITY_FETCH_FNS: Record<EntityType, (...args: any[]) => Promise<any>> = {
 // Single-shot endpoints returning the whole range in one response; entity types
 // without one fall back to page-draining the paginated endpoint.
 const ENTITY_AGGREGATED_FETCH_FNS: Partial<Record<EntityType, (...args: any[]) => Promise<any>>> = {
+  tag: tagDailyActivityAggregatedCall,
   team: teamDailyActivityAggregatedCall,
+  organization: organizationDailyActivityAggregatedCall,
+  customer: customerDailyActivityAggregatedCall,
+  agent: agentDailyActivityAggregatedCall,
+};
+
+const ENTITY_KEY_SEARCH_FNS: Partial<
+  Record<
+    EntityType,
+    (accessToken: string, startTime: Date, endTime: Date, ...options: [string, (string[] | null)?]) => Promise<any>
+  >
+> = {
+  tag: tagDailyActivityKeySearchCall,
+  team: teamDailyActivityKeySearchCall,
+  organization: organizationDailyActivityKeySearchCall,
+  customer: customerDailyActivityKeySearchCall,
+  agent: agentDailyActivityKeySearchCall,
+};
+
+type EntityExportCall = (options: {
+  accessToken: string;
+  startTime: Date;
+  endTime: Date;
+  entityIds: string[] | null;
+  exportType: Parameters<typeof teamDailyActivityExportCall>[0]["exportType"];
+  format: Parameters<typeof teamDailyActivityExportCall>[0]["format"];
+}) => Promise<Blob>;
+
+const teamExportCall: EntityExportCall = ({ entityIds, ...rest }) =>
+  teamDailyActivityExportCall({ ...rest, teamIds: entityIds });
+
+const ENTITY_EXPORT_FNS: Partial<Record<EntityType, EntityExportCall>> = {
+  tag: tagDailyActivityExportCall,
+  team: teamExportCall,
+  organization: organizationDailyActivityExportCall,
+  customer: customerDailyActivityExportCall,
+  agent: agentDailyActivityExportCall,
 };
 
 const ENTITY_CAPABILITIES: Partial<Record<EntityType, Capability>> = {
@@ -149,6 +198,12 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const hasRequestWindow = !!accessToken && !!startTime && !!endTime;
   const enabled = hasRequestWindow && canViewEntity;
 
+  const paginatedActivityArgs = {
+    fetchFn,
+    args: [accessToken, startTime, endTime, entityFilterArg],
+    enabled,
+    aggregatedFetchFn,
+  };
   const {
     data: spendDataRaw,
     isFetchingMore,
@@ -157,12 +212,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
     failed,
     coversRange,
     cancel,
-  } = usePaginatedDailyActivity({
-    fetchFn,
-    args: [accessToken, startTime, endTime, entityFilterArg],
-    enabled,
-    aggregatedFetchFn,
-  });
+  } = usePaginatedDailyActivity(paginatedActivityArgs);
 
   const spendData = spendDataRaw as unknown as EntitySpendData;
   const apiKeyTruncation = getApiKeyTruncation(spendData.metadata?.api_key_limit, spendData.metadata?.total_api_keys);
@@ -185,15 +235,17 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const modelBreakdownKey = modelViewType === "groups" ? "model_groups" : "models";
   const modelMetrics = processActivityData(spendData, modelBreakdownKey, teams || []);
   const keyMetrics = processActivityData(spendData, "api_keys", teams || []);
-  const searchTeamKeys = useCallback(
+  const keySearchFn = ENTITY_KEY_SEARCH_FNS[entityType];
+  const searchKeys = useCallback(
     (query: string) => {
-      if (!accessToken || !startTime || !endTime) return Promise.resolve({});
-      const teamIds = Array.isArray(entityFilterArg) ? entityFilterArg : null;
-      return teamDailyActivityKeySearchCall(accessToken, startTime, endTime, query, teamIds).then((data) =>
+      const searchTimesReady = accessToken && startTime && endTime;
+      if (!keySearchFn || !searchTimesReady) return Promise.resolve({});
+      const entityIds = Array.isArray(entityFilterArg) ? entityFilterArg : null;
+      return keySearchFn(accessToken, startTime, endTime, query, entityIds).then((data) =>
         processActivityData(data, "api_keys", teams || []),
       );
     },
-    [accessToken, startTime, endTime, entityFilterArg, teams],
+    [keySearchFn, accessToken, startTime, endTime, entityFilterArg, teams],
   );
   const agentMetrics = showAgentBreakdown ? processActivityData(agentSpendData, "entities", teams || []) : {};
 
@@ -700,24 +752,28 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           keyMetrics={keyMetrics}
           hidePromptCachingMetrics={entityType === "agent"}
           apiKeyTruncation={apiKeyTruncation}
-          searchKeys={entityType === "team" ? searchTeamKeys : undefined}
+          searchKeys={searchKeys}
         />
       ),
     },
     { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
   ];
 
+  const exportFn = ENTITY_EXPORT_FNS[entityType];
+  const exportTimesReady = accessToken && startTime && endTime;
   const serverExport: ServerExport | undefined =
-    entityType === "team" && apiKeyTruncation !== undefined && accessToken && startTime && endTime
-      ? (scope, format) =>
-          teamDailyActivityExportCall({
+    exportFn !== undefined && apiKeyTruncation !== undefined && exportTimesReady
+      ? (scope, format) => {
+          const exportArgs = {
             accessToken,
             startTime,
             endTime,
-            teamIds: entityFilterArg as string[] | null,
+            entityIds: entityFilterArg as string[] | null,
             exportType: scope,
             format,
-          })
+          };
+          return exportFn(exportArgs);
+        }
       : undefined;
 
   const spendFetchState = { coversRange, cancelled, failed, apiKeyTruncation: serverExport ? null : apiKeyTruncation };

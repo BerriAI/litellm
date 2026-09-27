@@ -11,8 +11,6 @@ All /team management endpoints
 
 import asyncio
 import copy
-import csv
-import io
 import json
 import math
 import traceback
@@ -136,6 +134,16 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     get_daily_activity_export_rows,
     get_daily_activity_model_top_api_keys,
 )
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    _team_export_csv,
+    _team_export_row,
+)
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    aggregated_date_range_error as _aggregated_date_range_error,
+)
+from litellm.proxy.management_endpoints.common_daily_activity_routes import (
+    daily_activity_error as _daily_activity_error,
+)
 from litellm.proxy.management_endpoints.common_utils import (
     _check_disable_global_guardrails_caller_permission,
     _check_passthrough_routes_caller_permission,
@@ -220,7 +228,6 @@ from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamDailyActivityExportFormat,
     TeamDailyActivityExportMetadata,
     TeamDailyActivityExportResponse,
-    TeamDailyActivityExportRow,
     TeamDailyActivityExportType,
     TeamIdSearchFilter,
     TeamIdSearchMatch,
@@ -6799,71 +6806,6 @@ async def get_team_daily_activity_aggregated(
     )
 
 
-def _export_csv_headers(export_type: TeamDailyActivityExportType) -> tuple[str, ...]:
-    base: Final = ("Date", "Team", "Team ID")
-    if export_type == "daily_with_keys":
-        return (*base, "Key Alias", "Key ID", "User ID", "User Email", *EXPORT_CSV_METRIC_HEADERS)
-    if export_type == "daily_with_users":
-        return (*base, "User ID", "User Email", "Keys", *EXPORT_CSV_METRIC_HEADERS)
-    if export_type == "daily_with_models":
-        return (
-            *base,
-            "Model",
-            "Spend ($)",
-            "Requests",
-            "Successful",
-            "Failed",
-            "Total Tokens",
-            "Prompt Tokens",
-            "Completion Tokens",
-            "Cache Read Input Tokens",
-            "Cache Creation Input Tokens",
-        )
-    return (*base, *EXPORT_CSV_METRIC_HEADERS)
-
-
-def _export_csv_record(row: TeamDailyActivityExportRow) -> dict[str, object]:
-    return {  # mutable-ok: csv.DictWriter consumes a plain mapping per row
-        "Date": row.date,
-        "Team": csv_safe(row.team_alias) if row.team_alias else "-",
-        "Team ID": row.team_id,
-        "Key Alias": csv_safe(row.key_alias) if row.key_alias else "-",
-        "Key ID": row.api_key or "-",
-        "User ID": csv_safe(row.user_id) if row.user_id else "-",
-        "User Email": csv_safe(row.user_email) if row.user_email else "-",
-        "Keys": row.keys,
-        "Model": csv_safe(row.model) if row.model else "-",
-        "Spend ($)": f"{row.spend:.4f}",
-        "Flat Cost ($)": f"{row.flat_cost:.4f}",
-        "Total Cost ($)": f"{row.spend + row.flat_cost:.4f}",
-        "Requests": row.api_requests,
-        "Successful Requests": row.successful_requests,
-        "Failed Requests": row.failed_requests,
-        "Successful": row.successful_requests,
-        "Failed": row.failed_requests,
-        "Total Tokens": row.total_tokens,
-        "Prompt Tokens": row.prompt_tokens,
-        "Completion Tokens": row.completion_tokens,
-        "Cache Read Input Tokens": row.cache_read_input_tokens,
-        "Cache Creation Input Tokens": row.cache_creation_input_tokens,
-    }
-
-
-def _team_export_csv(export_type: TeamDailyActivityExportType, rows: Sequence[TeamDailyActivityExportRow]) -> str:
-    base_headers: Final = _export_csv_headers(export_type)
-    spend_index: Final = base_headers.index("Spend ($)") + 1
-    headers: Final = (
-        (*base_headers[:spend_index], "Flat Cost ($)", "Total Cost ($)", *base_headers[spend_index:])
-        if sum(row.flat_cost for row in rows) > 0
-        else base_headers
-    )
-    buffer: Final = io.StringIO()
-    writer: Final = csv.DictWriter(buffer, fieldnames=headers, extrasaction="ignore")
-    writer.writeheader()
-    writer.writerows(_export_csv_record(row) for row in rows)
-    return buffer.getvalue()
-
-
 @router.get(
     "/team/daily/activity/export",
     response_model=TeamDailyActivityExportResponse,
@@ -6912,7 +6854,7 @@ async def get_team_daily_activity_export(
         proxy_logging_obj=proxy_logging_obj,
     )
 
-    rows: Final = await get_daily_activity_export_rows(
+    generic_rows: Final = await get_daily_activity_export_rows(
         prisma_client=prisma_client,
         table_name="litellm_dailyteamspend",
         entity_id_field="team_id",
@@ -6924,7 +6866,9 @@ async def get_team_daily_activity_export(
         exclude_entity_ids=scope.exclude_team_ids,
         timezone_offset_minutes=timezone_offset,
         export_type=export_type,
+        alias_metadata_key="team_alias",
     )
+    rows: Final = tuple(_team_export_row(row) for row in generic_rows)
 
     now: Final = datetime.now(timezone.utc)
     metadata: Final = TeamDailyActivityExportMetadata(
@@ -7087,11 +7031,11 @@ async def get_team_daily_activity_model_top_keys(
     )
 
     if prisma_client is None:
-        raise daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
+        raise _daily_activity_error(status_code=500, message=CommonProxyErrors.db_not_connected_error.value)
 
-    range_error: Final = aggregated_date_range_error(start_date, end_date)
+    range_error: Final = _aggregated_date_range_error(start_date, end_date)
     if range_error is not None or start_date is None or end_date is None:
-        raise daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
+        raise _daily_activity_error(status_code=400, message=range_error or "Please provide start_date and end_date")
 
     scope: Final = await _resolve_team_daily_activity_scope(
         team_ids=team_ids,

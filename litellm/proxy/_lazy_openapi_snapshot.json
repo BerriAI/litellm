@@ -3290,6 +3290,250 @@
           "title": "BreakdownMetrics",
           "type": "object"
         },
+        "DailyActivityExportMetadata": {
+          "properties": {
+            "end_date": {
+              "title": "End Date",
+              "type": "string"
+            },
+            "entity_ids": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Entity Ids"
+            },
+            "export_date": {
+              "title": "Export Date",
+              "type": "string"
+            },
+            "export_type": {
+              "enum": [
+                "daily",
+                "daily_with_keys",
+                "daily_with_users",
+                "daily_with_models"
+              ],
+              "title": "Export Type",
+              "type": "string"
+            },
+            "start_date": {
+              "title": "Start Date",
+              "type": "string"
+            },
+            "total_api_requests": {
+              "title": "Total Api Requests",
+              "type": "integer"
+            },
+            "total_failed_requests": {
+              "title": "Total Failed Requests",
+              "type": "integer"
+            },
+            "total_flat_cost": {
+              "default": 0.0,
+              "title": "Total Flat Cost",
+              "type": "number"
+            },
+            "total_spend": {
+              "title": "Total Spend",
+              "type": "number"
+            },
+            "total_successful_requests": {
+              "title": "Total Successful Requests",
+              "type": "integer"
+            },
+            "total_tokens": {
+              "title": "Total Tokens",
+              "type": "integer"
+            }
+          },
+          "required": [
+            "export_date",
+            "export_type",
+            "start_date",
+            "end_date",
+            "entity_ids",
+            "total_spend",
+            "total_api_requests",
+            "total_successful_requests",
+            "total_failed_requests",
+            "total_tokens"
+          ],
+          "title": "DailyActivityExportMetadata",
+          "type": "object"
+        },
+        "DailyActivityExportResponse": {
+          "properties": {
+            "data": {
+              "items": {
+                "$ref": "#/components/schemas/DailyActivityExportRow"
+              },
+              "title": "Data",
+              "type": "array"
+            },
+            "metadata": {
+              "$ref": "#/components/schemas/DailyActivityExportMetadata"
+            }
+          },
+          "required": [
+            "metadata",
+            "data"
+          ],
+          "title": "DailyActivityExportResponse",
+          "type": "object"
+        },
+        "DailyActivityExportRow": {
+          "properties": {
+            "api_key": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Api Key"
+            },
+            "api_requests": {
+              "title": "Api Requests",
+              "type": "integer"
+            },
+            "cache_creation_input_tokens": {
+              "title": "Cache Creation Input Tokens",
+              "type": "integer"
+            },
+            "cache_read_input_tokens": {
+              "title": "Cache Read Input Tokens",
+              "type": "integer"
+            },
+            "completion_tokens": {
+              "title": "Completion Tokens",
+              "type": "integer"
+            },
+            "date": {
+              "title": "Date",
+              "type": "string"
+            },
+            "entity_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Entity Alias"
+            },
+            "entity_id": {
+              "title": "Entity Id",
+              "type": "string"
+            },
+            "failed_requests": {
+              "title": "Failed Requests",
+              "type": "integer"
+            },
+            "flat_cost": {
+              "default": 0.0,
+              "title": "Flat Cost",
+              "type": "number"
+            },
+            "key_alias": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Key Alias"
+            },
+            "keys": {
+              "anyOf": [
+                {
+                  "type": "integer"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Keys"
+            },
+            "model": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Model"
+            },
+            "prompt_tokens": {
+              "title": "Prompt Tokens",
+              "type": "integer"
+            },
+            "spend": {
+              "title": "Spend",
+              "type": "number"
+            },
+            "successful_requests": {
+              "title": "Successful Requests",
+              "type": "integer"
+            },
+            "total_tokens": {
+              "title": "Total Tokens",
+              "type": "integer"
+            },
+            "user_email": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Email"
+            },
+            "user_id": {
+              "anyOf": [
+                {
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "User Id"
+            }
+          },
+          "required": [
+            "date",
+            "entity_id",
+            "spend",
+            "api_requests",
+            "successful_requests",
+            "failed_requests",
+            "total_tokens",
+            "prompt_tokens",
+            "completion_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens"
+          ],
+          "title": "DailyActivityExportRow",
+          "type": "object"
+        },
         "DailySpendData": {
           "properties": {
             "breakdown": {
@@ -4187,6 +4431,437 @@
             }
           ],
           "summary": "Get Agent Daily Activity",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/aggregated": {
+        "get": {
+          "description": "Aggregated daily activity for agents without pagination, including per-agent breakdown.",
+          "operationId": "get_agent_daily_activity_aggregated_agent_daily_activity_aggregated_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "model",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Model"
+              }
+            },
+            {
+              "in": "query",
+              "name": "api_key",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Api Key"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SpendAnalyticsPaginatedResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Aggregated",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/aggregated/search": {
+        "get": {
+          "description": "Key search over aggregated agent daily activity.",
+          "operationId": "search_agent_daily_activity_keys_agent_daily_activity_aggregated_search_get",
+          "parameters": [
+            {
+              "description": "Search term matching key hash, key alias or user id",
+              "in": "query",
+              "name": "search",
+              "required": true,
+              "schema": {
+                "description": "Search term matching key hash, key alias or user id",
+                "title": "Search",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/SpendAnalyticsPaginatedResponse"
+                  }
+                }
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Search Agent Daily Activity Keys",
+          "tags": [
+            "agents"
+          ]
+        }
+      },
+      "/agent/daily/activity/export": {
+        "get": {
+          "description": "Export daily activity for agents as CSV or JSON, uncapped.",
+          "operationId": "get_agent_daily_activity_export_agent_daily_activity_export_get",
+          "parameters": [
+            {
+              "in": "query",
+              "name": "start_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Start Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "end_date",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "End Date"
+              }
+            },
+            {
+              "in": "query",
+              "name": "export_type",
+              "required": false,
+              "schema": {
+                "default": "daily",
+                "enum": [
+                  "daily",
+                  "daily_with_keys",
+                  "daily_with_users",
+                  "daily_with_models"
+                ],
+                "title": "Export Type",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "format",
+              "required": false,
+              "schema": {
+                "default": "csv",
+                "enum": [
+                  "csv",
+                  "json"
+                ],
+                "title": "Format",
+                "type": "string"
+              }
+            },
+            {
+              "in": "query",
+              "name": "agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "exclude_agent_ids",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "string"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Exclude Agent Ids"
+              }
+            },
+            {
+              "in": "query",
+              "name": "timezone",
+              "required": false,
+              "schema": {
+                "anyOf": [
+                  {
+                    "type": "integer"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ],
+                "title": "Timezone"
+              }
+            }
+          ],
+          "responses": {
+            "200": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/DailyActivityExportResponse"
+                  }
+                },
+                "text/csv": {}
+              },
+              "description": "Successful Response"
+            },
+            "422": {
+              "content": {
+                "application/json": {
+                  "schema": {
+                    "$ref": "#/components/schemas/HTTPValidationError"
+                  }
+                }
+              },
+              "description": "Validation Error"
+            }
+          },
+          "security": [
+            {
+              "APIKeyHeader": []
+            }
+          ],
+          "summary": "Get Agent Daily Activity Export",
           "tags": [
             "agents"
           ]
