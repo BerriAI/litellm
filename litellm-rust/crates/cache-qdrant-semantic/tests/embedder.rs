@@ -5,6 +5,10 @@ use std::{
 
 use litellm_cache::{Error, semantic::Embedder};
 use litellm_cache_qdrant_semantic::{OpenAiEmbedder, OpenAiEmbedderConfig};
+use litellm_http::{
+    ClientVariant, HttpClientConfig, HttpClientPool, HttpSettings, Resolution,
+    media::PublicDnsResolver,
+};
 use rstest::rstest;
 use serde_json::{Value, json};
 use tokio::{
@@ -104,7 +108,7 @@ fn config(base: String, timeout: Option<Duration>) -> OpenAiEmbedderConfig {
 async fn posts_embeddings_request_and_parses_vector() {
     let server = TestHttpServer::response("200 OK", r#"{"data":[{"embedding":[0.1,0.2]}]}"#).await;
     let embedder = OpenAiEmbedder::new(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         config(
             format!("{}/", server.base_url()),
             Some(Duration::from_secs(1)),
@@ -156,14 +160,17 @@ async fn status_timeout_and_body_errors_are_unavailable(
 ) {
     let server =
         TestHttpServer::response_after(status, body, Duration::from_millis(delay_ms)).await;
-    let embedder = OpenAiEmbedder::new(reqwest::Client::new(), config(server.base_url(), timeout));
+    let embedder = OpenAiEmbedder::new(
+        litellm_http::Client::plain_for_test(),
+        config(server.base_url(), timeout),
+    );
     assert_eq!(embedder.async_embed("hello", None).await, expected);
 }
 
 #[rstest]
 fn sync_embedding_is_unsupported() {
     let embedder = OpenAiEmbedder::new(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         config("http://127.0.0.1:9".to_owned(), None),
     );
     assert_eq!(
@@ -176,9 +183,12 @@ fn sync_embedding_is_unsupported() {
 #[tokio::test]
 async fn uses_the_injected_client() {
     let server = TestHttpServer::response("200 OK", r#"{"data":[{"embedding":[0.1,0.2]}]}"#).await;
-    let client = reqwest::Client::builder()
-        .user_agent("litellm-embedder-test")
-        .build()
+    let config_with_agent = HttpClientConfig {
+        user_agent: Some("litellm-embedder-test".into()),
+        ..Resolution::from(&HttpSettings::default()).config
+    };
+    let client = HttpClientPool::new(Arc::new(PublicDnsResolver))
+        .client(&config_with_agent, ClientVariant::Provider)
         .unwrap();
     let embedder = OpenAiEmbedder::new(client, config(server.base_url(), None));
     assert_eq!(

@@ -16,6 +16,7 @@ from litellm.llms.base_llm.base_utils import (
 from litellm.router_strategy.complexity_router.fuse_presets import ProfileText, resolve_fuse_profile
 
 ShortText: TypeAlias = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=512)]
+VerdictText: TypeAlias = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1)]
 
 
 class _SolverProfile(TypedDict):
@@ -90,7 +91,7 @@ class LLMV2Demands(BaseModel):
 class LLMV2SolverForecast(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    likely_failure: ShortText
+    likely_failure: VerdictText
     p_solve: StrictFloat = Field(ge=0.0, le=1.0)
 
 
@@ -104,7 +105,7 @@ class LLMV2SolverForecasts(BaseModel):
 class LLMV2Verdict(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
-    crux: ShortText
+    crux: VerdictText
     demands: LLMV2Demands
     verification: Literal["relevant", "partial", "unavailable", "unknown"]
     forecasts: LLMV2SolverForecasts
