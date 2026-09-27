@@ -7,6 +7,7 @@ environment so the same tests run against localhost or a deployed proxy.
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass
 import time
 import uuid
 from pathlib import Path
@@ -62,6 +63,38 @@ CONTROL_PLANE_REPLICA_URLS: Final = parse_control_plane_replica_urls(
     control_plane_base_url=CONTROL_PLANE_BASE_URL,
     base_url=PROXY_BASE_URL,
     replica_urls=PROXY_REPLICA_URLS,
+)
+
+
+@dataclass(frozen=True, slots=True)
+class StackEndpoints:
+    base_url: str
+    control_plane_base_url: str
+    replica_urls: tuple[str, ...]
+    control_replica_urls: tuple[str, ...]
+
+    def control_replica_urls_for(
+        self, *, base_url: str, control_plane_base_url: str, replica_urls: tuple[str, ...]
+    ) -> tuple[str, ...]:
+        """The control replicas a client built for these endpoints polls when its caller names none:
+        this stack's own list for this stack's endpoints, since an exported list describes one stack only,
+        and the base-URL rule for any other proxy."""
+        if (base_url, control_plane_base_url, replica_urls) == (
+            self.base_url,
+            self.control_plane_base_url,
+            self.replica_urls,
+        ):
+            return self.control_replica_urls
+        return parse_control_plane_replica_urls(
+            "", control_plane_base_url=control_plane_base_url, base_url=base_url, replica_urls=replica_urls
+        )
+
+
+ENV_STACK: Final = StackEndpoints(
+    base_url=PROXY_BASE_URL,
+    control_plane_base_url=CONTROL_PLANE_BASE_URL,
+    replica_urls=PROXY_REPLICA_URLS,
+    control_replica_urls=CONTROL_PLANE_REPLICA_URLS,
 )
 
 UI_USERNAME = os.environ.get("E2E_UI_USERNAME", "admin")

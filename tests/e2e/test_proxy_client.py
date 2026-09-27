@@ -24,7 +24,7 @@ from types import MappingProxyType
 from typing import Final, cast
 
 import pytest
-from e2e_config import parse_control_plane_replica_urls, parse_replica_urls
+from e2e_config import StackEndpoints, parse_control_plane_replica_urls, parse_replica_urls
 from e2e_http import NoBody, Result, Success, without_retries
 from idp import Keycloak
 from lifecycle import ResourceManager
@@ -363,6 +363,30 @@ class TestParseControlPlaneReplicaUrls:
         ) == ("http://backend",)
 
 
+class TestStackEndpointsControlReplicas:
+    STACK: Final = StackEndpoints(
+        base_url="http://router",
+        control_plane_base_url="http://router",
+        replica_urls=("http://10.0.0.1:4000", "http://10.0.0.2:4000"),
+        control_replica_urls=("http://router",),
+    )
+
+    def test_the_stacks_own_endpoints_take_its_exported_control_list(self) -> None:
+        assert self.STACK.control_replica_urls_for(
+            base_url="http://router",
+            control_plane_base_url="http://router",
+            replica_urls=("http://10.0.0.1:4000", "http://10.0.0.2:4000"),
+        ) == ("http://router",)
+
+    def test_any_other_endpoints_follow_the_base_url_rule(self) -> None:
+        assert self.STACK.control_replica_urls_for(
+            base_url="http://router", control_plane_base_url="http://router", replica_urls=("http://10.0.0.1:4000",)
+        ) == ("http://10.0.0.1:4000",)
+        assert self.STACK.control_replica_urls_for(
+            base_url="http://lb", control_plane_base_url="http://backend", replica_urls=("http://gateway-1",)
+        ) == ("http://backend",)
+
+
 def _answers(answers: Iterable[str]) -> ReplicaRead[str]:
     it: Final = iter(answers)
     return lambda _timeout: next(it)
@@ -438,6 +462,21 @@ class TestReplicasFor:
         )
         assert set(client.replicas_for("/key/info")) == {"http://router"}
         assert set(client.replicas_for("/v1/models")) == {"http://10.0.0.1:4000", "http://10.0.0.2:4000"}
+
+    def test_a_client_built_for_another_proxy_reads_management_routes_back_from_that_proxy(self) -> None:
+        """A caller that points the client at its own server (test_provider_cache.py)
+        names no control list, so the derived one has to follow that server rather
+        than the env proxy, on a shared base and on split ones alike."""
+        local: Final = build_proxy_client(
+            base_url="http://local", control_plane_base_url="http://local", replica_urls=("http://local",)
+        )
+        assert set(local.replicas_for("/key/info")) == {"http://local"}
+        assert set(local.replicas_for("/v1/models")) == {"http://local"}
+        split: Final = build_proxy_client(
+            base_url="http://lb", control_plane_base_url="http://backend", replica_urls=("http://gateway-1",)
+        )
+        assert set(split.replicas_for("/key/info")) == {"http://backend"}
+        assert set(split.replicas_for("/v1/models")) == {"http://gateway-1"}
 
     def test_management_read_backs_poll_the_control_replicas_only(self) -> None:
         """A gateway pod answers /key/info 404 even after the write landed on the

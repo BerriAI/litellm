@@ -20,7 +20,7 @@ from typing import Final, Literal
 
 from e2e_config import (
     CONTROL_PLANE_BASE_URL,
-    CONTROL_PLANE_REPLICA_URLS,
+    ENV_STACK,
     MASTER_KEY,
     POLL_INTERVAL,
     POLL_TIMEOUT,
@@ -1131,7 +1131,7 @@ def build_proxy_client(
     master_key: str = MASTER_KEY,
     control_plane_base_url: str = CONTROL_PLANE_BASE_URL,
     replica_urls: tuple[str, ...] = PROXY_REPLICA_URLS,
-    control_replica_urls: tuple[str, ...] = CONTROL_PLANE_REPLICA_URLS,
+    control_replica_urls: tuple[str, ...] | None = None,
 ) -> ProxyClient:
     """The ProxyClient every suite's client is built from: a SplitTransport that routes
     LLM calls to the data plane (PROXY_BASE_URL) and management/admin calls to the
@@ -1149,9 +1149,14 @@ def build_proxy_client(
     address cannot stand in for the control plane.
 
     The endpoints are injectable for callers that resolve the proxy some other
-    way than ``e2e_config``'s env names (see ``claude_code/_env.py``); they must
-    pass all five together, since a caller that overrides only the data plane
-    would leave management calls and the replica polls pointed at the env defaults.
+    way than ``e2e_config``'s env names (see ``claude_code/_env.py``); they pass
+    the three URL parameters together, since a caller that overrides only the
+    data plane would leave management calls and the replica polls pointed at the
+    env defaults. An omitted ``control_replica_urls`` is derived from those three
+    (``ENV_STACK.control_replica_urls_for``): the env stack's own endpoints take
+    its exported list, any other proxy follows the base-URL rule above, so a
+    client built for a local test server never reads management state back from
+    the env proxy.
 
     Test-to-proxy traffic always goes over the wire, in every E2E_FIXTURE_MODE:
     record and replay scope to the proxy's provider-bound calls via the
@@ -1174,10 +1179,17 @@ def build_proxy_client(
             for url in replica_urls
         }
     )
+    control_replica_urls_named: Final = (
+        control_replica_urls
+        if control_replica_urls is not None
+        else ENV_STACK.control_replica_urls_for(
+            base_url=base_url, control_plane_base_url=control_plane_base_url, replica_urls=replica_urls
+        )
+    )
     control_replicas: Final = MappingProxyType(
         {
             url: HttpTransport(base_url=url, master_key=master_key, request_timeout=REQUEST_TIMEOUT)
-            for url in control_replica_urls
+            for url in control_replica_urls_named
         }
     )
     return ProxyClient(
