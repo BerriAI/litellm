@@ -45,8 +45,12 @@ struct BatchResultRecord {
 #[derive(Deserialize)]
 #[serde(tag = "type", rename_all = "snake_case")]
 enum BatchResult {
-    Succeeded { message: AnthropicMessagesResponse },
-    Errored { error: Value },
+    Succeeded {
+        message: Box<AnthropicMessagesResponse>,
+    },
+    Errored {
+        error: Value,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -256,7 +260,7 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
                         ))
                     })?;
                 match record.result {
-                    BatchResult::Succeeded { message } => Ok(message),
+                    BatchResult::Succeeded { message } => Ok(*message),
                     BatchResult::Errored { error } => Err(Error::InvalidResponse(format!(
                         "Anthropic batch request failed: {error}"
                     ))),

@@ -232,7 +232,7 @@ async fn credential_precedence(
     true,
     json!({"azure_ad_token": "oidc/assertion", "client_id": "client", "tenant_id": "tenant"}),
     numbered_token,
-    |error: &Error| *error == Error::Auth(litellm_auth::Error::InvalidConfiguration("unsupported OIDC reference".into())),
+    |error: &Error| matches!(error, Error::Auth(litellm_auth::Error::InvalidConfiguration(message)) if message == "unsupported OIDC reference"),
     0
 )]
 #[case::empty_provider_token_ignores_static_token(
