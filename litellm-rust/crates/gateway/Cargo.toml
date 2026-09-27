@@ -7,6 +7,7 @@ repository.workspace = true
 
 [dependencies]
 axum.workspace = true
+envy = "0.4.2"
 http-body-util = "0.1"
 litellm-core.workspace = true
 litellm-gateway-inference.workspace = true
@@ -19,6 +20,7 @@ litellm-llms.workspace = true
 litellm-secrets.workspace = true
 litellm-tracing.workspace = true
 serde_json.workspace = true
+serde.workspace = true
 tracing.workspace = true
 tokio.workspace = true
 uuid.workspace = true
