@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use litellm_core::chat_completions::{
-    Error, chat_completions, chat_completions_decline_reason, types::ChatCompletionsRequest,
+    Error, chat_completions_decline_reason, types::ChatCompletionsRequest,
 };
 use litellm_http::transport::Error as TransportError;
 use litellm_types::utils::ChatCompletionsResponse;
@@ -15,7 +15,7 @@ use support::*;
 const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
 
 async fn complete(request: ChatCompletionsRequest<'_>) -> Result<ChatCompletionsResponse, Error> {
-    chat_completions(&support::resources(), &http_config(), request).await
+    client().chat_completions(request).await
 }
 
 fn object(value: Value) -> Map<String, Value> {
@@ -162,6 +162,7 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsReq
 #[case::missing_usage(
     r#"{"model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}"#
 )]
+#[rstest::rstest]
 #[case::tool_use_block(r#"{"model":"m","content":[{"type":"tool_use","id":"t","name":"f","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}"#)]
 #[case::not_json("not json")]
 #[tokio::test]

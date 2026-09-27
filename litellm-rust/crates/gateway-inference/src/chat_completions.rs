@@ -7,7 +7,7 @@ use axum::{
     http::StatusCode,
     response::{IntoResponse, Response},
 };
-use litellm_core::chat_completions::{chat_completions, types::ChatCompletionsRequest};
+use litellm_core::chat_completions::types::ChatCompletionsRequest;
 use serde_json::{Map, Value};
 
 use crate::{Error, Gateway, request};
@@ -61,10 +61,7 @@ async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response,
         .get("messages")
         .cloned()
         .ok_or_else(|| Error::InvalidBody("messages is required".into()))?;
-    let response = chat_completions(
-        &gateway.resources,
-        &gateway.http,
-        ChatCompletionsRequest {
+    let response = gateway.core.chat_completions(ChatCompletionsRequest {
             model: &deployment.model,
             messages,
             optional_params: body
@@ -76,8 +73,6 @@ async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response,
             custom_llm_provider: deployment.custom_llm_provider.as_deref(),
             extra_headers: None,
             timeout: deployment.timeout,
-        },
-    )
-    .await?;
+        }).await?;
     Ok(Json(response).into_response())
 }

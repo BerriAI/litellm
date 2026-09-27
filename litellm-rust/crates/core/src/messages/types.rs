@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use bytes::Bytes;
-use futures_util::stream::BoxStream;
+use litellm_host::call::CallOutput;
 use litellm_llms::anthropic::common_utils::AnthropicModelCapabilities;
 use litellm_types::{
     llms::anthropic_messages::{
@@ -33,13 +33,8 @@ pub(super) fn invalid_request(err: serde_json::Error) -> Error {
     Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
 }
 
-pub enum MessagesResponse {
-    Message(Box<AnthropicMessagesResponse>),
-    Stream {
-        headers: Vec<(String, String)>,
-        chunks: BoxStream<'static, Result<Bytes, Error>>,
-    },
-}
+pub type MessagesResponse =
+    CallOutput<Box<AnthropicMessagesResponse>, super::route::MessagesStreamHead, Bytes, Error>;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesShaping {

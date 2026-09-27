@@ -4,6 +4,13 @@ use litellm_http::outbound::OutboundRequest;
 use litellm_llms::base_llm::auth::Authenticated;
 use serde_json::Value;
 
+pub(crate) async fn send(
+    request: OutboundRequest,
+    client: &litellm_http::Client,
+) -> Result<reqwest::Response, reqwest::Error> {
+    request.send(client).await
+}
+
 /// Header credentials are already in `headers`; SigV4 is applied here, over the
 /// bytes that are sent.
 pub(crate) fn outbound_request(

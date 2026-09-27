@@ -6,10 +6,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use litellm_auth::SecretValue;
-use litellm_core::ocr::{
-    client::perform,
-    types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput},
-};
+use litellm_core::ocr::types::{LiteLLMOcrRequest, OcrConnectionInputs, OcrDocumentInput};
 use litellm_llms::base_llm::ocr::transformation::OcrDocument;
 use serde_json::Value;
 
@@ -69,7 +66,7 @@ async fn handle(gateway: &Gateway, request: Request) -> Result<Value, Error> {
             ..Default::default()
         },
     )?;
-    let response = perform(&gateway.ocr, call).await?;
+    let response = gateway.core.ocr(call).await?;
     match response.provider_native_response {
         Some(native) => Ok(Value::Object(native)),
         None => Ok(response.into_json()),

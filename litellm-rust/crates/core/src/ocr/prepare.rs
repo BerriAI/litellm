@@ -100,7 +100,10 @@ mod tests {
     struct NoHooks;
 
     impl CallHooks<Error> for NoHooks {
-        fn before_send(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, Error>> {
+        fn before_provider_request(
+            &self,
+            wire: WireRequest,
+        ) -> BoxFuture<'_, Result<WireRequest, Error>> {
             Box::pin(async move { Ok(wire) })
         }
 
@@ -144,6 +147,7 @@ mod tests {
         json!({"type": "image_url", "image_url": url})
     }
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn cohere_body_keeps_native_document_fields_and_untyped_overrides() {
         let request = request(
@@ -176,6 +180,7 @@ mod tests {
         );
     }
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn explicit_null_options_use_defaults_before_http() {
         let request = request(
@@ -199,6 +204,7 @@ mod tests {
         assert!(body.get("req_format").is_none());
     }
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn direct_and_vertex_mistral_build_the_same_request_and_share_normalization() {
         let options = json!({
@@ -276,7 +282,7 @@ mod tests {
         pages: Option<Vec<i64>>,
     }
 
-    #[test]
+    #[rstest::rstest]
     fn parsed_provider_params_separates_known_and_extra_params() {
         let arguments: CallArguments = serde_json::from_value(json!({
             "pages": [0, 2],
