@@ -6696,6 +6696,8 @@ def _directory_prisma(mocker: MockerFixture, directory: _Directory) -> MagicMock
     _writer_query_raw(prisma, AsyncMock(side_effect=directory.query_raw))
     prisma.db.litellm_usertable.find_many = directory.hydrate("user_id")
     prisma.db.litellm_teamtable.find_many = directory.hydrate("team_id")
+    prisma.writer_db.litellm_usertable.find_many = directory.hydrate("user_id")
+    prisma.writer_db.litellm_teamtable.find_many = directory.hydrate("team_id")
     prisma.writer_db.litellm_scimresource.find_many = AsyncMock(
         side_effect=AssertionError("legacy listing must not materialise the owned resource set")
     )
@@ -6845,3 +6847,30 @@ async def test_trusted_listing_keeps_the_plain_legacy_query(
     table.find_many.assert_awaited_once_with(
         where={} if kind == "Users" else {"team_alias": "legacy"}, skip=0, take=10, order={"created_at": "desc"}
     )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["Users", "Groups"])
+async def test_legacy_listing_hydrates_writer_page_despite_replica_lag(
+    kind: str, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    scim_v2: Final = scim_v2_module()
+    directory: Final = _Directory(
+        users=(_ORDINARY_USER,), teams=(_LEGACY_TEAM,), owned_local_ids=frozenset()
+    )
+    prisma: Final = _directory_prisma(mocker, directory)
+    prisma.db.litellm_usertable.find_many = AsyncMock(return_value=())
+    prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=())
+    _listing_route_stubs(mocker, monkeypatch, prisma)
+    auth: Final = UserAPIKeyAuth(token="legacy-hash")
+
+    listed: Final = (
+        await scim_v2.get_users(startIndex=1, count=10, filter=None, auth=auth)
+        if kind == "Users"
+        else await scim_v2.get_groups(startIndex=1, count=10, filter=None, auth=auth)
+    )
+
+    assert [resource.id for resource in listed.Resources] == ["ordinary-user" if kind == "Users" else "legacy-team"]
+    assert listed.totalResults == listed.itemsPerPage == 1
+    prisma.db.litellm_usertable.find_many.assert_not_awaited()
+    prisma.db.litellm_teamtable.find_many.assert_not_awaited()
