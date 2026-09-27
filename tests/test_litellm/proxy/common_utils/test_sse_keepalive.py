@@ -445,3 +445,35 @@ async def test_relay_late_response_serializes_a_dict_body_attribute():
 
     assert frames[0] == b'data: {"ok":true}\n\n'
     assert frames[1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_relay_late_response_encodes_a_string_payload():
+    from litellm.proxy.common_request_processing import _relay_late_response
+
+    frames: Final = [chunk async for chunk in _relay_late_response("late")]
+
+    assert frames == [b"data: late\n\n", b"data: [DONE]\n\n"]
+
+
+@pytest.mark.asyncio
+async def test_relay_late_response_uses_an_empty_object_for_an_unknown_payload():
+    from litellm.proxy.common_request_processing import _relay_late_response
+
+    class _NoBody:
+        pass
+
+    frames: Final = [chunk async for chunk in _relay_late_response(_NoBody())]
+
+    assert frames == [b"data: {}\n\n", b"data: [DONE]\n\n"]
+
+
+@pytest.mark.asyncio
+async def test_relay_late_response_serializes_a_mapping_proxy():
+    from types import MappingProxyType
+
+    from litellm.proxy.common_request_processing import _relay_late_response
+
+    frames: Final = [chunk async for chunk in _relay_late_response(MappingProxyType({"ok": True}))]
+
+    assert frames == [b'data: {"ok":true}\n\n', b"data: [DONE]\n\n"]
