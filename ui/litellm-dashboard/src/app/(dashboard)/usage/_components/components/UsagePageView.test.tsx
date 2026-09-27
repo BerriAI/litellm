@@ -170,7 +170,7 @@ vi.mock("@/app/(dashboard)/hooks/useIsOrgAdmin", () => ({
 }));
 
 vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
-  useOrganizations: vi.fn(() => ({ data: [], isPending: false })),
+  useOrganizations: vi.fn(() => ({ data: undefined, isPending: true, isLoading: false })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
@@ -1495,7 +1495,9 @@ describe("UsagePage", () => {
       await waitFor(() => {
         expect(lastQuery()).toBe("?range=30d");
       });
-      expect(warning).toHaveBeenCalledWith("You don't have access to that usage view");
+      expect(warning).toHaveBeenCalledWith("You don't have access to that usage view", {
+        id: "usage-url-access-denied",
+      });
       expect(screen.queryByTestId("entity-usage")).not.toBeInTheDocument();
     });
 
@@ -1508,7 +1510,9 @@ describe("UsagePage", () => {
       await waitFor(() => {
         expect(lastQuery()).toBe("");
       });
-      expect(warning).toHaveBeenCalledWith("You don't have access to that usage view");
+      expect(warning).toHaveBeenCalledWith("You don't have access to that usage view", {
+        id: "usage-url-access-denied",
+      });
       expect(mockUserDailyActivityAggregatedCall).not.toHaveBeenCalledWith(
         expect.anything(),
         expect.anything(),

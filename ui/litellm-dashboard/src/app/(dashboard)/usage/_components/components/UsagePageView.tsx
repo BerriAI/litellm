@@ -150,17 +150,18 @@ const UsagePage: React.FC<UsagePageProps> = ({ teams, organizations }) => {
   // For non-admins or "my-usage" view, always pass their own user_id
   const effectiveUserId = usageView === "my-usage" || !isAdmin ? userID || null : urlParams.user;
 
-  const { isPending: organizationsPending } = useOrganizations();
+  const { isLoading: organizationsLoading } = useOrganizations();
   const allowedViews = useMemo(
     () => allowedUsageOptions(userRole, canViewTagUsage, isOrgAdmin),
     [userRole, canViewTagUsage, isOrgAdmin],
   );
-  const accessSettled = userRole !== null && !organizationsPending;
+  const accessSettled = userRole !== null && !organizationsLoading;
   useEffect(() => {
     if (!accessSettled) return;
     const cleanup = cleanUsageUrl(urlParams, { allowedViews, isAdmin });
     if (!cleanup) return;
-    if (cleanup.deniedAccess) toast.warning("You don't have access to that usage view");
+    if (cleanup.deniedAccess)
+      toast.warning("You don't have access to that usage view", { id: "usage-url-access-denied" });
     void setUrlParams(cleanup.patch);
   }, [accessSettled, urlParams, allowedViews, isAdmin, setUrlParams]);
 
