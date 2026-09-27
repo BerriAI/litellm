@@ -2975,6 +2975,7 @@ async def _run_centralized_common_checks(
         request=request,
         llm_router=llm_router,
         team_id=user_api_key_auth_obj.team_id,
+        agent_invocation_cost=user_api_key_auth_obj.agent_invocation_cost,
     )
 
     # Pin the metadata variable name (litellm_metadata vs metadata) before
@@ -3149,7 +3150,10 @@ def _should_skip_budget_checks(
     request: Request | None,
     llm_router: Any | None,
     team_id: str | None = None,
+    agent_invocation_cost: float | None = None,
 ) -> bool:
+    if agent_invocation_cost is not None and agent_invocation_cost > 0:
+        return False
     model: Final = _get_model_from_request_context(
         request_data=request_data,
         route=route,
