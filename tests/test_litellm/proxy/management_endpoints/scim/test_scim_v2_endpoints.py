@@ -6982,7 +6982,7 @@ async def test_legacy_team_changes_preserve_directory_ownership(
     monkeypatch.setattr(scim_v2, "_source_owned_ids", owned)
     if denied:
         with pytest.raises(HTTPException) as failure:
-            await scim_v2._assert_legacy_team_changes_unowned(UserAPIKeyAuth(), current, proposed)
+            await scim_v2.assert_legacy_team_changes_unowned(UserAPIKeyAuth(), current, proposed)
         assert failure.value.status_code == 403
     else:
-        await scim_v2._assert_legacy_team_changes_unowned(None if trusted else UserAPIKeyAuth(), current, proposed)
+        await scim_v2.assert_legacy_team_changes_unowned(None if trusted else UserAPIKeyAuth(), current, proposed)
