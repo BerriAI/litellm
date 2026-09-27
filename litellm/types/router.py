@@ -493,9 +493,9 @@ class GenericLiteLLMParams(CredentialLiteLLMParams, CustomPricingLiteLLMParams):
     xai_oauth_token_file: str | None = Field(
         default=None,
         description=(
-            "Per-deployment xAI OAuth token file path. When set with use_xai_oauth=True, "
-            "the request reads that account's OAuth credentials instead of the global "
-            "token file, enabling multi-account SuperGrok routing."
+            "Per-deployment xAI OAuth token file, relative to XAI_OAUTH_TOKEN_DIR or an absolute path inside it. "
+            "With use_xai_oauth=True the deployment authenticates as that account, enabling multi-account "
+            "SuperGrok routing. Deployment config only: the proxy rejects it in request bodies."
         ),
     )
     model_config = ConfigDict(extra="allow", arbitrary_types_allowed=True)
