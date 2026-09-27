@@ -778,18 +778,25 @@ class DatabricksChatResponseIterator(BaseModelResponseIterator):
                 )
                 choice["delta"]["thinking_blocks"] = thinking_blocks
                 translated_choices.append(choice)
-            kwargs: Final[dict[str, Any]] = {
-                "id": chunk["id"],
-                "object": "chat.completion.chunk",
-                "created": chunk["created"],
-                "model": chunk["model"],
-                "choices": translated_choices,
-                "usage": chunk.get("usage"),
-            }
             service_tier: Final = chunk.get("service_tier")
             if isinstance(service_tier, str) and service_tier:
-                kwargs["service_tier"] = service_tier
-            return ModelResponseStream(**kwargs)
+                return ModelResponseStream(
+                    id=chunk["id"],
+                    object="chat.completion.chunk",
+                    created=chunk["created"],
+                    model=chunk["model"],
+                    choices=translated_choices,
+                    usage=chunk.get("usage"),
+                    service_tier=service_tier,
+                )
+            return ModelResponseStream(
+                id=chunk["id"],
+                object="chat.completion.chunk",
+                created=chunk["created"],
+                model=chunk["model"],
+                choices=translated_choices,
+                usage=chunk.get("usage"),
+            )
         except KeyError as e:
             raise DatabricksException(
                 message=f"KeyError: {e}, Got unexpected response from Databricks: {chunk}",
