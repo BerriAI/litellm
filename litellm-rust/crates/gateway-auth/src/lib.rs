@@ -3,6 +3,7 @@ mod authorization;
 mod error;
 mod http;
 mod identity;
+pub mod keys;
 mod ui;
 
 use sha2::{Digest, Sha256};
@@ -15,7 +16,7 @@ pub use authorization::{
     AccessRequest, AuthenticatedRequest, AuthorizedOperation, Authorizer, McpAction,
     NoAdditionalPolicy, Permissions, UiAction,
 };
-pub use error::{Error, UiAuthError};
+pub use error::{Error, KeyError, UiAuthError};
 pub use http::{Bearer, CredentialExtractor, RequireMasterKey, authenticate};
 pub use identity::{
     AuthenticatedCaller, Authentication, AuthenticationMethod, Principal, PrincipalKind,

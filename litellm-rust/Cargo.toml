@@ -17,6 +17,7 @@ litellm-gateway-mcp = { path = "crates/gateway-mcp" }
 litellm-gateway = { path = "crates/gateway" }
 litellm-gateway-inference = { path = "crates/gateway-inference" }
 litellm-gateway-auth = { path = "crates/gateway-auth" }
+litellm-gateway-management = { path = "crates/gateway-management" }
 litellm-gateway-ui = { path = "crates/gateway-ui" }
 litellm-coroutine = { path = "crates/coroutine" }
 litellm-host = { path = "crates/host" }
