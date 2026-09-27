@@ -11,27 +11,32 @@ use litellm_secrets::source::SecretSource;
 use types::{ResponsesCall, ResponsesOutput};
 
 impl crate::CoreClient {
-    pub async fn responses(&self, call: ResponsesCall) -> Result<ResponsesOutput, Error> {
-        self.responses_with_hooks(call, &()).await
+    pub fn responses(&self, call: ResponsesCall) -> crate::CallBuilder<'_, ResponsesCall> {
+        crate::CallBuilder::new(self, call)
     }
+}
 
-    pub async fn responses_with_hooks(
-        &self,
-        call: ResponsesCall,
-        hooks: &impl RouteHooks<Error>,
-    ) -> Result<ResponsesOutput, Error> {
-        litellm_host::lifecycle::observe_call(hooks.observer(), async {
-            let http = self.provider_http()?;
-            execute(
-                &http,
-                &self.resources().auth,
-                self.secret_source().as_ref(),
-                call,
-                hooks,
-            )
+impl<'a, H: RouteHooks<Error>> std::future::IntoFuture
+    for crate::CallBuilder<'a, ResponsesCall, H>
+{
+    type Output = Result<ResponsesOutput, Error>;
+    type IntoFuture = futures_util::future::BoxFuture<'a, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            litellm_host::lifecycle::observe_call(self.hooks.observer(), async {
+                let http = self.client.provider_http()?;
+                execute(
+                    &http,
+                    &self.client.resources().auth,
+                    self.client.secret_source().as_ref(),
+                    self.request,
+                    self.hooks,
+                )
+                .await
+            })
             .await
         })
-        .await
     }
 }
 

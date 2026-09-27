@@ -50,9 +50,11 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
         response
     } else {
         let call = host.request.lock().unwrap().take().unwrap();
-        let ResponsesOutput::Complete(response) =
-            client().responses_with_hooks(call, &host).await.unwrap()
-        else {
+        let client = client();
+        let builder = client.responses(call).with_hooks(&host);
+        assert!(host.events.0.lock().unwrap().is_empty());
+        assert!(received(&upstream).await.is_empty());
+        let ResponsesOutput::Complete(response) = builder.await.unwrap() else {
             panic!()
         };
         response
@@ -106,7 +108,7 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
     } else {
         let call = host.request.lock().unwrap().take().unwrap();
         let ResponsesOutput::Stream { head, chunks } =
-            client().responses_with_hooks(call, &host).await.unwrap()
+            client().responses(call).with_hooks(&host).await.unwrap()
         else {
             panic!()
         };
@@ -139,7 +141,7 @@ async fn provider_failures_emit_failure_once(
         ..call
     });
     let call = host.request.lock().unwrap().take().unwrap();
-    assert!(client().responses_with_hooks(call, &host).await.is_err());
+    assert!(client().responses(call).with_hooks(&host).await.is_err());
     assert_eq!(received(&upstream).await.len(), 1);
     let events = host.events.0.lock().unwrap();
     assert!(matches!(events.last(), Some(CallEvent::Failed { .. })));

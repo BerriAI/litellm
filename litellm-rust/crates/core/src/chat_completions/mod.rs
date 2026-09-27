@@ -46,23 +46,36 @@ pub fn chat_completions_decline_reason(
 }
 
 impl crate::CoreClient {
-    pub async fn chat_completions(
-        &self,
-        request: ChatCompletionsRequest<'_>,
-    ) -> Result<ChatCompletionsResponse, Error> {
-        self.chat_completions_with_hooks(request, &()).await
+    pub fn chat_completions<'a>(
+        &'a self,
+        request: ChatCompletionsRequest<'a>,
+    ) -> crate::CallBuilder<'a, ChatCompletionsRequest<'a>> {
+        crate::CallBuilder::new(self, request)
     }
+}
 
-    pub async fn chat_completions_with_hooks(
-        &self,
-        request: ChatCompletionsRequest<'_>,
-        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
-    ) -> Result<ChatCompletionsResponse, Error> {
-        litellm_host::lifecycle::observe_unary(hooks.observer(), async {
-            let http = self.provider_http()?;
-            execute(&http, &self.resources().auth, request, hooks).await
+impl<'a, 'r: 'a, H> std::future::IntoFuture
+    for crate::CallBuilder<'a, ChatCompletionsRequest<'r>, H>
+where
+    H: litellm_host::hooks::RouteHooks<Error>,
+{
+    type Output = Result<ChatCompletionsResponse, Error>;
+    type IntoFuture = futures_util::future::BoxFuture<'a, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        Box::pin(async move {
+            litellm_host::lifecycle::observe_unary(self.hooks.observer(), async {
+                let http = self.client.provider_http()?;
+                execute(
+                    &http,
+                    &self.client.resources().auth,
+                    self.request,
+                    self.hooks,
+                )
+                .await
+            })
+            .await
         })
-        .await
     }
 }
 

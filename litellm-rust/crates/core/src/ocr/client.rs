@@ -11,19 +11,22 @@ use super::{
 };
 
 impl crate::CoreClient {
-    pub async fn ocr(&self, request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
-        self.ocr_with_hooks(request, &()).await
+    pub fn ocr(&self, request: LiteLLMOcrRequest) -> crate::CallBuilder<'_, LiteLLMOcrRequest> {
+        crate::CallBuilder::new(self, request)
     }
+}
 
-    pub fn ocr_with_hooks<'a>(
-        &'a self,
-        request: LiteLLMOcrRequest,
-        hooks: &'a impl RouteHooks<Error>,
-    ) -> futures_util::future::BoxFuture<'a, Result<LiteLLMOcrResponse, Error>> {
+impl<'a, H: RouteHooks<Error>> std::future::IntoFuture
+    for crate::CallBuilder<'a, LiteLLMOcrRequest, H>
+{
+    type Output = Result<LiteLLMOcrResponse, Error>;
+    type IntoFuture = futures_util::future::BoxFuture<'a, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
-            litellm_host::lifecycle::observe_unary(hooks.observer(), async {
-                let client = self.ocr_client()?;
-                execute(&client, request, hooks).await
+            litellm_host::lifecycle::observe_unary(self.hooks.observer(), async {
+                let client = self.client.ocr_client()?;
+                execute(&client, self.request, self.hooks).await
             })
             .await
         })

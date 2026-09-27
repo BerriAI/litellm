@@ -358,22 +358,22 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
         response
     } else {
         let call = host.request.lock().unwrap().take().unwrap();
-        client()
-            .chat_completions_with_hooks(
-                ChatCompletionsRequest {
-                    model: &call.model,
-                    messages: call.messages,
-                    optional_params: call.optional_params,
-                    api_key: call.api_key.as_deref(),
-                    api_base: call.api_base.as_deref(),
-                    custom_llm_provider: call.custom_llm_provider.as_deref(),
-                    extra_headers: call.extra_headers,
-                    timeout: call.timeout,
-                },
-                &host,
-            )
-            .await
-            .unwrap()
+        let client = client();
+        let builder = client
+            .chat_completions(ChatCompletionsRequest {
+                model: &call.model,
+                messages: call.messages,
+                optional_params: call.optional_params,
+                api_key: call.api_key.as_deref(),
+                api_base: call.api_base.as_deref(),
+                custom_llm_provider: call.custom_llm_provider.as_deref(),
+                extra_headers: call.extra_headers,
+                timeout: call.timeout,
+            })
+            .with_hooks(&host);
+        assert!(host.events.0.lock().unwrap().is_empty());
+        assert!(received(&upstream).await.is_empty());
+        builder.await.unwrap()
     };
     assert_eq!(
         response.choices[0].message.content.as_deref(),
@@ -419,13 +419,11 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
     let base = upstream.uri();
     let error = client()
-        .chat_completions_with_hooks(
-            ChatCompletionsRequest {
-                api_base: Some(&base),
-                ..request
-            },
-            &FailingHook,
-        )
+        .chat_completions(ChatCompletionsRequest {
+            api_base: Some(&base),
+            ..request
+        })
+        .with_hooks(&FailingHook)
         .await
         .unwrap_err();
     assert_eq!(error.phase(), litellm_core::error::Phase::AfterSend);

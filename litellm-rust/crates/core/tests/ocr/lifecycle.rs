@@ -347,13 +347,14 @@ async fn direct_execution_uses_hooks_without_a_machine() {
     )])
     .await;
     let events = Arc::new(super::support::CallEvents::default());
-    let result = ocr_client()
-        .ocr_with_hooks(
-            ocr_request("mistral/model", &upstream.uri(), json!({})),
-            &Hooks(events.clone()),
-        )
-        .await
-        .unwrap();
+    let client = ocr_client();
+    let hooks = Hooks(events.clone());
+    let builder = client
+        .ocr(ocr_request("mistral/model", &upstream.uri(), json!({})))
+        .with_hooks(&hooks);
+    assert!(events.0.lock().unwrap().is_empty());
+    assert!(received(&upstream).await.is_empty());
+    let result = builder.await.unwrap();
     assert_eq!(result.pages[0].markdown, "direct");
     assert_eq!(
         only_request(&upstream).await.header("x-direct-hook"),

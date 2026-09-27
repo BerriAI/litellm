@@ -8,6 +8,59 @@ use rstest::rstest;
 use super::*;
 
 #[rstest]
+#[case::without_hooks(false)]
+#[case::with_hooks(true)]
+#[tokio::test]
+async fn call_builders_defer_execution_until_polled(call: MessagesCall, #[case] with_hooks: bool) {
+    use std::future::IntoFuture;
+
+    use litellm_host::event::CallEvent;
+
+    let upstream = upstream([message_response()]).await;
+    let secrets = Arc::new(RecordingSecrets::new([("ANTHROPIC_API_KEY", "test-key")]));
+    let client = client_with_secrets(secrets.clone());
+    let host = RecordingCall::<Messages>::new(MessagesCall {
+        api_base: Some(upstream.uri()),
+        ..call
+    });
+    let builder = client.messages(host.request().unwrap());
+    let future = if with_hooks {
+        builder.with_hooks(&host).into_future()
+    } else {
+        builder.into_future()
+    };
+
+    assert!(secrets.requested().is_empty());
+    assert!(host.events.0.lock().unwrap().is_empty());
+    assert!(received(&upstream).await.is_empty());
+
+    let MessagesResponse::Complete(response) = future.await.unwrap() else {
+        panic!("expected a completed message");
+    };
+    assert_eq!(
+        response.content,
+        message_body()["content"].as_array().unwrap().as_slice()
+    );
+    assert!(secrets.requested().contains(&"ANTHROPIC_API_KEY".into()));
+    let sent = only_request(&upstream).await;
+    assert_eq!(sent.header("x-api-key"), Some("test-key"));
+    assert_eq!(sent.header("x-hook"), with_hooks.then_some("called"));
+    let events = host.events.0.lock().unwrap();
+    if with_hooks {
+        assert!(matches!(
+            &events[..],
+            [
+                CallEvent::Started { .. },
+                CallEvent::Machine(_),
+                CallEvent::Succeeded { .. }
+            ]
+        ));
+    } else {
+        assert!(events.is_empty());
+    }
+}
+
+#[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure_ai("azure_ai")]
 #[tokio::test]

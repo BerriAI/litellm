@@ -6,6 +6,36 @@ use litellm_secrets::source::SecretSource;
 
 use crate::resources::CoreResources;
 
+#[must_use = "a call does nothing until awaited"]
+pub struct CallBuilder<'a, R, H = ()> {
+    pub(crate) client: &'a CoreClient,
+    pub(crate) request: R,
+    pub(crate) hooks: &'a H,
+}
+
+impl<'a, R> CallBuilder<'a, R> {
+    pub(crate) fn new(client: &'a CoreClient, request: R) -> Self {
+        Self {
+            client,
+            request,
+            hooks: &(),
+        }
+    }
+}
+
+impl<'a, R, H> CallBuilder<'a, R, H> {
+    pub fn with_hooks<'h, T>(self, hooks: &'h T) -> CallBuilder<'h, R, T>
+    where
+        'a: 'h,
+    {
+        CallBuilder {
+            client: self.client,
+            request: self.request,
+            hooks,
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct CoreClient {
     resources: CoreResources,
