@@ -2684,3 +2684,48 @@ def test_forwarding_headers_minted_bearer_replaces_a_forwarded_authorization_of_
     )
 
     assert merged == {"X-Custom": "kept", "Authorization": "Bearer minted-token"}
+
+
+def test_forwarding_headers_keeps_allowlisted_x_litellm_api_key():
+    """Admin-configured extra_headers may include x-litellm-api-key. That name is not a minted
+    caller-identity header, so it must reach the backend agent (#43450)."""
+    from litellm.proxy.agent_endpoints.a2a_endpoints import _forwarding_headers
+
+    merged = _forwarding_headers(
+        caller_identity={"X-LiteLLM-User-Id": "u1", "X-LiteLLM-Team-Id": "t1"},
+        request_data={},
+        agent_extra_headers={
+            "authorization": "Bearer client",
+            "x-litellm-api-key": "sk-forward-me",
+            "x-litellm-user-id": "attacker",
+        },
+        backend_auth_header=None,
+    )
+
+    assert merged is not None
+    assert merged.get("x-litellm-api-key") == "sk-forward-me"
+    assert merged.get("authorization") == "Bearer client"
+    assert merged.get("X-LiteLLM-User-Id") == "u1"
+    assert merged.get("X-LiteLLM-Team-Id") == "t1"
+    # Spoofed lowercase identity must not sit beside the minted header.
+    assert "x-litellm-user-id" not in merged
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_message_methods_forward_allowlisted_x_litellm_api_key(method: str):
+    agent = _make_agent_mock()
+    agent.extra_headers = ["authorization", "x-litellm-api-key"]
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
+    mock_request.headers = {
+        "authorization": "Bearer client-key",
+        "x-litellm-api-key": "sk-allowlisted",
+    }
+    user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
+
+    captured = await _invoke_message_method(method, mock_request, user_api_key_dict, agent=agent)
+
+    forwarded = captured.agent_extra_headers or {}
+    assert forwarded.get("authorization") == "Bearer client-key"
+    assert forwarded.get("x-litellm-api-key") == "sk-allowlisted"
+    assert forwarded.get("X-LiteLLM-Team-Id") == "t1"
