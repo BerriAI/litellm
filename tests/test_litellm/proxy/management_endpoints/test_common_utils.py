@@ -774,6 +774,135 @@ class TestCheckPassthroughRoutesCallerPermission:
         )
 
 
+class TestCheckDisableGlobalGuardrailsCallerPermission:
+    """Only proxy admins may set disable_global_guardrails (top-level or under
+    metadata); non-admins get a 403 naming the entity."""
+
+    def _non_admin(self):
+        return UserAPIKeyAuth(
+            user_id="u1", api_key="sk-x", user_role=LitellmUserRoles.INTERNAL_USER
+        )
+
+    def _admin(self):
+        return UserAPIKeyAuth(
+            user_id="u2", api_key="sk-y", user_role=LitellmUserRoles.PROXY_ADMIN
+        )
+
+    def test_top_level_flag_rejected_with_default_entity(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_disable_global_guardrails_caller_permission(True, None, self._non_admin())
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {"error": "Only proxy admins can set `disable_global_guardrails` on a key."}
+
+    def test_metadata_flag_rejected_with_default_entity(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_disable_global_guardrails_caller_permission(
+                None, {"disable_global_guardrails": True}, self._non_admin()
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {"error": "Only proxy admins can set `disable_global_guardrails` on a key."}
+
+    def test_explicit_false_with_metadata_true_is_rejected(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_disable_global_guardrails_caller_permission(
+                False, {"disable_global_guardrails": True}, self._non_admin()
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {"error": "Only proxy admins can set `disable_global_guardrails` on a key."}
+
+    def test_rejection_names_the_team_entity(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_disable_global_guardrails_caller_permission(True, None, self._non_admin(), entity="team")
+
+        assert exc_info.value.detail == {"error": "Only proxy admins can set `disable_global_guardrails` on a team."}
+
+    def test_false_and_absent_flag_do_not_raise(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        non_admin = self._non_admin()
+        assert _check_disable_global_guardrails_caller_permission(False, None, non_admin) is None
+        assert _check_disable_global_guardrails_caller_permission(None, None, non_admin) is None
+        assert _check_disable_global_guardrails_caller_permission(None, {}, non_admin) is None
+        assert (
+            _check_disable_global_guardrails_caller_permission(None, {"disable_global_guardrails": False}, non_admin)
+            is None
+        )
+
+    def test_unchanged_stored_flag_does_not_raise(self):
+        """Re-sending a flag that is already stored is not an opt-out."""
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        non_admin = self._non_admin()
+        assert (
+            _check_disable_global_guardrails_caller_permission(
+                True,
+                {"disable_global_guardrails": True},
+                non_admin,
+                existing_metadata={"disable_global_guardrails": True},
+            )
+            is None
+        )
+
+    def test_stored_false_does_not_exempt(self):
+        from fastapi import HTTPException
+
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        with pytest.raises(HTTPException) as exc_info:
+            _check_disable_global_guardrails_caller_permission(
+                True,
+                None,
+                self._non_admin(),
+                existing_metadata={"disable_global_guardrails": False},
+            )
+
+        assert exc_info.value.status_code == 403
+        assert exc_info.value.detail == {"error": "Only proxy admins can set `disable_global_guardrails` on a key."}
+
+    def test_proxy_admin_may_set_the_flag(self):
+        from litellm.proxy.management_endpoints.common_utils import (
+            _check_disable_global_guardrails_caller_permission,
+        )
+
+        assert (
+            _check_disable_global_guardrails_caller_permission(True, {"disable_global_guardrails": True}, self._admin())
+            is None
+        )
+
+
 class TestIsUserOrgAdminForTeam:
     """The caller must be looked up with its exact identity; a nulled or omitted
     lookup argument would silently mis-resolve org-admin status."""

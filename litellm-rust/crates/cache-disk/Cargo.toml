@@ -15,5 +15,6 @@ serde_json.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+litellm-cache-testing.workspace = true
 rstest.workspace = true
 tempfile = "3.27.0"

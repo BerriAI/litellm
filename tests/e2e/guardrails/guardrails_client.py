@@ -17,6 +17,7 @@ from models import (
     AnthropicMessagesResponse,
     ChatBody,
     ChatMessage,
+    ChatMetadata,
     ChatResponse,
     ChatTool,
     KeyGenerateBody,
@@ -110,6 +111,15 @@ class ToolPermissionParamsBody(GuardrailParamsBase):
     on_disallowed_action: Literal["block", "rewrite"] = "block"
 
 
+class CustomCodeParamsBody(GuardrailParamsBase):
+    """Custom-code guardrail params: `custom_code` is the sandboxed source the
+    proxy compiles, which must define `apply_guardrail(inputs, request_data,
+    input_type)` returning `allow()` or `block(reason)`."""
+
+    guardrail: Literal["custom_code"] = "custom_code"
+    custom_code: str
+
+
 GuardrailParamsBody = (
     ContentFilterParamsBody
     | BedrockGuardrailParamsBody
@@ -117,6 +127,7 @@ GuardrailParamsBody = (
     | BlockCodeExecutionParamsBody
     | PresidioParamsBody
     | ToolPermissionParamsBody
+    | CustomCodeParamsBody
 )
 
 
@@ -131,6 +142,31 @@ class GuardrailCreateBody(BaseModel):
 
 class GuardrailCreateResponse(BaseModel):
     guardrail_id: str
+
+
+class PolicyConditionBody(BaseModel):
+    model: str
+
+
+class PolicyCreateBody(BaseModel):
+    policy_name: str
+    inherit: str | None = None
+    guardrails_add: list[str]
+    condition: PolicyConditionBody | None = None
+
+
+class PolicyCreateResponse(BaseModel):
+    policy_id: str
+    policy_name: str
+
+
+class PolicyAttachmentCreateBody(BaseModel):
+    policy_name: str
+    tags: list[str]
+
+
+class PolicyAttachmentCreateResponse(BaseModel):
+    attachment_id: str
 
 
 class ApplyGuardrailRequest(BaseModel):
@@ -148,6 +184,7 @@ class _ResponsesGuardrailBody(BaseModel):
     model: str
     input: str
     guardrails: list[str] | None = None
+    stream: bool | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -243,6 +280,49 @@ class GuardrailsClient:
             response_type=NoBody,
         )
 
+    def create_policy(self, body: PolicyCreateBody) -> str:
+        """Create a policy via POST /policies and return its name once every replica
+        can be expected to serve it (policies reach the data plane on the periodic
+        DB sync, same as guardrails)."""
+        created = unwrap(
+            self.proxy.transport.post(
+                "/policies",
+                headers=self.proxy.transport.master,
+                json=body,
+                response_type=PolicyCreateResponse,
+            )
+        )
+        settle_propagation(time.monotonic())
+        return created.policy_name
+
+    def delete_policy(self, policy_name: str) -> None:
+        _ = self.proxy.transport.delete(
+            f"/policies/name/{policy_name}/all-versions",
+            headers=self.proxy.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
+        )
+
+    def attach_policy_to_tags(self, policy_name: str, tags: list[str]) -> str:
+        attachment_id = unwrap(
+            self.proxy.transport.post(
+                "/policies/attachments",
+                headers=self.proxy.transport.master,
+                json=PolicyAttachmentCreateBody(policy_name=policy_name, tags=tags),
+                response_type=PolicyAttachmentCreateResponse,
+            )
+        ).attachment_id
+        settle_propagation(time.monotonic())
+        return attachment_id
+
+    def delete_policy_attachment(self, attachment_id: str) -> None:
+        _ = self.proxy.transport.delete(
+            f"/policies/attachments/{attachment_id}",
+            headers=self.proxy.transport.master,
+            json=NoBody(),
+            response_type=NoBody,
+        )
+
     def create_team_opted_out_of_global_guardrails(self, alias: str) -> str:
         team_id = unwrap(
             self.proxy.transport.post(
@@ -291,6 +371,7 @@ class GuardrailsClient:
         text: str,
         *,
         guardrails: list[str] | None = None,
+        include_guardrail_response: bool | None = None,
         max_tokens: int = 16,
         tools: list[ChatTool] | None = None,
     ) -> Result[ChatResponse]:
@@ -306,6 +387,7 @@ class GuardrailsClient:
                 messages=[ChatMessage(role="user", content=text)],
                 max_tokens=max_tokens,
                 guardrails=guardrails,
+                include_guardrail_response=include_guardrail_response,
                 tools=tools,
             ),
         )
@@ -320,11 +402,13 @@ class GuardrailsClient:
         max_tokens: int = 16,
         tools: list[ChatTool] | None = None,
         tool_choice: str | None = None,
+        tags: list[str] | None = None,
     ) -> StreamingResponse:
         """Drive /chat/completions returning the raw HTTP outcome, for the
         assertions a typed body cannot carry: the `x-litellm-applied-guardrails`
         response header, which is how an ALLOW scenario proves the guardrail ran
-        rather than being absent."""
+        rather than being absent. `tags` land in `metadata.tags`, which is what a
+        tag-scoped policy attachment matches on."""
         return self.proxy.transport.send(
             "/chat/completions",
             headers=self.proxy.transport.bearer(key),
@@ -335,6 +419,7 @@ class GuardrailsClient:
                 guardrails=guardrails,
                 tools=tools,
                 tool_choice=tool_choice,
+                metadata=ChatMetadata(tags=tags) if tags is not None else None,
             ),
         )
 
@@ -433,6 +518,24 @@ class GuardrailsClient:
             "/v1/responses",
             headers=self.proxy.transport.bearer(key),
             json=_ResponsesGuardrailBody(model=model, input=text, guardrails=guardrails),
+        )
+
+    def responses_stream_raw(
+        self,
+        key: str,
+        model: str,
+        text: str,
+        *,
+        guardrails: list[str] | None = None,
+    ) -> StreamingResponse:
+        """Drive /v1/responses with stream=true, returning the raw HTTP outcome:
+        a streamed block is judged on status, content-type, and the SSE event
+        sequence, not a typed JSON body."""
+        return self.proxy.transport.send(
+            "/v1/responses",
+            headers=self.proxy.transport.bearer(key),
+            json=_ResponsesGuardrailBody(model=model, input=text, guardrails=guardrails, stream=True),
+            stream=True,
         )
 
     def apply_guardrail(self, key: str, *, name: str, text: str) -> Result[ApplyGuardrailResponse]:

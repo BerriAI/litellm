@@ -3,9 +3,11 @@ Utils used for slack alerting
 """
 
 import asyncio
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any, Final
 
 import litellm
+from litellm.integrations.custom_logger import CustomLogger
 from litellm.proxy._types import AlertType
 from litellm.secret_managers.main import get_secret
 
@@ -66,25 +68,27 @@ async def _add_langfuse_trace_id_to_alert(
     -> trace_id
     -> litellm_call_id
     """
-    if "langfuse" not in litellm.logging_callback_manager._get_all_callbacks():
+    from litellm.integrations.langfuse.langfuse import LangFuseLogger, resolve_langfuse_host
+
+    callbacks: Final[list[CustomLogger | Callable[..., object] | str]] = (
+        litellm.logging_callback_manager._get_all_callbacks()
+    )
+    if not any(callback == "langfuse" or isinstance(callback, LangFuseLogger) for callback in callbacks):
         return None
-    #########################################################
-    # Only run if langfuse is added as a callback
-    #########################################################
 
-    if request_data is not None and request_data.get("litellm_logging_obj", None) is not None:
-        trace_id: str | None = None
-        litellm_logging_obj: Final[Logging] = request_data["litellm_logging_obj"]
+    if request_data is None or request_data.get("litellm_logging_obj", None) is None:
+        return None
 
-        for _ in range(3):
-            trace_id = litellm_logging_obj._get_trace_id(service_name="langfuse")
-            if trace_id is not None:
-                break
-            await asyncio.sleep(3)  # wait 3s before retrying for trace id
-        #########################################################
-        langfuse_object: Final = litellm_logging_obj._get_callback_object(service_name="langfuse")
-        if langfuse_object is not None:
-            base_url: Final = langfuse_object.Langfuse.base_url
-            return f"{base_url}/trace/{trace_id}"
+    litellm_logging_obj: Final[Logging] = request_data["litellm_logging_obj"]
+    instance_host: Final = next(
+        (callback.langfuse_host for callback in callbacks if isinstance(callback, LangFuseLogger)), None
+    )
+    host: Final = resolve_langfuse_host(
+        litellm_logging_obj.standard_callback_dynamic_params.get("langfuse_host") or instance_host
+    )
+    for _ in range(3):
+        if (trace_id := litellm_logging_obj._get_trace_id(service_name="langfuse")) is not None:
+            return f"{host}/trace/{trace_id}"
+        await asyncio.sleep(3)  # wait 3s before retrying for trace id
 
     return None

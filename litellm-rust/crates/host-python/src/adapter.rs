@@ -1,5 +1,5 @@
 use litellm_host::event::{FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest};
-use litellm_host::route::Route;
+use litellm_host::protocol::Protocol;
 use pyo3::exceptions::PyRuntimeError;
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
@@ -8,6 +8,12 @@ use pyo3::types::PyDict;
 pub fn missing_state() -> PyErr {
     PyRuntimeError::new_err("missing native call state")
 }
+
+/// The SDK's request policy, run by the driver on the keyword view `begin` returned and
+/// before the protocol host projects from it. It rewrites that view in place, so the
+/// lifecycle that returned it sees the rewrite too; a rejection fails the call as a host
+/// failure, so the lifecycle still observes it.
+pub type Preflight = fn(Python<'_>, &Bound<'_, PyDict>) -> PyResult<()>;
 
 /// What an adapter step produced: either the value the driver asked for, or a Python
 /// awaitable the driver hands back to the caller's task before asking again.
@@ -85,7 +91,7 @@ pub trait PythonLifecycle: Send + Sync {
     fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError>;
 }
 
-/// Why a route operation the host answered did not produce a result: the route's own code
+/// Why a custom operation the host answered did not produce a result: the route's own code
 /// rejected it, which the route classifies like any other native failure, or Python code
 /// raised, which reaches the caller as it was raised.
 #[derive(Debug)]
@@ -100,45 +106,61 @@ impl<E> From<PyErr> for InvokeError<E> {
     }
 }
 
-/// The Python side of one route: answers the route's own operations, builds the public
+/// The Python side of one protocol: answers its custom operations, builds the public
 /// response and classifies native failures into public exceptions.
-pub trait RouteHost: Send + Sync {
-    type Route: Route<Error: std::fmt::Display>;
+pub trait ProtocolHost: Send + Sync {
+    type Protocol: Protocol<Error: std::fmt::Display>;
 
     /// The public exception a native failure maps to, kept as a value until the driver
     /// raises it.
     type Failure: Into<PyErr>;
 
-    /// `arguments` is the keyword view the lifecycle's `begin` produced, not the
-    /// caller's own dict. A route host that projects from it inherits whatever that
-    /// adapter rewrote.
-    fn invoke(
+    /// Projects the call's request. `arguments` is the keyword view the lifecycle's
+    /// `begin` produced, not the caller's own dict, so the projection inherits whatever
+    /// that adapter rewrote.
+    fn project(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-        op: <Self::Route as Route>::Op,
-    ) -> Result<<Self::Route as Route>::OpResult, InvokeError<<Self::Route as Route>::Error>>;
+    ) -> Result<
+        <Self::Protocol as Protocol>::Projection,
+        InvokeError<<Self::Protocol as Protocol>::Error>,
+    >;
+
+    /// Answers `op` through its reply.
+    fn invoke(
+        &mut self,
+        py: Python<'_>,
+        op: <Self::Protocol as Protocol>::Op,
+    ) -> Result<(), InvokeError<<Self::Protocol as Protocol>::Error>>;
 
     fn complete(
         &mut self,
         py: Python<'_>,
-        response: <Self::Route as Route>::Response,
+        response: <Self::Protocol as Protocol>::Response,
+    ) -> PyResult<Py<PyAny>>;
+
+    /// What the stream carries at hand-off, as the caller's stream receives it.
+    fn head(
+        &mut self,
+        py: Python<'_>,
+        head: <Self::Protocol as Protocol>::StreamHead,
     ) -> PyResult<Py<PyAny>>;
 
     /// One streamed chunk as the caller receives it.
     fn chunk(
         &mut self,
         py: Python<'_>,
-        chunk: <Self::Route as Route>::Chunk,
+        chunk: <Self::Protocol as Protocol>::Chunk,
     ) -> PyResult<Py<PyAny>>;
 
     fn classify(
         &self,
         py: Python<'_>,
-        error: <Self::Route as Route>::Error,
+        error: <Self::Protocol as Protocol>::Error,
     ) -> PyResult<Self::Failure>;
 
-    fn host_error(error: &PyErr) -> <Self::Route as Route>::Error;
+    fn host_error(error: &PyErr) -> <Self::Protocol as Protocol>::Error;
 
     fn close(&mut self, py: Python<'_>);
 

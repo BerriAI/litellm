@@ -3817,6 +3817,22 @@ class TestTeamAdminEditableTeamFieldsSetting:
 
         assert response.status_code == 422
 
+    def test_patch_422_never_echoes_the_submitted_value(self, monkeypatch):
+        self._as_proxy_admin(monkeypatch)
+        submitted = "hunter2-Sup3rSecret!"
+
+        try:
+            response = client.patch("/update/ui_settings", json={"team_admin_editable_team_fields": submitted})
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 422
+        assert submitted.encode() not in response.content
+        detail = response.json()["detail"]
+        assert detail[0]["loc"] == ["team_admin_editable_team_fields"]
+        assert detail[0]["msg"]
+        assert set(detail[0]) == {"type", "loc", "msg"}
+
     def test_patch_persists_and_syncs_the_list_to_general_settings(self, monkeypatch):
         mock_prisma = self._as_proxy_admin(monkeypatch)
         general_settings: dict = {"team_admin_editable_team_fields": []}
@@ -3853,6 +3869,28 @@ class TestTeamAdminEditableTeamFieldsSetting:
         stored = json.loads(mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]["create"]["ui_settings"])
         assert stored["team_admin_editable_team_fields"] == ["projects"]
         assert team_admin_may_manage_projects(general_settings) is True
+
+    def test_patch_accepts_the_member_key_budgets_permission(self, monkeypatch):
+        from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+            team_admin_may_edit_member_key_budgets,
+        )
+
+        mock_prisma = self._as_proxy_admin(monkeypatch)
+        general_settings: dict = {}
+        monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", general_settings)
+        assert team_admin_may_edit_member_key_budgets(general_settings) is False
+
+        try:
+            response = client.patch(
+                "/update/ui_settings", json={"team_admin_editable_team_fields": ["member_key_budgets"]}
+            )
+        finally:
+            app.dependency_overrides.clear()
+
+        assert response.status_code == 200
+        stored = json.loads(mock_prisma.db.litellm_uisettings.upsert.call_args.kwargs["data"]["create"]["ui_settings"])
+        assert stored["team_admin_editable_team_fields"] == ["member_key_budgets"]
+        assert team_admin_may_edit_member_key_budgets(general_settings) is True
 
     def test_patch_with_an_empty_list_turns_team_admin_editing_off_again(self, monkeypatch):
         mock_prisma = self._as_proxy_admin(monkeypatch)
@@ -3997,6 +4035,32 @@ class TestSyncUiSettingsToGeneralSettings:
 
         assert general_settings["forward_client_headers_to_llm_api"] is True
         assert general_settings.source("forward_client_headers_to_llm_api") == "db"
+
+    def test_every_runtime_flag_reaches_a_reader_once_applied(self, monkeypatch):
+        """A flag the settings rules do not route to the ui_settings row is stored but never read back."""
+        from litellm.proxy import proxy_server
+        from litellm.proxy.config_resolvers import SettingsStore
+        from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
+            TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING,
+            _RUNTIME_GENERAL_SETTINGS_FLAGS,
+            apply_runtime_general_settings_flags,
+        )
+
+        general_settings = SettingsStore("general_settings")
+        general_settings.load_yaml({})
+        monkeypatch.setattr(proxy_server, "general_settings", general_settings)
+
+        stored = {
+            key: (["tpm_limit"] if key == TEAM_ADMIN_EDITABLE_TEAM_FIELDS_SETTING else True)
+            for key in _RUNTIME_GENERAL_SETTINGS_FLAGS
+        }
+        assert stored
+
+        apply_runtime_general_settings_flags(stored)
+
+        read_back = {key: general_settings.get(key) for key in stored}
+
+        assert read_back == stored
 
     def test_applied_runtime_flags_cannot_override_the_config_file(self, monkeypatch):
         from litellm.proxy import proxy_server
