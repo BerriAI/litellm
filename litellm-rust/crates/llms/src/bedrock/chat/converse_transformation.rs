@@ -212,7 +212,7 @@ impl BaseConfig for AmazonConverseConfig {
     ) -> Result<ChatCompletionsResponse, Error> {
         let response: ConverseResponse =
             serde_json::from_value(response.body).map_err(|error| {
-                Error::InvalidResponse(format!("invalid Converse response: {error}"))
+                Error::InvalidResponse(format!("invalid Converse response: {error}").into())
             })?;
         // The route declines tool requests, so anything other than a text block
         // is something this path never asked for. Decline; the host falls back.

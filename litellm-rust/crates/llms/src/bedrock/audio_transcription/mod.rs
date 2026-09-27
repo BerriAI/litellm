@@ -129,10 +129,9 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
             serde_json::from_value(response_json).map_err(|error| {
                 Error::InvalidResponse(format!("invalid Converse response: {error}").into())
             })?;
-            })?;
         if response.message_content_is_non_text() {
             return Err(Error::InvalidResponse(
-                "Bedrock response contains non-text transcript content".to_string(),
+                "Bedrock response contains non-text transcript content".to_string().into(),
             ));
         }
         Ok(AudioTranscriptionResponseData {
