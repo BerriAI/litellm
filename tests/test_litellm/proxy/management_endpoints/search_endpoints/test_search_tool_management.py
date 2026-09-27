@@ -26,6 +26,16 @@ from litellm.types.search import SearchToolInfoResponse
 client = TestClient(app)
 
 
+def test_dashboard_discovers_webiq_with_its_display_name() -> None:
+    with _override_auth(UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)):
+        response: Final = client.get("/search_tools/ui/available_providers")
+
+    assert response.status_code == 200, response.text
+    assert [provider for provider in response.json()["providers"] if provider["provider_name"] == "webiq"] == [
+        {"provider_name": "webiq", "ui_friendly_name": "Microsoft Web IQ"}
+    ]
+
+
 @pytest.mark.parametrize(
     "team_id,role,key_tools,team_tools,expected_status",
     [
