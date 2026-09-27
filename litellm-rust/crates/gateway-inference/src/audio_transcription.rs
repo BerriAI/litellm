@@ -38,7 +38,9 @@ async fn handle(gateway: &Gateway, request: Request) -> Result<Value, Error> {
             .cloned()
             .ok_or_else(|| Error::InvalidBody("audio is required".into()))?,
     };
-    Ok(gateway.core.audio_transcription(AudioTranscriptionRequest {
+    Ok(gateway
+        .core
+        .audio_transcription(AudioTranscriptionRequest {
             model: &deployment.model,
             audio,
             api_key: deployment.api_key.as_deref(),
@@ -50,5 +52,6 @@ async fn handle(gateway: &Gateway, request: Request) -> Result<Value, Error> {
                 .filter(|(name, _)| !matches!(name.as_str(), "model" | "audio"))
                 .collect(),
             timeout: deployment.timeout,
-        }).await?)
+        })
+        .await?)
 }
