@@ -6931,8 +6931,8 @@ class TestMCPServerManager:
             url="http://srv",
             auth_type=MCPAuth.oauth2_token_exchange,
         )
-        alice = UserAPIKeyAuth(user_id="alice", api_key="hashed-alice")
-        bob = UserAPIKeyAuth(user_id="bob", api_key="hashed-bob")
+        alice = UserAPIKeyAuth(user_id="alice", token="hashed-alice")
+        bob = UserAPIKeyAuth(user_id="bob", token="hashed-bob")
         alice_schema = {"type": "object", "properties": {"path": {"type": "string"}}}
         bob_schema = {"type": "object", "properties": {"path": {"type": "string"}, "site": {"type": "string"}}}
         manager._create_prefixed_tools(
@@ -6953,7 +6953,7 @@ class TestMCPServerManager:
             alice_schema,
         )
         assert bob_tool is not None and (bob_tool.description, bob_tool.input_schema) == ("bob view", bob_schema)
-        carol = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(user_id="carol", api_key="k"))
+        carol = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(user_id="carol", token="k"))
         assert manager.get_listed_tool(server, "srv-read", carol) is None
 
         shared = MCPServer(server_id="shared", name="shared", transport=MCPTransport.http, url="http://shared")
@@ -6989,11 +6989,11 @@ class TestMCPServerManager:
             pytest.param(
                 {"auth_type": MCPAuth.oauth2_token_exchange},
                 ListedToolsCaller(
-                    user_api_key_auth=UserAPIKeyAuth(user_id="team-bot", api_key="hashed-shared"),
+                    user_api_key_auth=UserAPIKeyAuth(user_id="team-bot", token="hashed-shared"),
                     raw_headers={"x-litellm-api-key": "sk-shared", "authorization": "Bearer entra-alice"},
                 ),
                 ListedToolsCaller(
-                    user_api_key_auth=UserAPIKeyAuth(user_id="team-bot", api_key="hashed-shared"),
+                    user_api_key_auth=UserAPIKeyAuth(user_id="team-bot", token="hashed-shared"),
                     raw_headers={"x-litellm-api-key": "sk-shared", "authorization": "Bearer entra-bob"},
                 ),
                 id="shared-key-different-obo-subjects",
@@ -7106,8 +7106,8 @@ class TestMCPServerManager:
         server = MCPServer(
             server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv", static_headers=static_headers
         )
-        alice = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(user_id="alice", api_key="hashed-alice"))
-        bob = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(user_id="bob", api_key="hashed-bob"))
+        alice = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(user_id="alice", token="hashed-alice"))
+        bob = ListedToolsCaller(user_api_key_auth=UserAPIKeyAuth(user_id="bob", token="hashed-bob"))
 
         with patch(  # test-quality-ok: the signer is a process-wide singleton the manager reads, no injection seam
             "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.get_mcp_jwt_signer",
@@ -7122,6 +7122,37 @@ class TestMCPServerManager:
             assert for_bob is not None and for_bob.description == "alice view"
         else:
             assert for_bob is None
+
+    def test_per_caller_slot_identity_is_the_token_not_the_api_key(self):
+        """Two callers sharing user_id split on the hashed token the admission validator stamps;
+        the raw api_key never enters the identity, so a caller carrying only that token lands on
+        the same slot."""
+        from litellm.proxy._types import hash_token
+
+        manager = MCPServerManager()
+        server = MCPServer(server_id="srv", name="srv", transport=MCPTransport.http, url="http://srv")
+        alice = ListedToolsCaller(
+            user_api_key_auth=UserAPIKeyAuth(user_id="same-user", api_key="sk-alpha")
+        )
+        bob = ListedToolsCaller(
+            user_api_key_auth=UserAPIKeyAuth(user_id="same-user", api_key="sk-beta")
+        )
+
+        with patch(  # test-quality-ok: the signer is a process-wide singleton the manager reads, no injection seam
+            "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.get_mcp_jwt_signer",
+            return_value=MagicMock(),
+        ):
+            manager._create_prefixed_tools(
+                [MCPTool(name="turn", description="slot a", inputSchema={})], server, caller=alice
+            )
+            assert manager.get_listed_tool(server, "srv-turn", bob) is None
+
+            same_token = ListedToolsCaller(
+                user_api_key_auth=UserAPIKeyAuth(user_id="same-user", token=hash_token("sk-alpha"))
+            )
+            listed = manager.get_listed_tool(server, "srv-turn", same_token)
+
+        assert listed is not None and listed.description == "slot a"
 
     @pytest.mark.asyncio
     async def test_call_tool_hands_hooks_the_catalog_the_same_forwarded_headers_listed(self):

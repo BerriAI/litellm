@@ -4606,7 +4606,7 @@ class MCPServerManager:
             return None
         auth: Final = caller.user_api_key_auth
         identity: Final = (
-            (auth.user_id, auth.api_key) if auth is not None and self._discovers_per_caller(server) else None
+            (auth.user_id, auth.token) if auth is not None and self._discovers_per_caller(server) else None
         )
         forwarded: Final = self._forwarded_header_values(server, caller.raw_headers)
         header_env: Final = self._build_stdio_env(server, caller.raw_headers)
