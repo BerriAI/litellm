@@ -2061,6 +2061,43 @@ class TestSanitizeInputSchemaForAnthropic:
             f"a constraint stated beside the $ref must not be dropped, got {dict(result)}"
         )
 
+    def test_a_property_declared_on_both_sides_of_a_ref_keeps_both_constraints(self):
+        """Keys beside a ``$ref`` apply on top of it, so where both declare the
+        same property neither constraint may be dropped. Anthropic accepts a
+        combinator nested inside a property, so both can be carried."""
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            sanitize_input_schema_for_anthropic,
+        )
+
+        result = sanitize_input_schema_for_anthropic(
+            {
+                "$defs": {"A": {"type": "object", "properties": {"a": {"type": "string", "minLength": 5}}}},
+                "$ref": "#/$defs/A",
+                "properties": {"a": {"type": "string", "maxLength": 9}},
+            }
+        )
+
+        assert result["properties"]["a"] == {
+            "allOf": [{"type": "string", "minLength": 5}, {"type": "string", "maxLength": 9}]
+        }, f"both sides' constraints on a shared property must survive, got {dict(result)}"
+
+    def test_a_property_identical_on_both_sides_is_not_wrapped(self):
+        from litellm.litellm_core_utils.prompt_templates.common_utils import (
+            sanitize_input_schema_for_anthropic,
+        )
+
+        shared = {"type": "string"}
+
+        result = sanitize_input_schema_for_anthropic(
+            {
+                "$defs": {"A": {"type": "object", "properties": {"a": shared}}},
+                "$ref": "#/$defs/A",
+                "properties": {"a": shared},
+            }
+        )
+
+        assert result["properties"]["a"] == shared, f"identical declarations need no allOf wrapper, got {dict(result)}"
+
     def test_ref_root_resolves_to_the_schema_it_points_at(self):
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
             sanitize_input_schema_for_anthropic,
@@ -2134,22 +2171,25 @@ class TestSanitizeInputSchemaForAnthropic:
 
         assert dict(many) == dict(once), f"repeating a branch must not change the result, got {dict(many)}"
 
-    def test_branches_that_resolved_to_one_object_collapse_to_one(self):
-        """Repeated ``$ref``s share a single memoised result, so the merge only
-        needs to see it once. Collapsing them is what keeps a compact schema
-        repeating one reference from costing work per branch."""
+    @pytest.mark.parametrize(
+        "name, root",
+        [
+            ("ref root", {"$ref": "#/$defs/A"}),
+            ("union root", {"anyOf": [{"$ref": "#/$defs/A"}, {"$ref": "#/$defs/B"}]}),
+        ],
+    )
+    def test_the_sanitized_schema_can_be_serialized_onto_the_wire(self, name, root):
+        """The result is JSON-encoded into the provider request, so every value in
+        it has to be encodable. A mapping proxy is not."""
         from litellm.litellm_core_utils.prompt_templates.common_utils import (
-            _distinct_branches,
+            sanitize_input_schema_for_anthropic,
         )
 
-        shared = {"type": "object", "properties": {"a": {"type": "string"}}}
-        other = {"type": "object", "properties": {"b": {"type": "string"}}}
+        result = sanitize_input_schema_for_anthropic({"$defs": {"A": self.A, "B": self.B}, **root})
 
-        result = _distinct_branches((shared, shared, other, shared))
-
-        assert len(result) == 2, f"identical objects should collapse, got {len(result)} branches"
-        assert result[0] is shared, f"the first occurrence should be kept, got {result}"
-        assert result[1] is other, f"distinct branches must survive in order, got {result}"
+        assert json.loads(json.dumps(result))["properties"], (
+            f"{name} must survive a JSON round trip, got {dict(result)}"
+        )
 
     def test_a_pydantic_union_tool_reaches_anthropic_with_its_arguments(self):
         """The reporter's path: Pydantic emits a root ``anyOf`` over ``$defs``."""

@@ -11,7 +11,9 @@ from itertools import groupby, islice
 from os import PathLike
 from pathlib import Path
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypeVar, cast
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, cast
+
+from typing_extensions import ReadOnly
 
 import litellm
 from litellm import verbose_logger
@@ -1211,15 +1213,35 @@ def _resolve_local_schema_ref(root: Mapping[str, object], ref: str) -> Mapping[s
     return target if isinstance(target, dict) else None
 
 
+class _AllOfSchema(TypedDict):
+    allOf: ReadOnly[Sequence[object]]
+
+
+def _both_constraints_apply(target_property: object, sibling_property: object) -> object:
+    """One property schema satisfying both sides of a ``$ref`` merge.
+
+    A plain dict rather than a ``MappingProxyType``, because this value is
+    serialised straight into the provider request and ``json`` cannot encode a
+    mapping proxy.
+    """
+    if target_property is None or target_property == sibling_property:
+        return sibling_property
+    both: Final = [target_property, sibling_property]  # mutable-ok: allOf is a JSON array; a tuple is not one
+    combined: Final[_AllOfSchema] = {"allOf": both}
+    return combined
+
+
 def _inline_root_schema_ref(schema: Mapping[str, object]) -> Mapping[str, object]:
     """Merge a root-level local ``$ref`` with the schema it points at.
 
     Per JSON Schema, keys beside a ``$ref`` apply on top of what it references
-    rather than being replaced by it, so ``properties`` and ``required`` union
-    and the local key wins elsewhere. Dropping the siblings instead would lose
-    constraints the caller stated here, such as ``additionalProperties: false``.
-    A root without a ``$ref``, or one pointing outside the document or at a
-    missing name, is returned as is.
+    rather than being replaced by it. ``properties`` and ``required`` therefore
+    union, and a property both sides declare becomes an ``allOf`` of the two so
+    neither one's constraints are lost; Anthropic accepts a combinator nested
+    inside a property, only a root one is a problem. Replacing the root outright
+    would drop what the caller stated here, such as ``additionalProperties:
+    false``. A root without a ``$ref``, or one pointing outside the document or
+    at a missing name, is returned as is.
     """
     ref: Final = schema.get("$ref")
     if not isinstance(ref, str):
@@ -1228,7 +1250,11 @@ def _inline_root_schema_ref(schema: Mapping[str, object]) -> Mapping[str, object
     if target is None:
         return schema
     siblings: Final = MappingProxyType({key: value for key, value in schema.items() if key != "$ref"})
-    properties: Final = MappingProxyType({**_schema_properties(target), **_schema_properties(siblings)})
+    target_properties: Final = _schema_properties(target)
+    sibling_wins: Final = MappingProxyType({**target_properties, **_schema_properties(siblings)})
+    properties: Final = {  # mutable-ok: tool parameters are JSON dicts, and a mapping proxy will not serialise
+        name: _both_constraints_apply(target_properties.get(name), value) for name, value in sibling_wins.items()
+    }
     required: Final = sorted(_schema_required_names(target) | _schema_required_names(siblings))
     required_update: Final = MappingProxyType({"required": required}) if required else _EMPTY_SCHEMA
     return MappingProxyType({**target, **siblings, "properties": properties, **required_update})
