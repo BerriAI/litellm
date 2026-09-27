@@ -240,7 +240,7 @@ async def prepare_agent_invocation(
     if not await AgentRequestHandler.is_agent_allowed(effective.agent_id, auth):
         raise_identity_failure(AgentIdentityFailure(message="The caller is not permitted to invoke this agent"))
     auth.invoked_agent_id = effective.agent_id
-    if auth.agent_id is None and (effective.identity_managed or effective.litellm_budget_table is not None):
+    if billable and auth.agent_id is None and (effective.identity_managed or effective.litellm_budget_table is not None):
         auth.billing_agent_policy = effective
     raw_fee: Final = (effective.litellm_params or MappingProxyType({})).get("cost_per_query", 0.0) if billable else 0.0
     try:
