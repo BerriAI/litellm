@@ -30,6 +30,56 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 from litellm.types.llms.openai import ChatCompletionToolMessage
 
 
+@pytest.mark.parametrize("role", ["user", "assistant"])
+@pytest.mark.parametrize("block_cache_control", [False, True])
+def test_anthropic_list_content_preserves_message_cache_control(role, block_cache_control):
+    message_cache_control: Final = {"type": "ephemeral"}
+    block_cache: Final = {"type": "ephemeral", "ttl": "1h"}
+    content: Final = [
+        {"type": "text", "text": "first", **({"cache_control": block_cache} if block_cache_control else {})},
+        {"type": "text", "text": "second"},
+    ]
+    message: Final = {"role": role, "content": content, "cache_control": message_cache_control}
+    messages: Final = [message] if role == "user" else [{"role": "user", "content": "hi"}, message]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    expected: Final = [
+        {"type": "text", "text": "first", **({"cache_control": block_cache} if block_cache_control else {})},
+        {
+            "type": "text",
+            "text": "second",
+            **({} if block_cache_control else {"cache_control": message_cache_control}),
+        },
+    ]
+    assert result[-1]["content"] == expected
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("block_cache_control", [False, True])
+async def test_bedrock_list_content_preserves_message_cache_control(block_cache_control):
+    content: Final = [
+        {"type": "text", "text": "first", **({"cache_control": {"type": "ephemeral"}} if block_cache_control else {})},
+        {"type": "text", "text": "second"},
+    ]
+    messages: Final = [{"role": "user", "content": content, "cache_control": {"type": "ephemeral"}}]
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+
+    sync_result: Final = _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    async_result: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages, model=model, llm_provider="bedrock"
+    )
+
+    cache_point: Final = {"cachePoint": {"type": "default"}}
+    expected: Final = (
+        [{"text": "first"}, cache_point, {"text": "second"}]
+        if block_cache_control
+        else [{"text": "first"}, {"text": "second"}, cache_point]
+    )
+    assert sync_result[0]["content"] == expected
+    assert async_result[0]["content"] == expected
+
+
 def _get_gemini_function_response_inline_data_parts(result):
     assert isinstance(result, list), "expected Gemini parts list"
     assert len(result) == 1, "multimodal function responses should stay in one part"

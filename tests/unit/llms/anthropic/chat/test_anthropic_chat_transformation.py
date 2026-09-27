@@ -2383,6 +2383,32 @@ def test_translate_system_message_preserves_cache_control():
     assert result[0]["cache_control"] == {"type": "ephemeral"}
 
 
+@pytest.mark.parametrize("block_cache_control", [False, True])
+def test_translate_system_list_content_preserves_message_cache_control(block_cache_control):
+    message_cache_control: Final = {"type": "ephemeral"}
+    block_cache: Final = {"type": "ephemeral", "ttl": "1h"}
+    content: Final = [
+        {"type": "text", "text": "first", **({"cache_control": block_cache} if block_cache_control else {})},
+        {"type": "text", "text": "second"},
+    ]
+    messages: Final = [
+        {"role": "system", "content": content, "cache_control": message_cache_control},
+        {"role": "user", "content": "hi"},
+    ]
+
+    result: Final = AnthropicConfig().translate_system_message(messages)
+
+    expected: Final = [
+        {"type": "text", "text": "first", **({"cache_control": block_cache} if block_cache_control else {})},
+        {
+            "type": "text",
+            "text": "second",
+            **({} if block_cache_control else {"cache_control": message_cache_control}),
+        },
+    ]
+    assert result == expected
+
+
 # ============ Dynamic max_tokens Tests ============
 
 

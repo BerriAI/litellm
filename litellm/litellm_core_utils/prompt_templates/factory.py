@@ -2407,6 +2407,7 @@ def anthropic_messages_pt(
             ) = messages[msg_i]
             if user_message_types_block["role"] == "user":
                 if isinstance(user_message_types_block["content"], list):
+                    user_content_start: Final = len(user_content)
                     for m in user_message_types_block["content"]:
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
@@ -2478,6 +2479,16 @@ def anthropic_messages_pt(
                                     _file_content_element,
                                 )
                             )
+                    if (
+                        len(user_content) > user_content_start
+                        and user_message_types_block.get("cache_control") is not None
+                        and not any(
+                            m.get("cache_control") is not None
+                            for m in user_message_types_block["content"]
+                            if isinstance(m, dict)
+                        )
+                    ):
+                        add_cache_control_to_content(user_content[-1], dict(user_message_types_block))
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
@@ -2680,6 +2691,7 @@ def anthropic_messages_pt(
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
                     assistant_content.extend(thinking_blocks)
                 if _content_is_list and _content_list is not None:
+                    assistant_content_start: Final = len(assistant_content)
                     for m in _content_list:
                         if not isinstance(m, dict):
                             continue
@@ -2710,6 +2722,12 @@ def anthropic_messages_pt(
                         # Pass through as-is since these are Anthropic-native content types
                         elif m.get("type", "") == "server_tool_use" or m.get("type", "").endswith("_tool_result"):
                             assistant_content.append(m)
+                    if (
+                        len(assistant_content) > assistant_content_start
+                        and assistant_content_block.get("cache_control") is not None
+                        and not any(m.get("cache_control") is not None for m in _content_list if isinstance(m, dict))
+                    ):
+                        add_cache_control_to_content(assistant_content[-1], dict(assistant_content_block))
                 elif (
                     "content" in assistant_content_block
                     and isinstance(assistant_content_block["content"], str)
@@ -4417,6 +4435,16 @@ class BedrockConverseMessagesProcessor:
                             )
                             if _cache_point_block is not None:
                                 _parts.append(_cache_point_block)
+                    if (
+                        _parts
+                        and message_block.get("cache_control") is not None
+                        and not any("cachePoint" in part for part in _parts)
+                    ):
+                        _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
+                            message_block, block_type="content_block", model=model
+                        )
+                        if _cache_point_block is not None:
+                            _parts.append(_cache_point_block)
                     user_content.extend(_parts)
                 elif message_block["content"] and isinstance(message_block["content"], str):
                     _part = BedrockContentBlock(text=messages[msg_i]["content"])
@@ -4790,6 +4818,16 @@ def _bedrock_converse_messages_pt(
                         )
                         if _cache_point_block is not None:
                             _parts.append(_cache_point_block)
+                if (
+                    _parts
+                    and message_block.get("cache_control") is not None
+                    and not any("cachePoint" in part for part in _parts)
+                ):
+                    _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
+                        message_block, block_type="content_block", model=model
+                    )
+                    if _cache_point_block is not None:
+                        _parts.append(_cache_point_block)
                 user_content.extend(_parts)
             elif message_block["content"] and isinstance(message_block["content"], str):
                 _part = BedrockContentBlock(text=messages[msg_i]["content"])
