@@ -49,13 +49,15 @@ def test_shipped_decisions(
     if environment is not None:
         monkeypatch.setenv("LITELLM_RUST", environment)
     context: Final = RouteContext(route, provider=provider, model="test-model", delivery=delivery)
+    opted_in: Final = environment == "1" or (environment is None and process is True)
 
     if route is Route.OCR or (route is Route.TRANSCRIPTION and provider == "bedrock"):
         assert catalog.rollout(context) is Rollout.RUST_REQUIRED
         assert catalog.decision(context) is Decision.RUST_REQUIRED
-    elif route is Route.MESSAGES and provider == "anthropic":
+    elif (route is Route.MESSAGES and provider == "anthropic") or (
+        route in (Route.CHAT_COMPLETIONS, Route.RESPONSES) and delivery is Delivery.COMPLETED
+    ):
         assert catalog.rollout(context) is Rollout.RUST_OPT_IN
-        opted_in: Final = environment == "1" or (environment is None and process is True)
         assert catalog.decision(context) is (Decision.RUST_WITH_FALLBACK if opted_in else Decision.PYTHON)
     else:
         assert catalog.rollout(context) is Rollout.PYTHON_ONLY
