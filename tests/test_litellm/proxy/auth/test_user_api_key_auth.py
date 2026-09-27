@@ -9544,12 +9544,16 @@ async def test_human_agent_discovery_does_not_reserve_target_budget_but_send_and
         **_proxy_attrs_for_centralized_checks(),
         "prisma_client": database,
         "llm_router": litellm.Router(
-            model_list=[{
-                "model_name": "free-model",
-                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
-                "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
-            }]
-        ) if body.get("model") else None,
+            model_list=[
+                {
+                    "model_name": "free-model",
+                    "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                    "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
+                }
+            ]
+        )
+        if body.get("model")
+        else None,
         "proxy_logging_obj": MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
     }.items():
         monkeypatch.setattr(proxy_server, name, value)
@@ -9585,12 +9589,22 @@ def test_free_model_only_waives_budgets_without_a_paid_agent_invocation(
 
     from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
 
-    router: Final = litellm.Router(model_list=[{
-        "model_name": "free-model",
-        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
-        "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
-    }])
-    assert _should_skip_budget_checks(
-        request_data={"model": "free-model"}, route="/chat/completions", request=None,
-        llm_router=router, agent_invocation_cost=invocation_cost,
-    ) is skipped
+    router: Final = litellm.Router(
+        model_list=[
+            {
+                "model_name": "free-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
+            }
+        ]
+    )
+    assert (
+        _should_skip_budget_checks(
+            request_data={"model": "free-model"},
+            route="/chat/completions",
+            request=None,
+            llm_router=router,
+            agent_invocation_cost=invocation_cost,
+        )
+        is skipped
+    )
