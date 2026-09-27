@@ -1,4 +1,4 @@
-from typing import List
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
@@ -1530,7 +1530,7 @@ class TestContextCachingEndpoints:
         ]
         all_messages = short_cached_messages + non_cached_messages
 
-        large_tools = [
+        openai_large_tools: Final = [
             {
                 "type": "function",
                 "function": {
@@ -1548,6 +1548,11 @@ class TestContextCachingEndpoints:
             }
             for i in range(12)
         ]
+        large_tools: Final = litellm.utils.get_optional_params(
+            model="gemini-1.5-pro",
+            custom_llm_provider="gemini",
+            tools=openai_large_tools,
+        )["tools"]
 
         optional_params = {
             **self.sample_optional_params,

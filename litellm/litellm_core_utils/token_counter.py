@@ -951,7 +951,7 @@ def _count_content_list(
         )
 
 
-def _format_function_definitions(tools):
+def _format_function_definitions(tools: Sequence[Mapping[str, object]]) -> str:
     """Formats tool definitions in the format that OpenAI appears to use.
     Based on https://github.com/forestwanglin/openai-java/blob/main/jtokkit/src/main/java/xyz/felh/openai/jtokkit/utils/TikTokenUtils.java
     """
@@ -959,39 +959,53 @@ def _format_function_definitions(tools):
     lines.append("namespace functions {")
     lines.append("")
     for tool in tools:
-        if not isinstance(tool, dict):
-            continue
-        function = tool.get("function")
-        if not isinstance(function, dict):
-            # Anthropic tool shape → OpenAI function dict for token counting.
-            params = tool.get("input_schema") or tool.get("parameters") or {}
-            if not isinstance(params, dict):
-                params = {}
-            function = {
-                "name": tool.get("name"),
-                "description": tool.get("description"),
-                "parameters": params,
-            }
-        function_name = function.get("name")
-        if not function_name:
-            # Skip malformed tools missing a name to avoid emitting
-            # ``type None = ...`` which would produce inaccurate token counts.
-            continue
-        if function_description := function.get("description"):
-            lines.append(f"// {function_description}")
-        parameters = function.get("parameters") or {}
-        if not isinstance(parameters, dict):
-            parameters = {}
-        properties = parameters.get("properties")
-        if properties and properties.keys():
-            lines.append(f"type {function_name} = (_: {{")
-            lines.append(_format_object_parameters(parameters, 0))
-            lines.append("}) => any;")
-        else:
-            lines.append(f"type {function_name} = () => any;")
-        lines.append("")
+        for function in _function_definitions_for_tool(tool):
+            lines.extend(_format_single_function_definition(function))
     lines.append("} // namespace functions")
     return "\n".join(lines)
+
+
+def _function_definitions_for_tool(tool: Mapping[str, object]) -> Iterable[Mapping[str, object]]:
+    function: Final = tool.get("function")
+    if isinstance(function, Mapping):
+        yield function
+        return
+    declarations: Final = tool.get("function_declarations") or tool.get("functionDeclarations")
+    if isinstance(declarations, list):
+        for declaration in declarations:
+            if isinstance(declaration, Mapping):
+                yield declaration
+        return
+    parameters: Final = tool.get("input_schema") or tool.get("parameters") or {}
+    normalized_parameters: Final = parameters if isinstance(parameters, Mapping) else {}
+    yield {
+        "name": tool.get("name"),
+        "description": tool.get("description"),
+        "parameters": normalized_parameters,
+    }
+
+
+def _format_single_function_definition(function: Mapping[str, object]) -> tuple[str, ...]:
+    function_name: Final = function.get("name")
+    if not function_name:
+        return ()
+    function_description: Final = function.get("description")
+    parameters_value: Final = function.get("parameters") or {}
+    parameters: Final = parameters_value if isinstance(parameters_value, Mapping) else {}
+    properties: Final = parameters.get("properties")
+    if isinstance(properties, Mapping) and properties:
+        return (
+            *((f"// {function_description}",) if function_description else ()),
+            f"type {function_name} = (_: {{",
+            _format_object_parameters(parameters, 0),
+            "}) => any;",
+            "",
+        )
+    return (
+        *((f"// {function_description}",) if function_description else ()),
+        f"type {function_name} = () => any;",
+        "",
+    )
 
 
 def _format_object_parameters(parameters, indent):
