@@ -1,5 +1,7 @@
 import asyncio, copy, importlib, os, time
 from datetime import datetime
+from typing import Final
+from unittest.mock import patch
 
 import pytest
 
@@ -48,6 +50,49 @@ def test_log_success_event_counts_a_response_with_no_completion_tokens():
     )
 
     assert _recorded_minute_counters(cache) == {"tpm": 12, "rpm": 1}
+
+
+@pytest.mark.parametrize(
+    ("candidate_model", "candidate_price", "expected_id"),
+    (
+        ("openai/cheap", None, "candidate"),
+        ("other/cheap", None, "reference"),
+        (None, None, "reference"),
+        ("unknown", None, "reference"),
+        ("ollama/unknown", None, "reference"),
+        ("custom/cheap", {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02}, "candidate"),
+        ("openai/cheap", {"input_cost_per_token": 2.0, "output_cost_per_token": 3.0}, "reference"),
+        ("custom/broken", {"input_cost_per_token": "invalid"}, "reference"),
+        ("custom/null", {"input_cost_per_token": None, "output_cost_per_token": None}, "reference"),
+    ),
+)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("reverse_order", [False, True], ids=["candidate-first", "reference-first"])
+async def test_provider_prefix_uses_matching_static_prices_and_preserves_exact_entries(
+    candidate_model: str | None,
+    candidate_price: dict[str, float | str | None] | None,
+    expected_id: str,
+    reverse_order: bool,
+) -> None:
+    deployments: Final = [
+        {"litellm_params": {"model": candidate_model}, "model_info": {"id": "candidate"}},
+        {"litellm_params": {"model": "openai/reference"}, "model_info": {"id": "reference"}},
+    ]
+    prices: Final = {
+        "cheap": {"input_cost_per_token": 0.01, "output_cost_per_token": 0.02, "litellm_provider": "openai"},
+        "reference": {"input_cost_per_token": 0.2, "output_cost_per_token": 0.3, "litellm_provider": "openai"},
+        **({candidate_model: candidate_price} if candidate_model is not None and candidate_price is not None else {}),
+    }
+    handler: Final = LowestCostLoggingHandler(router_cache=DualCache())
+
+    with patch.dict(litellm.model_cost, prices, clear=True), patch("litellm.get_model_info") as metadata_lookup:
+        selected: Final = await handler.async_get_available_deployments(
+            model_group="test-group", healthy_deployments=deployments[::-1] if reverse_order else deployments
+        )
+
+    expected: Final = next(deployment for deployment in deployments if deployment["model_info"]["id"] == expected_id)
+    assert selected is expected
+    metadata_lookup.assert_not_called()
 
 
 @pytest.mark.asyncio
