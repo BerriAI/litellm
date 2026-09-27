@@ -6334,3 +6334,43 @@ async def test_attachment_scan_honors_scan_only_tool_results():
     assert result is None
     assert mock_post.await_count == 0
     assert data == _pdf_chat_request()
+
+
+@pytest.mark.asyncio
+async def test_native_pre_call_hook_blocks_unscannable_attachment():
+    guardrail = _attachment_guardrail(event_hook=GuardrailEventHooks.pre_call, default_on=True)
+
+    with patch.object(guardrail.async_handler, "post", new_callable=AsyncMock) as mock_post:
+        with pytest.raises(HTTPException) as exc_info:
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=UserAPIKeyAuth(),
+                cache=MagicMock(),
+                data=_pdf_chat_request(),
+                call_type="acompletion",
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "cannot scan 1 attachment(s) (file)" in exc_info.value.detail["reason"]
+    assert mock_post.await_count == 0
+
+
+@pytest.mark.asyncio
+async def test_attachment_scan_debug_log_omits_image_bytes():
+    guardrail = _attachment_guardrail()
+    post_patch, credentials_patch, prepare_patch = _patched_bedrock_post(
+        guardrail, _passing_bedrock_httpx_response("ok")
+    )
+
+    with (
+        post_patch,
+        credentials_patch,
+        prepare_patch,
+        patch("litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.verbose_proxy_logger.debug") as mock_debug,
+    ):
+        await guardrail.async_scan_request_attachments(
+            data=_image_only_chat_request(), call_type=CallTypes.acompletion.value
+        )
+
+    logged = " ".join(str(call.args) for call in mock_debug.call_args_list)
+    assert _ATTACHMENT_PNG_B64 not in logged
+    assert f"<{len(_ATTACHMENT_PNG_B64)} base64 chars>" in logged

@@ -46,6 +46,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_skip_tool_message_for_guardrail,
 )
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, bedrock_bearer_token, run_aws_signing
+from litellm.llms.bedrock.guardrail_attachments import find_request_attachments
 from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -60,7 +61,6 @@ from litellm.proxy.guardrails.anthropic_sse import (
     is_raw_sse_stream,
     model_response_text,
 )
-from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrail_attachments import find_request_attachments
 from litellm.types.guardrails import (
     BedrockChecksConfigModel,
     BedrockGuardrailStreamingParams,
@@ -77,6 +77,8 @@ from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrailQualifier,
     BedrockGuardrailResponse,
     BedrockGuardrailUsage,
+    BedrockImageContent,
+    BedrockImageSource,
     BedrockRequest,
     BedrockTextContent,
 )
@@ -223,6 +225,20 @@ def _redact_assessment_match_fields(assessments: list[dict]) -> list[dict]:
 
 
 _RESPONSES_API_CALL_TYPES: Final = frozenset({CallTypes.responses, CallTypes.aresponses})
+
+
+def _without_image_bytes(content: Sequence[BedrockContentItem]) -> list[BedrockContentItem]:
+    return [
+        BedrockContentItem(
+            image=BedrockImageContent(
+                format=item["image"]["format"],
+                source=BedrockImageSource(bytes=f"<{len(item['image']['source']['bytes'])} base64 chars>"),
+            )
+        )
+        if "image" in item
+        else item
+        for item in content
+    ]
 
 
 def _is_responses_api_route(request_route: str | None) -> bool:
@@ -1263,7 +1279,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         headers_dict: Final = dict(prepared_request.headers)  # mutable-ok: the masking helper requires a dict
         verbose_proxy_logger.debug(
             "Bedrock AI request body: %s, url %s, headers: %s",
-            bedrock_request_data,
+            {**bedrock_request_data, "content": _without_image_bytes(content)},
             prepared_request.url,
             _get_masked_values(headers_dict),
         )
@@ -2642,6 +2658,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         event_type: Final[GuardrailEventHooks] = GuardrailEventHooks.pre_call
         if self.should_run_guardrail(data=data, event_type=event_type) is not True:
             return data
+        await self.async_scan_request_attachments(data=data, call_type=call_type, event_type=event_type)
 
         new_messages: Final = self.get_guardrails_messages_for_call_type(
             call_type=cast(CallTypes, call_type),

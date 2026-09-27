@@ -11,7 +11,7 @@ import base64
 import binascii
 from collections.abc import Callable, Mapping, Sequence
 from types import MappingProxyType
-from typing import Final, Literal, NamedTuple
+from typing import Final, Literal, NamedTuple, TypeGuard
 
 from litellm.types.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockContentItem,
@@ -53,12 +53,13 @@ _CHAT_CALL_TYPES: Final = frozenset({CallTypes.completion.value, CallTypes.acomp
 _RESPONSES_CALL_TYPES: Final = frozenset({CallTypes.responses.value, CallTypes.aresponses.value})
 _CHAT_UNSCANNABLE_TYPES: Final = frozenset({"file", "input_audio", "video_url", "audio_url", "document"})
 _ANTHROPIC_UNSCANNABLE_TYPES: Final = frozenset({"document", "container_upload"})
+_RESPONSES_IMAGE_TYPES: Final = frozenset({"input_image", "computer_screenshot"})
 _RESPONSES_UNSCANNABLE_TYPES: Final = frozenset({"input_file", "input_audio"})
 _CONVERSE_UNSCANNABLE_KEYS: Final = ("document", "video")
 _MAX_IMAGE_BYTES: Final = 4 * 1024 * 1024
 _CONVERSE_ACTIONS: Final = frozenset({"converse", "converse-stream"})
 _TOOL_ROLES: Final = frozenset({"tool", "function"})
-_TOOL_OUTPUT_ITEM_TYPES: Final = frozenset({"function_call_output", "custom_tool_call_output"})
+_TOOL_OUTPUT_ITEM_TYPES: Final = frozenset({"function_call_output", "custom_tool_call_output", "computer_call_output"})
 _MAX_LABEL_MIME_CHARS: Final = 40
 
 
@@ -96,7 +97,7 @@ def _messages_and_classifier(
         return _mappings(data.get("input")), _classify_responses_block, _no_nested_blocks
     if call_type == CallTypes.allm_passthrough_route.value and _is_bedrock_converse(data):
         body: Final = data.get("data")
-        messages: Final = _mappings(body.get("messages") if isinstance(body, Mapping) else None)
+        messages: Final = _mappings(body.get("messages") if _is_mapping(body) else None)
         return messages, _classify_converse_block, _converse_tool_result_blocks
     return (), _classify_nothing, _no_nested_blocks
 
@@ -110,10 +111,18 @@ def _is_bedrock_converse(data: Mapping[str, object]) -> bool:
     )
 
 
+def _is_mapping(value: object) -> TypeGuard[Mapping[str, object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
+    return isinstance(value, Mapping)
+
+
+def _is_list(value: object) -> TypeGuard[list[object]]:  # guard-ok: isinstance narrows correctly; predicate is trivially correct  # fmt: skip
+    return isinstance(value, list)
+
+
 def _mappings(value: object) -> tuple[Mapping[str, object], ...]:
-    if not isinstance(value, list):
+    if not _is_list(value):
         return ()
-    return tuple(item for item in value if isinstance(item, Mapping))
+    return tuple(item for item in value if _is_mapping(item))
 
 
 def _latest_user_message(messages: Sequence[Mapping[str, object]]) -> tuple[Mapping[str, object], ...]:
@@ -122,7 +131,9 @@ def _latest_user_message(messages: Sequence[Mapping[str, object]]) -> tuple[Mapp
 
 def _message_blocks(message: Mapping[str, object], nested_tool_blocks: _NestedToolBlocks) -> tuple[_Block, ...]:
     if message.get("type") in _TOOL_OUTPUT_ITEM_TYPES:
-        return tuple(_Block(block, from_tool=True) for block in _mappings(message.get("output")))
+        output: Final = message.get("output")
+        blocks: Final = (output,) if _is_mapping(output) else _mappings(output)
+        return tuple(_Block(block, from_tool=True) for block in blocks)
     from_tool_message: Final = message.get("role") in _TOOL_ROLES
     return tuple(
         entry
@@ -148,7 +159,7 @@ def _anthropic_tool_result_blocks(block: Mapping[str, object]) -> tuple[Mapping[
 
 def _converse_tool_result_blocks(block: Mapping[str, object]) -> tuple[Mapping[str, object], ...]:
     tool_result: Final = block.get("toolResult")
-    return _mappings(tool_result.get("content")) if isinstance(tool_result, Mapping) else ()
+    return _mappings(tool_result.get("content")) if _is_mapping(tool_result) else ()
 
 
 def _classify_nothing(block: Mapping[str, object]) -> _Classified:
@@ -159,7 +170,7 @@ def _classify_chat_block(block: Mapping[str, object]) -> _Classified:
     block_type: Final = block.get("type")
     if block_type == "image_url":
         image_url: Final = block.get("image_url")
-        url: Final = image_url.get("url") if isinstance(image_url, Mapping) else image_url
+        url: Final = image_url.get("url") if _is_mapping(image_url) else image_url
         return _classify_data_uri(url, "image_url")
     if isinstance(block_type, str) and block_type in _CHAT_UNSCANNABLE_TYPES:
         return _Unscannable(block_type)
@@ -170,7 +181,7 @@ def _classify_anthropic_block(block: Mapping[str, object]) -> _Classified:
     block_type: Final = block.get("type")
     if block_type == "image":
         source: Final = block.get("source")
-        if isinstance(source, Mapping) and source.get("type") == "base64":
+        if _is_mapping(source) and source.get("type") == "base64":
             return _classify_base64(source.get("media_type"), source.get("data"), "image")
         return _Unscannable("image (url or file source)")
     if isinstance(block_type, str) and block_type in _ANTHROPIC_UNSCANNABLE_TYPES:
@@ -180,8 +191,8 @@ def _classify_anthropic_block(block: Mapping[str, object]) -> _Classified:
 
 def _classify_responses_block(block: Mapping[str, object]) -> _Classified:
     block_type: Final = block.get("type")
-    if block_type == "input_image":
-        return _classify_data_uri(block.get("image_url"), "input_image")
+    if isinstance(block_type, str) and block_type in _RESPONSES_IMAGE_TYPES:
+        return _classify_data_uri(block.get("image_url"), block_type)
     if isinstance(block_type, str) and block_type in _RESPONSES_UNSCANNABLE_TYPES:
         return _Unscannable(block_type)
     return None
@@ -189,10 +200,10 @@ def _classify_responses_block(block: Mapping[str, object]) -> _Classified:
 
 def _classify_converse_block(block: Mapping[str, object]) -> _Classified:
     image: Final = block.get("image")
-    if isinstance(image, Mapping):
+    if _is_mapping(image):
         image_format: Final = image.get("format")
         source: Final = image.get("source")
-        encoded: Final = source.get("bytes") if isinstance(source, Mapping) else None
+        encoded: Final = source.get("bytes") if _is_mapping(source) else None
         if encoded is None:
             return _Unscannable("image (no inline bytes)")
         mime: Final = f"image/{image_format}" if isinstance(image_format, str) else None

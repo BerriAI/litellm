@@ -2,7 +2,7 @@ import base64
 
 import pytest
 
-from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrail_attachments import find_request_attachments
+from litellm.llms.bedrock.guardrail_attachments import find_request_attachments
 from litellm.types.utils import CallTypes
 
 PNG_B64 = base64.b64encode(b"\x89PNG\r\n\x1a\nfake-png").decode()
@@ -236,6 +236,26 @@ TEXT = {"type": "text", "text": "hello"}
             [_png_item()],
             ["input_file"],
             id="responses-function-call-output-image-and-file",
+        ),
+        pytest.param(
+            {
+                "input": [
+                    {
+                        "type": "computer_call_output",
+                        "call_id": "call_1",
+                        "output": {"type": "computer_screenshot", "image_url": f"data:image/png;base64,{PNG_B64}"},
+                    },
+                    {
+                        "type": "computer_call_output",
+                        "call_id": "call_2",
+                        "output": {"type": "computer_screenshot", "file_id": "file-1"},
+                    },
+                ]
+            },
+            CallTypes.responses.value,
+            [_png_item()],
+            ["computer_screenshot (remote URL or file id)"],
+            id="responses-computer-screenshot",
         ),
         pytest.param(
             _converse(

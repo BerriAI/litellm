@@ -1037,9 +1037,11 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     skip_unscannable_attachments: bool | None = Field(
         default=False,
         description=(
-            "Implemented by guardrail='model_armor'. When True, attachment references that carry no "
-            "inline bytes (file_id, gs://, or http(s) URLs) pass through unscanned instead of blocking, "
-            "while fail_on_error still governs real Model Armor API errors. Default False blocks them."
+            "Implemented by guardrail='model_armor' and guardrail='bedrock'. When True, attachments the "
+            "guardrail cannot scan pass through unscanned instead of blocking. For Model Armor these are "
+            "references with no inline bytes (file_id, gs://, or http(s) URLs), and fail_on_error still "
+            "governs real Model Armor API errors. For Bedrock these are documents, files, audio, video, "
+            "and images that are not inline PNG or JPEG up to 4 MB. Default False blocks them."
         ),
     )
     sanitize_error_detail: bool | None = Field(
