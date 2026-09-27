@@ -15,7 +15,7 @@ use litellm_llms::base_llm::{
     },
     auth::{Authenticated, resolve_auth},
 };
-use litellm_tracing::{ByteChunk, debug};
+use litellm_tracing::ByteChunk;
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 use serde_json::Value;
 
@@ -58,7 +58,7 @@ pub(super) async fn execute(
         )
         .await?;
     let provider_name = provider.as_str();
-    debug!(provider = provider_name, stream, body = %wire.body, "provider request");
+    log_request_body(provider_name, stream, &wire.body);
     let response = send(
         http,
         Authenticated {
@@ -70,11 +70,6 @@ pub(super) async fn execute(
         timeout,
     )
     .await?;
-    debug!(
-        provider = provider_name,
-        status = response.status().as_u16(),
-        "provider response headers"
-    );
     if !response.status().is_success() {
         return Err(provider_error(response).await);
     }
@@ -87,7 +82,7 @@ pub(super) async fn execute(
         ));
     }
     let text = response.text().await.map_err(network)?;
-    debug!(body = text.as_str(), "provider response body");
+    log_response_body(&text);
     hooks
         .on_event(MachineEvent::ResponseReceived {
             raw: RawResponse { body: text.clone() },
@@ -121,14 +116,14 @@ async fn send(
         body,
         Some(timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS))),
     )?;
-    request.send(http).await.map_err(network)
+    crate::outbound::send(request, http).await.map_err(network)
 }
 
 async fn provider_error(response: reqwest::Response) -> Error {
     let status = response.status().as_u16();
     match response.text().await {
         Ok(text) => {
-            litellm_tracing::debug!(status, body = text.as_str(), "provider error body");
+            log_error_body(status, &text);
             Error::Transport(TransportError::Http {
                 status,
                 body: truncate_error_body(&text),
@@ -198,9 +193,21 @@ fn decoded_chunks(
     .boxed()
 }
 
-fn log_chunk(provider: &str, stage: &str, data: &Bytes) {
+fn log_request_body(provider: &str, stream: bool, body: &serde_json::Value) {
+    tracing::debug!(provider, stream, body = %body, "provider request");
+}
+
+fn log_response_body(body: &str) {
+    tracing::debug!(body, "provider response body");
+}
+
+fn log_error_body(status: u16, body: &str) {
+    tracing::debug!(status, body, "provider error body");
+}
+
+fn log_chunk(provider: &str, stage: &str, data: &bytes::Bytes) {
     let chunk = ByteChunk::new(data);
-    debug!(provider, stage, encoding = chunk.encoding(), chunk = %chunk, "stream chunk");
+    tracing::debug!(provider, stage, encoding = chunk.encoding(), chunk = %chunk, "stream chunk");
 }
 
 #[cfg(test)]

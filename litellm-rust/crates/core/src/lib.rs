@@ -1,4 +1,5 @@
 mod client;
+mod diagnostic;
 pub use client::{CallBuilder, CoreClient};
 
 pub mod audio_transcription;

@@ -45,7 +45,7 @@ impl crate::CoreClient {
                         extra_headers: call.extra_headers,
                         timeout: call.timeout,
                     };
-                    super::execute(&http, &auth, request, &hooks)
+                    super::execute(Ok(http), &auth, request, &hooks)
                         .await
                         .map(CallOutput::Complete)
                 },

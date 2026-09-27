@@ -65,9 +65,9 @@ where
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             litellm_host::lifecycle::observe_unary(self.hooks.observer(), async {
-                let http = self.client.provider_http()?;
+                let http = self.client.provider_http();
                 execute(
-                    &http,
+                    http,
                     &self.client.resources().auth,
                     self.request,
                     self.hooks,
@@ -79,14 +79,27 @@ where
     }
 }
 
+#[tracing::instrument(name = "litellm.route", skip_all, fields(
+    route = "chat_completions",
+    model = %request.model,
+    provider,
+    resolved_model,
+    stream = false,
+    outcome
+))]
 async fn execute(
-    http: &litellm_http::Client,
+    http: Result<litellm_http::Client, litellm_http::Error>,
     auth: &litellm_auth::AuthServices,
     request: ChatCompletionsRequest<'_>,
     hooks: &impl litellm_host::hooks::RouteHooks<Error>,
 ) -> Result<ChatCompletionsResponse, Error> {
-    let prepared = prepare_provider_request(resolve_request(request)?)?;
-    let execute: futures_util::future::BoxFuture<'_, Result<ChatCompletionsResponse, Error>> =
-        Box::pin(handler::execute(http, auth, prepared, hooks));
-    execute.await
+    crate::diagnostic::unary(async {
+        let http = http?;
+        let prepared = prepare_provider_request(resolve_request(request)?)?;
+        crate::diagnostic::provider(&prepared.model, &prepared.custom_llm_provider);
+        let execute: futures_util::future::BoxFuture<'_, Result<ChatCompletionsResponse, Error>> =
+            Box::pin(handler::execute(&http, auth, prepared, hooks));
+        execute.await
+    })
+    .await
 }

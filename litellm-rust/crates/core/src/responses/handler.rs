@@ -43,7 +43,9 @@ pub(super) async fn execute(
         &wire.body,
         Some(request.timeout.unwrap_or(Duration::from_secs(600))),
     )?;
-    let response = outbound.send(http).await.map_err(network)?;
+    let response = crate::outbound::send(outbound, http)
+        .await
+        .map_err(network)?;
     let status = response.status().as_u16();
     if !response.status().is_success() {
         let body = response.text().await.map_err(network)?;

@@ -25,34 +25,55 @@ impl<'a, H: RouteHooks<Error>> std::future::IntoFuture
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             litellm_host::lifecycle::observe_unary(self.hooks.observer(), async {
-                let client = self.client.ocr_client()?;
-                execute(&client, self.request, self.hooks).await
+                let client = self.client.ocr_client();
+                execute(client, self.request, self.hooks).await
             })
             .await
         })
     }
 }
 
+#[tracing::instrument(name = "litellm.route", skip_all, fields(
+    route = "ocr",
+    model = %request.model,
+    resolved_model = %request.model,
+    provider = <&str>::from(request.config.provider()),
+    stream = false,
+    outcome
+))]
 pub(super) async fn execute(
-    client: &OcrClient,
+    client: Result<OcrClient, litellm_http::Error>,
     request: LiteLLMOcrRequest,
     hooks: &impl RouteHooks<Error>,
 ) -> Result<LiteLLMOcrResponse, Error> {
-    let caller_document = matches!(&request.document, OcrDocumentInput::Document(_));
-    let prepared = prepare_request_document(request).await?;
-    let execute: futures_util::future::BoxFuture<'_, Result<LiteLLMOcrResponse, Error>> = Box::pin(
-        perform_ocr_request(client, prepared, hooks, caller_document),
-    );
-    execute.await
+    crate::diagnostic::unary(async {
+        let client = client?;
+        let caller_document = matches!(&request.document, OcrDocumentInput::Document(_));
+        let prepared = prepare_request_document(request).await?;
+        let execute: futures_util::future::BoxFuture<'_, Result<LiteLLMOcrResponse, Error>> =
+            Box::pin(perform_ocr_request(
+                &client,
+                prepared,
+                hooks,
+                caller_document,
+            ));
+        execute.await
+    })
+    .await
 }
 
+#[tracing::instrument(name = "litellm.prepare", level = "debug", skip_all)]
 async fn prepare_request_document(
     request: LiteLLMOcrRequest<OcrDocumentInput>,
 ) -> Result<ResolvedOcrRequest, Error> {
     if let OcrDocumentInput::Document(_) = &request.document {
         return request.map_document(super::document::prepare_document);
     }
-    tokio::task::spawn_blocking(move || request.map_document(super::document::prepare_document))
-        .await
-        .map_err(|error| Error::DocumentTask(Arc::new(error)))?
+    let logger = litellm_tracing::Logger::current();
+    let span = tracing::Span::current();
+    tokio::task::spawn_blocking(move || {
+        logger.scope(|| span.in_scope(|| request.map_document(super::document::prepare_document)))
+    })
+    .await
+    .map_err(|error| Error::DocumentTask(Arc::new(error)))?
 }

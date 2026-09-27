@@ -55,7 +55,7 @@ impl crate::CoreClient {
                             .or(projection.request.azure_ad_token_provider),
                         ..projection.request
                     };
-                    super::client::execute(&client, request, &hooks)
+                    super::client::execute(Ok(client), request, &hooks)
                         .await
                         .map(CallOutput::Complete)
                 },

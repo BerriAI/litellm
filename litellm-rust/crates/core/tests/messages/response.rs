@@ -269,3 +269,34 @@ fn a_body_that_does_not_parse_is_an_invalid_request(#[case] raw: Value) {
         "{error:?}"
     );
 }
+
+#[rstest]
+#[tokio::test]
+async fn message_route_summary_excludes_payload_diagnostics(
+    call: MessagesCall,
+    traces: TraceCapture,
+) {
+    let upstream = upstream([message_response()]).await;
+    let model = call.body.model.clone();
+    traces
+        .logger()
+        .instrument(run_message(MessagesCall {
+            api_key: Some("private-key-sentinel".into()),
+            api_base: Some(upstream.uri()),
+            ..call
+        }))
+        .await;
+    let summaries = traces.summaries("litellm.route");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0]["route"], "messages");
+    assert_eq!(summaries[0]["model"], model);
+    assert_eq!(
+        summaries[0]["resolved_model"],
+        only_request(&upstream).await.json()["model"]
+    );
+    assert_eq!(summaries[0]["provider"], "anthropic");
+    assert_eq!(summaries[0]["outcome"], "success");
+    assert_eq!(summaries[0]["stream"], false);
+    assert!(summaries[0].get("body").is_none());
+    assert!(!format!("{:?}", traces.records()).contains("private-key-sentinel"));
+}

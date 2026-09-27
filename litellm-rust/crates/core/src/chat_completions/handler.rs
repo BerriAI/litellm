@@ -64,7 +64,7 @@ pub(super) async fn execute(
         timeout,
     )?;
 
-    let response = outbound.send(http).await.map_err(|err| {
+    let response = crate::outbound::send(outbound, http).await.map_err(|err| {
         // Failing to establish the connection means the request never went out,
         // so the host can still serve it. Everything else here, a timeout
         // above all, may have reached the provider and been answered.

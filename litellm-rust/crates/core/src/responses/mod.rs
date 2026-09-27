@@ -25,9 +25,9 @@ impl<'a, H: RouteHooks<Error>> std::future::IntoFuture
     fn into_future(self) -> Self::IntoFuture {
         Box::pin(async move {
             litellm_host::lifecycle::observe_call(self.hooks.observer(), async {
-                let http = self.client.provider_http()?;
+                let http = self.client.provider_http();
                 execute(
-                    &http,
+                    http,
                     &self.client.resources().auth,
                     self.client.secret_source().as_ref(),
                     self.request,
@@ -40,13 +40,28 @@ impl<'a, H: RouteHooks<Error>> std::future::IntoFuture
     }
 }
 
+#[tracing::instrument(name = "litellm.route", skip_all, fields(
+    route = "responses",
+    model = %call.model,
+    provider,
+    resolved_model,
+    stream = call.optional_params.get("stream").and_then(serde_json::Value::as_bool).unwrap_or(false),
+    outcome
+))]
 async fn execute(
-    http: &litellm_http::Client,
+    http: Result<litellm_http::Client, litellm_http::Error>,
     auth: &litellm_auth::AuthServices,
     secrets: &dyn SecretSource,
     call: ResponsesCall,
     hooks: &impl RouteHooks<Error>,
 ) -> Result<ResponsesOutput, Error> {
-    let request = prepare::prepare(call, secrets).await?;
-    handler::execute(http, auth, request, hooks).await
+    crate::diagnostic::call(async {
+        let http = http?;
+        let request = prepare::prepare(call, secrets).await?;
+        crate::diagnostic::provider(&request.context.model, &request.context.custom_llm_provider);
+        let execute: futures_util::future::BoxFuture<'_, Result<ResponsesOutput, Error>> =
+            Box::pin(handler::execute(&http, auth, request, hooks));
+        execute.await
+    })
+    .await
 }

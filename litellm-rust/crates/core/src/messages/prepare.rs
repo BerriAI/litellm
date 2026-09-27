@@ -38,6 +38,7 @@ pub(super) struct ProviderMessagesRequest {
     pub(super) api_key: Option<SecretValue>,
 }
 
+#[tracing::instrument(name = "litellm.prepare", level = "debug", skip_all)]
 pub(super) async fn prepare(
     call: MessagesCall,
     secrets: &dyn SecretSource,

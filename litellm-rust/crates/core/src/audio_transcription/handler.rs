@@ -17,7 +17,7 @@ pub async fn execute_audio_transcription_provider_call(
 ) -> Result<Value, Error> {
     let env_lookup = |key: &str| std::env::var(key).ok();
     let authenticated = resolve_auth(auth, request.environment.clone(), &env_lookup).await?;
-    let response = crate::outbound::outbound_request(
+    let outbound = crate::outbound::outbound_request(
         authenticated,
         request.url.clone(),
         &request.body,
@@ -26,12 +26,12 @@ pub async fn execute_audio_transcription_provider_call(
                 .timeout
                 .unwrap_or(Duration::from_secs(AUDIO_TRANSCRIPTION_TIMEOUT_SECS)),
         ),
-    )?
-    .send(http)
-    .await
-    .map_err(|error| {
-        Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
-    })?;
+    )?;
+    let response = crate::outbound::send(outbound, http)
+        .await
+        .map_err(|error| {
+            Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
+        })?;
     let status = response.status();
     let text = response.text().await.map_err(|error| {
         Error::Transport(litellm_http::transport::Error::Network(error.to_string()))

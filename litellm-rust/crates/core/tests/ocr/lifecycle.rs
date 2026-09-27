@@ -369,3 +369,34 @@ async fn direct_execution_uses_hooks_without_a_machine() {
         ]
     ));
 }
+
+#[rstest]
+#[case::native(false)]
+#[case::hosted(true)]
+#[tokio::test]
+async fn ocr_records_one_route_summary_across_both_execution_paths(
+    traces: TraceCapture,
+    #[case] hosted: bool,
+) {
+    let upstream = upstream([pages_response()]).await;
+    let request = ocr_request("mistral/model", &upstream.uri(), json!({}));
+    let model = request.model.clone();
+    traces
+        .logger()
+        .instrument(async {
+            if hosted {
+                perform_with(LocalOcrHost::new(request)).await
+            } else {
+                perform(request).await
+            }
+        })
+        .await
+        .unwrap();
+    let summaries = traces.summaries("litellm.route");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0]["route"], "ocr");
+    assert_eq!(summaries[0]["model"], model);
+    assert_eq!(summaries[0]["provider"], "mistral");
+    assert_eq!(summaries[0]["outcome"], "success");
+    assert_eq!(summaries[0]["stream"], false);
+}

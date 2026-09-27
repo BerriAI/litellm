@@ -35,7 +35,7 @@ impl crate::CoreClient {
         let secrets = self.secret_source().clone();
         Ok(move |request| {
             hosted_call(request, move |call, _, hooks| async move {
-                super::execute(&http, &auth, secrets.as_ref(), call, &hooks).await
+                super::execute(Ok(http), &auth, secrets.as_ref(), call, &hooks).await
             })
         })
     }

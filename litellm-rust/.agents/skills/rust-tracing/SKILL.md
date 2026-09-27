@@ -17,6 +17,6 @@ Use `skip_all` and explicitly selected fields. Basic tracing excludes bodies, cr
 
 A returned stream retains its route span until exhaustion, error, or drop, with exactly one terminal outcome. Builder construction does not start a trace. Never hold a span entry guard across an await. Diagnostic tracing remains separate from lifecycle callbacks and `CustomLogger` dispatch
 
-The existing sink forwards events only. Span collection and composable adapter exposure are intended changes, not capabilities to assume already exist. When implementing them, test observable records, concurrent isolation, filtering, sensitive-field exclusion, and stream cancellation
+Use `litellm_tracing::sink_layer` to compose a sink with other subscriber layers. It inherits span fields into events and emits span-close summaries with elapsed time. Test observable records, concurrent isolation, dynamic filtering, sensitive-field exclusion, and stream cancellation when changing this behavior
 
 Consult the [tracing API](https://docs.rs/tracing/latest/tracing/) and [subscriber layers](https://docs.rs/tracing-subscriber/latest/tracing_subscriber/layer/index.html) for implementation details
