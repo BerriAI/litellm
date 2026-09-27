@@ -49,7 +49,7 @@ impl IntoResponse for Error {
     }
 }
 
-#[derive(Debug, thiserror::Error)]
+#[derive(thiserror::Error)]
 pub enum ConnectError {
     #[error("MCP server {server}: {message}")]
     Configuration { server: String, message: String },
@@ -69,4 +69,30 @@ pub enum ConnectError {
     Cancelled,
     #[error(transparent)]
     Registry(#[from] Error),
+}
+
+impl std::fmt::Debug for ConnectError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Display::fmt(self, formatter)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[rstest::rstest]
+    fn startup_diagnostics_do_not_expose_upstream_details() {
+        let error = ConnectError::Initialize {
+            server: "docs".into(),
+            source: Box::new(rmcp::service::ClientInitializeError::ConnectionClosed(
+                "https://example.test/mcp?token=private-secret".into(),
+            )),
+        };
+        assert_eq!(
+            format!("{error:?}"),
+            "could not initialize MCP upstream docs"
+        );
+        assert!(std::error::Error::source(&error).is_some());
+    }
 }
