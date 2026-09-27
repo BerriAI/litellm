@@ -309,7 +309,8 @@ class WebSearchInterceptionLogger(CustomLogger):
             (cleaned.startswith('"') and cleaned.endswith('"')) or (cleaned.startswith("'") and cleaned.endswith("'"))
         ):
             cleaned = cleaned[1:-1].strip()
-        return cleaned if cleaned else raw_message.strip()
+        return cleaned if (cleaned or prefix) else raw_message.strip()
+
 
     async def try_short_circuit_search(
         self,
