@@ -2663,7 +2663,7 @@ async def _legacy_users_page(
     prisma_client: PrismaClient, auth: UserAPIKeyAuth | None, filter: str | None, start_index: int, page_size: int
 ) -> tuple[Sequence[LiteLLM_UserTable], int]:
     filter_attribute, filter_value = _legacy_user_filter(filter)
-    table: Final = _table(UserRepository(prisma_client))
+    table: Final = _table(UserRepository(prisma_client, use_writer=auth is not None))
     if auth is not None:
         page: Final = await _unowned_page(
             prisma_client, "Users", filter_value, start_index, page_size, filter_attribute=filter_attribute
@@ -2696,7 +2696,7 @@ async def _legacy_teams_page(
     prisma_client: PrismaClient, auth: UserAPIKeyAuth | None, filter: str | None, start_index: int, page_size: int
 ) -> tuple[Sequence[LiteLLM_TeamTable], int]:
     team_alias: Final = _legacy_team_alias(filter)
-    table: Final = _table(TeamRepository(prisma_client))
+    table: Final = _table(TeamRepository(prisma_client, use_writer=auth is not None))
     if auth is not None:
         page: Final = await _unowned_page(prisma_client, "Groups", team_alias, start_index, page_size)
         rows: Final = await find_many_in(table, "team_id", page.local_ids)
