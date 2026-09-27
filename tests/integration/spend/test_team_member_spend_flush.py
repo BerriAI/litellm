@@ -70,6 +70,7 @@ def _chat(gateway: Gateway, key: str, model: str) -> str:
     return string_value(response.json()["id"])
 
 
+@pytest.mark.covers("quota_management.spend_tracking.team_member_spend_lands_after_zero_cost_flush")
 def test_fractional_member_spend_lands_after_a_whole_number_flush_on_the_same_connection(
     gateway: Gateway, tmp_path: Path
 ) -> None:
