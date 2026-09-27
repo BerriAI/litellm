@@ -14,9 +14,11 @@ from typing import Final
 
 from litellm.secret_managers.main import get_secret_bool
 from litellm.types.router import ModelInfo
-from litellm.types.utils import CustomPricingLiteLLMParams, MirroredPricingParams
+from litellm.types.utils import AzureSpillover, CustomPricingLiteLLMParams, MirroredPricingParams
 
 PTU_COST_ATTRIBUTION_ENV_VAR: Final = "LITELLM_ENABLE_PTU_COST_ATTRIBUTION"
+AZURE_SPILLOVER_HEADER: Final = "x-ms-is-spilled-over"
+AZURE_SPILLOVER_FROM_HEADER: Final = "x-ms-spillover-from-deployment"
 
 
 def is_ptu_cost_attribution_enabled() -> bool:
@@ -235,3 +237,33 @@ def zeroed_ptu_pricing(
             ),
         }
     )
+
+
+def is_spilled_over_ptu_request(
+    model_info: Mapping[str, object],
+    response_headers: Mapping[str, object] | None,
+    additional_headers: Mapping[str, object] | None,
+) -> bool:
+    """Whether Azure served this request from pay-as-you-go capacity, so the zeroed PTU rates must not apply."""
+    if ptu_terms(model_info) is None:
+        return False
+    if not is_ptu_cost_attribution_enabled():
+        return False
+    return azure_spillover(response_headers, additional_headers) is not None
+
+
+def azure_spillover(
+    response_headers: Mapping[str, object] | None,
+    additional_headers: Mapping[str, object] | None,
+) -> AzureSpillover | None:
+    """The spillover Azure reports in the response headers, else None."""
+    for headers, prefix in (
+        (response_headers, ""),
+        (additional_headers, "llm_provider-"),
+    ):
+        if headers is None or str(headers.get(f"{prefix}{AZURE_SPILLOVER_HEADER}")).lower() != "true":
+            continue
+        return AzureSpillover(
+            from_deployment=str(v) if (v := headers.get(f"{prefix}{AZURE_SPILLOVER_FROM_HEADER}")) is not None else None
+        )
+    return None

@@ -2,6 +2,8 @@
 -- Idempotent: deletes all e2e-* rows then re-inserts deterministic data.
 
 -- 1. Clean up in dependency order
+DELETE FROM "LiteLLM_InvitationLink"
+WHERE "user_id" LIKE 'e2e-%' OR "created_by" LIKE 'e2e-%' OR "updated_by" LIKE 'e2e-%';
 DELETE FROM "LiteLLM_TeamMembership" WHERE "user_id" LIKE 'e2e-%';
 DELETE FROM "LiteLLM_VerificationToken" WHERE token LIKE 'e2e-%';
 DELETE FROM "LiteLLM_TeamTable" WHERE "team_id" LIKE 'e2e-%';

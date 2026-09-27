@@ -202,6 +202,8 @@ export const buildKeyCreatePayload = (input: KeyCreateInput): KeyPayloadResult =
     endpoint: input.keyOwner === "service_account" ? "service_account" : "standard",
     payload: {
       ...withoutKeys(values, dropped),
+      ...(values.organization_id === null && { organization_id: undefined }),
+      ...(values.project_id === null && { project_id: undefined }),
       ...(input.keyOwner === "you" && { user_id: input.userID }),
       ...(input.keyOwner === "agent" && { agent_id: input.selectedAgentId }),
       ...(input.autoRotationEnabled && { auto_rotate: true, rotation_interval: input.rotationInterval }),

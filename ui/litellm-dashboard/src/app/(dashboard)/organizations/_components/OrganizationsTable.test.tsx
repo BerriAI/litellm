@@ -1,7 +1,9 @@
-import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import type { OnUrlUpdateFunction } from "nuqs/adapters/testing";
 import React from "react";
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it, vi, type Mock } from "vitest";
+
+import { renderWithProviders, screen, waitFor, within } from "../../../../../tests/test-utils";
 
 import { Organization } from "@/components/networking";
 
@@ -26,6 +28,34 @@ const makeOrganization = (overrides: Partial<Organization> = {}): Organization =
   ...overrides,
 });
 
+const thirtyOrganizations = Array.from({ length: 30 }, (_, index) =>
+  makeOrganization({ organization_id: `org-${index}`, organization_alias: `Org ${index}` }),
+);
+
+const sortableOrganization = (alias: string, createdAt: string, spend: number): Organization => {
+  const overrides: Partial<Organization> = {
+    organization_id: `org-${alias.toLowerCase()}`,
+    organization_alias: alias,
+    created_at: createdAt,
+    spend,
+  };
+  return makeOrganization(overrides);
+};
+
+const sortableOrganizations = [
+  sortableOrganization("Mid", "2024-03-01T00:00:00Z", 5),
+  sortableOrganization("Zed", "2023-01-01T00:00:00Z", 1),
+  sortableOrganization("Ace", "2025-01-01T00:00:00Z", 3),
+];
+
+const bodyRowAliases = () =>
+  screen
+    .getAllByRole("row")
+    .slice(1)
+    .map((row) => ["Ace", "Mid", "Zed"].find((alias) => within(row).queryByText(alias) !== null));
+
+const lastSearchParams = (onUrlUpdate: Mock<OnUrlUpdateFunction>) => onUrlUpdate.mock.calls.at(-1)?.[0].searchParams;
+
 const baseProps = {
   isLoading: false,
   userRole: "Admin",
@@ -37,7 +67,7 @@ const baseProps = {
 
 describe("OrganizationsTable", () => {
   it("renders every column header", () => {
-    render(<OrganizationsTable {...baseProps} organizations={[]} />);
+    renderWithProviders(<OrganizationsTable {...baseProps} organizations={[]} />);
     for (const header of [
       "Organization ID",
       "Organization Name",
@@ -55,7 +85,7 @@ describe("OrganizationsTable", () => {
   it("opens the detail view when the organization ID cell is clicked", async () => {
     const user = userEvent.setup();
     const onOrganizationClick = vi.fn();
-    render(
+    renderWithProviders(
       <OrganizationsTable
         {...baseProps}
         onOrganizationClick={onOrganizationClick}
@@ -72,7 +102,7 @@ describe("OrganizationsTable", () => {
     const user = userEvent.setup();
     const onEditClick = vi.fn();
     const onDeleteClick = vi.fn();
-    render(
+    renderWithProviders(
       <OrganizationsTable
         {...baseProps}
         userRole="Admin"
@@ -92,7 +122,7 @@ describe("OrganizationsTable", () => {
   });
 
   it("hides the row actions menu from non-admins", () => {
-    render(
+    renderWithProviders(
       <OrganizationsTable
         {...baseProps}
         userRole="Internal User"
@@ -104,7 +134,7 @@ describe("OrganizationsTable", () => {
   });
 
   it("sorts by created_at descending by default", () => {
-    render(
+    renderWithProviders(
       <OrganizationsTable
         {...baseProps}
         organizations={[
@@ -129,7 +159,7 @@ describe("OrganizationsTable", () => {
   });
 
   it("renders budget, limits, members, and models for a fully-populated organization", () => {
-    render(
+    renderWithProviders(
       <OrganizationsTable
         {...baseProps}
         organizations={[
@@ -151,7 +181,7 @@ describe("OrganizationsTable", () => {
   });
 
   it("shows Unlimited budget and All Proxy Models when unset", () => {
-    render(
+    renderWithProviders(
       <OrganizationsTable
         {...baseProps}
         organizations={[makeOrganization({ organization_id: "org-empty", litellm_budget_table: {}, models: [] })]}
@@ -166,7 +196,7 @@ describe("OrganizationsTable", () => {
   });
 
   it("renders a tpm/rpm limit of 0 as 0, never as Unlimited", () => {
-    render(
+    renderWithProviders(
       <OrganizationsTable
         {...baseProps}
         organizations={[makeOrganization({ litellm_budget_table: { max_budget: null, tpm_limit: 0, rpm_limit: 0 } })]}
@@ -180,7 +210,7 @@ describe("OrganizationsTable", () => {
   });
 
   it("renders loading skeletons instead of rows while loading", () => {
-    render(
+    renderWithProviders(
       <OrganizationsTable
         {...baseProps}
         isLoading
@@ -194,10 +224,8 @@ describe("OrganizationsTable", () => {
 
   it("pages long lists client-side with the shared size selector and footer", async () => {
     const user = userEvent.setup();
-    const organizations = Array.from({ length: 30 }, (_, index) =>
-      makeOrganization({ organization_id: `org-${index}`, organization_alias: `Org ${index}` }),
-    );
-    render(<OrganizationsTable {...baseProps} organizations={organizations} />);
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<OrganizationsTable {...baseProps} organizations={thirtyOrganizations} />, { onUrlUpdate });
 
     expect(screen.getAllByRole("row")).toHaveLength(26);
     expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-25 of 30");
@@ -207,13 +235,87 @@ describe("OrganizationsTable", () => {
 
     expect(screen.getAllByRole("row")).toHaveLength(31);
     expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-30 of 30");
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("page_size")).toBe("50"));
   });
 
   it("uses a search-aware empty state", () => {
-    const { rerender } = render(<OrganizationsTable {...baseProps} searchActive={false} organizations={[]} />);
+    const { rerender } = renderWithProviders(
+      <OrganizationsTable {...baseProps} searchActive={false} organizations={[]} />,
+    );
     expect(screen.getByText("No organizations yet")).toBeInTheDocument();
 
     rerender(<OrganizationsTable {...baseProps} searchActive={true} organizations={[]} />);
     expect(screen.getByText("No matching organizations")).toBeInTheDocument();
+  });
+});
+
+describe("OrganizationsTable URL state", () => {
+  it("restores the sort column and direction from ?sort_by=&sort_order=", () => {
+    renderWithProviders(<OrganizationsTable {...baseProps} organizations={sortableOrganizations} />, {
+      searchParams: "?sort_by=spend&sort_order=desc",
+    });
+
+    expect(bodyRowAliases()).toEqual(["Mid", "Ace", "Zed"]);
+  });
+
+  it("falls back to sorting by creation date for a ?sort_by= column that cannot be sorted", () => {
+    renderWithProviders(<OrganizationsTable {...baseProps} organizations={sortableOrganizations} />, {
+      searchParams: "?sort_by=members&sort_order=asc",
+    });
+
+    expect(bodyRowAliases()).toEqual(["Zed", "Mid", "Ace"]);
+  });
+
+  it("writes the clicked sort column to the URL and returns to the first page", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<OrganizationsTable {...baseProps} organizations={thirtyOrganizations} />, {
+      searchParams: "?page=2",
+      onUrlUpdate,
+    });
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 26-30 of 30");
+
+    await user.click(screen.getByTestId("sort-header-organization_alias"));
+
+    await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.get("sort_by")).toBe("organization_alias"));
+    expect(onUrlUpdate).toHaveBeenCalledTimes(1);
+    expect(lastSearchParams(onUrlUpdate)?.get("sort_order")).toBe("asc");
+    expect(lastSearchParams(onUrlUpdate)?.has("page")).toBe(false);
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-25 of 30");
+    expect(within(screen.getAllByRole("row")[1]).getByText("Org 0")).toBeInTheDocument();
+  });
+
+  it("opens the page named by ?page= and writes page changes back to the URL", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    renderWithProviders(<OrganizationsTable {...baseProps} organizations={thirtyOrganizations} />, {
+      searchParams: "?page=2",
+      onUrlUpdate,
+    });
+
+    expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 26-30 of 30");
+    expect(screen.getByText("org-29")).toBeInTheDocument();
+
+    await user.click(screen.getByTestId("pagination-prev"));
+
+    await waitFor(() => expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 1-25 of 30"));
+    expect(lastSearchParams(onUrlUpdate)?.has("page")).toBe(false);
+
+    await user.click(screen.getByTestId("pagination-next"));
+
+    await waitFor(() => expect(lastSearchParams(onUrlUpdate)?.get("page")).toBe("2"));
+  });
+
+  it("keeps a deep-linked ?page= while the organization list is still loading", async () => {
+    const onUrlUpdate = vi.fn<OnUrlUpdateFunction>();
+    const { rerender } = renderWithProviders(<OrganizationsTable {...baseProps} isLoading organizations={[]} />, {
+      searchParams: "?page=2",
+      onUrlUpdate,
+    });
+
+    rerender(<OrganizationsTable {...baseProps} organizations={thirtyOrganizations} />);
+
+    await waitFor(() => expect(screen.getByTestId("pagination-range")).toHaveTextContent("Showing 26-30 of 30"));
+    expect(onUrlUpdate).not.toHaveBeenCalled();
   });
 });

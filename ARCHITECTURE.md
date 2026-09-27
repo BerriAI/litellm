@@ -45,7 +45,7 @@ sequenceDiagram
     ProxyServer->>Auth: user_api_key_auth()
     Auth->>Redis: Check API key cache
     Redis-->>Auth: Key info + spend limits
-    ProxyServer->>Hooks: max_budget_limiter, parallel_request_limiter
+    ProxyServer->>Hooks: parallel_request_limiter, cache_control_check
     Hooks->>Redis: Check/increment rate limit counters
     ProxyServer->>Router: route_request()
     Router->>Main: litellm.acompletion()
@@ -145,7 +145,6 @@ graph TD
 
 | Hook | File | Purpose |
 |------|------|---------|
-| `max_budget_limiter` | `proxy/hooks/max_budget_limiter.py` | Enforce budget limits |
 | `parallel_request_limiter` | `proxy/hooks/parallel_request_limiter_v3.py` | Rate limiting per key/user |
 | `cache_control_check` | `proxy/hooks/cache_control_check.py` | Cache validation |
 | `responses_id_security` | `proxy/hooks/responses_id_security.py` | Response ID validation |
@@ -256,7 +255,7 @@ Conventions to follow when touching this layer:
 | Column vs. field names | Where a model field differs from its DB column (for example `org_id` maps to the `organization_id` column), the repository translates in both directions rather than relying on Pydantic to guess. |
 | Array mutations | Adds use Prisma's atomic `push` (`add_member`, `add_admin`, `add_models`) to avoid read-modify-write races. Removals fall back to read-modify-write because Prisma has no atomic array remove. |
 
-To add a new entity, define the model under `litellm/models/`, re-export it from `proxy/_types.py` if existing code imports it from there, and add a repository under `litellm/repositories/` (subclass `BaseRepository` for plain CRUD, or add bespoke methods when the entity needs encryption, archiving, or atomic array updates). Mirror the tests in `tests/test_litellm/repositories/`.
+To add a new entity, define the model under `litellm/models/`, re-export it from `proxy/_types.py` if existing code imports it from there, and add a repository under `litellm/repositories/` (subclass `BaseRepository` for plain CRUD, or add bespoke methods when the entity needs encryption, archiving, or atomic array updates). Mirror the tests in `tests/unit/repositories/`.
 
 ---
 
@@ -337,7 +336,7 @@ Each translation is isolated in its own file, making it easy to test and modify 
 | `/v1/chat/completions` | Gemini | `llms/gemini/chat/transformation.py` |
 | `/v1/chat/completions` | Vertex AI | `llms/vertex_ai/gemini/transformation.py` |
 | `/v1/chat/completions` | OpenAI | `llms/openai/chat/gpt_transformation.py` |
-| `/v1/messages` (passthrough) | Anthropic | `llms/anthropic/experimental_pass_through/messages/transformation.py` |
+| `/v1/messages` (passthrough) | Anthropic | `llms/anthropic/pass_through/messages/transformation.py` |
 | `/v1/messages` (passthrough) | Bedrock | `llms/bedrock/messages/invoke_transformations/anthropic_claude3_transformation.py` |
 | `/v1/messages` (passthrough) | Vertex AI | `llms/vertex_ai/vertex_ai_partner_models/anthropic/experimental_pass_through/transformation.py` |
 | Passthrough endpoints | All | `proxy/pass_through_endpoints/llm_provider_handlers/` |
