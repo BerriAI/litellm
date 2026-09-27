@@ -1,12 +1,13 @@
+from dataclasses import astuple
 from types import MappingProxyType
 from typing import Final
 
-from litellm.rust_bridge.messages.route_host import arguments, response
-from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
-from dataclasses import astuple
 import pytest
+
 import litellm
 from litellm.rust_bridge.messages import route_host
+from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
+from litellm.rust_bridge.messages.route_host import arguments, response
 
 
 def test_response_is_a_detached_public_messages_dict() -> None:
@@ -28,6 +29,17 @@ def test_response_is_a_detached_public_messages_dict() -> None:
     assert isinstance(built, dict)
     built["_hidden_params"] = {"annotated": True}
     assert "_hidden_params" not in native
+
+
+def test_response_projects_upstream_headers_into_hidden_params() -> None:
+    built: Final = response(
+        MappingProxyType({"id": "msg_native"}),
+        (("request-id", "req_upstream_123"), ("x-ratelimit-remaining-requests", "41")),
+    )
+
+    additional: Final = built["_hidden_params"]["additional_headers"]
+    assert additional["llm_provider-request-id"] == "req_upstream_123"
+    assert additional["x-ratelimit-remaining-requests"] == "41"
 
 
 def test_arguments_are_the_public_kwargs_view() -> None:

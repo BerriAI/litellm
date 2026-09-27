@@ -9,6 +9,7 @@ from pydantic import TypeAdapter, ValidationError
 
 import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
+from litellm.litellm_core_utils.core_helpers import process_response_headers
 from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
 from litellm.router_utils.add_retry_fallback_headers import _add_headers_to_response
 from litellm.rust_bridge import failures
@@ -54,7 +55,10 @@ def response(
 ) -> AnthropicMessagesResponse:
     response_value = dict(value)
     if headers:
-        _add_headers_to_response(response_value, dict(httpx.Headers(list(headers)).items()))
+        _add_headers_to_response(
+            response_value,
+            process_response_headers(httpx.Headers(list(headers))),
+        )
     return cast(  # cast-ok: AnthropicMessagesResponse is a TypedDict over the normalized native payload
         AnthropicMessagesResponse,
         response_value,
