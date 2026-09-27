@@ -1026,12 +1026,21 @@ class ContentFilterGuardrail(CustomGuardrail):
                 if not sentence_lower:
                     continue
 
-                # Check if sentence contains ANY identifier word
+                # Check if sentence contains ANY identifier word (with word boundaries)
                 identifier_found = None
                 for identifier in identifier_words:
-                    if identifier in sentence_lower:
-                        identifier_found = identifier
-                        break
+                    # Use word boundary to avoid false positives (e.g., "alter" in "alternative")
+                    if " " in identifier:
+                        # Multi-word phrase - use simple substring matching
+                        if identifier in sentence_lower:
+                            identifier_found = identifier
+                            break
+                    else:
+                        # Single word - use word boundary
+                        pattern = r"\b" + re.escape(identifier) + r"\b"
+                        if re.search(pattern, sentence_lower):
+                            identifier_found = identifier
+                            break
 
                 if not identifier_found:
                     continue
