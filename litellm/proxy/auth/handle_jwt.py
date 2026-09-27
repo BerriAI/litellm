@@ -2736,14 +2736,6 @@ class JWTAuthManager:
                 team_id_upsert=team_id_upsert,
             )
 
-        if team_id and not JWTAuthManager._team_has_passthrough_route_access(
-            team_object=team_object,
-            route=route,
-            request_method=request_method,
-            team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
-        ):
-            JWTAuthManager._raise_team_passthrough_route_denial(route=route)
-
         if managed is not None:
             from litellm.proxy.agent_endpoints.auth.agent_permission_handler import resolve_delegated_agent_team
 
@@ -2751,6 +2743,8 @@ class JWTAuthManager:
                 managed.user_id, managed.agent_id, team_id, explicit_team=header_team is not None
             )
             if granting_team is not None and granting_team != team_id:
+                if not JWTAuthManager._is_team_route_allowed(route, request_method, handler):
+                    raise HTTPException(403, "The granting team is not allowed to access this route")
                 team_id = granting_team
                 team_object = await get_team_object(
                     team_id=team_id,
@@ -2760,6 +2754,14 @@ class JWTAuthManager:
                     proxy_logging_obj=proxy_logging_obj,
                     check_db_only=True,
                 )
+
+        if team_id and not JWTAuthManager._team_has_passthrough_route_access(
+            team_object=team_object,
+            route=route,
+            request_method=request_method,
+            team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
+        ):
+            JWTAuthManager._raise_team_passthrough_route_denial(route=route)
 
         # Extract alias fields for resolution (if configured)
         org_alias: Final = handler.get_org_alias(token=jwt_valid_token, default_value=None)
