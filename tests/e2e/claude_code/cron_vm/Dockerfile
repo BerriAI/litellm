@@ -4,8 +4,6 @@ ARG GH_VERSION=2.101.0
 ARG GH_SHA256=9bca2d1c16825f109907a23307628a2f0698fbf99662b73a5cf0b020293072b8
 ARG UV_VERSION=0.10.9
 ARG UV_SHA256=20d79708222611fa540b5c9ed84f352bcd3937740e51aacc0f8b15b271c57594
-ARG CLAUDE_CODE_VERSION=2.1.228
-ARG CLAUDE_CODE_SHA256=d535985e6941a3eb00179ccd7f52ceb0c6623a0305a518ebc4e6514f84a94c99
 
 SHELL ["/bin/bash", "-o", "pipefail", "-c"]
 
@@ -22,11 +20,6 @@ RUN curl -fsSLo /tmp/uv.tar.gz "https://github.com/astral-sh/uv/releases/downloa
  && echo "${UV_SHA256}  /tmp/uv.tar.gz" | sha256sum -c - \
  && tar -xzf /tmp/uv.tar.gz -C /usr/local/bin --strip-components=1 uv-x86_64-unknown-linux-gnu/uv \
  && rm /tmp/uv.tar.gz
-
-RUN curl -fsSLo /tmp/claude "https://downloads.claude.ai/claude-code-releases/${CLAUDE_CODE_VERSION}/linux-x64/claude" \
- && echo "${CLAUDE_CODE_SHA256}  /tmp/claude" | sha256sum -c - \
- && install -m 0755 /tmp/claude /usr/local/bin/claude \
- && rm /tmp/claude
 
 RUN groupadd --gid 1000 populator && useradd --uid 1000 --gid 1000 --create-home populator
 

@@ -81,7 +81,6 @@ from litellm.llms.base_llm.image_edit.transformation import BaseImageEditConfig
 from litellm.llms.base_llm.image_generation.transformation import (
     BaseImageGenerationConfig,
 )
-from litellm.llms.base_llm.ocr.transformation import OCR_REQUEST_FORMAT_PARAM, BaseOCRConfig, OCRResponse
 from litellm.llms.base_llm.realtime.http_transformation import BaseRealtimeHTTPConfig
 from litellm.llms.base_llm.realtime.transformation import BaseRealtimeConfig
 from litellm.llms.base_llm.rerank.transformation import BaseRerankConfig
@@ -205,7 +204,7 @@ if TYPE_CHECKING:
     from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
     from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
-    from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+    from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
         FakeAnthropicMessagesStreamIterator,
     )
     from litellm.llms.base_llm.passthrough.transformation import BasePassthroughConfig
@@ -650,7 +649,16 @@ class BaseLLMHTTPHandler:
         def sign_and_log(
             transformed: dict[str, object],  # mutable-ok: async_completion takes dict
         ) -> tuple[dict[str, object], dict[str, object], bytes | None]:  # mutable-ok: async_completion takes dict
-            data: Final = {**transformed, **extra_body} if extra_body is not None else transformed
+            data: Final = (
+                {
+                    **transformed,
+                    **provider_config.transform_extra_body(
+                        extra_body=extra_body, request=transformed, model=model, litellm_params=litellm_params
+                    ),
+                }
+                if extra_body is not None
+                else transformed
+            )
             signed: Final = cast(  # cast-ok: sign_request is declared as a bare dict
                 "tuple[dict[str, object], bytes | None]",
                 provider_config.sign_request(
@@ -782,6 +790,7 @@ class BaseLLMHTTPHandler:
                     messages=messages,
                     client=client,
                     json_mode=json_mode,
+                    litellm_params=litellm_params,
                 )
             completion_stream, headers = self.make_sync_call(
                 provider_config=provider_config,
@@ -945,6 +954,7 @@ class BaseLLMHTTPHandler:
                 client=client,
                 json_mode=json_mode,
                 signed_json_body=signed_json_body,
+                litellm_params=litellm_params,
             )
 
         completion_stream, _response_headers = await self.make_async_call_stream_helper(
@@ -1636,320 +1646,6 @@ class BaseLLMHTTPHandler:
             api_key=api_key,
         )
 
-    def _prepare_ocr_request(
-        self,
-        model: str,
-        document: dict[str, str],
-        optional_params: dict,
-        logging_obj: LiteLLMLoggingObj,
-        api_key: str | None,
-        api_base: str | None,
-        headers: dict[str, object] | None,
-        provider_config: BaseOCRConfig,
-        litellm_params: dict,
-    ) -> tuple[dict[str, object], str, dict[str, object], None]:
-        """
-        Shared logic for preparing OCR requests.
-        Returns: (headers, complete_url, data, files)
-        """
-        from litellm.llms.base_llm.ocr.transformation import OCRRequestData
-
-        headers = provider_config.validate_environment(
-            api_key=api_key,
-            api_base=api_base,
-            headers=headers or {},
-            model=model,
-            litellm_params=litellm_params,
-        )
-
-        complete_url: Final = provider_config.get_complete_url(
-            api_base=api_base,
-            model=model,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-        )
-
-        # Transform the request to get data and files
-        transformed_result: Final = provider_config.transform_ocr_request(
-            model=model,
-            document=document,
-            optional_params={key: value for key, value in optional_params.items() if key != OCR_REQUEST_FORMAT_PARAM},
-            headers=headers,
-            api_key=api_key,
-            api_base=api_base,
-        )
-
-        # All providers return OCRRequestData
-        if not isinstance(transformed_result, OCRRequestData):
-            raise ValueError(f"Provider {provider_config.__class__.__name__} must return OCRRequestData")
-
-        # Data is always a dict for Mistral OCR format
-        if not isinstance(transformed_result.data, dict):
-            raise ValueError(f"Expected dict data for OCR request, got {type(transformed_result.data)}")
-
-        data: Final = transformed_result.data
-
-        ## LOGGING
-        logging_obj.pre_call(
-            input="OCR document processing",
-            api_key=api_key,
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": complete_url,
-                "headers": headers,
-            },
-        )
-
-        return headers, complete_url, data, None
-
-    async def _async_prepare_ocr_request(
-        self,
-        model: str,
-        document: dict[str, str],
-        optional_params: dict,
-        logging_obj: LiteLLMLoggingObj,
-        api_key: str | None,
-        api_base: str | None,
-        headers: dict[str, object] | None,
-        provider_config: BaseOCRConfig,
-        litellm_params: dict,
-    ) -> tuple[dict[str, object], str, dict[str, object], None]:
-        """
-        Async version of _prepare_ocr_request for providers that need async transforms.
-        Returns: (headers, complete_url, data, files)
-        """
-        from litellm.llms.base_llm.ocr.transformation import OCRRequestData
-
-        headers = provider_config.validate_environment(
-            api_key=api_key,
-            api_base=api_base,
-            headers=headers or {},
-            model=model,
-            litellm_params=litellm_params,
-        )
-
-        complete_url: Final = provider_config.get_complete_url(
-            api_base=api_base,
-            model=model,
-            optional_params=optional_params,
-            litellm_params=litellm_params,
-        )
-
-        # Use async transform (providers can override this method if they need async operations)
-        transformed_result: Final = await provider_config.async_transform_ocr_request(
-            model=model,
-            document=document,
-            optional_params={key: value for key, value in optional_params.items() if key != OCR_REQUEST_FORMAT_PARAM},
-            headers=headers,
-            api_key=api_key,
-            api_base=api_base,
-        )
-
-        # All providers return OCRRequestData
-        if not isinstance(transformed_result, OCRRequestData):
-            raise ValueError(f"Provider {provider_config.__class__.__name__} must return OCRRequestData")
-
-        # Data is always a dict for Mistral OCR format
-        if not isinstance(transformed_result.data, dict):
-            raise ValueError(f"Expected dict data for OCR request, got {type(transformed_result.data)}")
-
-        data: Final = transformed_result.data
-
-        ## LOGGING
-        logging_obj.pre_call(
-            input="OCR document processing",
-            api_key=api_key,
-            additional_args={
-                "complete_input_dict": data,
-                "api_base": complete_url,
-                "headers": headers,
-            },
-        )
-
-        return headers, complete_url, data, None
-
-    def _transform_ocr_response(
-        self,
-        provider_config: BaseOCRConfig,
-        model: str,
-        response: httpx.Response,
-        logging_obj: LiteLLMLoggingObj,
-        optional_params: Mapping[str, object],
-    ) -> OCRResponse:
-        """Shared logic for transforming OCR responses."""
-        normalized: Final = provider_config.transform_ocr_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
-            optional_params=optional_params,
-        )
-        return self._finalize_ocr_response(normalized, response, optional_params)
-
-    @staticmethod
-    def _finalize_ocr_response(
-        normalized: OCRResponse,
-        response: httpx.Response,
-        optional_params: Mapping[str, object],
-    ) -> OCRResponse:
-        if (
-            optional_params.get(OCR_REQUEST_FORMAT_PARAM) == "native"
-            and normalized.get_provider_native_response() is None
-        ):
-            normalized.set_provider_native_response(response.json())
-        return normalized
-
-    def ocr(
-        self,
-        model: str,
-        document: dict[str, str],
-        optional_params: dict,
-        timeout: float | httpx.Timeout,
-        logging_obj: LiteLLMLoggingObj,
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str,
-        client: HTTPHandler | AsyncHTTPHandler | None = None,
-        aocr: bool = False,
-        headers: dict[str, object] | None = None,
-        provider_config: BaseOCRConfig | None = None,
-        litellm_params: dict | None = None,
-    ) -> OCRResponse | Coroutine[object, object, OCRResponse]:
-        """
-        Sync OCR handler.
-        """
-        if provider_config is None:
-            raise ValueError(f"No provider config found for model: {model} and provider: {custom_llm_provider}")
-
-        if litellm_params is None:
-            litellm_params = {}
-
-        if aocr is True:
-            return self.async_ocr(
-                model=model,
-                document=document,
-                optional_params=optional_params,
-                timeout=timeout,
-                logging_obj=logging_obj,
-                api_key=api_key,
-                api_base=api_base,
-                custom_llm_provider=custom_llm_provider,
-                client=client,
-                headers=headers,
-                provider_config=provider_config,
-                litellm_params=litellm_params,
-            )
-
-        # Prepare the request
-        headers, complete_url, data, files = self._prepare_ocr_request(
-            model=model,
-            document=document,
-            optional_params=optional_params,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            api_base=api_base,
-            headers=headers,
-            provider_config=provider_config,
-            litellm_params=litellm_params,
-        )
-
-        if client is None or not isinstance(client, HTTPHandler):
-            client = _get_httpx_client()
-
-        try:
-            # Make the POST request with JSON data (Mistral format)
-            response: Final = client.post(
-                url=complete_url,
-                headers=headers,
-                json=data,
-                timeout=timeout,
-            )
-        except Exception as e:
-            raise self._handle_error(e=e, provider_config=provider_config)
-
-        logging_obj.post_call(
-            api_key=api_key,
-            original_response=response.text,
-            additional_args={"complete_input_dict": data},
-        )
-
-        return self._transform_ocr_response(
-            provider_config=provider_config,
-            model=model,
-            response=response,
-            logging_obj=logging_obj,
-            optional_params=optional_params,
-        )
-
-    async def async_ocr(
-        self,
-        model: str,
-        document: dict[str, str],
-        optional_params: dict,
-        timeout: float | httpx.Timeout,
-        logging_obj: LiteLLMLoggingObj,
-        api_key: str | None,
-        api_base: str | None,
-        custom_llm_provider: str,
-        client: HTTPHandler | AsyncHTTPHandler | None = None,
-        headers: dict[str, object] | None = None,
-        provider_config: BaseOCRConfig | None = None,
-        litellm_params: dict | None = None,
-    ) -> OCRResponse:
-        """
-        Async OCR handler.
-        """
-        if provider_config is None:
-            raise ValueError(f"No provider config found for model: {model} and provider: {custom_llm_provider}")
-
-        if litellm_params is None:
-            litellm_params = {}
-
-        # Prepare the request using async prepare method
-        headers, complete_url, data, files = await self._async_prepare_ocr_request(
-            model=model,
-            document=document,
-            optional_params=optional_params,
-            logging_obj=logging_obj,
-            api_key=api_key,
-            api_base=api_base,
-            headers=headers,
-            provider_config=provider_config,
-            litellm_params=litellm_params,
-        )
-
-        if client is None or not isinstance(client, AsyncHTTPHandler):
-            async_httpx_client = get_async_httpx_client(
-                llm_provider=litellm.LlmProviders(custom_llm_provider),
-            )
-        else:
-            async_httpx_client = client
-
-        try:
-            # Make the async POST request with JSON data (Mistral format)
-            response: Final = await async_httpx_client.post(
-                url=complete_url,
-                headers=headers,
-                json=data,
-                timeout=timeout,
-            )
-        except Exception as e:
-            raise self._handle_error(e=e, provider_config=provider_config)
-
-        logging_obj.post_call(
-            api_key=api_key,
-            original_response=response.text,
-            additional_args={"complete_input_dict": data},
-        )
-
-        # Use async response transform for async operations
-        normalized: Final = await provider_config.async_transform_ocr_response(
-            model=model,
-            raw_response=response,
-            logging_obj=logging_obj,
-            optional_params=optional_params,
-        )
-        return self._finalize_ocr_response(normalized, response, optional_params)
-
     def search(
         self,
         query: str | list[str],
@@ -2430,7 +2126,7 @@ class BaseLLMHTTPHandler:
 
         initial_response: AsyncIterator | AnthropicMessagesResponse
         if stream:
-            from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+            from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
                 AnthropicMessagesStreamingResponse,
                 anthropic_messages_stream_hidden_params,
             )
@@ -2454,7 +2150,7 @@ class BaseLLMHTTPHandler:
                     hidden_params=stream_hidden_params,
                 )
 
-            from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+            from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
                 AgenticAnthropicStreamingIterator,
             )
 
@@ -2736,7 +2432,11 @@ class BaseLLMHTTPHandler:
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         if extra_body:
-            data.update(extra_body)
+            data.update(
+                responses_api_provider_config.transform_extra_body(
+                    extra_body=extra_body, request=data, model=model, litellm_params=litellm_params
+                )
+            )
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
@@ -2924,7 +2624,11 @@ class BaseLLMHTTPHandler:
         data = BaseResponsesAPIConfig.normalize_responses_api_request_dict(data)
 
         if extra_body:
-            data.update(extra_body)
+            data.update(
+                responses_api_provider_config.transform_extra_body(
+                    extra_body=extra_body, request=data, model=model, litellm_params=litellm_params
+                )
+            )
         stream = bool(stream or data.get("stream"))
 
         # Preserve the OpenAI-style request context (not sent to the provider) for streaming
@@ -5838,7 +5542,7 @@ class BaseLLMHTTPHandler:
             from typing import cast
 
             from litellm._logging import verbose_logger
-            from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+            from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
                 FakeAnthropicMessagesStreamIterator,
             )
             from litellm.types.llms.anthropic_messages.anthropic_response import (
@@ -6211,7 +5915,6 @@ class BaseLLMHTTPHandler:
             BaseGoogleGenAIGenerateContentConfig,
             BaseAnthropicMessagesConfig,
             BaseBatchesConfig,
-            BaseOCRConfig,
             BaseVideoConfig,
             BaseSearchConfig,
             BaseTextToSpeechConfig,
@@ -6254,12 +5957,6 @@ class BaseLLMHTTPHandler:
             status_code=status_code,
             headers=error_headers,
         )
-        if (
-            isinstance(provider_config, BaseOCRConfig)
-            and isinstance(provider_error, BaseLLMException)
-            and isinstance(error_response, httpx.Response)
-        ):
-            provider_error.response = error_response
         if not isinstance(received_status_code, int):
             provider_error.status_code_is_synthesized = True
         raise provider_error

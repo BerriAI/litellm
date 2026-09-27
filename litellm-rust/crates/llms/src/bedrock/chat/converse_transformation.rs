@@ -1,5 +1,6 @@
+use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::{
-    bedrock_model_id_and_region,
+    AwsCredentialSource, bedrock_model_id_and_region,
     constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE},
     resolve_bedrock_region,
 };
@@ -16,9 +17,18 @@ use litellm_types::{
 };
 use serde_json::{Map, Value, json};
 
-use crate::base_llm::chat::transformation::{
-    BaseConfig, Error, ProviderChatRequestData, ProviderChatResponseData, RequestAuth, Unsupported,
-    unsupported_message, unsupported_param,
+use crate::{
+    Error,
+    base_llm::{
+        auth::AuthScheme,
+        chat::{
+            streaming::StreamShape,
+            transformation::{
+                BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
+                Unsupported, ValidatedEnvironment, unsupported_message, unsupported_param,
+            },
+        },
+    },
 };
 
 /// Converse parameter names, post `map_openai_params`, that the Rust path can
@@ -99,6 +109,7 @@ impl BaseConfig for AmazonConverseConfig {
     ) -> Result<ProviderChatRequestData, Error> {
         Ok(ProviderChatRequestData {
             body: converse_body(&build_conversation(&messages), &optional_params),
+            stream_shape: StreamShape::default(),
         })
     }
 
@@ -180,31 +191,48 @@ impl BaseConfig for AmazonConverseConfig {
         })
     }
 
-    fn auth(
+    /// Python reads `api_key` as the Bedrock bearer token and consults the env only when
+    /// the caller passed none, so a caller-supplied empty key falls through to SigV4
+    /// without reaching for the environment. An all-whitespace token stays a bearer token
+    /// here because Python sends it too: treating it as absent would sign as the host
+    /// principal instead, which is the identity swap this branch exists to prevent.
+    fn validate_environment(
         &self,
+        headers: Headers,
         api_key: Option<&str>,
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<RequestAuth, Error> {
-        // Python reads `api_key` as the Bedrock bearer token and consults the
-        // env only when the caller passed none, so a caller-supplied empty key
-        // falls through to SigV4 without reaching for the environment. An
-        // all-whitespace token stays a bearer token here because Python sends
-        // it too: treating it as absent would sign as the host principal
-        // instead, which is the identity swap this branch exists to prevent.
+    ) -> Result<ValidatedEnvironment, Error> {
         let bearer = match api_key {
             Some(key) => Some(key.to_string()),
             None => env_lookup(AWS_BEARER_TOKEN_BEDROCK),
         }
         .filter(|token| !token.is_empty());
         if let Some(token) = bearer {
-            return Ok(RequestAuth::Bearer { token });
+            return Ok(ValidatedEnvironment {
+                headers,
+                auth: AuthScheme::Credential {
+                    placement: CredentialPlacement::Bearer,
+                    secret: SecretValue::new(token),
+                },
+            });
         }
         let (_, model_region) = bedrock_model_id_and_region(model);
-        Ok(RequestAuth::AwsSigV4 {
-            region: resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup),
-            service: BEDROCK_SERVICE,
+        Ok(ValidatedEnvironment {
+            headers,
+            auth: AuthScheme::AwsSigV4 {
+                region: resolve_bedrock_region(
+                    model_region.as_deref(),
+                    optional_params,
+                    env_lookup,
+                ),
+                service: BEDROCK_SERVICE,
+                credentials: Box::new(AwsCredentialSource::from_params(
+                    optional_params,
+                    env_lookup,
+                )),
+            },
         })
     }
 

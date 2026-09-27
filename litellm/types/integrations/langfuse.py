@@ -14,3 +14,8 @@ class LangfuseUsageDetails(TypedDict):
     total: int | None
     cache_creation_input_tokens: int | None
     cache_read_input_tokens: int | None
+
+
+class LangfuseLoggedEvent(TypedDict):
+    trace_id: ReadOnly[str | None]
+    generation_id: ReadOnly[str | None]
