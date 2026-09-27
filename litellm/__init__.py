@@ -636,6 +636,7 @@ fal_ai_models: Set = set()
 fireworks_ai_models: Set = set()
 fireworks_ai_embedding_models: Set = set()
 deepinfra_models: Set = set()
+compactifai_models: Final[Set[str]] = set()  # mutable-ok: provider registry is populated and refreshed in place
 perplexity_models: Set = set()
 watsonx_models: Set = set()
 gemini_models: Set = set()
@@ -838,6 +839,8 @@ def _populate_provider_model_sets(model_cost_map: Dict) -> None:
             bedrock_converse_models.add(key)
         elif value.get("litellm_provider") == "deepinfra":
             deepinfra_models.add(key)
+        elif value.get("litellm_provider") == "compactifai":
+            compactifai_models.add(key)
         elif value.get("litellm_provider") == "perplexity":
             perplexity_models.add(key)
         elif value.get("litellm_provider") == "watsonx":
@@ -1064,6 +1067,7 @@ model_list = list(
     | set(ollama_models)
     | bedrock_models
     | deepinfra_models
+    | compactifai_models
     | perplexity_models
     | set(maritalk_models)
     | runwayml_models
@@ -1169,6 +1173,7 @@ def _build_models_by_provider() -> dict:
         "ollama": ollama_models,
         "ollama_chat": ollama_models,
         "deepinfra": deepinfra_models,
+        "compactifai": compactifai_models,
         "perplexity": perplexity_models,
         "maritalk": maritalk_models,
         "watsonx": watsonx_models,

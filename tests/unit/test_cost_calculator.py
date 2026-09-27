@@ -38,13 +38,35 @@ from litellm.types.utils import (
     Usage,
 )
 from litellm.types.videos.main import VideoObject
-from litellm.utils import supports_prompt_caching
+from litellm.utils import get_valid_models, supports_prompt_caching
 
 
 @pytest.fixture
 def _local_model_cost_map(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+
+@pytest.mark.parametrize("model", ("glm-5-2", "glm-5-3", "quasar-438b"))
+def test_compactifai_response_cost_uses_provider_catalog(model: str, _local_model_cost_map: None) -> None:
+    assert f"compactifai/{model}" in get_valid_models(custom_llm_provider="compactifai")
+    model_info: Final = litellm.get_model_info(model=model, custom_llm_provider="compactifai")
+    input_rate: Final = model_info.get("input_cost_per_token")
+    output_rate: Final = model_info.get("output_cost_per_token")
+    assert input_rate is not None and input_rate > 0
+    assert output_rate is not None and output_rate > 0
+
+    response: Final = ModelResponse(
+        model=f"compactifai/{model}",
+        choices=[],
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    assert completion_cost(completion_response=response, custom_llm_provider="compactifai") == pytest.approx(
+        100 * input_rate + 50 * output_rate
+    )
+    assert cost_per_token(
+        model=model, prompt_tokens=100, completion_tokens=50, custom_llm_provider="compactifai"
+    ) == pytest.approx((100 * input_rate, 50 * output_rate))
 
 
 def test_cost_per_token_duplicate_openai_prefix_matches_model_cost(monkeypatch):
