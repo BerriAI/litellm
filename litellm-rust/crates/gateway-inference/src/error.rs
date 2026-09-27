@@ -28,6 +28,15 @@ pub enum Error {
     Internal(String),
 }
 
+impl From<litellm_host_http::Error<RouteError>> for Error {
+    fn from(error: litellm_host_http::Error<RouteError>) -> Self {
+        match error {
+            litellm_host_http::Error::Call(error) => Self::Route(error),
+            litellm_host_http::Error::Protocol => Self::Internal(error.to_string()),
+        }
+    }
+}
+
 impl Error {
     pub fn status(&self) -> StatusCode {
         match self {

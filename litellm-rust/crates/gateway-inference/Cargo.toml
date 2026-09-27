@@ -9,9 +9,9 @@ repository.workspace = true
 axum = { workspace = true, features = ["json", "multipart"] }
 base64.workspace = true
 bytes.workspace = true
-futures-util.workspace = true
 litellm-auth.workspace = true
 litellm-core.workspace = true
+litellm-host-http.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
 litellm-router.workspace = true

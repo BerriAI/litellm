@@ -4,15 +4,17 @@ use std::{convert::Infallible, sync::Arc};
 
 use axum::{
     Json,
-    body::{Body, Bytes},
+    body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
 };
-use futures_util::{StreamExt, stream::BoxStream};
 use litellm_core::messages::{
-    Error as RouteError, MessagesCall, MessagesResponse, messages, messages_body,
+    Error as RouteError, MessagesCall, messages_body,
+    route::{Messages, MessagesStreamHead, messages_machine},
 };
+use litellm_host_http::HttpAdapter;
+use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
@@ -52,17 +54,9 @@ async fn handle(gateway: &Gateway, headers: &HeaderMap, body: &[u8]) -> Result<R
         .get(model_name)
         .ok_or_else(|| Error::UnknownModel(model_name.to_owned()))?;
     let call = project(deployment, body, headers)?;
-    match messages(
-        &gateway.resources,
-        &gateway.http,
-        gateway.secrets.as_ref(),
-        call,
-    )
-    .await?
-    {
-        MessagesResponse::Complete(message) => Ok(Json(message).into_response()),
-        MessagesResponse::Stream { chunks, .. } => Ok(stream(chunks)),
-    }
+    let machine = messages_machine(&gateway.resources, &gateway.http, gateway.secrets.clone())
+        .map_err(RouteError::from)?;
+    Ok(litellm_host_http::serve(machine, call, MessagesHttp, ()).await?)
 }
 
 fn project(
@@ -105,18 +99,33 @@ fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders>
     })
 }
 
-/// A chunk that fails after the stream opened is delivered as an SSE error frame, since
-/// the status line already went out; the stream ends on it.
-fn stream(chunks: BoxStream<'static, Result<Bytes, RouteError>>) -> Response {
-    let body = chunks.map(|chunk| {
-        Ok::<_, Infallible>(
-            chunk.unwrap_or_else(|error| Bytes::from(Error::Route(error).sse_frame())),
+struct MessagesHttp;
+
+impl HttpAdapter for MessagesHttp {
+    type Protocol = Messages;
+
+    async fn custom_op(&self, op: Infallible) -> Result<(), RouteError> {
+        match op {}
+    }
+
+    fn complete(&self, response: Box<AnthropicMessagesResponse>) -> Result<Response, RouteError> {
+        Ok(Json(response).into_response())
+    }
+
+    fn head(&self, _: MessagesStreamHead) -> Result<axum::http::Response<()>, RouteError> {
+        let response = (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/event-stream")],
         )
-    });
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/event-stream")],
-        Body::from_stream(body),
-    )
-        .into_response()
+            .into_response();
+        Ok(response.map(|_| ()))
+    }
+
+    fn chunk(&self, chunk: Bytes) -> Result<Bytes, RouteError> {
+        Ok(chunk)
+    }
+
+    fn stream_error(&self, error: litellm_host_http::Error<RouteError>) -> Bytes {
+        Bytes::from(Error::from(error).sse_frame())
+    }
 }

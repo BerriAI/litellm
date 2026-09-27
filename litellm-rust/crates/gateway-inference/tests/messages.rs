@@ -119,3 +119,33 @@ async fn a_stream_that_fails_after_opening_ends_with_an_sse_error_frame() {
     assert_eq!(error["type"], "error");
     assert_eq!(error["error"]["type"], "api_error");
 }
+
+#[rstest]
+#[tokio::test]
+async fn hosted_provider_failure_preserves_status_body_and_request_id() {
+    let upstream = MockServer::start().await;
+    let error =
+        json!({"type": "error", "error": {"type": "rate_limit_error", "message": "retry later"}});
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(error.clone()))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let request = Request::post("/v1/messages")
+        .header("content-type", "application/json")
+        .header("x-request-id", "host-http-request")
+        .body(Body::from(json!({
+            "model": "public/model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16,
+        }).to_string()))
+        .unwrap();
+    let response = support::app("anthropic/test-model", &upstream.uri())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 429);
+    let body = support::json(response).await;
+    assert_eq!(body["type"], error["type"]);
+    assert_eq!(body["error"], error["error"]);
+    assert_eq!(body["request_id"], "host-http-request");
+}
