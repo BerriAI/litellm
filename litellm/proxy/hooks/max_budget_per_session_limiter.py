@@ -172,11 +172,11 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         if redis_cache is self._registered_redis_cache:
             return
 
-        self.increment_script = cast(
+        self.increment_script = cast(  # cast-ok: Redis registration returns the callable invoked below
             Callable[..., Awaitable[object]],
             redis_cache.async_register_script(MAX_BUDGET_SESSION_INCREMENT_SCRIPT),
         )
-        self.get_agent_spend_script = cast(
+        self.get_agent_spend_script = cast(  # cast-ok: Redis registration returns the callable invoked below
             Callable[..., Awaitable[object]],
             redis_cache.async_register_script(MAX_BUDGET_SESSION_GET_AGENT_SPEND_SCRIPT),
         )
@@ -314,7 +314,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         return f"{{session_budget:{session_id}}}:spend"
 
     async def _get_local_scope(self, cache_key: str) -> dict[str, object] | None:
-        result: Final[object | None] = cast(
+        result: Final[object | None] = cast(  # cast-ok: cache API returns Any; validate value before use
             object | None,
             await self.internal_usage_cache.async_get_cache(
                 key=cache_key,
@@ -325,7 +325,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         if result is None:
             return None
         if isinstance(result, dict) and all(isinstance(key, str) for key in result):
-            return cast(dict[str, object], result)
+            return cast(dict[str, object], result)  # cast-ok: keys are checked and values remain opaque
         raise RuntimeError("Agent session scope cache has an invalid value")
 
     @staticmethod
@@ -376,7 +376,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         return max(float(legacy_value) - total_new_value, 0.0) + agent_value
 
     async def _get_local_spend(self, cache_key: str) -> float | None:
-        result: Final[object | None] = cast(
+        result: Final[object | None] = cast(  # cast-ok: cache API returns Any; validate value before use
             object | None,
             await self.internal_usage_cache.async_get_cache(
                 key=cache_key,
