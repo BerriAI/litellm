@@ -236,6 +236,8 @@ dev = [
     "pytest-timeout==2.4.0",
     "vcrpy==8.2.1",
     "pytest-recording==0.13.4",
+    "datamodel-code-generator==0.83.0",
+    "ast-grep-cli==0.45.3",
 ]
 e2e-dev = [
     "playwright==1.61.0",

@@ -3439,8 +3439,12 @@ dependencies = [
 name = "litellm-db"
 version = "0.1.0"
 dependencies = [
+ "rstest",
+ "schemars 1.2.2",
  "serde",
+ "serde_json",
  "sqlx",
+ "thiserror 2.0.19",
 ]
 
 [[package]]
@@ -5560,6 +5564,7 @@ version = "1.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "687274d293b6cdc6e73e0fee520bf2049650090d7164f87672d212a3c530cf4a"
 dependencies = [
+ "chrono",
  "dyn-clone",
  "ref-cast",
  "schemars_derive",
