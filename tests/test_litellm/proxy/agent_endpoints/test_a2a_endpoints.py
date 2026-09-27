@@ -657,6 +657,7 @@ async def test_message_methods_forward_allowlisted_x_litellm_api_key(method: str
     mock_request.headers = {
         "x-litellm-api-key": "sk-allowlisted",
         "x-a2a-test-agent-x-litellm-team-id": "attacker-team",
+        "x-a2a-test-agent-x-litellm-agent-id": "attacker-agent",
     }
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="real-user", team_id="real-team")
 
@@ -669,6 +670,9 @@ async def test_message_methods_forward_allowlisted_x_litellm_api_key(method: str
     assert forwarded_headers.get("X-LiteLLM-User-Id") == "real-user"
     assert forwarded_headers.get("X-LiteLLM-Team-Id") == "real-team", (
         "proxy-minted team id must not be overridden by a forged client header"
+    )
+    assert "x-litellm-agent-id" not in {k.lower() for k in forwarded_headers}, (
+        "forged agent id must be stripped before asend_message mints the real one"
     )
 
 

@@ -174,13 +174,16 @@ async def _resolve_backend_auth_header(
 
 
 # Headers the proxy mints itself on the backend call. Forged client copies of
-# these must not be forwarded, but any other x-litellm-* header (e.g. an
-# admin-allowlisted x-litellm-api-key from extra_headers) is valid passthrough.
+# these must not be forwarded (agent-id is minted later in asend_message, where
+# agent_extra_headers would otherwise overwrite it), but any other x-litellm-*
+# header (e.g. an admin-allowlisted x-litellm-api-key from extra_headers) is
+# valid passthrough.
 _MINTED_A2A_IDENTITY_HEADERS: Final = frozenset(
     {
         AGENT_CALLER_USER_ID_HEADER.lower(),
         AGENT_CALLER_TEAM_ID_HEADER.lower(),
         "x-litellm-trace-id",
+        "x-litellm-agent-id",
     }
 )
 
