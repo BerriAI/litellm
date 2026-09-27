@@ -210,6 +210,7 @@ def test_translate_moves_params_into_extra_body(
         pytest.param(_model_info(), {"type": "adaptive"}, None, id="thinking_type_not_allowed"),
         pytest.param(_model_info(), {"budget_tokens": 1024}, None, id="thinking_type_unreadable"),
         pytest.param(_model_info(), 1, None, id="thinking_type_unsupported_value"),
+        pytest.param(_model_info(), {1: "enabled"}, None, id="thinking_mapping_with_non_string_keys"),
         pytest.param(
             _model_info(thinking_param="thinking", thinking_values=[]), "adaptive", None, id="thinking_value_unmapped"
         ),
