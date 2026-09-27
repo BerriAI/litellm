@@ -452,6 +452,38 @@ class TestErrorLogCarriesCallId:
         assert call_id in record.getMessage()
 
 
+    @pytest.mark.asyncio
+    async def test_count_tokens_reports_an_unfetchable_image_as_a_400_like_v1_messages(self):
+        from fastapi import HTTPException
+
+        import litellm
+        import litellm.proxy.anthropic_endpoints.endpoints as ep
+        from litellm.proxy import proxy_server
+        from litellm.proxy._types import UserAPIKeyAuth
+
+        request = MagicMock()
+        request.headers = {}
+
+        with (
+            patch.object(  # test-quality-ok: endpoint reads the body via a module function; no injection seam
+                ep,
+                "_read_request_body",
+                new=AsyncMock(return_value={"model": "g", "messages": [{"role": "user", "content": "hi"}]}),
+            ),
+            patch.object(  # test-quality-ok: module global imported at call time; the test targets the endpoint's except block
+                proxy_server,
+                "count_request_tokens",
+                new=AsyncMock(side_effect=litellm.ImageFetchError(message="Unable to fetch image from URL")),
+            ),
+            pytest.raises(HTTPException) as raised,
+        ):
+            await ep.count_tokens(request=request, user_api_key_dict=UserAPIKeyAuth())
+
+        assert raised.value.status_code == 400
+        assert raised.value.detail["type"] == "error"
+        assert raised.value.detail["error"]["type"] == "invalid_request_error"
+        assert "Unable to fetch image from URL" in raised.value.detail["error"]["message"]
+
 class TestEventLoggingBatchEndpoint:
     """Test the stubbed event logging batch endpoint"""
 

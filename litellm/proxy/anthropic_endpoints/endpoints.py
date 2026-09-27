@@ -369,6 +369,11 @@ async def count_tokens(
             status_code=status_code,
             detail=detail,
         )
+    except litellm.BadRequestError as e:
+        raise HTTPException(
+            status_code=400,
+            detail=AnthropicExceptionMapping.transform_to_anthropic_error(status_code=400, raw_message=e.message),
+        )
     except Exception as e:
         log_llm_api_exception(e, litellm_call_id)
         raise HTTPException(status_code=500, detail={"error": f"Internal server error: {e}"})
