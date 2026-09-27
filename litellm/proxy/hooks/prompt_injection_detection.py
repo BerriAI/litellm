@@ -128,11 +128,14 @@ class _PromptInjectionLLMJudge(CustomGuardrail):
         input_type: Literal["request", "response"],
         logging_obj: LiteLLMLoggingObj | None = None,
     ) -> GenericGuardrailAPIInputs:
-        if input_type != "request":
-            return inputs
-        prompt: Final = "\n".join((*inputs.get("texts", ()), *_attachment_texts(request_data)))
+        if input_type == "request":
+            await self.reject_injection(inputs.get("texts", ()))
+        return inputs
+
+    async def reject_injection(self, texts: Iterable[str]) -> None:
+        prompt: Final = "\n".join(texts)
         if not prompt.strip():
-            return inputs
+            return
         response: Final[ModelResponse] = await self.router.acompletion(
             model=self.llm_api_name,
             messages=[
@@ -145,7 +148,6 @@ class _PromptInjectionLLMJudge(CustomGuardrail):
         )
         if self._verdict_is_attack(response):
             raise _rejection()
-        return inputs
 
     def _verdict_is_attack(self, response: ModelResponse) -> bool:
         fail_call_string: Final = self.params.llm_api_fail_call_string
@@ -286,16 +288,13 @@ class _OPTIONAL_PromptInjectionDetection(CustomGuardrail):
         return inputs
 
     async def _judge_request(self, judge: _PromptInjectionLLMJudge, data: dict[str, object], call_type: str) -> None:
+        await judge.reject_injection(_attachment_texts(data))
         handler: Final = _translation_handler(call_type)
-        if handler is not None:
-            await handler.process_input_messages(
-                data=data, guardrail_to_apply=judge, litellm_logging_obj=_logging_obj(data)
-            )
+        if handler is None:
+            await judge.reject_injection(_plain_request_texts(data))
             return
-        await judge.apply_guardrail(
-            inputs=GenericGuardrailAPIInputs(texts=list(_plain_request_texts(data))),
-            request_data=data,
-            input_type="request",
+        await handler.process_input_messages(
+            data=data, guardrail_to_apply=judge, litellm_logging_obj=_logging_obj(data)
         )
 
     async def async_moderation_hook(

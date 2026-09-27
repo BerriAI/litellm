@@ -91,18 +91,28 @@ def _chat_with_only_a_file(text: str) -> dict[str, object]:
     return _chat_with_parts(_file_part(text))
 
 
+def _input_file_part(text: str) -> dict[str, object]:
+    return {"type": "input_file", "filename": "notes.txt", "file_data": _text_data_url(text)}
+
+
+def _document_part(text: str) -> dict[str, object]:
+    return {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": text}}
+
+
 def _responses_with_text_and_input_file(text: str) -> dict[str, object]:
-    return _responses_with_parts(
-        {"type": "input_text", "text": SAFE},
-        {"type": "input_file", "filename": "notes.txt", "file_data": _text_data_url(text)},
-    )
+    return _responses_with_parts({"type": "input_text", "text": SAFE}, _input_file_part(text))
+
+
+def _responses_with_only_an_input_file(text: str) -> dict[str, object]:
+    return _responses_with_parts(_input_file_part(text))
 
 
 def _messages_with_text_and_document(text: str) -> dict[str, object]:
-    return _messages_with_parts(
-        {"type": "text", "text": SAFE},
-        {"type": "document", "source": {"type": "text", "media_type": "text/plain", "data": text}},
-    )
+    return _messages_with_parts({"type": "text", "text": SAFE}, _document_part(text))
+
+
+def _messages_with_only_a_document(text: str) -> dict[str, object]:
+    return _messages_with_parts(_document_part(text))
 
 
 PDF_FILE_PART: Final[dict[str, object]] = {
@@ -378,7 +388,26 @@ async def test_llm_check_scans_text_attachments(monkeypatch: pytest.MonkeyPatch)
         "acompletion",
     )
 
-    assert router.seen_prompts == (f"{SAFE}\nattached text",)
+    assert router.seen_prompts == ("attached text", SAFE)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("call_type", "build"),
+    [
+        ("acompletion", _chat_with_only_a_file),
+        ("aresponses", _responses_with_only_an_input_file),
+        ("anthropic_messages", _messages_with_only_a_document),
+    ],
+)
+async def test_llm_check_judges_attachment_only_input(
+    monkeypatch: pytest.MonkeyPatch, call_type: CallTypesLiteral, build: RequestBuilder
+):
+    with pytest.raises(HTTPException) as exc_info:
+        await _proxy_during_call(monkeypatch, _moderation_detector(verdict="UNSAFE"), build(INJECTION), call_type)
+
+    assert exc_info.value.status_code == 400
+    assert _error(exc_info.value)["error"] == REJECTION_MESSAGE
 
 
 def _moderation(text: str | list[str]) -> dict[str, object]:
