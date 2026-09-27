@@ -417,6 +417,14 @@ class TestShortCircuitEntryPoint:
                 "Search for Claude Code releases",
                 "Search for Claude Code releases",
             ),
+            (
+                '"LiteLLM latest version release"',
+                '"LiteLLM latest version release"',
+            ),
+            (
+                "'fastapi SSE streaming'",
+                "'fastapi SSE streaming'",
+            ),
         ],
     )
     async def test_short_circuits_strips_claude_code_instructional_prefix(
