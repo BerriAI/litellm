@@ -8,6 +8,8 @@ from datetime import datetime, timezone
 from itertools import chain, count
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, cast
 
+from pydantic import ValidationError
+
 import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
@@ -50,7 +52,6 @@ from litellm.types.guardrails import (
     LitellmParams,
     SupportedGuardrailIntegrations,
 )
-from pydantic import ValidationError
 
 from .guardrail_hooks.llm_as_a_judge import (
     initialize_guardrail as initialize_llm_as_a_judge,
