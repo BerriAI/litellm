@@ -1,3 +1,5 @@
+The same ownership rule applies to Messages, Responses, Chat Completions, OCR, and other API formats. This crate owns their shared API data contracts. Adapter contracts and shared transformation machinery belong in `llms/src/base_llm/<format>/`, provider policy in `llms/src/<provider>/<format>/`, and call orchestration in `core/src/<format>/`. A provider originating a format, or several providers using a type, does not change these responsibilities. Existing model locations outside this crate are not exceptions to this rule for new shared API contracts
+
 - `litellm-types` owns shared API data contracts and their serialization
   - A type belongs here when it describes a request, response, event, or value that consumers must agree on independently of how a call executes
   - Being public, serializable, or used by several crates is not sufficient

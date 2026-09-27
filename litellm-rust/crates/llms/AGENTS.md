@@ -12,7 +12,7 @@ Use trait defaults for unchanged inherited behavior and explicit delegation for 
 
 Use named `#[rstest]` cases for independent input/output scenarios instead of loops or repeated calls in one test. Inject reusable setup with `#[fixture]` arguments and use `#[with(...)]` for fixture overrides. Keep assertions about the same result together
 
-For base OCR, Python response models live next to `BaseOcrConfig` in `src/base_llm/ocr/transformation.rs`, as they do in Python; Rust context/environment types support the runtime. `BaseOcrConfig::prepare_request` corresponds to Python's HTTP-handler preparation rather than a `BaseOCRConfig` method, and `validate_request_body` is a Rust-only hook. `src/base_llm/ocr/error.rs` and `src/base_llm/ocr/document.rs` are Rust-only: the OCR error taxonomy shared with the route, and inline-document helpers shared by several providers
+Base OCR currently keeps response models next to `BaseOcrConfig` in `src/base_llm/ocr/transformation.rs`. This is legacy placement, not an exception to the shared API contract ownership in `litellm-types`. Rust context/environment types support the runtime. `BaseOcrConfig::prepare_request` corresponds to Python's HTTP-handler preparation rather than a `BaseOCRConfig` method, and `validate_request_body` is a Rust-only hook. `src/base_llm/ocr/error.rs` and `src/base_llm/ocr/document.rs` are Rust-only: the OCR error taxonomy shared with the route, and inline-document helpers shared by several providers
 
 For Mistral, `async_transform_ocr_request` uses the base default in both languages. `resolve_headers` and `build_ocr_url` implement the respective environment and URL operations, and `normalize_response` implements the typed part of response transformation. Existing auth key/header handling and top-level response-extra preservation differ between languages; layout refactors must preserve those behaviors and verify them with the existing tests
 
@@ -21,6 +21,10 @@ For non-OCR pairs, order corresponding methods as parameter support/mapping, env
 Azure Messages maps to `llms/azure_ai/anthropic/messages_transformation.py`; Bedrock Converse maps to `llms/bedrock/chat/converse_transformation.py`. `AnthropicConfig`, `AmazonConverseConfig`, and the non-OCR base traits are partial ports. `OpenAiResponsesApiConfig` currently implements only the WebSocket surface. Preserve their acceptance gates, passthrough behavior, and host fallback contracts when aligning layout
 
 ## Provider and format boundaries
+
+The same ownership rule applies to Messages, Responses, Chat Completions, OCR, and other API formats. `litellm-types` owns shared API data contracts. `llms/src/base_llm/<format>/` owns provider adapter contracts and shared transformation machinery. `llms/src/<provider>/<format>/` owns provider implementations and policy. `core/src/<format>/` owns call orchestration. Repeating a format name identifies the API each layer handles, not duplicate ownership of its schema. These boundaries also apply between modules in the same crate
+
+A provider adapter may explicitly reuse another provider's transformation helper when that policy applies to its backend, such as Bedrock's Claude adapter using Anthropic payload shaping. Reuse across hosts of the same model family does not make the policy format-wide. Keep provider policy out of shared trait defaults and generic normalization, and keep shared execution contexts limited to inputs the adapter contract actually needs. Pure payload rewrites belong with transformations, not transport handlers
 
 - These are intended boundaries, not a claim that all existing code already satisfies them
 - Preserve behavior and conceptual boundaries. Python names and layout are reference points, not requirements to reproduce its class hierarchy or helper structure
