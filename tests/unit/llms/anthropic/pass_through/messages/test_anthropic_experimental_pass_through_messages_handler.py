@@ -160,13 +160,13 @@ def test_should_route_to_responses_api_considers_api_base_for_openai(api_base, e
     assert _should_route_to_responses_api("openai", "openai/model", "model", api_base) is expected
 
 
-def test_openai_custom_api_base_forwards_messages_to_chat_completions():
+def test_openai_custom_api_base_forwards_messages_to_chat_completions():  # test-quality-ok: routing guard, asserts /v1/messages reaches litellm.completion with api_base forwarded; the routing decision itself is behaviorally covered by test_should_route_to_responses_api_considers_api_base_for_openai
     """Regression test for #40780: the full handler forwards a custom-api_base openai/ request to litellm.completion."""
     from litellm.llms.anthropic.pass_through.messages.handler import (
         anthropic_messages_handler,
     )
 
-    with patch("litellm.completion") as mock_completion:  # test-quality-ok: routes via real handler; no injection seam
+    with patch("litellm.completion") as mock_completion:
         try:
             anthropic_messages_handler(
                 max_tokens=100,
