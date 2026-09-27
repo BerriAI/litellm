@@ -50,16 +50,21 @@ def _thinking_enabled(thinking: object) -> bool:
     return False
 
 
+def _thinking_type_candidate(thinking: object) -> str | None:
+    match thinking:
+        case bool():
+            return "enabled" if thinking else "disabled"
+        case str():
+            return thinking
+        case Mapping():
+            raw: Final = thinking.get("type")
+            return raw if isinstance(raw, str) else None
+        case _:
+            return None
+
+
 def _thinking_type_value(thinking: object, allowed: Sequence[str]) -> str | None:
-    if isinstance(thinking, str):
-        candidate = thinking
-    elif isinstance(thinking, Mapping):
-        raw = thinking.get("type")
-        candidate = raw if isinstance(raw, str) else None
-    elif isinstance(thinking, bool):
-        candidate = "enabled" if thinking else "disabled"
-    else:
-        candidate = None
+    candidate: Final = _thinking_type_candidate(thinking)
     if candidate is None:
         return None
     if not allowed or candidate in allowed:
@@ -72,10 +77,7 @@ def _thinking_type_value(thinking: object, allowed: Sequence[str]) -> str | None
 def _thinking_payload(thinking: object, typ: str) -> Mapping[str, object]:
     if not isinstance(thinking, Mapping):
         return MappingProxyType({"type": typ})
-    budget: Final = thinking.get("budget_tokens")
-    if isinstance(budget, int):
-        return MappingProxyType({"type": typ, "budget_tokens": budget})
-    return MappingProxyType({"type": typ})
+    return MappingProxyType({**thinking, "type": typ})
 
 
 def _clamp_effort(value: object, allowed: Sequence[str]) -> str | None:
@@ -110,8 +112,17 @@ def _merged_mapping_value(left: Mapping[str, object], right: Mapping[str, object
 
 
 def _deep_merge_pair(left: Mapping[str, object], right: Mapping[str, object]) -> Mapping[str, object]:
-    keys: Final = frozenset(left) | frozenset(right)
+    keys: Final = (*left, *(key for key in right if key not in left))
     return MappingProxyType({key: _merged_mapping_value(left, right, key) for key in keys})
+
+
+def _thawed(value: object) -> object:
+    mapping: Final = _mapping_or_none(value)
+    return value if mapping is None else thaw_mapping(mapping)
+
+
+def thaw_mapping(mapping: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: JSON request body
+    return {key: _thawed(item) for key, item in mapping.items()}  # mutable-ok: JSON request body
 
 
 def _map_thinking_to_extra_body(
@@ -139,8 +150,6 @@ def _map_thinking_to_extra_body(
             return MappingProxyType(
                 {"chat_template_kwargs": MappingProxyType({"enable_thinking": _thinking_enabled(thinking)})}
             )
-        case None:
-            return MappingProxyType({})
         case _:
             return MappingProxyType({})
 
@@ -211,31 +220,9 @@ def translate_thinking_params(
     thinking_mapped: Final = any(key in patch for key in ("thinking", "enable_thinking", "chat_template_kwargs"))
     next_thinking: Final = thinking if (keep_thinking or not thinking_mapped) else None
     next_effort: Final = None if "reasoning_effort" in patch else effort
-    merged_extra: Final = _deep_merge_pair(state.extra_body, patch)
+    merged_extra: Final = _deep_merge_pair(patch, state.extra_body)
     return ThinkingParamsState(
         thinking=next_thinking,
         reasoning_effort=next_effort,
         extra_body=merged_extra,
-    )
-
-
-def apply_thinking_param_translation(
-    *,
-    model_info: Mapping[str, object] | None,
-    thinking: object | None,
-    reasoning_effort: object | None,
-    existing_extra_body: Mapping[str, object] | None,
-) -> ThinkingParamsState:
-    base_extra: Final = (
-        MappingProxyType({k: existing_extra_body[k] for k in existing_extra_body})
-        if isinstance(existing_extra_body, Mapping)
-        else MappingProxyType({})
-    )
-    return translate_thinking_params(
-        model_info=model_info,
-        state=ThinkingParamsState(
-            thinking=thinking,
-            reasoning_effort=reasoning_effort,
-            extra_body=base_extra,
-        ),
     )
