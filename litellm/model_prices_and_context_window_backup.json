@@ -32608,7 +32608,8 @@
         "output_cost_per_token_batches": 5e-06,
         "source": "https://developers.openai.com/api/docs/pricing",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supports_vision": true,
         "supports_pdf_input": true
@@ -32629,7 +32630,8 @@
         "output_cost_per_token_batches": 5e-06,
         "source": "https://developers.openai.com/api/docs/pricing",
         "supported_endpoints": [
-            "/v1/images/generations"
+            "/v1/images/generations",
+            "/v1/images/edits"
         ],
         "supports_vision": true,
         "supports_pdf_input": true
