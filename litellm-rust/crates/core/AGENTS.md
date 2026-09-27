@@ -1,4 +1,4 @@
-litellm-core owns route orchestration. Messages return `litellm_host::call::CallOutput`, containing either a completed response or a stream head and chunks. OCR and currently non-streaming Chat Completions return their completed response directly
+litellm-core owns route orchestration. Messages and HTTP Responses return `litellm_host::call::CallOutput`, containing either a completed response or a stream head and chunks. OCR and currently non-streaming Chat Completions return their completed response directly
 
 Each route exposes an ordinary async entrypoint and a `*_with_hooks` variant. Both use the same preparation and handler functions. Handlers accept `RouteHooks`, never a concrete `HostChannel`. Native observers receive start and terminal events through the shared call runner; a stream retains its lifecycle until exhaustion, error, or drop. A host channel has no native observer because its driver owns terminal dispatch
 
