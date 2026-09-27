@@ -99,8 +99,8 @@ from litellm.utils import (
 from ..common_utils import (
     AnthropicError,
     AnthropicModelInfo,
-    context_1m_requested,
     eager_input_streaming_flag,
+    has_context_1m_suffix,
     process_anthropic_headers,
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
@@ -1781,17 +1781,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         return tools
 
-    def _maybe_add_context_1m_beta(
-        self,
-        headers: dict,
-        *,
-        model: str,
-        optional_params: dict,
-        litellm_params: Mapping[str, object] | None,
-    ) -> None:
-        if context_1m_requested(model=model, optional_params=optional_params, litellm_params=litellm_params):
-            self._ensure_beta_header(headers, "context-1m-2025-08-07")
-
     def _ensure_beta_header(self, headers: dict[str, str], beta_value: str) -> None:
         """
         Ensure a beta header value is present in the anthropic-beta header.
@@ -1850,12 +1839,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
     def update_headers_with_optional_anthropic_beta(
-        self,
-        headers: dict,
-        optional_params: dict,
-        messages: Sequence[object] = (),
-        litellm_params: Mapping[str, object] | None = None,
-        model: str = "",
+        self, headers: dict, optional_params: dict, messages: Sequence[object] = ()
     ) -> dict:
         """Update headers with optional anthropic beta."""
 
@@ -1867,10 +1851,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         if requires_native_compaction_beta(self._resolved_provider, optional_params, messages):
             self._ensure_beta_header(headers, ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
-
-        self._maybe_add_context_1m_beta(
-            headers, model=model, optional_params=optional_params, litellm_params=litellm_params
-        )
 
         _tools: Final = optional_params.get("tools", [])
         for tool in _tools:
@@ -1926,6 +1906,15 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         """
         Translate messages to anthropic format.
         """
+        if has_context_1m_suffix(model):
+            return AnthropicConfig.transform_request(
+                self,
+                model=strip_context_1m_suffix(model),
+                messages=messages,
+                optional_params=optional_params,
+                litellm_params=litellm_params,
+                headers=headers,
+            )
         ## VALIDATE REQUEST
         """Anthropic requires ``tools`` when messages include tool blocks; LiteLLM injects a dummy tool if omitted (no ``modify_params`` needed)."""
         from litellm.litellm_core_utils.prompt_templates.factory import (
@@ -2024,11 +2013,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )  # don't use verbose_logger.exception, if exception is raised
 
         self.update_headers_with_optional_anthropic_beta(
-            headers=headers,
-            optional_params=optional_params,
-            messages=anthropic_messages,
-            litellm_params=litellm_params,
-            model=model,
+            headers=headers, optional_params=optional_params, messages=anthropic_messages
         )
 
         ## Auto-strip advisor blocks from history if advisor tool is absent.
@@ -2096,7 +2081,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
 
         data: Final = {
-            "model": strip_context_1m_suffix(model),
+            "model": model,
             "messages": anthropic_messages,
             **optional_params,
         }
