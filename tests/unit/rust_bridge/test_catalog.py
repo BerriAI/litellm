@@ -50,12 +50,13 @@ def test_shipped_decisions(
         monkeypatch.setenv("LITELLM_RUST", environment)
     context: Final = RouteContext(route, provider=provider, model="test-model", delivery=delivery)
 
-    if route is Route.OCR:
+    if route is Route.OCR or (route is Route.TRANSCRIPTION and provider == "bedrock"):
         assert catalog.rollout(context) is Rollout.RUST_REQUIRED
         assert catalog.decision(context) is Decision.RUST_REQUIRED
-    elif route is Route.TRANSCRIPTION and provider == "bedrock":
-        assert catalog.rollout(context) is Rollout.RUST_REQUIRED
-        assert catalog.decision(context) is Decision.RUST_REQUIRED
+    elif route is Route.MESSAGES and provider == "anthropic":
+        assert catalog.rollout(context) is Rollout.RUST_OPT_IN
+        opted_in: Final = environment == "1" or (environment is None and process is True)
+        assert catalog.decision(context) is (Decision.RUST_WITH_FALLBACK if opted_in else Decision.PYTHON)
     else:
         assert catalog.rollout(context) is Rollout.PYTHON_ONLY
         assert catalog.decision(context) is Decision.PYTHON
@@ -145,10 +146,7 @@ def test_ocr_has_no_python_path_to_opt_out_to(
         monkeypatch.setenv("LITELLM_RUST", environment)
 
     assert catalog.decision(RouteContext(Route.OCR, model="m")) is Decision.RUST_REQUIRED
-    assert (
-        catalog.decision(RouteContext(Route.OCR, provider="aws_textract", model="m"))
-        is Decision.RUST_REQUIRED
-    )
+    assert catalog.decision(RouteContext(Route.OCR, provider="aws_textract", model="m")) is Decision.RUST_REQUIRED
 
 
 @pytest.mark.parametrize(

@@ -2,9 +2,8 @@ use std::convert::Infallible;
 
 use bytes::Bytes;
 use litellm_core::messages::{
-    Error,
-    route::{Messages, MessagesCall, MessagesOutput, MessagesStreamHead, messages_body},
-    types::MessagesShaping,
+    Error, MessagesCall, MessagesShaping, messages_body,
+    route::{Messages, MessagesOutput, MessagesStreamHead},
 };
 use litellm_host_python::{InvokeError, ProtocolHost, from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
@@ -73,6 +72,11 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
         }
         Error::InvalidRequest(message) => {
             let error = PyValueError::new_err(message);
+            error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
+            Ok(error)
+        }
+        Error::MissingField(field) => {
+            let error = PyValueError::new_err(format!("missing required field: {field}"));
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
             Ok(error)
         }
@@ -314,6 +318,7 @@ mod tests {
 
     #[rstest]
     #[case::rejected_request(Error::InvalidRequest("does not support top_k=5".into()), true)]
+    #[case::missing_field(Error::MissingField("max_tokens"), true)]
     #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
     #[case::upstream_failure(
         Error::Transport(TransportError::Http { status: 400, body: "bad".into() }),

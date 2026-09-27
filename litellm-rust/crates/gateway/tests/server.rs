@@ -1,11 +1,31 @@
-use std::{sync::Arc, time::Duration};
+use std::{
+    sync::{Arc, mpsc},
+    time::Duration,
+};
 
+use axum::{body::Body, http::Request};
 use litellm_config::Config;
 use litellm_gateway_inference::{Error, Gateway};
 use litellm_http::ClientVariant;
+use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::{fixture, rstest};
 use serde_json::{Value, json};
 use tokio::{net::TcpListener, sync::oneshot, time::timeout};
+use tower::ServiceExt;
+
+struct LogSink(mpsc::Sender<Value>);
+
+impl Sink for LogSink {
+    fn enabled(&self, _: &Metadata<'_>) -> bool {
+        true
+    }
+
+    fn emit(&self, record: &Record) {
+        self.0
+            .send(json!({"message": record.message, "fields": record.fields}))
+            .unwrap();
+    }
+}
 
 #[fixture]
 fn inference() -> Arc<Gateway> {
@@ -87,4 +107,37 @@ async fn authenticates_before_serving_mounted_inference_routes(
         .unwrap()
         .unwrap()
         .unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn logs_request_outcome_without_credentials_or_query(inference: Arc<Gateway>) {
+    let config =
+        Config::from_yaml("model_list: []\ngeneral_settings:\n  master_key: gateway-key\n")
+            .unwrap();
+    let request = Request::builder()
+        .method("POST")
+        .uri("/v1/messages?token=query-secret")
+        .header("authorization", "Bearer header-secret")
+        .body(Body::empty())
+        .unwrap();
+    let (sender, receiver) = mpsc::channel();
+    let logger = Logger::new(LogSink(sender));
+
+    let response = logger
+        .instrument(litellm_gateway::router(inference, &config).oneshot(request))
+        .await
+        .unwrap();
+
+    assert_eq!(response.status().as_u16(), 401);
+    let record = receiver.try_recv().unwrap();
+    assert_eq!(record["message"], "response headers");
+    assert_eq!(record["fields"]["method"], "POST");
+    assert_eq!(record["fields"]["path"], "/v1/messages");
+    assert_eq!(record["fields"]["status"], 401);
+    assert!(record["fields"]["time_to_headers_ms"].as_f64().unwrap() >= 0.0);
+    assert!(record["fields"]["request_id"].as_str().is_some());
+    assert!(receiver.try_recv().is_err());
+    assert!(!record.to_string().contains("header-secret"));
+    assert!(!record.to_string().contains("query-secret"));
 }

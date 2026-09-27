@@ -516,7 +516,7 @@ def _integration_ownership(repo_root: pathlib.Path = REPO_ROOT) -> tuple[frozens
         str(path.relative_to(repo_root))
         for folders in groups.values()
         for folder in folders
-        for path in (integration_root / folder).glob("test_*.py")
+        for path in (integration_root / folder).rglob("test_*.py")
     )
     browser_manifest: Final = repo_root / "tests/e2e/ui/tests/integrationCritical/expected.json"
     browser_nodes: Final = json.loads(browser_manifest.read_text()) if browser_manifest.exists() else ()

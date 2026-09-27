@@ -1,12 +1,21 @@
-use std::{convert::Infallible, sync::Mutex};
+use std::{
+    convert::Infallible,
+    sync::{Mutex, mpsc},
+};
 
 use bytes::Bytes;
-use litellm_core::messages::route::{Messages, MessagesStreamHead};
+use futures_util::{StreamExt, TryStreamExt};
+use litellm_core::messages::{
+    MessagesResponse, messages,
+    route::{Messages, MessagesStreamHead},
+};
 use litellm_host::host::{Demand, Host};
+use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::rstest;
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::TcpListener,
+    task::JoinHandle,
 };
 
 use super::*;
@@ -21,6 +30,20 @@ const SSE_BODY: &str = "event: message_start\ndata: {\"type\":\"message_start\"}
 enum Seen {
     Open(Vec<(String, String)>),
     Deliver(Bytes),
+}
+
+struct TraceSink(mpsc::Sender<(String, Value)>);
+
+impl Sink for TraceSink {
+    fn enabled(&self, metadata: &Metadata<'_>) -> bool {
+        metadata.target().starts_with("litellm_core::messages")
+    }
+
+    fn emit(&self, record: &Record) {
+        self.0
+            .send((record.message.clone(), Value::Object(record.fields.clone())))
+            .unwrap();
+    }
 }
 
 /// Projects like `LocalMessagesHost`, records every stream op in the order the route
@@ -121,6 +144,37 @@ async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: Me
 }
 
 #[rstest]
+#[tokio::test]
+async fn debug_trace_keeps_provider_input_and_every_stream_chunk(call: MessagesCall) {
+    let upstream = upstream([sse_response()]).await;
+    let host = RecordingStreamHost::new(streaming(call, upstream.uri()), usize::MAX);
+    let (sender, receiver) = mpsc::channel();
+
+    Logger::new(TraceSink(sender))
+        .instrument(stream_through(&host))
+        .await
+        .unwrap();
+
+    let records: Vec<(String, Value)> = receiver.try_iter().collect();
+    let request = records
+        .iter()
+        .find(|(message, _)| message == "provider request")
+        .unwrap();
+    let body: Value = serde_json::from_str(request.1["body"].as_str().unwrap()).unwrap();
+    assert_eq!(body["messages"][0]["content"], "hi");
+    assert_eq!(request.1["stream"], true);
+    let chunks: String = records
+        .iter()
+        .filter(|(message, fields)| {
+            message == "stream chunk" && fields["stage"] == "provider_response"
+        })
+        .map(|(_, fields)| fields["chunk"].as_str().unwrap())
+        .collect();
+    assert_eq!(chunks, SSE_BODY);
+    assert!(!format!("{records:?}").contains("sk-ant"));
+}
+
+#[rstest]
 #[case::at_open(1)]
 #[case::after_the_first_chunk(2)]
 #[tokio::test]
@@ -192,10 +246,10 @@ async fn a_stream_that_ends_without_message_stop_is_relayed_as_is(call: Messages
 }
 
 /// Serves one SSE chunk and then holds the connection open without ever finishing.
-async fn stalling_upstream() -> String {
+async fn stalling_upstream() -> (String, JoinHandle<()>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let base = format!("http://{}", listener.local_addr().unwrap());
-    tokio::spawn(async move {
+    let connection = tokio::spawn(async move {
         let (mut socket, _) = listener.accept().await.unwrap();
         let mut request = vec![0; 4096];
         let _ = socket.read(&mut request).await;
@@ -206,15 +260,15 @@ async fn stalling_upstream() -> String {
             )
             .await
             .unwrap();
-        std::future::pending::<()>().await;
+        let _ = socket.read_to_end(&mut Vec::new()).await;
     });
-    base
+    (base, connection)
 }
 
 #[rstest]
 #[tokio::test]
 async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
-    let base = stalling_upstream().await;
+    let (base, connection) = stalling_upstream().await;
     let host = RecordingStreamHost::new(
         MessagesCall {
             timeout: Some(Duration::from_millis(300)),
@@ -236,6 +290,145 @@ async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
         "the chunk before the stall reached the caller, saw {} ops",
         seen.len()
     );
+    tokio::time::timeout(Duration::from_secs(5), connection)
+        .await
+        .expect("timing out closes the upstream connection")
+        .unwrap();
+}
+
+#[rstest]
+#[case::anthropic("anthropic")]
+#[case::azure_ai("azure_ai")]
+#[tokio::test]
+async fn the_sdk_returns_stream_headers_and_every_sse_byte(
+    call: MessagesCall,
+    #[case] provider: &str,
+) {
+    let upstream = upstream([sse_response()]).await;
+    let response = messages(
+        &support::resources(),
+        &http_config(),
+        &RecordingSecrets::empty(),
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            ..streaming(call, upstream.uri())
+        },
+    )
+    .await
+    .unwrap();
+
+    let MessagesResponse::Stream { headers, chunks } = response else {
+        panic!("a streaming request returns a stream");
+    };
+    for (name, value) in UPSTREAM_HEADERS {
+        assert!(headers.contains(&(name.into(), value.into())));
+    }
+    let delivered = chunks.try_collect::<Vec<_>>().await.unwrap().concat();
+    assert_eq!(delivered, SSE_BODY.as_bytes());
+    assert_eq!(only_request(&upstream).await.json()["stream"], true);
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall) {
+    let upstream = upstream([ResponseTemplate::new(429).set_body_string("slow down")]).await;
+    let error = messages(
+        &support::resources(),
+        &http_config(),
+        &RecordingSecrets::empty(),
+        streaming(call, upstream.uri()),
+    )
+    .await
+    .err()
+    .expect("upstream failure is returned by messages()");
+
+    assert_eq!(
+        error,
+        Error::Transport(litellm_http::transport::Error::Http {
+            status: 429,
+            body: "slow down".into(),
+        })
+    );
+}
+
+#[rstest]
+#[case::before_reading(false)]
+#[case::after_reading(true)]
+#[tokio::test]
+async fn dropping_the_sdk_stream_closes_the_unfinished_upstream(
+    call: MessagesCall,
+    #[case] read_chunk: bool,
+) {
+    let (base, connection) = stalling_upstream().await;
+    let response = tokio::time::timeout(
+        Duration::from_secs(5),
+        messages(
+            &support::resources(),
+            &http_config(),
+            &RecordingSecrets::empty(),
+            MessagesCall {
+                timeout: Some(Duration::from_secs(30)),
+                ..streaming(call, base)
+            },
+        ),
+    )
+    .await
+    .expect("messages() returns before the upstream finishes")
+    .unwrap();
+
+    let MessagesResponse::Stream { mut chunks, .. } = response else {
+        panic!("a streaming request returns a stream");
+    };
+    if read_chunk {
+        let chunk = tokio::time::timeout(Duration::from_secs(5), chunks.next())
+            .await
+            .expect("the first chunk arrives before the upstream finishes")
+            .unwrap()
+            .unwrap();
+        assert_eq!(chunk.as_ref(), b"event: message_start\ndata: {}\n\n");
+    }
+    assert!(!connection.is_finished());
+    drop(chunks);
+    tokio::time::timeout(Duration::from_secs(5), connection)
+        .await
+        .expect("dropping the stream closes the upstream connection")
+        .unwrap();
+}
+
+#[rstest]
+#[tokio::test]
+async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesCall) {
+    let (base, connection) = stalling_upstream().await;
+    let response = messages(
+        &support::resources(),
+        &http_config(),
+        &RecordingSecrets::empty(),
+        MessagesCall {
+            timeout: Some(Duration::from_millis(300)),
+            ..streaming(call, base)
+        },
+    )
+    .await
+    .unwrap();
+
+    let MessagesResponse::Stream { mut chunks, .. } = response else {
+        panic!("a streaming request returns a stream");
+    };
+    assert_eq!(
+        chunks.next().await.unwrap().unwrap().as_ref(),
+        b"event: message_start\ndata: {}\n\n"
+    );
+    let error = tokio::time::timeout(Duration::from_secs(5), chunks.next())
+        .await
+        .expect("the stalled body times out")
+        .unwrap()
+        .unwrap_err();
+    assert!(matches!(error, Error::Transport(_)), "{error:?}");
+    assert!(chunks.next().await.is_none());
+    tokio::time::timeout(Duration::from_secs(5), connection)
+        .await
+        .expect("the failed stream closes its upstream connection")
+        .unwrap();
 }
 
 #[rstest]
