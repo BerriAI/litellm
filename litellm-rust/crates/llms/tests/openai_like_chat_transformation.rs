@@ -45,7 +45,7 @@ fn reason(msgs: Value, opts: Value) -> Option<Unsupported> {
     OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG.unsupported_reason(&messages(msgs), &params(opts))
 }
 
-#[test]
+#[rstest]
 fn builds_the_openai_shaped_body() {
     let body = transform(
         "my-model",
@@ -67,7 +67,7 @@ fn builds_the_openai_shaped_body() {
     assert_eq!(body["max_tokens"], json!(8));
 }
 
-#[test]
+#[rstest]
 fn renames_max_completion_tokens_to_max_tokens() {
     // `OpenAILikeChatConfig.map_openai_params`: most OpenAI-compatible providers
     // support `max_tokens`, not `max_completion_tokens`.
@@ -80,7 +80,20 @@ fn renames_max_completion_tokens_to_max_tokens() {
     assert!(body.get("max_completion_tokens").is_none());
 }
 
-#[test]
+#[rstest]
+fn max_completion_tokens_wins_when_both_limits_are_sent() {
+    // Python assigns `max_tokens = max_completion_tokens` after copying the
+    // params, so the renamed value outranks a caller-supplied `max_tokens`.
+    let body = transform(
+        "my-model",
+        json!([{"role": "user", "content": "hi"}]),
+        json!({"max_tokens": 8, "max_completion_tokens": 12}),
+    );
+    assert_eq!(body["max_tokens"], json!(12));
+    assert!(body.get("max_completion_tokens").is_none());
+}
+
+#[rstest]
 fn call_configuration_never_enters_the_body() {
     let body = transform(
         "my-model",
@@ -106,7 +119,7 @@ fn complete_url(#[case] api_base: &str, #[case] opts: Value, #[case] expected: &
     );
 }
 
-#[test]
+#[rstest]
 fn api_base_falls_back_to_the_environment() {
     assert_eq!(
         OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
@@ -121,7 +134,7 @@ fn api_base_falls_back_to_the_environment() {
     );
 }
 
-#[test]
+#[rstest]
 fn a_missing_api_base_is_an_error() {
     assert!(matches!(
         OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
@@ -130,7 +143,7 @@ fn a_missing_api_base_is_an_error() {
     ));
 }
 
-#[test]
+#[rstest]
 fn the_resolved_key_authenticates_as_a_bearer() {
     let validated = OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
         .validate_environment(
@@ -150,7 +163,7 @@ fn the_resolved_key_authenticates_as_a_bearer() {
     ));
 }
 
-#[test]
+#[rstest]
 fn the_key_falls_back_to_the_environment() {
     let validated = OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
         .validate_environment(
@@ -167,7 +180,7 @@ fn the_key_falls_back_to_the_environment() {
     assert_eq!(secret.expose(), "sk-env");
 }
 
-#[test]
+#[rstest]
 fn a_forwarded_authorization_is_the_whole_credential() {
     // Python adds `Bearer <key>` only when the caller did not already send
     // `Authorization`, so the forwarded header wins over the deployment key.
@@ -184,7 +197,7 @@ fn a_forwarded_authorization_is_the_whole_credential() {
     assert!(matches!(validated.auth, AuthScheme::Forwarded));
 }
 
-#[test]
+#[rstest]
 fn keyless_calls_still_validate_for_endpoints_that_take_no_key() {
     // vllm-compatible endpoints require no api key; Python resolves `""` and
     // sends `Bearer `, so validation must not fail on the missing key.
@@ -197,7 +210,7 @@ fn keyless_calls_still_validate_for_endpoints_that_take_no_key() {
     assert_eq!(secret.expose(), "");
 }
 
-#[test]
+#[rstest]
 fn normalizes_an_openai_response() {
     let response = transform_response(json!({
         "created": 1_700_000_000,
@@ -222,7 +235,7 @@ fn normalizes_an_openai_response() {
     assert_eq!(response.usage.total_tokens, 8);
 }
 
-#[test]
+#[rstest]
 fn null_token_fields_in_usage_become_zero() {
     // `_sanitize_usage_obj`: providers that return null token values break
     // OpenAI clients, so the response is scrubbed at the source.
@@ -237,7 +250,7 @@ fn null_token_fields_in_usage_become_zero() {
     assert_eq!(response.usage.prompt_tokens, 3);
 }
 
-#[test]
+#[rstest]
 fn a_tool_call_response_declines_instead_of_dropping_the_calls() {
     // The `json_mode` rewrite needs a request flag the route does not carry, so
     // a tool-call answer falls back to Python rather than losing the calls.
@@ -261,7 +274,21 @@ fn a_tool_call_response_declines_instead_of_dropping_the_calls() {
     );
 }
 
-#[test]
+#[rstest]
+fn a_refusal_declines_instead_of_returning_an_empty_reply() {
+    assert_eq!(
+        transform_response(json!({
+            "model": "m",
+            "choices": [{
+                "message": {"role": "assistant", "content": null, "refusal": "cannot help"},
+                "finish_reason": "stop",
+            }],
+        })),
+        Err(Error::Unsupported("refusal response"))
+    );
+}
+
+#[rstest]
 fn a_non_text_response_content_declines() {
     assert_eq!(
         transform_response(json!({
@@ -285,7 +312,7 @@ fn declines(#[case] opts: Value, #[case] expected: &'static str) {
     );
 }
 
-#[test]
+#[rstest]
 fn accepts_standard_openai_params() {
     assert_eq!(
         reason(
@@ -302,7 +329,7 @@ fn accepts_standard_openai_params() {
     );
 }
 
-#[test]
+#[rstest]
 fn tool_parameters_decline_before_the_call() {
     // A `tools` request would come back with tool calls this port cannot
     // normalize, so it declines at the gate instead of after the call.

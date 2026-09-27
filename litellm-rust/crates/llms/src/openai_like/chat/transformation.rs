@@ -87,26 +87,24 @@ impl BaseConfig for OpenAILikeChatConfig {
         messages: Vec<ChatMessage>,
         optional_params: Map<String, Value>,
     ) -> Result<ProviderChatRequestData, Error> {
-        let mapped = optional_params
-            .into_iter()
-            .filter(|(key, _)| !CONFIG_PARAMS.contains(&key.as_str()))
-            .map(|(key, value)| {
-                // Most OpenAI-compatible endpoints take `max_tokens`, not
-                // `max_completion_tokens`, so Python's `map_openai_params`
-                // renames it before the body is built.
-                if key == "max_completion_tokens" {
-                    ("max_tokens".to_string(), value)
-                } else {
-                    (key, value)
-                }
-            });
+        let mut params = Map::from_iter(
+            optional_params
+                .into_iter()
+                .filter(|(key, _)| !CONFIG_PARAMS.contains(&key.as_str())),
+        );
+        // Most OpenAI-compatible endpoints take `max_tokens`, not
+        // `max_completion_tokens`, so Python's `map_openai_params` renames it
+        // and lets it overwrite a `max_tokens` the caller also sent.
+        if let Some(limit) = params.remove("max_completion_tokens") {
+            params.insert("max_tokens".to_string(), limit);
+        }
         let body = Map::from_iter(
             [
                 ("model".to_string(), json!(model)),
                 ("messages".to_string(), json!(messages)),
             ]
             .into_iter()
-            .chain(mapped),
+            .chain(params),
         );
         Ok(ProviderChatRequestData {
             body: Value::Object(body),
@@ -237,9 +235,14 @@ fn normalize_choice(position: usize, choice: &Value) -> Result<ChatCompletionsCh
         .is_some_and(|calls| !calls.is_empty())
     {
         // Python rewrites the lone tool call into content only under
-        // `json_mode`, a request flag `transform_response` cannot see. Decline
-        // so the host falls back rather than guess the mode.
+        // `json_mode`, a request flag `transform_response` cannot see, and the
+        // normalized type cannot carry tool calls at all. Declining is
+        // terminal at this point, but passing back an empty assistant turn
+        // would fabricate the reply.
         return Err(Error::Unsupported("tool call response"));
+    }
+    if message.get("refusal").is_some_and(|value| !value.is_null()) {
+        return Err(Error::Unsupported("refusal response"));
     }
     let content = message.get("content");
     if content.is_some_and(|value| !value.is_null() && !value.is_string()) {
