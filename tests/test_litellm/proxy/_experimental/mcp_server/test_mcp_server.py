@@ -6393,16 +6393,13 @@ class TestEnsureUpstreamInitializeInstructionsCached:
     @pytest.mark.asyncio
     async def test_reload_resets_probe_cooldown(self):
         """load_servers_from_config clears the negative-cache map so reloads re-probe."""
-        from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
-            global_mcp_server_manager,
-        )
+        from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
 
-        global_mcp_server_manager._upstream_initialize_instructions_probed_at["reload-target"] = 1.0
-        try:
-            await global_mcp_server_manager.load_servers_from_config({})
-            assert "reload-target" not in global_mcp_server_manager._upstream_initialize_instructions_probed_at
-        finally:
-            global_mcp_server_manager._upstream_initialize_instructions_probed_at.pop("reload-target", None)
+        manager: Final = MCPServerManager()
+        manager._upstream_initialize_instructions_probed_at["reload-target"] = 1.0
+        await manager.load_servers_from_config({})
+        assert "reload-target" not in manager._upstream_initialize_instructions_probed_at
+
 
 
 class TestGatewayCreateInitializationOptions:
