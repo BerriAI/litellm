@@ -1022,3 +1022,44 @@ async def test_async_batch_reads_of_missing_keys_hit_redis_once_per_expiry_windo
     dual_cache.last_redis_batch_access_time.update({key: time.time() - 61 for key in keys})
     await dual_cache.async_batch_get_cache(keys)
     assert redis_cache.async_batch_get_cache.await_count == 2
+
+async def _write_through(dual_cache: DualCache, write_path: str, **kwargs) -> None:
+    if write_path == "set_cache":
+        dual_cache.set_cache("ttl_key", "v", **kwargs)
+    elif write_path == "async_set_cache":
+        await dual_cache.async_set_cache("ttl_key", "v", **kwargs)
+    else:
+        await dual_cache.async_set_cache_pipeline([("ttl_key", "v")], **kwargs)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("write_path", ["set_cache", "async_set_cache", "async_set_cache_pipeline"])
+@pytest.mark.parametrize(
+    ("kwargs", "memory_ttl", "redis_ttl"),
+    [({}, 60, 3600), ({"ttl": 99}, 99, 99)],
+    ids=["tier_defaults", "explicit_ttl"],
+)
+async def test_dual_cache_writes_each_tier_with_its_own_default_ttl(write_path, kwargs, memory_ttl, redis_ttl):
+    """
+    Regression for #43187: the Redis tier was written with default_in_memory_ttl,
+    so a configured default_redis_ttl never took effect. An explicit ttl still
+    reaches both tiers unchanged.
+    """
+    in_memory_cache = InMemoryCache(default_ttl=600)
+    mock_redis = MagicMock()
+    mock_redis.async_set_cache = AsyncMock()
+    mock_redis.async_set_cache_pipeline = AsyncMock()
+    dual_cache = DualCache(
+        in_memory_cache=in_memory_cache,
+        redis_cache=mock_redis,
+        default_in_memory_ttl=60,
+        default_redis_ttl=3600,
+    )
+
+    before = time.time()
+    await _write_through(dual_cache, write_path, **kwargs)
+    after = time.time()
+
+    assert getattr(mock_redis, write_path).call_args.kwargs["ttl"] == redis_ttl
+    expiry = in_memory_cache.ttl_dict["ttl_key"]
+    assert before + memory_ttl <= expiry <= after + memory_ttl

@@ -4942,10 +4942,13 @@ def _attach_redis_usage_cache(redis_cache: RedisCache, enable_redis_auth_cache: 
         default_redis_ttl=CLI_SSO_SESSION_TTL_SECONDS,
     )
     if enable_redis_auth_cache is True:
-        user_api_key_cache.attach_redis_cache(
-            redis_cache,
-            default_redis_ttl=litellm.default_redis_ttl,
-        )
+        # The auth cache mirrors its own in-memory TTL on the Redis tier (see
+        # UserApiKeyCache.__init__ and #43187). Do not pass the global
+        # default_redis_ttl here: that would override the auth cache's shorter
+        # TTL whenever default_redis_ttl is set before Redis is attached.
+        # Operators who want a longer auth-cache TTL should set
+        # general_settings.user_api_key_cache_ttl.
+        user_api_key_cache.attach_redis_cache(redis_cache)
         verbose_proxy_logger.info(
             "enable_redis_auth_cache=True: attached Redis to "
             "user_api_key_cache — virtual-key lookups are now "
@@ -5968,9 +5971,18 @@ class ProxyConfig:
             litellm.default_in_memory_ttl = cache_params["default_in_memory_ttl"]
 
         if "default_redis_ttl" in cache_params:
+            # default_redis_ttl is a DualCache/global setting, not a redis-py
+            # Redis() constructor kwarg. Promote it to the global and filter it
+            # out when constructing Cache (do NOT pop the caller's dict: the
+            # caller snapshots cache_params to detect DB reloads and a mutation
+            # here would force a cache rebuild on every poll).
             litellm.default_redis_ttl = cache_params["default_redis_ttl"]
 
-        litellm.cache = Cache(**cache_params)
+        # Copy first: the caller snapshots cache_params to detect DB reloads, so
+        # mutating it here would force a cache rebuild on every poll.
+        cache_kwargs = dict(cache_params)  # mutable-ok: local filter; caller's dict is left untouched
+        cache_kwargs.pop("default_redis_ttl", None)
+        litellm.cache = Cache(**cache_kwargs)
 
         resolved_usage_cache = redis_usage_cache
         cache_backend: Final = litellm.cache.cache if litellm.cache is not None else None
