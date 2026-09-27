@@ -14764,6 +14764,49 @@ class TestToolCatalogGuard:
         proxy_logging_obj.slack_alerting_instance.send_alert.assert_not_awaited()
 
     @pytest.mark.asyncio
+    async def test_discovery_masks_nested_schema_descriptions_without_changing_cached_schema(self, catalog_guardrail):
+        _, proxy_logging_obj = catalog_guardrail
+        upstream: Final = MCPTool(
+            name="search",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "records": {
+                        "type": "array",
+                        "items": {"anyOf": [{"type": "string", "description": "SECRET record", "const": "SECRET"}]},
+                    }
+                },
+            },
+        )
+        manager: Final = _catalog_manager(upstream)
+
+        served: Final = await manager._get_tools_from_server(
+            _notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj
+        )
+
+        assert len(served) == 1
+        assert served[0].input_schema["properties"]["records"]["items"]["anyOf"] == [
+            {"type": "string", "description": "[MASKED] record", "const": "SECRET"}
+        ]
+        assert upstream.input_schema["properties"]["records"]["items"]["anyOf"] == [
+            {"type": "string", "description": "SECRET record", "const": "SECRET"}
+        ]
+
+    @pytest.mark.asyncio
+    async def test_discovery_scan_cancellation_propagates(self, catalog_guardrail):
+        _, proxy_logging_obj = catalog_guardrail
+        manager: Final = _catalog_manager(LIST_NOTES)
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=asyncio.CancelledError)
+
+        with pytest.raises(asyncio.CancelledError):
+            await manager._get_tools_from_server(
+                _notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj
+            )
+
+        proxy_logging_obj.pre_call_hook.assert_awaited_once()
+        proxy_logging_obj.slack_alerting_instance.send_alert.assert_not_awaited()
+
+    @pytest.mark.asyncio
     async def test_discovery_without_a_logger_serves_the_upstream_catalog_unscanned(self, catalog_guardrail):
         guardrail, _ = catalog_guardrail
         manager = _catalog_manager(LIST_NOTES, POISONED_DELETE)

@@ -237,8 +237,8 @@ async def test_guardrail_returning_wrong_text_count_blocks_the_call():
 
 
 @pytest.mark.asyncio
-async def test_deeply_nested_arguments_are_blocked_rather_than_skipped():
-    """Arguments too deep to walk must block instead of passing unscanned."""
+@pytest.mark.parametrize("payload_field", ("mcp_arguments", "mcp_input_schema"))
+async def test_deeply_nested_tool_text_is_blocked_rather_than_skipped(payload_field: str):
     handler = MCPGuardrailTranslationHandler()
     guardrail = ArgumentMaskingGuardrail()
 
@@ -246,7 +246,7 @@ async def test_deeply_nested_arguments_are_blocked_rather_than_skipped():
     for _ in range(MAX_STRUCTURED_CONTENT_SCAN_DEPTH + 1):
         nested = {"next": nested}
 
-    data = {"mcp_tool_name": "search", "mcp_arguments": nested}
+    data = {"mcp_tool_name": "search", payload_field: nested}
 
     with pytest.raises(HTTPException) as exc_info:
         await handler.process_input_messages(data, guardrail)
