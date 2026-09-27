@@ -1,6 +1,4 @@
-use litellm_core::audio_transcription::{
-    Error, audio_transcription, types::AudioTranscriptionRequest,
-};
+use litellm_core::audio_transcription::{Error, types::AudioTranscriptionRequest};
 use rstest::{fixture, rstest};
 use serde_json::{Map, Value, json};
 use wiremock::ResponseTemplate;
@@ -11,7 +9,7 @@ use support::*;
 const MODEL: &str = "mistral.voxtral-mini-3b-2507";
 
 async fn transcribe(request: AudioTranscriptionRequest<'_>) -> Result<Value, Error> {
-    audio_transcription(&support::resources(), &http_config(), request).await
+    client().audio_transcription(request).await
 }
 
 fn transcript_response(text: &str) -> ResponseTemplate {

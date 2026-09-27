@@ -63,9 +63,10 @@ async fn authenticates_before_serving_mounted_inference_routes(
     ))
     .unwrap();
     let client = inference
-        .resources
+        .core
+        .resources()
         .pool
-        .client(&inference.http, ClientVariant::Provider)
+        .client(inference.core.http_config(), ClientVariant::Provider)
         .unwrap();
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();

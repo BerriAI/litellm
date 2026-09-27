@@ -45,18 +45,20 @@ async fn mistral_is_served_at_the_resolved_project_and_location() {
 #[tokio::test]
 async fn configured_project_and_location_apply_when_the_call_sets_neither() {
     let upstream = upstream([pages_response()]).await;
-    let client = ocr_client().with_settings(OcrSettings {
+    let client = ocr_client().with_ocr_settings(OcrSettings {
         vertex_project: Some("configured-project".into()),
         vertex_location: Some("europe-west4".into()),
         ..OcrSettings::default()
     });
 
-    litellm_core::ocr::client::perform(
-        &client,
-        ocr_request("vertex_ai/mistral-ocr-maas", &upstream.uri(), json!({})),
-    )
-    .await
-    .unwrap();
+    client
+        .ocr(ocr_request(
+            "vertex_ai/mistral-ocr-maas",
+            &upstream.uri(),
+            json!({}),
+        ))
+        .await
+        .unwrap();
 
     assert_eq!(
         only_request(&upstream).await.url.path(),
