@@ -84,11 +84,24 @@ struct ConverseMessage {
     content: Vec<ConverseContentBlock>,
 }
 
-#[derive(Deserialize)]
-#[serde(untagged)]
 enum ConverseContentBlock {
     Text { text: String },
     Other(serde::de::IgnoredAny),
+}
+
+impl<'de> Deserialize<'de> for ConverseContentBlock {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        let value = Value::deserialize(deserializer)?;
+        if let Some(text) = value.get("text") {
+            let text = text.as_str().ok_or_else(|| {
+                serde::de::Error::custom("invalid type for `text`, expected a string")
+            })?;
+            return Ok(Self::Text {
+                text: text.to_owned(),
+            });
+        }
+        Ok(Self::Other(serde::de::IgnoredAny))
+    }
 }
 
 #[derive(Deserialize)]
@@ -210,10 +223,22 @@ impl BaseConfig for AmazonConverseConfig {
         model: &str,
         response: ProviderChatResponseData,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let response: ConverseResponse =
-            serde_json::from_value(response.body).map_err(|error| {
-                Error::InvalidResponse(format!("invalid Converse response: {error}").into())
-            })?;
+        let body = response.body;
+        if !body.is_object() {
+            return Err(Error::InvalidResponse(
+                "converse response is not an object".into(),
+            ));
+        }
+        for field in ["output", "usage"] {
+            if body.get(field).is_none() {
+                return Err(Error::InvalidResponse(
+                    format!("invalid Converse response: missing field `{field}`").into(),
+                ));
+            }
+        }
+        let response: ConverseResponse = serde_json::from_value(body).map_err(|error| {
+            Error::InvalidResponse(format!("invalid Converse response: {error}").into())
+        })?;
         // The route declines tool requests, so anything other than a text block
         // is something this path never asked for. Decline; the host falls back.
         if response.message_content_is_non_text() {
