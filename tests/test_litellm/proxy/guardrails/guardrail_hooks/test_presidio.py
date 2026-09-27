@@ -8,7 +8,7 @@ import copy
 import json
 import re
 from contextlib import asynccontextmanager
-from typing import Final
+from typing import Final, Literal
 from unittest.mock import MagicMock, patch
 
 from aiohttp import web
@@ -2275,15 +2275,17 @@ async def test_apply_to_output_streaming_mixed_chunks_flushes_and_warns():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_unmask_on_response():
+@pytest.mark.parametrize("output_parse_pii", [False, True])
+async def test_apply_guardrail_unmask_on_response(output_parse_pii: bool) -> None:
     """
     When input_type is 'response' and pii_tokens exist, apply_guardrail
     should unmask text instead of masking it.
     """
     guardrail = _OPTIONAL_PresidioPIIMasking(
         guardrail_name="test_presidio",
-        output_parse_pii=True,
+        output_parse_pii=output_parse_pii,
         mock_testing=True,
+        mock_redacted_text={"text": "unexpected scan", "items": []},
     )
 
     request_data = {
@@ -2312,12 +2314,14 @@ async def test_apply_guardrail_unmask_on_response():
 
 
 @pytest.mark.asyncio
-async def test_apply_guardrail_masks_on_request():
+@pytest.mark.parametrize("input_type", ["request", "response"])
+async def test_standalone_scans_without_restoration_tokens(input_type: Literal["request", "response"]) -> None:
     """
-    When input_type is 'request', apply_guardrail should mask as before.
+    Standalone callbacks retain scanning without tokens, including MCP results.
     """
     guardrail = _OPTIONAL_PresidioPIIMasking(
         guardrail_name="test_presidio",
+        event_hook="post_mcp_call",
         output_parse_pii=True,
         mock_testing=True,
     )
@@ -2330,7 +2334,7 @@ async def test_apply_guardrail_masks_on_request():
     result = await guardrail.apply_guardrail(
         inputs={"texts": ["Hello John Smith"]},
         request_data={"model": "gpt-4o", "metadata": {}},
-        input_type="request",
+        input_type=input_type,
     )
 
     assert "<PERSON>" in result["texts"][0]

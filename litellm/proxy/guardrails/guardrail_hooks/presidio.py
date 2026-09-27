@@ -1718,7 +1718,7 @@ class _OPTIONAL_PresidioPIIMasking(CustomGuardrail):
         new_texts: Final = []
         if input_type == "response" and (
             self._callback_role == "restore"
-            or (self._callback_role is None and self.output_parse_pii and not self.apply_to_output)
+            or (self._callback_role is None and not self.apply_to_output and pii_tokens)
         ):
             for text in texts:
                 new_texts.append(self._unmask_pii_text(text, pii_tokens))
