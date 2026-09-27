@@ -1,43 +1,48 @@
-use litellm_auth::SecretValue;
-use litellm_core_utils::settings::resolve_non_empty;
+use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_http::request::{has_bearer_auth, has_header};
-use litellm_types::llms::anthropic_messages::{
-    anthropic_request::{
-        AnthropicMessage, AnthropicMessagesOptionalParams, AnthropicMessagesRequest, ContentBlock,
-        MessageContent, SystemPrompt,
-    },
-    anthropic_response::AnthropicMessagesResponse,
+use litellm_types::llms::anthropic_messages::anthropic_request::{
+    AnthropicMessage, AnthropicMessagesOptionalParams, AnthropicMessagesRequest, CacheControl,
+    ContentBlock, MessageContent, SystemPrompt,
 };
 
 use crate::{
     Error,
-    anthropic::{
-        common_utils::{API_KEY_PLACEMENT, MESSAGES_PATH_SUFFIX},
-        messages::transformation::{ANTHROPIC_MESSAGES_CONFIG, AnthropicMessagesConfig},
+    anthropic::messages::{
+        handler::shape_anthropic_messages_request,
+        transformation::{
+            DEFAULT_HEADERS, transform_messages_request, update_headers_with_anthropic_beta,
+        },
+    },
+    azure_ai::common_utils::{
+        AZURE_API_BASE_ENV, AZURE_API_KEY_ENV, resolve_azure_api_base, resolve_azure_api_key,
     },
     base_llm::{
-        anthropic_messages::transformation::{
-            BaseAnthropicMessagesConfig, Headers, MessagesTransformContext, ValidatedEnvironment,
+        auth::{AuthScheme, Headers, ValidatedEnvironment},
+        messages::{
+            context::MessagesTransformContext,
+            normalization::fold_system_role_messages,
+            transformation::{BaseAnthropicMessagesConfig, MESSAGES_PATH_SUFFIX},
         },
-        auth::AuthScheme,
     },
 };
 
-const AZURE_API_KEY_ENV: &str = "AZURE_API_KEY";
-const AZURE_API_BASE_ENV: &str = "AZURE_API_BASE";
+const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header("x-api-key");
 const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
-const SYSTEM_ROLE: &str = "system";
 
-pub struct AzureAnthropicMessagesConfig {
-    anthropic: AnthropicMessagesConfig,
-}
+pub struct AzureAnthropicMessagesConfig;
 
 pub const AZURE_ANTHROPIC_MESSAGES_CONFIG: AzureAnthropicMessagesConfig =
-    AzureAnthropicMessagesConfig {
-        anthropic: ANTHROPIC_MESSAGES_CONFIG,
-    };
+    AzureAnthropicMessagesConfig;
 
 impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
+    fn shape_request(
+        &self,
+        request: AnthropicMessagesRequest,
+        reasoning_auto_summary: bool,
+    ) -> Result<AnthropicMessagesRequest, Error> {
+        shape_anthropic_messages_request(request, reasoning_auto_summary)
+    }
+
     fn get_complete_url(
         &self,
         api_base: Option<&str>,
@@ -52,25 +57,22 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
         request: AnthropicMessagesRequest,
         context: &MessagesTransformContext,
     ) -> Result<AnthropicMessagesRequest, Error> {
-        let mut request = fold_system_role_messages(request);
-        if let Some(system) = request.params.system.as_mut() {
-            strip_scope_from_system(system);
-        }
-        request
-            .messages
-            .iter_mut()
-            .for_each(strip_scope_from_message);
-        self.anthropic
-            .transform_anthropic_messages_request(request, context)
-    }
-
-    fn transform_anthropic_messages_response(
-        &self,
-        model: &str,
-        response: AnthropicMessagesResponse,
-    ) -> Result<AnthropicMessagesResponse, Error> {
-        self.anthropic
-            .transform_anthropic_messages_response(model, response)
+        let request = fold_system_role_messages(request);
+        transform_messages_request(
+            AnthropicMessagesRequest {
+                messages: request
+                    .messages
+                    .into_iter()
+                    .map(strip_scope_from_message)
+                    .collect(),
+                params: AnthropicMessagesOptionalParams {
+                    system: request.params.system.map(strip_scope_from_system),
+                    ..request.params
+                },
+                ..request
+            },
+            context,
+        )
     }
 
     fn secret_names(&self) -> &'static [&'static str] {
@@ -100,32 +102,19 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
-        self.anthropic.default_headers()
+        DEFAULT_HEADERS
     }
 
     fn request_headers(&self, headers: Headers, request: &AnthropicMessagesRequest) -> Headers {
-        self.anthropic.request_headers(headers, request)
+        update_headers_with_anthropic_beta(headers, request)
     }
-}
-
-pub fn resolve_azure_api_key(
-    api_key: Option<&str>,
-    env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
-    resolve_non_empty(api_key, env_lookup, &[AZURE_API_KEY_ENV]).ok_or_else(|| {
-        Error::from(litellm_auth::Error::MissingApiKey {
-            provider: "Azure",
-            environment_variable: AZURE_API_KEY_ENV,
-        })
-    })
 }
 
 pub fn complete_azure_anthropic_url(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
-    let api_base = resolve_non_empty(api_base, env_lookup, &[AZURE_API_BASE_ENV])
-        .ok_or_else(|| Error::from(litellm_auth::Error::MissingApiBase { provider: "Azure", guidance: "Set `api_base` or the AZURE_API_BASE environment variable. Expected format: https://<resource-name>.services.ai.azure.com/anthropic" }))?;
+    let api_base = resolve_azure_api_base(api_base, env_lookup)?;
 
     let api_base = api_base.trim_end_matches('/');
 
@@ -140,81 +129,47 @@ pub fn complete_azure_anthropic_url(
     Ok(format!("{with_anthropic}{MESSAGES_PATH_SUFFIX}"))
 }
 
-fn strip_scope_from_block(block: &mut ContentBlock) {
-    if let Some(cache_control) = block.cache_control.as_mut() {
-        cache_control.scope = None;
+fn strip_scope_from_block(block: ContentBlock) -> ContentBlock {
+    ContentBlock {
+        cache_control: block.cache_control.map(|cache_control| CacheControl {
+            scope: None,
+            ..cache_control
+        }),
+        ..block
     }
 }
 
-fn strip_scope_from_system(system: &mut SystemPrompt) {
-    if let SystemPrompt::Blocks(blocks) = system {
-        blocks.iter_mut().for_each(strip_scope_from_block);
-    }
-}
-
-fn strip_scope_from_message(message: &mut AnthropicMessage) {
-    if let MessageContent::Blocks(blocks) = &mut message.content {
-        blocks.iter_mut().for_each(strip_scope_from_block);
-    }
-}
-
-fn text_content_block(text: String) -> ContentBlock {
-    ContentBlock::text(text)
-}
-
-fn content_into_blocks(content: MessageContent) -> Vec<ContentBlock> {
-    match content {
-        MessageContent::Text(text) => vec![text_content_block(text)],
-        MessageContent::Blocks(blocks) => blocks,
-    }
-}
-
-fn system_into_blocks(system: Option<SystemPrompt>) -> Vec<ContentBlock> {
+fn strip_scope_from_system(system: SystemPrompt) -> SystemPrompt {
     match system {
-        None => Vec::new(),
-        Some(SystemPrompt::Text(text)) => vec![text_content_block(text)],
-        Some(SystemPrompt::Blocks(blocks)) => blocks,
+        SystemPrompt::Blocks(blocks) => {
+            SystemPrompt::Blocks(blocks.into_iter().map(strip_scope_from_block).collect())
+        }
+        text => text,
     }
 }
 
-fn fold_system_role_messages(request: AnthropicMessagesRequest) -> AnthropicMessagesRequest {
-    if !request.messages.iter().any(|msg| msg.role == SYSTEM_ROLE) {
-        return request;
-    }
-
-    let (system_messages, chat_messages): (Vec<AnthropicMessage>, Vec<AnthropicMessage>) = request
-        .messages
-        .into_iter()
-        .partition(|msg| msg.role == SYSTEM_ROLE);
-
-    let folded_system: Vec<ContentBlock> = system_into_blocks(request.params.system)
-        .into_iter()
-        .chain(
-            system_messages
-                .into_iter()
-                .flat_map(|msg| content_into_blocks(msg.content)),
-        )
-        .collect();
-
-    AnthropicMessagesRequest {
-        messages: chat_messages,
-        params: AnthropicMessagesOptionalParams {
-            system: (!folded_system.is_empty()).then_some(SystemPrompt::Blocks(folded_system)),
-            ..request.params
+fn strip_scope_from_message(message: AnthropicMessage) -> AnthropicMessage {
+    AnthropicMessage {
+        content: match message.content {
+            MessageContent::Blocks(blocks) => {
+                MessageContent::Blocks(blocks.into_iter().map(strip_scope_from_block).collect())
+            }
+            text => text,
         },
-        ..request
+        ..message
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
     use rstest::rstest;
     use serde_json::json;
 
     use litellm_auth::CredentialPlacement;
 
     use super::*;
-    use crate::anthropic::common_utils::AnthropicModelCapabilities;
+    use crate::base_llm::messages::context::MessagesModelCapabilities;
 
     fn request_from(value: serde_json::Value) -> AnthropicMessagesRequest {
         serde_json::from_value(value).expect("valid request")
@@ -453,7 +408,7 @@ mod tests {
             "litellm_metadata": {"trace": "abc"}
         });
         let context = MessagesTransformContext::with_lookup(
-            AnthropicModelCapabilities {
+            MessagesModelCapabilities {
                 supports_reasoning: true,
                 supports_adaptive_thinking: true,
                 supports_legacy_thinking: true,
@@ -542,7 +497,7 @@ mod tests {
             ]
         });
         let context = MessagesTransformContext::with_lookup(
-            AnthropicModelCapabilities {
+            MessagesModelCapabilities {
                 supports_reasoning: true,
                 supports_adaptive_thinking: true,
                 supports_legacy_thinking: true,

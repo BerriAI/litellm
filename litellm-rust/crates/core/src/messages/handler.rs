@@ -9,11 +9,11 @@ use litellm_host::{
 };
 use litellm_http::transport::Error as TransportError;
 use litellm_llms::base_llm::{
-    anthropic_messages::{
+    auth::{Authenticated, resolve_auth},
+    messages::{
         streaming::{ByteStream, StreamDecoder, encode_anthropic_sse},
         transformation::BaseAnthropicMessagesConfig,
     },
-    auth::{Authenticated, resolve_auth},
 };
 use litellm_tracing::{ByteChunk, debug};
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
@@ -206,7 +206,7 @@ fn log_chunk(provider: &str, stage: &str, data: &Bytes) {
 
 #[cfg(test)]
 mod tests {
-    use litellm_llms::base_llm::anthropic_messages::streaming::anthropic_sse_event_stream;
+    use litellm_llms::base_llm::messages::streaming::anthropic_sse_event_stream;
     use rstest::rstest;
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
 

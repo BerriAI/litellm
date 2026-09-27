@@ -20,7 +20,6 @@ use crate::{
         },
     },
     base_llm::{
-        anthropic_messages::streaming::anthropic_sse_event_stream,
         auth::AuthScheme,
         chat::{
             streaming::{ChatStream, StreamShape},
@@ -29,6 +28,7 @@ use crate::{
                 Unsupported, ValidatedEnvironment, unsupported_message, unsupported_param,
             },
         },
+        messages::streaming::anthropic_sse_event_stream,
     },
 };
 

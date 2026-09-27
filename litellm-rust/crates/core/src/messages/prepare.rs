@@ -8,11 +8,8 @@ use litellm_core_utils::{
     settings::Lookup,
 };
 use litellm_http::request::with_default_headers;
-use litellm_llms::{
-    anthropic::messages::handler::shape_anthropic_messages_request,
-    base_llm::{
-        anthropic_messages::transformation::MessagesTransformContext, auth::ValidatedEnvironment,
-    },
+use litellm_llms::base_llm::{
+    auth::ValidatedEnvironment, messages::context::MessagesTransformContext,
 };
 use litellm_secrets::source::SecretSource;
 use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
@@ -96,7 +93,7 @@ fn prepare_provider_request(
     let config = provider.config();
     let env_lookup = |key: &str| secrets.get(key);
 
-    let sanitized = shape_anthropic_messages_request(
+    let sanitized = config.shape_request(
         AnthropicMessagesRequest { model, ..body },
         shaping.reasoning_auto_summary,
     )?;

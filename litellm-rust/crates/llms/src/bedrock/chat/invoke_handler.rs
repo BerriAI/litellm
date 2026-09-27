@@ -5,18 +5,16 @@ use litellm_framing::{
     aws_event_stream::{AwsEventStreamCodec, Message},
     frames,
 };
+use litellm_types::messages::streaming::MessagesStreamEvent;
 use serde::Deserialize;
 use serde_json::Value;
 
 use crate::{
     Error,
-    anthropic::{
-        chat::handler::ModelResponseIterator,
-        messages::streaming_iterator::AnthropicMessagesStreamEvent,
-    },
+    anthropic::chat::handler::ModelResponseIterator,
     base_llm::{
-        anthropic_messages::streaming::{ByteStream, EventStream},
         chat::streaming::{ChatStream, StreamShape},
+        messages::streaming::{ByteStream, EventStream},
     },
 };
 
@@ -56,7 +54,7 @@ where
     })
 }
 
-pub fn decode_invoke_anthropic_chunk(chunk: Value) -> Result<AnthropicMessagesStreamEvent, Error> {
+pub fn decode_invoke_anthropic_chunk(chunk: Value) -> Result<MessagesStreamEvent, Error> {
     serde_json::from_value(chunk).map_err(|error| {
         Error::InvalidResponse(crate::ErrorDetail::invalid("Anthropic stream event", error))
     })
@@ -66,16 +64,35 @@ pub fn invoke_anthropic_event_stream(bytes: ByteStream) -> EventStream {
     Box::pin(invoke_chunk_stream(bytes).map(|chunk| decode_invoke_anthropic_chunk(chunk?)))
 }
 
+#[derive(Clone, Copy)]
+enum InvokeProvider {
+    Anthropic,
+    DeepseekR1,
+    Moonshot,
+    Unsupported,
+}
+
+impl From<&str> for InvokeProvider {
+    fn from(value: &str) -> Self {
+        match value {
+            "anthropic" => Self::Anthropic,
+            "deepseek_r1" => Self::DeepseekR1,
+            "moonshot" => Self::Moonshot,
+            _ => Self::Unsupported,
+        }
+    }
+}
+
 pub fn invoke_chat_stream(invoke_provider: &str, shape: StreamShape) -> Result<ChatStream, Error> {
-    match invoke_provider {
-        "anthropic" => Ok(ChatStream::new(
+    match InvokeProvider::from(invoke_provider) {
+        InvokeProvider::Anthropic => Ok(ChatStream::new(
             invoke_anthropic_event_stream,
             ModelResponseIterator::new(shape),
         )),
-        "deepseek_r1" | "moonshot" => Err(Error::Unsupported(
+        InvokeProvider::DeepseekR1 | InvokeProvider::Moonshot => Err(Error::Unsupported(
             "Bedrock invoke streaming for this model family",
         )),
-        _ => Err(Error::Unsupported("Bedrock invoke streaming")),
+        InvokeProvider::Unsupported => Err(Error::Unsupported("Bedrock invoke streaming")),
     }
 }
 
@@ -86,12 +103,10 @@ mod tests {
     use base64::engine::general_purpose::STANDARD;
     use bytes::Bytes;
     use futures_util::TryStreamExt;
+    use litellm_types::messages::streaming::MessagesContentBlockDelta;
 
     use super::*;
-    use crate::{
-        anthropic::messages::streaming_iterator::AnthropicContentBlockDelta,
-        base_llm::anthropic_messages::streaming::anthropic_sse_event_stream,
-    };
+    use crate::base_llm::messages::streaming::anthropic_sse_event_stream;
 
     fn in_pieces(wire: &[u8]) -> ByteStream {
         let pieces: Vec<Bytes> = wire.chunks(3).map(Bytes::copy_from_slice).collect();
@@ -127,9 +142,9 @@ mod tests {
 
         assert_eq!(
             from_aws,
-            vec![AnthropicMessagesStreamEvent::ContentBlockDelta {
+            vec![MessagesStreamEvent::ContentBlockDelta {
                 index: 0,
-                delta: AnthropicContentBlockDelta::TextDelta {
+                delta: MessagesContentBlockDelta::TextDelta {
                     text: "hello".into(),
                 },
             }]

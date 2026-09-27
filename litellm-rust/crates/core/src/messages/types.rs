@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::stream::BoxStream;
-use litellm_llms::anthropic::common_utils::AnthropicModelCapabilities;
+use litellm_llms::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_types::{
     llms::anthropic_messages::{
         anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
@@ -47,7 +47,7 @@ pub enum MessagesResponse {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct MessagesShaping {
     #[serde(default)]
-    pub capabilities: AnthropicModelCapabilities,
+    pub capabilities: MessagesModelCapabilities,
     #[serde(default)]
     pub drop_params: bool,
     #[serde(default)]
@@ -58,7 +58,7 @@ pub struct MessagesShaping {
 
 #[cfg(test)]
 mod tests {
-    use litellm_llms::anthropic::common_utils::SupportedEffortTiers;
+    use litellm_llms::base_llm::messages::context::SupportedEffortTiers;
     use rstest::rstest;
     use serde_json::{Value, json};
 
@@ -84,9 +84,9 @@ mod tests {
     #[case::partial_capabilities(
         json!({"capabilities": {"supports_reasoning": true}}),
         MessagesShaping {
-            capabilities: AnthropicModelCapabilities {
+            capabilities: MessagesModelCapabilities {
                 supports_reasoning: true,
-                ..AnthropicModelCapabilities::default()
+                ..MessagesModelCapabilities::default()
             },
             ..MessagesShaping::default()
         },
@@ -108,7 +108,7 @@ mod tests {
             "additional_drop_params": ["metadata.user_id", "thinking"]
         }),
         MessagesShaping {
-            capabilities: AnthropicModelCapabilities {
+            capabilities: MessagesModelCapabilities {
                 supports_reasoning: true,
                 supports_adaptive_thinking: true,
                 thinking_always_on: false,

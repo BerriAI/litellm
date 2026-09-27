@@ -3,7 +3,7 @@ pub(super) use litellm_http::request::truncate_error_body;
 use litellm_llms::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
     azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
-    base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig,
+    base_llm::messages::transformation::BaseAnthropicMessagesConfig,
     bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};

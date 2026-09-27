@@ -1,3 +1,4 @@
+use crate::base_llm::messages::context::MessagesModelCapabilities;
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_core_utils::settings::resolve_non_empty;
 use litellm_http::request::{
@@ -11,9 +12,10 @@ use litellm_types::llms::{
     },
 };
 use litellm_types::recognized::Recognized;
-use serde::{Deserialize, Serialize};
+use serde::Deserialize;
 use serde_json::Value;
 
+use crate::base_llm::messages::transformation::MESSAGES_PATH_SUFFIX;
 use crate::{
     anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX,
     base_llm::auth::{AuthScheme, Headers},
@@ -27,94 +29,32 @@ const BETA_HEADER: &str = "anthropic-beta";
 pub const ANTHROPIC_API_BASE_ENV: &str = "ANTHROPIC_API_BASE";
 pub const ANTHROPIC_BASE_URL_ENV: &str = "ANTHROPIC_BASE_URL";
 pub const DEFAULT_ANTHROPIC_API_BASE: &str = "https://api.anthropic.com";
-pub const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
 pub const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header("x-api-key");
 const API_KEY_HEADER: &str = API_KEY_PLACEMENT.header_name();
 const AUTHORIZATION: &str = CredentialPlacement::Bearer.header_name();
 const DIRECT_BROWSER_ACCESS_HEADER: &str = "anthropic-dangerous-direct-browser-access";
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-pub struct SupportedEffortTiers {
-    #[serde(default)]
-    pub minimal: bool,
-    #[serde(default)]
-    pub low: bool,
-    #[serde(default)]
-    pub medium: bool,
-    #[serde(default)]
-    pub high: bool,
-    #[serde(default)]
-    pub xhigh: bool,
-    #[serde(default)]
-    pub max: bool,
-}
-
-impl SupportedEffortTiers {
-    pub fn any(self) -> bool {
-        self.minimal || self.low || self.medium || self.high || self.xhigh || self.max
+pub fn supports_effort_tier(capabilities: &MessagesModelCapabilities, level: EffortLevel) -> bool {
+    match level {
+        EffortLevel::Low => capabilities.effort_tiers.low,
+        EffortLevel::Medium => capabilities.effort_tiers.medium,
+        EffortLevel::High => capabilities.effort_tiers.high,
+        EffortLevel::Xhigh => capabilities.effort_tiers.xhigh,
+        EffortLevel::Max => capabilities.effort_tiers.max,
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-pub struct AnthropicModelCapabilities {
-    #[serde(default)]
-    pub supports_reasoning: bool,
-    #[serde(default)]
-    pub supports_adaptive_thinking: bool,
-    #[serde(default)]
-    pub thinking_always_on: bool,
-    #[serde(default)]
-    pub supports_legacy_thinking: bool,
-    #[serde(default)]
-    pub supports_output_config: bool,
-    #[serde(default = "default_true")]
-    pub supports_sampling_params: bool,
-    #[serde(default)]
-    pub supports_speed: bool,
-    #[serde(default)]
-    pub effort_tiers: SupportedEffortTiers,
+pub fn supports_effort_param(capabilities: &MessagesModelCapabilities) -> bool {
+    capabilities.supports_output_config || capabilities.effort_tiers.any()
 }
 
-fn default_true() -> bool {
-    true
-}
-
-impl Default for AnthropicModelCapabilities {
-    fn default() -> Self {
-        Self {
-            supports_reasoning: false,
-            supports_adaptive_thinking: false,
-            thinking_always_on: false,
-            supports_legacy_thinking: false,
-            supports_output_config: false,
-            supports_sampling_params: true,
-            supports_speed: false,
-            effort_tiers: SupportedEffortTiers::default(),
+pub fn accepts_effort(capabilities: &MessagesModelCapabilities, level: EffortLevel) -> bool {
+    match level {
+        EffortLevel::Max => {
+            capabilities.supports_adaptive_thinking || capabilities.effort_tiers.max
         }
-    }
-}
-
-impl AnthropicModelCapabilities {
-    pub fn supports_effort_tier(&self, level: EffortLevel) -> bool {
-        match level {
-            EffortLevel::Low => self.effort_tiers.low,
-            EffortLevel::Medium => self.effort_tiers.medium,
-            EffortLevel::High => self.effort_tiers.high,
-            EffortLevel::Xhigh => self.effort_tiers.xhigh,
-            EffortLevel::Max => self.effort_tiers.max,
-        }
-    }
-
-    pub fn supports_effort_param(&self) -> bool {
-        self.supports_output_config || self.effort_tiers.any()
-    }
-
-    pub fn accepts_effort(&self, level: EffortLevel) -> bool {
-        match level {
-            EffortLevel::Max => self.supports_adaptive_thinking || self.effort_tiers.max,
-            EffortLevel::Xhigh => self.effort_tiers.xhigh,
-            EffortLevel::Low | EffortLevel::Medium | EffortLevel::High => true,
-        }
+        EffortLevel::Xhigh => capabilities.effort_tiers.xhigh,
+        EffortLevel::Low | EffortLevel::Medium | EffortLevel::High => true,
     }
 }
 
@@ -665,6 +605,7 @@ pub fn flatten_unencrypted_web_search_results(
 
 #[cfg(test)]
 mod tests {
+    use crate::base_llm::messages::context::SupportedEffortTiers;
     use rstest::{fixture, rstest};
     use serde_json::json;
 
@@ -821,8 +762,8 @@ mod tests {
     }
 
     #[fixture]
-    fn unmapped() -> AnthropicModelCapabilities {
-        AnthropicModelCapabilities::default()
+    fn unmapped() -> MessagesModelCapabilities {
+        MessagesModelCapabilities::default()
     }
 
     #[rstest]
@@ -1779,14 +1720,14 @@ mod tests {
     fn supports_effort_tier_reads_the_matching_flag(
         #[case] effort_tiers: SupportedEffortTiers,
         #[case] expected: [bool; 5],
-        unmapped: AnthropicModelCapabilities,
+        unmapped: MessagesModelCapabilities,
     ) {
-        let capabilities = AnthropicModelCapabilities {
+        let capabilities = MessagesModelCapabilities {
             effort_tiers,
             ..unmapped
         };
         assert_eq!(
-            ALL_LEVELS.map(|level| capabilities.supports_effort_tier(level)),
+            ALL_LEVELS.map(|level| supports_effort_tier(&capabilities, level)),
             expected
         );
     }
@@ -1849,16 +1790,16 @@ mod tests {
         #[case] supports_output_config: bool,
         #[case] effort_tiers: SupportedEffortTiers,
         #[case] expected: bool,
-        unmapped: AnthropicModelCapabilities,
+        unmapped: MessagesModelCapabilities,
     ) {
-        let capabilities = AnthropicModelCapabilities {
+        let capabilities = MessagesModelCapabilities {
             supports_reasoning,
             supports_adaptive_thinking,
             supports_output_config,
             effort_tiers,
             ..unmapped
         };
-        assert_eq!(capabilities.supports_effort_param(), expected);
+        assert_eq!(supports_effort_param(&capabilities), expected);
     }
 
     #[rstest]
@@ -1911,24 +1852,24 @@ mod tests {
         #[case] effort_tiers: SupportedEffortTiers,
         #[case] level: EffortLevel,
         #[case] expected: bool,
-        unmapped: AnthropicModelCapabilities,
+        unmapped: MessagesModelCapabilities,
     ) {
-        let capabilities = AnthropicModelCapabilities {
+        let capabilities = MessagesModelCapabilities {
             supports_output_config: true,
             supports_adaptive_thinking,
             effort_tiers,
             ..unmapped
         };
-        assert_eq!(capabilities.accepts_effort(level), expected);
+        assert_eq!(accepts_effort(&capabilities, level), expected);
     }
 
     #[rstest]
     fn unmapped_model_has_no_reasoning_features_but_accepts_sampling_params(
-        unmapped: AnthropicModelCapabilities,
+        unmapped: MessagesModelCapabilities,
     ) {
         assert_eq!(
             unmapped,
-            AnthropicModelCapabilities {
+            MessagesModelCapabilities {
                 supports_reasoning: false,
                 supports_adaptive_thinking: false,
                 thinking_always_on: false,
@@ -1940,7 +1881,7 @@ mod tests {
             }
         );
         assert_eq!(
-            serde_json::from_value::<AnthropicModelCapabilities>(json!({})).unwrap(),
+            serde_json::from_value::<MessagesModelCapabilities>(json!({})).unwrap(),
             unmapped
         );
     }
@@ -1948,26 +1889,26 @@ mod tests {
     #[rstest]
     #[case::sampling_params_removed(
         json!({"supports_sampling_params": false}),
-        AnthropicModelCapabilities { supports_sampling_params: false, ..AnthropicModelCapabilities::default() }
+        MessagesModelCapabilities { supports_sampling_params: false, ..MessagesModelCapabilities::default() }
     )]
     #[case::fast_mode(
         json!({"supports_speed": true}),
-        AnthropicModelCapabilities { supports_speed: true, ..AnthropicModelCapabilities::default() }
+        MessagesModelCapabilities { supports_speed: true, ..MessagesModelCapabilities::default() }
     )]
     #[case::partial_effort_tiers(
         json!({"supports_reasoning": true, "effort_tiers": {"xhigh": true}}),
-        AnthropicModelCapabilities {
+        MessagesModelCapabilities {
             supports_reasoning: true,
             effort_tiers: tiers(false, false, false, false, true, false),
-            ..AnthropicModelCapabilities::default()
+            ..MessagesModelCapabilities::default()
         }
     )]
     fn capabilities_fill_missing_flags_with_unmapped_defaults(
         #[case] input: Value,
-        #[case] expected: AnthropicModelCapabilities,
+        #[case] expected: MessagesModelCapabilities,
     ) {
         assert_eq!(
-            serde_json::from_value::<AnthropicModelCapabilities>(input).unwrap(),
+            serde_json::from_value::<MessagesModelCapabilities>(input).unwrap(),
             expected
         );
     }

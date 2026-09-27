@@ -1,4 +1,3 @@
-use litellm_core_utils::settings::Lookup;
 use litellm_python_compat::{json::from_json, repr::repr, truthy::truthy};
 use litellm_types::{
     llms::{
@@ -12,86 +11,43 @@ use litellm_types::{
 };
 use serde_json::Value;
 
-use crate::{Error, anthropic::common_utils::AnthropicModelCapabilities};
+use crate::base_llm::messages::context::{
+    MessagesModelCapabilities, ThinkingBudgets, ThinkingContext,
+};
+use crate::{
+    Error,
+    anthropic::common_utils::{accepts_effort, supports_effort_param},
+};
 
 pub const ANTHROPIC_MIN_THINKING_BUDGET_TOKENS: u64 = 1024;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct ThinkingBudgets {
-    pub minimal: u64,
-    pub low: u64,
-    pub medium: u64,
-    pub high: u64,
-    pub xhigh: u64,
-    pub max: u64,
-}
-
-impl Default for ThinkingBudgets {
-    fn default() -> Self {
-        Self {
-            minimal: 128,
-            low: 1024,
-            medium: 2048,
-            high: 4096,
-            xhigh: 8192,
-            max: 16384,
-        }
+fn budget_for_effort(budgets: &ThinkingBudgets, effort: ReasoningEffort) -> Option<u64> {
+    match effort {
+        ReasoningEffort::None => None,
+        ReasoningEffort::Minimal => Some(budgets.minimal.max(ANTHROPIC_MIN_THINKING_BUDGET_TOKENS)),
+        ReasoningEffort::Low => Some(budgets.low),
+        ReasoningEffort::Medium => Some(budgets.medium),
+        ReasoningEffort::High => Some(budgets.high),
+        ReasoningEffort::Xhigh => Some(budgets.xhigh),
+        ReasoningEffort::Max => Some(budgets.max),
     }
 }
 
-impl ThinkingBudgets {
-    pub fn from_lookup(env: &impl Lookup) -> Self {
-        let defaults = Self::default();
-        let tier = |name: &str, default: u64| {
-            env.parsed::<u64>(&format!("DEFAULT_REASONING_EFFORT_{name}_THINKING_BUDGET"))
-                .unwrap_or(default)
-        };
-        Self {
-            minimal: tier("MINIMAL", defaults.minimal),
-            low: tier("LOW", defaults.low),
-            medium: tier("MEDIUM", defaults.medium),
-            high: tier("HIGH", defaults.high),
-            xhigh: tier("XHIGH", defaults.xhigh),
-            max: tier("MAX", defaults.max),
-        }
+fn effort_for_budget(
+    budgets: &ThinkingBudgets,
+    budget_tokens: u64,
+    capabilities: &MessagesModelCapabilities,
+) -> EffortLevel {
+    if budget_tokens >= budgets.xhigh && capabilities.effort_tiers.xhigh {
+        return EffortLevel::Xhigh;
     }
-
-    fn for_effort(&self, effort: ReasoningEffort) -> Option<u64> {
-        match effort {
-            ReasoningEffort::None => None,
-            ReasoningEffort::Minimal => {
-                Some(self.minimal.max(ANTHROPIC_MIN_THINKING_BUDGET_TOKENS))
-            }
-            ReasoningEffort::Low => Some(self.low),
-            ReasoningEffort::Medium => Some(self.medium),
-            ReasoningEffort::High => Some(self.high),
-            ReasoningEffort::Xhigh => Some(self.xhigh),
-            ReasoningEffort::Max => Some(self.max),
-        }
+    if budget_tokens >= budgets.high {
+        return EffortLevel::High;
     }
-
-    fn effort_for_budget(
-        &self,
-        budget_tokens: u64,
-        capabilities: &AnthropicModelCapabilities,
-    ) -> EffortLevel {
-        if budget_tokens >= self.xhigh && capabilities.effort_tiers.xhigh {
-            return EffortLevel::Xhigh;
-        }
-        if budget_tokens >= self.high {
-            return EffortLevel::High;
-        }
-        if budget_tokens >= self.medium {
-            return EffortLevel::Medium;
-        }
-        EffortLevel::Low
+    if budget_tokens >= budgets.medium {
+        return EffortLevel::Medium;
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct ThinkingContext {
-    pub capabilities: AnthropicModelCapabilities,
-    pub budgets: ThinkingBudgets,
+    EffortLevel::Low
 }
 
 fn unmapped_effort(effort: &Value) -> Error {
@@ -205,8 +161,10 @@ fn translate_reasoning_effort(
         }
         Recognized::Unrecognized(_) => return Ok(request),
     };
-    let (Some(level), Some(budget)) = (output_effort(effort), context.budgets.for_effort(effort))
-    else {
+    let (Some(level), Some(budget)) = (
+        output_effort(effort),
+        budget_for_effort(&context.budgets, effort),
+    ) else {
         return Ok(AnthropicMessagesRequest {
             params: AnthropicMessagesOptionalParams {
                 thinking: None,
@@ -218,7 +176,7 @@ fn translate_reasoning_effort(
     };
     let capabilities = &context.capabilities;
     if capabilities.supports_adaptive_thinking {
-        if !capabilities.accepts_effort(level) {
+        if !accepts_effort(capabilities, level) {
             return Err(unsupported_effort(level, &request.model));
         }
         let adaptive = ThinkingConfig::adaptive(Some(ThinkingDisplay::Summarized));
@@ -289,7 +247,7 @@ fn translate_legacy_thinking_for_adaptive_model(
         .and_then(Recognized::known)
         .copied()
         .unwrap_or(0);
-    let level = context.budgets.effort_for_budget(budget, capabilities);
+    let level = effort_for_budget(&context.budgets, budget, capabilities);
     AnthropicMessagesRequest {
         params: AnthropicMessagesOptionalParams {
             thinking: Some(Recognized::Known(ThinkingConfig::adaptive(None))),
@@ -314,10 +272,10 @@ fn translate_adaptive_effort_for_non_adaptive_model(
         return Ok(request);
     }
     let level_accepted = match &effort {
-        Some(Recognized::Known(level)) => capabilities.accepts_effort(*level),
+        Some(Recognized::Known(level)) => accepts_effort(capabilities, *level),
         _ => true,
     };
-    if capabilities.supports_effort_param() && (!adaptive_thinking || level_accepted) {
+    if supports_effort_param(capabilities) && (!adaptive_thinking || level_accepted) {
         return Ok(AnthropicMessagesRequest {
             params: AnthropicMessagesOptionalParams {
                 thinking: if adaptive_thinking {
@@ -331,9 +289,7 @@ fn translate_adaptive_effort_for_non_adaptive_model(
         });
     }
     let budget = if capabilities.supports_reasoning {
-        context
-            .budgets
-            .for_effort(legacy_reasoning_effort(effort.as_ref())?)
+        budget_for_effort(&context.budgets, legacy_reasoning_effort(effort.as_ref())?)
     } else {
         None
     };
@@ -390,7 +346,7 @@ mod tests {
     use rstest::{fixture, rstest};
 
     use super::*;
-    use crate::anthropic::common_utils::SupportedEffortTiers;
+    use crate::base_llm::messages::context::SupportedEffortTiers;
 
     const EFFORT_CHOICES: &str = "'none', 'minimal', 'low', 'medium', 'high', 'xhigh', 'max'";
 
@@ -402,7 +358,7 @@ mod tests {
         serde_json::from_value(body).unwrap()
     }
 
-    fn context(capabilities: AnthropicModelCapabilities) -> ThinkingContext {
+    fn context(capabilities: MessagesModelCapabilities) -> ThinkingContext {
         ThinkingContext {
             capabilities,
             budgets: ThinkingBudgets::default(),
@@ -410,7 +366,7 @@ mod tests {
     }
 
     fn translate(
-        capabilities: AnthropicModelCapabilities,
+        capabilities: MessagesModelCapabilities,
         fields: Value,
     ) -> Result<AnthropicMessagesRequest, Error> {
         translate_thinking(request(fields), &context(capabilities))
@@ -442,21 +398,21 @@ mod tests {
     }
 
     #[fixture]
-    fn haiku_3_5() -> AnthropicModelCapabilities {
-        AnthropicModelCapabilities::default()
+    fn haiku_3_5() -> MessagesModelCapabilities {
+        MessagesModelCapabilities::default()
     }
 
     #[fixture]
-    fn haiku_4_5() -> AnthropicModelCapabilities {
-        AnthropicModelCapabilities {
+    fn haiku_4_5() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
             supports_reasoning: true,
             ..Default::default()
         }
     }
 
     #[fixture]
-    fn opus_4_5() -> AnthropicModelCapabilities {
-        AnthropicModelCapabilities {
+    fn opus_4_5() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
             supports_reasoning: true,
             supports_output_config: true,
             ..Default::default()
@@ -464,8 +420,8 @@ mod tests {
     }
 
     #[fixture]
-    fn sonnet_4_6() -> AnthropicModelCapabilities {
-        AnthropicModelCapabilities {
+    fn sonnet_4_6() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
             supports_reasoning: true,
             supports_adaptive_thinking: true,
             supports_legacy_thinking: true,
@@ -479,8 +435,8 @@ mod tests {
     }
 
     #[fixture]
-    fn opus_4_7() -> AnthropicModelCapabilities {
-        AnthropicModelCapabilities {
+    fn opus_4_7() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
             supports_reasoning: true,
             supports_adaptive_thinking: true,
             supports_output_config: true,
@@ -494,16 +450,16 @@ mod tests {
     }
 
     #[fixture]
-    fn fable_5_1() -> AnthropicModelCapabilities {
-        AnthropicModelCapabilities {
+    fn fable_5_1() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
             thinking_always_on: true,
             ..opus_4_7()
         }
     }
 
     #[fixture]
-    fn newfamily_6() -> AnthropicModelCapabilities {
-        AnthropicModelCapabilities {
+    fn newfamily_6() -> MessagesModelCapabilities {
+        MessagesModelCapabilities {
             supports_reasoning: true,
             supports_adaptive_thinking: true,
             ..Default::default()
@@ -521,7 +477,7 @@ mod tests {
     #[case::low_on_4_6(sonnet_4_6(), "low", "low")]
     #[case::max_without_max_tier_is_allowed_on_adaptive_models(newfamily_6(), "max", "max")]
     fn reasoning_effort_on_adaptive_model_becomes_summarized_adaptive_thinking_and_effort(
-        #[case] capabilities: AnthropicModelCapabilities,
+        #[case] capabilities: MessagesModelCapabilities,
         #[case] reasoning_effort: &str,
         #[case] expected_effort: &str,
     ) {
@@ -661,7 +617,7 @@ mod tests {
         })
     )]
     fn reasoning_effort_is_translated(
-        #[case] capabilities: AnthropicModelCapabilities,
+        #[case] capabilities: MessagesModelCapabilities,
         #[case] input: Value,
         #[case] expected: Value,
     ) {
@@ -676,7 +632,7 @@ mod tests {
     #[case::xhigh("xhigh", 8192)]
     #[case::max("max", 16384)]
     fn reasoning_effort_on_non_adaptive_model_uses_the_tier_budget(
-        haiku_4_5: AnthropicModelCapabilities,
+        haiku_4_5: MessagesModelCapabilities,
         #[case] reasoning_effort: &str,
         #[case] expected_budget: u64,
     ) {
@@ -697,7 +653,7 @@ mod tests {
     #[case::effort_capable_model(opus_4_5())]
     #[case::budget_model(haiku_4_5())]
     fn reasoning_effort_none_clears_thinking_and_output_config(
-        #[case] capabilities: AnthropicModelCapabilities,
+        #[case] capabilities: MessagesModelCapabilities,
     ) {
         assert_eq!(
             translate(
@@ -770,7 +726,7 @@ mod tests {
         format!("Unmapped reasoning effort: \"it's\". Must be one of: {EFFORT_CHOICES}.")
     )]
     fn unsupported_effort_is_a_request_error(
-        #[case] capabilities: AnthropicModelCapabilities,
+        #[case] capabilities: MessagesModelCapabilities,
         #[case] input: Value,
         #[case] expected_message: String,
     ) {
@@ -790,7 +746,7 @@ mod tests {
         Some(serde_json::json!({"type": "adaptive"}))
     )]
     fn disabled_thinking_is_omitted_only_for_always_on_models(
-        #[case] capabilities: AnthropicModelCapabilities,
+        #[case] capabilities: MessagesModelCapabilities,
         #[case] thinking: Value,
         #[case] expected_thinking: Option<Value>,
     ) {
@@ -821,7 +777,7 @@ mod tests {
     #[case::missing_budget(opus_4_7(), Value::Null, "low")]
     #[case::always_on_model(fable_5_1(), serde_json::json!(24000), "xhigh")]
     fn legacy_thinking_is_bucketed_into_adaptive_effort_on_adaptive_only_models(
-        #[case] capabilities: AnthropicModelCapabilities,
+        #[case] capabilities: MessagesModelCapabilities,
         #[case] budget_tokens: Value,
         #[case] expected_effort: &str,
     ) {
@@ -890,7 +846,7 @@ mod tests {
         serde_json::json!({"max_tokens": 8192, "thinking": {"type": "adaptive", "display": "summarized"}})
     )]
     fn legacy_thinking_on_adaptive_capable_models(
-        #[case] capabilities: AnthropicModelCapabilities,
+        #[case] capabilities: MessagesModelCapabilities,
         #[case] input: Value,
         #[case] expected: Value,
     ) {
@@ -1079,7 +1035,7 @@ mod tests {
         })
     )]
     fn adaptive_interface_is_reshaped_for_non_adaptive_models(
-        #[case] capabilities: AnthropicModelCapabilities,
+        #[case] capabilities: MessagesModelCapabilities,
         #[case] input: Value,
         #[case] expected: Value,
     ) {
@@ -1124,7 +1080,7 @@ mod tests {
         serde_json::json!({"max_tokens": 8192, "output_config": {"effort": "high"}})
     )]
     fn pinned_temperature_is_dropped_when_thinking_or_effort_survives_on_non_adaptive_model(
-        #[case] capabilities: AnthropicModelCapabilities,
+        #[case] capabilities: MessagesModelCapabilities,
         #[case] input: Value,
         #[case] temperature: f64,
         #[case] expected: Value,
@@ -1180,7 +1136,7 @@ mod tests {
         serde_json::json!({"max_tokens": 8192, "thinking": {"type": "enabled", "budget_tokens": 4096}})
     )]
     fn temperature_is_kept(
-        #[case] capabilities: AnthropicModelCapabilities,
+        #[case] capabilities: MessagesModelCapabilities,
         #[case] input: Value,
         #[case] temperature: f64,
         #[case] expected: Value,
@@ -1275,7 +1231,7 @@ mod tests {
     )]
     fn translation_honors_budget_overrides(
         #[case] overrides: &[(&str, &str)],
-        #[case] capabilities: AnthropicModelCapabilities,
+        #[case] capabilities: MessagesModelCapabilities,
         #[case] input: Value,
         #[case] expected: Value,
     ) {
