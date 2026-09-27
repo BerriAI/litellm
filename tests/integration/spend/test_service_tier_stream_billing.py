@@ -9,6 +9,14 @@ streamed response is an AnthropicStreamWrapper under AnthropicSSEStream, wrapped
 by AnthropicMessagesStreamCacheWriter when litellm.cache is on and then by the
 router's FallbackAwareAnthropicMessagesStream; each layer must delegate the
 inner stream's chunks for disconnect billing to find them.
+
+Azure streams run the same OpenAI chunk path against /openai/deployments, so the
+served tier must reach the spend row there too (LIT-2850). Databricks streams go
+through DatabricksChatResponseIterator.chunk_parser and the databricks branch of
+cost_per_token (LIT-8121). The responses bridge relays Responses API SSE as chat
+chunks, so the served tier remembered from response.created must land on both
+the chunks and the row. Gemini reports capacity as usageMetadata.trafficType, which maps to
+service_tier "flex" and the *_flex rates (LIT-6287, LIT-6292).
 """
 
 import json
@@ -30,6 +38,9 @@ OUTPUT_RATE: Final = 0.002
 PRIORITY_INPUT_RATE: Final = 0.01
 PRIORITY_OUTPUT_RATE: Final = 0.02
 EXPECTED_FULL_SPEND: Final = PROMPT_TOKENS * PRIORITY_INPUT_RATE + COMPLETION_TOKENS * PRIORITY_OUTPUT_RATE
+FLEX_INPUT_RATE: Final = 0.0005
+FLEX_OUTPUT_RATE: Final = 0.001
+EXPECTED_FLEX_SPEND: Final = PROMPT_TOKENS * FLEX_INPUT_RATE + COMPLETION_TOKENS * FLEX_OUTPUT_RATE
 
 
 def _sse_frame(payload: dict[str, JsonValue]) -> bytes:
@@ -47,13 +58,15 @@ def _chat_chunk(request_id: str, upstream_model: str, content: str) -> dict[str,
     }
 
 
-def _respond_for(request_id: str, prompt: str, *, pause: float = 0.4) -> Callable[[Request], Reply]:
+def _respond_for(
+    request_id: str, prompt: str, *, expected_target: str = "/v1/chat/completions", pause: float = 0.4
+) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         if request.target == "/v1/models":
             return Reply(
                 body=json.dumps({"object": "list", "data": [{"id": "gpt-4o-mini", "object": "model"}]}).encode()
             )
-        assert request.target == "/v1/chat/completions", request.target
+        assert request.target.startswith(expected_target), request.target
         body: Final = json.loads(request.body)
         assert body["messages"] == [{"role": "user", "content": prompt}], body
         upstream_model: Final = str(body["model"])
@@ -85,14 +98,24 @@ def _respond_for(request_id: str, prompt: str, *, pause: float = 0.4) -> Callabl
     return respond
 
 
-def _tiered_model(scenario: Scenario, wire: Wire, *, litellm_model: str) -> str:
+def _tiered_model(
+    scenario: Scenario,
+    wire: Wire,
+    *,
+    litellm_model: str,
+    api_base: str | None = None,
+    **extra: JsonValue,
+) -> str:
     return scenario.model(
         model=litellm_model,
-        api_base=f"{wire.url}/v1",
+        api_base=api_base or f"{wire.url}/v1",
         input_cost_per_token=INPUT_RATE,
         output_cost_per_token=OUTPUT_RATE,
         input_cost_per_token_priority=PRIORITY_INPUT_RATE,
         output_cost_per_token_priority=PRIORITY_OUTPUT_RATE,
+        input_cost_per_token_flex=FLEX_INPUT_RATE,
+        output_cost_per_token_flex=FLEX_OUTPUT_RATE,
+        **extra,
     )
 
 
@@ -259,4 +282,294 @@ def test_disconnected_messages_stream_bills_partial_usage_at_the_served_tier(gat
         assert int(row["completion_tokens"]) < COMPLETION_TOKENS, row
         breakdown: Final = _cost_breakdown(row)
         assert breakdown["service_tier"] == "priority", breakdown
+        assert len(wire.drain()) == 1
+
+
+def _responses_frame(event: str, payload: dict[str, JsonValue]) -> bytes:
+    return f"event: {event}\ndata: {json.dumps(payload, separators=(',', ':'))}\n\n".encode()
+
+
+def _respond_responses_for(response_id: str, prompt: str) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        assert request.target == "/v1/responses", request.target
+        body: Final = json.loads(request.body)
+        assert prompt in json.dumps(body["input"]), body["input"]
+        assert body["stream"] is True, body
+        upstream_model: Final = str(body["model"])
+        text: Final = "firstsecondthird"
+        response_payload: Final[dict[str, JsonValue]] = {
+            "id": response_id,
+            "object": "response",
+            "model": upstream_model,
+            "status": "in_progress",
+            "service_tier": "priority",
+            "output": [],
+        }
+        message_item: Final[dict[str, JsonValue]] = {
+            "type": "message",
+            "id": "msg_1",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": text, "annotations": []}],
+        }
+        return Reply(
+            content_type="text/event-stream",
+            chunks=(
+                _responses_frame("response.created", {"type": "response.created", "response": response_payload}),
+                _responses_frame(
+                    "response.output_item.added",
+                    {
+                        "type": "response.output_item.added",
+                        "output_index": 0,
+                        "item": {
+                            "type": "message",
+                            "id": "msg_1",
+                            "status": "in_progress",
+                            "role": "assistant",
+                            "content": [],
+                        },
+                    },
+                ),
+                _responses_frame(
+                    "response.content_part.added",
+                    {
+                        "type": "response.content_part.added",
+                        "item_id": "msg_1",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "part": {"type": "output_text", "text": ""},
+                    },
+                ),
+                *(
+                    _responses_frame(
+                        "response.output_text.delta",
+                        {
+                            "type": "response.output_text.delta",
+                            "item_id": "msg_1",
+                            "output_index": 0,
+                            "content_index": 0,
+                            "delta": delta,
+                        },
+                    )
+                    for delta in ("first", "second", "third")
+                ),
+                _responses_frame(
+                    "response.output_text.done",
+                    {
+                        "type": "response.output_text.done",
+                        "item_id": "msg_1",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "text": text,
+                    },
+                ),
+                _responses_frame(
+                    "response.content_part.done",
+                    {
+                        "type": "response.content_part.done",
+                        "item_id": "msg_1",
+                        "output_index": 0,
+                        "content_index": 0,
+                        "part": {"type": "output_text", "text": text},
+                    },
+                ),
+                _responses_frame(
+                    "response.output_item.done",
+                    {"type": "response.output_item.done", "output_index": 0, "item": message_item},
+                ),
+                _responses_frame(
+                    "response.completed",
+                    {
+                        "type": "response.completed",
+                        "response": {
+                            **response_payload,
+                            "status": "completed",
+                            "output": [message_item],
+                            "usage": {
+                                "input_tokens": PROMPT_TOKENS,
+                                "output_tokens": COMPLETION_TOKENS,
+                                "total_tokens": PROMPT_TOKENS + COMPLETION_TOKENS,
+                            },
+                        },
+                    },
+                ),
+            ),
+        )
+
+    return respond
+
+
+def _gemini_chunk(text: str) -> dict[str, JsonValue]:
+    return {"candidates": [{"index": 0, "content": {"role": "model", "parts": [{"text": text}]}}]}
+
+
+def _respond_gemini_for(prompt: str) -> Callable[[Request], Reply]:
+    def respond(request: Request) -> Reply:
+        assert request.target.startswith("/models/gemini-2.5-flash:streamGenerateContent"), request.target
+        body: Final = json.loads(request.body)
+        assert prompt in json.dumps(body["contents"]), body["contents"]
+        terminal: Final[dict[str, JsonValue]] = {
+            "candidates": [{"index": 0, "content": {"role": "model", "parts": [{"text": ""}]}, "finishReason": "STOP"}],
+            "usageMetadata": {
+                "promptTokenCount": PROMPT_TOKENS,
+                "candidatesTokenCount": COMPLETION_TOKENS,
+                "totalTokenCount": PROMPT_TOKENS + COMPLETION_TOKENS,
+                "trafficType": "ON_DEMAND_FLEX",
+            },
+        }
+        return Reply(
+            content_type="text/event-stream",
+            chunks=(
+                _sse_frame(_gemini_chunk("first")),
+                _sse_frame(_gemini_chunk("second")),
+                _sse_frame(_gemini_chunk("third")),
+                _sse_frame(terminal),
+            ),
+        )
+
+    return respond
+
+
+@pytest.mark.timeout(120)
+def test_azure_chat_stream_bills_the_served_tier(gateway: Gateway) -> None:
+    prompt: Final = f"tier control {uuid4().hex[:8]}"
+    request_id: Final = f"chatcmpl-{uuid4().hex[:8]}"
+    with (
+        wire_server(
+            _respond_for(request_id, prompt, expected_target="/openai/deployments/gpt-4o-mini/chat/completions")
+        ) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _tiered_model(
+            scenario,
+            wire,
+            litellm_model="azure/gpt-4o-mini",
+            api_base=wire.url,
+            api_version="2024-10-21",
+        )
+        key: Final = scenario.key(models=[model])
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": prompt}], "stream": True},
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+        chunks: Final = _events(list(response.iter_lines()))
+
+        assert len(chunks) == 4, chunks
+        tiers: Final = {chunk.get("service_tier") for chunk in chunks}
+        assert tiers == {"priority"}, f"every relayed chunk must carry the served tier: {tiers}"
+
+        row: Final = _single_spend_row(key)
+        assert row["status"] == "success", row
+        assert row["prompt_tokens"] == PROMPT_TOKENS, row
+        assert row["completion_tokens"] == COMPLETION_TOKENS, row
+        assert float(str(row["spend"])) == pytest.approx(EXPECTED_FULL_SPEND), row
+        breakdown: Final = _cost_breakdown(row)
+        assert breakdown["service_tier"] == "priority", breakdown
+        assert len(wire.drain()) == 1
+
+
+@pytest.mark.timeout(120)
+def test_databricks_chat_stream_bills_the_served_tier(gateway: Gateway) -> None:
+    prompt: Final = f"tier control {uuid4().hex[:8]}"
+    request_id: Final = f"chatcmpl-{uuid4().hex[:8]}"
+    with (
+        wire_server(_respond_for(request_id, prompt, expected_target="/serving-endpoints/chat/completions")) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _tiered_model(
+            scenario,
+            wire,
+            litellm_model="databricks/dbrx-instruct",
+            api_base=f"{wire.url}/serving-endpoints",
+        )
+        key: Final = scenario.key(models=[model])
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": prompt}], "stream": True},
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+        chunks: Final = _events(list(response.iter_lines()))
+
+        assert len(chunks) == 4, chunks
+        tiers: Final = {chunk.get("service_tier") for chunk in chunks}
+        assert tiers == {"priority"}, f"every relayed chunk must carry the served tier: {tiers}"
+
+        row: Final = _single_spend_row(key)
+        assert row["status"] == "success", row
+        assert row["prompt_tokens"] == PROMPT_TOKENS, row
+        assert row["completion_tokens"] == COMPLETION_TOKENS, row
+        assert float(str(row["spend"])) == pytest.approx(EXPECTED_FULL_SPEND), row
+        breakdown: Final = _cost_breakdown(row)
+        assert breakdown["service_tier"] == "priority", breakdown
+        assert len(wire.drain()) == 1
+
+
+@pytest.mark.timeout(120)
+def test_responses_bridge_stream_bills_the_served_tier(gateway: Gateway) -> None:
+    prompt: Final = f"tier control {uuid4().hex[:8]}"
+    with (
+        wire_server(_respond_responses_for(f"resp_{uuid4().hex[:8]}", prompt)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _tiered_model(scenario, wire, litellm_model="openai/responses/gpt-4o-mini")
+        key: Final = scenario.key(models=[model])
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": prompt}], "stream": True},
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+        chunks: Final = _events(list(response.iter_lines()))
+
+        assert len(chunks) >= 4, chunks
+        tiers: Final = {chunk.get("service_tier") for chunk in chunks}
+        assert tiers == {"priority"}, f"every relayed chunk must carry the served tier: {tiers}"
+
+        row: Final = _single_spend_row(key)
+        assert row["status"] == "success", row
+        assert row["prompt_tokens"] == PROMPT_TOKENS, row
+        assert row["completion_tokens"] == COMPLETION_TOKENS, row
+        assert float(str(row["spend"])) == pytest.approx(EXPECTED_FULL_SPEND), row
+        breakdown: Final = _cost_breakdown(row)
+        assert breakdown["service_tier"] == "priority", breakdown
+        assert len(wire.drain()) == 1
+
+
+@pytest.mark.timeout(120)
+def test_gemini_chat_stream_bills_the_flex_tier(gateway: Gateway) -> None:
+    prompt: Final = f"tier control {uuid4().hex[:8]}"
+    with (
+        wire_server(_respond_gemini_for(prompt)) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _tiered_model(
+            scenario,
+            wire,
+            litellm_model="gemini/gemini-2.5-flash",
+            api_base=wire.url,
+        )
+        key: Final = scenario.key(models=[model])
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {"model": model, "messages": [{"role": "user", "content": prompt}], "stream": True},
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+        chunks: Final = _events(list(response.iter_lines()))
+        assert len(chunks) >= 2, chunks
+
+        row: Final = _single_spend_row(key)
+        assert row["status"] == "success", row
+        assert row["prompt_tokens"] == PROMPT_TOKENS, row
+        assert row["completion_tokens"] == COMPLETION_TOKENS, row
+        assert float(str(row["spend"])) == pytest.approx(EXPECTED_FLEX_SPEND), row
+        breakdown: Final = _cost_breakdown(row)
+        assert breakdown["service_tier"] == "flex", breakdown
         assert len(wire.drain()) == 1
