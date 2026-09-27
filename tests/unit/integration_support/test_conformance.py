@@ -14,6 +14,7 @@ from pydantic import ValidationError
 def test_owned_proxy_isolates_automatic_coverage_unless_requested(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, explicit: bool
 ) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
     from integration._support.client import Gateway
     from integration._support.process import owned_proxy_process
 
