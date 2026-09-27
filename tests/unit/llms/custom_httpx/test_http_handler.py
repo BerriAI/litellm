@@ -1937,7 +1937,12 @@ async def test_bounded_get_decodes_a_compressed_body_under_the_cap_and_rejects_a
 @pytest.mark.asyncio
 async def test_bounded_get_refuses_an_encoding_it_cannot_decode_under_the_cap(respx_mock, monkeypatch):
     monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
-    respx_mock.get("https://cdn.example/zst").respond(200, content=b"\x28\xb5\x2f\xfd", headers={"content-encoding": "zstd"})
+
+    class WireStream(httpx.AsyncByteStream):
+        async def __aiter__(self):
+            yield b"\x28\xb5\x2f\xfd"
+
+    respx_mock.get("https://cdn.example/zst").respond(200, stream=WireStream(), headers={"content-encoding": "zstd"})
     handler = AsyncHTTPHandler()
     try:
         with pytest.raises(HTTPResponseLimitError, match="identity, gzip, deflate, or br"):

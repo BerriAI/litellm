@@ -670,19 +670,30 @@ class _ZlibDecoder:
         self._inflate = zlib.decompressobj(wbits)
         self._raw_fallback = wbits == zlib.MAX_WBITS
 
-    def decode(self, data: bytes, max_output: int) -> bytes:
+    def _inflate_once(self, data: bytes, max_output: int) -> bytes:
         try:
-            head: Final = self._inflate.decompress(data, max_output)
-        except zlib.error as exc:
+            return self._inflate.decompress(data, max_output)
+        except zlib.error as zlib_wrapped:
             if not self._raw_fallback:
-                raise httpx.DecodingError(str(exc)) from exc
-            self._inflate = zlib.decompressobj(-zlib.MAX_WBITS)
-            self._raw_fallback = False
-            return self.decode(data, max_output)
-        self._raw_fallback = False
-        if len(head) >= max_output or not self._inflate.unconsumed_tail:
-            return head
-        return head + self.decode(self._inflate.unconsumed_tail, max_output - len(head))
+                raise httpx.DecodingError(str(zlib_wrapped)) from zlib_wrapped
+        self._inflate = zlib.decompressobj(-zlib.MAX_WBITS)
+        try:
+            return self._inflate.decompress(data, max_output)
+        except zlib.error as raw_deflate:
+            raise httpx.DecodingError(str(raw_deflate)) from raw_deflate
+
+    def decode(self, data: bytes, max_output: int) -> bytes:
+        def drained() -> Iterator[bytes]:
+            produced = 0  # rebind-ok: running total of the bytes yielded so far
+            pending = data  # rebind-ok: first call feeds the wire bytes, later calls feed the unconsumed tail
+            while produced < max_output and pending:
+                piece: bytes = self._inflate_once(pending, max_output - produced)
+                self._raw_fallback = False
+                produced += len(piece)
+                pending = self._inflate.unconsumed_tail
+                yield piece
+
+        return b"".join(drained())
 
     def finish(self) -> None:
         if not self._inflate.eof:
