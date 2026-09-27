@@ -47,6 +47,9 @@ class DeploymentPromptSettings(BaseModel):
     supports_system_message: bool | None = None
 
 
+_NO_DEPLOYMENT_PROMPT_SETTINGS: Final = DeploymentPromptSettings()
+
+
 def _dict_copy(value: Mapping[str, object]) -> dict[str, object]:  # mutable-ok: adapter pops keys
     return copy.deepcopy(dict(value))
 
@@ -187,7 +190,7 @@ async def build_count_tokens_payload(
     system: object | None,
     tools: Sequence[Mapping[str, object]] | None,
     message_format: CountTokensMessageFormat,
-    settings: DeploymentPromptSettings = DeploymentPromptSettings(),
+    settings: DeploymentPromptSettings = _NO_DEPLOYMENT_PROMPT_SETTINGS,
 ) -> GeminiCountTokensPayload:
     chat_request: Final = await (
         offload_token_count(_chat_request_from_anthropic)(
