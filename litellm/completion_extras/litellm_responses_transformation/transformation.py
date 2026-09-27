@@ -79,14 +79,19 @@ _RESPONSES_API_ONLY_FIELDS: Final = frozenset((*Response.model_fields, *Response
 )
 
 
-def _offset_annotation(annotation: Mapping[str, object], offset: int) -> dict[str, object]:
-    citation: Final = annotation.get("url_citation")
-    if isinstance(citation, dict):
-        return {**annotation, "url_citation": _offset_annotation(citation, offset)}
+def _offset_citation_indices(fields: Mapping[str, object], offset: int) -> dict[str, object]:
     return {
         key: value + offset if key in ("start_index", "end_index") and isinstance(value, int) else value
-        for key, value in annotation.items()
+        for key, value in fields.items()
     }
+
+
+def _offset_annotation(annotation: Mapping[str, object], offset: int) -> dict[str, object]:
+    """Shift citation indices in either the flat Responses form or the nested Chat Completions ``url_citation`` form."""
+    citation: Final = annotation.get("url_citation")
+    if isinstance(citation, dict):
+        return {**annotation, "url_citation": _offset_citation_indices(citation, offset)}
+    return _offset_citation_indices(annotation, offset)
 
 
 def _provider_metadata(response_fields: Mapping[str, object] | None) -> Mapping[str, object]:
