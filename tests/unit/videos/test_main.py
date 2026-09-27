@@ -39,6 +39,7 @@ import pytest
 
 
 import litellm
+from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.types.videos.main import CharacterObject, VideoObject
 from litellm.types.videos.utils import encode_video_id_with_provider
@@ -178,13 +179,45 @@ def test_video_content__plain_id_defaults_to_openai(seams):
     assert seams.kwargs_of("video_content_handler")["custom_llm_provider"] == "openai"
 
 
-def test_video_content__plain_id_with_grok_model_uses_xai(seams):
+@pytest.fixture
+def real_provider_resolution(seams):
+    with patch.object(videos_main, "get_llm_provider", get_llm_provider):
+        yield seams
+
+
+def test_video_content__plain_id_with_xai_model_uses_xai(real_provider_resolution):
+    seams = real_provider_resolution
     videos_main.video_content(
         video_id="9b444cea-aaaa-bbbb-cccc-dddddddddddd",
-        model="grok-imagine-video-1.5",
+        model="xai/grok-imagine-video-1.5",
     )
 
     assert seams.kwargs_of("video_content_handler")["custom_llm_provider"] == "xai"
+
+
+def test_video_status__plain_id_with_xai_model_uses_xai(real_provider_resolution):
+    seams = real_provider_resolution
+    videos_main.video_status(
+        video_id="9b444cea-aaaa-bbbb-cccc-dddddddddddd",
+        model="xai/grok-imagine-video-1.5",
+    )
+
+    assert seams.kwargs_of("video_status_handler")["custom_llm_provider"] == "xai"
+    assert seams.get_config.call_args.kwargs["provider"] == litellm.LlmProviders.XAI
+
+
+def test_video_status__plain_id_with_unresolvable_model_defaults_to_openai(real_provider_resolution):
+    seams = real_provider_resolution
+    videos_main.video_status(video_id="video_plain", model="not-a-known-model")
+
+    assert seams.kwargs_of("video_status_handler")["custom_llm_provider"] == "openai"
+
+
+def test_video_status__decoded_provider_beats_model(real_provider_resolution):
+    seams = real_provider_resolution
+    videos_main.video_status(video_id=AZURE_VIDEO_ID, model="xai/grok-imagine-video-1.5")
+
+    assert seams.kwargs_of("video_status_handler")["custom_llm_provider"] == "azure"
 
 
 def test_video_remix__dispatch_and_provider_from_id(seams):
@@ -387,14 +420,14 @@ async def test_avideo_content__pre_decodes_provider_before_delegating():
 
 
 @pytest.mark.asyncio
-async def test_avideo_content__plain_id_with_grok_model_uses_xai():
+async def test_avideo_content__plain_id_with_xai_model_uses_xai():
     sentinel = b"mp4-bytes"
     with patch.object(
         videos_main, "video_content", MagicMock(return_value=sentinel)
     ) as sync:
         result = await videos_main.avideo_content(
             video_id="9b444cea-aaaa-bbbb-cccc-dddddddddddd",
-            model="grok-imagine-video-1.5",
+            model="xai/grok-imagine-video-1.5",
         )
 
     assert result is sentinel

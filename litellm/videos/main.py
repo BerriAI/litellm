@@ -30,49 +30,23 @@ from litellm.videos.utils import VideoGenerationRequestUtils
 llm_http_handler: BaseLLMHTTPHandler = BaseLLMHTTPHandler()
 
 
-def _litellm_provider_from_cost_entry(info: object) -> str | None:
-    if isinstance(info, dict):
-        catalog_provider: Final = info.get("litellm_provider")
-        if isinstance(catalog_provider, str) and catalog_provider:
-            return catalog_provider
-    return None
-
-
-def _provider_from_prefixed_model(model: str) -> str | None:
-    if "/" not in model:
+def _provider_from_model(model: object) -> str | None:
+    if not isinstance(model, str) or not model:
         return None
     try:
         _, provider, _, _ = get_llm_provider(model=model)
-    except Exception:
+    except litellm.BadRequestError:
         return None
     return provider
 
 
-def _custom_llm_provider_from_model(model: str) -> str | None:
+def _provider_for_video_id(video_id: str, custom_llm_provider: str | None, model: object) -> str:
     return (
-        _provider_from_prefixed_model(model)
-        or _litellm_provider_from_cost_entry(litellm.model_cost.get(model))
-        or _litellm_provider_from_cost_entry(litellm.model_cost.get(f"xai/{model}"))
-        or ("xai" if model.startswith("grok-imagine-video") else None)
+        custom_llm_provider
+        or decode_video_id_with_provider(video_id).get("custom_llm_provider")
+        or _provider_from_model(model)
+        or "openai"
     )
-
-
-def _provider_for_video_id(
-    video_id: str,
-    custom_llm_provider: str | None,
-    model: object | None = None,
-) -> str:
-    if custom_llm_provider is not None:
-        return custom_llm_provider
-    decoded: Final = decode_video_id_with_provider(video_id)
-    from_id: Final = decoded.get("custom_llm_provider")
-    if from_id:
-        return from_id
-    if isinstance(model, str) and model:
-        from_model: Final = _custom_llm_provider_from_model(model)
-        if from_model:
-            return from_model
-    return "openai"
 
 
 ##### Video Generation #######################
