@@ -862,6 +862,7 @@ class LiteLLMRoutes(enum.Enum):
             "/tag/daily/activity",
             "/tag/daily/activity/aggregated",
             "/tag/daily/activity/aggregated/search",
+            "/tag/daily/activity/aggregated/model_top_keys",
             "/tag/daily/activity/export",
             "/tag/list",
             "/v1/models/{model_id}",
@@ -889,6 +890,7 @@ class LiteLLMRoutes(enum.Enum):
             "/tag/daily/activity",
             "/tag/daily/activity/aggregated",
             "/tag/daily/activity/aggregated/search",
+            "/tag/daily/activity/aggregated/model_top_keys",
             "/tag/daily/activity/export",
             "/tag/list",
         ]
@@ -935,6 +937,7 @@ class LiteLLMRoutes(enum.Enum):
         "/organization/daily/activity",
         "/organization/daily/activity/aggregated",
         "/organization/daily/activity/aggregated/search",
+        "/organization/daily/activity/aggregated/model_top_keys",
         "/organization/daily/activity/export",
         "/user/available_roles",  # read-only role metadata; any authenticated user may read
         # Claude Code gateway: the signed-in CLI fetches its managed settings and posts its own telemetry
@@ -1022,6 +1025,7 @@ class LiteLLMRoutes(enum.Enum):
             "/tag/daily/activity",
             "/tag/daily/activity/aggregated",
             "/tag/daily/activity/aggregated/search",
+            "/tag/daily/activity/aggregated/model_top_keys",
             "/tag/daily/activity/export",
             "/tag/list",
             "/audit",

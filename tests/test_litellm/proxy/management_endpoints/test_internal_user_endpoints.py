@@ -6,7 +6,7 @@ from collections.abc import Mapping, Sequence
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from typing import Final
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import ANY, AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -2587,7 +2587,67 @@ async def test_get_user_daily_activity_aggregated_admin_global_view(monkeypatch,
         api_key=None,
         timezone_offset_minutes=480,
         include_current_utc_day=include_current_utc_day,
+        include_entity_breakdown=True,
+        entity_breakdown_api_keys=False,
+        resolve_entity_metadata=ANY,
     )
+
+
+@pytest.mark.asyncio
+async def test_get_user_daily_activity_aggregated_resolves_user_emails(monkeypatch):
+    """
+    The admin Spend Per User view needs breakdown.entities labelled with the
+    user's email, so the aggregated call must opt into the entity breakdown
+    and pass a resolver keyed on the user ids found in the rollup.
+    """
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy.management_endpoints.internal_user_endpoints import (
+        get_user_daily_activity_aggregated,
+    )
+
+    mock_prisma_client = MagicMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+
+    mock_get_daily_agg = AsyncMock(return_value=MagicMock())
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.internal_user_endpoints.get_daily_activity_aggregated",
+        mock_get_daily_agg,
+    )
+
+    admin_key_dict = UserAPIKeyAuth(
+        user_id="admin-user-001",
+        user_role=LitellmUserRoles.PROXY_ADMIN,
+    )
+
+    await get_user_daily_activity_aggregated(
+        start_date="2025-02-01",
+        end_date="2025-02-28",
+        model=None,
+        api_key=None,
+        user_id=None,
+        timezone=None,
+        include_current_utc_day=False,
+        user_api_key_dict=admin_key_dict,
+    )
+
+    kwargs = mock_get_daily_agg.call_args.kwargs
+    assert kwargs["include_entity_breakdown"] is True
+    assert kwargs["entity_breakdown_api_keys"] is False
+    resolve = kwargs["resolve_entity_metadata"]
+    assert resolve is not None
+
+    db_user: Final = MagicMock(user_id="u1", user_email="u1@example.com", user_alias=None)
+    user_table: Final = MagicMock()
+    user_table.find_many = AsyncMock(return_value=[db_user])
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.internal_user_endpoints._user_table",
+        lambda prisma: user_table,
+    )
+
+    resolved: Final = await resolve(frozenset({"u1"}))
+
+    assert resolved == {"u1": {"user_email": "u1@example.com", "user_alias": None}}
 
 
 @pytest.mark.asyncio
@@ -5270,11 +5330,11 @@ def test_user_export_csv_adds_flat_cost_columns_only_with_ptu_flat_cost():
 
 def test_user_export_row_maps_the_entity_column_to_user_id():
     from litellm.proxy.management_endpoints.internal_user_endpoints import _ExportUserLabel, _user_export_row
-    from litellm.types.proxy.management_endpoints.team_endpoints import TeamDailyActivityExportRow
+    from litellm.types.proxy.management_endpoints.common_daily_activity import DailyActivityExportRow
 
-    team_row: Final = TeamDailyActivityExportRow(
+    team_row: Final = DailyActivityExportRow(
         date="2026-06-01",
-        team_id="user-7",
+        entity_id="user-7",
         api_key="key-1",
         key_alias="alias-1",
         user_email="key-owner@example.com",
@@ -5358,14 +5418,14 @@ async def test_get_user_daily_activity_export_admin_global_view(monkeypatch):
     from litellm.proxy.management_endpoints.internal_user_endpoints import (
         get_user_daily_activity_export,
     )
-    from litellm.types.proxy.management_endpoints.team_endpoints import TeamDailyActivityExportRow
+    from litellm.types.proxy.management_endpoints.common_daily_activity import DailyActivityExportRow
 
     mock_prisma_client = MagicMock()
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
 
-    team_row: Final = TeamDailyActivityExportRow(
+    team_row: Final = DailyActivityExportRow(
         date="2025-02-01",
-        team_id="user-9",
+        entity_id="user-9",
         api_key="key-1",
         key_alias="alias-1",
         user_email="key-metadata@example.com",

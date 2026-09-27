@@ -64,8 +64,8 @@ from litellm.proxy.management_endpoints.common_daily_activity import (
     daily_activity_error,
     get_daily_activity,
     get_daily_activity_aggregated,
-    get_daily_activity_model_top_api_keys,
     get_daily_activity_export_rows,
+    get_daily_activity_model_top_api_keys,
 )
 from litellm.proxy.management_endpoints.common_utils import (
     _is_user_team_admin,
@@ -98,6 +98,7 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    DailyActivityExportRow,
     DailySpendMetadata,
     ModelTopApiKeysGroupBy,
     ModelTopApiKeysResponse,
@@ -122,7 +123,6 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
 )
 from litellm.types.proxy.management_endpoints.team_endpoints import (
     TeamDailyActivityExportFormat,
-    TeamDailyActivityExportRow,
 )
 from litellm.types.utils import BudgetConfig
 
@@ -2878,18 +2878,32 @@ async def ui_view_users(
 # Using shared metric helper implementations from common_daily_activity
 
 
+class _UserEmailMetadata(TypedDict):
+    user_email: ReadOnly[str | None]
+    user_alias: ReadOnly[str | None]
+
+
+async def _resolve_user_email_metadata_by_ids(
+    prisma_client: "PrismaClient", user_ids: frozenset[str]
+) -> Mapping[str, _UserEmailMetadata]:
+    if not user_ids:
+        return MappingProxyType({})
+    users: Final = await _user_table(prisma_client).find_many(where={"user_id": {"in": list(user_ids)}})
+    return MappingProxyType(
+        {user.user_id: _UserEmailMetadata(user_email=user.user_email, user_alias=user.user_alias) for user in users}
+    )
+
+
 async def _resolve_user_email_metadata(
     prisma_client: "PrismaClient", records: Sequence[DailySpendRecord]
-) -> dict[str, dict]:
+) -> dict[str, dict[str, object]]:
     """Map each user_id on the page to its email/alias so the Usage dashboard can
     label the 'Spend Per User' chart with the email instead of the raw UUID."""
-    user_ids: Final = {
+    user_ids: Final = frozenset(
         user_id for record in records if isinstance(user_id := getattr(record, "user_id", None), str) and user_id
-    }
-    if not user_ids:
-        return {}
-    users: Final = await _user_table(prisma_client).find_many(where={"user_id": {"in": list(user_ids)}})
-    return {user.user_id: {"user_email": user.user_email, "user_alias": user.user_alias} for user in users}
+    )
+    resolved: Final = await _resolve_user_email_metadata_by_ids(prisma_client, user_ids)
+    return {user_id: dict(metadata) for user_id, metadata in resolved.items()}
 
 
 @router.get(
@@ -3115,6 +3129,9 @@ async def get_user_daily_activity_aggregated(
             api_key=api_key,
             timezone_offset_minutes=timezone,
             include_current_utc_day=include_current_utc_day,
+            include_entity_breakdown=True,
+            entity_breakdown_api_keys=False,
+            resolve_entity_metadata=lambda user_ids: _resolve_user_email_metadata_by_ids(prisma_client, user_ids),
         )
 
     except HTTPException:
@@ -3144,13 +3161,11 @@ async def _resolve_export_users(
     )
 
 
-def _user_export_row(
-    row: TeamDailyActivityExportRow, users: Mapping[str, _ExportUserLabel]
-) -> UserDailyActivityExportRow:
-    label: Final = users.get(row.team_id)
+def _user_export_row(row: DailyActivityExportRow, users: Mapping[str, _ExportUserLabel]) -> UserDailyActivityExportRow:
+    label: Final = users.get(row.entity_id)
     return UserDailyActivityExportRow(
         date=row.date,
-        user_id=row.team_id,
+        user_id=row.entity_id,
         user_email=label.email if label else None,
         user_alias=label.alias if label else None,
         api_key=row.api_key,
@@ -3286,7 +3301,7 @@ async def get_user_daily_activity_export(
         )
         export_users: Final = await _resolve_export_users(
             prisma_client,
-            frozenset(row.team_id for row in rows if row.team_id and row.team_id != "Unassigned"),
+            frozenset(row.entity_id for row in rows if row.entity_id and row.entity_id != "Unassigned"),
         )
     except HTTPException:
         raise

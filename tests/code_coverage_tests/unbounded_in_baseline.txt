@@ -11,7 +11,7 @@ litellm/proxy/_experimental/mcp_server/oauth2_flow_backfill.py backfill_null_oau
 litellm/proxy/_experimental/mcp_server/oauth2_flow_backfill.py backfill_null_oauth2_flows prisma server_id.in `server_ids` 0
 litellm/proxy/_experimental/mcp_server/toolset_db.py list_mcp_toolsets prisma toolset_id.in `toolset_ids` 0
 litellm/proxy/agent_endpoints/endpoints.py _attach_keys_to_agents prisma agent_id.in `agent_ids` 0
-litellm/proxy/agent_endpoints/endpoints.py get_agent_daily_activity prisma agent_id.in `list(agent_ids_list)` 0
+litellm/proxy/agent_endpoints/endpoints.py _resolve_agent_daily_activity_scope prisma agent_id.in `list(agent_ids_list)` 0
 litellm/proxy/agent_endpoints/endpoints.py get_agents prisma agent_id.in `agent_ids` 0
 litellm/proxy/anthropic_endpoints/claude_code_endpoints/claude_code_skill_access.py SkillVisibility.where prisma name.in `sorted(self.granted)` 0
 litellm/proxy/auth/auth_checks.py _fetch_uncached_model_access_group_budgets prisma access_group_name.in `list(uncached_groups)` 0
@@ -39,21 +39,22 @@ litellm/proxy/management_endpoints/auto_router_endpoints.py start_shadow_eval pr
 litellm/proxy/management_endpoints/auto_router_endpoints.py start_shadow_eval prisma token.in `list(data.api_key_ids)` 0
 litellm/proxy/management_endpoints/auto_router_endpoints.py start_shadow_eval prisma user_id.in `list(data.user_ids)` 0
 litellm/proxy/management_endpoints/budget_management_endpoints.py info_budget prisma budget_id.in `data.budgets` 0
-litellm/proxy/management_endpoints/common_daily_activity.py _build_aggregated_where_clause raw-sql api_key.IN `IN ({placeholders})` 0
-litellm/proxy/management_endpoints/common_daily_activity.py _build_aggregated_where_clause raw-sql {entity_id_field}.IN `IN ({placeholders})` 0
-litellm/proxy/management_endpoints/common_daily_activity.py _build_aggregated_where_clause raw-sql {entity_id_field}.IN `IN ({placeholders})` 1
 litellm/proxy/management_endpoints/common_daily_activity.py _build_where_conditions prisma [entity_id_field].in `entity_id` 0
 litellm/proxy/management_endpoints/common_daily_activity.py _build_where_conditions prisma api_key.in `api_key` 0
 litellm/proxy/management_endpoints/common_daily_activity.py _build_where_conditions prisma not.in `exclude_entity_ids` 0
+litellm/proxy/management_endpoints/common_daily_activity.py build_aggregated_where_clause raw-sql api_key.IN `IN ({placeholders})` 0
+litellm/proxy/management_endpoints/common_daily_activity.py build_aggregated_where_clause raw-sql {entity_id_field}.IN `IN ({placeholders})` 0
+litellm/proxy/management_endpoints/common_daily_activity.py build_aggregated_where_clause raw-sql {entity_id_field}.IN `IN ({placeholders})` 1
 litellm/proxy/management_endpoints/common_daily_activity.py get_api_key_metadata prisma token.in `list(api_keys)` 0
 litellm/proxy/management_endpoints/common_daily_activity.py get_api_key_metadata prisma token.in `list(missing_keys)` 0
 litellm/proxy/management_endpoints/common_utils.py _team_admin_can_invite_user prisma team_id.in `admin_user_obj.teams` 0
 litellm/proxy/management_endpoints/common_utils.py _user_has_admin_privileges prisma team_id.in `user_obj.teams` 0
+litellm/proxy/management_endpoints/customer_endpoints.py _resolve_customer_daily_activity_scope prisma user_id.in `list(end_user_ids_list)` 0
 litellm/proxy/management_endpoints/customer_endpoints.py delete_end_user prisma user_id.in `data.user_ids` 0
 litellm/proxy/management_endpoints/customer_endpoints.py delete_end_user prisma user_id.in `data.user_ids` 1
 litellm/proxy/management_endpoints/customer_endpoints.py get_customer_daily_activity prisma user_id.in `list(end_user_ids_list)` 0
 litellm/proxy/management_endpoints/internal_user_endpoints.py _check_user_info_v2_access prisma team_id.in `caller_user.teams` 0
-litellm/proxy/management_endpoints/internal_user_endpoints.py _resolve_user_email_metadata prisma user_id.in `list(user_ids)` 0
+litellm/proxy/management_endpoints/internal_user_endpoints.py _resolve_user_email_metadata_by_ids prisma user_id.in `list(user_ids)` 0
 litellm/proxy/management_endpoints/internal_user_endpoints.py delete_user prisma created_by.in `data.user_ids` 0
 litellm/proxy/management_endpoints/internal_user_endpoints.py delete_user prisma team_id.in `user_row.teams` 0
 litellm/proxy/management_endpoints/internal_user_endpoints.py delete_user prisma updated_by.in `data.user_ids` 0
@@ -80,8 +81,8 @@ litellm/proxy/management_endpoints/key_management_endpoints.py info_key_fn_v2 pr
 litellm/proxy/management_endpoints/mcp_management_endpoints.py fetch_all_mcp_servers prisma server_id.in `byok_server_ids` 0
 litellm/proxy/management_endpoints/model_access_group_management_endpoints.py update_deployments_with_access_group prisma model_name.in `model_names` 0
 litellm/proxy/management_endpoints/model_management_endpoints.py delete_team_models prisma model_id.in `model_ids` 0
+litellm/proxy/management_endpoints/organization_endpoints.py _resolve_organization_daily_activity_scope prisma organization_id.in `list(org_ids_list)` 0
 litellm/proxy/management_endpoints/organization_endpoints.py deprecated_info_organization prisma organization_id.in `data.organizations` 0
-litellm/proxy/management_endpoints/organization_endpoints.py get_organization_daily_activity prisma organization_id.in `list(org_ids_list)` 0
 litellm/proxy/management_endpoints/organization_endpoints.py list_organization prisma organization_id.in `membership_org_ids` 0
 litellm/proxy/management_endpoints/router_weights.py validate_router_settings_weights prisma model_id.in `list(deployment_ids)` 0
 litellm/proxy/management_endpoints/session_endpoints.py revoke_ui_session_keys prisma token.in `revoked_tokens` 0

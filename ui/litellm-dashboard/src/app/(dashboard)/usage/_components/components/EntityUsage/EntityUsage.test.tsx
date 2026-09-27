@@ -55,35 +55,63 @@ vi.mock("@/components/networking", () => ({
   tagDailyActivityAggregatedCall: vi.fn(),
   tagDailyActivityKeySearchCall: vi.fn(),
   tagDailyActivityExportCall: vi.fn(),
+  tagDailyActivityModelTopKeysCall: vi.fn(),
   teamDailyActivityCall: vi.fn(),
   teamDailyActivityAggregatedCall: vi.fn(),
   teamDailyActivityKeySearchCall: vi.fn(),
   teamDailyActivityExportCall: vi.fn(),
+  teamDailyActivityModelTopKeysCall: vi.fn(),
   organizationDailyActivityCall: vi.fn(),
   organizationDailyActivityAggregatedCall: vi.fn(),
   organizationDailyActivityKeySearchCall: vi.fn(),
   organizationDailyActivityExportCall: vi.fn(),
+  organizationDailyActivityModelTopKeysCall: vi.fn(),
   customerDailyActivityCall: vi.fn(),
   customerDailyActivityAggregatedCall: vi.fn(),
   customerDailyActivityKeySearchCall: vi.fn(),
   customerDailyActivityExportCall: vi.fn(),
+  customerDailyActivityModelTopKeysCall: vi.fn(),
   agentDailyActivityCall: vi.fn(),
   agentDailyActivityAggregatedCall: vi.fn(),
   agentDailyActivityKeySearchCall: vi.fn(),
   agentDailyActivityExportCall: vi.fn(),
+  agentDailyActivityModelTopKeysCall: vi.fn(),
   userDailyActivityCall: vi.fn(),
+  userDailyActivityAggregatedCall: vi.fn(),
+  userDailyActivityKeySearchCall: vi.fn(),
+  userDailyActivityExportCall: vi.fn(),
+  userDailyActivityModelTopKeysCall: vi.fn(),
 }));
 
 // Mock the child components to simplify testing
-vi.mock("@/components/activity_metrics", () => ({
-  ActivityMetrics: ({ modelMetrics }: { modelMetrics?: { __source?: string } }) => (
-    <div>
-      <span>Activity Metrics</span>
-      <span>{`metrics-source:${modelMetrics?.__source ?? "none"}`}</span>
-    </div>
-  ),
-  processActivityData: (_data: unknown, key: string) => ({ __source: key }),
-}));
+vi.mock("@/components/activity_metrics", async () => {
+  const { useState } = await import("react");
+  return {
+    ActivityMetrics: ({
+      modelMetrics,
+      fetchTopApiKeys,
+    }: {
+      modelMetrics?: { __source?: string };
+      fetchTopApiKeys?: (modelName: string) => Promise<{ api_key: string }[]>;
+    }) => {
+      const [keys, setKeys] = useState<string[]>([]);
+      return (
+        <div>
+          <span>Activity Metrics</span>
+          <span>{`metrics-source:${modelMetrics?.__source ?? "none"}`}</span>
+          {fetchTopApiKeys && (
+            <button onClick={() => fetchTopApiKeys("gpt-4o").then((rows) => setKeys(rows.map((row) => row.api_key)))}>
+              expand gpt-4o
+            </button>
+          )}
+          <span>{`model-top-keys:${keys.join("|")}`}</span>
+        </div>
+      );
+    },
+    processActivityData: (_data: unknown, key: string) => ({ __source: key }),
+    toTopApiKeyData: (response: { api_keys: { api_key: string }[] }) => response.api_keys,
+  };
+});
 
 vi.mock("../EndpointUsage/EndpointUsage", () => ({
   default: () => <div>Endpoint Usage Panel</div>,
@@ -121,11 +149,15 @@ vi.mock("@/components/EntityUsageExport", () => ({
     filterSlot,
     showFilters,
     serverExport,
+    filterOptions,
+    onFiltersChange,
   }: {
     filterLabel?: string;
     filterSlot?: ReactNode;
     showFilters?: boolean;
     serverExport?: unknown;
+    filterOptions?: { label: string; value: string }[];
+    onFiltersChange?: (values: string[]) => void;
   }) => (
     <div>
       <span>Usage Export Header</span>
@@ -133,6 +165,11 @@ vi.mock("@/components/EntityUsageExport", () => ({
       <span>{`show-filters:${showFilters === true}`}</span>
       <span>{`server-export:${serverExport !== undefined}`}</span>
       {filterSlot}
+      {(filterOptions ?? []).map((option) => (
+        <button key={option.value} onClick={() => onFiltersChange?.([option.value])}>
+          {`filter:${option.value}`}
+        </button>
+      ))}
     </div>
   ),
 }));
@@ -164,6 +201,9 @@ describe("EntityUsage", () => {
   const mockAgentDailyActivityCall = vi.mocked(networking.agentDailyActivityCall);
   const mockAgentDailyActivityAggregatedCall = vi.mocked(networking.agentDailyActivityAggregatedCall);
   const mockUserDailyActivityCall = vi.mocked(networking.userDailyActivityCall);
+  const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
+  const mockTagDailyActivityModelTopKeysCall = vi.mocked(networking.tagDailyActivityModelTopKeysCall);
+  const mockUserDailyActivityModelTopKeysCall = vi.mocked(networking.userDailyActivityModelTopKeysCall);
   const mockUseInfiniteUsers = vi.mocked(useInfiniteUsers);
 
   const infiniteUsersResult = (users: { user_id: string; user_alias: string | null; user_email: string | null }[]) =>
@@ -468,6 +508,9 @@ describe("EntityUsage", () => {
     mockAgentDailyActivityCall.mockClear();
     mockAgentDailyActivityAggregatedCall.mockClear();
     mockUserDailyActivityCall.mockClear();
+    mockUserDailyActivityAggregatedCall.mockReset();
+    mockTagDailyActivityModelTopKeysCall.mockReset();
+    mockUserDailyActivityModelTopKeysCall.mockReset();
     mockTagDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
     mockTagDailyActivityKeySearchCall.mockResolvedValue(mockSpendData);
     mockTeamDailyActivityCall.mockResolvedValue(mockSpendData);
@@ -477,6 +520,23 @@ describe("EntityUsage", () => {
     mockAgentDailyActivityCall.mockResolvedValue(mockAgentSpendData);
     mockAgentDailyActivityAggregatedCall.mockResolvedValue(mockAgentSpendData);
     mockUserDailyActivityCall.mockResolvedValue(mockSpendData);
+    mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
+    mockTagDailyActivityModelTopKeysCall.mockResolvedValue({
+      model: "gpt-4o",
+      group_by: "model_group",
+      limit: 5,
+      api_keys: [
+        { api_key: "sk-top-1", key_alias: "Top Key", team_id: null, spend: 12.5, api_requests: 3, total_tokens: 700 },
+      ],
+    });
+    mockUserDailyActivityModelTopKeysCall.mockResolvedValue({
+      model: "gpt-4o",
+      group_by: "model_group",
+      limit: 5,
+      api_keys: [
+        { api_key: "sk-user-1", key_alias: "User Key", team_id: null, spend: 9.5, api_requests: 2, total_tokens: 300 },
+      ],
+    });
     mockUseInfiniteUsers.mockClear();
     mockUseInfiniteUsers.mockReturnValue(
       infiniteUsersResult([
@@ -634,12 +694,19 @@ describe("EntityUsage", () => {
     });
   });
 
-  it("should render with user entity type and call user API", async () => {
+  it("should render with user entity type and call the aggregated user API once", async () => {
     render(<EntityUsage {...defaultProps} entityType="user" />);
 
     await waitFor(() => {
-      expect(mockUserDailyActivityCall).toHaveBeenCalled();
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledTimes(1);
     });
+    expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+      "test-token",
+      expect.any(Date),
+      expect.any(Date),
+      null,
+    );
+    expect(mockUserDailyActivityCall).not.toHaveBeenCalled();
 
     expect(screen.getByText("User Spend Overview")).toBeInTheDocument();
 
@@ -1074,13 +1141,13 @@ describe("EntityUsage", () => {
       ],
     };
 
-    mockUserDailyActivityCall.mockResolvedValue(spendDataForUser);
+    mockUserDailyActivityAggregatedCall.mockResolvedValue(spendDataForUser);
 
     // entityList is null to simulate a spender missing from the paginated user list
     render(<EntityUsage {...defaultProps} entityType="user" entityList={null} />);
 
     await waitFor(() => {
-      expect(mockUserDailyActivityCall).toHaveBeenCalled();
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
     await waitFor(() => {
@@ -1257,7 +1324,7 @@ describe("EntityUsage", () => {
     const renderUserUsage = async () => {
       render(<EntityUsage {...defaultProps} entityType="user" entityList={null} />);
       await waitFor(() => {
-        expect(mockUserDailyActivityCall).toHaveBeenCalled();
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
     };
 
@@ -1284,30 +1351,33 @@ describe("EntityUsage", () => {
       const user = userEvent.setup();
       await renderUserUsage();
 
-      expect(mockUserDailyActivityCall).toHaveBeenCalledWith("test-token", expect.any(Date), expect.any(Date), 1, null);
+      expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+        "test-token",
+        expect.any(Date),
+        expect.any(Date),
+        null,
+      );
 
       await user.click(userCombobox());
       await user.click(await screen.findByText("Alice (user-001)"));
 
       await waitFor(() => {
-        expect(mockUserDailyActivityCall).toHaveBeenCalledWith(
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
           "test-token",
           expect.any(Date),
           expect.any(Date),
-          1,
           "user-001",
         );
       });
 
-      mockUserDailyActivityCall.mockClear();
+      mockUserDailyActivityAggregatedCall.mockClear();
       await user.click(userDropdown().querySelector('[data-slot="combobox-clear"]') as HTMLElement);
 
       await waitFor(() => {
-        expect(mockUserDailyActivityCall).toHaveBeenCalledWith(
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
           "test-token",
           expect.any(Date),
           expect.any(Date),
-          1,
           null,
         );
       });
@@ -1384,6 +1454,91 @@ describe("EntityUsage", () => {
       render(<EntityUsage {...defaultProps} entityType="tag" />);
 
       expect(await screen.findByText("server-export:true")).toBeInTheDocument();
+    });
+
+    it("offers a server export for user even without truncation since the rollup is key-free", async () => {
+      const untruncatedData = {
+        ...mockSpendData,
+        metadata: { ...mockSpendData.metadata, api_key_limit: 10, total_api_keys: 4 },
+      };
+      mockUserDailyActivityAggregatedCall.mockResolvedValue(untruncatedData);
+
+      render(<EntityUsage {...defaultProps} entityType="user" entityList={null} />);
+
+      expect(await screen.findByText("server-export:true")).toBeInTheDocument();
+    });
+
+    it("keeps client-side export for a non-user entity without truncation", async () => {
+      const untruncatedData = {
+        ...mockSpendData,
+        metadata: { ...mockSpendData.metadata, api_key_limit: 10, total_api_keys: 4 },
+      };
+      mockTagDailyActivityAggregatedCall.mockResolvedValue(untruncatedData);
+
+      render(<EntityUsage {...defaultProps} entityType="tag" />);
+
+      expect(await screen.findByText("server-export:false")).toBeInTheDocument();
+    });
+  });
+
+  describe("model top api keys", () => {
+    it("expanding a model row on the tag tab calls the tag model_top_keys route with the selected tags", async () => {
+      render(<EntityUsage {...defaultProps} entityType="tag" />);
+      await waitFor(() => {
+        expect(mockTagDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      fireEvent.click(screen.getByText("filter:tag-1"));
+      fireEvent.click(screen.getByText("Model Activity"));
+      fireEvent.click(screen.getByText("expand gpt-4o"));
+
+      await waitFor(() => {
+        expect(mockTagDailyActivityModelTopKeysCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          "gpt-4o",
+          "model_group",
+          ["tag-1"],
+        );
+      });
+      expect(await screen.findByText("model-top-keys:sk-top-1")).toBeInTheDocument();
+    });
+
+    it("expanding a model row on the user tab calls the user model_top_keys route with the selected user", async () => {
+      const user = userEvent.setup();
+      render(<EntityUsage {...defaultProps} entityType="user" entityList={null} />);
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
+      });
+
+      const userCombobox = within(screen.getByTestId("user-dropdown")).getByRole("combobox");
+      await user.click(userCombobox);
+      await user.click(await screen.findByText("Alice (user-001)"));
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          "user-001",
+        );
+      });
+
+      fireEvent.click(screen.getByText("expand gpt-4o"));
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityModelTopKeysCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          "gpt-4o",
+          "model_group",
+          "user-001",
+        );
+      });
+      expect(await screen.findByText("model-top-keys:sk-user-1")).toBeInTheDocument();
+      expect(mockTagDailyActivityModelTopKeysCall).not.toHaveBeenCalled();
     });
   });
 });
