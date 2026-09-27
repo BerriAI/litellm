@@ -7604,6 +7604,53 @@ class TestTeamMemberAutoRouterWrites:
         assert request.litellm_params.complexity_router_config == config
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("supplied", "carried"),
+        [
+            ({}, {"provider": "bespoke_nimble", "api_base": "http://nimble.internal"}),
+            ({"provider": "typesafe", "model": "jev-latest"}, {}),
+            ({"model": None}, {"provider": "bespoke_nimble", "model": "nimble-latest", "api_base": "http://nimble.internal"}),
+        ],
+    )
+    async def test_dashboard_save_keeps_the_stored_jev_provider_with_its_own_base(
+        self, supplied: dict[str, str], carried: dict[str, str]
+    ) -> None:
+        from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
+
+        stored_jev: Final = {"provider": "bespoke_nimble", "model": "nimble-latest", "api_base": "http://nimble.internal"}
+        row: Final = self._row().model_copy(
+            update={
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "classifier_type": "jev",
+                        "tiers": {"SIMPLE": "allowed"},
+                        "jev_classifier_config": stored_jev,
+                    },
+                },
+            }
+        )
+        database: Final = self._database(self._team(), row)
+        incoming: Final = {
+            key: value for key, value in {"model": "nimble-latest", "timeout_ms": 900, **supplied}.items() if value
+        }
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(
+                complexity_router_config={
+                    "classifier_type": "jev",
+                    "tiers": {"SIMPLE": "allowed"},
+                    "jev_classifier_config": incoming,
+                }
+            ),
+            model_info=ModelInfo(id=row.model_id),
+        )
+        with self._environment(database, row):
+            await patch_model(row.model_id, request, UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN))
+        written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
+        saved: Final = json.loads(written["litellm_params"])["complexity_router_config"]["jev_classifier_config"]
+        assert saved == {**carried, **incoming}
+
+    @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
     @pytest.mark.parametrize("access", ["owner", "peer", "limited-key"])
     async def test_both_update_entries_enforce_creator_and_stamp_member_scope(

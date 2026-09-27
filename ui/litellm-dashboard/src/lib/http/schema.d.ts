@@ -31562,12 +31562,12 @@ export interface components {
         JevClassifierConfig: {
             /**
              * Api Base
-             * @description TypeSafe API base, falling back to TYPESAFE_API_BASE and then https://api.typesafe.ai
+             * @description API base, falling back to TYPESAFE_API_BASE (then https://api.typesafe.ai) or BESPOKE_NIMBLE_API_BASE
              */
             api_base?: string | null;
             /**
              * Api Key
-             * @description TypeSafe API key, falling back to TYPESAFE_API_KEY
+             * @description API key, falling back to TYPESAFE_API_KEY or BESPOKE_NIMBLE_API_KEY; bespoke_nimble may run keyless
              */
             api_key?: string | null;
             /**
@@ -31590,6 +31590,13 @@ export interface components {
              * @default jev-latest
              */
             model: string;
+            /**
+             * Provider
+             * @description System One server: TypeSafe, or a Bespoke Nimble deployment serving the same /v1/systemone API
+             * @default typesafe
+             * @enum {string}
+             */
+            provider: "typesafe" | "bespoke_nimble";
             /**
              * Timeout Ms
              * @default 3000

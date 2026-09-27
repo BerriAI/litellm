@@ -419,12 +419,17 @@ def _effective_complexity_router_config(
         return incoming
     supplied: Final = TypeAdapter(dict[str, object]).validate_python(incoming_jev)
     stored: Final = TypeAdapter(dict[str, object]).validate_python(existing_jev)
-    same_base: Final = "api_base" not in supplied or supplied["api_base"] == stored.get("api_base")
+    stored_provider: Final = stored.get("provider", "typesafe")
+    same_provider: Final = supplied.get("provider", stored_provider) == stored_provider
+    same_base: Final = same_provider and ("api_base" not in supplied or supplied["api_base"] == stored.get("api_base"))
     transport: Final = MappingProxyType(
         {
             key: value
             for key, value in stored.items()
-            if key in ("api_key", "api_base") and (key != "api_key" or same_base)
+            if key == "provider"
+            or (key == "api_base" and same_provider)
+            or (key == "api_key" and same_base)
+            or (key == "model" and same_provider and stored_provider != "typesafe")
         }
     )
     return {  # mutable-ok: persisted JSON requires concrete nested dicts

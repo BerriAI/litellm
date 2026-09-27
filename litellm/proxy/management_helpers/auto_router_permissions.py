@@ -33,6 +33,7 @@ from litellm.repositories.prisma_protocols import DatabaseClient
 from litellm.repositories.project_repository import ProjectRepository
 from litellm.repositories.table_repositories import TeamMembershipRepository
 from litellm.router import Router
+from litellm.router_strategy.complexity_router.config import JevProvider
 from litellm.router_utils.auto_router_model_naming import classify_strategy_router_model, strategy_router_dependencies
 from litellm.types.management_endpoints.auto_router_endpoints import RequestComplexityRouterConfig
 from litellm.types.router import Deployment, updateDeployment
@@ -67,10 +68,12 @@ class _MemberRouterGenerationParams(BaseModel):
 
 class _MemberJevClassifierConfig(BaseModel):
     """The Jev classifier settings a team member may set. Credentials stay the proxy's own: a member-chosen
-    api_base would receive the proxy's TYPESAFE_API_KEY, and a member-chosen api_key would be sent from the proxy."""
+    api_base would receive the proxy's TYPESAFE_API_KEY, and a member-chosen api_key would be sent from the proxy.
+    A member-chosen provider only selects between the proxy's own environment credential pairs."""
 
     model_config = ConfigDict(extra="forbid")
 
+    provider: JevProvider = "typesafe"
     model: str
     api_key: None = None
     api_base: None = None

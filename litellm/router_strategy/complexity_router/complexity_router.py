@@ -1309,14 +1309,26 @@ class ComplexityRouter(CustomLogger):
 
     @staticmethod
     def _build_jev_client(config: JevClassifierConfig) -> JevClassifierClient:
-        api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
-        if not api_key:
+        env_prefix: Final = config.provider.upper()
+        api_key: Final = config.api_key or (
+            get_secret_str(f"{env_prefix}_API_KEY") if config.api_base is None else None
+        )
+        if not api_key and config.provider == "typesafe":
             raise ValueError("jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'")
-        api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
+        api_base: Final = (
+            config.api_base
+            or get_secret_str(f"{env_prefix}_API_BASE")
+            or ("https://api.typesafe.ai" if config.provider == "typesafe" else None)
+        )
+        if not api_base:
+            raise ValueError(
+                f"jev_classifier_config.api_base or {env_prefix}_API_BASE is required for provider {config.provider!r}"
+            )
         return HttpJevClassifierClient(
-            api_key=api_key,
+            api_key=api_key or None,
             api_base=api_base,
             http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
+            provider=config.provider,
         )
 
     def __init__(
@@ -2217,7 +2229,8 @@ class ComplexityRouter(CustomLogger):
                 probabilities=answer.probabilities,
                 confidence=answer.confidence,
                 model=model,
-                cost=jev_classifier_cost(response, config.model),
+                provider=config.provider,
+                cost=jev_classifier_cost(response, config.model, config.provider),
             )
             if breaker is not None and permit is not None:
                 breaker.record_success(permit)
@@ -4765,7 +4778,7 @@ class ComplexityRouter(CustomLogger):
 
         tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model)
         classifier_model: Final = (
-            f"typesafe/{outcome.jev_verdict.model}"
+            f"{outcome.jev_verdict.provider}/{outcome.jev_verdict.model}"
             if outcome.cause == "jev_classifier" and outcome.jev_verdict is not None
             else self.config.classifier_llm_config.model
             if outcome.cause in ("llm_classifier", "capability_classifier", "llm_v2_classifier", "llm_v2_fallback")

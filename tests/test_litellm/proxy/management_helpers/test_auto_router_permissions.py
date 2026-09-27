@@ -159,11 +159,15 @@ def test_members_can_still_tune_the_jev_classifier() -> None:
         {
             "tiers": {"SIMPLE": "allowed"},
             "classifier_type": "jev",
-            "jev_classifier_config": {"model": "jev-preview", "timeout_ms": 500},
+            "jev_classifier_config": {"provider": "bespoke_nimble", "model": "nimble-latest", "timeout_ms": 500},
         }
     )
     assert validated.jev_classifier_config is not None
-    assert (validated.jev_classifier_config.model, validated.jev_classifier_config.timeout_ms) == ("jev-preview", 500)
+    assert (
+        validated.jev_classifier_config.provider,
+        validated.jev_classifier_config.model,
+        validated.jev_classifier_config.timeout_ms,
+    ) == ("bespoke_nimble", "nimble-latest", 500)
     assert validate_member_auto_router_config(validated.model_dump()).jev_classifier_config is not None
 
 

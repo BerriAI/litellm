@@ -550,3 +550,123 @@ async def test_http_jev_classifier_client_posts_to_system_one() -> None:
     assert captured["content_type"] == "application/json"
     assert captured["body"] == request.model_dump(mode="json")
     assert response.model == "jev-1.13.0"
+
+
+@pytest.mark.parametrize(
+    ("config", "environment", "expected"),
+    [
+        ({}, {"TYPESAFE_API_KEY": "ts-env"}, ("https://api.typesafe.ai", "ts-env")),
+        (
+            {"provider": "bespoke_nimble", "model": "nimble-latest", "api_base": "http://nimble.test"},
+            {"BESPOKE_NIMBLE_API_KEY": "nimble-env", "TYPESAFE_API_KEY": "ts-env"},
+            ("http://nimble.test", None),
+        ),
+        (
+            {
+                "provider": "bespoke_nimble",
+                "model": "nimble-latest",
+                "api_base": "http://nimble.test",
+                "api_key": "own",
+            },
+            {},
+            ("http://nimble.test", "own"),
+        ),
+        (
+            {"provider": "bespoke_nimble", "model": "nimble-latest"},
+            {"BESPOKE_NIMBLE_API_BASE": "http://nimble-env.test", "BESPOKE_NIMBLE_API_KEY": "nimble-env"},
+            ("http://nimble-env.test", "nimble-env"),
+        ),
+        ({"provider": "bespoke_nimble", "model": "nimble-latest"}, {"TYPESAFE_API_BASE": "http://ts.test"}, None),
+    ],
+)
+def test_jev_provider_credentials_never_leave_their_own_environment_pair(
+    monkeypatch: pytest.MonkeyPatch,
+    config: Mapping[str, str],
+    environment: Mapping[str, str],
+    expected: tuple[str, str | None] | None,
+) -> None:
+    for name in ("TYPESAFE_API_KEY", "TYPESAFE_API_BASE", "BESPOKE_NIMBLE_API_KEY", "BESPOKE_NIMBLE_API_BASE"):
+        monkeypatch.delenv(name, raising=False)
+    for name, value in environment.items():
+        monkeypatch.setenv(name, value)
+    captured: Final[list[Mapping[str, object]]] = []
+    monkeypatch.setattr(
+        "litellm.router_strategy.complexity_router.complexity_router.HttpJevClassifierClient",
+        lambda **kwargs: captured.append(kwargs),
+    )
+    validated: Final = JevClassifierConfig.model_validate(config)
+    if expected is None:
+        with pytest.raises(ValueError, match="BESPOKE_NIMBLE_API_BASE is required"):
+            ComplexityRouter._build_jev_client(validated)
+        return
+    ComplexityRouter._build_jev_client(validated)
+    assert (captured[0]["api_base"], captured[0]["api_key"], captured[0]["provider"]) == (*expected, validated.provider)
+
+
+def test_non_typesafe_provider_requires_an_explicit_model() -> None:
+    with pytest.raises(ValueError, match="model is required for provider 'bespoke_nimble'"):
+        JevClassifierConfig(provider="bespoke_nimble", api_base="http://nimble.test")
+
+
+@pytest.mark.asyncio
+async def test_keyless_bespoke_nimble_classifies_and_reports_under_its_own_provider(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    logged: Final[list[Mapping[str, object]]] = []
+
+    class _Recorder(CustomLogger):
+        async def async_log_success_event(
+            self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
+        ) -> None:
+            if str(kwargs.get("model", "")).endswith("/nimble-accounting"):
+                logged.append(kwargs)
+
+    monkeypatch.setattr(litellm, "_async_success_callback", [_Recorder()])
+    monkeypatch.setitem(
+        litellm.model_cost,
+        "bespoke_nimble/nimble-accounting",
+        {"input_cost_per_token": 0.001, "output_cost_per_token": 0.0},
+    )
+    seen: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        seen.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "model": "nimble-accounting",
+                "usage": {"input_tokens": 3, "output_tokens": 0},
+                "answers": {
+                    "tier": {"type": "choice", "choice": "SIMPLE", "confidence": 1, "probabilities": {"SIMPLE": 1}}
+                },
+            },
+        )
+
+    handler: Final = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    router: Final = ComplexityRouter(
+        "nimble-router",
+        litellm.Router(model_list=[]),
+        {
+            "classifier_type": "jev",
+            "jev_classifier_config": {
+                "provider": "bespoke_nimble",
+                "model": "nimble-accounting",
+                "api_base": "http://n",
+            },
+            "tiers": {"SIMPLE": "cheap"},
+        },
+        jev_client=HttpJevClassifierClient(None, "http://nimble.test", handler, provider="bespoke_nimble"),
+        derive_savings_baseline=False,
+    )
+    outcome: Final = await router.aclassify("hello")
+    await GLOBAL_LOGGING_WORKER.flush()
+    await handler.client.aclose()
+
+    assert "authorization" not in seen[0].headers
+    assert outcome.cause == "jev_classifier"
+    assert outcome.jev_verdict is not None
+    assert (outcome.jev_verdict.provider, outcome.jev_verdict.cost) == ("bespoke_nimble", pytest.approx(0.003))
+    assert [(event["model"], event["custom_llm_provider"]) for event in logged] == [
+        ("bespoke_nimble/nimble-accounting", "bespoke_nimble")
+    ]
