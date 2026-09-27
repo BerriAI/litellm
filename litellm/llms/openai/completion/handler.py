@@ -1,3 +1,4 @@
+import asyncio
 import json
 import traceback
 from collections.abc import Callable
@@ -302,7 +303,9 @@ class OpenAITextCompletion(BaseLLM):
         try:
             raw_response: Final = await openai_client.completions.with_raw_response.create(**data)
         except Exception as e:
-            await logging_obj.dispatch_failure_handlers(e, traceback.format_exc(), prefer_async_handlers=True)
+            asyncio.create_task(
+                logging_obj.dispatch_failure_handlers(e, traceback.format_exc(), prefer_async_handlers=True)
+            )
             raise
         response: Final = raw_response.parse()
         streamwrapper: Final = CustomStreamWrapper(

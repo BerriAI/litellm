@@ -6,6 +6,8 @@ Regression tests for https://github.com/BerriAI/litellm/issues/27410
 """
 
 
+import asyncio
+
 import httpx
 import pytest
 import respx
@@ -94,9 +96,11 @@ async def test_acompletion_forwards_client_headers_to_provider(
 class _FailureRecorder(CustomLogger):
     def __init__(self):
         self.payloads = []
+        self.logged = asyncio.Event()
 
     async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
         self.payloads.append(kwargs["standard_logging_object"])
+        self.logged.set()
 
 
 @pytest.mark.parametrize(
@@ -120,6 +124,7 @@ async def test_astream_failing_before_first_byte_logs_one_failure(provider_respo
     with pytest.raises(expected_error):
         async for _ in response:
             pass
+    await asyncio.wait_for(recorder.logged.wait(), timeout=5)
 
     assert len(recorder.payloads) == 1
     payload = recorder.payloads[0]
