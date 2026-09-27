@@ -7,6 +7,7 @@ import re
 from dataclasses import dataclass
 from email.utils import formatdate
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final, Protocol, runtime_checkable
 from urllib.parse import urlparse
 
@@ -185,6 +186,31 @@ _OCI_COMMERCIAL_REALM_DOMAIN: Final = "oraclecloud.com"
 _OCI_INFERENCE_ENDPOINT_TEMPLATE: Final = "https://inference.generativeai.{region}.oci.{secondLevelDomain}"
 _OCI_REGION_METADATA_ENV: Final = "OCI_REGION_METADATA"
 _OCI_REGIONS_CONFIG_FILE: Final = "~/.oci/regions-config.json"
+_OCID_REALM_RE: Final = re.compile(r"^ocid1\.[a-z0-9]+\.([a-z0-9]+)\.", re.IGNORECASE)
+_OCI_REALM_DOMAINS: Final = MappingProxyType(
+    {
+        "oc1": "oraclecloud.com",
+        "oc2": "oraclegovcloud.com",
+        "oc3": "oraclegovcloud.com",
+        "oc4": "oraclegovcloud.uk",
+        "oc8": "oraclecloud8.com",
+        "oc9": "oraclecloud9.com",
+        "oc10": "oraclecloud10.com",
+        "oc14": "oraclecloud14.com",
+        "oc15": "oraclecloud15.com",
+        "oc19": "oraclecloud.eu",
+        "oc20": "oraclecloud20.com",
+        "oc21": "oraclecloud21.com",
+        "oc23": "oraclecloud23.com",
+        "oc24": "oraclecloud24.com",
+        "oc26": "oraclecloud26.com",
+        "oc29": "oraclecloud29.com",
+        "oc35": "oraclecloud35.com",
+        "oc42": "oraclecloud42.com",
+        "oc51": "oraclecloud51.com",
+        "oc52": "oraclecloud52.com",
+    }
+)
 
 
 class OCIRegionMetadata(BaseModel):
@@ -232,12 +258,14 @@ def _region_metadata_from_env() -> tuple[OCIRegionMetadata, ...]:
         return ()
 
 
-def _realm_domain_from_metadata(region: str) -> str:
+def _realm_domain_from_ocid(ocid: object) -> str | None:
+    match: Final = _OCID_REALM_RE.match(ocid) if isinstance(ocid, str) else None
+    return _OCI_REALM_DOMAINS.get(match.group(1).lower()) if match else None
+
+
+def _realm_domain_from_metadata(region: str) -> str | None:
     entries: Final = (*_region_metadata_from_file(), *_region_metadata_from_env())
-    return next(
-        (entry.realm_domain_component for entry in entries if entry.region_identifier == region),
-        _OCI_COMMERCIAL_REALM_DOMAIN,
-    )
+    return next((entry.realm_domain_component for entry in entries if entry.region_identifier == region), None)
 
 
 @runtime_checkable
@@ -253,20 +281,23 @@ def _load_oci_region_registry() -> _OCIRegionRegistry | None:
     return registry if isinstance(registry, _OCIRegionRegistry) else None
 
 
-def resolve_oci_inference_endpoint(region: str) -> str:
+def resolve_oci_inference_endpoint(region: str, compartment_id: object = None) -> str:
     """Return the GenAI inference endpoint for ``region`` in whichever OCI realm hosts it.
 
-    Delegates to the OCI SDK's region registry when the SDK is installed. Without the SDK,
-    the realm's second-level domain comes from the same per-region metadata sources the SDK
-    reads, ``~/.oci/regions-config.json`` and ``OCI_REGION_METADATA``, and otherwise defaults
-    to the commercial realm. A region that is not described anywhere therefore keeps its
-    commercial endpoint, so one government deployment never redirects the others.
+    The realm's second-level domain comes first from the realm key inside ``compartment_id``
+    (``ocid1.compartment.oc2..`` is the Government realm), then from the per-region metadata
+    sources the OCI SDK reads, ``~/.oci/regions-config.json`` and ``OCI_REGION_METADATA``, then
+    from the OCI SDK's region registry when the SDK is installed, and otherwise defaults to the
+    commercial realm. Realm domains per ``oci/regions_definitions.py`` in oci 2.187.0. A region
+    that is not described anywhere therefore keeps its commercial endpoint, so one government
+    deployment never redirects the others.
     """
+    domain: Final = _realm_domain_from_ocid(compartment_id) or _realm_domain_from_metadata(region)
+    if domain is not None:
+        return _OCI_INFERENCE_ENDPOINT_TEMPLATE.format(region=region, secondLevelDomain=domain)
     registry: Final = _load_oci_region_registry()
     if registry is None:
-        return _OCI_INFERENCE_ENDPOINT_TEMPLATE.format(
-            region=region, secondLevelDomain=_realm_domain_from_metadata(region)
-        )
+        return _OCI_INFERENCE_ENDPOINT_TEMPLATE.format(region=region, secondLevelDomain=_OCI_COMMERCIAL_REALM_DOMAIN)
     return registry.endpoint_for(
         "generative_ai_inference", region=region, service_endpoint_template=_OCI_INFERENCE_ENDPOINT_TEMPLATE
     )
@@ -290,7 +321,7 @@ def get_oci_base_url(optional_params: dict, api_base: str | None = None) -> str:
                 f"Invalid OCI region {region!r}: must match ^[a-z][a-z0-9-]{{0,30}}[a-z0-9]$ (e.g. 'us-ashburn-1')."
             ),
         )
-    return resolve_oci_inference_endpoint(region)
+    return resolve_oci_inference_endpoint(region, creds["oci_compartment_id"])
 
 
 # ---------------------------------------------------------------------------
