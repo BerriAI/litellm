@@ -362,6 +362,10 @@ def _build_banned_observability_params() -> frozenset[str]:
     )
 
 
+# Credential selectors that name an account stored on the proxy host, so no
+# client-side opt-in can hand them to a caller. Only the deployment config sets them.
+_OPERATOR_ONLY_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = ("xai_oauth_token_file",)
+
 _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     "api_base",
     "base_url",
@@ -386,11 +390,7 @@ _BANNED_REQUEST_BODY_PARAMS: Final[tuple[str, ...]] = (
     # caller-supplied value is the same exfil shape as
     # ``aws_web_identity_token`` on the Bedrock path.
     "azure_ad_token",
-    # xAI SuperGrok OAuth token file. The xAI transformer reads
-    # ``xai_oauth_token_file`` and authenticates as that local account,
-    # so a caller-supplied path is the same credential-selector shape as
-    # ``aws_profile_name`` on the Bedrock path.
-    "xai_oauth_token_file",
+    *_OPERATOR_ONLY_REQUEST_BODY_PARAMS,
     # Endpoint-targeting fields that retarget the outbound request or
     # an observability callback. An attacker-controlled value either
     # exfiltrates the request payload (incl. messages + admin-set
@@ -455,6 +455,12 @@ def _check_banned_params(
     reject_server_owned_wif_params(body)
     if not manages_deployments:
         reject_federated_credential_reference(body)
+    operator_only: Final = next((param for param in _OPERATOR_ONLY_REQUEST_BODY_PARAMS if param in body), None)
+    if operator_only is not None:
+        raise ValueError(
+            f"Rejected Request: {operator_only} is not allowed in request body. "
+            "Set it on the deployment's litellm_params in your proxy config.yaml instead."
+        )
     for param in _BANNED_REQUEST_BODY_PARAMS:
         if param not in body:
             continue
