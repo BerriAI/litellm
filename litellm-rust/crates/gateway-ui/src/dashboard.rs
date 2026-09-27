@@ -12,6 +12,7 @@ struct Logo {
 pub fn dashboard_assets(directory: impl AsRef<Path>) -> Router {
     let directory = directory.as_ref();
     let assets = ServeDir::new(directory.join("_next")).append_index_html_on_directories(false);
+    
     crate::static_assets(directory)
         .route(
             "/get_logo_url",
