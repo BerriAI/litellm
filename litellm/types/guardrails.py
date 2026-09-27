@@ -4,9 +4,6 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Final, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
-from typing_extensions import ReadOnly, Required, TypedDict
-
 from litellm.constants import BEDROCK_APPLY_GUARDRAIL_CHUNK_BUDGET_CHARS
 from litellm.types.proxy.guardrails.guardrail_hooks.agent_365 import (
     Agent365GuardrailConfigModel,
@@ -71,6 +68,8 @@ from litellm.types.proxy.guardrails.guardrail_hooks.vigil_guard import (
 from litellm.types.proxy.guardrails.guardrail_hooks.xecguard import (
     XecGuardConfigModel,
 )
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from typing_extensions import ReadOnly, Required, TypedDict
 
 """
 Pydantic object defining how to set guardrails on litellm proxy
@@ -367,7 +366,11 @@ PII_ENTITY_CATEGORIES_MAP: Final = {
         PiiEntityType.UK_VEHICLE_REGISTRATION,
         PiiEntityType.UK_DRIVING_LICENCE,
     ),
-    PiiEntityCategory.SPAIN: (PiiEntityType.ES_NIF, PiiEntityType.ES_NIE, PiiEntityType.ES_PASSPORT),
+    PiiEntityCategory.SPAIN: (
+        PiiEntityType.ES_NIF,
+        PiiEntityType.ES_NIE,
+        PiiEntityType.ES_PASSPORT,
+    ),
     PiiEntityCategory.ITALY: (
         PiiEntityType.IT_FISCAL_CODE,
         PiiEntityType.IT_DRIVER_LICENSE,
@@ -415,11 +418,24 @@ PII_ENTITY_CATEGORIES_MAP: Final = {
         PiiEntityType.KR_BRN,
     ),
     PiiEntityCategory.CANADA: (PiiEntityType.CA_SIN,),
-    PiiEntityCategory.SWEDEN: (PiiEntityType.SE_PERSONNUMMER, PiiEntityType.SE_ORGANISATIONSNUMMER),
+    PiiEntityCategory.SWEDEN: (
+        PiiEntityType.SE_PERSONNUMMER,
+        PiiEntityType.SE_ORGANISATIONSNUMMER,
+    ),
     PiiEntityCategory.THAILAND: (PiiEntityType.TH_TNIN,),
-    PiiEntityCategory.TURKEY: (PiiEntityType.TR_NATIONAL_ID, PiiEntityType.TR_LICENSE_PLATE),
-    PiiEntityCategory.NIGERIA: (PiiEntityType.NG_NIN, PiiEntityType.NG_VEHICLE_REGISTRATION),
-    PiiEntityCategory.PHILIPPINES: (PiiEntityType.PH_TIN, PiiEntityType.PH_UMID, PiiEntityType.PH_PASSPORT),
+    PiiEntityCategory.TURKEY: (
+        PiiEntityType.TR_NATIONAL_ID,
+        PiiEntityType.TR_LICENSE_PLATE,
+    ),
+    PiiEntityCategory.NIGERIA: (
+        PiiEntityType.NG_NIN,
+        PiiEntityType.NG_VEHICLE_REGISTRATION,
+    ),
+    PiiEntityCategory.PHILIPPINES: (
+        PiiEntityType.PH_TIN,
+        PiiEntityType.PH_UMID,
+        PiiEntityType.PH_PASSPORT,
+    ),
     PiiEntityCategory.SOUTH_AFRICA: (PiiEntityType.ZA_ID_NUMBER,),
 }
 
@@ -610,7 +626,8 @@ class BedrockGuardrailConfigModel(BaseModel):
     aws_web_identity_token: str | None = Field(default=None, description="Web identity token for AWS role assumption")
     aws_sts_endpoint: str | None = Field(default=None, description="AWS STS endpoint URL")
     aws_external_id: str | None = Field(
-        default=None, description="External ID required by the target role's trust policy on sts:AssumeRole"
+        default=None,
+        description="External ID required by the target role's trust policy on sts:AssumeRole",
     )
     aws_bedrock_runtime_endpoint: str | None = Field(default=None, description="AWS Bedrock runtime endpoint URL")
     checks: BedrockChecksConfigModel | None = Field(
