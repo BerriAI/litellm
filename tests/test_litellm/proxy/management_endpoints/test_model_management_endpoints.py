@@ -9,6 +9,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
+from pydantic import TypeAdapter
 
 from litellm._uuid import uuid
 from litellm.models.credentials import CredentialItem
@@ -7613,7 +7614,7 @@ class TestTeamMemberAutoRouterWrites:
         ],
     )
     async def test_dashboard_save_keeps_the_stored_jev_provider_with_its_own_base(
-        self, supplied: dict[str, str], carried: dict[str, str]
+        self, supplied: Mapping[str, str | None], carried: Mapping[str, str]
     ) -> None:
         from litellm.proxy.management_endpoints.model_management_endpoints import patch_model
 
@@ -7646,9 +7647,66 @@ class TestTeamMemberAutoRouterWrites:
         )
         with self._environment(database, row):
             await patch_model(row.model_id, request, UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN))
-        written: Final = database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]
-        saved: Final = json.loads(written["litellm_params"])["complexity_router_config"]["jev_classifier_config"]
+        written: Final = TypeAdapter(str).validate_python(
+            database.db.litellm_proxymodeltable.update.await_args.kwargs["data"]["litellm_params"]
+        )
+        params: Final = LiteLLM_Params.model_validate_json(written)
+        config: Final = TypeAdapter(Mapping[str, object]).validate_python(params.complexity_router_config)
+        saved: Final = TypeAdapter(Mapping[str, object]).validate_python(config["jev_classifier_config"])
         assert saved == {**carried, **incoming}
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
+    @pytest.mark.parametrize("can_use_nimble", [True, False])
+    async def test_member_partial_update_authorizes_the_persisted_classifier_provider(
+        self, endpoint: str, can_use_nimble: bool
+    ) -> None:
+        from fastapi import HTTPException
+
+        evaluation: Final = "bespoke_nimble/nimble-latest" if can_use_nimble else "typesafe/jev-latest"
+        models: Final = ["allowed", evaluation]
+        team: Final = self._team().model_copy(update={"models": models})
+        row: Final = self._row().model_copy(
+            update={
+                "litellm_params": {
+                    "model": "auto_router/complexity_router",
+                    "complexity_router_config": {
+                        "classifier_type": "jev",
+                        "tiers": {"SIMPLE": "allowed"},
+                        "jev_classifier_config": {"provider": "bespoke_nimble", "model": "nimble-latest"},
+                    },
+                },
+            }
+        )
+        database: Final = self._database(team, row)
+        request: Final = updateDeployment(
+            litellm_params=updateLiteLLMParams(
+                complexity_router_config={
+                    "classifier_type": "jev",
+                    "tiers": {"SIMPLE": "allowed"},
+                    "jev_classifier_config": {"timeout_ms": 900},
+                }
+            ),
+            model_info=ModelInfo(id=row.model_id, team_id=team.team_id),
+        )
+        actor: Final = UserAPIKeyAuth(user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER, models=models)
+        with self._environment(database, row):
+            operation: Final = patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
+            if not can_use_nimble:
+                with pytest.raises((HTTPException, ProxyException)) as denied:
+                    await operation
+                assert "bespoke_nimble/nimble-latest" in str(denied.value)
+                database.transaction.litellm_proxymodeltable.update.assert_not_awaited()
+                return
+            await operation
+        written: Final = TypeAdapter(str).validate_python(
+            database.transaction.litellm_proxymodeltable.update.await_args.kwargs["data"]["litellm_params"]
+        )
+        params: Final = LiteLLM_Params.model_validate_json(written)
+        config: Final = TypeAdapter(Mapping[str, object]).validate_python(params.complexity_router_config)
+        assert config["jev_classifier_config"] == {
+            "provider": "bespoke_nimble", "model": "nimble-latest", "timeout_ms": 900
+        }
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])

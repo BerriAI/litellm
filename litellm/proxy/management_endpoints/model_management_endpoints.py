@@ -2149,14 +2149,21 @@ class ModelManagementAuthChecks:
                     raise HTTPException(
                         status_code=400, detail="An auto-router configuration and model catalog are required."
                     )
+                incoming: Final = incoming_model_params if incoming_model_params is not None else model_params
                 return await authorize_member_auto_router_write(
-                    incoming=incoming_model_params if incoming_model_params is not None else model_params,
+                    incoming=incoming,
                     existing=model_params if member_operation == "update" else None,
                     user_api_key_dict=user_api_key_dict,
                     team=team_obj,
                     premium_user=premium_user,
                     prisma_client=prisma_client,
                     llm_router=llm_router,
+                    effective_config=TypeAdapter(Mapping[str, object] | None).validate_python(
+                        _effective_complexity_router_config(
+                            incoming.litellm_params,
+                            model_params.litellm_params if member_operation == "update" else None,
+                        )
+                    ),
                 )
 
             return ModelManagementAuthChecks.can_user_make_team_model_call(

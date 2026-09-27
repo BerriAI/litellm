@@ -8,6 +8,7 @@ from unittest.mock import create_autospec
 
 import httpx
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_router_logger
@@ -579,7 +580,8 @@ async def test_http_jev_classifier_client_posts_to_system_one() -> None:
         ({"provider": "bespoke_nimble", "model": "nimble-latest"}, {"TYPESAFE_API_BASE": "http://ts.test"}, None),
     ],
 )
-def test_jev_provider_credentials_never_leave_their_own_environment_pair(
+@pytest.mark.asyncio
+async def test_jev_provider_credentials_never_leave_their_own_environment_pair(
     monkeypatch: pytest.MonkeyPatch,
     config: Mapping[str, str],
     environment: Mapping[str, str],
@@ -589,18 +591,28 @@ def test_jev_provider_credentials_never_leave_their_own_environment_pair(
         monkeypatch.delenv(name, raising=False)
     for name, value in environment.items():
         monkeypatch.setenv(name, value)
-    captured: Final[list[Mapping[str, object]]] = []
-    monkeypatch.setattr(
-        "litellm.router_strategy.complexity_router.complexity_router.HttpJevClassifierClient",
-        lambda **kwargs: captured.append(kwargs),
-    )
     validated: Final = JevClassifierConfig.model_validate(config)
     if expected is None:
         with pytest.raises(ValueError, match="BESPOKE_NIMBLE_API_BASE is required"):
             ComplexityRouter._build_jev_client(validated)
         return
-    ComplexityRouter._build_jev_client(validated)
-    assert (captured[0]["api_base"], captured[0]["api_key"], captured[0]["provider"]) == (*expected, validated.provider)
+    base, key = expected
+    request: Final = build_jev_request("hello", None, validated.model, "Choose a tier", {"SIMPLE": "small talk"})
+    answer: Final = JevSystemOneResponse(answers={"tier": _answer()})
+
+    def respond(sent: httpx.Request) -> httpx.Response:
+        assert str(sent.url) == f"{base}/v1/systemone"
+        assert sent.headers.get("authorization") == (f"Bearer {key}" if key else None)
+        assert json.loads(sent.content) == request.model_dump(mode="json")
+        return httpx.Response(200, json=answer.model_dump(mode="json"))
+
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    try:
+        client: Final = ComplexityRouter._build_jev_client(validated, http_client=handler)
+        assert await client.evaluate(request, 1.0) == answer
+        await GLOBAL_LOGGING_WORKER.flush()
+    finally:
+        await handler.client.aclose()
 
 
 def test_non_typesafe_provider_requires_an_explicit_model() -> None:
@@ -612,25 +624,29 @@ def test_non_typesafe_provider_requires_an_explicit_model() -> None:
 async def test_keyless_bespoke_nimble_classifies_and_reports_under_its_own_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    logged: Final[list[Mapping[str, object]]] = []
-
     class _Recorder(CustomLogger):
+        def __init__(self) -> None:
+            super().__init__()
+            self.events: tuple[tuple[str, str], ...] = ()
+
         async def async_log_success_event(
             self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
         ) -> None:
             if str(kwargs.get("model", "")).endswith("/nimble-accounting"):
-                logged.append(kwargs)
+                event: Final = TypeAdapter(tuple[str, str]).validate_python(
+                    (kwargs["model"], kwargs["custom_llm_provider"])
+                )
+                self.events = (*self.events, event)
 
-    monkeypatch.setattr(litellm, "_async_success_callback", [_Recorder()])
+    recorder: Final = _Recorder()
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
     monkeypatch.setitem(
         litellm.model_cost,
         "bespoke_nimble/nimble-accounting",
         {"input_cost_per_token": 0.001, "output_cost_per_token": 0.0},
     )
-    seen: Final[list[httpx.Request]] = []
-
     def respond(request: httpx.Request) -> httpx.Response:
-        seen.append(request)
+        assert "authorization" not in request.headers
         return httpx.Response(
             200,
             json={
@@ -642,31 +658,30 @@ async def test_keyless_bespoke_nimble_classifies_and_reports_under_its_own_provi
             },
         )
 
-    handler: Final = AsyncHTTPHandler()
-    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    handler: Final = AsyncHTTPHandler(transport=httpx.MockTransport(respond))
+    config: Final = JevClassifierConfig(provider="bespoke_nimble", model="nimble-accounting", api_base="http://nimble.test")
     router: Final = ComplexityRouter(
         "nimble-router",
         litellm.Router(model_list=[]),
         {
             "classifier_type": "jev",
-            "jev_classifier_config": {
-                "provider": "bespoke_nimble",
-                "model": "nimble-accounting",
-                "api_base": "http://n",
-            },
+            "jev_classifier_config": config.model_dump(),
             "tiers": {"SIMPLE": "cheap"},
         },
-        jev_client=HttpJevClassifierClient(None, "http://nimble.test", handler, provider="bespoke_nimble"),
+        jev_client=ComplexityRouter._build_jev_client(config, http_client=handler),
         derive_savings_baseline=False,
     )
-    outcome: Final = await router.aclassify("hello")
-    await GLOBAL_LOGGING_WORKER.flush()
-    await handler.client.aclose()
+    try:
+        outcome: Final = await router.async_pre_routing_hook(
+            model="nimble-router", request_kwargs={}, messages=[{"role": "user", "content": "hello"}]
+        )
+        await GLOBAL_LOGGING_WORKER.flush()
+    finally:
+        await handler.client.aclose()
 
-    assert "authorization" not in seen[0].headers
-    assert outcome.cause == "jev_classifier"
-    assert outcome.jev_verdict is not None
-    assert (outcome.jev_verdict.provider, outcome.jev_verdict.cost) == ("bespoke_nimble", pytest.approx(0.003))
-    assert [(event["model"], event["custom_llm_provider"]) for event in logged] == [
-        ("bespoke_nimble/nimble-accounting", "bespoke_nimble")
-    ]
+    assert outcome is not None and outcome.model == "cheap"
+    assert outcome.routing_decision is not None
+    assert outcome.routing_decision["cause"] == "jev_classifier"
+    assert outcome.routing_decision["classifier_model"] == "bespoke_nimble/nimble-accounting"
+    assert outcome.routing_decision["classifier_cost"] == pytest.approx(0.003)
+    assert recorder.events == (("bespoke_nimble/nimble-accounting", "bespoke_nimble"),)

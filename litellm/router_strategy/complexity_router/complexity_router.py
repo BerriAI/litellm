@@ -55,7 +55,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.router_strategy.complexity_router.tier_predictor import (
@@ -1308,7 +1308,9 @@ class ComplexityRouter(CustomLogger):
     """
 
     @staticmethod
-    def _build_jev_client(config: JevClassifierConfig) -> JevClassifierClient:
+    def _build_jev_client(
+        config: JevClassifierConfig, http_client: AsyncHTTPHandler | None = None
+    ) -> JevClassifierClient:
         env_prefix: Final = config.provider.upper()
         api_key: Final = config.api_key or (
             get_secret_str(f"{env_prefix}_API_KEY") if config.api_base is None else None
@@ -1327,7 +1329,9 @@ class ComplexityRouter(CustomLogger):
         return HttpJevClassifierClient(
             api_key=api_key or None,
             api_base=api_base,
-            http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
+            http_client=http_client
+            if http_client is not None
+            else get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
             provider=config.provider,
         )
 

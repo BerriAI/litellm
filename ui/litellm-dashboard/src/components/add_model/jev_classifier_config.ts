@@ -1,6 +1,7 @@
 import { z } from "zod";
 
 const jevClassifierConfigFields = {
+  provider: z.enum(["typesafe", "bespoke_nimble"]).optional(),
   model: z.string().trim().min(1).default("jev-latest"),
   timeout_ms: z.number().int().positive().default(3000),
   instructions: z
@@ -20,6 +21,7 @@ export const defaultJevClassifierConfig = (): JevClassifierConfig => jevClassifi
 export const normalizeJevClassifierConfig = (
   config: JevClassifierConfig = defaultJevClassifierConfig(),
 ): JevClassifierConfig => ({
+  ...(config.provider !== undefined && { provider: config.provider }),
   model: config.model.trim(),
   timeout_ms: config.timeout_ms,
   ...(config.instructions?.trim() && { instructions: config.instructions.trim() }),

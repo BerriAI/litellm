@@ -289,6 +289,7 @@ async def authorize_member_auto_router_write(
     premium_user: bool,
     prisma_client: DatabaseClient,
     llm_router: Router,
+    effective_config: Mapping[str, object] | None = None,
 ) -> MemberAutoRouterWrite:
     authorize_member_auto_router_team(user_api_key_dict=user_api_key_dict, team=team, premium_user=premium_user)
     stored: Final = StoredAutoRouterIdentity.model_validate(existing.model_dump()) if existing is not None else None
@@ -346,7 +347,7 @@ async def authorize_member_auto_router_write(
     )
     if raw_config is None:
         raise HTTPException(status_code=400, detail="A complexity_router_config is required.")
-    config: Final = validate_member_auto_router_config(raw_config)
+    config: Final = validate_member_auto_router_config(effective_config if effective_config is not None else raw_config)
     stored_default: Final = existing.litellm_params.complexity_router_default_model if existing is not None else None
     default_model: Final = (
         params.complexity_router_default_model
