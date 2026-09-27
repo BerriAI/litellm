@@ -4979,11 +4979,8 @@ class TestRouterPreRoutingAliasOverrides:
         string, and model info adopts the declared prefix. The recording wrapper raises for a
         copilot-directed resolution rather than calling through, so a regression fails on the
         recorded call instead of hanging the suite in a device-code poll."""
-        import json
-        import time
-
         monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-        (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": int(time.time()) + 3600}))
+        (tmp_path / "access-token").write_text("gho_test")
         router = Router(
             model_list=[
                 {
@@ -14305,11 +14302,8 @@ class TestContextWindowEscalation:
         """Resolving github_copilot runs its OAuth device flow, so a window question must adopt
         the declaration instead of resolving: the copilot group reads as unknown-window and the
         request stays put, with zero copilot resolutions recorded."""
-        import json
-        import time
-
         monkeypatch.setenv("GITHUB_COPILOT_TOKEN_DIR", str(tmp_path))
-        (tmp_path / "api-key.json").write_text(json.dumps({"token": "tid=test", "expires_at": int(time.time()) + 3600}))
+        (tmp_path / "access-token").write_text("gho_test")
         router = ComplexityRouter(
             model_name="test-router",
             litellm_router_instance=Router(
