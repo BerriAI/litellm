@@ -178,6 +178,18 @@ describe("UsersTable", () => {
     expect(onUserClick).toHaveBeenCalledWith("user-1", true);
   });
 
+  it("links the row menu to that user's usage", async () => {
+    const user = userEvent.setup();
+    render(<Harness />);
+
+    await openRowMenu(user, "user-1");
+
+    expect(await screen.findByRole("menuitem", { name: "View usage" })).toHaveAttribute(
+      "href",
+      "/ui/usage?user=user-1",
+    );
+  });
+
   it("delegates delete and reset-password from the row menu", async () => {
     const user = userEvent.setup();
     const onDeleteUser = vi.fn();

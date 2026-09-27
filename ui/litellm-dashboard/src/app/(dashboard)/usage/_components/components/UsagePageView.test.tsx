@@ -7,7 +7,9 @@ import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import { act, fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
+import type { UrlUpdateEvent } from "nuqs/adapters/testing";
 import { renderWithProviders } from "@/../tests/test-utils";
+import { toast } from "@/lib/toast";
 import type { Organization } from "@/components/networking";
 import * as networking from "@/components/networking";
 import UsagePage from "./UsagePageView";
@@ -48,9 +50,27 @@ vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
 }));
 
 vi.mock("./EntityUsage/EntityUsage", () => ({
-  default: ({ entityType, entityList }: { entityType: string; entityList: unknown }) => (
-    <div data-testid="entity-usage" data-entity-type={entityType} data-entity-list={JSON.stringify(entityList ?? null)}>
+  default: ({
+    entityType,
+    entityList,
+    selectedEntities,
+    onSelectedEntitiesChange,
+  }: {
+    entityType: string;
+    entityList: unknown;
+    selectedEntities: readonly string[];
+    onSelectedEntitiesChange: (ids: readonly string[]) => void;
+  }) => (
+    <div
+      data-testid="entity-usage"
+      data-entity-type={entityType}
+      data-entity-list={JSON.stringify(entityList ?? null)}
+      data-selected={JSON.stringify(selectedEntities)}
+    >
       Entity Usage
+      <button type="button" onClick={() => onSelectedEntitiesChange(["picked-1", "picked-2"])}>
+        pick entities
+      </button>
     </div>
   ),
   EntityList: [],
@@ -64,7 +84,8 @@ vi.mock("./EndpointUsage/EndpointUsage", () => ({
   default: () => <div>Endpoint Usage</div>,
 }));
 
-vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
+vi.mock("./UsageViewSelect/UsageViewSelect", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("./UsageViewSelect/UsageViewSelect")>();
   const React = await import("react");
   const UsageViewSelect = ({ value, onChange, canViewTagUsage = false }: any) => {
     const tagOption = canViewTagUsage ? React.createElement("option", { value: "tag" }, "Tag Usage") : null;
@@ -87,10 +108,11 @@ vi.mock("./UsageViewSelect/UsageViewSelect", async () => {
     );
   };
   UsageViewSelect.displayName = "UsageViewSelect";
-  return { UsageViewSelect };
+  return { ...actual, UsageViewSelect };
 });
 
-vi.mock("@/components/shared/advanced_date_picker", async () => {
+vi.mock("@/components/shared/advanced_date_picker", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/components/shared/advanced_date_picker")>();
   const React = await import("react");
   // The button is how a test drives a range change; the real picker's own UI is
   // not what any test here is asserting on.
@@ -110,7 +132,7 @@ vi.mock("@/components/shared/advanced_date_picker", async () => {
       ),
     );
   AdvancedDatePicker.displayName = "AdvancedDatePicker";
-  return { default: AdvancedDatePicker };
+  return { ...actual, default: AdvancedDatePicker };
 });
 
 vi.mock("@/components/user_agent_activity", () => ({
@@ -145,6 +167,10 @@ vi.mock("@/app/(dashboard)/hooks/useAuthorized", () => ({
 vi.mock("@/app/(dashboard)/hooks/useIsOrgAdmin", () => ({
   __esModule: true,
   default: vi.fn(() => false),
+}));
+
+vi.mock("@/app/(dashboard)/hooks/organizations/useOrganizations", () => ({
+  useOrganizations: vi.fn(() => ({ data: [], isPending: false })),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/users/useCurrentUser", () => ({
@@ -1363,6 +1389,144 @@ describe("UsagePage", () => {
       expect(screen.getByText("Key Activity")).toBeInTheDocument();
       expect(screen.getByText("MCP Server Activity")).toBeInTheDocument();
       expect(screen.getByText("Endpoint Activity")).toBeInTheDocument();
+    });
+  });
+  describe("URL state", () => {
+    const renderAt = (searchParams: string) => {
+      const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+      const view = renderWithProviders(<UsagePage {...defaultProps} />, {
+        searchParams,
+        onUrlUpdate,
+        resetUrlUpdateQueueOnMount: false,
+      });
+      const lastQuery = (): string | undefined => onUrlUpdate.mock.lastCall?.[0].queryString;
+      return { ...view, onUrlUpdate, lastQuery };
+    };
+
+    it("preselects the user filter from ?user= and links back to that user's record", async () => {
+      renderAt("?user=user-001");
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          "user-001",
+        );
+      });
+      expect(screen.getByRole("link", { name: "View user record" })).toHaveAttribute("href", "/ui/users?user=user-001");
+    });
+
+    it("shows no user record link while the global view is unfiltered", async () => {
+      renderAt("");
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+          "test-token",
+          expect.any(Date),
+          expect.any(Date),
+          null,
+        );
+      });
+      expect(screen.queryByRole("link", { name: "View user record" })).not.toBeInTheDocument();
+    });
+
+    it("opens the linked entity view with its selection and writes new picks back", async () => {
+      const { lastQuery } = renderAt("?view=team&team=team-1");
+
+      const entityUsage = await screen.findByTestId("entity-usage");
+      expect(entityUsage).toHaveAttribute("data-entity-type", "team");
+      expect(entityUsage).toHaveAttribute("data-selected", JSON.stringify(["team-1"]));
+
+      fireEvent.click(screen.getByRole("button", { name: "pick entities" }));
+
+      await waitFor(() => {
+        expect(lastQuery()).toBe("?view=team&team=picked-1&team=picked-2");
+      });
+    });
+
+    it("writes the chosen view and drops the previous view's filters", async () => {
+      const { lastQuery } = renderAt("?user=user-001&tab=keys&range=30d");
+
+      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: "customer" } });
+
+      await waitFor(() => {
+        expect(lastQuery()).toBe("?range=30d&view=customer");
+      });
+    });
+
+    it("restores the inner tab from the URL and writes tab changes", async () => {
+      const { lastQuery } = renderAt("?tab=models");
+
+      expect(await screen.findByRole("tab", { name: "Model Activity" })).toHaveAttribute("aria-selected", "true");
+
+      fireEvent.click(screen.getByRole("tab", { name: "Key Activity" }));
+
+      await waitFor(() => {
+        expect(lastQuery()).toBe("?tab=keys");
+      });
+    });
+
+    it("fetches the custom range in the URL and writes a newly picked one", async () => {
+      const { lastQuery } = renderAt("?from=2025-03-01T00:00:00.000Z&to=2025-03-05T00:00:00.000Z");
+
+      await waitFor(() => {
+        expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalledWith(
+          "test-token",
+          new Date("2025-03-01T00:00:00.000Z"),
+          new Date("2025-03-05T00:00:00.000Z"),
+          null,
+        );
+      });
+
+      fireEvent.click(screen.getByTestId("pick-a-different-range"));
+
+      await waitFor(() => {
+        expect(lastQuery()).toBe("?from=2024-01-01T00:00:00.000Z&to=2024-01-08T00:00:00.000Z");
+      });
+    });
+
+    it("tells a viewer they lack access and sends them to the default view", async () => {
+      const warning = vi.spyOn(toast, "warning");
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+
+      const { lastQuery } = renderAt("?view=organization&org=org-1&range=30d");
+
+      await waitFor(() => {
+        expect(lastQuery()).toBe("?range=30d");
+      });
+      expect(warning).toHaveBeenCalledWith("You don't have access to that usage view");
+      expect(screen.queryByTestId("entity-usage")).not.toBeInTheDocument();
+    });
+
+    it("never fetches another user's usage for a non-admin who opens their link", async () => {
+      const warning = vi.spyOn(toast, "warning");
+      mockUseAuthorized.mockReturnValue(nonAdminSession);
+
+      const { lastQuery } = renderAt("?user=user-001");
+
+      await waitFor(() => {
+        expect(lastQuery()).toBe("");
+      });
+      expect(warning).toHaveBeenCalledWith("You don't have access to that usage view");
+      expect(mockUserDailyActivityAggregatedCall).not.toHaveBeenCalledWith(
+        expect.anything(),
+        expect.anything(),
+        expect.anything(),
+        "user-001",
+      );
+    });
+
+    it("copies the current page URL as the share link", async () => {
+      const writeText = vi.fn().mockResolvedValue(undefined);
+      Object.defineProperty(navigator, "clipboard", { value: { writeText }, configurable: true });
+      renderAt("?tab=models");
+
+      fireEvent.click(await screen.findByRole("button", { name: "Copy Share Link" }));
+
+      await waitFor(() => {
+        expect(writeText).toHaveBeenCalledWith(window.location.href);
+      });
     });
   });
 });

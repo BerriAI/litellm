@@ -14,13 +14,13 @@ interface AdvancedDatePickerProps {
   align?: "left" | "right";
 }
 
-interface RelativeTimeOption {
+export interface RelativeTimeOption {
   label: string;
   shortLabel: string;
   getValue: () => { from: Date; to: Date };
 }
 
-const relativeTimeOptions: RelativeTimeOption[] = [
+export const relativeTimeOptions: readonly RelativeTimeOption[] = [
   {
     label: "Today",
     shortLabel: "today",
@@ -63,6 +63,15 @@ const relativeTimeOptions: RelativeTimeOption[] = [
   },
 ];
 
+export function matchRelativeTimeOption(value: DateRangePickerValue): RelativeTimeOption | undefined {
+  const { from, to } = value;
+  if (!from || !to) return undefined;
+  return relativeTimeOptions.find((option) => {
+    const optionRange = option.getValue();
+    return moment(from).isSame(optionRange.from, "day") && moment(to).isSame(optionRange.to, "day");
+  });
+}
+
 /**
  * Advanced Date Range Picker with dropdown, relative times, and custom inputs
  */
@@ -84,24 +93,10 @@ const AdvancedDatePicker: React.FC<AdvancedDatePickerProps> = ({
 
   const dropdownRef = useRef<HTMLDivElement>(null);
 
-  // Function to check if current value matches a relative time option
-  const getMatchingOption = useCallback((currentValue: DateRangePickerValue): string | null => {
-    if (!currentValue.from || !currentValue.to) return null;
-
-    for (const option of relativeTimeOptions) {
-      const optionRange = option.getValue();
-
-      // Compare dates with some tolerance (to account for time differences)
-      const fromMatches = moment(currentValue.from).isSame(moment(optionRange.from), "day");
-      const toMatches = moment(currentValue.to).isSame(moment(optionRange.to), "day");
-
-      if (fromMatches && toMatches) {
-        return option.shortLabel;
-      }
-    }
-
-    return null;
-  }, []);
+  const getMatchingOption = useCallback(
+    (currentValue: DateRangePickerValue): string | null => matchRelativeTimeOption(currentValue)?.shortLabel ?? null,
+    [],
+  );
 
   // Update selected option when value changes
   useEffect(() => {

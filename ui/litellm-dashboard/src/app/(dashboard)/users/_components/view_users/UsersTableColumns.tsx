@@ -1,7 +1,8 @@
 "use client";
 
 import { ColumnDef } from "@tanstack/react-table";
-import { Copy, Info, KeyRound, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import { ChartColumn, Copy, Info, KeyRound, MoreHorizontal, Pencil, Trash2 } from "lucide-react";
+import Link from "next/link";
 
 import { UserInfo } from "@/components/networking";
 import { createSelectionColumn, DataTableSortHeader } from "@/components/shared/DataTable";
@@ -16,6 +17,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { cn } from "@/lib/cva.config";
+import { usageHrefForUser } from "@/app/(dashboard)/usage/_components/usageUrlState";
 import { copyToClipboard } from "@/utils/dataUtils";
 
 const SSO_ID_HINT =
@@ -59,6 +61,10 @@ function UserRowActions({ user, onUserClick, onDeleteUser, onResetPassword }: Us
         >
           <Copy />
           Copy user ID
+        </DropdownMenuItem>
+        <DropdownMenuItem render={<Link href={usageHrefForUser(user.user_id)} />} data-testid="user-action-view-usage">
+          <ChartColumn />
+          View usage
         </DropdownMenuItem>
         <DropdownMenuSeparator />
         <DropdownMenuItem variant="destructive" onClick={() => onDeleteUser(user)} data-testid="user-action-delete">
