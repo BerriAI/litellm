@@ -340,7 +340,7 @@ def test_list__unsupported_provider_raises_badrequest(seams):
 
 def test_list__unknown_provider_string_raises_badrequest_not_valueerror(seams):
     with pytest.raises(litellm.exceptions.BadRequestError):
-        bm.list_batches(custom_llm_provider="not-a-provider")  # type: ignore[arg-type]
+        bm.list_batches(custom_llm_provider="not-a-provider")
 
     for m in _all_seam_methods(seams, "list_batches"):
         m.assert_not_called()
@@ -373,7 +373,7 @@ def test_list__provider_config_without_list_capability_keeps_legacy_dispatch(sea
     """bedrock has a batches config too, but one that cannot list, so the config-first
     lookup must fall through to the legacy switch (which rejects bedrock for list)."""
     with pytest.raises(litellm.exceptions.BadRequestError):
-        bm.list_batches(custom_llm_provider="bedrock")  # type: ignore[arg-type]
+        bm.list_batches(custom_llm_provider="bedrock")
 
     for m in _all_seam_methods(seams, "list_batches"):
         m.assert_not_called()
