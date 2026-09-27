@@ -1,20 +1,23 @@
 import asyncio
 import contextvars
-from collections.abc import Coroutine, Generator, Iterable, Mapping
+import json
+from collections.abc import Coroutine, Generator, Iterable, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional, cast
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Any, Final, Literal, NoReturn, Optional, TypeAlias, cast
 
 import httpx
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 import litellm
 from litellm._logging import verbose_logger
 from litellm.completion_extras.litellm_responses_transformation.transformation import (
     LiteLLMResponsesTransformationHandler,
 )
-from litellm.constants import request_timeout
+from litellm.constants import DEFAULT_CHAT_COMPLETION_PARAM_VALUES, request_timeout
 from litellm.integrations.anthropic_cache_control_hook import CARRY_UNMATCHED_MESSAGE_POINTS
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
@@ -23,12 +26,14 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
     update_responses_input_with_model_file_ids,
     update_responses_tools_with_model_file_ids,
 )
+from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_header
 from litellm.llms.base_llm.responses.transformation import BaseResponsesAPIConfig
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.openai_like.responses.transformation import OpenAILikeResponsesConfig
 from litellm.responses.litellm_completion_transformation.handler import (
     LiteLLMCompletionTransformationHandler,
 )
+from litellm.responses.mcp.request_context import MCPRequestContext
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.types.llms.openai import (
     PromptObject,
@@ -50,7 +55,9 @@ from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.llms.openai.data_residency import infer_openai_data_residency
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.responses.main import *
+from litellm.types.responses.streaming_websocket import ResponsesWebSocketRequestDefaults
 from litellm.types.router import GenericLiteLLMParams
+from litellm.types.utils import all_litellm_params
 from litellm.utils import (
     ProviderConfigManager,
     client,
@@ -63,6 +70,23 @@ else:
     MCPTool = Any
 
 from .streaming_iterator import BaseResponsesAPIStreamingIterator
+
+__all__ = (
+    "acancel_responses",
+    "acompact_responses",
+    "adelete_responses",
+    "aget_responses",
+    "alist_input_items",
+    "aresponses",
+    "aresponses_api_with_mcp",
+    "cancel_responses",
+    "compact_responses",
+    "delete_responses",
+    "get_responses",
+    "list_input_items",
+    "mock_responses_api_response",
+    "responses",
+)
 
 ####### ENVIRONMENT VARIABLES ###################
 # Initialize any necessary instances or variables here
@@ -185,16 +209,12 @@ async def aresponses_api_with_mcp(
     user_api_key_auth = kwargs.get("user_api_key_auth") or kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
 
     # Extract MCP auth headers from request (for dynamic auth when fetching tools)
-    mcp_auth_header: str | None = None
-    mcp_server_auth_headers: dict[str, dict[str, str]] | None = None
-    secret_fields = kwargs.get("secret_fields")
-    if secret_fields and isinstance(secret_fields, dict):
-        (
-            mcp_auth_header,
-            mcp_server_auth_headers,
-            _,
-            _,
-        ) = ResponsesAPIRequestUtils.extract_mcp_headers_from_request(secret_fields=secret_fields, tools=tools)
+    secret_fields: Final = kwargs.get("secret_fields")
+    mcp_auth_header, mcp_server_auth_headers, _, discovery_raw_headers = (
+        ResponsesAPIRequestUtils.extract_mcp_headers_from_request(secret_fields=secret_fields, tools=tools)
+        if isinstance(secret_fields, dict) and secret_fields
+        else (None, None, None, None)
+    )
 
     # Get original MCP tools (for events) and OpenAI tools (for LLM) by reusing existing methods
     (
@@ -207,6 +227,7 @@ async def aresponses_api_with_mcp(
         mcp_auth_header=mcp_auth_header,
         mcp_server_auth_headers=mcp_server_auth_headers,
         request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
+        raw_headers=discovery_raw_headers,
     )
     openai_tools: Final = LiteLLM_Proxy_MCP_Handler._transform_mcp_tools_to_openai(original_mcp_tools)
 
@@ -306,7 +327,6 @@ async def aresponses_api_with_mcp(
             user_api_key_auth = kwargs.get("litellm_metadata", {}).get("user_api_key_auth")
 
             # Extract MCP auth headers from the request to pass to MCP server
-            secret_fields = kwargs.get("secret_fields")
             (
                 mcp_auth_header,
                 mcp_server_auth_headers,
@@ -328,6 +348,9 @@ async def aresponses_api_with_mcp(
                 litellm_call_id=kwargs.get("litellm_call_id"),
                 litellm_trace_id=kwargs.get("litellm_trace_id"),
                 request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
+                guardrail_context=MCPRequestContext.resolve_guardrail_context(
+                    MappingProxyType({**kwargs, "metadata": metadata, "model": model})
+                ),
             )
 
             if tool_results:
@@ -389,6 +412,7 @@ async def aresponses_api_with_mcp(
                         mcp_auth_header=mcp_auth_header,
                         mcp_server_auth_headers=mcp_server_auth_headers,
                         request_tags=LiteLLM_Proxy_MCP_Handler._get_parent_request_tags(kwargs),
+                        raw_headers=discovery_raw_headers,
                     )
                     final_response = LiteLLM_Proxy_MCP_Handler._add_mcp_output_elements_to_response(
                         response=final_response,
@@ -405,6 +429,61 @@ def _bridges_to_chat_completions(
 ) -> bool:
     """Whether the request reaches its provider as a chat completion, not a Responses call."""
     return responses_api_provider_config is None or use_chat_completions_api is True
+
+
+_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED: Final = frozenset({"client_metadata"})
+
+
+def _bridge_kwargs(
+    kwargs: Mapping[str, object],
+    responses_api_provider_config: BaseResponsesAPIConfig | None,
+    allowed_openai_params: Sequence[str] | None,
+) -> Mapping[str, object]:
+    if responses_api_provider_config is None:
+        return MappingProxyType(
+            {key: value for key, value in kwargs.items() if key not in _RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED}
+        )
+    forwarded_keys: Final = frozenset(
+        (
+            *litellm.OPENAI_CHAT_COMPLETION_PARAMS,
+            *DEFAULT_CHAT_COMPLETION_PARAM_VALUES,
+            *all_litellm_params,
+            *GenericLiteLLMParams.model_fields,
+            *(allowed_openai_params or ()),
+        )
+    ).difference(_RESPONSES_ONLY_REQUEST_FIELDS_NEVER_BRIDGED)
+    return MappingProxyType({key: value for key, value in kwargs.items() if key in forwarded_keys})
+
+
+_ResponsesCompatibilityFailure: TypeAlias = Literal["encrypted_task_unsupported"]
+
+
+def _encrypted_task_support_failure(
+    responses_api_provider_config: BaseResponsesAPIConfig | None, use_chat_completions_api: bool
+) -> _ResponsesCompatibilityFailure | None:
+    if (
+        responses_api_provider_config is None
+        or _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api)
+        or not responses_api_provider_config.supports_encrypted_agent_messages()
+    ):
+        return "encrypted_task_unsupported"
+    return None
+
+
+def _raise_responses_compatibility_failure(
+    failure: _ResponsesCompatibilityFailure, model: str, custom_llm_provider: str | None
+) -> NoReturn:
+    match failure:
+        case "encrypted_task_unsupported":
+            raise litellm.exception_type(
+                model=model,
+                custom_llm_provider=custom_llm_provider,
+                original_exception=ValueError(
+                    "Encrypted task classification requires a compatible native Responses deployment"
+                ),
+            )
+        case _:
+            assert_never(failure)
 
 
 def _deployment_passes_through_responses(model_info: object) -> bool:
@@ -429,18 +508,27 @@ class _AsyncPromptManagementOutcome:
 
 
 def _resolve_responses_api_provider_config(
-    model: str, custom_llm_provider: str, model_info: object
+    model: str, custom_llm_provider: str, model_info: object, api_base: str | None
 ) -> BaseResponsesAPIConfig | None:
     provider_config: Final = ProviderConfigManager.get_provider_responses_api_config(
-        model=model, provider=custom_llm_provider
+        model=model, provider=custom_llm_provider, api_base=api_base
     )
     if provider_config is not None or not _deployment_passes_through_responses(model_info):
         return provider_config
     return OpenAILikeResponsesConfig()
 
 
+def _api_base_kwarg(kwargs: Mapping[str, object]) -> str | None:
+    api_base: Final = kwargs.get("api_base")
+    return api_base if isinstance(api_base, str) else None
+
+
 def _will_bridge_to_chat_completions(
-    model: str, custom_llm_provider: str | None, use_chat_completions_api: bool, model_info: object
+    model: str,
+    custom_llm_provider: str | None,
+    use_chat_completions_api: bool,
+    model_info: object,
+    api_base: str | None,
 ) -> bool:
     """``_bridges_to_chat_completions`` for callers running before the provider config is resolved.
 
@@ -454,14 +542,14 @@ def _will_bridge_to_chat_completions(
     if custom_llm_provider is None:
         return True
     return _bridges_to_chat_completions(
-        _resolve_responses_api_provider_config(normalized_model[0], custom_llm_provider, model_info),
+        _resolve_responses_api_provider_config(normalized_model[0], custom_llm_provider, model_info, api_base),
         use_chat_completions_api or normalized_model[1],
     )
 
 
 @contextmanager
 def _prompt_management_sees_a_provisional_message_list(
-    kwargs: dict[str, Any],  # mutable-ok: the signal is read and popped out of the caller's own kwargs
+    kwargs: dict[str, object],  # mutable-ok: the signal is read and popped out of the caller's own kwargs
     bridged: bool,
 ) -> Generator[None, None]:
     """Tell the cache-control hook that this layer's messages are not the ones sent upstream.
@@ -565,6 +653,7 @@ async def aresponses(
                     custom_llm_provider,
                     bool(kwargs.get("use_chat_completions_api")),
                     kwargs.get("model_info"),
+                    _api_base_kwarg(kwargs),
                 ),
             ):
                 (
@@ -730,7 +819,11 @@ def _apply_prompt_management_to_responses_call(
         with _prompt_management_sees_a_provisional_message_list(
             kwargs,
             bridged=_will_bridge_to_chat_completions(
-                model, custom_llm_provider, use_chat_completions_api, kwargs.get("model_info")
+                model,
+                custom_llm_provider,
+                use_chat_completions_api,
+                kwargs.get("model_info"),
+                _api_base_kwarg(kwargs),
             ),
         ):
             (
@@ -1078,6 +1171,7 @@ def responses(
         litellm_call_id: Final[str | None] = kwargs.get("litellm_call_id", None)
         _is_async: Final = kwargs.pop("aresponses", False) is True
         skip_mcp_handler: Final = kwargs.pop("_skip_mcp_handler", False)
+        require_encrypted_task_support: Final = kwargs.pop("_require_encrypted_task_support", False) is True
         use_chat_completions_api = _pop_use_chat_completions_api_kw(kwargs)
 
         client_headers: Final = kwargs.get("headers")
@@ -1122,6 +1216,27 @@ def responses(
 
         # get llm provider logic
         litellm_params: Final = GenericLiteLLMParams(**kwargs)
+        try:
+            effective_extra_headers: Final = (
+                add_provider_affinity_header(
+                    headers=extra_headers or MappingProxyType({}),
+                    litellm_params=MappingProxyType(
+                        {
+                            "provider_affinity_header": litellm_params.provider_affinity_header,
+                            "litellm_session_id": kwargs.get("litellm_session_id"),
+                            "session_id": kwargs.get("session_id"),
+                            "metadata": metadata,
+                            "litellm_metadata": kwargs.get("litellm_metadata"),
+                        }
+                    ),
+                )
+                if litellm_params.provider_affinity_header is not None
+                else extra_headers
+            )
+        except ValueError as affinity_error:
+            raise litellm.BadRequestError(
+                message=str(affinity_error), model=model, llm_provider=custom_llm_provider
+            ) from affinity_error
 
         #########################################################
         # MOCK RESPONSE LOGIC
@@ -1165,7 +1280,7 @@ def responses(
             top_p=top_p,
             truncation=truncation,
             user=user,
-            extra_headers=extra_headers,
+            extra_headers=effective_extra_headers,
             extra_query=extra_query,
             extra_body=extra_body,
             timeout=timeout,
@@ -1183,19 +1298,36 @@ def responses(
             responses_api_provider_config = None
         else:
             responses_api_provider_config = _resolve_responses_api_provider_config(
-                model, custom_llm_provider, deployment_model_info
+                model, custom_llm_provider, deployment_model_info, litellm_params.api_base
             )
 
+        if (
+            require_encrypted_task_support
+            and (
+                compatibility_failure := _encrypted_task_support_failure(
+                    responses_api_provider_config, use_chat_completions_api
+                )
+            )
+            is not None
+        ):
+            _raise_responses_compatibility_failure(compatibility_failure, model, custom_llm_provider)
+
         local_vars.update(kwargs)
-        # Map reasoning_effort (from litellm_params/proxy config) to reasoning when not set
-        if reasoning is None and "reasoning_effort" in local_vars:
-            _mapped = LiteLLMResponsesTransformationHandler()._map_reasoning_effort(local_vars.pop("reasoning_effort"))
-            if _mapped is not None:
-                reasoning = _mapped
-                local_vars["reasoning"] = _mapped
-        # Get ResponsesAPIOptionalRequestParams with only valid parameters
+        current_reasoning: Final = cast(  # cast-ok: prompt-managed reasoning arrives as a plain dict
+            Reasoning | None, local_vars.get("reasoning")
+        )
+        reasoning_effort: Final = local_vars.get("reasoning_effort")
+        request_reasoning: Final = (
+            LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
+            if current_reasoning is None and reasoning_effort is not None
+            else current_reasoning
+        )
         response_api_optional_params: Final[ResponsesAPIOptionalRequestParams] = (
-            ResponsesAPIRequestUtils.get_requested_response_api_optional_param(local_vars)
+            ResponsesAPIRequestUtils.get_requested_response_api_optional_param(
+                {  # mutable-ok: callee pops keys off the dict it is given
+                    k: v for k, v in {**local_vars, "reasoning": request_reasoning}.items() if k != "reasoning_effort"
+                }
+            )
         )
 
         _file_search_dispatch: Final = _responses_try_dispatch_emulated_file_search(
@@ -1211,7 +1343,7 @@ def responses(
             metadata=metadata,
             parallel_tool_calls=parallel_tool_calls,
             previous_response_id=previous_response_id,
-            reasoning=reasoning,
+            reasoning=request_reasoning,
             store=store,
             background=background,
             stream=stream,
@@ -1225,7 +1357,7 @@ def responses(
             safety_identifier=safety_identifier,
             text_format=text_format,
             allowed_openai_params=allowed_openai_params,
-            extra_headers=extra_headers,
+            extra_headers=effective_extra_headers,
             extra_query=extra_query,
             extra_body=extra_body,
             timeout=timeout,
@@ -1237,6 +1369,7 @@ def responses(
             return _file_search_dispatch
 
         if _bridges_to_chat_completions(responses_api_provider_config, use_chat_completions_api):
+            bridge_kwargs: Final = _bridge_kwargs(kwargs, responses_api_provider_config, allowed_openai_params)
             return litellm_completion_transformation_handler.response_api_handler(
                 model=model,
                 input=input,
@@ -1244,11 +1377,11 @@ def responses(
                 custom_llm_provider=custom_llm_provider,
                 _is_async=_is_async,
                 stream=stream,
-                extra_headers=extra_headers,
+                extra_headers=effective_extra_headers,
                 extra_body=extra_body,
                 timeout=timeout if timeout is not None else request_timeout,
                 allowed_openai_params=allowed_openai_params,
-                **kwargs,
+                **bridge_kwargs,
             )
 
         # Get optional parameters for the responses API
@@ -1273,6 +1406,7 @@ def responses(
                 "model_info": kwargs.get("model_info"),
                 "data_residency": infer_openai_data_residency(custom_llm_provider, litellm_params.api_base),
                 "metadata": (kwargs["litellm_metadata"] if "litellm_metadata" in kwargs else kwargs.get("metadata")),
+                "provider_affinity_header": litellm_params.provider_affinity_header,
             },
             custom_llm_provider=custom_llm_provider,
         )
@@ -1292,7 +1426,7 @@ def responses(
             custom_llm_provider=custom_llm_provider,
             litellm_params=litellm_params,
             logging_obj=litellm_logging_obj,
-            extra_headers=extra_headers,
+            extra_headers=effective_extra_headers,
             extra_body=extra_body,
             timeout=timeout or request_timeout,
             _is_async=_is_async,
@@ -1430,6 +1564,7 @@ def delete_responses(
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
+                api_base=litellm_params.api_base,
             )
         )
 
@@ -1601,6 +1736,7 @@ def get_responses(
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
+                api_base=litellm_params.api_base,
             )
         )
 
@@ -1745,6 +1881,7 @@ def list_input_items(
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
+                api_base=litellm_params.api_base,
             )
         )
 
@@ -1894,6 +2031,7 @@ def cancel_responses(
             ProviderConfigManager.get_provider_responses_api_config(
                 model=None,
                 provider=custom_llm_provider,
+                api_base=litellm_params.api_base,
             )
         )
 
@@ -2066,6 +2204,7 @@ def compact_responses(
             ProviderConfigManager.get_provider_responses_api_config(
                 model=model,
                 provider=custom_llm_provider,
+                api_base=litellm_params.api_base,
             )
         )
 
@@ -2155,6 +2294,54 @@ def _build_litellm_metadata_for_ws(kwargs: dict) -> dict:
     return metadata
 
 
+_JSON_OBJECT_ADAPTER: Final = TypeAdapter(dict[str, object] | None)
+
+
+def _deployment_reasoning_default(kwargs: Mapping[str, object]) -> Reasoning | dict[str, object] | None:
+    if kwargs.get("reasoning") is not None:
+        return None
+    reasoning_effort: Final = kwargs.get("reasoning_effort")
+    if reasoning_effort is None:
+        return None
+    if isinstance(reasoning_effort, Mapping):
+        return _JSON_OBJECT_ADAPTER.validate_python(reasoning_effort)
+    return LiteLLMResponsesTransformationHandler()._map_reasoning_effort(reasoning_effort)
+
+
+_RESPONSES_WS_ROUTING_HINT_KEYS: Final = frozenset({"input", "previous_response_id"})
+
+
+def _first_ws_frame_with_routed_input(first_message: str, routed_input: object) -> str:
+    try:
+        frame: Final = _JSON_OBJECT_ADAPTER.validate_json(first_message)
+    except ValidationError:
+        return first_message
+    if frame is None or routed_input is None:
+        return first_message
+    raw_nested: Final = frame.get("response")
+    nested: Final = _JSON_OBJECT_ADAPTER.validate_python(raw_nested) if isinstance(raw_nested, Mapping) else None
+    if nested is not None and nested.get("input") is not None:
+        if nested["input"] == routed_input:
+            return first_message
+        return json.dumps({**frame, "response": {**nested, "input": routed_input}})
+    if frame.get("input") == routed_input:
+        return first_message
+    return json.dumps({**frame, "input": routed_input})
+
+
+def _build_responses_websocket_request_defaults(kwargs: Mapping[str, object]) -> ResponsesWebSocketRequestDefaults:
+    default_reasoning: Final = _deployment_reasoning_default(kwargs)
+    candidate_params: Final[dict[str, object]] = {
+        **kwargs,
+        **({"reasoning": default_reasoning} if default_reasoning is not None else {}),
+    }
+    fill_missing: Final = ResponsesAPIRequestUtils.get_requested_response_api_optional_param(candidate_params)
+    return ResponsesWebSocketRequestDefaults(
+        fill_missing=MappingProxyType(dict(fill_missing)),
+        overrides=MappingProxyType(_JSON_OBJECT_ADAPTER.validate_python(kwargs.get("extra_body")) or {}),
+    )
+
+
 @client
 async def _aresponses_websocket(
     model: str,
@@ -2163,11 +2350,11 @@ async def _aresponses_websocket(
     api_key: str | None = None,
     timeout: float | None = None,
     **kwargs,
-):
+) -> Exception | None:
     """
     Private function to handle the Responses API WebSocket mode.
 
-    For PROXY use only.
+    For PROXY use only. Returns the provider failure that ended the connection, if any.
 
     Resolves the LLM provider from ``model``, looks up the matching
     ``BaseResponsesAPIConfig``, and hands off to
@@ -2204,14 +2391,15 @@ async def _aresponses_websocket(
         custom_llm_provider=_custom_llm_provider,
     )
 
+    resolved_api_base: Final = dynamic_api_base or litellm_params.api_base or litellm.api_base or None
     responses_api_provider_config: BaseResponsesAPIConfig | None = None
     if _custom_llm_provider is not None:
         responses_api_provider_config = ProviderConfigManager.get_provider_responses_api_config(
             model=resolved_model,
             provider=litellm.LlmProviders(_custom_llm_provider),
+            api_base=resolved_api_base,
         )
 
-    resolved_api_base: Final = dynamic_api_base or litellm_params.api_base or litellm.api_base or None
     resolved_api_key: Final = (
         dynamic_api_key
         or litellm_params.api_key
@@ -2231,10 +2419,14 @@ async def _aresponses_websocket(
         "api_base",
         "api_key",
         "timeout",
+        "first_message",
+        *_RESPONSES_WS_ROUTING_HINT_KEYS,
     }
     remaining_kwargs: Final = {k: v for k, v in kwargs.items() if k not in _explicit_keys}
+    deployment_kwargs: Final = {k: v for k, v in kwargs.items() if k not in _RESPONSES_WS_ROUTING_HINT_KEYS}
+    first_message: Final = kwargs.get("first_message")
 
-    await base_llm_http_handler.async_responses_websocket(
+    return await base_llm_http_handler.async_responses_websocket(
         model=resolved_model,
         websocket=websocket,
         logging_obj=litellm_logging_obj,
@@ -2242,8 +2434,14 @@ async def _aresponses_websocket(
         api_base=resolved_api_base,
         api_key=resolved_api_key,
         timeout=timeout,
+        first_message=(
+            _first_ws_frame_with_routed_input(first_message, kwargs.get("input"))
+            if isinstance(first_message, str)
+            else None
+        ),
         user_api_key_dict=kwargs.get("user_api_key_dict"),
         litellm_metadata=_build_litellm_metadata_for_ws(kwargs),
         custom_llm_provider=_custom_llm_provider,
+        request_defaults=_build_responses_websocket_request_defaults(deployment_kwargs),
         **remaining_kwargs,
     )

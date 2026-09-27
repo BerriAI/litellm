@@ -1,7 +1,7 @@
 from typing import Any, Final
 
 from litellm.llms.anthropic.common_utils import AnthropicModelInfo
-from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+from litellm.llms.anthropic.pass_through.messages.transformation import (
     AnthropicMessagesConfig,
 )
 from litellm.types.llms.anthropic import (
@@ -107,6 +107,9 @@ class VertexAIPartnerModelsAnthropicMessagesConfig(AnthropicMessagesConfig, Vert
         anthropic_model_info: Final = AnthropicModelInfo()
         if anthropic_model_info.is_tool_search_used(tools):
             beta_values.add(get_tool_search_beta_header("vertex_ai"))
+
+        if optional_params.get("safeguards") is not None:
+            beta_values.add(ANTHROPIC_BETA_HEADER_VALUES.DANGEROUS_TOOL_USE_2026_09_03.value)
 
         if beta_values:
             headers["anthropic-beta"] = ",".join(beta_values)

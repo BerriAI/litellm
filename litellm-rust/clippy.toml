@@ -1,0 +1,22 @@
+# The Tokio runtime is reached only through `host-python/src/execution.rs`, whose fork gate
+# must see every entry. Going around it makes a fork-after-use hang instead of raising.
+disallowed-methods = [
+    { path = "pyo3_async_runtimes::tokio::get_runtime", reason = "use litellm_host_python::run_sync / run_sync_value" },
+    { path = "pyo3_async_runtimes::tokio::future_into_py", reason = "use litellm_host_python::run_async / run_async_value" },
+    { path = "pyo3_async_runtimes::tokio::future_into_py_with_locals", reason = "use litellm_host_python::run_async / run_async_value" },
+    { path = "pyo3_async_runtimes::tokio::local_future_into_py", reason = "use litellm_host_python::run_async / run_async_value" },
+    { path = "pyo3_async_runtimes::tokio::run", reason = "use litellm_host_python::run_sync / run_sync_value" },
+    { path = "pyo3_async_runtimes::tokio::run_until_complete", reason = "use litellm_host_python::run_sync / run_sync_value" },
+    { path = "reqwest::Client::new", reason = "take litellm_http::Client from HttpClientPool" },
+    { path = "reqwest::Client::builder", reason = "HttpClientConfig owns client construction" },
+    { path = "reqwest::ClientBuilder::danger_accept_invalid_certs", reason = "set HttpClientConfig::verify instead" },
+    { path = "reqwest::ClientBuilder::identity", reason = "set HttpClientConfig::client_certificate instead" },
+    { path = "reqwest::ClientBuilder::use_preconfigured_tls", reason = "HttpClientConfig owns the TLS configuration" },
+]
+
+# Every outbound client comes from litellm_http::HttpClientPool so it honors the host's TLS,
+# proxy and timeout settings. Only crates/http builds one.
+disallowed-types = [
+    { path = "reqwest::Client", reason = "take litellm_http::Client from HttpClientPool; only crates/http builds one" },
+    { path = "reqwest::ClientBuilder", reason = "HttpClientConfig owns client construction" },
+]

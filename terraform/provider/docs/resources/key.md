@@ -120,6 +120,8 @@ In addition to all arguments above, the following attributes are exported:
 
 * `key` - The generated API key. This is the actual key value that will be used for authentication.
 
+* `server_metadata` - Map of every metadata entry the proxy stores for this key, including entries not declared in `metadata`, so drift on them is visible on refresh. Entries already exposed as their own attributes (`model_rpm_limit`, `model_tpm_limit`, `tags`, `guardrails`, `enforced_params`, `allowed_passthrough_routes`, `rpm_limit_type`, `tpm_limit_type`, `prompts`) are omitted and non-string values are JSON encoded. Terraform never writes it; `metadata` still tracks only the entries declared in the configuration.
+
 * `spend` - The current spend for this key. This reflects the total amount spent using this key so far.
 
 ## State Management

@@ -27,9 +27,7 @@ def _make_client(
     `call_with_db_reconnect_retry` actually pokes at."""
     client = MagicMock()
     if has_attempt_db_reconnect:
-        client.attempt_db_reconnect = AsyncMock(
-            return_value=attempt_db_reconnect_return
-        )
+        client.attempt_db_reconnect = AsyncMock(return_value=attempt_db_reconnect_return)
     else:
         # `hasattr(client, "attempt_db_reconnect")` must return False — MagicMock
         # auto-creates attributes, so we wipe it out via `spec`.
@@ -127,9 +125,7 @@ async def test_call_with_db_reconnect_retry_propagates_after_second_transport_er
         raise httpx.ReadError("still failing")
 
     with pytest.raises(httpx.ReadError):
-        await call_with_db_reconnect_retry(
-            client, _factory, reason="second_transport_error"
-        )
+        await call_with_db_reconnect_retry(client, _factory, reason="second_transport_error")
 
     assert len(invocations) == 2
     client.attempt_db_reconnect.assert_awaited_once()
@@ -166,9 +162,7 @@ async def test_call_with_db_reconnect_retry_invokes_factory_twice_not_same_coro(
             raise httpx.ReadError("transport blip")
         return "ok"
 
-    result = await call_with_db_reconnect_retry(
-        client, _factory, reason="fresh_coro_on_retry"
-    )
+    result = await call_with_db_reconnect_retry(client, _factory, reason="fresh_coro_on_retry")
 
     assert result == "ok"
     assert factory_call_count == 2
@@ -243,13 +237,12 @@ async def test_call_with_db_reconnect_retry_preserves_original_error_when_reconn
         raise original_exc
 
     with pytest.raises(httpx.ReadError) as exc_info:
-        await call_with_db_reconnect_retry(
-            client, _factory, reason="reconnect_itself_raises"
-        )
+        await call_with_db_reconnect_retry(client, _factory, reason="reconnect_itself_raises")
 
     assert exc_info.value is original_exc
     assert exc_info.value.__cause__ is reconnect_exc
     client.attempt_db_reconnect.assert_awaited_once()
+
 
 @pytest.mark.asyncio
 async def test_call_with_db_reconnect_retry_honors_narrowed_retry_safe_types():
@@ -259,7 +252,7 @@ async def test_call_with_db_reconnect_retry_honors_narrowed_retry_safe_types():
     attempts = 0
 
     async def _factory():
-        nonlocal attempts  # rebind-ok: attempt counter for a two-call helper
+        nonlocal attempts
         attempts += 1
         raise httpx.ReadError("ambiguous")
 
@@ -283,7 +276,7 @@ async def test_call_with_db_reconnect_retry_default_covers_every_transport_error
     attempts = 0
 
     async def _factory():
-        nonlocal attempts  # rebind-ok: attempt counter for a two-call helper
+        nonlocal attempts
         attempts += 1
         if attempts == 1:
             raise ClientNotConnectedError()

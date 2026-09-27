@@ -1,8 +1,38 @@
 import React, { useState } from "react";
 import { ArrowLeft, Check, Copy, Link2 } from "lucide-react";
 import { cn } from "@/lib/cva.config";
-import { buildMarketplaceSettingsSnippet, formatInstallCommand } from "./helpers";
-import { Plugin } from "./types";
+import { buildMarketplaceSettingsSnippet, formatInstallCommand, getSourceDisplayText, getSourceLink } from "./helpers";
+import { Plugin, PluginSource } from "./types";
+
+const SkillSource: React.FC<{ source: PluginSource }> = ({ source }) => {
+  const link = getSourceLink(source);
+  const href = link && source.source === "git-subdir" && source.path ? `${link}/tree/main/${source.path}` : link;
+  if (href) {
+    return (
+      <div className="mb-6">
+        <div className="mb-1 text-xs text-muted-foreground">Source</div>
+        <a
+          href={href}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="flex items-center gap-1 break-all text-[13px] text-info"
+        >
+          {href.replace("https://", "")}
+          <Link2 className="size-3 shrink-0" />
+        </a>
+      </div>
+    );
+  }
+  if (!source.url) {
+    return null;
+  }
+  return (
+    <div className="mb-6">
+      <div className="mb-1 text-xs text-muted-foreground">Source</div>
+      <div className="break-all text-[13px] text-foreground">{getSourceDisplayText(source)}</div>
+    </div>
+  );
+};
 
 interface SkillDetailProps {
   skill: Plugin;
@@ -21,14 +51,6 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
     setCopiedKey(key);
     setTimeout(() => setCopiedKey(null), 2000);
   };
-
-  const sourceUrl = (() => {
-    const src = skill.source;
-    if (src.source === "github" && src.repo) return `https://github.com/${src.repo}`;
-    if (src.source === "git-subdir" && src.url) return src.path ? `${src.url}/tree/main/${src.path}` : src.url;
-    if (src.source === "url" && src.url) return src.url;
-    return null;
-  })();
 
   const installCommand = formatInstallCommand(skill);
 
@@ -128,20 +150,7 @@ const SkillDetail: React.FC<SkillDetailProps> = ({ skill, onBack }) => {
               </span>
             </div>
 
-            {sourceUrl && (
-              <div className="mb-6">
-                <div className="mb-1 text-xs text-muted-foreground">Source</div>
-                <a
-                  href={sourceUrl}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-1 break-all text-[13px] text-info"
-                >
-                  {sourceUrl.replace("https://", "")}
-                  <Link2 className="size-3 shrink-0" />
-                </a>
-              </div>
-            )}
+            <SkillSource source={skill.source} />
 
             {skill.keywords && skill.keywords.length > 0 && (
               <div className="mb-6">

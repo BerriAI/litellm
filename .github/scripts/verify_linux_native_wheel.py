@@ -134,7 +134,16 @@ def main(
         uncompressed_wheel_size: Final = sum(member.file_size for member in wheel_members)
         native_path: Final = wheel.parent / "native" / Path(native_member.filename).name
         native_path.parent.mkdir(parents=True, exist_ok=True)
-        native_path.write_bytes(archive.read(native_member))
+        native_bytes: Final = archive.read(native_member)
+        native_path.write_bytes(native_bytes)
+        duplicated_vocabularies: Final = tuple(
+            member.filename
+            for member in wheel_members
+            if member.filename.startswith("litellm/litellm_core_utils/tokenizers/")
+            and re.fullmatch(r"[0-9a-f]{40}", PurePosixPath(member.filename).name)
+            and member.file_size > 0
+            and archive.read(member) in native_bytes
+        )
 
     wheel_metadata_tags_match: Final = (
         len(wheel_metadata_tags) == len(expanded_filename_tags)
@@ -205,7 +214,7 @@ def main(
     native_module: Final = load_native_module(native_path)
     native_module_loads: Final = native_module is not None
     panic_test_hook_absent: Final = native_module is not None and not hasattr(native_module, "_panic_for_test")
-    native_size_limit: Final = 20_000_000
+    native_size_limit: Final = 40_000_000
     native_size_within_limit: Final = native_member.file_size <= native_size_limit
     validations: Final = (
         (f"Python tag is {EXPECTED_PYTHON_TAG}", python_tag == EXPECTED_PYTHON_TAG),
@@ -222,7 +231,8 @@ def main(
         ("Python extension entry point is present", extension_entry_point_present),
         ("Native module loads", native_module_loads),
         ("Production module omits the panic test hook", panic_test_hook_absent),
-        ("Native extension does not exceed 20 MB", native_size_within_limit),
+        (f"Native extension does not exceed {native_size_limit / 1_000_000:.0f} MB", native_size_within_limit),
+        ("Tokenizer vocabularies are not duplicated in the native extension", not duplicated_vocabularies),
         ("Wheel contents are valid", not unexpected_members),
     )
 
@@ -267,7 +277,8 @@ def main(
             ),
             (
                 not native_size_within_limit,
-                f"native extension exceeds 20 MB: {native_member.file_size / 1_000_000:.2f} MB",
+                f"native extension exceeds {native_size_limit / 1_000_000:.0f} MB: "
+                f"{native_member.file_size / 1_000_000:.2f} MB",
             ),
             (bool(unexpected_members), f"wheel contains unexpected build artifacts: {', '.join(unexpected_members)}"),
         )

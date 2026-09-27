@@ -17,7 +17,9 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 from litellm.proxy.proxy_server import app
+from litellm.types.agents import AgentResponse
 
 
 def _make_access_group_record(
@@ -126,6 +128,7 @@ def client_and_mocks(monkeypatch):
 
     mock_agents_table = MagicMock()
     mock_agents_table.find_many = AsyncMock(return_value=[])
+    mock_agents_table.update = AsyncMock(return_value=None)
 
     @asynccontextmanager
     async def mock_tx():
@@ -133,6 +136,7 @@ def client_and_mocks(monkeypatch):
             litellm_accessgrouptable=mock_access_group_table,
             litellm_teamtable=mock_team_table,
             litellm_verificationtoken=mock_key_table,
+            litellm_agentstable=mock_agents_table,
         )
         yield tx
 
@@ -158,15 +162,9 @@ def client_and_mocks(monkeypatch):
     mock_proxy_logging = MagicMock()
     mock_proxy_logging.internal_usage_cache = MagicMock()
     mock_proxy_logging.internal_usage_cache.dual_cache = MagicMock()
-    mock_proxy_logging.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock(
-        return_value=None
-    )
-    mock_proxy_logging.internal_usage_cache.dual_cache.async_get_cache = AsyncMock(
-        return_value=None
-    )
-    mock_proxy_logging.internal_usage_cache.dual_cache.async_set_cache = AsyncMock(
-        return_value=None
-    )
+    mock_proxy_logging.internal_usage_cache.dual_cache.async_delete_cache = AsyncMock(return_value=None)
+    mock_proxy_logging.internal_usage_cache.dual_cache.async_get_cache = AsyncMock(return_value=None)
+    mock_proxy_logging.internal_usage_cache.dual_cache.async_set_cache = AsyncMock(return_value=None)
     monkeypatch.setattr(ps, "proxy_logging_obj", mock_proxy_logging)
 
     admin_user = UserAPIKeyAuth(
@@ -239,9 +237,7 @@ def test_create_access_group_duplicate_name_conflict(client_and_mocks):
         "unique constraint violation",
     ],
 )
-def test_create_access_group_race_condition_returns_409(
-    client_and_mocks, error_message
-):
+def test_create_access_group_race_condition_returns_409(client_and_mocks, error_message):
     """Create race condition: Prisma unique constraint surfaces as 409, not 500."""
     client, _, mock_table, *_ = client_and_mocks
 
@@ -288,9 +284,7 @@ def test_create_access_group_500_on_non_constraint_prisma_error(client_and_mocks
 
     # Use raise_server_exceptions=False so unhandled exceptions become 500 responses
     test_client = TestClient(app, raise_server_exceptions=False)
-    resp = test_client.post(
-        "/v1/access_group", json={"access_group_name": "test-group"}
-    )
+    resp = test_client.post("/v1/access_group", json={"access_group_name": "test-group"})
     assert resp.status_code == 500
 
 
@@ -558,9 +552,7 @@ def test_update_access_group_empty_body(client_and_mocks):
     """Update with empty body succeeds; only updated_by is set."""
     client, _, mock_table, *_ = client_and_mocks
 
-    existing = _make_access_group_record(
-        access_group_id="ag-update", access_group_name="unchanged"
-    )
+    existing = _make_access_group_record(access_group_id="ag-update", access_group_name="unchanged")
     mock_table.find_unique = AsyncMock(return_value=existing)
 
     resp = client.put("/v1/access_group/ag-update", json={})
@@ -576,14 +568,10 @@ def test_update_access_group_name_success(client_and_mocks):
     """Update access_group_name succeeds when new name is unique."""
     client, _, mock_table, *_ = client_and_mocks
 
-    existing = _make_access_group_record(
-        access_group_id="ag-update", access_group_name="old-name"
-    )
+    existing = _make_access_group_record(access_group_id="ag-update", access_group_name="old-name")
     mock_table.find_unique = AsyncMock(return_value=existing)
 
-    resp = client.put(
-        "/v1/access_group/ag-update", json={"access_group_name": "new-name"}
-    )
+    resp = client.put("/v1/access_group/ag-update", json={"access_group_name": "new-name"})
     assert resp.status_code == 200
     mock_table.update.assert_awaited_once()
     call_kwargs = mock_table.update.call_args.kwargs
@@ -594,19 +582,13 @@ def test_update_access_group_name_duplicate_conflict(client_and_mocks):
     """Update access_group_name to existing name returns 409 (unique constraint)."""
     client, _, mock_table, *_ = client_and_mocks
 
-    existing = _make_access_group_record(
-        access_group_id="ag-update", access_group_name="old-name"
-    )
+    existing = _make_access_group_record(access_group_id="ag-update", access_group_name="old-name")
     mock_table.find_unique = AsyncMock(return_value=existing)
     mock_table.update = AsyncMock(
-        side_effect=Exception(
-            "Unique constraint failed on the fields: (`access_group_name`)"
-        )
+        side_effect=Exception("Unique constraint failed on the fields: (`access_group_name`)")
     )
 
-    resp = client.put(
-        "/v1/access_group/ag-update", json={"access_group_name": "taken-name"}
-    )
+    resp = client.put("/v1/access_group/ag-update", json={"access_group_name": "taken-name"})
     assert resp.status_code == 409
     assert "already exists" in resp.json()["detail"]
     mock_table.update.assert_awaited_once()
@@ -620,21 +602,15 @@ def test_update_access_group_name_duplicate_conflict(client_and_mocks):
         "unique constraint violation",
     ],
 )
-def test_update_access_group_name_unique_constraint_returns_409(
-    client_and_mocks, error_message
-):
+def test_update_access_group_name_unique_constraint_returns_409(client_and_mocks, error_message):
     """Update access_group_name: Prisma unique constraint surfaces as 409."""
     client, _, mock_table, *_ = client_and_mocks
 
-    existing = _make_access_group_record(
-        access_group_id="ag-update", access_group_name="old-name"
-    )
+    existing = _make_access_group_record(access_group_id="ag-update", access_group_name="old-name")
     mock_table.find_unique = AsyncMock(return_value=existing)
     mock_table.update = AsyncMock(side_effect=Exception(error_message))
 
-    resp = client.put(
-        "/v1/access_group/ag-update", json={"access_group_name": "race-name"}
-    )
+    resp = client.put("/v1/access_group/ag-update", json={"access_group_name": "race-name"})
     assert resp.status_code == 409
     assert "already exists" in resp.json()["detail"]
 
@@ -690,9 +666,7 @@ def test_delete_access_group_forbidden_non_admin(client_and_mocks, user_role):
 
 def test_delete_access_group_cleans_up_teams_and_keys(client_and_mocks):
     """Delete removes access_group_id from teams and keys before deleting the group."""
-    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
-        client_and_mocks
-    )
+    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = client_and_mocks
     mock_team_table = mock_prisma.db.litellm_teamtable
     mock_key_table = mock_prisma.db.litellm_verificationtoken
 
@@ -722,9 +696,60 @@ def test_delete_access_group_cleans_up_teams_and_keys(client_and_mocks):
         where={"token": "key-token-1"},
         data={"access_group_ids": []},
     )
-    mock_access_group_table.delete.assert_awaited_once_with(
-        where={"access_group_id": "ag-to-delete"}
+    mock_access_group_table.delete.assert_awaited_once_with(where={"access_group_id": "ag-to-delete"})
+
+
+def test_delete_access_group_detaches_group_from_agents(client_and_mocks):
+    """Delete strips the group from every agent that had it attached, so agents are not left
+    pointing at a group that no longer exists (which would deny them every model, server and agent)."""
+    client, mock_prisma, mock_access_group_table, _mock_cache, _mock_proxy_logging = client_and_mocks
+    mock_agents_table = mock_prisma.db.litellm_agentstable
+
+    existing = _make_access_group_record(access_group_id="ag-to-delete")
+    mock_access_group_table.find_unique = AsyncMock(return_value=existing)
+
+    agent_with_group = MagicMock()
+    agent_with_group.agent_id = "agent-1"
+    agent_with_group.access_group_ids = ["ag-keep", "ag-to-delete"]
+    mock_agents_table.find_many = AsyncMock(return_value=[agent_with_group])
+    global_agent_registry.register_agent(
+        AgentResponse(
+            agent_id="agent-1",
+            agent_name="detach-test-agent",
+            agent_card_params={"name": "detach-test-agent", "url": "http://localhost:9", "version": "1"},
+            access_group_ids=["ag-keep", "ag-to-delete"],
+        )
     )
+
+    try:
+        resp = client.delete("/v1/access_group/ag-to-delete")
+        assert resp.status_code == 204
+
+        mock_agents_table.update.assert_awaited_once_with(
+            where={"agent_id": "agent-1"},
+            data={"access_group_ids": ("ag-keep",)},
+        )
+        mock_access_group_table.delete.assert_awaited_once_with(where={"access_group_id": "ag-to-delete"})
+        registered = global_agent_registry.get_agent_by_id("agent-1")
+        assert registered is not None
+        assert tuple(registered.access_group_ids or ()) == ("ag-keep",)
+    finally:
+        global_agent_registry.deregister_agent("detach-test-agent")
+
+
+def test_delete_access_group_without_attached_agents_leaves_agents_untouched(client_and_mocks):
+    client, mock_prisma, mock_access_group_table, _mock_cache, _mock_proxy_logging = client_and_mocks
+    mock_agents_table = mock_prisma.db.litellm_agentstable
+
+    mock_access_group_table.find_unique = AsyncMock(
+        return_value=_make_access_group_record(access_group_id="ag-to-delete")
+    )
+
+    resp = client.delete("/v1/access_group/ag-to-delete")
+    assert resp.status_code == 204
+
+    mock_agents_table.find_many.assert_awaited_once_with(where={"access_group_ids": {"hasSome": ("ag-to-delete",)}})
+    mock_agents_table.update.assert_not_awaited()
 
 
 @pytest.mark.parametrize(
@@ -792,9 +817,7 @@ def test_delete_access_group_patches_cached_team_and_key(
     """Delete patches cached team/key objects to remove the deleted access_group_id."""
     from litellm.proxy._types import LiteLLM_TeamTableCachedObj
 
-    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
-        client_and_mocks
-    )
+    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = client_and_mocks
     mock_team_table = mock_prisma.db.litellm_teamtable
     mock_key_table = mock_prisma.db.litellm_verificationtoken
 
@@ -820,13 +843,9 @@ def test_delete_access_group_patches_cached_team_and_key(
             team_id="team-1",
             access_group_ids=list(team_cache_group_ids),
         )
-        mock_proxy_logging.internal_usage_cache.dual_cache.async_get_cache = AsyncMock(
-            return_value=cached_team
-        )
+        mock_proxy_logging.internal_usage_cache.dual_cache.async_get_cache = AsyncMock(return_value=cached_team)
     else:
-        mock_proxy_logging.internal_usage_cache.dual_cache.async_get_cache = AsyncMock(
-            return_value=None
-        )
+        mock_proxy_logging.internal_usage_cache.dual_cache.async_get_cache = AsyncMock(return_value=None)
 
     # user_api_key_cache is queried both for teams (fallback after dual_cache) and
     # hashed keys — return the right stub per ``key``. A single AsyncMock(return_value=key)
@@ -834,9 +853,7 @@ def test_delete_access_group_patches_cached_team_and_key(
     # Use a synchronous side_effect (not async def): AsyncMock awaits coroutine side_effects
     # inconsistently across Python/unittest versions; sync returns are awaited as immediate results.
     def user_cache_get_side_effect(*args, **kwargs):
-        cache_key = (
-            kwargs.get("key") if "key" in kwargs else (args[0] if args else None)
-        )
+        cache_key = kwargs.get("key") if "key" in kwargs else (args[0] if args else None)
         if cache_key == "team_id:team-1":
             if team_cache_group_ids is None:
                 return None
@@ -868,14 +885,11 @@ def test_delete_access_group_patches_cached_team_and_key(
         team_set_calls = [
             c
             for c in mock_cache.async_set_cache.call_args_list
-            if c.kwargs.get("key", "") == "team_id:team-1"
-            or (len(c.args) >= 1 and c.args[0] == "team_id:team-1")
+            if c.kwargs.get("key", "") == "team_id:team-1" or (len(c.args) >= 1 and c.args[0] == "team_id:team-1")
         ]
         assert len(team_set_calls) >= 1, "Expected team cache to be patched"
         # The cached team object should have the updated access_group_ids
-        written_team = (
-            team_set_calls[0].kwargs.get("value") or team_set_calls[0].args[1]
-        )
+        written_team = team_set_calls[0].kwargs.get("value") or team_set_calls[0].args[1]
         if isinstance(written_team, LiteLLM_TeamTableCachedObj):
             assert written_team.access_group_ids == expected_team_ids_after
     else:
@@ -883,8 +897,7 @@ def test_delete_access_group_patches_cached_team_and_key(
         team_set_calls = [
             c
             for c in mock_cache.async_set_cache.call_args_list
-            if c.kwargs.get("key", "") == "team_id:team-1"
-            or (len(c.args) >= 1 and c.args[0] == "team_id:team-1")
+            if c.kwargs.get("key", "") == "team_id:team-1" or (len(c.args) >= 1 and c.args[0] == "team_id:team-1")
         ]
         assert len(team_set_calls) == 0, "Should not patch team cache when not cached"
 
@@ -892,8 +905,7 @@ def test_delete_access_group_patches_cached_team_and_key(
         key_set_calls = [
             c
             for c in mock_cache.async_set_cache.call_args_list
-            if c.kwargs.get("key", "") == "hashed-key-1"
-            or (len(c.args) >= 1 and c.args[0] == "hashed-key-1")
+            if c.kwargs.get("key", "") == "hashed-key-1" or (len(c.args) >= 1 and c.args[0] == "hashed-key-1")
         ]
         assert len(key_set_calls) >= 1, "Expected key cache to be patched"
         written_key = key_set_calls[0].kwargs.get("value") or key_set_calls[0].args[1]
@@ -903,17 +915,14 @@ def test_delete_access_group_patches_cached_team_and_key(
         key_set_calls = [
             c
             for c in mock_cache.async_set_cache.call_args_list
-            if c.kwargs.get("key", "") == "hashed-key-1"
-            or (len(c.args) >= 1 and c.args[0] == "hashed-key-1")
+            if c.kwargs.get("key", "") == "hashed-key-1" or (len(c.args) >= 1 and c.args[0] == "hashed-key-1")
         ]
         assert len(key_set_calls) == 0, "Should not patch key cache when not cached"
 
 
 def test_delete_access_group_patches_key_cached_as_dict(client_and_mocks):
     """Delete patches key cache — mock returns UserAPIKeyAuth (what UserApiKeyCache emits after deserialize)."""
-    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
-        client_and_mocks
-    )
+    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = client_and_mocks
     mock_team_table = mock_prisma.db.litellm_teamtable
     mock_key_table = mock_prisma.db.litellm_verificationtoken
 
@@ -929,9 +938,7 @@ def test_delete_access_group_patches_key_cached_as_dict(client_and_mocks):
     mock_key_table.find_unique = AsyncMock(return_value=key_with_group)
 
     # No team in cache
-    mock_proxy_logging.internal_usage_cache.dual_cache.async_get_cache = AsyncMock(
-        return_value=None
-    )
+    mock_proxy_logging.internal_usage_cache.dual_cache.async_get_cache = AsyncMock(return_value=None)
 
     # Serialized shape from Redis dict; UserApiKeyCache.async_get_cache(model_type=...) yields a model — simulate that.
     cached_key_payload = {
@@ -940,18 +947,14 @@ def test_delete_access_group_patches_key_cached_as_dict(client_and_mocks):
     }
 
     def user_cache_get_dict_when_key_matches(*args, **kwargs):
-        cache_key = (
-            kwargs.get("key") if "key" in kwargs else (args[0] if args else None)
-        )
+        cache_key = kwargs.get("key") if "key" in kwargs else (args[0] if args else None)
         if cache_key == "team_id:team-1":
             return None
         if cache_key == "hashed-key-dict":
             return UserAPIKeyAuth.model_validate(cached_key_payload)
         return None
 
-    mock_cache.async_get_cache = AsyncMock(
-        side_effect=user_cache_get_dict_when_key_matches
-    )
+    mock_cache.async_get_cache = AsyncMock(side_effect=user_cache_get_dict_when_key_matches)
 
     resp = client.delete("/v1/access_group/ag-to-delete")
     assert resp.status_code == 204
@@ -960,8 +963,7 @@ def test_delete_access_group_patches_key_cached_as_dict(client_and_mocks):
     key_set_calls = [
         c
         for c in mock_cache.async_set_cache.call_args_list
-        if c.kwargs.get("key", "") == "hashed-key-dict"
-        or (len(c.args) >= 1 and c.args[0] == "hashed-key-dict")
+        if c.kwargs.get("key", "") == "hashed-key-dict" or (len(c.args) >= 1 and c.args[0] == "hashed-key-dict")
     ]
     assert len(key_set_calls) >= 1, "Expected key cache to be patched"
     written_key = key_set_calls[0].kwargs.get("value") or key_set_calls[0].args[1]
@@ -988,9 +990,7 @@ def test_delete_access_group_404_on_p2025_or_record_not_found(client_and_mocks):
 
     existing = _make_access_group_record(access_group_id="ag-to-delete")
     mock_table.find_unique = AsyncMock(return_value=existing)
-    mock_table.delete = AsyncMock(
-        side_effect=Exception("P2025: Record to delete does not exist")
-    )
+    mock_table.delete = AsyncMock(side_effect=Exception("P2025: Record to delete does not exist"))
 
     resp = client.delete("/v1/access_group/ag-to-delete")
     assert resp.status_code == 404
@@ -1039,9 +1039,7 @@ def test_delete_access_group_500_on_generic_exception(client_and_mocks):
         ("delete", "/v1/unified_access_group/ag-123", lambda: {}),
     ],
 )
-def test_access_group_endpoints_db_not_connected(
-    client_and_mocks, monkeypatch, method, url, factory
-):
+def test_access_group_endpoints_db_not_connected(client_and_mocks, monkeypatch, method, url, factory):
     """All endpoints return 500 when DB is not connected."""
     client, *_ = client_and_mocks
 
@@ -1049,9 +1047,7 @@ def test_access_group_endpoints_db_not_connected(
 
     resp = getattr(client, method)(url, **factory())
     assert resp.status_code == 500
-    assert (
-        resp.json()["detail"]["error"] == CommonProxyErrors.db_not_connected_error.value
-    )
+    assert resp.json()["detail"]["error"] == CommonProxyErrors.db_not_connected_error.value
 
 
 # ---------------------------------------------------------------------------
@@ -1107,9 +1103,7 @@ def test_attached_team_ids_by_group_keeps_column_order_then_appends_unmirrored_t
 
 def test_create_access_group_syncs_assigned_teams(client_and_mocks):
     """Create adds access_group_id to each assigned team's access_group_ids in DB."""
-    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
-        client_and_mocks
-    )
+    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = client_and_mocks
     mock_team_table = mock_prisma.db.litellm_teamtable
 
     team_record = _make_team_record("team-1")
@@ -1132,9 +1126,7 @@ def test_create_access_group_syncs_assigned_teams(client_and_mocks):
 
 def test_create_access_group_syncs_assigned_keys(client_and_mocks):
     """Create adds access_group_id to each assigned key's access_group_ids in DB."""
-    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
-        client_and_mocks
-    )
+    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = client_and_mocks
     mock_key_table = mock_prisma.db.litellm_verificationtoken
 
     key_record = MagicMock()
@@ -1148,9 +1140,7 @@ def test_create_access_group_syncs_assigned_keys(client_and_mocks):
     )
     assert resp.status_code == 201
 
-    mock_key_table.find_unique.assert_awaited_once_with(
-        where={"token": "hashed-token-1"}
-    )
+    mock_key_table.find_unique.assert_awaited_once_with(where={"token": "hashed-token-1"})
     mock_key_table.update.assert_awaited_once()
     call_kwargs = mock_key_table.update.call_args.kwargs
     assert call_kwargs["where"] == {"token": "hashed-token-1"}
@@ -1200,14 +1190,10 @@ def test_create_access_group_idempotent_team_sync(client_and_mocks):
 
 def test_update_access_group_syncs_added_teams(client_and_mocks):
     """Update adds access_group_id to newly assigned teams."""
-    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
-        client_and_mocks
-    )
+    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = client_and_mocks
     mock_team_table = mock_prisma.db.litellm_teamtable
 
-    existing = _make_access_group_record(
-        access_group_id="ag-update", assigned_team_ids=["team-existing"]
-    )
+    existing = _make_access_group_record(access_group_id="ag-update", assigned_team_ids=["team-existing"])
     mock_access_group_table.find_unique = AsyncMock(return_value=existing)
 
     team_record = _make_team_record("team-new")
@@ -1248,14 +1234,10 @@ def test_update_access_group_rejects_nonexistent_team(client_and_mocks):
 
 def test_update_access_group_syncs_removed_teams(client_and_mocks):
     """Update removes access_group_id from de-assigned teams."""
-    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
-        client_and_mocks
-    )
+    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = client_and_mocks
     mock_team_table = mock_prisma.db.litellm_teamtable
 
-    existing = _make_access_group_record(
-        access_group_id="ag-update", assigned_team_ids=["team-keep", "team-remove"]
-    )
+    existing = _make_access_group_record(access_group_id="ag-update", assigned_team_ids=["team-keep", "team-remove"])
     mock_access_group_table.find_unique = AsyncMock(return_value=existing)
 
     team_to_remove = _make_team_record("team-remove", ["ag-update"])
@@ -1268,9 +1250,7 @@ def test_update_access_group_syncs_removed_teams(client_and_mocks):
     )
     assert resp.status_code == 200
 
-    mock_team_table.find_unique.assert_awaited_once_with(
-        where={"team_id": "team-remove"}
-    )
+    mock_team_table.find_unique.assert_awaited_once_with(where={"team_id": "team-remove"})
     mock_team_table.update.assert_awaited_once()
     call_kwargs = mock_team_table.update.call_args.kwargs
     assert call_kwargs["where"] == {"team_id": "team-remove"}
@@ -1296,19 +1276,15 @@ def test_update_access_group_detaches_team_the_mirror_missed(client_and_mocks):
     mock_team_table.update.assert_awaited_once()
     call_kwargs = mock_team_table.update.call_args.kwargs
     assert call_kwargs["where"] == {"team_id": "team-unmirrored"}
-    assert call_kwargs["data"]["access_group_ids"] == ["ag-other"]
+    assert tuple(call_kwargs["data"]["access_group_ids"]) == ("ag-other",)
 
 
 def test_update_access_group_no_team_sync_when_ids_not_in_payload(client_and_mocks):
     """Update does not sync teams when assigned_team_ids is absent from the payload."""
-    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
-        client_and_mocks
-    )
+    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = client_and_mocks
     mock_team_table = mock_prisma.db.litellm_teamtable
 
-    existing = _make_access_group_record(
-        access_group_id="ag-update", assigned_team_ids=["team-1"]
-    )
+    existing = _make_access_group_record(access_group_id="ag-update", assigned_team_ids=["team-1"])
     mock_access_group_table.find_unique = AsyncMock(return_value=existing)
 
     resp = client.put("/v1/access_group/ag-update", json={"description": "new desc"})
@@ -1320,14 +1296,10 @@ def test_update_access_group_no_team_sync_when_ids_not_in_payload(client_and_moc
 
 def test_update_access_group_syncs_added_keys(client_and_mocks):
     """Update adds access_group_id to newly assigned keys."""
-    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
-        client_and_mocks
-    )
+    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = client_and_mocks
     mock_key_table = mock_prisma.db.litellm_verificationtoken
 
-    existing = _make_access_group_record(
-        access_group_id="ag-update", assigned_key_ids=["old-token"]
-    )
+    existing = _make_access_group_record(access_group_id="ag-update", assigned_key_ids=["old-token"])
     mock_access_group_table.find_unique = AsyncMock(return_value=existing)
 
     key_record = MagicMock()
@@ -1350,14 +1322,10 @@ def test_update_access_group_syncs_added_keys(client_and_mocks):
 
 def test_update_access_group_syncs_removed_keys(client_and_mocks):
     """Update removes access_group_id from de-assigned keys."""
-    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
-        client_and_mocks
-    )
+    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = client_and_mocks
     mock_key_table = mock_prisma.db.litellm_verificationtoken
 
-    existing = _make_access_group_record(
-        access_group_id="ag-update", assigned_key_ids=["keep-token", "remove-token"]
-    )
+    existing = _make_access_group_record(access_group_id="ag-update", assigned_key_ids=["keep-token", "remove-token"])
     mock_access_group_table.find_unique = AsyncMock(return_value=existing)
 
     key_to_remove = MagicMock()
@@ -1385,9 +1353,7 @@ def test_update_access_group_syncs_removed_keys(client_and_mocks):
 
 def test_delete_access_group_handles_out_of_sync_assigned_teams(client_and_mocks):
     """Delete includes teams from assigned_team_ids even when not found by hasSome query."""
-    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
-        client_and_mocks
-    )
+    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = client_and_mocks
     mock_team_table = mock_prisma.db.litellm_teamtable
 
     # Access group has assigned_team_ids but the team's access_group_ids is not synced
@@ -1409,18 +1375,14 @@ def test_delete_access_group_handles_out_of_sync_assigned_teams(client_and_mocks
     assert resp.status_code == 204
 
     # find_unique is called for the out-of-sync team (included via union with assigned_team_ids)
-    mock_team_table.find_unique.assert_awaited_once_with(
-        where={"team_id": "team-out-of-sync"}
-    )
+    mock_team_table.find_unique.assert_awaited_once_with(where={"team_id": "team-out-of-sync"})
     # No update needed since team's access_group_ids doesn't contain "ag-to-delete"
     mock_team_table.update.assert_not_awaited()
 
 
 def test_delete_access_group_handles_out_of_sync_assigned_keys(client_and_mocks):
     """Delete includes keys from assigned_key_ids even when not found by hasSome query."""
-    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = (
-        client_and_mocks
-    )
+    client, mock_prisma, mock_access_group_table, mock_cache, mock_proxy_logging = client_and_mocks
     mock_key_table = mock_prisma.db.litellm_verificationtoken
 
     existing = _make_access_group_record(
@@ -1439,9 +1401,7 @@ def test_delete_access_group_handles_out_of_sync_assigned_keys(client_and_mocks)
     resp = client.delete("/v1/access_group/ag-to-delete")
     assert resp.status_code == 204
 
-    mock_key_table.find_unique.assert_awaited_once_with(
-        where={"token": "token-out-of-sync"}
-    )
+    mock_key_table.find_unique.assert_awaited_once_with(where={"token": "token-out-of-sync"})
     mock_key_table.update.assert_not_awaited()
 
 
@@ -1536,10 +1496,16 @@ def test_list_access_groups_resolves_names_with_one_query_per_table(client_and_m
     mock_table.find_many = AsyncMock(
         return_value=[
             _make_access_group_record(
-                access_group_id="ag-1", access_mcp_server_ids=["mcp-a"], access_agent_ids=["agent-a"], assigned_key_ids=["key-a"]
+                access_group_id="ag-1",
+                access_mcp_server_ids=["mcp-a"],
+                access_agent_ids=["agent-a"],
+                assigned_key_ids=["key-a"],
             ),
             _make_access_group_record(
-                access_group_id="ag-2", access_mcp_server_ids=["mcp-b"], access_agent_ids=["agent-b"], assigned_key_ids=["key-b"]
+                access_group_id="ag-2",
+                access_mcp_server_ids=["mcp-b"],
+                access_agent_ids=["agent-b"],
+                assigned_key_ids=["key-b"],
             ),
         ]
     )
@@ -1573,7 +1539,10 @@ def test_list_access_groups_skips_lookups_when_nothing_to_resolve(client_and_moc
     """Groups with no MCP servers, agents or keys must not trigger an empty IN () query per table."""
     client, mock_prisma, mock_table, *_ = client_and_mocks
     mock_table.find_many = AsyncMock(
-        return_value=[_make_access_group_record(access_group_id="ag-1"), _make_access_group_record(access_group_id="ag-2")]
+        return_value=[
+            _make_access_group_record(access_group_id="ag-1"),
+            _make_access_group_record(access_group_id="ag-2"),
+        ]
     )
 
     resp = client.get("/v1/access_group")

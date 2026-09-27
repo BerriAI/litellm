@@ -213,6 +213,12 @@ locals {
   # otherwise we keep the image's ENTRYPOINT and only override `command`.
   gateway_uvicorn_args = "--host 0.0.0.0 --port 4000 --workers ${var.gateway_num_workers}"
 
+  gateway_pool_env = var.gateway_connection_pool_enabled ? [
+    { name = "LITELLM_PGBOUNCER_ENABLED", value = "true" },
+    { name = "LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS", value = tostring(var.gateway_pool_max_db_connections) },
+    { name = "LITELLM_PGBOUNCER_MAX_CLIENT_CONN", value = tostring(var.gateway_pool_max_client_conn) },
+  ] : []
+
   metrics_enabled       = var.gateway_metrics_port != null
   metrics_multiproc_dir = "/tmp/litellm_prometheus_multiproc"
   metrics_volume        = "prometheus-multiproc"
@@ -253,7 +259,7 @@ locals {
 
   backend_uvicorn_args = "--host 0.0.0.0 --port 4001"
 
-  gateway_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn gateway.main:app ${local.gateway_uvicorn_args};; *) exec uvicorn gateway.main:app ${local.gateway_uvicorn_args};; esac"
+  gateway_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run python -m gateway.launch ${local.gateway_uvicorn_args};; *) exec python -m gateway.launch ${local.gateway_uvicorn_args};; esac"
   backend_launch_cmd = "case \"$USE_DDTRACE\" in [Tt][Rr][Uu][Ee]) export DD_TRACE_OPENAI_ENABLED=\"False\"; exec ddtrace-run uvicorn backend.main:app ${local.backend_uvicorn_args};; *) exec uvicorn backend.main:app ${local.backend_uvicorn_args};; esac"
 
   gateway_proxy_overrides = local.proxy_config_enabled ? {
@@ -272,6 +278,62 @@ locals {
       "${local.proxy_config_fetch_cmd} && ${local.backend_launch_cmd}"
     ]
   } : {}
+
+  collector_address = "tcp://127.0.0.1:${var.collector_port}"
+  collector_env = var.collector_enabled ? [
+    { name = "LITELLM_COLLECTOR_ENABLED", value = "true" },
+    { name = "LITELLM_COLLECTOR_ADDRESS", value = local.collector_address },
+    { name = "LITELLM_COLLECTOR_BUFFER_SIZE", value = tostring(var.collector_buffer_size) },
+    { name = "LITELLM_COLLECTOR_ON_UNAVAILABLE", value = var.collector_on_unavailable },
+    { name = "LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS", value = tostring(var.collector_drain_timeout_seconds) },
+  ] : []
+
+  gateway_environment = concat(
+    local.shared_env,
+    local.gateway_otel_env,
+    local.billing_metrics_env,
+    local.gateway_extra_env_list,
+    local.proxy_config_env,
+    local.metrics_env,
+    local.gateway_pool_env,
+    local.collector_env,
+  )
+
+  collector_launch_cmd = "exec python -m litellm.proxy.collector"
+  collector_command = [
+    local.proxy_config_enabled ? "${local.proxy_config_fetch_cmd} && ${local.collector_launch_cmd}" : local.collector_launch_cmd
+  ]
+
+  collector_container = var.collector_enabled ? [{
+    name      = "collector"
+    image     = var.gateway_image
+    essential = false
+    cpu       = var.collector_cpu
+    memory    = var.collector_memory
+
+    restartPolicy = { enabled = true }
+
+    entryPoint = ["sh", "-c"]
+    command    = local.collector_command
+    environment = concat(
+      local.shared_env,
+      local.gateway_extra_env_list,
+      local.proxy_config_env,
+      local.gateway_pool_env,
+      local.collector_env,
+      [{ name = "LITELLM_JOB_ROLE", value = "collector" }],
+    )
+    secrets = concat(local.shared_secrets, local.gateway_extra_secrets_list)
+
+    logConfiguration = {
+      logDriver = "awslogs"
+      options = {
+        awslogs-group         = aws_cloudwatch_log_group.gateway.name
+        awslogs-region        = var.region
+        awslogs-stream-prefix = "collector"
+      }
+    }
+  }] : []
 }
 
 # ---------- Gateway ----------
@@ -298,6 +360,21 @@ resource "aws_ecs_task_definition" "gateway" {
       )
       error_message = "billing_metrics_client_cert_pem and billing_metrics_client_key_pem are both required when billing_metrics_endpoint is set."
     }
+
+    precondition {
+      condition     = !var.gateway_connection_pool_enabled || local.database_enabled
+      error_message = "gateway_connection_pool_enabled needs a database: set create_database = true or pass database_url."
+    }
+
+    precondition {
+      condition     = !var.collector_enabled || (var.collector_cpu < var.gateway_cpu && var.collector_memory < var.gateway_memory)
+      error_message = "collector_cpu and collector_memory are carved out of gateway_cpu / gateway_memory and must leave room for the gateway container."
+    }
+
+    precondition {
+      condition     = !var.collector_enabled || var.gateway_metrics_port == null || var.collector_port != var.gateway_metrics_port
+      error_message = "collector_port and gateway_metrics_port must differ: both sidecars bind loopback in the same task."
+    }
   }
 
   family                   = "${local.name}-gateway"
@@ -316,16 +393,9 @@ resource "aws_ecs_task_definition" "gateway" {
         essential = true
 
         portMappings = [{ containerPort = 4000, protocol = "tcp" }]
-        environment = concat(
-          local.shared_env,
-          local.gateway_otel_env,
-          local.billing_metrics_env,
-          local.gateway_extra_env_list,
-          local.proxy_config_env,
-          local.metrics_env,
-        )
-        secrets     = concat(local.shared_secrets, local.gateway_extra_secrets_list)
-        mountPoints = local.metrics_mount_points
+        environment  = local.gateway_environment
+        secrets      = concat(local.shared_secrets, local.gateway_extra_secrets_list)
+        mountPoints  = local.metrics_mount_points
 
         # Container-level healthCheck intentionally omitted — the wolfi
         # runtime image doesn't ship curl/wget. The ALB target group polls
@@ -342,7 +412,7 @@ resource "aws_ecs_task_definition" "gateway" {
       },
       local.gateway_proxy_overrides,
     )
-  ], local.gateway_metrics_container))
+  ], local.gateway_metrics_container, local.collector_container))
 
   dynamic "volume" {
     for_each = local.metrics_enabled ? [1] : []

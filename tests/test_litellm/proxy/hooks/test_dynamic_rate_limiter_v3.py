@@ -1918,3 +1918,30 @@ async def test_post_call_success_hook_leaves_raw_provider_dict_untouched():
     )
 
     assert response == {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_metadata", "expected_priority_header"),
+    [
+        ({"priority": "优先"}, None),
+        ({"priority": "high"}, "high"),
+        ({}, "default"),
+    ],
+)
+async def test_post_call_success_hook_priority_header_is_always_http_encodable(team_metadata, expected_priority_header):
+    from starlette.responses import Response
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    response = {"id": "msg_123", "type": "message", "role": "assistant", "content": [], "_hidden_params": {}}
+
+    await handler.async_post_call_success_hook(
+        data={"model": "anthropic-haiku"},
+        user_api_key_dict=UserAPIKeyAuth(team_id="team-1", team_metadata=team_metadata),
+        response=response,
+    )
+
+    additional_headers = response["_hidden_params"]["additional_headers"]
+    http_response = Response(headers={key: str(value) for key, value in additional_headers.items()})
+    assert http_response.headers.get("x-litellm-priority") == expected_priority_header
+    assert http_response.headers["x-litellm-rate-limiter-version"] == "v3"

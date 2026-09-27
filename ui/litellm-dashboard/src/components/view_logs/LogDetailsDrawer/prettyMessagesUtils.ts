@@ -8,40 +8,8 @@ import {
   ParsedMessages,
   RequestPayload,
   ResponsePayload,
-  RoleStyle,
   ToolCall,
 } from "./prettyMessagesTypes";
-
-/**
- * Role color styles for message cards - minimal, professional design
- * Color only used for labels and left border accent
- */
-export const ROLE_STYLES: Record<string, RoleStyle> = {
-  system: {
-    background: "transparent",
-    borderColor: "var(--color-muted-foreground)",
-    label: "SYSTEM",
-    labelColor: "var(--color-muted-foreground)",
-  },
-  user: {
-    background: "transparent",
-    borderColor: "var(--color-info)",
-    label: "USER",
-    labelColor: "var(--color-info)",
-  },
-  assistant: {
-    background: "transparent",
-    borderColor: "var(--color-success)",
-    label: "ASSISTANT",
-    labelColor: "var(--color-success)",
-  },
-  tool: {
-    background: "transparent",
-    borderColor: "var(--color-warning)",
-    label: "TOOL RESULT",
-    labelColor: "var(--color-warning)",
-  },
-};
 
 type UnknownRecord = Record<string, unknown>;
 
