@@ -959,6 +959,6 @@ async def test_delegated_target_grants_do_not_borrow_another_teams_authority(
         agent_id="actor",
         agent_name="Actor",
         agent_card_params={},
-        object_permission={"agents": ["direct", "a-only", "b-only"]},
+        object_permission={"object_permission_id": "own", "agents": ["direct", "a-only", "b-only"]},
     )
     assert await AgentRequestHandler.resolve_agent_access(auth) == RestrictedAgentAccess(frozenset(expected))
