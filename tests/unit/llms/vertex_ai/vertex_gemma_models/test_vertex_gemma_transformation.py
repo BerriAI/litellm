@@ -6,7 +6,7 @@ Maps to: litellm/llms/vertex_ai/vertex_gemma_models/transformation.py
 
 import json
 from collections.abc import AsyncIterator
-from typing import cast
+from typing import Any, cast
 from unittest.mock import AsyncMock, Mock, patch
 
 import pytest
@@ -1303,3 +1303,82 @@ class TestVertexGemmaCompletion:
         mock_async_post.assert_awaited_once()
         assert mock_async_post.call_args.kwargs["client"] is None
         assert response.choices[0].message.content == "default async handler fallback"
+
+
+_STREAM_VERTEX_URL = "https://example.invalid/v1/projects/test/locations/us-central1/endpoints/test:predict"
+_STREAM_MESSAGES = [{"role": "user", "content": "Reply exactly READY"}]
+_FAKE_CREDENTIALS = "gemma-test-credentials"
+
+
+@pytest.fixture
+def cached_access_token():
+    """Serve a fake token from the handler's credential cache so no auth round-trip runs."""
+    from types import SimpleNamespace
+
+    from litellm.main import vertex_gemma_chat_completion
+
+    cache = vertex_gemma_chat_completion._credentials_project_mapping
+    key = (_FAKE_CREDENTIALS, "test")
+    cache[key] = (SimpleNamespace(token="fake-token", expired=False), "test")
+    yield
+    cache.pop(key, None)
+
+
+def test_sync_gemma_stream(cached_access_token):
+    import httpx
+
+    from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+
+    captured: dict[str, Any] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_make_gemma_vertex_response(content="READY"))
+
+    stream = litellm.completion(
+        model="vertex_ai/gemma/test-model",
+        messages=_STREAM_MESSAGES,
+        stream=True,
+        api_base=_STREAM_VERTEX_URL,
+        vertex_project="test",
+        vertex_location="us-central1",
+        vertex_credentials=_FAKE_CREDENTIALS,
+        client=httpx.Client(transport=httpx.MockTransport(handle)),
+    )
+
+    assert isinstance(stream, CustomStreamWrapper)
+    chunks = list(stream)
+
+    assert "stream" not in captured["body"]["instances"][0]
+    assert len(chunks) == 2
+    assert chunks[0].choices[0].delta.content == "READY"
+    assert chunks[1].choices[0].finish_reason == "stop"
+
+
+@pytest.mark.asyncio
+async def test_async_gemma_responses_stream(cached_access_token):
+    import httpx
+
+    captured: dict[str, Any] = {}
+
+    def handle(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(200, json=_make_gemma_vertex_response(content="READY"))
+
+    response = await litellm.aresponses(
+        model="vertex_ai/gemma/test-model",
+        input="Reply exactly READY",
+        stream=True,
+        api_base=_STREAM_VERTEX_URL,
+        vertex_project="test",
+        vertex_location="us-central1",
+        vertex_credentials=_FAKE_CREDENTIALS,
+        client=httpx.AsyncClient(transport=httpx.MockTransport(handle)),
+    )
+    events = [event async for event in cast(AsyncIterator[ResponsesAPIStreamingResponse], response)]
+
+    assert "stream" not in captured["body"]["instances"][0]
+    assert "READY" in "".join(event.delta for event in events if isinstance(event, OutputTextDeltaEvent))
+    assert isinstance(events[-1], ResponseCompletedEvent)
+    assert events[-1].response.usage is not None
+    assert events[-1].response.usage.total_tokens == 114
