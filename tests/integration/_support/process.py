@@ -103,6 +103,8 @@ def owned_proxy_process(
         "LITELLM_MASTER_KEY": gateway.key,
         "LITELLM_SALT_KEY": os.environ.get("LITELLM_SALT_KEY", "sk-integration-salt"),
         "STORE_MODEL_IN_DB": "True",
+        "COVERAGE_PROCESS_CONFIG": "",
+        "COVERAGE_PROCESS_START": "",
         **overrides,
     }
     output: Final = Path(os.environ.get("INTEGRATION_RESULTS_DIR", str(directory)))
