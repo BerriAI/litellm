@@ -11063,10 +11063,21 @@ def _catalog_server() -> MCPServer:
 
 
 class _CallerSignInGuardrail(CustomGuardrail):
+    def __init__(self, *args, preflight_result=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self._preflight_result = preflight_result
+        self.preflight_calls = []  # mutable-ok: call recorder
+
     def caller_sign_in(self, server, user_api_key_auth):
         from litellm.proxy._experimental.mcp_server.caller_sign_in import CallerSignIn
 
         return CallerSignIn(issuers=("https://idp.test",), scopes=("scope-a",))
+
+    async def preflight_caller_sign_in(self, server, user_api_key_auth, subject_token):
+        from litellm.proxy._experimental.mcp_server.caller_sign_in import SignedIn
+
+        self.preflight_calls.append(subject_token)
+        return self._preflight_result if self._preflight_result is not None else SignedIn()
 
 
 class TestConnectChallengeResolver:
@@ -11195,3 +11206,47 @@ class TestConnectChallengeResolver:
             'error="invalid_token", '
             'error_description="Missing or invalid subject token; authenticate with the IdP and retry"'
         )
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "route_name",
+        ["catalog-server-id-001", "CATALOG"],
+        ids=["server_id", "uppercase_name"],
+    )
+    async def test_challenge_resource_metadata_names_the_connected_segment(self, route_name):
+        """The PRM path in the challenge must name the segment the client connected with, or the
+        client's follow-up metadata fetch 404s against the route it was pointed at."""
+        from litellm.proxy._experimental.mcp_server import server as server_module
+
+        server = _catalog_server()
+        guardrail = _CallerSignInGuardrail(guardrail_name="sign-in-stub")
+        litellm.logging_callback_manager.add_litellm_callback(guardrail)
+        try:
+            with (
+                patch.object(
+                    mcp_operations.global_mcp_server_manager,
+                    "get_filtered_registry",
+                    return_value={server.server_id: server},
+                ),
+                patch.object(
+                    mcp_operations,
+                    "_get_allowed_mcp_servers",
+                    AsyncMock(return_value=[server]),
+                ),
+                pytest.raises(HTTPException) as exc,
+            ):
+                await server_module._raise_preemptive_401_for_unauthenticated_servers(
+                    scope={"type": "http", "method": "POST", "path": f"/mcp/{route_name}", "headers": []},
+                    mcp_servers=[route_name],
+                    oauth2_headers=None,
+                    mcp_server_auth_headers=None,
+                    user_api_key_auth=UserAPIKeyAuth(api_key="sk-litellm-virtual-key", user_id="u-1"),
+                    client_ip=None,
+                )
+        finally:
+            litellm.logging_callback_manager.remove_callback_from_list_by_object(
+                litellm.callbacks, guardrail, require_self=False
+            )
+
+        authenticate: Final = (exc.value.headers or {}).get("WWW-Authenticate") or ""
+        assert authenticate.startswith(f'Bearer resource_metadata="/.well-known/oauth-protected-resource/mcp/{route_name}"')

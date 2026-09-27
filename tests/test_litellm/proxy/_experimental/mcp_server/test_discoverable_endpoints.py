@@ -3743,6 +3743,56 @@ async def test_protected_resource_metadata_resolves_server_by_id_when_name_looku
     by_id.assert_called_once_with(server.server_id, client_ip=None)
 
 
+@pytest.mark.asyncio
+async def test_protected_resource_metadata_resolves_the_connected_case_variant():
+    """The challenge points clients at the segment they connected with (``/mcp/CATALOG``), so the PRM
+    route must resolve that same segment through the answering-to fallback."""
+    from fastapi import Request
+
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.caller_sign_in import CallerSignIn
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+    from litellm.types.mcp import MCPAuth, MCPTransport
+    from litellm.types.mcp_server.mcp_server_manager import MCPServer
+
+    server = MCPServer(
+        server_id="catalog-server-id-001",
+        name="catalog",
+        alias="catalog",
+        server_name="catalog",
+        url="https://catalog.test/mcp",
+        transport=MCPTransport.http,
+        auth_type=MCPAuth.none,
+        mcp_info={"server_name": "catalog"},
+    )
+    sign_in: Final = CallerSignIn(
+        issuers=("https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0",),
+        scopes=("api://22222222-2222-2222-2222-222222222222/access_as_user",),
+    )
+    request = MagicMock(spec=Request)
+    request.base_url = "https://llm.example.com/"
+    request.headers = {}
+
+    with (
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_name", return_value=None),  # test-quality-ok: resolver seam
+        patch.object(global_mcp_server_manager, "get_mcp_server_by_id", return_value=None),  # test-quality-ok: resolver seam
+        patch.object(
+            global_mcp_server_manager, "get_filtered_registry", return_value={server.server_id: server}
+        ),  # test-quality-ok: resolver seam
+        patch.object(discoverable_endpoints, "caller_sign_in_for", return_value=sign_in),  # test-quality-ok: provider seam
+    ):
+        result = await discoverable_endpoints._build_oauth_protected_resource_response(
+            request=request,
+            mcp_server_name="CATALOG",
+            use_standard_pattern=True,
+        )
+
+    assert result["authorization_servers"] == [
+        "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"
+    ]
+    assert result["resource"] == "https://llm.example.com/mcp/CATALOG"
+
+
 def test_authorization_server_metadata_resolves_server_by_id_when_name_lookup_fails():
     from fastapi import Request
 

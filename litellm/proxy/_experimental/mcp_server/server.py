@@ -1737,7 +1737,9 @@ if MCP_AVAILABLE:
                     get_request_root_path,
                 )
 
-                raise_token_exchange_challenge(server, root_path=get_request_root_path())
+                raise_token_exchange_challenge(
+                    server, root_path=get_request_root_path(), connected_as=server_name
+                )
 
             # Exchange-backed modes (token_exchange's OBO mint, id_jag's stored-assertion mint): run
             # the exchange here at the transport edge, so a rejected subject raises the RFC 9728

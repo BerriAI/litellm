@@ -216,3 +216,46 @@ def test_agent_365_gated_server_challenges_at_connect_and_advertises_entra(gatew
             assert refused.status_code == 403, refused.text
             assert "www-authenticate" not in refused.headers
             assert api.drain() == ()
+
+
+def test_challenge_and_prm_resolve_the_connected_case_variant(gateway: Gateway, tmp_path: Path) -> None:
+    def nothing(request: Request) -> Reply:
+        return Reply(status=500)
+
+    with wire_server(nothing) as api:
+        config: Final = _sign_in_config(
+            {
+                "guardrail": "agent_365",
+                "mode": "pre_mcp_call",
+                "default_on": True,
+                "tenant_id": "00000000-0000-0000-0000-000000000000",
+                "client_id": "22222222-2222-2222-2222-222222222222",
+                "client_secret": "secret",
+                "api_base": api.url,
+            },
+            tmp_path / "agent365-case.yaml",
+        )
+        with (
+            owned_proxy(gateway, tmp_path, {}, config=config) as candidate,
+            mcp_peer() as peer,
+            candidate.scenario() as scenario,
+        ):
+            alias: Final = "a365" + uuid.uuid4().hex[:8]
+            identity: Final = register_mcp(scenario, peer, alias)
+            granted: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+            connected_as: Final = alias.upper()
+
+            challenged: Final = _rpc(candidate, f"/mcp/{connected_as}", granted, {})
+            assert challenged.status_code == 401, challenged.text
+            authenticate: Final = challenged.headers.get("www-authenticate", "")
+            assert f'resource_metadata="/.well-known/oauth-protected-resource/mcp/{connected_as}"' in authenticate
+            assert 'error="invalid_token"' in authenticate
+
+            discovery: Final = candidate.client.get(f"/.well-known/oauth-protected-resource/mcp/{connected_as}")
+            assert discovery.status_code == 200, discovery.text
+            document: Final = discovery.json()
+            assert document["authorization_servers"] == [
+                "https://login.microsoftonline.com/00000000-0000-0000-0000-000000000000/v2.0"
+            ]
+            assert document["scopes_supported"] == ["api://22222222-2222-2222-2222-222222222222/access_as_user"]
+            assert api.drain() == ()

@@ -531,7 +531,10 @@ def _resolve_mcp_server_by_name_or_id(lookup: str, client_ip: str | None) -> MCP
     by_name: Final = global_mcp_server_manager.get_mcp_server_by_name(lookup, client_ip=client_ip)
     if by_name is not None:
         return by_name
-    return global_mcp_server_manager.get_mcp_server_by_id(lookup, client_ip=client_ip)
+    by_id: Final = global_mcp_server_manager.get_mcp_server_by_id(lookup, client_ip=client_ip)
+    if by_id is not None:
+        return by_id
+    return global_mcp_server_manager.get_mcp_server_answering_to(lookup, client_ip=client_ip)
 
 
 def _resolve_oauth2_server_for_root_endpoints(
