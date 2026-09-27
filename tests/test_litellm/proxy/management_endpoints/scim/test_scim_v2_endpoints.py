@@ -6930,7 +6930,7 @@ async def test_legacy_user_routes_cannot_join_a_source_owned_team(
     roster: Final = AsyncMock(side_effect=AssertionError("roster writes must follow ownership validation"))
     monkeypatch.setattr(scim_v2, "new_user", create)
     monkeypatch.setattr(scim_v2, "_handle_team_membership_changes", roster)
-    user: Final = SCIMUser(schemas=[], userName="new-user", groups=[{"value": "directory-team"}])
+    user: Final = SCIMUser(schemas=[], userName="new-user", groups=[SCIMUserGroup(value="directory-team")])
     auth: Final = UserAPIKeyAuth(token="legacy-hash")
     with pytest.raises((HTTPException, ProxyException)) as failure:
         if route == "create":
