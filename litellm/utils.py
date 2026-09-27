@@ -297,6 +297,7 @@ from typing_extensions import assert_never
 from litellm import utils as litellm_utils
 from litellm.litellm_core_utils.thinking_param_translation import (
     ThinkingParamsState,
+    str_keyed_mapping_or_none,
     thaw_mapping,
     translate_thinking_params,
 )
@@ -4352,14 +4353,13 @@ def remove_sensitive_keys_from_dict(d: dict) -> dict:
 def _translate_thinking_in_params(
     *,
     model_info: Mapping[str, object] | None,
-    passed_params: dict,  # mutable-ok: get_optional_params hands over its legacy mutable params
-    non_default_params: dict,  # mutable-ok: get_optional_params hands over its legacy mutable params
-) -> tuple[dict, dict]:  # mutable-ok: get_optional_params keeps mutating both copies downstream
-    existing_extra_body: Final = passed_params.get("extra_body")
+    passed_params: dict[str, object],  # mutable-ok: get_optional_params hands over its legacy mutable params
+    non_default_params: dict[str, object],  # mutable-ok: get_optional_params hands over its legacy mutable params
+) -> tuple[dict[str, object], dict[str, object]]:  # mutable-ok: get_optional_params keeps mutating both downstream
     state: Final = ThinkingParamsState(
         thinking=non_default_params.get("thinking"),
         reasoning_effort=non_default_params.get("reasoning_effort"),
-        extra_body=existing_extra_body if isinstance(existing_extra_body, Mapping) else MappingProxyType({}),
+        extra_body=str_keyed_mapping_or_none(passed_params.get("extra_body")) or MappingProxyType({}),
     )
     translated: Final = translate_thinking_params(model_info=model_info, state=state)
     if translated is state:
