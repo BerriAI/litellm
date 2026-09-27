@@ -14,7 +14,7 @@ is encode_character_id_with_provider, which runs for real; encoding assertions
 are checked by the genuine decode round-trip.
 """
 
-from typing import Final
+from typing import Final, cast
 
 import pytest
 
@@ -28,6 +28,7 @@ from litellm.proxy.video_endpoints.utils import (
     fallback_requested_model,
     get_custom_provider_from_data,
     routable_model_name,
+    resolve_video_request_model,
     video_model_group,
     video_reference_to_id,
 )
@@ -38,6 +39,54 @@ from litellm.types.videos.utils import (
     encode_character_id_with_provider,
     encode_video_id_with_provider,
 )
+
+# =========================================================================== #
+# resolve_video_request_model
+# =========================================================================== #
+
+
+class _Resolver:
+    def __init__(self, mapping: dict[tuple[str, str | None], str | None]):
+        self.mapping = mapping
+
+    def resolve_model_name_from_model_id(
+        self, model_id: str | None, custom_llm_provider: str | None = None
+    ) -> str | None:
+        return self.mapping.get((model_id, custom_llm_provider)) if model_id else None
+
+
+def test_resolve_video_request_model__router_hit_uses_the_ids_provider():
+    assert (
+        resolve_video_request_model(
+            decoded={"model_id": "deployment-123", "custom_llm_provider": "azure"},
+            query_model="ignored",
+            llm_router=cast(Router, _Resolver({("deployment-123", "azure"): "azure-sora"})),
+        )
+        == "azure-sora"
+    )
+
+
+def test_resolve_video_request_model__keeps_decoded_id_when_router_misses():
+    assert (
+        resolve_video_request_model(
+            decoded={"model_id": "grok-imagine-video-1.5", "custom_llm_provider": "xai"},
+            query_model=None,
+            llm_router=cast(Router, _Resolver({})),
+        )
+        == "grok-imagine-video-1.5"
+    )
+
+
+def test_resolve_video_request_model__query_model_on_plain_id():
+    assert (
+        resolve_video_request_model(
+            decoded={},
+            query_model="grok-imagine-video-1.5",
+            llm_router=None,
+        )
+        == "grok-imagine-video-1.5"
+    )
+
 
 # =========================================================================== #
 # extract_model_from_target_model_names
