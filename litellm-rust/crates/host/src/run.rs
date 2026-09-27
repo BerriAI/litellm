@@ -6,8 +6,35 @@ use crate::protocol::Protocol;
 /// Drives a machine to completion against an in-process host and emits exactly one
 /// terminal event.
 pub async fn run<M, H>(
+    machine: M,
+    host: &H,
+) -> Result<M::Complete, <M::Protocol as Protocol>::Error>
+where
+    M: Machine,
+    H: Host<M::Protocol>,
+{
+    run_with_completion(machine, host, |_| false).await
+}
+
+pub async fn run_hosted<P, H>(
+    machine: crate::call::HostedMachine<P>,
+    host: &H,
+) -> Result<crate::call::HostedCompletion<P::Response>, P::Error>
+where
+    P: Protocol,
+    P::Error: From<crate::machine::MachineFault>,
+    H: Host<P>,
+{
+    run_with_completion(machine, host, |completion| {
+        matches!(completion, crate::call::HostedCompletion::Detached)
+    })
+    .await
+}
+
+async fn run_with_completion<M, H>(
     mut machine: M,
     host: &H,
+    detached: impl Fn(&M::Complete) -> bool,
 ) -> Result<M::Complete, <M::Protocol as Protocol>::Error>
 where
     M: Machine,
@@ -30,6 +57,7 @@ where
         end_time: epoch_seconds(),
     };
     let terminal = match &outcome {
+        Ok(completion) if detached(completion) => CallEvent::Cancelled { timing },
         Ok(_) => CallEvent::Succeeded { timing },
         Err(_) => CallEvent::Failed {
             timing,

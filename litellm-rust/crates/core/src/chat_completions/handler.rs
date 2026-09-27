@@ -90,7 +90,8 @@ pub(super) async fn execute(
         .emit(MachineEvent::ResponseReceived {
             raw: RawResponse { body: text.clone() },
         })
-        .await?;
+        .await
+        .map_err(Error::post_call)?;
 
     let body: Value = serde_json::from_str(&text).map_err(|err| {
         Error::InvalidResponse(format!("invalid chat completions response JSON: {err}"))

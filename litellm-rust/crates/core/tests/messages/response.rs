@@ -75,8 +75,7 @@ async fn a_json_error_envelope_is_kept_verbatim(call: MessagesCall) {
         ..call
     })
     .await
-    .err()
-    .expect("upstream error propagates");
+    .expect_err("upstream error propagates");
 
     let Error::Transport(TransportError::Http { status, body }) = error else {
         panic!("{error:?}");
@@ -97,8 +96,7 @@ async fn a_long_error_body_is_truncated_at_the_documented_cap(call: MessagesCall
         ..call
     })
     .await
-    .err()
-    .expect("upstream error propagates");
+    .expect_err("upstream error propagates");
 
     assert_eq!(
         error,
@@ -126,8 +124,7 @@ async fn an_upstream_error_keeps_its_status_and_body(call: MessagesCall, #[case]
         ..call
     })
     .await
-    .err()
-    .expect("upstream error propagates");
+    .expect_err("upstream error propagates");
 
     assert_eq!(
         error,
@@ -154,8 +151,7 @@ async fn an_unreadable_success_body_is_an_invalid_response(
         ..call
     })
     .await
-    .err()
-    .expect("an unreadable body fails");
+    .expect_err("an unreadable body fails");
 
     assert_eq!(error.phase(), Phase::AfterSend, "{error:?}");
 }
@@ -172,8 +168,7 @@ async fn a_provider_slower_than_the_timeout_fails_the_call(call: MessagesCall) {
         ..call
     })
     .await
-    .err()
-    .expect("the call times out");
+    .expect_err("the call times out");
 
     assert!(matches!(error, Error::Transport(_)), "{error:?}");
 }
@@ -201,7 +196,7 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
     .await
     .expect("messages request succeeds");
 
-    let MessagesResponse::Message(message) = response else {
+    let MessagesResponse::Complete(message) = response else {
         panic!("a non-streaming request returns a message");
     };
     assert_eq!(message.id, "msg_1");

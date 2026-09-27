@@ -78,7 +78,7 @@ impl Host<Messages> for RecordingHost {
 }
 
 async fn run_through(host: &RecordingHost) -> Result<MessagesOutput, Error> {
-    litellm_host::run::run(machine(Arc::new(RecordingSecrets::empty())), host).await
+    litellm_host::run::run_hosted(machine(Arc::new(RecordingSecrets::empty())), host).await
 }
 
 fn authenticated(call: MessagesCall, api_base: String) -> MessagesCall {
@@ -129,8 +129,7 @@ async fn a_before_send_failure_never_sends(call: MessagesCall) {
 
     let error = run_through(&host)
         .await
-        .err()
-        .expect("the host failure fails the call");
+        .expect_err("the host failure fails the call");
 
     assert_eq!(error, Error::InvalidRequest("vetoed by the host".into()));
     assert!(received(&upstream).await.is_empty());
@@ -146,7 +145,7 @@ async fn the_raw_upstream_text_is_emitted_once_for_a_message(call: MessagesCall)
 
     let output = run_through(&host).await.expect("messages call succeeds");
 
-    assert!(matches!(output, MessagesOutput::Message(_)));
+    assert!(matches!(output, MessagesOutput::Complete(_)));
     let [emitted] = <[String; 1]>::try_from(host.raw_responses())
         .unwrap_or_else(|raws| panic!("expected one raw response, got {}", raws.len()));
     assert_eq!(serde_json::from_str::<Value>(&emitted).unwrap(), raw);

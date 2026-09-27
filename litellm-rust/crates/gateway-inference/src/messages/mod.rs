@@ -60,7 +60,7 @@ async fn handle(gateway: &Gateway, headers: &HeaderMap, body: &[u8]) -> Result<R
     )
     .await?
     {
-        MessagesResponse::Message(message) => Ok(Json(message).into_response()),
+        MessagesResponse::Complete(message) => Ok(Json(message).into_response()),
         MessagesResponse::Stream { chunks, .. } => Ok(stream(chunks)),
     }
 }

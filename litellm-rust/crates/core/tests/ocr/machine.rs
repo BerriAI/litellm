@@ -36,7 +36,7 @@ async fn drive_until(
     let outcome = loop {
         let op = match machine.resume().await {
             Ok(MachineStep::Host(op)) => op,
-            Ok(MachineStep::Complete(response)) => break Ok(response),
+            Ok(MachineStep::Complete(response)) => break Ok(completed(response)),
             Err(error) => break Err(error),
         };
         let answer = match op {
@@ -67,7 +67,7 @@ async fn drive_until(
             }
         };
         if let Err(failure) = answer {
-            break machine.interrupt(failure).await;
+            break machine.interrupt(failure).await.map(completed);
         }
     };
     (outcome, ops, machine)

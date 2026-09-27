@@ -18,6 +18,7 @@ pub(crate) fn event_name(event: &CallEvent) -> &'static str {
         CallEvent::Machine(MachineEvent::ResponseReceived { .. }) => "response",
         CallEvent::Succeeded { .. } => "success",
         CallEvent::Failed { .. } => "failure",
+        CallEvent::Cancelled { .. } => "cancelled",
     }
 }
 
@@ -254,7 +255,7 @@ async fn the_callers_azure_token_is_acquired_before_before_send_which_can_still_
         trace: Mutex::new(Vec::new()),
     };
 
-    litellm_host::run::run(ocr_machine(ocr_client()), &host)
+    litellm_host::run::run_hosted(ocr_machine(ocr_client()), &host)
         .await
         .unwrap();
 
@@ -266,4 +267,64 @@ async fn the_callers_azure_token_is_acquired_before_before_send_which_can_still_
         only_request(&upstream).await.header_values("authorization"),
         ["Bearer edited"]
     );
+}
+
+#[rstest]
+#[tokio::test]
+async fn direct_execution_uses_hooks_without_a_machine() {
+    use litellm_host::{call::CallObserver, hooks::RouteHooks};
+
+    struct Hooks(Arc<super::support::CallEvents>);
+
+    impl RouteHooks<Error> for Hooks {
+        fn observer(&self) -> Option<Arc<dyn CallObserver>> {
+            Some(self.0.clone())
+        }
+
+        async fn before_send(
+            &self,
+            wire: WireRequest,
+            _: RequestContext,
+        ) -> Result<WireRequest, Error> {
+            Ok(WireRequest {
+                headers: wire
+                    .headers
+                    .into_iter()
+                    .chain([("x-direct-hook".into(), "called".into())])
+                    .collect(),
+                ..wire
+            })
+        }
+
+        async fn emit(&self, event: MachineEvent) -> Result<(), Error> {
+            self.0.observe(CallEvent::Machine(event));
+            Ok(())
+        }
+    }
+
+    let upstream = upstream([json_response(
+        json!({"pages":[{"index":0,"markdown":"direct"}]}),
+    )])
+    .await;
+    let events = Arc::new(super::support::CallEvents::default());
+    let result = litellm_core::ocr::client::perform_with_hooks(
+        &ocr_client(),
+        ocr_request("mistral/model", &upstream.uri(), json!({})),
+        &Hooks(events.clone()),
+    )
+    .await
+    .unwrap();
+    assert_eq!(result.pages[0].markdown, "direct");
+    assert_eq!(
+        only_request(&upstream).await.header("x-direct-hook"),
+        Some("called")
+    );
+    assert!(matches!(
+        &events.0.lock().unwrap()[..],
+        [
+            CallEvent::Started { .. },
+            CallEvent::Machine(_),
+            CallEvent::Succeeded { .. }
+        ]
+    ));
 }

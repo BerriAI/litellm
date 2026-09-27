@@ -6,6 +6,7 @@
 //! each through the typed [`host::Reply`] it carries, observes [`event::CallEvent`]s and
 //! may rewrite the wire request before it is sent.
 
+pub mod call;
 pub mod event;
 pub mod hooks;
 pub mod host;

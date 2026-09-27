@@ -3,7 +3,7 @@
 //! lifetime. No other callback host has that obligation, which is why nothing outside
 //! this crate holds them.
 
-use litellm_host::{machine::Machine, protocol::Protocol};
+use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
 use litellm_host_python::{Preflight, ProtocolHost, lookup, run_call};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
@@ -78,14 +78,15 @@ pub fn run_legacy_call<H, M>(
 ) -> PyResult<Py<PyAny>>
 where
     H: ProtocolHost + 'static,
-    M: Machine<Protocol = H::Protocol, Complete = <H::Protocol as Protocol>::Response> + 'static,
+    M: Machine<Protocol = H::Protocol> + 'static,
+    M::Complete: Into<HostedCompletion<<H::Protocol as Protocol>::Response>>,
 {
     let arguments = call.kwargs.clone_ref(py);
     run_call(
         py,
         machine,
         host,
-        Box::new(LegacyLogging::new(py, surface, call, asynchronous)),
+        LegacyLogging::new(py, surface, call, asynchronous),
         preflight,
         arguments,
         asynchronous,

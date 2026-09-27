@@ -48,11 +48,10 @@ struct DeliveredStream {
     first_chunk: Option<Py<PyAny>>,
 }
 
-enum Pending {
-    DeploymentPreCall,
-    DeploymentPostCall,
-    DeploymentFailure,
-    AsyncFailure,
+struct LoggedRequest {
+    body: Py<PyDict>,
+    headers: Py<PyDict>,
+    context: RequestContext,
 }
 
 pub struct LegacyLogging {
@@ -63,13 +62,10 @@ pub struct LegacyLogging {
     end: Option<Py<PyAny>>,
     response: Option<Py<PyAny>>,
     error: Option<Py<PyBaseException>>,
-    body: Option<Py<PyDict>>,
-    headers: Option<Py<PyDict>>,
-    context: Option<RequestContext>,
+    request: Option<LoggedRequest>,
     stream: Option<DeliveredStream>,
     asynchronous: bool,
     internal: bool,
-    pending: Option<Pending>,
 }
 
 fn datetime(py: Python<'_>, epoch_seconds: f64) -> PyResult<Py<PyAny>> {
@@ -95,13 +91,10 @@ impl LegacyLogging {
             end: None,
             response: None,
             error: None,
-            body: None,
-            headers: None,
-            context: None,
+            request: None,
             stream: None,
             asynchronous,
             internal: false,
-            pending: None,
         }
     }
 
@@ -120,14 +113,14 @@ impl LegacyLogging {
     /// The keyword view the rest of the call reads: a copy, so the deployment hook's own
     /// dict is left as the hook returned it, carrying the logger as `@client` injects it.
     /// The driver's preflight rewrites this same dict before the host projects from it.
-    fn prepare(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
+    fn prepare(&mut self, py: Python<'_>) -> PyResult<LifecycleStep<Self, Py<PyDict>>> {
         let prepared = self.call.kwargs().bind(py).copy()?;
         prepared.set_item("litellm_logging_obj", self.logger()?.object(py))?;
         self.call.set_kwargs(prepared.unbind());
-        Ok(LifecycleStep::Arguments(self.call.kwargs().clone_ref(py)))
+        Ok(LifecycleStep::Ready(self.call.kwargs().clone_ref(py)))
     }
 
-    fn finalize(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
+    fn finalize(&mut self, py: Python<'_>) -> PyResult<LifecycleStep<Self, Py<PyAny>>> {
         finalize(
             py,
             &self.response,
@@ -138,7 +131,7 @@ impl LegacyLogging {
         )?;
         self.response
             .as_ref()
-            .map(|response| LifecycleStep::Response(response.clone_ref(py)))
+            .map(|response| LifecycleStep::Ready(response.clone_ref(py)))
             .ok_or_else(missing_state)
     }
 
@@ -195,7 +188,10 @@ impl LegacyLogging {
                 logger.object(py),
                 billing.url_route,
                 billing.endpoint_type,
-                &self.body,
+                &self
+                    .request
+                    .as_ref()
+                    .map(|request| request.body.clone_ref(py)),
                 &stream.chunks,
                 &self.start,
                 &self.end,
@@ -214,11 +210,11 @@ impl LegacyLogging {
     /// A failure after the stream reached the caller bills the delivered chunks as
     /// partial usage. The sync path has no loop to schedule that on, so it falls back to
     /// the plain failure handler.
-    fn stream_failure(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
+    fn stream_failure(&mut self, py: Python<'_>) -> PyResult<LifecycleStep<Self, ()>> {
         let (Some(logger), Some(error), Some(stream), Some(billing)) =
             (&self.logger, &self.error, &self.stream, self.surface.stream)
         else {
-            return Ok(LifecycleStep::Done);
+            return Ok(LifecycleStep::Ready(()));
         };
         if !self.asynchronous {
             return self.dispatch_failure(py);
@@ -228,30 +224,33 @@ impl LegacyLogging {
             (
                 logger.object(py),
                 billing.endpoint_type,
-                &self.body,
+                &self
+                    .request
+                    .as_ref()
+                    .map(|request| request.body.clone_ref(py)),
                 &stream.chunks,
                 error,
             ),
         );
         match scheduled {
-            Ok(awaitable) => {
-                self.pending = Some(Pending::AsyncFailure);
-                Ok(LifecycleStep::Await(awaitable.unbind()))
-            }
+            Ok(awaitable) => Ok(LifecycleStep::Await(
+                awaitable.unbind(),
+                Self::resume_async_failure,
+            )),
             Err(failure) if is_cancellation(py, &failure) => Err(failure),
-            Err(_) => Ok(LifecycleStep::Done),
+            Err(_) => Ok(LifecycleStep::Ready(())),
         }
     }
 
     /// The sync failure handler, then the async one for async calls. Ordinary handler
     /// errors never replace the selected failure or suppress the other family; a
     /// cancellation does end the call.
-    fn dispatch_failure(&mut self, py: Python<'_>) -> PyResult<LifecycleStep> {
+    fn dispatch_failure(&mut self, py: Python<'_>) -> PyResult<LifecycleStep<Self, ()>> {
         let (Some(logger), Some(error)) = (&self.logger, &self.error) else {
-            return Ok(LifecycleStep::Done);
+            return Ok(LifecycleStep::Ready(()));
         };
         if self.asynchronous && self.internal {
-            return Ok(LifecycleStep::Done);
+            return Ok(LifecycleStep::Ready(()));
         }
         if let Err(failure) = logger.failure(py, error, &self.start, &self.end, false)
             && is_cancellation(py, &failure)
@@ -259,16 +258,53 @@ impl LegacyLogging {
             return Err(failure);
         }
         if !self.asynchronous {
-            return Ok(LifecycleStep::Done);
+            return Ok(LifecycleStep::Ready(()));
         }
         match logger.failure(py, error, &self.start, &self.end, true) {
-            Ok(Some(awaitable)) => {
-                self.pending = Some(Pending::AsyncFailure);
-                Ok(LifecycleStep::Await(awaitable))
-            }
-            Ok(None) => Ok(LifecycleStep::Done),
+            Ok(Some(awaitable)) => Ok(LifecycleStep::Await(awaitable, Self::resume_async_failure)),
+            Ok(None) => Ok(LifecycleStep::Ready(())),
             Err(failure) if is_cancellation(py, &failure) => Err(failure),
-            Err(_) => Ok(LifecycleStep::Done),
+            Err(_) => Ok(LifecycleStep::Ready(())),
+        }
+    }
+}
+
+impl LegacyLogging {
+    fn resume_begin(
+        &mut self,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> PyResult<LifecycleStep<Self, Py<PyDict>>> {
+        self.call
+            .set_kwargs(result?.into_bound(py).cast_into::<PyDict>()?.unbind());
+        self.prepare(py)
+    }
+
+    fn resume_after_success(
+        &mut self,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> PyResult<LifecycleStep<Self, Py<PyAny>>> {
+        self.response = Some(result?);
+        self.finalize(py)
+    }
+
+    fn resume_deployment_failure(
+        &mut self,
+        py: Python<'_>,
+        _: PyResult<Py<PyAny>>,
+    ) -> PyResult<LifecycleStep<Self, ()>> {
+        self.dispatch_failure(py)
+    }
+
+    fn resume_async_failure(
+        &mut self,
+        py: Python<'_>,
+        result: PyResult<Py<PyAny>>,
+    ) -> PyResult<LifecycleStep<Self, ()>> {
+        match result {
+            Err(error) if is_cancellation(py, &error) => Err(error),
+            _ => Ok(LifecycleStep::Ready(())),
         }
     }
 }
@@ -279,7 +315,7 @@ impl PythonLifecycle for LegacyLogging {
         py: Python<'_>,
         arguments: Py<PyDict>,
         started_at: f64,
-    ) -> PyResult<LifecycleStep> {
+    ) -> PyResult<LifecycleStep<Self, Py<PyDict>>> {
         self.call.set_kwargs(arguments);
         self.start = datetime(py, started_at)?;
         self.internal = is_internal_call(py)?;
@@ -294,12 +330,10 @@ impl PythonLifecycle for LegacyLogging {
         self.logger = Some(result.logger()?);
         self.call.set_kwargs(result.kwargs()?);
         if self.runs_deployment_hooks() {
-            self.pending = Some(Pending::DeploymentPreCall);
-            return Ok(LifecycleStep::Await(DeploymentHooks::before_call(
-                py,
-                self.call.kwargs(),
-                self.surface.call_type,
-            )?));
+            return Ok(LifecycleStep::Await(
+                DeploymentHooks::before_call(py, self.call.kwargs(), self.surface.call_type)?,
+                Self::resume_begin,
+            ));
         }
         self.prepare(py)
     }
@@ -309,7 +343,7 @@ impl PythonLifecycle for LegacyLogging {
         py: Python<'_>,
         wire: Box<WireRequest>,
         context: &RequestContext,
-    ) -> PyResult<LifecycleStep> {
+    ) -> PyResult<LifecycleStep<Self, Box<WireRequest>>> {
         let logger = self.logger()?;
         logger.update_from_kwargs(py, self.call.kwargs(), &wire, context)?;
         let body = to_py(py, &wire.body)?
@@ -326,9 +360,11 @@ impl PythonLifecycle for LegacyLogging {
         for (name, value) in &wire.headers {
             headers.set_item(name, value)?;
         }
-        self.body = Some(body.clone().unbind());
-        self.headers = Some(headers.clone().unbind());
-        self.context = Some(context.clone());
+        self.request = Some(LoggedRequest {
+            body: body.clone().unbind(),
+            headers: headers.clone().unbind(),
+            context: context.clone(),
+        });
         self.logger()?.pre_call(
             py,
             self.surface.input_description,
@@ -341,7 +377,7 @@ impl PythonLifecycle for LegacyLogging {
             .iter()
             .map(|(name, value)| Ok((name.extract::<String>()?, value.extract::<String>()?)))
             .collect::<PyResult<Vec<_>>>()?;
-        Ok(LifecycleStep::Wire(Box::new(WireRequest {
+        Ok(LifecycleStep::Ready(Box::new(WireRequest {
             body: from_py(&body)?,
             headers,
             ..*wire
@@ -353,38 +389,44 @@ impl PythonLifecycle for LegacyLogging {
         py: Python<'_>,
         response: Py<PyAny>,
         timing: Timing,
-    ) -> PyResult<LifecycleStep> {
+    ) -> PyResult<LifecycleStep<Self, Py<PyAny>>> {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response);
         if self.runs_deployment_hooks() {
-            self.pending = Some(Pending::DeploymentPostCall);
-            return Ok(LifecycleStep::Await(DeploymentHooks::after_success(
-                py,
-                self.call.kwargs(),
-                &self.response,
-                self.surface.call_type,
-            )?));
+            return Ok(LifecycleStep::Await(
+                DeploymentHooks::after_success(
+                    py,
+                    self.call.kwargs(),
+                    &self.response,
+                    self.surface.call_type,
+                )?,
+                Self::resume_after_success,
+            ));
         }
         self.finalize(py)
     }
 
-    fn emit(&mut self, py: Python<'_>, event: LifecycleEvent<'_>) -> PyResult<LifecycleStep> {
+    fn emit(
+        &mut self,
+        py: Python<'_>,
+        event: LifecycleEvent<'_>,
+    ) -> PyResult<LifecycleStep<Self, ()>> {
         match event {
-            LifecycleEvent::Started { .. } => Ok(LifecycleStep::Done),
+            LifecycleEvent::Started { .. } => Ok(LifecycleStep::Ready(())),
             LifecycleEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
                 let api_key = self
-                    .context
+                    .request
                     .as_ref()
-                    .and_then(|context| context.api_key.as_ref())
+                    .and_then(|request| request.context.api_key.as_ref())
                     .map(|api_key| api_key.expose());
                 self.logger()?.post_call(
                     py,
                     &raw.body,
                     api_key,
-                    self.body.as_ref(),
-                    self.headers.as_ref(),
+                    self.request.as_ref().map(|request| &request.body),
+                    self.request.as_ref().map(|request| &request.headers),
                 )?;
-                Ok(LifecycleStep::Done)
+                Ok(LifecycleStep::Ready(()))
             }
             LifecycleEvent::Succeeded { timing, response } => {
                 self.end = Some(datetime(py, timing.end_time)?);
@@ -393,7 +435,7 @@ impl PythonLifecycle for LegacyLogging {
                     Some(stream) => self.stream_success(py, stream)?,
                     None => self.dispatch_success(py)?,
                 }
-                Ok(LifecycleStep::Done)
+                Ok(LifecycleStep::Ready(()))
             }
             LifecycleEvent::Failed {
                 timing,
@@ -410,13 +452,15 @@ impl PythonLifecycle for LegacyLogging {
                     && self.runs_deployment_hooks()
                 {
                     let error = self.error.as_ref().ok_or_else(missing_state)?;
-                    self.pending = Some(Pending::DeploymentFailure);
-                    return Ok(LifecycleStep::Await(DeploymentHooks::after_failure(
-                        py,
-                        self.call.kwargs(),
-                        error,
-                        self.surface.call_type,
-                    )?));
+                    return Ok(LifecycleStep::Await(
+                        DeploymentHooks::after_failure(
+                            py,
+                            self.call.kwargs(),
+                            error,
+                            self.surface.call_type,
+                        )?,
+                        Self::resume_deployment_failure,
+                    ));
                 }
                 self.dispatch_failure(py)
             }
@@ -443,34 +487,13 @@ impl PythonLifecycle for LegacyLogging {
         stream.chunks.bind(py).append(chunk)
     }
 
-    fn resume(&mut self, py: Python<'_>, result: PyResult<Py<PyAny>>) -> PyResult<LifecycleStep> {
-        match self.pending.take().ok_or_else(missing_state)? {
-            Pending::DeploymentPreCall => {
-                self.call
-                    .set_kwargs(result?.into_bound(py).cast_into::<PyDict>()?.unbind());
-                self.prepare(py)
-            }
-            Pending::DeploymentPostCall => {
-                self.response = Some(result?);
-                self.finalize(py)
-            }
-            Pending::DeploymentFailure => self.dispatch_failure(py),
-            Pending::AsyncFailure => match result {
-                Err(failure) if is_cancellation(py, &failure) => Err(failure),
-                _ => Ok(LifecycleStep::Done),
-            },
-        }
-    }
-
     fn close(&mut self, py: Python<'_>) {
         if let Some(logger) = self.logger.take()
             && let Err(error) = logger.restore_context(py)
         {
             error.write_unraisable(py, None);
         }
-        self.body = None;
-        self.headers = None;
-        self.context = None;
+        self.request = None;
         self.stream = None;
     }
 
@@ -487,8 +510,11 @@ impl PythonLifecycle for LegacyLogging {
             visit.call(&stream.chunks)?;
             visit.call(&stream.first_chunk)?;
         }
-        visit.call(&self.body)?;
-        visit.call(&self.headers)
+        if let Some(request) = &self.request {
+            visit.call(&request.body)?;
+            visit.call(&request.headers)?;
+        }
+        Ok(())
     }
 }
 
@@ -506,6 +532,18 @@ mod deployment_hooks_tests {
     use super::LegacyLogging;
     use crate::test_support::{legacy_call, local, namespace, run};
 
+    fn resume<T>(
+        logging: &mut LegacyLogging,
+        step: LifecycleStep<LegacyLogging, T>,
+        py: Python<'_>,
+        value: PyResult<Py<PyAny>>,
+    ) -> PyResult<LifecycleStep<LegacyLogging, T>> {
+        let LifecycleStep::Await(_, continuation) = step else {
+            panic!("expected suspension")
+        };
+        continuation(logging, py, value)
+    }
+
     const CALL: &CStr = c"
 document = {'type': 'document_url', 'document_url': 'data:application/pdf;base64,YWJj'}
 kwargs = {'logger': logger, 'document': document}
@@ -520,7 +558,7 @@ kwargs = {'logger': logger, 'document': document}
         py: Python<'py>,
         locals: &Bound<'py, PyDict>,
         asynchronous: bool,
-    ) -> (LegacyLogging, LifecycleStep) {
+    ) -> (LegacyLogging, LifecycleStep<LegacyLogging, Py<PyDict>>) {
         let mut logging = legacy_call(py, locals, asynchronous);
         let kwargs = local(locals, "kwargs")
             .cast_into::<PyDict>()
@@ -530,15 +568,18 @@ kwargs = {'logger': logger, 'document': document}
         (logging, step)
     }
 
-    fn arguments<'py>(py: Python<'py>, step: LifecycleStep) -> Bound<'py, PyDict> {
-        let LifecycleStep::Arguments(arguments) = step else {
+    fn arguments<'py>(
+        py: Python<'py>,
+        step: LifecycleStep<LegacyLogging, Py<PyDict>>,
+    ) -> Bound<'py, PyDict> {
+        let LifecycleStep::Ready(arguments) = step else {
             panic!("expected the prepared arguments");
         };
         arguments.into_bound(py)
     }
 
-    fn awaits_deployment_hook(step: &LifecycleStep) -> bool {
-        matches!(step, LifecycleStep::Await(_))
+    fn awaits_deployment_hook<T>(step: &LifecycleStep<LegacyLogging, T>) -> bool {
+        matches!(step, LifecycleStep::Await(_, _))
     }
 
     #[rstest]
@@ -574,9 +615,13 @@ replaced_kwargs = {'logger': logger, 'document': replacement, 'pages': [0]}
             );
             let (mut logging, step) = begin(py, &locals, true);
             assert!(awaits_deployment_hook(&step));
-            let step = logging
-                .resume(py, Ok(local(&locals, "replaced_kwargs").unbind()))
-                .unwrap();
+            let step = resume(
+                &mut logging,
+                step,
+                py,
+                Ok(local(&locals, "replaced_kwargs").unbind()),
+            )
+            .unwrap();
             locals.set_item("prepared", arguments(py, step)).unwrap();
             run(
                 py,
@@ -610,7 +655,9 @@ kwargs = {'logger': logger, 'vendor_extension': opaque}
             );
             let (mut logging, step) = begin(py, &locals, asynchronous);
             let step = match step {
-                LifecycleStep::Await(hook_result) => logging.resume(py, Ok(hook_result)).unwrap(),
+                LifecycleStep::Await(hook_result, resume) => {
+                    resume(&mut logging, py, Ok(hook_result)).unwrap()
+                }
                 step => step,
             };
             locals.set_item("prepared", arguments(py, step)).unwrap();
@@ -639,18 +686,26 @@ replacement = object()
 logger.hooks = {'pre': lambda kwargs: kwargs}
 ",
             );
-            let (mut logging, _) = begin(py, &locals, true);
-            logging
-                .resume(py, Ok(local(&locals, "kwargs").unbind()))
-                .unwrap();
+            let (mut logging, step) = begin(py, &locals, true);
+            resume(
+                &mut logging,
+                step,
+                py,
+                Ok(local(&locals, "kwargs").unbind()),
+            )
+            .unwrap();
             let step = logging
                 .after_success(py, local(&locals, "response").unbind(), TIMING)
                 .unwrap();
             assert!(awaits_deployment_hook(&step));
-            let step = logging
-                .resume(py, Ok(local(&locals, "replacement").unbind()))
-                .unwrap();
-            let LifecycleStep::Response(returned) = step else {
+            let step = resume(
+                &mut logging,
+                step,
+                py,
+                Ok(local(&locals, "replacement").unbind()),
+            )
+            .unwrap();
+            let LifecycleStep::Ready(returned) = step else {
                 panic!("expected the finalized response");
             };
             assert!(returned.bind(py).is(local(&locals, "replacement")));
@@ -672,18 +727,28 @@ assert finalized is replacement
         Python::initialize();
         Python::attach(|py| {
             let locals = namespace(py, c"kwargs = {'logger': logger}\nresponse = object()");
-            let (mut logging, _) = begin(py, &locals, true);
-            if post_call {
-                logging
-                    .resume(py, Ok(local(&locals, "kwargs").unbind()))
-                    .unwrap();
-                logging
-                    .after_success(py, local(&locals, "response").unbind(), TIMING)
-                    .unwrap();
-            }
+            let (mut logging, step) = begin(py, &locals, true);
             let cancellation = CancelledError::new_err("cancelled");
             let cancelled = cancellation.value(py).clone();
-            let error = logging.resume(py, Err(cancellation)).err().unwrap();
+            let error = if post_call {
+                resume(
+                    &mut logging,
+                    step,
+                    py,
+                    Ok(local(&locals, "kwargs").unbind()),
+                )
+                .unwrap();
+                let step = logging
+                    .after_success(py, local(&locals, "response").unbind(), TIMING)
+                    .unwrap();
+                resume(&mut logging, step, py, Err(cancellation))
+                    .err()
+                    .unwrap()
+            } else {
+                resume(&mut logging, step, py, Err(cancellation))
+                    .err()
+                    .unwrap()
+            };
             assert!(error.value(py).is(&cancelled));
             let names: Vec<String> = local(&locals, "logger")
                 .call_method0("names")
@@ -704,10 +769,14 @@ assert finalized is replacement
                 py,
                 c"kwargs = {'logger': logger}\nfailure = ValueError('provider')",
             );
-            let (mut logging, _) = begin(py, &locals, true);
-            logging
-                .resume(py, Ok(local(&locals, "kwargs").unbind()))
-                .unwrap();
+            let (mut logging, step) = begin(py, &locals, true);
+            resume(
+                &mut logging,
+                step,
+                py,
+                Ok(local(&locals, "kwargs").unbind()),
+            )
+            .unwrap();
             let failure = PyErr::from_value(local(&locals, "failure"));
             let failed = LifecycleEvent::Failed {
                 timing: TIMING,
@@ -722,8 +791,8 @@ assert finalized is replacement
                 Ok(py.None())
             };
             assert!(matches!(
-                logging.resume(py, hook_result).unwrap(),
-                LifecycleStep::Await(_)
+                resume(&mut logging, step, py, hook_result).unwrap(),
+                LifecycleStep::Await(_, _)
             ));
             run(
                 py,
@@ -837,7 +906,7 @@ check = lambda: None
             };
             let (_, step) = send_and_receive(py, &mut logging, wire, &context);
             run(py, &locals, c"check()");
-            let LifecycleStep::Wire(wire) = step else {
+            let LifecycleStep::Ready(wire) = step else {
                 panic!("before_send did not hand back the wire request");
             };
             *wire
@@ -851,7 +920,10 @@ check = lambda: None
         logging: &'a mut LegacyLogging,
         wire: WireRequest,
         context: &RequestContext,
-    ) -> (&'a mut LegacyLogging, LifecycleStep) {
+    ) -> (
+        &'a mut LegacyLogging,
+        LifecycleStep<LegacyLogging, Box<WireRequest>>,
+    ) {
         let step = logging.before_send(py, Box::new(wire), context).unwrap();
         let raw = MachineEvent::ResponseReceived {
             raw: RawResponse {
@@ -860,7 +932,7 @@ check = lambda: None
         };
         assert!(matches!(
             logging.emit(py, LifecycleEvent::Machine(&raw)).unwrap(),
-            LifecycleStep::Done
+            LifecycleStep::Ready(())
         ));
         (logging, step)
     }
@@ -1416,7 +1488,7 @@ mod terminal_tests {
         py: Python<'_>,
         locals: &Bound<'_, PyDict>,
         logging: &mut LegacyLogging,
-    ) -> LifecycleStep {
+    ) -> LifecycleStep<LegacyLogging, ()> {
         let response = local(locals, "response").unbind();
         logging
             .emit(
@@ -1433,7 +1505,7 @@ mod terminal_tests {
         py: Python<'_>,
         locals: &Bound<'_, PyDict>,
         logging: &mut LegacyLogging,
-    ) -> LifecycleStep {
+    ) -> LifecycleStep<LegacyLogging, ()> {
         let failure = PyErr::from_value(local(locals, "failure"));
         logging
             .emit(
@@ -1468,7 +1540,7 @@ mod terminal_tests {
             let mut logging = logged(py, &locals, asynchronous);
             assert!(matches!(
                 succeed(py, &locals, &mut logging),
-                LifecycleStep::Done
+                LifecycleStep::Ready(())
             ));
             let names: Vec<String> = local(&locals, "logger")
                 .call_method0("names")
@@ -1503,7 +1575,7 @@ assert hasattr(logger, '_native_pending_logging') == getattr(logger, '_defer_asy
             };
             assert!(matches!(
                 fail(py, &locals, &mut logging),
-                LifecycleStep::Done
+                LifecycleStep::Ready(())
             ));
             let names: Vec<String> = local(&locals, "logger")
                 .call_method0("names")
@@ -1552,7 +1624,7 @@ logger = FailingLogger()
             let mut logging = logged(py, &locals, true);
             assert!(matches!(
                 succeed(py, &locals, &mut logging),
-                LifecycleStep::Done
+                LifecycleStep::Ready(())
             ));
             assert!(
                 logging
@@ -1582,7 +1654,7 @@ logger = FailingLogger()
             let step = fail(py, &locals, &mut logging);
             let awaits_async_handler = expected.contains(&"async_failure_handler");
             assert_eq!(
-                matches!(step, LifecycleStep::Await(_)),
+                matches!(step, LifecycleStep::Await(_, _)),
                 awaits_async_handler
             );
             let names: Vec<String> = local(&locals, "logger")
@@ -1619,7 +1691,7 @@ logger = FailingLogger()
             let mut logging = logged(py, &locals, true);
             assert!(matches!(
                 fail(py, &locals, &mut logging),
-                LifecycleStep::Await(_)
+                LifecycleStep::Await(_, _)
             ));
             assert!(
                 logging
@@ -1649,15 +1721,17 @@ logger = FailingLogger()
         Python::attach(|py| {
             let locals = namespace(py, c"failure = ValueError('provider')");
             let mut logging = logged(py, &locals, true);
-            fail(py, &locals, &mut logging);
+            let LifecycleStep::Await(_, resume) = fail(py, &locals, &mut logging) else {
+                panic!("expected async failure handler")
+            };
             let result = match error {
                 None => Ok(py.None()),
                 Some(false) => Err(PyRuntimeError::new_err("handler failed")),
                 Some(true) => Err(CancelledError::new_err("cancelled")),
             };
             let expected = result.as_ref().err().map(|error| error.value(py).clone());
-            match logging.resume(py, result) {
-                Ok(step) => assert!(done && matches!(step, LifecycleStep::Done)),
+            match resume(&mut logging, py, result) {
+                Ok(step) => assert!(done && matches!(step, LifecycleStep::Ready(()))),
                 Err(propagated) => {
                     assert!(!done);
                     assert!(propagated.value(py).is(expected.unwrap()));

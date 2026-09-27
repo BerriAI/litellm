@@ -1,8 +1,13 @@
-use std::{sync::Arc, time::Duration};
+use litellm_host::host::Host;
+use std::convert::Infallible;
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use litellm_core::messages::{
     Error, MessagesCall, MessagesShaping,
-    route::{LocalMessagesHost, MessagesMachine, MessagesOutput, messages_machine},
+    route::{Messages, MessagesMachine, MessagesOutput, messages_machine},
 };
 use litellm_http::{HttpSettings, Resolution};
 use litellm_secrets::source::SecretSource;
@@ -104,7 +109,7 @@ async fn run_with(
     secrets: Arc<RecordingSecrets>,
     call: MessagesCall,
 ) -> Result<MessagesOutput, Error> {
-    litellm_host::run::run(machine(secrets), &LocalMessagesHost::new(call)).await
+    litellm_host::run::run_hosted(machine(secrets), &LocalMessagesHost::new(call)).await
 }
 
 /// Runs the route with a secret source that knows nothing, so no environment leaks in.
@@ -114,7 +119,35 @@ async fn run(call: MessagesCall) -> Result<MessagesOutput, Error> {
 
 async fn run_message(call: MessagesCall) -> AnthropicMessagesResponse {
     match run(call).await.expect("messages call succeeds") {
-        MessagesOutput::Message(message) => *message,
-        MessagesOutput::Streamed => panic!("a non-streaming call returned a stream"),
+        MessagesOutput::Complete(message) => *message,
+        MessagesOutput::StreamEnded | MessagesOutput::Detached => {
+            panic!("a non-streaming call returned a stream")
+        }
+    }
+}
+
+struct LocalMessagesHost {
+    call: Mutex<Option<MessagesCall>>,
+}
+
+impl LocalMessagesHost {
+    fn new(call: MessagesCall) -> Self {
+        Self {
+            call: Mutex::new(Some(call)),
+        }
+    }
+}
+
+impl Host<Messages> for LocalMessagesHost {
+    async fn project(&self) -> Result<MessagesCall, Error> {
+        self.call
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .ok_or_else(|| Error::InvalidRequest("messages request was already projected".into()))
+    }
+
+    async fn custom_op(&self, op: Infallible) -> Result<(), Error> {
+        match op {}
     }
 }

@@ -92,9 +92,10 @@ pub(super) async fn execute(
         .emit(MachineEvent::ResponseReceived {
             raw: RawResponse { body: text.clone() },
         })
-        .await?;
+        .await
+        .map_err(Error::post_call)?;
     decode_response(config, &body.model, &text)
-        .map(|message| MessagesResponse::Message(Box::new(message)))
+        .map(|message| MessagesResponse::Complete(Box::new(message)))
 }
 
 fn serialize_failure(err: serde_json::Error) -> Error {
@@ -170,7 +171,10 @@ fn streaming_response(
         .boxed(),
         Some(decode) => decoded_chunks(response, decode, provider),
     };
-    MessagesResponse::Stream { headers, chunks }
+    MessagesResponse::Stream {
+        head: super::route::MessagesStreamHead { headers },
+        chunks,
+    }
 }
 
 fn decoded_chunks(

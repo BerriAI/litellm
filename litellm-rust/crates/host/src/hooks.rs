@@ -9,6 +9,10 @@ use crate::{
 /// What a route reaches for mid-call: the send-time rewrite and the events it reports.
 /// Python's `logging_obj.pre_call` and `post_call`, in that order.
 pub trait RouteHooks<E>: Send + Sync {
+    fn observer(&self) -> Option<std::sync::Arc<dyn crate::call::CallObserver>> {
+        None
+    }
+
     fn before_send(
         &self,
         wire: WireRequest,

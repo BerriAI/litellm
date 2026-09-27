@@ -22,8 +22,8 @@ pub enum MachineFault {
     Protocol(ResumeError),
 }
 
-pub type ExecuteFuture<R> =
-    Pin<Box<dyn Future<Output = Result<<R as Protocol>::Response, <R as Protocol>::Error>> + Send>>;
+pub type ExecuteFuture<R, C = <R as Protocol>::Response> =
+    Pin<Box<dyn Future<Output = Result<C, <R as Protocol>::Error>> + Send>>;
 
 /// The provider side of the machine: how the in-flight call reaches its host.
 pub struct HostChannel<R: Protocol> {
@@ -91,30 +91,31 @@ where
     }
 }
 
-type CallCoroutine<R> =
-    Coroutine<HostOp<R>, Result<<R as Protocol>::Response, <R as Protocol>::Error>>;
+type CallCoroutine<R, C> = Coroutine<HostOp<R>, Result<C, <R as Protocol>::Error>>;
 
-pub struct CallMachine<R: Protocol> {
-    coroutine: CallCoroutine<R>,
+pub struct CallMachine<R: Protocol, C = <R as Protocol>::Response> {
+    coroutine: CallCoroutine<R, C>,
 }
 
-impl<R: Protocol> CallMachine<R>
+impl<R: Protocol, C: Send + 'static> CallMachine<R, C>
 where
     R::Error: From<MachineFault>,
 {
-    pub fn new(execute: impl FnOnce(HostChannel<R>) -> ExecuteFuture<R> + Send + 'static) -> Self {
+    pub fn new(
+        execute: impl FnOnce(HostChannel<R>) -> ExecuteFuture<R, C> + Send + 'static,
+    ) -> Self {
         Self {
             coroutine: Coroutine::new(|co| execute(HostChannel { co })),
         }
     }
 }
 
-impl<R: Protocol> Machine for CallMachine<R>
+impl<R: Protocol, C: Send + 'static> Machine for CallMachine<R, C>
 where
     R::Error: From<MachineFault>,
 {
     type Protocol = R;
-    type Complete = R::Response;
+    type Complete = C;
 
     fn resume(&mut self) -> Step<'_, Self> {
         Box::pin(async move {

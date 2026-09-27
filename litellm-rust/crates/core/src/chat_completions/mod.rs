@@ -6,6 +6,7 @@
 //! credentials, and it resolves the provider, translates the conversation,
 //! calls the provider, and returns a typed OpenAI-shaped response.
 
+pub mod route;
 pub mod types;
 pub use crate::error::RouteError as Error;
 mod common_utils;
@@ -23,9 +24,7 @@ pub async fn chat_completions(
     config: &HttpClientConfig,
     request: ChatCompletionsRequest<'_>,
 ) -> Result<ChatCompletionsResponse, Error> {
-    let http = resources.pool.client(config, ClientVariant::Provider)?;
-    let request = prepare_provider_request(resolve_request(request)?)?;
-    handler::execute(&http, &resources.auth, request, &()).await
+    chat_completions_with_hooks(resources, config, request, &()).await
 }
 
 /// Whether the core would accept this request, without resolving credentials or
@@ -53,4 +52,29 @@ pub fn chat_completions_decline_reason(
     config
         .unsupported_reason(&messages, optional_params)
         .map(|reason| reason.0)
+}
+
+pub async fn chat_completions_with_hooks(
+    resources: &crate::resources::CoreResources,
+    config: &HttpClientConfig,
+    request: ChatCompletionsRequest<'_>,
+    hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+) -> Result<ChatCompletionsResponse, Error> {
+    litellm_host::call::observe_unary(hooks.observer(), async {
+        let http = resources.pool.client(config, ClientVariant::Provider)?;
+        execute(&http, &resources.auth, request, hooks).await
+    })
+    .await
+}
+
+async fn execute(
+    http: &litellm_http::Client,
+    auth: &litellm_auth::AuthServices,
+    request: ChatCompletionsRequest<'_>,
+    hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+) -> Result<ChatCompletionsResponse, Error> {
+    let prepared = prepare_provider_request(resolve_request(request)?)?;
+    let execute: futures_util::future::BoxFuture<'_, Result<ChatCompletionsResponse, Error>> =
+        Box::pin(handler::execute(http, auth, prepared, hooks));
+    execute.await
 }

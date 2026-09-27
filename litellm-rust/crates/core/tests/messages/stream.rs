@@ -107,7 +107,7 @@ fn sse_response() -> ResponseTemplate {
 }
 
 async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Error> {
-    litellm_host::run::run(machine(Arc::new(RecordingSecrets::empty())), host).await
+    litellm_host::run::run_hosted(machine(Arc::new(RecordingSecrets::empty())), host).await
 }
 
 #[rstest]
@@ -118,7 +118,7 @@ async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: Me
 
     let outcome = stream_through(&host).await.expect("streamed call succeeds");
 
-    assert!(matches!(outcome, MessagesOutput::Streamed));
+    assert!(matches!(outcome, MessagesOutput::StreamEnded));
     let seen = host.seen.into_inner().unwrap();
     let [Seen::Open(headers), chunks @ ..] = seen.as_slice() else {
         panic!("the stream opens before any chunk is delivered");
@@ -186,7 +186,7 @@ async fn a_detached_caller_receives_nothing_more(call: MessagesCall, #[case] det
         .await
         .expect("a detached stream still completes");
 
-    assert!(matches!(outcome, MessagesOutput::Streamed));
+    assert!(matches!(outcome, MessagesOutput::Detached));
     assert_eq!(host.seen.into_inner().unwrap().len(), detach_after);
 }
 
@@ -207,8 +207,7 @@ async fn an_upstream_error_fails_the_call_without_opening_the_stream(
 
     let error = stream_through(&host)
         .await
-        .err()
-        .expect("upstream error propagates");
+        .expect_err("upstream error propagates");
 
     assert_eq!(
         error,
@@ -280,8 +279,7 @@ async fn the_timeout_covers_a_stalled_stream_body(call: MessagesCall) {
     let error = tokio::time::timeout(Duration::from_secs(5), stream_through(&host))
         .await
         .expect("the stalled stream gives up within the timeout")
-        .err()
-        .expect("a stalled body fails the call");
+        .expect_err("a stalled body fails the call");
 
     assert!(matches!(error, Error::Transport(_)), "{error:?}");
     let seen = host.seen.into_inner().unwrap();
@@ -317,11 +315,11 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
     .await
     .unwrap();
 
-    let MessagesResponse::Stream { headers, chunks } = response else {
+    let MessagesResponse::Stream { head, chunks } = response else {
         panic!("a streaming request returns a stream");
     };
     for (name, value) in UPSTREAM_HEADERS {
-        assert!(headers.contains(&(name.into(), value.into())));
+        assert!(head.headers.contains(&(name.into(), value.into())));
     }
     let delivered = chunks.try_collect::<Vec<_>>().await.unwrap().concat();
     assert_eq!(delivered, SSE_BODY.as_bytes());
@@ -445,7 +443,7 @@ async fn a_host_on_anthropic_sse_is_relayed_byte_for_byte(call: MessagesCall) {
 
     let outcome = stream_through(&host).await.expect("azure streams");
 
-    assert!(matches!(outcome, MessagesOutput::Streamed));
+    assert!(matches!(outcome, MessagesOutput::StreamEnded));
     let seen = host.seen.into_inner().unwrap();
     let delivered: Vec<u8> = seen
         .iter()

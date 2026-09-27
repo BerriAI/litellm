@@ -1,9 +1,10 @@
 use litellm_core::ocr::{
     document::prepare_document,
-    route::{LocalOcrHost, ocr_machine},
-    types::LiteLLMOcrRequest,
+    route::{Ocr, OcrOp, OcrProjection, ocr_machine},
+    types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, decode_request},
 };
+use litellm_host::event::{CallEvent, RequestContext, WireRequest};
 use litellm_http::Client;
 use litellm_llms::base_llm::ocr::{
     error::Error,
@@ -11,6 +12,7 @@ use litellm_llms::base_llm::ocr::{
     transformation::{LiteLLMOcrResponse, OcrDocument},
 };
 use serde_json::{Map, Value, json};
+use std::sync::Mutex;
 use wiremock::{MockServer, ResponseTemplate};
 
 #[path = "../support/mod.rs"]
@@ -46,7 +48,9 @@ async fn perform(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error
 }
 
 async fn perform_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Error> {
-    litellm_host::run::run(ocr_machine(ocr_client()), &host).await
+    litellm_host::run::run_hosted(ocr_machine(ocr_client()), &host)
+        .await
+        .map(completed)
 }
 
 fn wire(model: &str, base: &str, document: Value, options: Value) -> OcrWireRequest {
@@ -119,4 +123,95 @@ fn accepted(server: &MockServer, body: Value) -> ResponseTemplate {
     ResponseTemplate::new(202)
         .insert_header("Operation-Location", format!("{}/operation", server.uri()))
         .set_body_json(body)
+}
+
+fn completed(
+    result: litellm_host::call::HostedCompletion<LiteLLMOcrResponse>,
+) -> LiteLLMOcrResponse {
+    match result {
+        litellm_host::call::HostedCompletion::Complete(response) => response,
+        other => panic!("unexpected OCR completion: {other:?}"),
+    }
+}
+
+type BeforeSend =
+    Box<dyn Fn(WireRequest, &RequestContext) -> Result<WireRequest, Error> + Send + Sync>;
+type Observer = Box<dyn Fn(&CallEvent) + Send + Sync>;
+
+struct LocalOcrHost {
+    request: Mutex<Option<LiteLLMOcrRequest<OcrDocumentInput>>>,
+    before_send: Option<BeforeSend>,
+    observer: Option<Observer>,
+}
+
+impl LocalOcrHost {
+    fn new(request: LiteLLMOcrRequest<OcrDocumentInput>) -> Self {
+        Self {
+            request: Mutex::new(Some(request)),
+            before_send: None,
+            observer: None,
+        }
+    }
+
+    fn with_before_send(
+        self,
+        before_send: impl Fn(WireRequest, &RequestContext) -> Result<WireRequest, Error>
+        + Send
+        + Sync
+        + 'static,
+    ) -> Self {
+        Self {
+            before_send: Some(Box::new(before_send)),
+            ..self
+        }
+    }
+
+    fn with_observer(self, observer: impl Fn(&CallEvent) + Send + Sync + 'static) -> Self {
+        Self {
+            observer: Some(Box::new(observer)),
+            ..self
+        }
+    }
+}
+
+impl litellm_host::host::Host<Ocr> for LocalOcrHost {
+    async fn project(&self) -> Result<OcrProjection, Error> {
+        self.request
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .take()
+            .map(|request| OcrProjection {
+                request,
+                caller_token: false,
+            })
+            .ok_or_else(|| Error::InvalidRequest("OCR request was already projected".into()))
+    }
+
+    async fn custom_op(&self, op: OcrOp) -> Result<(), Error> {
+        match op {
+            OcrOp::AcquireAzureAdToken(_) => {
+                Err(Error::Auth(litellm_auth::Error::AzureTokenAcquisition(
+                    "OCR host has no Azure AD token provider".into(),
+                )))
+            }
+        }
+    }
+
+    async fn before_send(
+        &self,
+        wire: WireRequest,
+        context: &RequestContext,
+    ) -> Result<WireRequest, Error> {
+        match &self.before_send {
+            Some(before_send) => before_send(wire, context),
+            None => Ok(wire),
+        }
+    }
+
+    async fn emit(&self, event: &CallEvent) -> Result<(), Error> {
+        if let Some(observer) = &self.observer {
+            observer(event);
+        }
+        Ok(())
+    }
 }

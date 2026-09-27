@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::task::Poll;
 
 use futures_util::future::{AbortHandle, Abortable};
+use litellm_host::call::HostedCompletion;
 use litellm_host::event::WireRequest;
 use litellm_host::event::{FailureOrigin, Timing, epoch_seconds};
 use litellm_host::host::{Demand, HostOp, HostStep, Reply};
@@ -14,8 +15,8 @@ use pyo3::types::PyDict;
 use tokio::sync::Mutex;
 
 use crate::adapter::{
-    InvokeError, LifecycleEvent, LifecycleStep, Preflight, ProtocolHost, PythonLifecycle,
-    missing_state,
+    InvokeError, LifecycleEvent, LifecycleResume, LifecycleStep, Preflight, ProtocolHost,
+    PythonLifecycle, missing_state,
 };
 use crate::execution::{poll_async_value, run_async_value, run_sync_value};
 use crate::handle::{Execution, ExecutionBody, ExecutionStep};
@@ -23,7 +24,7 @@ use crate::handle::{Execution, ExecutionBody, ExecutionStep};
 type ProtocolOf<H> = <H as ProtocolHost>::Protocol;
 type ErrorOf<H> = <ProtocolOf<H> as Protocol>::Error;
 type ResponseOf<H> = <ProtocolOf<H> as Protocol>::Response;
-type NativeStep<H> = MachineStep<ProtocolOf<H>, ResponseOf<H>>;
+type NativeStep<H> = MachineStep<ProtocolOf<H>, HostedCompletion<ResponseOf<H>>>;
 type NativeResult<H> = Result<NativeStep<H>, ErrorOf<H>>;
 type Interruption<H> = Option<HostFailure<ErrorOf<H>>>;
 
@@ -46,19 +47,18 @@ enum Stage {
     Failed(Py<PyBaseException>),
 }
 
-enum Expect {
+enum EventNext {
     Started,
-    Arguments,
-    Wire(Reply<WireRequest>),
     Emitted(Reply<()>),
-    Response,
     Terminal,
 }
 
-enum Pending {
+enum Pending<L> {
     Native,
-    Adapter(Expect),
-    /// The stream handed to the caller waits for its next read or its close.
+    Arguments(LifecycleResume<L, Py<PyDict>>),
+    Wire(LifecycleResume<L, Box<WireRequest>>, Reply<WireRequest>),
+    Response(LifecycleResume<L, Py<PyAny>>),
+    Event(LifecycleResume<L, ()>, EventNext),
     Consumer(Reply<Demand>),
 }
 
@@ -77,20 +77,22 @@ enum Next<H: ProtocolHost> {
     Continue(HostStep<NativeResult<H>, Py<PyAny>>),
 }
 
-struct PythonDriver<H, M>
+struct PythonDriver<H, M, L>
 where
+    L: PythonLifecycle + 'static,
     H: ProtocolHost,
-    M: Machine<Protocol = H::Protocol, Complete = ResponseOf<H>> + 'static,
+    M: Machine<Protocol = H::Protocol> + 'static,
+    M::Complete: Into<HostedCompletion<ResponseOf<H>>>,
 {
     host: H,
-    adapter: Box<dyn PythonLifecycle>,
+    adapter: L,
     preflight: Preflight,
     machine: Option<Arc<Mutex<MachineState<M>>>>,
     arguments: Option<Py<PyDict>>,
     started_at: f64,
     ended_at: Option<f64>,
     stage: Stage,
-    pending: Option<Pending>,
+    pending: Option<Pending<L>>,
     native_abort: Option<AbortHandle>,
     interrupted: Option<Py<PyBaseException>>,
     asynchronous: bool,
@@ -99,18 +101,20 @@ where
 /// Runs one native call for Python: synchronously, or as a coroutine that awaits every
 /// host suspension inline in the caller's task. `preflight` runs once, on the keyword view
 /// the adapter's `begin` returned, before the host projects from it.
-pub fn run_call<H, M>(
+pub fn run_call<H, M, L>(
     py: Python<'_>,
     machine: M,
     host: H,
-    adapter: Box<dyn PythonLifecycle>,
+    adapter: L,
     preflight: Preflight,
     arguments: Py<PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>>
 where
+    L: PythonLifecycle + 'static,
     H: ProtocolHost + 'static,
-    M: Machine<Protocol = H::Protocol, Complete = ResponseOf<H>> + 'static,
+    M: Machine<Protocol = H::Protocol> + 'static,
+    M::Complete: Into<HostedCompletion<ResponseOf<H>>>,
 {
     let mut driver = PythonDriver {
         host,
@@ -154,10 +158,12 @@ fn is_cancellation(py: Python<'_>, error: &PyErr) -> bool {
     !error.is_instance_of::<PyException>(py)
 }
 
-impl<H, M> PythonDriver<H, M>
+impl<H, M, L> PythonDriver<H, M, L>
 where
+    L: PythonLifecycle + 'static,
     H: ProtocolHost,
-    M: Machine<Protocol = H::Protocol, Complete = ResponseOf<H>> + 'static,
+    M: Machine<Protocol = H::Protocol> + 'static,
+    M::Complete: Into<HostedCompletion<ResponseOf<H>>>,
 {
     fn timing(&self) -> Timing {
         Timing {
@@ -178,7 +184,7 @@ where
                     start_time: self.started_at,
                 };
                 match self.adapter.emit(py, started) {
-                    Ok(step) => self.on_adapter(py, step, Expect::Started),
+                    Ok(step) => self.on_event(py, step, EventNext::Started),
                     Err(error) => self.adapter_failed(py, error),
                 }
             }
@@ -195,9 +201,31 @@ where
                 });
                 self.resume_machine(py, None)
             }
-            (Some(Pending::Adapter(expect)), Some(result)) => {
-                match self.adapter.resume(py, result) {
-                    Ok(step) => self.on_adapter(py, step, expect),
+            (Some(Pending::Arguments(resume)), Some(result)) => {
+                let step = resume(&mut self.adapter, py, result);
+                match step {
+                    Ok(step) => self.on_arguments(py, step),
+                    Err(error) => self.adapter_failed(py, error),
+                }
+            }
+            (Some(Pending::Wire(resume, reply)), Some(result)) => {
+                let step = resume(&mut self.adapter, py, result);
+                match step {
+                    Ok(step) => self.on_wire(py, step, reply),
+                    Err(error) => self.adapter_failed(py, error),
+                }
+            }
+            (Some(Pending::Response(resume)), Some(result)) => {
+                let step = resume(&mut self.adapter, py, result);
+                match step {
+                    Ok(step) => self.on_response(py, step),
+                    Err(error) => self.adapter_failed(py, error),
+                }
+            }
+            (Some(Pending::Event(resume, next)), Some(result)) => {
+                let step = resume(&mut self.adapter, py, result);
+                match step {
+                    Ok(step) => self.on_event(py, step, next),
                     Err(error) => self.adapter_failed(py, error),
                 }
             }
@@ -205,19 +233,17 @@ where
         }
     }
 
-    fn on_adapter(
+    fn on_arguments(
         &mut self,
         py: Python<'_>,
-        step: LifecycleStep,
-        expect: Expect,
+        step: LifecycleStep<L, Py<PyDict>>,
     ) -> PyResult<ExecutionStep> {
-        if let LifecycleStep::Await(awaitable) = step {
-            self.pending = Some(Pending::Adapter(expect));
-            return Ok(ExecutionStep::Await(awaitable));
-        }
-        match (expect, step) {
-            (Expect::Started, LifecycleStep::Done) => self.begin(py),
-            (Expect::Arguments, LifecycleStep::Arguments(arguments)) => {
+        match step {
+            LifecycleStep::Await(awaitable, resume) => {
+                self.pending = Some(Pending::Arguments(resume));
+                Ok(ExecutionStep::Await(awaitable))
+            }
+            LifecycleStep::Ready(arguments) => {
                 if let Err(error) = (self.preflight)(py, arguments.bind(py)) {
                     return self.adapter_failed(py, error);
                 }
@@ -225,28 +251,73 @@ where
                 self.stage = Stage::Call;
                 self.resume_machine(py, None)
             }
-            (Expect::Wire(reply), LifecycleStep::Wire(wire)) => {
+        }
+    }
+
+    fn on_wire(
+        &mut self,
+        py: Python<'_>,
+        step: LifecycleStep<L, Box<WireRequest>>,
+        reply: Reply<WireRequest>,
+    ) -> PyResult<ExecutionStep> {
+        match step {
+            LifecycleStep::Await(awaitable, resume) => {
+                self.pending = Some(Pending::Wire(resume, reply));
+                Ok(ExecutionStep::Await(awaitable))
+            }
+            LifecycleStep::Ready(wire) => {
                 reply.send(*wire);
                 self.resume_machine(py, None)
             }
-            (Expect::Emitted(reply), LifecycleStep::Done) => {
-                reply.send(());
-                self.resume_machine(py, None)
+        }
+    }
+
+    fn on_response(
+        &mut self,
+        py: Python<'_>,
+        step: LifecycleStep<L, Py<PyAny>>,
+    ) -> PyResult<ExecutionStep> {
+        match step {
+            LifecycleStep::Await(awaitable, resume) => {
+                self.pending = Some(Pending::Response(resume));
+                Ok(ExecutionStep::Await(awaitable))
             }
-            (Expect::Response, LifecycleStep::Response(response)) => self.succeeded(py, response),
-            (Expect::Terminal, LifecycleStep::Done) => match &self.stage {
-                Stage::Succeeded(response) => Ok(ExecutionStep::Return(response.clone_ref(py))),
-                Stage::Failed(error) => Err(PyErr::from_value(error.bind(py).clone().into_any())),
-                _ => Err(missing_state()),
+            LifecycleStep::Ready(response) => self.succeeded(py, response),
+        }
+    }
+
+    fn on_event(
+        &mut self,
+        py: Python<'_>,
+        step: LifecycleStep<L, ()>,
+        next: EventNext,
+    ) -> PyResult<ExecutionStep> {
+        match step {
+            LifecycleStep::Await(awaitable, resume) => {
+                self.pending = Some(Pending::Event(resume, next));
+                Ok(ExecutionStep::Await(awaitable))
+            }
+            LifecycleStep::Ready(()) => match next {
+                EventNext::Started => self.begin(py),
+                EventNext::Emitted(reply) => {
+                    reply.send(());
+                    self.resume_machine(py, None)
+                }
+                EventNext::Terminal => match &self.stage {
+                    Stage::Succeeded(response) => Ok(ExecutionStep::Return(response.clone_ref(py))),
+                    Stage::Failed(error) => {
+                        Err(PyErr::from_value(error.bind(py).clone().into_any()))
+                    }
+                    _ => Err(missing_state()),
+                },
             },
-            _ => Err(missing_state()),
         }
     }
 
     fn begin(&mut self, py: Python<'_>) -> PyResult<ExecutionStep> {
         let arguments = self.arguments.take().ok_or_else(missing_state)?;
         match self.adapter.begin(py, arguments, self.started_at) {
-            Ok(step) => self.on_adapter(py, step, Expect::Arguments),
+            Ok(step) => self.on_arguments(py, step),
             Err(error) => self.adapter_failed(py, error),
         }
     }
@@ -309,15 +380,14 @@ where
                 context,
                 reply,
             } => match self.adapter.before_send(py, wire, &context) {
-                Ok(LifecycleStep::Wire(wire)) => {
+                Ok(LifecycleStep::Ready(wire)) => {
                     reply.send(*wire);
                     Ok(Ok(()))
                 }
-                Ok(LifecycleStep::Await(awaitable)) => {
-                    self.pending = Some(Pending::Adapter(Expect::Wire(reply)));
+                Ok(LifecycleStep::Await(awaitable, resume)) => {
+                    self.pending = Some(Pending::Wire(resume, reply));
                     return Ok(Next::Return(ExecutionStep::Await(awaitable)));
                 }
-                Ok(_) => return Err(missing_state()),
                 Err(error) => Err(error),
             },
             HostOp::Open(head, reply) => return self.opened(py, head, reply).map(Next::Return),
@@ -326,15 +396,14 @@ where
             }
             HostOp::Emit(event, reply) => {
                 match self.adapter.emit(py, LifecycleEvent::Machine(&event)) {
-                    Ok(LifecycleStep::Done) => {
+                    Ok(LifecycleStep::Ready(())) => {
                         reply.send(());
                         Ok(Ok(()))
                     }
-                    Ok(LifecycleStep::Await(awaitable)) => {
-                        self.pending = Some(Pending::Adapter(Expect::Emitted(reply)));
+                    Ok(LifecycleStep::Await(awaitable, resume)) => {
+                        self.pending = Some(Pending::Event(resume, EventNext::Emitted(reply)));
                         return Ok(Next::Return(ExecutionStep::Await(awaitable)));
                     }
-                    Ok(_) => return Err(missing_state()),
                     Err(error) => Err(error),
                 }
             }
@@ -448,10 +517,26 @@ where
             .result
             .take()
             .ok_or_else(missing_state)
+            .map(|result| {
+                result.map(|step| match step {
+                    MachineStep::Host(op) => MachineStep::Host(op),
+                    MachineStep::Complete(response) => MachineStep::Complete(response.into()),
+                })
+            })
     }
 
-    fn completed(&mut self, py: Python<'_>, response: ResponseOf<H>) -> PyResult<ExecutionStep> {
+    fn completed(
+        &mut self,
+        py: Python<'_>,
+        response: HostedCompletion<ResponseOf<H>>,
+    ) -> PyResult<ExecutionStep> {
         self.ended_at = Some(epoch_seconds());
+        let response = match response {
+            HostedCompletion::Complete(response) => response,
+            HostedCompletion::StreamEnded | HostedCompletion::Detached => {
+                return self.succeeded(py, py.None());
+            }
+        };
         let public = match self.host.complete(py, response) {
             Ok(public) => public,
             Err(error) => return self.failure(py, error, FailureOrigin::Call),
@@ -461,7 +546,7 @@ where
         }
         self.stage = Stage::AfterSuccess;
         match self.adapter.after_success(py, public, self.timing()) {
-            Ok(step) => self.on_adapter(py, step, Expect::Response),
+            Ok(step) => self.on_response(py, step),
             Err(error) => self.failure(py, error, FailureOrigin::Host),
         }
     }
@@ -494,7 +579,7 @@ where
         };
         let step = self.adapter.emit(py, event)?;
         self.stage = Stage::Succeeded(response);
-        self.on_adapter(py, step, Expect::Terminal)
+        self.on_event(py, step, EventNext::Terminal)
     }
 
     fn failure(
@@ -514,7 +599,7 @@ where
         };
         let step = self.adapter.emit(py, event)?;
         self.stage = Stage::Failed(error.into_value(py));
-        self.on_adapter(py, step, Expect::Terminal)
+        self.on_event(py, step, EventNext::Terminal)
     }
 
     fn clear(&mut self) {
@@ -530,10 +615,12 @@ where
     }
 }
 
-impl<H, M> ExecutionBody for PythonDriver<H, M>
+impl<H, M, L> ExecutionBody for PythonDriver<H, M, L>
 where
+    L: PythonLifecycle + 'static,
     H: ProtocolHost,
-    M: Machine<Protocol = H::Protocol, Complete = ResponseOf<H>> + 'static,
+    M: Machine<Protocol = H::Protocol> + 'static,
+    M::Complete: Into<HostedCompletion<ResponseOf<H>>>,
 {
     fn resume(&mut self, result: Option<PyResult<Py<PyAny>>>) -> PyResult<ExecutionStep> {
         Python::attach(|py| self.drive(py, result))
@@ -552,10 +639,12 @@ where
     }
 }
 
-impl<H, M> Drop for PythonDriver<H, M>
+impl<H, M, L> Drop for PythonDriver<H, M, L>
 where
+    L: PythonLifecycle + 'static,
     H: ProtocolHost,
-    M: Machine<Protocol = H::Protocol, Complete = ResponseOf<H>> + 'static,
+    M: Machine<Protocol = H::Protocol> + 'static,
+    M::Complete: Into<HostedCompletion<ResponseOf<H>>>,
 {
     fn drop(&mut self) {
         self.clear();
@@ -771,12 +860,12 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             _: Python<'_>,
             arguments: Py<PyDict>,
             _: f64,
-        ) -> PyResult<LifecycleStep> {
+        ) -> PyResult<LifecycleStep<Self, Py<PyDict>>> {
             self.log.push("begin");
             if matches!(self.script, AdapterScript::FailBegin) {
                 return Err(PyValueError::new_err("begin failed"));
             }
-            Ok(LifecycleStep::Arguments(arguments))
+            Ok(LifecycleStep::Ready(arguments))
         }
 
         fn before_send(
@@ -784,9 +873,9 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             _: Python<'_>,
             wire: Box<WireRequest>,
             _: &RequestContext,
-        ) -> PyResult<LifecycleStep> {
+        ) -> PyResult<LifecycleStep<Self, Box<WireRequest>>> {
             self.log.push("before_send");
-            Ok(LifecycleStep::Wire(Box::new(WireRequest {
+            Ok(LifecycleStep::Ready(Box::new(WireRequest {
                 url: "rewritten".into(),
                 ..*wire
             })))
@@ -797,22 +886,26 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             py: Python<'_>,
             response: Py<PyAny>,
             _: Timing,
-        ) -> PyResult<LifecycleStep> {
+        ) -> PyResult<LifecycleStep<Self, Py<PyAny>>> {
             self.log.push("after_success");
             match self.script {
-                AdapterScript::ReplaceResponse => Ok(LifecycleStep::Response(
+                AdapterScript::ReplaceResponse => Ok(LifecycleStep::Ready(
                     "replaced".into_pyobject(py)?.into_any().unbind(),
                 )),
                 AdapterScript::FailAfterSuccess => {
                     Err(PyValueError::new_err("after_success failed"))
                 }
                 AdapterScript::Plain | AdapterScript::FailBegin => {
-                    Ok(LifecycleStep::Response(response))
+                    Ok(LifecycleStep::Ready(response))
                 }
             }
         }
 
-        fn emit(&mut self, py: Python<'_>, event: LifecycleEvent<'_>) -> PyResult<LifecycleStep> {
+        fn emit(
+            &mut self,
+            py: Python<'_>,
+            event: LifecycleEvent<'_>,
+        ) -> PyResult<LifecycleStep<Self, ()>> {
             self.log.push(match event {
                 LifecycleEvent::Started { .. } => "started".into(),
                 LifecycleEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
@@ -825,7 +918,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                     format!("failed:{origin:?}:{}", error.value(py))
                 }
             });
-            Ok(LifecycleStep::Done)
+            Ok(LifecycleStep::Ready(()))
         }
 
         fn opened(&mut self, _: Python<'_>) -> PyResult<()> {
@@ -836,10 +929,6 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         fn delivered(&mut self, _: Python<'_>, _: &Py<PyAny>) -> PyResult<()> {
             self.log.push("delivered");
             Ok(())
-        }
-
-        fn resume(&mut self, _: Python<'_>, _: PyResult<Py<PyAny>>) -> PyResult<LifecycleStep> {
-            Err(missing_state())
         }
 
         fn close(&mut self, _: Python<'_>) {
@@ -904,7 +993,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             py,
             machine,
             host,
-            Box::new(adapter),
+            adapter,
             preflight,
             arguments.unbind(),
             asynchronous,
@@ -1052,21 +1141,80 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         }
     }
 
-    fn streaming_machine() -> CallMachine<Streaming> {
-        CallMachine::new(|host| {
-            Box::pin(async move {
-                host.project().await?;
-                if host.open(vec![("request-id", "req_1")]).await? == Demand::Detached {
-                    return Ok(());
-                }
-                for chunk in ["first", "second"] {
-                    if host.deliver(chunk).await? == Demand::Detached {
-                        break;
-                    }
-                }
-                Ok(())
+    fn streaming_machine() -> litellm_host::call::HostedMachine<Streaming> {
+        litellm_host::call::hosted_call(|(), _| async {
+            Ok(litellm_host::call::CallOutput::Stream {
+                head: vec![("request-id", "req_1")],
+                chunks: Box::pin(futures_util::stream::iter([Ok("first"), Ok("second")])),
             })
         })
+    }
+
+    #[rstest::rstest]
+    #[case::sync(false)]
+    #[case::asynchronous(true)]
+    fn explicitly_closing_a_stream_dispatches_success_for_delivered_chunks(
+        #[case] asynchronous: bool,
+    ) {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            let log = Log::default();
+            let handed = run_call(
+                py,
+                streaming_machine(),
+                StreamingHost,
+                SyntheticAdapter {
+                    log: Log(log.0.clone()),
+                    script: AdapterScript::Plain,
+                },
+                no_preflight,
+                PyDict::new(py).unbind(),
+                asynchronous,
+            )
+            .unwrap();
+            let stream = if asynchronous {
+                let stop = handed.call_method1(py, "send", (py.None(),)).unwrap_err();
+                stop.value(py).getattr("value").unwrap()
+            } else {
+                handed.into_bound(py)
+            };
+            if asynchronous {
+                for method in ["__anext__", "aclose", "aclose"] {
+                    let stop = stream
+                        .call_method0(method)
+                        .unwrap()
+                        .call_method1("send", (py.None(),))
+                        .unwrap_err();
+                    assert!(stop.is_instance_of::<pyo3::exceptions::PyStopIteration>(py));
+                }
+            } else {
+                assert_eq!(
+                    stream
+                        .call_method0("__next__")
+                        .unwrap()
+                        .extract::<String>()
+                        .unwrap(),
+                    "first"
+                );
+                stream.call_method0("close").unwrap();
+                stream.call_method0("close").unwrap();
+            }
+            assert_eq!(
+                log.entries(),
+                [
+                    "started",
+                    "begin",
+                    "opened",
+                    "delivered",
+                    "succeeded:None",
+                    "adapter.close"
+                ]
+            );
+        });
     }
 
     /// Drives a `Stream` (async) or `SyncStream` to completion from a sync test.
@@ -1111,7 +1259,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                     py,
                     streaming_machine(),
                     StreamingHost,
-                    Box::new(adapter),
+                    adapter,
                     no_preflight,
                     PyDict::new(py).unbind(),
                     asynchronous,
@@ -1517,7 +1665,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 py,
                 success_machine(),
                 host,
-                Box::new(adapter),
+                adapter,
                 no_preflight,
                 PyDict::new(py).unbind(),
                 false,

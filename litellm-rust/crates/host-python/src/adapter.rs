@@ -17,12 +17,12 @@ pub type Preflight = fn(Python<'_>, &Bound<'_, PyDict>) -> PyResult<()>;
 
 /// What an adapter step produced: either the value the driver asked for, or a Python
 /// awaitable the driver hands back to the caller's task before asking again.
-pub enum LifecycleStep {
-    Await(Py<PyAny>),
-    Arguments(Py<PyDict>),
-    Wire(Box<WireRequest>),
-    Response(Py<PyAny>),
-    Done,
+pub type LifecycleResume<L, T> =
+    fn(&mut L, Python<'_>, PyResult<Py<PyAny>>) -> PyResult<LifecycleStep<L, T>>;
+
+pub enum LifecycleStep<L, T> {
+    Await(Py<PyAny>, LifecycleResume<L, T>),
+    Ready(T),
 }
 
 /// What a lifecycle observes: the driver's start, the machine's own events, and one
@@ -47,35 +47,39 @@ pub enum LifecycleEvent<'a> {
 /// order: `begin` before the machine starts, `before_send` and `emit` while it runs,
 /// `after_success` and one terminal `emit` after it completes. Whenever a step returns
 /// [`LifecycleStep::Await`], the driver awaits it in the caller's task and continues the
-/// same step through `resume`.
+/// same step through its typed continuation.
 ///
 /// A step that fails with an ordinary exception fails the call with that exception,
 /// except on a terminal event, where the adapter is expected to report and swallow its
 /// own errors. An exception that is not a `PyException`, such as a cancellation, ends
 /// the call without further dispatch.
-pub trait PythonLifecycle: Send + Sync {
+pub trait PythonLifecycle: Sized + Send + Sync {
     fn begin(
         &mut self,
         py: Python<'_>,
         arguments: Py<PyDict>,
         started_at: f64,
-    ) -> PyResult<LifecycleStep>;
+    ) -> PyResult<LifecycleStep<Self, Py<PyDict>>>;
 
     fn before_send(
         &mut self,
         py: Python<'_>,
         wire: Box<WireRequest>,
         context: &RequestContext,
-    ) -> PyResult<LifecycleStep>;
+    ) -> PyResult<LifecycleStep<Self, Box<WireRequest>>>;
 
     fn after_success(
         &mut self,
         py: Python<'_>,
         response: Py<PyAny>,
         timing: Timing,
-    ) -> PyResult<LifecycleStep>;
+    ) -> PyResult<LifecycleStep<Self, Py<PyAny>>>;
 
-    fn emit(&mut self, py: Python<'_>, event: LifecycleEvent<'_>) -> PyResult<LifecycleStep>;
+    fn emit(
+        &mut self,
+        py: Python<'_>,
+        event: LifecycleEvent<'_>,
+    ) -> PyResult<LifecycleStep<Self, ()>>;
 
     /// The call streams and its stream was handed to the caller. The caller is not
     /// inside an await here, so this step and `delivered` cannot suspend.
@@ -83,8 +87,6 @@ pub trait PythonLifecycle: Send + Sync {
 
     /// One chunk of an open stream is about to reach the caller.
     fn delivered(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()>;
-
-    fn resume(&mut self, py: Python<'_>, result: PyResult<Py<PyAny>>) -> PyResult<LifecycleStep>;
 
     fn close(&mut self, py: Python<'_>);
 
