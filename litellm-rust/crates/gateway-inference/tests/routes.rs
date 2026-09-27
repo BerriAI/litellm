@@ -141,8 +141,6 @@ async fn missing_inference_fields_use_the_same_validation_as_null(
 }
 
 #[rstest]
-#[case("/responses")]
-#[case("/v1/responses")]
 #[case("/embeddings")]
 #[case("/v1/embeddings")]
 #[case("/completions")]
@@ -219,6 +217,7 @@ async fn upload_audio_format_validation_matches_core(#[case] filename: &str) {
 
 #[rstest]
 #[case::chat("/v1/chat/completions", false)]
+#[case::responses("/v1/responses", false)]
 #[case::deployment("/openai/deployments/public%2Fmodel/chat/completions", false)]
 #[case::messages("/v1/messages", true)]
 #[case::ocr("/v1/ocr", false)]

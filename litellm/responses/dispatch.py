@@ -61,6 +61,7 @@ def _public_request(
         custom_llm_provider=optional_str(fields.get("custom_llm_provider")),
         extra_headers=optional_mapping(fields.get("extra_headers")),
         kwargs=extra,
+        parameters=MappingProxyType({name: value for name, value in fields.items() if name != "kwargs"}),
     )
 
 

@@ -1,3 +1,5 @@
+mod host;
+
 use pyo3::types::{PyDict, PyTuple};
 
 use crate::errors::RustBridgeDeclined;
@@ -144,58 +146,93 @@ pub(crate) fn achat_completions<'py>(
     )
 }
 
-#[pyfunction]
-#[pyo3(signature = (request, args, kwargs))]
-pub(crate) fn completion(
+fn run_public(
+    py: Python<'_>,
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
+    asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    drop((request, args, kwargs));
-    Err(RustBridgeDeclined::new_err(
-        "native chat completions route is not implemented",
-    ))
+    use super::inference::InferenceHost;
+    use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
+    let host = InferenceHost::new(
+        request.clone().unbind(),
+        "litellm.rust_bridge.chat_completions.route_host",
+    );
+    if let Some(reason) = py
+        .import("litellm.rust_bridge.chat_completions.route_host")?
+        .getattr("decline_reason")?
+        .call1((&request,))?
+        .extract::<Option<String>>()?
+    {
+        return Err(RustBridgeDeclined::new_err(reason));
+    }
+    let admission = host::project(&host, py, &kwargs)?;
+    if let Some(reason) = chat_completions_decline_reason(
+        &admission.model,
+        admission.custom_llm_provider.as_deref(),
+        admission.messages,
+        &admission.optional_params,
+    ) {
+        return Err(RustBridgeDeclined::new_err(reason));
+    }
+    if admission
+        .optional_params
+        .get("stream")
+        .is_some_and(|value| value == &serde_json::Value::Bool(true))
+    {
+        return Err(RustBridgeDeclined::new_err(
+            "native Python chat_completions streaming",
+        ));
+    }
+    let config = crate::http::call_config(py, &kwargs, asynchronous)?;
+    let machine = litellm_core::chat_completions::route::chat_completions_machine(
+        crate::http::resources(),
+        &config,
+    )
+    .map_err(crate::http::client_error)?;
+    run_legacy_call(
+        py,
+        LegacySurface {
+            call_type: if asynchronous {
+                "acompletion"
+            } else {
+                "completion"
+            },
+            input_description: "Chat completions",
+            stream: None,
+        },
+        PublicCall::capture(&request, &args, &kwargs)?,
+        move |request| crate::logger::LoggedMachine::new(machine(request)),
+        host::ChatCompletionsPythonHost(host),
+        crate::preflight::sdk_preflight,
+        asynchronous,
+    )
 }
 
 #[pyfunction]
-#[pyo3(signature = (request, args, kwargs))]
-pub(crate) fn acompletion(
+pub(crate) fn completion(
+    py: Python<'_>,
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
 ) -> PyResult<Py<PyAny>> {
-    drop((request, args, kwargs));
-    Err(RustBridgeDeclined::new_err(
-        "native chat completions route is not implemented",
-    ))
+    run_public(py, request, args, kwargs, false)
+}
+
+#[pyfunction]
+pub(crate) fn acompletion(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    run_public(py, request, args, kwargs, true)
 }
 
 #[cfg(test)]
 mod tests {
-    use pyo3::{
-        prelude::*,
-        types::{PyDict, PyList, PyTuple},
-    };
-
-    use crate::errors::RustBridgeDeclined;
-
-    #[test]
-    fn both_entrypoints_decline_before_provider_execution() {
-        Python::initialize();
-        Python::attach(|py| {
-            let request = PyDict::new(py);
-            let args = PyTuple::empty(py);
-            let kwargs = PyDict::new(py);
-
-            for entrypoint in [super::completion, super::acompletion] {
-                let error = entrypoint(request.clone().into_any(), args.clone(), kwargs.clone())
-                    .expect_err(
-                        "native chat completions must decline until a route machine exists",
-                    );
-                assert!(error.is_instance_of::<RustBridgeDeclined>(py));
-            }
-        });
-    }
+    use pyo3::{prelude::*, types::PyList};
 
     #[test]
     fn chat_completions_decline_keeps_existing_reasons() {
