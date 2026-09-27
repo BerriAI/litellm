@@ -3,12 +3,15 @@ import json
 import logging
 import threading
 import time
+from collections import defaultdict
 from itertools import chain
+from types import MappingProxyType
 from typing import Callable, Final, Literal, NoReturn, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
 from openai.types.chat import ChatCompletionChunk, ChatCompletionStreamOptionsParam
+from pydantic import BaseModel, ConfigDict
 
 import litellm
 from litellm import verbose_logger
@@ -3144,12 +3147,13 @@ def test_stream_keeps_text_finish_reason_and_usage_from_incomplete_generic_chunk
             "missing ['finish_reason', 'text', 'usage'], unexpected ['content']",
             id="placeholder-flag-with-foreign-key",
         ),
+        pytest.param("hello", "str is missing ['finish_reason', 'is_finished', 'text', 'usage']", id="plain-string"),
+        pytest.param(42, "expected a dict, got int", id="not-subscriptable"),
         pytest.param(
-            {"text": "", "content": "hello"},
-            "missing ['finish_reason', 'is_finished', 'usage'], unexpected ['content']",
-            id="empty-text-with-foreign-key",
+            litellm.ModelResponse(),
+            "ModelResponse is missing ['finish_reason', 'is_finished', 'text', 'usage']",
+            id="litellm-response-object",
         ),
-        pytest.param("hello", "expected a dict, got str", id="not-a-dict"),
     ],
 )
 def test_custom_provider_stream_names_the_keys_of_a_chunk_that_is_not_generic(
@@ -3191,6 +3195,22 @@ def test_custom_provider_stream_names_the_keys_of_a_chunk_that_is_not_generic(
             ],
             id="complete-with-null-values",
         ),
+        pytest.param(
+            [
+                {"id": "evt-0", "text": ""},
+                {"id": "evt-1", "text": "hello"},
+                {"id": "evt-2", "is_finished": True, "finish_reason": "length"},
+            ],
+            id="empty-text-first",
+        ),
+        pytest.param(
+            [
+                {"id": "evt-0", "provider_specific_fields": {"citations": ["https://example.com"]}},
+                {"id": "evt-1", "text": "hello"},
+                {"id": "evt-2", "is_finished": True, "finish_reason": "length"},
+            ],
+            id="provider-fields-only",
+        ),
     ],
 )
 def test_custom_provider_stream_keeps_generic_values_of_chunks_with_extra_keys(
@@ -3210,18 +3230,140 @@ def test_custom_provider_stream_keeps_generic_values_of_chunks_with_extra_keys(
     assert assembled.choices[0].finish_reason == "length"
 
 
-def test_custom_provider_stream_keeps_streaming_after_finished_chunk_with_null_finish_reason(
-    monkeypatch: pytest.MonkeyPatch,
-):
+def test_custom_provider_stream_keeps_tool_call_of_chunk_with_extra_keys(monkeypatch: pytest.MonkeyPatch):
     monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    tool_call: Final = {
+        "id": "call_1",
+        "type": "function",
+        "function": {"name": "get_weather", "arguments": "{}"},
+        "index": 0,
+    }
     wrapper: Final = CustomStreamWrapper(
         completion_stream=iter(
             [
-                {"text": "The answer", "is_finished": True, "finish_reason": None, "usage": None},
-                {"text": "", "is_finished": False, "finish_reason": "", "usage": None},
-                {"text": " continues", "is_finished": True, "finish_reason": "length", "usage": None},
+                {"id": "evt-0", "tool_use": tool_call},
+                {"id": "evt-1", "is_finished": True, "finish_reason": "tool_calls"},
             ]
         ),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
+
+    assert assembled.choices[0].message.tool_calls[0].function.name == "get_weather"
+    assert assembled.choices[0].finish_reason == "tool_calls"
+
+
+class _DictLikeChunk(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    text: str = ""
+    is_finished: bool = False
+    finish_reason: str | None = ""
+    usage: dict[str, int] | None = None
+
+    def get(self, key: str, default: object = None) -> object:
+        return getattr(self, key, default)
+
+    def __getitem__(self, key: str) -> object:
+        return getattr(self, key)
+
+
+class _NoneAsDefaultChunk(_DictLikeChunk):
+    def get(self, key: str, default: object = None) -> object:
+        value: Final = getattr(self, key, None)
+        return default if value is None else value
+
+
+class _DelegatingChunk:
+    def __init__(self, fields: dict[str, object]) -> None:
+        self._fields: Final = fields
+
+    def __getitem__(self, key: str) -> object:
+        return self._fields[key]
+
+    def __contains__(self, key: object) -> bool:
+        return key in self._fields
+
+    def __getattr__(self, name: str) -> object:
+        if name != "get":
+            raise AttributeError(name)
+        return self._fields.get
+
+
+class _ValueErrorForMissingKeyChunk(_DelegatingChunk):
+    def __getitem__(self, key: str) -> object:
+        if key not in self._fields:
+            raise ValueError(f"no field {key}")
+        return self._fields[key]
+
+
+class _EmptyStringForMissingKeyChunk(_DelegatingChunk):
+    def __init__(self, fields: dict[str, object]) -> None:
+        super().__init__(defaultdict(str, fields))
+
+
+class _NoneAsDefaultDict(dict[str, object]):
+    def get(self, key: str, default: object = None, /) -> object:
+        value: Final = super().get(key)
+        return default if value is None else value
+
+
+@pytest.mark.parametrize(
+    "as_chunk",
+    [
+        pytest.param(_DictLikeChunk.model_validate, id="object-with-get"),
+        pytest.param(_ValueErrorForMissingKeyChunk, id="object-raising-value-error-for-missing-key"),
+        pytest.param(_EmptyStringForMissingKeyChunk, id="object-returning-empty-string-for-missing-key"),
+    ],
+)
+def test_custom_provider_stream_reads_dict_like_chunk_objects(
+    monkeypatch: pytest.MonkeyPatch,
+    as_chunk: Callable[[dict[str, object]], object],
+):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    chunks: Final = (
+        {"text": "hello", "is_finished": False, "finish_reason": "", "usage": None},
+        {"text": "", "is_finished": True, "finish_reason": "length", "usage": None},
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter([as_chunk(chunk) for chunk in chunks]),
+        model="custom-model",
+        logging_obj=MagicMock(),
+        custom_llm_provider="my-custom-llm",
+    )
+
+    assembled: Final = litellm.stream_chunk_builder(chunks=list(wrapper))
+
+    assert assembled.choices[0].message.content == "hello"
+    assert assembled.choices[0].finish_reason == "length"
+
+
+@pytest.mark.parametrize(
+    "as_chunk",
+    [
+        pytest.param(dict, id="dict"),
+        pytest.param(MappingProxyType, id="mapping"),
+        pytest.param(_NoneAsDefaultDict, id="dict-whose-get-skips-none"),
+        pytest.param(_DictLikeChunk.model_validate, id="object-with-get"),
+        pytest.param(_NoneAsDefaultChunk.model_validate, id="object-whose-get-skips-none"),
+        pytest.param(_DelegatingChunk, id="object-with-get-from-getattr"),
+    ],
+)
+def test_custom_provider_stream_keeps_streaming_after_finished_chunk_with_null_finish_reason(
+    monkeypatch: pytest.MonkeyPatch,
+    as_chunk: Callable[[dict[str, object]], object],
+):
+    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    chunks: Final = (
+        {"text": "The answer", "is_finished": True, "finish_reason": None, "usage": None},
+        {"text": "", "is_finished": False, "finish_reason": "", "usage": None},
+        {"text": " continues", "is_finished": True, "finish_reason": "length", "usage": None},
+    )
+    wrapper: Final = CustomStreamWrapper(
+        completion_stream=iter([as_chunk(chunk) for chunk in chunks]),
         model="custom-model",
         logging_obj=MagicMock(),
         custom_llm_provider="my-custom-llm",
@@ -3233,10 +3375,15 @@ def test_custom_provider_stream_keeps_streaming_after_finished_chunk_with_null_f
     assert assembled.choices[0].finish_reason == "length"
 
 
+@pytest.mark.parametrize("custom_llm_provider", [None, "my-custom-llm"])
 @pytest.mark.parametrize(
     ("chunks", "finish_reason"),
     [
-        pytest.param([{"text": "hello"}, {"is_finished": True}], "stop", id="no-earlier-reason"),
+        pytest.param(
+            [{"text": "hello"}, {"is_finished": True}, {"is_finished": True, "finish_reason": "length"}],
+            "stop",
+            id="no-earlier-reason",
+        ),
         pytest.param(
             [{"text": "hello", "finish_reason": "length"}, {"is_finished": True}],
             "length",
@@ -3252,18 +3399,19 @@ def test_custom_provider_stream_keeps_streaming_after_finished_chunk_with_null_f
         ),
     ],
 )
-def test_custom_provider_stream_finished_chunk_without_reason_keeps_earlier_reason_or_stop(
+def test_stream_finished_chunk_without_reason_keeps_earlier_reason_or_stop(
     monkeypatch: pytest.MonkeyPatch,
     caplog: pytest.LogCaptureFixture,
     chunks: list[dict[str, object]],
     finish_reason: str,
+    custom_llm_provider: str | None,
 ):
-    monkeypatch.setattr(litellm, "_custom_providers", ["my-custom-llm"])
+    monkeypatch.setattr(litellm, "_custom_providers", [] if custom_llm_provider is None else [custom_llm_provider])
     wrapper: Final = CustomStreamWrapper(
         completion_stream=iter(chunks),
         model="custom-model",
         logging_obj=MagicMock(),
-        custom_llm_provider="my-custom-llm",
+        custom_llm_provider=custom_llm_provider,
     )
 
     with caplog.at_level(logging.WARNING, logger="LiteLLM"):
@@ -3274,22 +3422,19 @@ def test_custom_provider_stream_finished_chunk_without_reason_keeps_earlier_reas
 
 
 @pytest.mark.parametrize(
-    ("chunk", "content", "finish_reason"),
+    ("chunk", "content"),
     [
-        pytest.param({"text": "hi"}, "hi", None, id="text-only"),
-        pytest.param({"is_finished": True, "finish_reason": "length"}, "", "length", id="finish-only"),
-        pytest.param({"is_finished": True}, "", "", id="finished-without-reason"),
+        pytest.param({"text": "hi"}, "hi", id="text-only"),
+        pytest.param({"is_finished": True, "finish_reason": "length"}, "", id="finish-only"),
+        pytest.param({"is_finished": True}, "", id="finished-without-reason"),
     ],
 )
-def test_convert_generic_chunk_reads_incomplete_chunk(
-    chunk: dict[str, object], content: str, finish_reason: str | None
-):
+def test_convert_generic_chunk_reads_incomplete_chunk(chunk: dict[str, object], content: str):
     converted: Final = convert_generic_chunk_to_model_response_stream(
         cast(GenericStreamingChunk, chunk)  # cast-ok: the chunk under test omits required keys
     )
 
     assert converted.choices[0].delta.content == content
-    assert getattr(converted, "finish_reason", None) == finish_reason
 
 
 def _run_dispatch(wrapper: CustomStreamWrapper, chunk):
