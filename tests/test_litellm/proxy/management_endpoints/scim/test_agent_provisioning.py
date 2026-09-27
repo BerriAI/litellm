@@ -966,7 +966,9 @@ async def test_group_patch_failure_does_not_sync_members(case: str, monkeypatch:
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("kind,operation", [(kind, op) for kind in ("Users", "Groups") for op in ("get", "update", "patch", "delete")])
+@pytest.mark.parametrize(
+    "kind,operation", [(kind, op) for kind in ("Users", "Groups") for op in ("get", "update", "patch", "delete")]
+)
 async def test_legacy_scim_token_cannot_access_source_owned_local_record(
     kind: str, operation: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -984,10 +986,15 @@ async def test_legacy_scim_token_cannot_access_source_owned_local_record(
     monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", AsyncMock(return_value=client))
     lookup = AsyncMock(side_effect=AssertionError("legacy operation reached the source-owned local record"))
     monkeypatch.setattr(scim_v2, "_check_user_exists" if kind == "Users" else "_check_team_exists", lookup)
-    arguments = {"user_id" if kind == "Users" else "group_id": "local-owned", "auth": UserAPIKeyAuth(api_key="legacy-scim")}
+    arguments = {
+        "user_id" if kind == "Users" else "group_id": "local-owned",
+        "auth": UserAPIKeyAuth(api_key="legacy-scim"),
+    }
     if operation == "update":
         arguments["user" if kind == "Users" else "group"] = (
-            SCIMUser(schemas=[], userName="changed@example.com") if kind == "Users" else SCIMGroup(schemas=[], displayName="Changed")
+            SCIMUser(schemas=[], userName="changed@example.com")
+            if kind == "Users"
+            else SCIMGroup(schemas=[], displayName="Changed")
         )
     if operation == "patch":
         arguments["patch_ops"] = SCIMPatchOp(Operations=[{"op": "replace", "path": "displayName", "value": "Changed"}])
@@ -996,3 +1003,37 @@ async def test_legacy_scim_token_cannot_access_source_owned_local_record(
         await endpoint(**arguments)
     assert denied.value.status_code == 403
     lookup.assert_not_awaited()
+
+
+@pytest.mark.parametrize(
+    "value, expected_name, expected_members",
+    [
+        ({"displayName": "Renamed"}, "Renamed", ["human"]),
+        ({"displayName": "Renamed", "members": [{"value": "agent"}]}, "Renamed", ["agent"]),
+        ({"members": [{"value": "agent"}]}, "Original", ["agent"]),
+    ],
+)
+def test_pathless_group_replace_applies_display_name_and_members(
+    value: dict[str, object], expected_name: str, expected_members: list[str]
+) -> None:
+    group: Final = SCIMGroup(schemas=[], displayName="Original", members=[SCIMMember(value="human")])
+    result: Final = group_members_after_patch(group, SCIMPatchOp(Operations=[{"op": "replace", "value": value}]))
+    assert isinstance(result, SCIMGroup), result
+    assert result.displayName == expected_name
+    assert [member.value for member in result.members or []] == expected_members
+
+
+@pytest.mark.parametrize(
+    "value",
+    [
+        {"externalId": "foreign"},
+        {"displayName": ""},
+        {"displayName": "Renamed", "members": [{"display": "no-id"}]},
+        "x",
+    ],
+)
+def test_pathless_group_replace_rejects_unsupported_or_invalid_attributes(value: object) -> None:
+    group: Final = SCIMGroup(schemas=[], displayName="Original", members=[SCIMMember(value="human")])
+    result: Final = group_members_after_patch(group, SCIMPatchOp(Operations=[{"op": "replace", "value": value}]))
+    assert isinstance(result, SCIMProvisioningFailure)
+    assert result.status == 400

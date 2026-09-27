@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from functools import partial
 from itertools import chain, groupby
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, overload
+from typing import TYPE_CHECKING, Annotated, Final, NamedTuple, Protocol, TypeVar, overload
 
 from fastapi import (
     APIRouter,
@@ -473,6 +473,76 @@ async def _source_owned_ids(
     by_local_id: Final = await find_many_in(table, "local_id", local_ids, where=source_kind)
     resources: Final = chain(by_scim_id, by_local_id)
     return frozenset(filter(None, chain.from_iterable((resource.id, resource.local_id) for resource in resources)))
+
+
+_UNOWNED_USER_PREDICATES: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "username": "($1::text IS NULL OR u.user_email = $1 OR u.user_id = $1)",
+        "emails.value": "($1::text IS NULL OR u.user_email = $1)",
+    }
+)
+_UNOWNED_USERS_FROM: Final = """
+FROM "LiteLLM_UserTable" u
+WHERE {predicate}
+  AND NOT EXISTS (SELECT 1 FROM "LiteLLM_SCIMResource" r WHERE r.kind = 'Users' AND r.local_id = u.user_id)
+"""
+_UNOWNED_TEAMS_FROM: Final = """
+FROM "LiteLLM_TeamTable" t
+WHERE ($1::text IS NULL OR t.team_alias = $1)
+  AND NOT EXISTS (SELECT 1 FROM "LiteLLM_SCIMResource" r WHERE r.kind = 'Groups' AND r.local_id = t.team_id)
+"""
+
+
+class _LocalIdRow(BaseModel):
+    local_id: str
+
+
+class _CountRow(BaseModel):
+    total: int
+
+
+_LOCAL_ID_ROWS: Final = TypeAdapter(tuple[_LocalIdRow, ...])
+_COUNT_ROWS: Final = TypeAdapter(tuple[_CountRow, ...])
+
+
+@dataclass(frozen=True)
+class _UnownedPage:
+    local_ids: tuple[str, ...]
+    total: int
+
+
+async def _unowned_page(
+    prisma_client: PrismaClient,
+    kind: Literal["Users", "Groups"],
+    filter_value: str | None,
+    start_index: int,
+    page_size: int,
+    *,
+    filter_attribute: str = "username",
+) -> _UnownedPage:
+    body: Final = (
+        _UNOWNED_USERS_FROM.format(predicate=_UNOWNED_USER_PREDICATES[filter_attribute])
+        if kind == "Users"
+        else _UNOWNED_TEAMS_FROM
+    )
+    column: Final = "u.user_id" if kind == "Users" else "t.team_id"
+    created_at: Final = "u.created_at" if kind == "Users" else "t.created_at"
+    page_sql: Final = f"SELECT {column} AS local_id {body} ORDER BY {created_at} DESC LIMIT $2 OFFSET $3"
+    count_sql: Final = f"SELECT COUNT(*)::int AS total {body}"
+    async with prisma_client.tx() as tx:
+        page_rows: Final = await tx.query_raw(page_sql, filter_value, page_size, start_index - 1)
+        count_rows: Final = await tx.query_raw(count_sql, filter_value)
+    local_ids: Final = tuple(row.local_id for row in _LOCAL_ID_ROWS.validate_python(page_rows))
+    totals: Final = _COUNT_ROWS.validate_python(count_rows)
+    return _UnownedPage(local_ids=local_ids, total=totals[0].total if totals else 0)
+
+
+_RowT = TypeVar("_RowT")
+
+
+def _in_page_order(local_ids: Sequence[str], rows: Iterable[_RowT], key: Callable[[_RowT], str]) -> tuple[_RowT, ...]:
+    by_id: Final = {key(row): row for row in rows}
+    return tuple(by_id[local_id] for local_id in local_ids if local_id in by_id)
 
 
 async def _assert_legacy_source_access(
@@ -1763,33 +1833,7 @@ async def get_users(
     )
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
-        # Parse filter if provided (basic support)
-        where_conditions: Final[dict[str, object]] = {}
-        if filter:
-            # Okta locates users by userName before deprovisioning. LiteLLM
-            # exposes SCIM userName from user_email, while older SCIM-created
-            # users may still have user_id == userName, so support both.
-            parsed_filter: Final = parse_scim_eq_filter(filter)
-            if parsed_filter:
-                filter_attribute, filter_value = parsed_filter
-                if filter_attribute == "username":
-                    where_conditions["OR"] = [
-                        {"user_email": filter_value},
-                        {"user_id": filter_value},
-                    ]
-                elif filter_attribute == "emails.value":
-                    where_conditions["user_email"] = filter_value
-
-        # Get users from database
-        users: Final[Sequence[LiteLLM_UserTable]] = await _table(UserRepository(prisma_client)).find_many(
-            where=where_conditions,
-            skip=(startIndex - 1),
-            take=page_size,
-            order={"created_at": "desc"},
-        )
-
-        # Get total count for pagination
-        total_count: Final = await _table(UserRepository(prisma_client)).count(where=where_conditions)
+        users, total_count = await _legacy_users_page(prisma_client, auth, filter, startIndex, page_size)
 
         # Convert to SCIM format
         scim_users: Final[list[SCIMUser]] = []
@@ -2605,10 +2649,63 @@ async def patch_user(
         raise handle_exception_on_proxy(e)
 
 
+def _legacy_user_filter(filter: str | None) -> tuple[str, str | None]:
+    # Okta locates users by userName before deprovisioning. LiteLLM
+    # exposes SCIM userName from user_email, while older SCIM-created
+    # users may still have user_id == userName, so support both.
+    parsed_filter: Final = parse_scim_eq_filter(filter) if filter else None
+    if parsed_filter and parsed_filter[0] in _UNOWNED_USER_PREDICATES:
+        return parsed_filter
+    return ("username", None)
+
+
+async def _legacy_users_page(
+    prisma_client: PrismaClient, auth: UserAPIKeyAuth | None, filter: str | None, start_index: int, page_size: int
+) -> tuple[Sequence[LiteLLM_UserTable], int]:
+    filter_attribute, filter_value = _legacy_user_filter(filter)
+    table: Final = _table(UserRepository(prisma_client))
+    if auth is not None:
+        page: Final = await _unowned_page(
+            prisma_client, "Users", filter_value, start_index, page_size, filter_attribute=filter_attribute
+        )
+        rows: Final = await find_many_in(table, "user_id", page.local_ids)
+        return _in_page_order(page.local_ids, rows, lambda user: user.user_id), page.total
+    where_conditions: Final[dict[str, object]] = {}
+    if filter_value is not None and filter_attribute == "username":
+        where_conditions["OR"] = [{"user_email": filter_value}, {"user_id": filter_value}]
+    elif filter_value is not None:
+        where_conditions["user_email"] = filter_value
+    users: Final = await table.find_many(
+        where=where_conditions, skip=start_index - 1, take=page_size, order={"created_at": "desc"}
+    )
+    return users, await table.count(where=where_conditions)
+
+
 class _TeamWhereConditions(TypedDict, total=False):
     """The team columns SCIM GET /Groups can filter on, as Prisma where-conditions."""
 
-    team_alias: str
+    team_alias: ReadOnly[str]
+
+
+def _legacy_team_alias(filter: str | None) -> str | None:
+    # Very basic filter support - only handling displayName eq
+    return filter.split("displayName eq ")[1].strip("\"'") if filter and "displayName eq" in filter else None
+
+
+async def _legacy_teams_page(
+    prisma_client: PrismaClient, auth: UserAPIKeyAuth | None, filter: str | None, start_index: int, page_size: int
+) -> tuple[Sequence[LiteLLM_TeamTable], int]:
+    team_alias: Final = _legacy_team_alias(filter)
+    table: Final = _table(TeamRepository(prisma_client))
+    if auth is not None:
+        page: Final = await _unowned_page(prisma_client, "Groups", team_alias, start_index, page_size)
+        rows: Final = await find_many_in(table, "team_id", page.local_ids)
+        return _in_page_order(page.local_ids, rows, lambda team: team.team_id), page.total
+    where_conditions: Final[_TeamWhereConditions] = {} if team_alias is None else {"team_alias": team_alias}
+    teams: Final = await table.find_many(
+        where=where_conditions, skip=start_index - 1, take=page_size, order={"created_at": "desc"}
+    )
+    return teams, await table.count(where=where_conditions)
 
 
 # Group Endpoints
@@ -2639,24 +2736,7 @@ async def get_groups(
     )
     try:
         prisma_client: Final = await _get_prisma_client_or_raise_exception()
-        # Parse filter if provided (basic support)
-        where_conditions: Final[_TeamWhereConditions] = {}
-        if filter:
-            # Very basic filter support - only handling displayName eq
-            if "displayName eq" in filter:
-                team_alias = filter.split("displayName eq ")[1].strip("\"'")
-                where_conditions["team_alias"] = team_alias
-
-        # Get teams from database
-        teams: Final = await _table(TeamRepository(prisma_client)).find_many(
-            where=where_conditions,
-            skip=(startIndex - 1),
-            take=page_size,
-            order={"created_at": "desc"},
-        )
-
-        # Get total count for pagination
-        total_count: Final = await _table(TeamRepository(prisma_client)).count(where=where_conditions)
+        teams, total_count = await _legacy_teams_page(prisma_client, auth, filter, startIndex, page_size)
 
         # Convert to SCIM format
         scim_groups: Final[list[SCIMGroup]] = []

@@ -11,7 +11,7 @@ from litellm.proxy import proxy_server
 from litellm.proxy.management_endpoints.scim import scim_v2
 from litellm.proxy.management_endpoints.scim.human_provisioning import SourceHumanProvisioner, human_email
 from litellm.proxy.utils import PrismaClient
-from litellm.types.proxy.management_endpoints.scim_v2 import SCIMPatchOp, SCIMUser
+from litellm.types.proxy.management_endpoints.scim_v2 import SCIMPatchOp, SCIMUser, SCIMUserEmail
 
 TENANT: Final = "11111111-1111-4111-8111-111111111111"
 SUBJECT: Final = "22222222-2222-4222-8222-222222222222"
@@ -440,3 +440,18 @@ async def test_existing_native_agent_cannot_be_reclassified_as_human() -> None:
     assert failure.value.status_code == 409
     tx.litellm_usertable.find_unique.assert_not_awaited()
     tx.litellm_scimresource.update.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_put_without_username_is_rejected_before_anything_is_written(monkeypatch: pytest.MonkeyPatch) -> None:
+    service, tx, row, user = human_fixture()
+    legacy_put: Final = AsyncMock(return_value=user)
+    monkeypatch.setattr(scim_v2, "update_user", legacy_put)
+    with pytest.raises(HTTPException, match="userName is required") as failure:
+        await service.update(
+            row, user.model_copy(update={"userName": None, "emails": [SCIMUserEmail(value="human@example.com")]})
+        )
+    assert failure.value.status_code == 400
+    legacy_put.assert_not_awaited()
+    tx.litellm_usertable.find_unique.assert_not_awaited()
+    tx.litellm_scimresource.update.assert_not_called()
