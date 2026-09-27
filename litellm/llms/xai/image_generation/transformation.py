@@ -57,7 +57,7 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
                 "Set drop_params=True to drop unsupported parameters."
             )
 
-        pairs = ((k, v) for k, v in non_default_params.items() if k in allowed)
+        pairs: Final = ((k, v) for k, v in non_default_params.items() if k in allowed)
         native: Final = dict(pairs)  # mutable-ok: provider JSON body and base-class dict signature
         merged: Final = {**optional_params, **native}  # mutable-ok: provider JSON body and base-class dict signature
         size: Final = merged.get("size")
@@ -65,11 +65,8 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
             _SIZE_TO_ASPECT_RATIO.get(str(size), "1:1") if size else None
         )
         n: Final = merged.get("n")
-        aspect = {"aspect_ratio": aspect_ratio} if aspect_ratio is not None else None  # mutable-ok: provider JSON body
-        count = {"n": int(n)} if n is not None else None  # mutable-ok: provider JSON body
-        aspect_ratio_field: Final = aspect or {}  # mutable-ok: provider JSON body and base-class dict signature
-        n_field: Final = count or {}  # mutable-ok: provider JSON body and base-class dict signature
-        return {**aspect_ratio_field, **n_field}  # mutable-ok: provider JSON body and base-class dict signature
+        fields: Final = (("aspect_ratio", aspect_ratio), ("n", int(n) if n is not None else None))
+        return {key: value for key, value in fields if value is not None}  # mutable-ok: base class returns a dict
 
     def get_complete_url(
         self,
@@ -143,9 +140,9 @@ class XAIImageGenerationConfig(BaseImageGenerationConfig):
         headers: dict,  # mutable-ok: provider JSON body and base-class dict signature
     ) -> dict:  # mutable-ok: provider JSON body and base-class dict signature
         n: Final = optional_params.get("n")
-        requested_ratio = optional_params.get("aspect_ratio")
-        aspect = {"aspect_ratio": requested_ratio} if requested_ratio is not None else None  # fmt: skip  # mutable-ok: provider JSON body
-        count = {"n": int(n)} if n is not None else None  # mutable-ok: provider JSON body
+        requested_ratio: Final = optional_params.get("aspect_ratio")
+        aspect: Final = {"aspect_ratio": requested_ratio} if requested_ratio is not None else None  # fmt: skip  # mutable-ok: provider JSON body
+        count: Final = {"n": int(n)} if n is not None else None  # mutable-ok: provider JSON body
         return {  # mutable-ok: provider JSON body and base-class dict signature
             "model": XAIModelInfo.get_base_model(model) or model,
             "prompt": prompt,
