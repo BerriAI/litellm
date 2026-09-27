@@ -67,19 +67,20 @@ class ResponsesToCompletionBridgeHandler:
         else:
             raise ValueError("Unexpected responses stream payload")
 
-        from .transformation import LiteLLMResponsesTransformationHandler
+        response = base_response
+        if not base_response.output:
+            from .transformation import LiteLLMResponsesTransformationHandler
 
-        parsed_chunks: Final = tuple(
-            payload
-            for event in stream_events
-            if (payload := ResponsesToCompletionBridgeHandler._stream_event_payload(event)) is not None
-        )
-        recovered_output: Final = LiteLLMResponsesTransformationHandler.recover_output_items_from_chunks(parsed_chunks)
-        response: Final = (
-            base_response
-            if base_response.output or not recovered_output
-            else base_response.model_copy(update={"output": recovered_output})
-        )
+            parsed_chunks: Final = (
+                payload
+                for event in stream_events
+                if (payload := ResponsesToCompletionBridgeHandler._stream_event_payload(event)) is not None
+            )
+            recovered_output: Final = LiteLLMResponsesTransformationHandler.recover_output_items_from_chunks(
+                parsed_chunks
+            )
+            if recovered_output:
+                response = base_response.model_copy(update={"output": recovered_output})
 
         if hidden_params:
             existing: Final = getattr(response, "_hidden_params", None)

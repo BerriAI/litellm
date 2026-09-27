@@ -334,22 +334,29 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         # Handle message items with output_text content
         if item_type == "message":
             content_list: Final = item.get("content", [])
+            response_text_parts: Final[list[str]] = []
+            message_annotations: Final[list[ChatCompletionAnnotation]] = []
+            has_output_text = False
             for content_item in content_list:
-                if isinstance(content_item, dict):
-                    content_type = content_item.get("type")
-                    if content_type == "output_text":
-                        response_text = content_item.get("text", "")
-                        # Extract annotations from content if present
-                        annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
-                            content_item.get("annotations", None)
-                        )
-                        msg = Message(
-                            role=item.get("role", "assistant"),
-                            content=response_text if response_text else "",
-                            annotations=annotations,
-                        )
-                        choice = Choices(message=msg, finish_reason="stop", index=index)
-                        return choice, index + 1
+                if not isinstance(content_item, dict) or content_item.get("type") != "output_text":
+                    continue
+                has_output_text = True
+                response_text = content_item.get("text", "")
+                response_text_parts.append(response_text if isinstance(response_text, str) else "")
+                annotations = LiteLLMResponsesTransformationHandler._convert_annotations_to_chat_format(
+                    content_item.get("annotations", None)
+                )
+                if annotations:
+                    message_annotations.extend(annotations)
+
+            if has_output_text:
+                msg = Message(
+                    role=item.get("role", "assistant"),
+                    content="".join(response_text_parts),
+                    annotations=message_annotations or None,
+                )
+                choice = Choices(message=msg, finish_reason="stop", index=index)
+                return choice, index + 1
 
         # function_call / custom_tool_call dicts are intercepted and accumulated by
         # _convert_response_output_to_choices before this callback is reached
@@ -879,7 +886,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         if not raw_sse or not isinstance(raw_sse, str):
             return []
 
-        parsed_chunks: Final = tuple(
+        parsed_chunks: Final = (
             parsed_chunk for chunk in raw_sse.splitlines() if (parsed_chunk := parse_sse_json_chunk(chunk)) is not None
         )
         return cls.recover_output_items_from_chunks(parsed_chunks)
