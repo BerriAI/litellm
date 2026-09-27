@@ -1247,6 +1247,75 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
         proxy_server.token_counter = original_token_counter
 
 
+def _server_tool_history(stdout: str, encrypted_content: str) -> list[dict[str, object]]:
+    return [
+        {"role": "user", "content": "weather in Paris?"},
+        {
+            "role": "assistant",
+            "content": [
+                {"type": "server_tool_use", "id": "srvtoolu_1", "name": "web_search", "input": {"query": "paris"}},
+                {
+                    "type": "web_search_tool_result",
+                    "tool_use_id": "srvtoolu_1",
+                    "content": [
+                        {
+                            "type": "web_search_result",
+                            "url": "https://example.com/paris",
+                            "title": "Paris weather",
+                            "encrypted_content": encrypted_content,
+                        }
+                    ],
+                },
+                {
+                    "type": "bash_code_execution_tool_result",
+                    "tool_use_id": "srvtoolu_2",
+                    "content": {"type": "bash_code_execution_result", "stdout": stdout, "stderr": "", "return_code": 0},
+                },
+                {
+                    "type": "text_editor_code_execution_tool_result",
+                    "tool_use_id": "srvtoolu_3",
+                    "content": {"type": "text_editor_code_execution_view_result", "content": "notes"},
+                },
+                {"type": "tool_use", "id": "toolu_1", "name": "lookup", "input": {}},
+            ],
+        },
+        {
+            "role": "user",
+            "content": [
+                {
+                    "type": "tool_result",
+                    "tool_use_id": "toolu_1",
+                    "content": [
+                        {
+                            "type": "search_result",
+                            "source": "https://example.com",
+                            "title": "t",
+                            "content": [{"type": "text", "text": "18C"}],
+                        }
+                    ],
+                }
+            ],
+        },
+    ]
+
+
+@pytest.mark.asyncio
+async def test_local_token_count_estimates_server_tool_history_without_counting_ciphertext(monkeypatch):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", None)
+
+    async def count(stdout: str, encrypted_content: str) -> int:
+        result = await token_counter(
+            request=TokenCountRequest(model="gpt-4o", messages=_server_tool_history(stdout, encrypted_content))
+        )
+        return result.total_tokens
+
+    baseline = await count("18C", "RW5jcnlwdGVk")
+
+    assert baseline > 0
+    assert await count("18C", "RW5jcnlwdGVk" * 2000) == baseline
+    assert await count("18C and sunny for the rest of the week", "RW5jcnlwdGVk") > baseline
+
+
 def _gemini_router() -> Router:
     return Router(
         model_list=[

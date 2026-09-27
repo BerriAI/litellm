@@ -28,6 +28,7 @@ from litellm import token_counter as token_counter_old
 import litellm.constants
 from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 from litellm.litellm_core_utils.asyncify import asyncify
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.litellm_core_utils.token_counter import (
     _encoding_count,
     _get_exact_count_function,
@@ -35,6 +36,7 @@ from litellm.litellm_core_utils.token_counter import (
     _get_tiktoken_count_function,
     calculate_img_tokens,
     high_detail_image_token_upper_bound,
+    messages_with_uncountable_blocks_as_text,
     offload_token_count,
 )
 from litellm.litellm_core_utils.token_counter import token_counter as token_counter_new
@@ -1561,3 +1563,67 @@ def test_token_counter_uses_the_tokenizer_of_each_model_family_and_of_a_custom_t
         "custom": expected["Xenova/llama-3-tokenizer"],
         "requested": sorted(served),
     }
+
+
+class _Unprintable:
+    def __str__(self) -> str:
+        raise AssertionError("opaque block values must be dropped before they are serialized")
+
+
+def test_uncountable_block_drops_opaque_values_without_serializing_them():
+    (message,) = messages_with_uncountable_blocks_as_text(
+        [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "web_search_tool_result",
+                        "tool_use_id": _Unprintable(),
+                        "content": [{"type": "web_search_result", "title": "Paris", "encrypted_content": _Unprintable()}],
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert message["content"] == [
+        {
+            "type": "text",
+            "text": '{"type": "web_search_tool_result", "content": [{"type": "web_search_result", "title": "Paris"}]}',
+        }
+    ]
+
+
+def test_uncountable_block_nesting_past_the_depth_limit_is_truncated():
+    nested: object = "leaf"
+    for _ in range(DEFAULT_MAX_RECURSE_DEPTH + 5):
+        nested = {"child": nested}
+
+    (message,) = messages_with_uncountable_blocks_as_text(
+        [{"role": "assistant", "content": [{"type": "server_tool_use", "input": nested}]}]
+    )
+
+    text = message["content"][0]["text"]
+    assert text.endswith('"<truncated>"' + "}" * (DEFAULT_MAX_RECURSE_DEPTH + 1))
+    assert "leaf" not in text
+
+
+def test_uncountable_block_elides_inline_base64_data_but_keeps_plain_text_data():
+    (message,) = messages_with_uncountable_blocks_as_text(
+        [
+            {
+                "role": "assistant",
+                "content": [
+                    {
+                        "type": "code_execution_tool_result",
+                        "content": {"data": "iVBORw0KGgo" * 20, "stdout": "ok", "notes": {"data": "two words"}},
+                    }
+                ],
+            }
+        ]
+    )
+
+    assert message["content"][0]["text"] == (
+        '{"type": "code_execution_tool_result", '
+        '"content": {"data": "<binary>", "stdout": "ok", "notes": {"data": "two words"}}}'
+    )

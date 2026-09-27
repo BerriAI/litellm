@@ -38,6 +38,7 @@ IGNORE_FUNCTIONS = [
     "_mask_sequence",  # max depth set.
     "_delete_nested_value_custom",  # max depth set (bounded by number of path segments).
     "filter_exceptions_from_params",  # max depth set (default 20) to prevent infinite recursion.
+    "_without_opaque_keys",  # max depth set (DEFAULT_MAX_RECURSE_DEPTH).
     "__getattr__",  # lazy loading pattern in litellm/__init__.py with proper caching to prevent infinite recursion.
     "_validate_inheritance_chain",  # max depth set (default 100) to prevent infinite recursion in policy inheritance validation.
     "_basic_json_schema_validate",  # max depth set.

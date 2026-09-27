@@ -2,6 +2,8 @@
 ## Helper utilities for token counting
 import base64
 import io
+import json
+import re
 import struct
 from collections.abc import Awaitable, Callable, Iterable, Mapping, Sequence
 from typing import Final, Literal, cast
@@ -19,6 +21,7 @@ from litellm.constants import (
     DEFAULT_IMAGE_HEIGHT,
     DEFAULT_IMAGE_TOKEN_COUNT,
     DEFAULT_IMAGE_WIDTH,
+    DEFAULT_MAX_RECURSE_DEPTH,
     MAX_IMAGE_URL_DOWNLOAD_SIZE_MB,
     MAX_LONG_SIDE_FOR_IMAGE_HIGH_RES,
     MAX_SHORT_SIDE_FOR_IMAGE_HIGH_RES,
@@ -866,6 +869,20 @@ def _count_anthropic_content(
     return tokens
 
 
+LOCALLY_COUNTABLE_BLOCK_TYPES: Final = (
+    "text",
+    "image_url",
+    "image",
+    "document",
+    "file",
+    "tool_use",
+    "tool_result",
+    "thinking",
+    "redacted_thinking",
+    "tool_reference",
+)
+
+
 def _count_content_list(
     count_function: TokenCounterFunction,
     content_list: str
@@ -938,9 +955,7 @@ def _count_content_list(
                 content_type = c.get("type", type(c).__name__) if isinstance(c, dict) else type(c).__name__
                 raise ValueError(
                     f"Invalid content item type: {content_type}. "
-                    f"Expected str or dict with 'type' field "
-                    f"(text, image_url, image, document, file, tool_use, tool_result, thinking, redacted_thinking, "
-                    f"tool_reference)."
+                    f"Expected str or dict with 'type' field ({', '.join(LOCALLY_COUNTABLE_BLOCK_TYPES)})."
                 )
         return num_tokens
     except Exception as e:
@@ -1033,3 +1048,54 @@ def _format_type(props, indent):
     else:
         # This is a guess, as an empty string doesn't yield the expected token count
         return "any"
+
+
+_INLINE_DATA_BASE64_RE: Final = re.compile(r"[A-Za-z0-9+/=_-]{16,}")
+
+
+_OPAQUE_BLOCK_KEYS: Final = frozenset(
+    {"id", "tool_use_id", "cache_control", "signature", "encrypted_content", "encrypted_index"}
+)
+
+
+def _countable_value(key: object, value: object, depth: int) -> object:
+    if key == "data" and isinstance(value, str) and _INLINE_DATA_BASE64_RE.fullmatch(value):
+        return "<binary>"
+    return _without_opaque_keys(value, depth + 1)
+
+
+def _without_opaque_keys(value: object, depth: int = 0) -> object:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return "<truncated>"
+    if isinstance(value, Mapping):
+        return {  # mutable-ok: json.dumps input
+            key: _countable_value(key, item, depth) for key, item in value.items() if key not in _OPAQUE_BLOCK_KEYS
+        }
+    if isinstance(value, (list, tuple)):
+        return [_without_opaque_keys(item, depth + 1) for item in value]  # mutable-ok: json.dumps input
+    return value
+
+
+def _countable_leaf_block(block: object) -> object:
+    if not isinstance(block, Mapping) or block.get("type") in LOCALLY_COUNTABLE_BLOCK_TYPES:
+        return block
+    return {"type": "text", "text": json.dumps(_without_opaque_keys(block), default=str)}
+
+
+def _countable_block(block: object) -> object:
+    if isinstance(block, Mapping) and block.get("type") == "tool_result" and isinstance(block.get("content"), list):
+        return {**block, "content": [_countable_leaf_block(item) for item in block["content"]]}
+    return _countable_leaf_block(block)
+
+
+def _countable_message(message: object) -> object:
+    if not isinstance(message, Mapping) or not isinstance(message.get("content"), list):
+        return message
+    return {
+        **message,
+        "content": [_countable_block(block) for block in message["content"]],
+    }
+
+
+def messages_with_uncountable_blocks_as_text(messages: Sequence[object]) -> tuple[object, ...]:
+    return tuple(_countable_message(message) for message in messages)
