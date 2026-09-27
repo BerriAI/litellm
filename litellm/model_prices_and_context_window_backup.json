@@ -77910,5 +77910,48 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
+    },
+    "compactifai/glm-5-2": {
+        "input_cost_per_token": 1.1e-06,
+        "litellm_provider": "compactifai",
+        "mode": "chat",
+        "output_cost_per_token": 3.5e-06,
+        "reasoning_effort_levels": [
+            "high",
+            "max"
+        ],
+        "source": "https://docs.compactif.ai/pricing/",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true
+    },
+    "compactifai/glm-5-3": {
+        "input_cost_per_token": 1.1e-06,
+        "litellm_provider": "compactifai",
+        "mode": "chat",
+        "output_cost_per_token": 3.5e-06,
+        "reasoning_effort_levels": [
+            "low",
+            "high",
+            "max"
+        ],
+        "source": "https://docs.compactif.ai/pricing/",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true
+    },
+    "compactifai/quasar-438b": {
+        "input_cost_per_token": 6e-07,
+        "litellm_provider": "compactifai",
+        "mode": "chat",
+        "output_cost_per_token": 1.8e-06,
+        "reasoning_effort_levels": [
+            "high",
+            "max"
+        ],
+        "source": "https://docs.compactif.ai/pricing/",
+        "supports_function_calling": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true
     }
 }
