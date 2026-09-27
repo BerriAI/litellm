@@ -4171,3 +4171,116 @@ async def test_pii_masking_replays_a_byte_identical_prefix_across_turns(mock_use
     assert json.dumps(later[: len(earlier)], sort_keys=True) == json.dumps(earlier, sort_keys=True)
     assert earlier[1]["content"] == "My name is <PERSON> and my colleague is <PERSON>."
     assert later[3]["content"] == "Now compare against <PERSON> too."
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("surface", ["mcp_arguments", "mcp_result", "llm_output"])
+@pytest.mark.parametrize("action", [PiiAction.MASK, PiiAction.BLOCK])
+@pytest.mark.parametrize("has_tokens", [False, True])
+async def test_initialized_presidio_scans_selected_surface(surface: str, action: PiiAction, has_tokens: bool) -> None:
+    from mcp.types import CallToolResult, TextContent
+
+    from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import MCPGuardrailTranslationHandler
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+
+    params: Final = LitellmParams(
+        guardrail="presidio",
+        mode="post_mcp_call" if surface == "mcp_result" else "pre_mcp_call",
+        default_on=True,
+        output_parse_pii=True,
+        presidio_filter_scope="output" if surface == "llm_output" else "input",
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+        pii_entities_config={"CREDIT_CARD": action},
+    )
+    callback: Final = initialize_presidio(params, {"guardrail_name": "selected_surface"})[0]
+    data: Final = {
+        "metadata": {"pii_tokens": {"<PERSON_1>": "Somebody"} if has_tokens else {}},
+        "mcp_tool_name": "echo",
+        "mcp_arguments": {"text": CHUNK_MARKER_ONE},
+        "guardrail_to_apply": callback,
+    }
+    result: Final = CallToolResult(content=[TextContent(type="text", text=CHUNK_MARKER_ONE)])
+    answer: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content=CHUNK_MARKER_ONE))])
+    analyzed: Final = []
+    anonymized: Final = []
+
+    async def dispatch() -> None:
+        if surface == "mcp_arguments":
+            await MCPGuardrailTranslationHandler().process_input_messages(data, callback)
+        elif surface == "mcp_result":
+            await MCPGuardrailTranslationHandler().process_output_response(result, callback, request_data=data)
+        else:
+            await UnifiedLLMGuardrails().async_post_call_success_hook(
+                data, UserAPIKeyAuth(request_route="/v1/chat/completions"), answer
+            )
+
+    with patch.object(
+        callback,
+        "_get_session_iterator",
+        _make_marker_session_iterator(analyzed, recorded_anonymize_payloads=anonymized),
+    ):
+        if action == PiiAction.BLOCK:
+            with pytest.raises(BlockedPiiEntityError):
+                await dispatch()
+            assert anonymized == []
+            assert data["mcp_arguments"]["text"] == CHUNK_MARKER_ONE
+            assert result.content[0].text == CHUNK_MARKER_ONE
+            assert answer.choices[0].message.content == CHUNK_MARKER_ONE
+        else:
+            await dispatch()
+            masked: Final = (
+                data["mcp_arguments"]["text"]
+                if surface == "mcp_arguments"
+                else result.content[0].text
+                if surface == "mcp_result"
+                else answer.choices[0].message.content
+            )
+            assert CHUNK_MARKER_ONE not in masked
+            assert "<CREDIT_CARD" in masked
+            assert len(anonymized) == 1
+    assert len(analyzed) == 1
+    assert analyzed[0]["text"] == CHUNK_MARKER_ONE
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("has_tokens", [False, True])
+async def test_restoration_never_contacts_presidio(has_tokens: bool) -> None:
+    from litellm.proxy.guardrails.guardrail_initializers import initialize_presidio
+
+    params: Final = LitellmParams(
+        guardrail="presidio",
+        mode="pre_mcp_call",
+        output_parse_pii=True,
+        presidio_analyzer_api_base="http://test-analyzer/",
+        presidio_anonymizer_api_base="http://test-anonymizer/",
+    )
+    callback: Final = initialize_presidio(params, {"guardrail_name": "restore_only"})[1]
+    analyzed: Final = []
+    data: Final = {"metadata": {"pii_tokens": {"<CREDIT_CARD_1>": CHUNK_MARKER_ONE} if has_tokens else {}}}
+    with patch.object(callback, "_get_session_iterator", _make_marker_session_iterator(analyzed)):
+        result: Final = await callback.apply_guardrail(
+            inputs={"texts": ["<CREDIT_CARD_1>", ""]}, request_data=data, input_type="response"
+        )
+    assert result["texts"] == [CHUNK_MARKER_ONE if has_tokens else "<CREDIT_CARD_1>", ""]
+    assert analyzed == []
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("event_hook", ["pre_call", ["pre_call"], ["pre_call", "post_call"]])
+async def test_standalone_restoration_preserves_post_call_selection(event_hook: str | list[str]) -> None:
+    from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import UnifiedLLMGuardrails
+
+    callback: Final = _OPTIONAL_PresidioPIIMasking(
+        event_hook=event_hook,
+        default_on=True,
+        output_parse_pii=True,
+        mock_testing=True,
+    )
+    response: Final = ModelResponse(choices=[Choices(message=Message(role="assistant", content="<PERSON_1>"))])
+    data: Final = {"metadata": {"pii_tokens": {"<PERSON_1>": "Jane"}}, "guardrail_to_apply": callback}
+    await UnifiedLLMGuardrails().async_post_call_success_hook(
+        data, UserAPIKeyAuth(request_route="/v1/chat/completions"), response
+    )
+    assert response.choices[0].message.content == "Jane"
