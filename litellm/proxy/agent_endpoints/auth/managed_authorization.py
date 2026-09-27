@@ -247,11 +247,35 @@ async def prepare_agent_invocation(
         and (effective.identity_managed or effective.litellm_budget_table is not None)
     ):
         auth.billing_agent_policy = effective
-    raw_fee: Final = (effective.litellm_params or MappingProxyType({})).get("cost_per_query", 0.0) if billable else 0.0
+    pricing: Final = effective.litellm_params or MappingProxyType({})
+    fixed_fee: Final = pricing.get("cost_per_query")
+    billing_policy: Final = auth.billing_agent_policy
+    bounded: Final = (
+        billing_policy is not None
+        and billing_policy.litellm_budget_table is not None
+        and billing_policy.litellm_budget_table.max_budget is not None
+    )
     try:
-        fee: Final = _INVOCATION_COST.validate_python(raw_fee)
+        fee: Final = _INVOCATION_COST.validate_python(fixed_fee if billable and fixed_fee is not None else 0.0)
+        unbounded_token_price: Final = (
+            billable
+            and bounded
+            and fixed_fee is None
+            and any(
+                _INVOCATION_COST.validate_python(pricing[field]) > 0
+                for field in ("input_cost_per_token", "output_cost_per_token")
+                if pricing.get(field) is not None
+            )
+        )
     except ValidationError:
         raise_identity_failure(
             AgentIdentityFailure(code="policy_unavailable", message="Agent invocation price is invalid")
+        )
+    if unbounded_token_price:
+        raise_identity_failure(
+            AgentIdentityFailure(
+                code="policy_unavailable",
+                message="Budgeted token-priced agent invocations require a fixed cost_per_query before execution",
+            )
         )
     auth.agent_invocation_cost = fee
