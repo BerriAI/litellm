@@ -392,3 +392,61 @@ class TestShortCircuitEntryPoint:
         assert result is not None
         text_block = next(b for b in result["content"] if b["type"] == "text")
         assert text_block["text"] == "results"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        "raw_prompt,expected_query",
+        [
+            (
+                "Perform a web search for the query: LiteLLM latest version release",
+                "LiteLLM latest version release",
+            ),
+            (
+                'Perform a web search for the query: "who is the maintainer of litellm"',
+                "who is the maintainer of litellm",
+            ),
+            (
+                "   perform a web search for the query:   fastapi SSE streaming   ",
+                "fastapi SSE streaming",
+            ),
+            (
+                "Search for the query: python 3.13 changelog",
+                "python 3.13 changelog",
+            ),
+            (
+                "Search for Claude Code releases",
+                "Search for Claude Code releases",
+            ),
+        ],
+    )
+    async def test_short_circuits_strips_claude_code_instructional_prefix(
+        self, raw_prompt, expected_query
+    ):
+        """Claude Code wraps standalone searches in 'Perform a web search for the query: ...'.
+        The short-circuit path must extract only the actual query terms so search backends
+        receive the intended query rather than instructional prefix words.
+        """
+        logger = WebSearchInterceptionLogger(enabled_providers=["github_copilot"])
+
+        with patch.object(
+            logger, "_execute_search", new_callable=AsyncMock
+        ) as mock_search:
+            mock_search.return_value = ("Results", None)
+
+            result = await logger.try_short_circuit_search(
+                model="github_copilot/claude-sonnet-4",
+                messages=[{"role": "user", "content": raw_prompt}],
+                tools=[
+                    {"type": "web_search_20250305", "name": "web_search", "max_uses": 8}
+                ],
+                custom_llm_provider="github_copilot",
+            )
+
+        assert result is not None
+        mock_search.assert_called_once_with(expected_query)
+        tool_use_block = next(
+            (b for b in result["content"] if b["type"] == "server_tool_use"), None
+        )
+        if tool_use_block is not None:
+            assert tool_use_block["input"]["query"] == expected_query
+

@@ -8,6 +8,7 @@ server-side using litellm router's search tools.
 
 import asyncio
 import math
+import re
 import uuid
 from collections.abc import AsyncIterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -91,6 +92,11 @@ WEBSEARCH_EMIT_NATIVE_BLOCKS_KEY: Final = "_websearch_interception_emit_native_b
 WEBSEARCH_NATIVE_BLOCKS_METADATA_KEY: Final = "websearch_native_blocks"
 
 _RESPONSE_CONTENT_FIELD: Final = "content"
+
+_CLAUDE_CODE_SEARCH_PREFIX_RE: Final = re.compile(
+    r"^\s*(?:Perform\s+a\s+)?(?:web\s+)?search\s+for\s+(?:the\s+)?query:\s*",
+    re.IGNORECASE,
+)
 
 _ResponseT: Final = TypeVar("_ResponseT")
 
@@ -288,6 +294,20 @@ class WebSearchInterceptionLogger(CustomLogger):
         """
         return validated_max_agentic_loops(max_agentic_loops, field="websearch_interception_params.max_agentic_loops")
 
+    @classmethod
+    def _extract_short_circuit_query(cls, raw_message: str) -> str:
+        """Extract the intended search terms from a short-circuit user message.
+
+        Clients such as Claude Code format standalone WebSearch requests with an
+        instructional wrapper (e.g. 'Perform a web search for the query: <query>').
+        Strip known instructional prefixes so the search backend receives only
+        the intended search terms rather than query wrapper keywords.
+        """
+        cleaned = _CLAUDE_CODE_SEARCH_PREFIX_RE.sub("", raw_message).strip()
+        if (cleaned.startswith('"') and cleaned.endswith('"')) or (cleaned.startswith("'") and cleaned.endswith("'")):
+            cleaned = cleaned[1:-1].strip()
+        return cleaned if cleaned else raw_message.strip()
+
     async def try_short_circuit_search(
         self,
         model: str,
@@ -358,7 +378,11 @@ class WebSearchInterceptionLogger(CustomLogger):
             get_last_user_message,
         )
 
-        query: Final = get_last_user_message(cast(list[AllMessageValues], messages))
+        raw_query: Final = get_last_user_message(cast(list[AllMessageValues], messages))
+        if not raw_query:
+            return None
+
+        query: Final = self._extract_short_circuit_query(raw_query)
         if not query:
             return None
 
