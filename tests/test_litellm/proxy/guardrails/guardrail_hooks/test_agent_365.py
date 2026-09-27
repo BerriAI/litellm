@@ -244,8 +244,30 @@ class TestInitializeGuardrail:
         assert set(fields) == {"tenant_id", "client_id", "client_secret", "unreachable_fallback"}
         assert fields["unreachable_fallback"]["default_value"] == "fail_closed"
 
-    def test_config_model_has_no_endpoint_or_identity_overrides(self):
-        assert not {"api_base", "resource_app_id", "agent_id"} & set(Agent365GuardrailConfigModel.model_fields)
+    @pytest.mark.asyncio
+    async def test_stale_yaml_overrides_are_ignored_and_logged(self, caplog):
+        params: Final = LitellmParams(
+            guardrail="agent_365",
+            mode="pre_mcp_call",
+            tenant_id="tenant-abc",
+            client_id="client-xyz",
+            client_secret="secret-123",
+            default_on=True,
+            api_base="https://agent365.example.test",
+            resource_app_id="00000000-0000-0000-0000-000000000000",
+            agent_id="yaml-agent",
+        )
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            guardrail: Final = initialize_guardrail(params, {"guardrail_name": "a365-stale"})
+        assert "ignoring api_base, resource_app_id, agent_id" in caplog.text
+        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        guardrail.async_handler = handler
+        await _run(guardrail, _mcp_data())
+        token_call, evaluate_call = handler.calls
+        assert token_call.url == TOKEN_URL
+        assert token_call.data["scope"] == f"{AGENT_365_PROD_RESOURCE_APP_ID}/ThreatProtection.Evaluate.All"
+        assert evaluate_call.url == EVALUATE_URL
+        assert evaluate_call.json["agentId"] == "my-agent-key"
 
     def test_explicit_params_win(self, monkeypatch):
         monkeypatch.setenv("AGENT365_TENANT_ID", "env-tenant")

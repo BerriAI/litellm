@@ -1,5 +1,6 @@
 from typing import TYPE_CHECKING, Final
 
+from litellm._logging import verbose_proxy_logger
 from litellm.types.guardrails import SupportedGuardrailIntegrations
 
 from .agent_365 import Agent365Guardrail
@@ -30,6 +31,24 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     guardrail_name: Final = guardrail.get("guardrail_name")
     if not guardrail_name:
         raise ValueError("Microsoft Agent 365: guardrail_name is required")
+
+    extras: Final = litellm_params.model_extra or {}
+    ignored_overrides: Final = tuple(
+        key
+        for key, value in (
+            ("api_base", litellm_params.api_base),
+            ("resource_app_id", extras.get("resource_app_id")),
+            ("agent_id", extras.get("agent_id")),
+        )
+        if value is not None
+    )
+    if ignored_overrides:
+        verbose_proxy_logger.warning(
+            "Microsoft Agent 365 (%s): ignoring %s; evaluations always go to the production Agent 365 endpoint "
+            "and the agent identity is the caller's key alias",
+            guardrail_name,
+            ", ".join(ignored_overrides),
+        )
 
     agent_365_guardrail: Final = Agent365Guardrail(
         guardrail_name=guardrail_name,
