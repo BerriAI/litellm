@@ -612,7 +612,9 @@ def test_transform_response_recovers_empty_output_from_raw_sse():
 
 @pytest.mark.parametrize("nested_citation", [False, True])
 @pytest.mark.parametrize("recovery_path", ["raw_sse", "bridge"])
-def test_transform_response_recovers_text_and_citation_offsets(nested_citation, recovery_path):
+def test_transform_response_recovers_text_and_citation_offsets(
+    nested_citation: bool, recovery_path: Literal["raw_sse", "bridge"]
+) -> None:
     from copy import deepcopy
 
     from litellm.completion_extras.litellm_responses_transformation.handler import (
@@ -622,12 +624,12 @@ def test_transform_response_recovers_text_and_citation_offsets(nested_citation, 
         LiteLLMResponsesTransformationHandler,
     )
 
-    handler = LiteLLMResponsesTransformationHandler()
-    citation = {"start_index": 0, "end_index": 5, "title": "Source", "url": "https://example.com"}
-    annotation = (
+    handler: Final = LiteLLMResponsesTransformationHandler()
+    citation: Final = {"start_index": 0, "end_index": 5, "title": "Source", "url": "https://example.com"}
+    annotation: Final = (
         {"type": "url_citation", "url_citation": citation} if nested_citation else {"type": "url_citation", **citation}
     )
-    events = (
+    events: Final = (
         {
             "type": "response.output_text.done",
             "output_index": 0,
@@ -645,18 +647,18 @@ def test_transform_response_recovers_text_and_citation_offsets(nested_citation, 
             "annotations": [annotation],
         },
     )
-    original_events = deepcopy(events)
-    raw_sse = "\n".join(f"data: {json.dumps(event)}" for event in events)
-    raw_response = (
+    original_events: Final = deepcopy(events)
+    raw_sse: Final = "\n".join(f"data: {json.dumps(event)}" for event in events)
+    raw_response: Final = (
         ResponsesToCompletionBridgeHandler._coerce_response_object(_make_empty_responses_api_response(), None, events)
         if recovery_path == "bridge"
         else _make_empty_responses_api_response()
     )
-    model_response = _make_empty_model_response()
-    logging_obj = Mock()
+    model_response: Final = _make_empty_model_response()
+    logging_obj: Final = Mock()
     logging_obj.model_call_details = {"original_response": raw_sse if recovery_path == "raw_sse" else None}
 
-    result = handler.transform_response(
+    result: Final = handler.transform_response(
         model="gpt-5.4",
         raw_response=raw_response,
         model_response=model_response,
@@ -670,8 +672,8 @@ def test_transform_response_recovers_text_and_citation_offsets(nested_citation, 
 
     assert len(result.choices) == 1
     assert result.choices[0].message.content == "Hello, world!"
-    shifted_citation = {**citation, "start_index": 7, "end_index": 12}
-    shifted_annotation = (
+    shifted_citation: Final = {**citation, "start_index": 7, "end_index": 12}
+    shifted_annotation: Final = (
         {"type": "url_citation", "url_citation": shifted_citation}
         if nested_citation
         else {"type": "url_citation", **shifted_citation}

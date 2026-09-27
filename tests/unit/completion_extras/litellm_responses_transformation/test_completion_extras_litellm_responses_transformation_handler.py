@@ -1,4 +1,5 @@
 import json
+from collections.abc import Iterator
 from datetime import datetime
 from itertools import chain
 from typing import Final
@@ -350,10 +351,10 @@ async def test_collect_response_from_async_stream_recovers_output_items(recovera
     ],
     ids=["validated-terminal", "partial-terminal"],
 )
-def test_recovery_accepts_sdk_events_and_dictionary_terminals(terminal_payload):
-    event = ResponseOutputItemDoneEvent(**_output_item_done_event(), sequence_number=1)
+def test_recovery_accepts_sdk_events_and_dictionary_terminals(terminal_payload: dict[str, JsonValue]) -> None:
+    event: Final = ResponseOutputItemDoneEvent(**_output_item_done_event(), sequence_number=1)
 
-    response = ResponsesToCompletionBridgeHandler._coerce_response_object(
+    response: Final = ResponsesToCompletionBridgeHandler._coerce_response_object(
         terminal_payload,
         {"headers": {"x-request-id": "req_test"}},
         (object(), event),
@@ -364,23 +365,23 @@ def test_recovery_accepts_sdk_events_and_dictionary_terminals(terminal_payload):
     assert terminal_payload["output"] == []
 
 
-def test_recovery_preserves_complete_response_without_consuming_events():
-    terminal = ResponsesAPIResponse.model_construct(output=[_output_item_done_event()["item"]])
+def test_recovery_preserves_complete_response_without_consuming_events() -> None:
+    terminal: Final = ResponsesAPIResponse.model_construct(output=[_output_item_done_event()["item"]])
 
-    def unavailable_events():
+    def unavailable_events() -> Iterator[object]:
         raise AssertionError("Complete terminal output must bypass event recovery")
         yield
 
-    response = ResponsesToCompletionBridgeHandler._coerce_response_object(terminal, None, unavailable_events())
+    response: Final = ResponsesToCompletionBridgeHandler._coerce_response_object(terminal, None, unavailable_events())
 
     assert response is terminal
     assert response.output == [_output_item_done_event()["item"]]
 
 
-def test_recovery_keeps_empty_terminal_when_no_output_can_be_recovered():
-    terminal = _empty_responses_response()
+def test_recovery_keeps_empty_terminal_when_no_output_can_be_recovered() -> None:
+    terminal: Final = _empty_responses_response()
 
-    response = ResponsesToCompletionBridgeHandler._coerce_response_object(terminal, None, (object(),))
+    response: Final = ResponsesToCompletionBridgeHandler._coerce_response_object(terminal, None, (object(),))
 
     assert response is terminal
     assert response.output == []
