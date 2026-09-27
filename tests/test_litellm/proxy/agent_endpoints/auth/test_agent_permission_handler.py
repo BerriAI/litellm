@@ -914,17 +914,13 @@ async def test_delegated_team_selection_preserves_the_grant_source(
 ) -> None:
     from fastapi import HTTPException
 
-    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
     from litellm.proxy.agent_endpoints.auth import agent_permission_handler as permissions
 
-    sources: Final = [UserAPIKeyAuth(user_id="human"), *(UserAPIKeyAuth(team_id=team) for team in teams)]
-    monkeypatch.setattr(MCPRequestHandler, "reload_admitted_user", AsyncMock(return_value=sources[0]))
-    monkeypatch.setattr(MCPRequestHandler, "admitted_subject_sources", AsyncMock(return_value=sources))
-
-    async def grants(source: UserAPIKeyAuth) -> AgentAccess:
-        return RestrictedAgentAccess(frozenset({"actor"}) if source.team_id is not None or direct else frozenset())
-
-    monkeypatch.setattr(permissions, "_strict_agent_access", grants)
+    sources: Final = [
+        (None, frozenset({"actor"}) if direct else frozenset()),
+        *((team, frozenset({"actor"})) for team in teams),
+    ]
+    monkeypatch.setattr(permissions, "_verified_human_agent_sources", AsyncMock(return_value=sources))
     if expected == "denied":
         with pytest.raises(HTTPException) as error:
             await permissions.resolve_delegated_agent_team("human", "actor", selected, explicit_team=explicit)
@@ -941,18 +937,12 @@ async def test_delegated_team_selection_preserves_the_grant_source(
 async def test_delegated_target_grants_do_not_borrow_another_teams_authority(
     monkeypatch: pytest.MonkeyPatch, team_id: str | None, expected: set[str]
 ) -> None:
-    from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
+    from litellm.proxy.agent_endpoints.auth import agent_permission_handler as permissions
     from litellm.types.agents import AgentResponse
     from litellm.types.proxy.agent_identity import ManagedAgentContext
 
-    sources: Final = [UserAPIKeyAuth(user_id="human"), UserAPIKeyAuth(team_id="a"), UserAPIKeyAuth(team_id="b")]
-    monkeypatch.setattr(MCPRequestHandler, "reload_admitted_user", AsyncMock(return_value=sources[0]))
-    monkeypatch.setattr(MCPRequestHandler, "admitted_subject_sources", AsyncMock(return_value=sources))
-    monkeypatch.setattr(
-        AgentRequestHandler,
-        "resolve_key_team_agent_access",
-        AsyncMock(side_effect=[RestrictedAgentAccess(frozenset({name})) for name in ("direct", "a-only", "b-only")]),
-    )
+    sources: Final = [(None, frozenset({"direct"})), ("a", frozenset({"a-only"})), ("b", frozenset({"b-only"}))]
+    monkeypatch.setattr(permissions, "_verified_human_agent_sources", AsyncMock(return_value=sources))
     auth: Final = UserAPIKeyAuth(agent_id="actor", team_id=team_id)
     auth.managed_agent_context = ManagedAgentContext(agent_id="actor", mode="delegated", user_id="human")
     auth.managed_agent_policy = AgentResponse(
