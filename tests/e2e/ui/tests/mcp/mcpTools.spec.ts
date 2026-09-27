@@ -42,7 +42,7 @@ test.describe("MCP Tools", () => {
 
     // Non-empty would still pass if the proxy returned some other server's tools.
     await expect(toolCard(toolList, TOOL_NAME)).toBeVisible();
-    await expect(toolCard(toolList, "ask_question")).toBeVisible();
+    await expect(toolCard(toolList, "ask_wiki_question")).toBeVisible();
     await expect(toolCard(toolList, "read_wiki_contents")).toBeVisible();
 
     // No other tool's name or description contains this string, so exactly one card survives.
