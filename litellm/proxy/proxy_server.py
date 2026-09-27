@@ -3780,7 +3780,7 @@ async def _read_update_cache_values(keys: Sequence[str], parent_otel_span: Span 
         return {}
     try:
         values: Final = await user_api_key_cache.async_batch_get_cache(
-            keys=list(keys), parent_otel_span=parent_otel_span
+            keys=list(keys), parent_otel_span=parent_otel_span, throttle_redis=False
         )
     except Exception as e:
         verbose_proxy_logger.warning(

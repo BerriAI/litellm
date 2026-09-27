@@ -8,6 +8,7 @@ from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 
+import litellm
 import litellm.proxy.proxy_server as ps
 from litellm.caching.redis_cache import RedisCache
 from litellm.proxy._types import UserAPIKeyAuth
@@ -674,3 +675,78 @@ async def test_post_call_lifecycle_reads_one_mget_and_writes_one_pipeline_around
     assert [round(entry["applied_adjustment"], 6) for entry in reservation["entries"]] == [0.1] * len(RESERVED_KEYS)
     assert reservation["finalized"] is True
     assert active_spend_counter_batch() is None
+
+
+def _reservation_fixture(monkeypatch, redis: CountingRedis) -> None:
+    redis.default_ttl = 3600
+    monkeypatch.setattr(ps, "spend_counter_cache", _spend_counter_cache(redis))
+    monkeypatch.setattr(ps, "prisma_client", None)
+    monkeypatch.setattr("litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost", lambda **_: 0.5)
+
+
+async def _reserve(redis: CountingRedis, token: UserAPIKeyAuth, team_max_budget: float) -> dict | None:
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy._types import LiteLLM_TeamTableCachedObj
+    from litellm.proxy.spend_tracking.budget_reservation import reserve_budget_for_request
+
+    with spend_counter_batch_scope(redis, counter_keys=admission_counter_keys(token, end_user_id=None)):
+        return await reserve_budget_for_request(
+            request_body={"model": "gpt-4o-mini", "messages": [{"role": "user", "content": "hi"}]},
+            route="/chat/completions",
+            llm_router=None,
+            valid_token=token,
+            team_object=LiteLLM_TeamTableCachedObj(team_id="team", max_budget=team_max_budget),
+            user_object=None,
+            prisma_client=None,
+            user_api_key_cache=DualCache(),
+            proxy_logging_obj=MagicMock(),
+        )
+
+
+@pytest.mark.asyncio
+async def test_a_rejected_counter_is_charged_alone_so_the_counters_after_it_are_never_touched(monkeypatch):
+    """Only counters the admission MGET says still fit the estimate share the reservation pipeline; a counter that
+    does not is charged on its own first, so its rejection never inflates a sibling counter, not even briefly."""
+    redis = CountingRedis({"spend:key:hashed": 10.0, "spend:team:team": 2.0})
+    _reservation_fixture(monkeypatch, redis)
+    token = UserAPIKeyAuth(token="hashed", team_id="team", max_budget=10.0)
+
+    with pytest.raises(litellm.BudgetExceededError):
+        await _reserve(redis, token, team_max_budget=20.0)
+
+    writes = [c for c in redis.commands if not c.startswith("MGET")]
+    assert writes and all("spend:team:team" not in c for c in writes), redis.commands
+    assert redis.store == {"spend:key:hashed": 10.0, "spend:team:team": 2.0}
+
+
+@pytest.mark.asyncio
+async def test_a_resized_reservation_is_carried_at_its_resized_cost_to_the_counters_charged_after_it(monkeypatch):
+    redis = CountingRedis({"spend:key:hashed": 9.8, "spend:team:team": 2.0})
+    _reservation_fixture(monkeypatch, redis)
+    token = UserAPIKeyAuth(token="hashed", team_id="team", max_budget=10.0)
+
+    reservation = await _reserve(redis, token, team_max_budget=2.1)
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == pytest.approx(0.1)
+    assert redis.store["spend:key:hashed"] == pytest.approx(9.9)
+    assert redis.store["spend:team:team"] == pytest.approx(2.1)
+
+
+@pytest.mark.asyncio
+async def test_update_cache_reads_an_object_redis_gained_right_after_a_batch_read_missed_it(monkeypatch):
+    """DualCache throttles repeated batch reads of a key that just missed; the per-object GET update_cache used to
+    issue never did, so its batched read must not either."""
+    from litellm.caching.dual_cache import DualCache
+
+    redis = CountingRedis()
+    cache = DualCache(redis_cache=redis)
+    monkeypatch.setattr(ps, "user_api_key_cache", cache)
+    assert await cache.async_batch_get_cache(keys=["team_id:team"]) == [None]
+    redis.store["team_id:team"] = {"spend": 1.0}
+    assert await cache.async_batch_get_cache(keys=["team_id:team"]) == [None]
+
+    assert await ps._read_update_cache_values(keys=["team_id:team"], parent_otel_span=None) == {
+        "team_id:team": {"spend": 1.0}
+    }
+    assert redis.commands.count("MGET team_id:team") == 2

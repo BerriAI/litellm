@@ -312,7 +312,9 @@ class DualCache(BaseCache):
                 else:
                     self.last_redis_batch_access_time[key] = previous_time
 
-    async def _prepare_batch_get(self, keys: list[str], local_only: bool, **kwargs: object) -> PendingBatchRead:
+    async def _prepare_batch_get(
+        self, keys: list[str], local_only: bool, throttle_redis: bool = True, **kwargs: object
+    ) -> PendingBatchRead:
         result: list[object | None] = [None] * len(keys)
         if self.in_memory_cache is not None:
             in_memory_result: Final = await self.in_memory_cache.async_batch_get_cache(keys, **kwargs)
@@ -323,7 +325,10 @@ class DualCache(BaseCache):
         redis_keys: list[str] = []
         previous_access_times: dict[str, float | None] = {}
         if None in result and self.redis_cache is not None and local_only is False:
-            redis_keys, previous_access_times = self._reserve_redis_batch_keys(time.time(), keys, result)
+            if throttle_redis:
+                redis_keys, previous_access_times = self._reserve_redis_batch_keys(time.time(), keys, result)
+            else:
+                redis_keys = [key for key, value in zip(keys, result) if value is None]
         return PendingBatchRead(
             keys=keys, result=result, redis_keys=redis_keys, previous_access_times=previous_access_times
         )
@@ -348,10 +353,13 @@ class DualCache(BaseCache):
         keys: list,
         parent_otel_span: Span | None = None,
         local_only: bool = False,
+        throttle_redis: bool = True,
         **kwargs,
     ):
+        """With ``throttle_redis`` False every key memory cannot serve is read from Redis, exactly as a per-key
+        ``async_get_cache`` would read it, instead of skipping keys that missed within ``redis_batch_cache_expiry``."""
         try:
-            pending: Final = await self._prepare_batch_get(keys, local_only, **kwargs)
+            pending: Final = await self._prepare_batch_get(keys, local_only, throttle_redis, **kwargs)
             # Only hit Redis for keys memory could not serve and enough time has passed since last access.
             if not pending.redis_keys or self.redis_cache is None:
                 return pending.result

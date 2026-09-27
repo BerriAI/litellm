@@ -6120,7 +6120,7 @@ async def test_tag_cache_update_called():
 
             await asyncio.sleep(0.1)
 
-            mock_get_cache.assert_awaited_once_with(keys=["tag:test-tag"], parent_otel_span=None)
+            mock_get_cache.assert_awaited_once_with(keys=["tag:test-tag"], parent_otel_span=None, throttle_redis=False)
             mock_set_cache.assert_awaited_once()
 
             call_args = mock_set_cache.call_args
@@ -6170,7 +6170,7 @@ async def test_tag_cache_update_multiple_tags():
 
             await asyncio.sleep(0.1)
 
-            mock_get_cache.assert_awaited_once_with(keys=["tag:tag1", "tag:tag2"], parent_otel_span=None)
+            mock_get_cache.assert_awaited_once_with(keys=["tag:tag1", "tag:tag2"], parent_otel_span=None, throttle_redis=False)
             mock_set_cache.assert_awaited_once()
 
             call_args = mock_set_cache.call_args
