@@ -21,6 +21,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     Member,
     NewUserRequest,
+    NewUserRequestTeam,
     NewUserResponse,
     ProxyErrorTypes,
     ProxyException,
@@ -824,7 +825,10 @@ async def test_handle_existing_user_by_email_roster_changes_use_existing_user_id
 
 
 @pytest.mark.asyncio
-async def test_handle_existing_user_by_email_syncs_roster_and_dedups_teams(mocker):
+@pytest.mark.parametrize("structured_teams", [False, True])
+async def test_handle_existing_user_by_email_syncs_roster_and_dedups_teams(
+    mocker: MockerFixture, structured_teams: bool
+) -> None:
     """Existing-email upsert must add the user to the team roster via the shared
     team_member_add path and dedup the teams built from repeated SCIM groups.
 
@@ -859,7 +863,11 @@ async def test_handle_existing_user_by_email_syncs_roster_and_dedups_teams(mocke
         user_id="same-id",
         user_email="member@example.com",
         user_alias="Member",
-        teams=["team-a", "team-a", "team-b"],
+        teams=(
+            [NewUserRequestTeam(team_id=team_id) for team_id in ("team-a", "team-a", "team-b")]
+            if structured_teams
+            else ["team-a", "team-a", "team-b"]
+        ),
         metadata={},
         auto_create_key=False,
     )

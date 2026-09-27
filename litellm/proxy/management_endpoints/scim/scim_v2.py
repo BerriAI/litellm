@@ -209,7 +209,9 @@ class UserProvisionerHelpers:
             return None
 
         await _assert_legacy_source_access(auth, "Users", existing_user.user_id)
-        requested_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
+        requested_teams: Final = list(
+            dict.fromkeys(team if isinstance(team, str) else team.team_id for team in new_user_request.teams or [])
+        )
         new_teams: Final = requested_teams if requested_teams else list(existing_user.teams or [])
         await assert_legacy_team_changes_unowned(auth, existing_user.teams or [], new_teams)
 
