@@ -13676,7 +13676,8 @@ async def _try_provider_token_count(
                 code=result.status_code or 500,
             )
         verbose_proxy_logger.warning(
-            "Provider token counting failed (%s): %s. Falling back to local tokenizer.",
+            "Provider token counting for model %s failed (%s): %s. Falling back to local tokenizer.",
+            model_to_use,
             result.status_code,
             result.error_message,
         )

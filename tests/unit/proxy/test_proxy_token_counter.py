@@ -1245,3 +1245,71 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
         proxy_server.token_counter = original_token_counter
+
+
+def _gemini_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gemini-count",
+                "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "fake-gemini-key"},
+            }
+        ]
+    )
+
+_GEMINI_COUNT_TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:countTokens"
+
+
+@pytest.mark.asyncio
+async def test_gemini_count_error_falls_back_to_the_local_estimate(monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "disable_token_counter", False)
+    count_route = respx_mock.post(_GEMINI_COUNT_TOKENS_URL).mock(
+        return_value=httpx.Response(400, json={"error": {"code": 400, "message": "API key not valid"}})
+    )
+
+    response = await token_counter(
+        request=TokenCountRequest(model="gemini-count", messages=[{"role": "user", "content": "hello world"}]),
+        call_endpoint=True,
+    )
+
+    assert count_route.called
+    assert response.error is not True
+    assert response.total_tokens > 0
+    assert response.tokenizer_type != "gemini_api"
+
+
+@pytest.mark.asyncio
+async def test_gemini_count_error_is_returned_when_fallback_is_disabled(monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    respx_mock.post(_GEMINI_COUNT_TOKENS_URL).mock(
+        return_value=httpx.Response(400, json={"error": {"code": 400, "message": "API key not valid"}})
+    )
+
+    with pytest.raises(ProxyException) as exc_info:
+        await token_counter(
+            request=TokenCountRequest(model="gemini-count", messages=[{"role": "user", "content": "hi"}]),
+            call_endpoint=True,
+        )
+
+    assert exc_info.value.code == "400"
+    assert "API key not valid" in exc_info.value.message
+
+
+@pytest.mark.asyncio
+async def test_gemini_non_json_success_body_surfaces_as_bad_gateway_when_fallback_disabled(monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "disable_token_counter", True)
+    respx_mock.post(_GEMINI_COUNT_TOKENS_URL).mock(return_value=httpx.Response(200, content=b"<html>portal</html>"))
+
+    with pytest.raises(ProxyException) as exc_info:
+        await token_counter(
+            request=TokenCountRequest(model="gemini-count", messages=[{"role": "user", "content": "hi"}]),
+            call_endpoint=True,
+        )
+
+    assert exc_info.value.code == "502"
