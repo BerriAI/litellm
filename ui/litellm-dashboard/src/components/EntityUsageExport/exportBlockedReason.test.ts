@@ -37,7 +37,15 @@ describe("getExportBlockedReason", () => {
     const reason = getExportBlockedReason(state({ apiKeyTruncation: { limit: 100, total: 3000 } }));
 
     expect(reason).toMatch(/100 highest-spend keys of 3000/);
+    expect(reason).toMatch(/a per-team export/);
     expect(reason).toMatch(/USAGE_TOP_API_KEYS_LIMIT/);
+  });
+
+  it("names whatever export the caller passes instead of assuming a team", () => {
+    const reason = getExportBlockedReason(state({ apiKeyTruncation: { limit: 100, total: 3000 } }), "the export");
+
+    expect(reason).toMatch(/so the export would under-report/);
+    expect(reason).not.toMatch(/team/);
   });
 
   it("does not block on truncation when a server export will cover every key", () => {
