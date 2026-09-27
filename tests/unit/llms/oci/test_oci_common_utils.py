@@ -7,6 +7,8 @@ that require no real OCI credentials or network calls.
 
 import sys
 import types
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -167,6 +169,7 @@ def test_get_oci_base_url_strips_trailing_action_path(api_base):
     assert get_oci_base_url({}, api_base=api_base) == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
 
 
+@pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
 def test_get_oci_base_url_from_region():
     url = get_oci_base_url({"oci_region": "eu-frankfurt-1"})
     assert url == "https://inference.generativeai.eu-frankfurt-1.oci.oraclecloud.com"
@@ -192,6 +195,7 @@ def test_get_oci_base_url_rejects_unsafe_region(region):
         get_oci_base_url({"oci_region": region})
 
 
+@pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
 def test_get_oci_base_url_empty_region_falls_back_to_default(monkeypatch):
     monkeypatch.delenv("OCI_REGION", raising=False)
     url = get_oci_base_url({"oci_region": ""})
@@ -209,24 +213,29 @@ def test_get_oci_base_url_empty_region_falls_back_to_default(monkeypatch):
         "ap",
     ],
 )
+@pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
 def test_get_oci_base_url_accepts_valid_region(region):
     url = get_oci_base_url({"oci_region": region})
     assert url == f"https://inference.generativeai.{region}.oci.oraclecloud.com"
 
 
-_NON_COMMERCIAL_REALMS = [
+_NON_COMMERCIAL_REALMS: Final = (
     ("oc2", "us-luke-1", "oraclegovcloud.com"),
     ("oc3", "us-gov-ashburn-1", "oraclegovcloud.com"),
     ("oc4", "uk-gov-london-1", "oraclegovcloud.uk"),
     ("oc19", "eu-frankfurt-2", "oraclecloud.eu"),
-]
-_UNKNOWN_REGION = "xx-nowhere-1"
-_UNKNOWN_REALM_COMPARTMENT = "ocid1.compartment.oc99..aaaaaaaaexample"
-_UNKNOWN_REGION_METADATA = '{"realmKey": "OCX", "realmDomainComponent": "example.test", "regionKey": "XNW", "regionIdentifier": "xx-nowhere-1"}'
+)
+_UNKNOWN_REGION: Final = "xx-nowhere-1"
+_UNKNOWN_REALM_COMPARTMENT: Final = "ocid1.compartment.oc99..aaaaaaaaexample"
+_UNKNOWN_REGION_METADATA: Final = '{"realmKey": "OCX", "realmDomainComponent": "example.test", "regionKey": "XNW", "regionIdentifier": "xx-nowhere-1"}'
 
 
 def _compartment(realm):
     return f"ocid1.compartment.{realm}..aaaaaaaaexample"
+
+
+def _params(region: str, compartment_id: object = None) -> MappingProxyType[str, object]:
+    return MappingProxyType({"oci_region": region, "oci_compartment_id": compartment_id})
 
 
 @pytest.fixture
@@ -244,8 +253,11 @@ def isolated_region_metadata(monkeypatch, tmp_path):
 
 
 def test_realm_table_matches_installed_sdk():
-    definitions = pytest.importorskip("oci.regions_definitions")
-    assert {realm: definitions.REALMS.get(realm) for realm in _OCI_REALM_DOMAINS} == dict(_OCI_REALM_DOMAINS)
+    # Realm domains per the OCI Python SDK's oci.regions_definitions.REALMS (v2.187.0, checked 2026-09-27)
+    definitions: Final = pytest.importorskip("oci.regions_definitions")
+    assert (
+        MappingProxyType({realm: definitions.REALMS.get(realm) for realm in _OCI_REALM_DOMAINS}) == _OCI_REALM_DOMAINS
+    )
 
 
 @pytest.mark.usefixtures("isolated_region_metadata")
@@ -253,40 +265,40 @@ def test_realm_table_matches_installed_sdk():
 def test_get_oci_base_url_resolves_realm_from_region_via_sdk(realm, region, second_level_domain):
     pytest.importorskip("oci.regions")
     # Realm domains per the OCI Python SDK's oci.regions_definitions (v2.187.0, checked 2026-09-27)
-    url = get_oci_base_url({"oci_region": region})
+    url: Final = get_oci_base_url(_params(region))
     assert url == f"https://inference.generativeai.{region}.oci.{second_level_domain}"
 
 
 @pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
 @pytest.mark.parametrize(("realm", "region", "second_level_domain"), _NON_COMMERCIAL_REALMS)
 def test_get_oci_base_url_resolves_realm_from_compartment_ocid(realm, region, second_level_domain):
-    url = get_oci_base_url({"oci_region": region, "oci_compartment_id": _compartment(realm)})
+    url: Final = get_oci_base_url(_params(region, _compartment(realm)))
     assert url == f"https://inference.generativeai.{region}.oci.{second_level_domain}"
 
 
 @pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
 def test_get_oci_base_url_resolves_realm_from_compartment_env(monkeypatch):
     monkeypatch.setenv("OCI_COMPARTMENT_ID", _compartment("oc2"))
-    url = get_oci_base_url({"oci_region": "us-luke-1"})
+    url: Final = get_oci_base_url(_params("us-luke-1"))
     assert url == "https://inference.generativeai.us-luke-1.oci.oraclegovcloud.com"
 
 
 @pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
 def test_get_oci_base_url_reads_realm_key_case_insensitively():
-    url = get_oci_base_url({"oci_region": "us-luke-1", "oci_compartment_id": _compartment("OC2")})
+    url: Final = get_oci_base_url(_params("us-luke-1", _compartment("OC2")))
     assert url == "https://inference.generativeai.us-luke-1.oci.oraclegovcloud.com"
 
 
 @pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
 def test_get_oci_base_url_keeps_commercial_compartment_commercial():
-    url = get_oci_base_url({"oci_region": "us-chicago-1", "oci_compartment_id": _compartment("oc1")})
+    url: Final = get_oci_base_url(_params("us-chicago-1", _compartment("oc1")))
     assert url == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
 
 
 @pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
-@pytest.mark.parametrize("compartment_id", [None, "not-an-ocid", _UNKNOWN_REALM_COMPARTMENT, 42])
+@pytest.mark.parametrize("compartment_id", (None, "not-an-ocid", _UNKNOWN_REALM_COMPARTMENT, 42))
 def test_get_oci_base_url_without_sdk_defaults_to_commercial_when_realm_unknown(compartment_id):
-    url = get_oci_base_url({"oci_region": _UNKNOWN_REGION, "oci_compartment_id": compartment_id})
+    url: Final = get_oci_base_url(_params(_UNKNOWN_REGION, compartment_id))
     assert url == f"https://inference.generativeai.{_UNKNOWN_REGION}.oci.oraclecloud.com"
 
 
@@ -295,72 +307,72 @@ def test_get_oci_base_url_compartment_realm_wins_over_region_metadata(monkeypatc
     monkeypatch.setenv(
         "OCI_REGION_METADATA", '{"regionIdentifier": "us-luke-1", "realmDomainComponent": "example.test"}'
     )
-    url = get_oci_base_url({"oci_region": "us-luke-1", "oci_compartment_id": _compartment("oc2")})
+    url: Final = get_oci_base_url(_params("us-luke-1", _compartment("oc2")))
     assert url == "https://inference.generativeai.us-luke-1.oci.oraclegovcloud.com"
 
 
 @pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
 def test_get_oci_base_url_without_sdk_uses_region_metadata_env(monkeypatch):
     monkeypatch.setenv("OCI_REGION_METADATA", _UNKNOWN_REGION_METADATA)
-    url = get_oci_base_url({"oci_region": _UNKNOWN_REGION, "oci_compartment_id": _UNKNOWN_REALM_COMPARTMENT})
+    url: Final = get_oci_base_url(_params(_UNKNOWN_REGION, _UNKNOWN_REALM_COMPARTMENT))
     assert url == f"https://inference.generativeai.{_UNKNOWN_REGION}.oci.example.test"
 
 
 @pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
 def test_get_oci_base_url_without_sdk_region_metadata_leaves_other_regions_commercial(monkeypatch):
     monkeypatch.setenv("OCI_REGION_METADATA", _UNKNOWN_REGION_METADATA)
-    url = get_oci_base_url({"oci_region": "us-chicago-1"})
+    url: Final = get_oci_base_url(_params("us-chicago-1"))
     assert url == "https://inference.generativeai.us-chicago-1.oci.oraclecloud.com"
 
 
 @pytest.mark.usefixtures("without_oci_sdk")
 def test_get_oci_base_url_without_sdk_uses_regions_config_file(isolated_region_metadata):
-    oci_dir = isolated_region_metadata / ".oci"
+    oci_dir: Final = isolated_region_metadata / ".oci"
     oci_dir.mkdir()
     (oci_dir / "regions-config.json").write_text(f"[{_UNKNOWN_REGION_METADATA}]")
-    url = get_oci_base_url({"oci_region": _UNKNOWN_REGION})
+    url: Final = get_oci_base_url(_params(_UNKNOWN_REGION))
     assert url == f"https://inference.generativeai.{_UNKNOWN_REGION}.oci.example.test"
 
 
 @pytest.mark.usefixtures("without_oci_sdk")
 def test_get_oci_base_url_without_sdk_keeps_valid_regions_config_entries_next_to_a_bad_one(isolated_region_metadata):
-    oci_dir = isolated_region_metadata / ".oci"
+    oci_dir: Final = isolated_region_metadata / ".oci"
     oci_dir.mkdir()
     (oci_dir / "regions-config.json").write_text(
         f'[{{"regionIdentifier": "us-langley-1"}}, {_UNKNOWN_REGION_METADATA}]'
     )
-    url = get_oci_base_url({"oci_region": _UNKNOWN_REGION})
+    url: Final = get_oci_base_url(_params(_UNKNOWN_REGION))
     assert url == f"https://inference.generativeai.{_UNKNOWN_REGION}.oci.example.test"
 
 
 @pytest.mark.usefixtures("without_oci_sdk")
-@pytest.mark.parametrize("content", [b"\xff\xfe\x00[", b'{"regionIdentifier": "xx-nowhere-1"}', b"not json"])
+@pytest.mark.parametrize("content", (b"\xff\xfe\x00[", b'{"regionIdentifier": "xx-nowhere-1"}', b"not json"))
 def test_get_oci_base_url_without_sdk_ignores_unusable_regions_config_file(isolated_region_metadata, content):
-    oci_dir = isolated_region_metadata / ".oci"
+    oci_dir: Final = isolated_region_metadata / ".oci"
     oci_dir.mkdir()
     (oci_dir / "regions-config.json").write_bytes(content)
-    url = get_oci_base_url({"oci_region": _UNKNOWN_REGION})
+    url: Final = get_oci_base_url(_params(_UNKNOWN_REGION))
     assert url == f"https://inference.generativeai.{_UNKNOWN_REGION}.oci.oraclecloud.com"
 
 
 @pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
 @pytest.mark.parametrize(
     "metadata",
-    [
+    (
         '{"regionIdentifier": "xx-nowhere-1", "realmDomainComponent": "evil.com/#"}',
-        '{"regionIdentifier": "xx-nowhere-1", "realmDomainComponent": "EXAMPLE.TEST"}',
+        '{"regionIdentifier": "xx-nowhere-1", "realmDomainComponent": "-internal"}',
         '{"regionIdentifier": "xx-nowhere-1"}',
         "not json",
-    ],
+    ),
 )
 def test_get_oci_base_url_without_sdk_ignores_invalid_region_metadata(monkeypatch, metadata):
     monkeypatch.setenv("OCI_REGION_METADATA", metadata)
-    url = get_oci_base_url({"oci_region": _UNKNOWN_REGION})
+    url: Final = get_oci_base_url(_params(_UNKNOWN_REGION))
     assert url == f"https://inference.generativeai.{_UNKNOWN_REGION}.oci.oraclecloud.com"
 
 
 def _fake_oci_regions(endpoint_for=None):
-    module = types.ModuleType("oci.regions")
+    module: Final = types.ModuleType("oci.regions")
     if endpoint_for is not None:
         module.endpoint_for = endpoint_for
     return module
@@ -368,17 +380,20 @@ def _fake_oci_regions(endpoint_for=None):
 
 @pytest.mark.usefixtures("isolated_region_metadata")
 def test_get_oci_base_url_uses_sdk_region_registry_when_realm_unknown(monkeypatch):
-    calls = []
-
-    def endpoint_for(service, region, service_endpoint_template):
-        calls.append((service, region))
-        return service_endpoint_template.format(region=region, secondLevelDomain="example.test")
-
+    endpoint_for: Final = MagicMock(
+        side_effect=lambda service, region, service_endpoint_template: service_endpoint_template.format(
+            region=region, secondLevelDomain="example.test"
+        )
+    )
     monkeypatch.setitem(sys.modules, "oci", types.ModuleType("oci"))
     monkeypatch.setitem(sys.modules, "oci.regions", _fake_oci_regions(endpoint_for))
-    url = get_oci_base_url({"oci_region": _UNKNOWN_REGION, "oci_compartment_id": _UNKNOWN_REALM_COMPARTMENT})
+    url: Final = get_oci_base_url(_params(_UNKNOWN_REGION, _UNKNOWN_REALM_COMPARTMENT))
     assert url == f"https://inference.generativeai.{_UNKNOWN_REGION}.oci.example.test"
-    assert calls == [("generative_ai_inference", _UNKNOWN_REGION)]
+    endpoint_for.assert_called_once_with(
+        "generative_ai_inference",
+        region=_UNKNOWN_REGION,
+        service_endpoint_template="https://inference.generativeai.{region}.oci.{secondLevelDomain}",
+    )
 
 
 @pytest.mark.usefixtures("isolated_region_metadata")
@@ -388,15 +403,55 @@ def test_get_oci_base_url_skips_sdk_region_registry_when_compartment_realm_known
 
     monkeypatch.setitem(sys.modules, "oci", types.ModuleType("oci"))
     monkeypatch.setitem(sys.modules, "oci.regions", _fake_oci_regions(endpoint_for))
-    url = get_oci_base_url({"oci_region": "us-luke-1", "oci_compartment_id": _compartment("oc2")})
+    url: Final = get_oci_base_url(_params("us-luke-1", _compartment("oc2")))
     assert url == "https://inference.generativeai.us-luke-1.oci.oraclegovcloud.com"
 
 
 @pytest.mark.usefixtures("isolated_region_metadata")
-def test_get_oci_base_url_tolerates_sdk_region_registry_without_endpoint_for(monkeypatch):
+def test_get_oci_base_url_prefers_sdk_region_registry_over_hand_parsed_metadata(monkeypatch):
+    def endpoint_for(service, region, service_endpoint_template):
+        return service_endpoint_template.format(region=region, secondLevelDomain="sdk.test")
+
+    monkeypatch.setitem(sys.modules, "oci", types.ModuleType("oci"))
+    monkeypatch.setitem(sys.modules, "oci.regions", _fake_oci_regions(endpoint_for))
+    monkeypatch.setenv("OCI_REGION_METADATA", _UNKNOWN_REGION_METADATA)
+    url: Final = get_oci_base_url(_params(_UNKNOWN_REGION))
+    assert url == f"https://inference.generativeai.{_UNKNOWN_REGION}.oci.sdk.test"
+
+
+@pytest.mark.usefixtures("isolated_region_metadata")
+def test_get_oci_base_url_falls_back_to_metadata_when_sdk_registry_lacks_endpoint_for(monkeypatch):
     monkeypatch.setitem(sys.modules, "oci", types.ModuleType("oci"))
     monkeypatch.setitem(sys.modules, "oci.regions", _fake_oci_regions())
-    url = get_oci_base_url({"oci_region": _UNKNOWN_REGION})
+    monkeypatch.setenv("OCI_REGION_METADATA", _UNKNOWN_REGION_METADATA)
+    url: Final = get_oci_base_url(_params(_UNKNOWN_REGION))
+    assert url == f"https://inference.generativeai.{_UNKNOWN_REGION}.oci.example.test"
+
+
+@pytest.mark.usefixtures("without_oci_sdk", "isolated_region_metadata")
+@pytest.mark.parametrize(
+    ("metadata", "second_level_domain"),
+    (
+        ('{"regionIdentifier": "XX-NOWHERE-1", "realmDomainComponent": "Example.Test"}', "example.test"),
+        ('{"regionIdentifier": "xx-nowhere-1", "realmDomainComponent": "internal"}', "internal"),
+    ),
+)
+def test_get_oci_base_url_without_sdk_normalizes_region_metadata_like_the_sdk(
+    monkeypatch, metadata, second_level_domain
+):
+    monkeypatch.setenv("OCI_REGION_METADATA", metadata)
+    url: Final = get_oci_base_url(_params(_UNKNOWN_REGION))
+    assert url == f"https://inference.generativeai.{_UNKNOWN_REGION}.oci.{second_level_domain}"
+
+
+@pytest.mark.usefixtures("without_oci_sdk")
+def test_get_oci_base_url_without_sdk_tolerates_unresolvable_home(monkeypatch):
+    def no_passwd_entry(uid):
+        raise KeyError(uid)
+
+    monkeypatch.delenv("HOME", raising=False)
+    monkeypatch.setattr("pwd.getpwuid", no_passwd_entry)
+    url: Final = get_oci_base_url(_params(_UNKNOWN_REGION))
     assert url == f"https://inference.generativeai.{_UNKNOWN_REGION}.oci.oraclecloud.com"
 
 
