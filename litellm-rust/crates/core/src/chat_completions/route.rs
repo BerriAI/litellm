@@ -24,18 +24,21 @@ impl Protocol for ChatCompletions {
 
 impl ChatCompletionsRoute {
     pub fn machine(self, call: ChatCompletionsCall) -> HostedMachine<ChatCompletions> {
-        hosted_call(call, move |call: ChatCompletionsCall, _, hooks| async move {
-            let request = ChatCompletionsRequest {
-                model: &call.model,
-                messages: call.messages,
-                optional_params: call.optional_params,
-                api_key: call.api_key.as_deref(),
-                api_base: call.api_base.as_deref(),
-                custom_llm_provider: call.custom_llm_provider.as_deref(),
-                extra_headers: call.extra_headers,
-                timeout: call.timeout,
-            };
-            self.run(request, &hooks).await.map(CallOutput::Complete)
-        })
+        hosted_call(
+            call,
+            move |call: ChatCompletionsCall, _, hooks| async move {
+                let request = ChatCompletionsRequest {
+                    model: &call.model,
+                    messages: call.messages,
+                    optional_params: call.optional_params,
+                    api_key: call.api_key.as_deref(),
+                    api_base: call.api_base.as_deref(),
+                    custom_llm_provider: call.custom_llm_provider.as_deref(),
+                    extra_headers: call.extra_headers,
+                    timeout: call.timeout,
+                };
+                self.run(request, &hooks).await.map(CallOutput::Complete)
+            },
+        )
     }
 }
