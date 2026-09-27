@@ -1,16 +1,80 @@
-from typing import Any, Final
+from collections.abc import Mapping, Sequence
+from typing import Final, Protocol
 
 import orjson
 
-from litellm.types.videos.utils import encode_character_id_with_provider
+from litellm.proxy._types import ProxyException
+from litellm.types.videos.utils import (
+    decode_video_id_with_provider,
+    encode_character_id_with_provider,
+    encode_video_id_with_provider,
+)
 
 
-def extract_model_from_target_model_names(target_model_names: Any) -> str | None:
-    if isinstance(target_model_names, str):
-        target_model_names = [m.strip() for m in target_model_names.split(",") if m.strip()]
-    elif not isinstance(target_model_names, list):
+class VideoModelIdResolver(Protocol):
+    def resolve_model_name_from_model_id(self, model_id: str | None) -> str | None: ...
+
+
+def video_owner_from_key(token: str | None, api_key: str | None) -> str | None:
+    return token or api_key
+
+
+def assert_video_owner(video_id: str, owner: str | None) -> None:
+    recorded: Final = decode_video_id_with_provider(video_id).get("owner")
+    if recorded and recorded != owner:
+        raise ProxyException(
+            message="Video does not belong to this API key",
+            type="permission_error",
+            param="video_id",
+            code=403,
+        )
+
+
+def stamp_video_owner(video_id: str, owner: str | None) -> str:
+    if not owner:
+        return video_id
+    decoded: Final = decode_video_id_with_provider(video_id)
+    provider: Final = decoded.get("custom_llm_provider")
+    raw_id: Final = decoded.get("video_id")
+    if not provider or not raw_id or decoded.get("owner"):
+        return video_id
+    return encode_video_id_with_provider(raw_id, provider, decoded.get("model_id"), owner)
+
+
+def infer_video_provider_from_model(model: str | None) -> str | None:
+    if not isinstance(model, str) or not model:
         return None
-    return target_model_names[0] if target_model_names else None
+    unprefixed: Final = model.split("/", 1)[-1]
+    if unprefixed.startswith("grok-imagine-video"):
+        return "xai"
+    return None
+
+
+def resolve_video_request_model(
+    *,
+    model_id_from_decoded: str | None,
+    query_model: str | None,
+    llm_router: VideoModelIdResolver | None,
+) -> str | None:
+    if model_id_from_decoded:
+        if llm_router is not None:
+            resolved: Final = llm_router.resolve_model_name_from_model_id(model_id_from_decoded)
+            if isinstance(resolved, str) and resolved:
+                return resolved
+        return model_id_from_decoded
+    if isinstance(query_model, str) and query_model:
+        return query_model
+    return None
+
+
+def extract_model_from_target_model_names(target_model_names: object) -> str | None:
+    if isinstance(target_model_names, str):
+        names: Final = tuple(m.strip() for m in target_model_names.split(",") if m.strip())
+        return names[0] if names else None
+    if isinstance(target_model_names, Sequence) and not isinstance(target_model_names, (str, bytes)):
+        first: Final = target_model_names[0] if target_model_names else None
+        return first if isinstance(first, str) else None
+    return None
 
 
 def video_reference_to_id(video_ref: object) -> str:
@@ -25,9 +89,9 @@ def video_reference_to_id(video_ref: object) -> str:
     return parsed_ref.get("id", "") if isinstance(parsed_ref, dict) else video_ref
 
 
-def get_custom_provider_from_data(data: dict[str, Any]) -> str | None:
+def get_custom_provider_from_data(data: Mapping[str, object]) -> str | None:
     custom_llm_provider: Final = data.get("custom_llm_provider")
-    if custom_llm_provider:
+    if isinstance(custom_llm_provider, str) and custom_llm_provider:
         return custom_llm_provider
 
     extra_body = data.get("extra_body")
@@ -47,7 +111,7 @@ def get_custom_provider_from_data(data: dict[str, Any]) -> str | None:
     return None
 
 
-def encode_character_id_in_response(response: Any, custom_llm_provider: str, model_id: str | None) -> Any:
+def encode_character_id_in_response(response: object, custom_llm_provider: str, model_id: str | None) -> object:
     if isinstance(response, dict) and response.get("id"):
         response["id"] = encode_character_id_with_provider(
             character_id=response["id"],

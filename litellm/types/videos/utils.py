@@ -35,7 +35,9 @@ def _add_base64_padding(value: str) -> str:
     return value
 
 
-def encode_video_id_with_provider(video_id: str, provider: str, model_id: str | None = None) -> str:
+def encode_video_id_with_provider(
+    video_id: str, provider: str, model_id: str | None = None, owner: str | None = None
+) -> str:
     """Encode provider and model_id into video_id using base64."""
     if not provider or not video_id:
         return video_id
@@ -50,6 +52,8 @@ def encode_video_id_with_provider(video_id: str, provider: str, model_id: str | 
 
     # ID is not encoded (even if it starts with video_), so encode it
     assembled_id = str(SpecialEnums.LITELLM_MANAGED_VIDEO_COMPLETE_STR.value).format(provider, model_id or "", video_id)
+    if owner:
+        assembled_id = f"{assembled_id};owner:{owner}"
 
     base64_encoded_id: Final[str] = base64.b64encode(assembled_id.encode("utf-8")).decode("utf-8")
 
@@ -89,20 +93,24 @@ def decode_video_id_with_provider(encoded_video_id: str) -> DecodedVideoId:
         custom_llm_provider = None
         model_id = None
         decoded_video_id = encoded_video_id
+        owner = None
 
         if len(parts) >= 3:
             custom_llm_provider_part: Final = parts[0]
             model_id_part: Final = parts[1]
             video_id_part: Final = parts[2]
+            owner_part: Final = next((part for part in parts[3:] if part.startswith("owner:")), None)
 
             custom_llm_provider = custom_llm_provider_part.replace("litellm:custom_llm_provider:", "")
             model_id = model_id_part.replace("model_id:", "")
             decoded_video_id = video_id_part.replace("video_id:", "")
+            owner = owner_part.removeprefix("owner:") if owner_part else None
 
         return DecodedVideoId(
             custom_llm_provider=custom_llm_provider,
             model_id=model_id,
             video_id=decoded_video_id,
+            owner=owner,
         )
     except Exception as e:
         verbose_logger.debug("Error decoding video_id '%s': %s", encoded_video_id, e)

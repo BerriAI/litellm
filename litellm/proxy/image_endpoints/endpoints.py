@@ -1,11 +1,13 @@
 import asyncio
 import io
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
+from types import MappingProxyType
 from typing import Final, get_type_hints
 
 import orjson
-from fastapi import APIRouter, Depends, File, HTTPException, Request, Response, UploadFile, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.responses import ORJSONResponse
+from starlette.datastructures import FormData, UploadFile
 
 import litellm
 from litellm.litellm_core_utils.prompt_templates.common_utils import (
@@ -19,6 +21,7 @@ from litellm.proxy.common_request_processing import (
     resolve_litellm_call_id,
 )
 from litellm.proxy.common_utils.http_parsing_utils import (
+    _is_form_content_type,
     coerce_numeric_form_fields,
     numeric_form_fields,
     resolve_inference_model,
@@ -40,6 +43,8 @@ IMAGE_EDIT_NUMERIC_FORM_FIELDS: Final = numeric_form_fields(get_type_hints(Image
 IMAGE_ARRAY_FIELD: Final = "image[]"
 MASK_ARRAY_FIELD: Final = "mask[]"
 BRACKETED_FILE_FIELDS: Final = frozenset({IMAGE_ARRAY_FIELD, MASK_ARRAY_FIELD})
+IMAGE_EDIT_FILE_FIELDS: Final = MappingProxyType({"image": IMAGE_ARRAY_FIELD, "mask": MASK_ARRAY_FIELD})
+IMAGE_REFERENCE_PREFIXES: Final = ("http://", "https://", "data:image/")
 
 
 async def uploadfile_to_bytesio(upload: UploadFile) -> io.BytesIO:
@@ -62,6 +67,58 @@ async def batch_to_bytesio(
     if not uploads:
         return None
     return [await uploadfile_to_bytesio(u) for u in uploads]
+
+
+async def _image_edit_part(value: object, field: str) -> io.BytesIO | str:
+    if isinstance(value, UploadFile):
+        return await uploadfile_to_bytesio(value)
+    if isinstance(value, str) and value.startswith(IMAGE_REFERENCE_PREFIXES):
+        return value
+    raise HTTPException(
+        status_code=422,
+        detail=f"'{field}' must be a multipart file upload, an http(s) URL, or a data:image URI.",
+    )
+
+
+def _image_edit_values(form: FormData | None, body: Mapping[str, object], name: str) -> tuple[object, ...]:
+    if form is not None:
+        return tuple(form.getlist(name))
+    raw: Final = body.get(name)
+    if raw is None:
+        return ()
+    return tuple(raw) if isinstance(raw, list) else (raw,)
+
+
+async def _image_edit_field(
+    form: FormData | None, body: Mapping[str, object], field: str, alias: str
+) -> list[io.BytesIO | str] | str | None:
+    values: Final = _image_edit_values(form, body, field)
+    alias_values: Final = _image_edit_values(form, body, alias)
+    if values and alias_values:
+        raise HTTPException(status_code=422, detail=f"Cannot specify both '{field}' and '{alias}'")
+    parts: Final = tuple([await _image_edit_part(value, field) for value in values or alias_values])
+    if not parts:
+        return None
+    if len(parts) == 1 and isinstance(parts[0], str):
+        return parts[0]
+    return list(parts)  # mutable-ok: provider image edit handlers take a list of image parts
+
+
+async def image_edit_assets(request: Request, body: Mapping[str, object]) -> Mapping[str, object]:
+    """
+    Collect ``image`` / ``mask`` (or their ``[]`` aliases) from a multipart form or JSON body.
+
+    Each part is an uploaded file, an http(s) URL, or a ``data:image/`` URI; any other string is rejected so it can
+    never be treated as a filesystem path downstream.
+    """
+    form: Final = await request.form() if _is_form_content_type(request.headers.get("content-type", "")) else None
+    return MappingProxyType(
+        {
+            field: parts
+            for field, alias in IMAGE_EDIT_FILE_FIELDS.items()
+            if (parts := await _image_edit_field(form, body, field, alias)) is not None
+        }
+    )
 
 
 @router.post(
@@ -243,10 +300,6 @@ async def image_edit_api(
     request: Request,
     fastapi_response: Response,
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    image: list[UploadFile] | None = File(None),
-    image_array: list[UploadFile] | None = File(None, alias=IMAGE_ARRAY_FIELD),
-    mask: list[UploadFile] | None = File(None),
-    mask_array: list[UploadFile] | None = File(None, alias=MASK_ARRAY_FIELD),
     model: str | None = None,
 ):
     """
@@ -262,20 +315,6 @@ async def image_edit_api(
         -F 'prompt=Create a studio ghibli image of this'
     ```
     """
-    if image is not None and image_array is not None:
-        raise HTTPException(status_code=422, detail="Cannot specify both 'image' and 'image[]'")
-    if mask is not None and mask_array is not None:
-        raise HTTPException(status_code=422, detail="Cannot specify both 'mask' and 'mask[]'")
-    if image is None and image_array is not None:
-        image = image_array
-    if mask is None and mask_array is not None:
-        mask = mask_array
-
-    # if image is None:
-    #     raise HTTPException(status_code=422, detail="Field required: image")
-    # Note: Image is optional for some models (e.g., Bedrock Stability style-transfer)
-    # The validation will be done at the model level if image is truly required
-
     from litellm.proxy.proxy_server import (
         _read_request_body,
         general_settings,
@@ -294,27 +333,14 @@ async def image_edit_api(
     #########################################################
     # Read request body and convert UploadFiles to BytesIO
     #########################################################
+    parsed_body: Final = coerce_numeric_form_fields(
+        parsed_body=await _read_request_body(request=request),
+        numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
+    )
     data: Final = {
-        key: value
-        for key, value in coerce_numeric_form_fields(
-            parsed_body=await _read_request_body(request=request),
-            numeric_fields=IMAGE_EDIT_NUMERIC_FORM_FIELDS,
-        ).items()
-        if key not in BRACKETED_FILE_FIELDS
+        **{key: value for key, value in parsed_body.items() if key not in BRACKETED_FILE_FIELDS},
+        **await image_edit_assets(request, parsed_body),
     }
-    image_files: Final = await batch_to_bytesio(image)
-    mask_files: Final = await batch_to_bytesio(mask)
-    if image_files:
-        data["image"] = image_files
-    if mask_files:
-        data["mask"] = mask_files
-
-    for _field in ("image", "mask"):
-        if _field in data and isinstance(data[_field], str):
-            raise HTTPException(
-                status_code=422,
-                detail=f"'{_field}' must be provided as a multipart file upload, not a string.",
-            )
 
     # Ensure prompt exists in data (default to None for models that don't require it)
     if "prompt" not in data:
