@@ -1,4 +1,5 @@
 mod error;
+pub mod keys;
 
 use std::sync::Arc;
 
@@ -12,7 +13,7 @@ use litellm_secrets::source::SecretSource;
 use sha2::{Digest, Sha256};
 use subtle::ConstantTimeEq;
 
-pub use error::Error;
+pub use error::{Error, KeyError};
 
 #[derive(Clone)]
 pub struct Auth {

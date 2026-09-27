@@ -16,6 +16,7 @@ litellm-core = { path = "crates/core" }
 litellm-gateway = { path = "crates/gateway" }
 litellm-gateway-inference = { path = "crates/gateway-inference" }
 litellm-gateway-auth = { path = "crates/gateway-auth" }
+litellm-gateway-management = { path = "crates/gateway-management" }
 litellm-coroutine = { path = "crates/coroutine" }
 litellm-host = { path = "crates/host" }
 litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
