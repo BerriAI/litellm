@@ -51,8 +51,11 @@ def _serialize(cost_map: dict[str, object]) -> str:
     return json.dumps(cost_map, indent=4, ensure_ascii=False) + "\n"
 
 
+NO_PINS: Final = "{}\n"
+
+
 def _snapshot(
-    cost_map: dict[str, object], backup: str | None = None, schema: str | None = None, pins: str = ""
+    cost_map: dict[str, object], backup: str | None = None, schema: str | None = None, pins: str = NO_PINS
 ) -> object:
     text = _serialize(cost_map)
     rendered = schema_module.render(schema_module.build_schema(cost_map))
@@ -114,7 +117,7 @@ def test_schema_validation_errors_are_reported() -> None:
 
 def test_unclassified_entry_key_is_reported() -> None:
     text = _serialize({**BASE_MAP, "openrouter/c": _entry(weird_thing=1)})
-    head = guard.Snapshot(cost_map=text, backup=text, schema=BASE.schema)
+    head = guard.Snapshot(cost_map=text, backup=text, schema=BASE.schema, pins=NO_PINS)
     (failure,) = _failures(head, bot=False)
     assert "Unclassified keys" in failure and "weird_thing" in failure
 
@@ -229,6 +232,13 @@ def test_malformed_pins_are_reported(pins: str, expected: str) -> None:
     assert _failures(_snapshot(BASE_MAP, pins=pins), bot=False) == (expected,)
 
 
+@pytest.mark.parametrize("bot", [False, True])
+def test_a_missing_pins_file_fails(bot: bool) -> None:
+    assert _failures(_snapshot(BASE_MAP, pins=""), bot=bot) == (
+        f"{guard.PINS_PATH} is missing; restore it, its pins were verified against live provider calls",
+    )
+
+
 def test_bot_may_not_touch_the_pins_file() -> None:
     head = _snapshot(BASE_MAP, pins=PINS)
     changed = (*guard.GUARDED_PATHS, guard.PINS_PATH)
@@ -247,9 +257,10 @@ def test_checked_in_pins_hold_in_the_checked_in_cost_map() -> None:
 
 def _commit(repo: Path, cost_map: dict[str, object], message: str, pins: str | None = None) -> str:
     text = _serialize(cost_map)
-    if pins is not None:
-        (repo / guard.PINS_PATH).parent.mkdir(exist_ok=True)
-        (repo / guard.PINS_PATH).write_text(pins)
+    pins_file = repo / guard.PINS_PATH
+    if pins is not None or not pins_file.exists():
+        pins_file.parent.mkdir(exist_ok=True)
+        pins_file.write_text(NO_PINS if pins is None else pins)
     (repo / guard.COST_MAP_PATH).write_text(text)
     (repo / guard.BACKUP_PATH).parent.mkdir(exist_ok=True)
     (repo / guard.BACKUP_PATH).write_text(text)
@@ -355,6 +366,17 @@ def test_main_reads_the_pins_from_the_head_revision(tmp_path: Path, head_ref: st
     assert result.returncode == 1, result.stdout + result.stderr
     pin_line: Final = f"- {guard.COST_MAP_PATH}: openrouter/a.supports_vision must stay true (verified 2026-09-26: "
     assert [line for line in result.stdout.splitlines() if line.startswith(pin_line)]
+
+
+def test_main_fails_a_pr_that_deletes_the_pins_file(tmp_path: Path) -> None:
+    subprocess.run(("git", "init", "-q", str(tmp_path)), check=True)
+    base: Final = _commit(tmp_path, BASE_MAP, "base", pins=PINS)
+    subprocess.run(("git", "rm", "-q", guard.PINS_PATH), cwd=tmp_path, check=True)
+    head: Final = _git_commit(tmp_path, "delete the pins")
+    result: Final = _run_guard(tmp_path, base, head, "litellm_fix_pricing")
+    assert result.returncode == 1, result.stdout + result.stderr
+    missing: Final = f"- {guard.PINS_PATH} is missing; restore it, its pins were verified against live provider calls"
+    assert missing in result.stdout.splitlines()
 
 
 def test_main_checks_a_pins_only_pr_against_the_head_map(tmp_path: Path) -> None:

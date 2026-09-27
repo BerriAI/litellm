@@ -3,7 +3,8 @@
 Every pull request whose diff against its merge base touches one of the three cost map files or the pins file gets
 the file checks: the files parse, the backup copy matches the root file, the JSON schema is in sync and validates the
 map, and every capability pinned in ci_cd/cost_map_pins.json (a value verified against a live provider call where the
-provider's model listing says otherwise) still holds in the map. A pull request that leaves all of them untouched
+provider's model listing says otherwise) still holds in the map, so a pull request that deletes the pins file fails
+too. A pull request that leaves all of them untouched
 skips the checks, since merging it keeps the base branch's copies and its head tree only carries whatever state the
 branch was cut from. Pull requests from the cost map sync bot (branches named litellm_cost_map_sync_*) always get the
 file checks and additionally may only touch the three cost map files and may only add or update models, so a sync
@@ -132,7 +133,7 @@ def _pin_violations(parsed: CostMap, entries: dict[str, dict[str, object]]) -> I
 
 def pin_failures(pins_text: str, head_map: CostMap) -> tuple[str, ...]:
     if not pins_text:
-        return ()
+        return (f"{PINS_PATH} is missing; restore it, its pins were verified against live provider calls",)
     parsed: Final = _parse_object(pins_text, PINS_PATH)
     if isinstance(parsed, str):
         return (parsed,)
