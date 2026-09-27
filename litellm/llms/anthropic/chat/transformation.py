@@ -104,6 +104,7 @@ from ..common_utils import (
     requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
 )
+from ..pass_through.utils import normalize_reasoning_effort_value
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -1266,7 +1267,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 type="adaptive",
                 display="summarized",
             )
-        elif reasoning_effort == "low":
+        reasoning_effort = normalize_reasoning_effort_value(str(reasoning_effort), model, custom_llm_provider)
+        if reasoning_effort == "low":
             return AnthropicThinkingParam(
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
@@ -2122,11 +2124,20 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         gate_error: Final = self._validate_effort_for_model(model, effort, self._resolved_provider)
         if gate_error is not None:
-            raise litellm.exceptions.BadRequestError(
-                message=gate_error,
-                model=model,
-                llm_provider=self._resolved_provider,
-            )
+            if not isinstance(effort, str):
+                raise litellm.exceptions.BadRequestError(
+                    message=gate_error,
+                    model=model,
+                    llm_provider=self._resolved_provider,
+                )
+            normalized_effort: Final = normalize_reasoning_effort_value(effort, model, self._resolved_provider)
+            if normalized_effort == effort:
+                raise litellm.exceptions.BadRequestError(
+                    message=gate_error,
+                    model=model,
+                    llm_provider=self._resolved_provider,
+                )
+            output_config["effort"] = normalized_effort
         data["output_config"] = output_config
 
     def _resolve_json_mode_non_streaming(
