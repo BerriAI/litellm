@@ -77910,5 +77910,33 @@
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true
+    },
+    "tsubasa/tsubasa-fast": {
+        "max_input_tokens": 32768,
+        "max_output_tokens": 8192,
+        "input_cost_per_token": 2.0000000000000002e-07,
+        "output_cost_per_token": 1e-06,
+        "litellm_provider": "tsubasa",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
+        "supports_response_schema": false,
+        "supports_vision": false,
+        "supports_reasoning": false
+    },
+    "tsubasa/tsubasa-pro": {
+        "max_input_tokens": 32768,
+        "max_output_tokens": 16384,
+        "input_cost_per_token": 5e-07,
+        "output_cost_per_token": 4e-06,
+        "litellm_provider": "tsubasa",
+        "mode": "chat",
+        "supports_system_messages": true,
+        "supports_function_calling": false,
+        "supports_parallel_function_calling": false,
+        "supports_response_schema": false,
+        "supports_vision": false,
+        "supports_reasoning": false
     }
 }
