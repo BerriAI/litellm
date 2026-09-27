@@ -3418,7 +3418,9 @@ class MCPServerManager:
 
         ``allow_all_server_ids`` / ``submitted_server_ids`` are injectable so the server union,
         which precomputes both for its fallback path, does not compute them twice."""
-        if user_api_key_auth is not None and user_api_key_auth.mcp_toolset_id is not None:
+        if user_api_key_auth is not None and (
+            user_api_key_auth.mcp_toolset_id is not None or user_api_key_auth.mcp_explicit_grants_only
+        ):
             return set()
         if allow_all_server_ids is None:
             allow_all_server_ids = self.get_allow_all_keys_server_ids()
@@ -3467,9 +3469,14 @@ class MCPServerManager:
         2. If admin and no object_permission, return all servers
         3. Otherwise, use standard permission checks
         """
+        if user_api_key_auth is not None and user_api_key_auth.managed_agent_policy is not None:
+            managed: Final = await MCPRequestHandler.get_allowed_mcp_servers(user_api_key_auth)
+            return managed if access is None else [server for server in managed if server in access.server_ids]
+
         from litellm.proxy.proxy_server import general_settings as proxy_general_settings
 
         resolved_general_settings: Final = proxy_general_settings if general_settings is None else general_settings
+        explicit_grants_only: Final = bool(user_api_key_auth and user_api_key_auth.mcp_explicit_grants_only)
         allow_all_server_ids: Final = self.get_allow_all_keys_server_ids()
 
         # A keyless admitted subject is resolved per grant source, and channel decisions that are
@@ -3501,7 +3508,7 @@ class MCPServerManager:
         # only keys without their own mcp_servers list get submitted servers unioned in.
         submitted_server_ids: Final = (
             []
-            if has_explicit_object_permission
+            if has_explicit_object_permission or explicit_grants_only
             else await self._get_active_submitted_mcp_server_ids_for_user(user_api_key_auth)
         )
 
@@ -3570,7 +3577,7 @@ class MCPServerManager:
             return [
                 server_id
                 for server_id in dict.fromkeys(allow_all_server_ids + submitted_server_ids)
-                if scope is None or server_id == scope
+                if not explicit_grants_only and (scope is None or server_id == scope)
             ]
 
     async def resolve_toolset_tool_permissions(

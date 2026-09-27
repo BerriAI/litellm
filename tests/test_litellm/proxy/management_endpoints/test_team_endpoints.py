@@ -4355,7 +4355,7 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
     prisma_client.db.litellm_teamtable.find_many = AsyncMock(side_effect=find_many)
     prisma_client.db.litellm_teamtable.count = AsyncMock(side_effect=count)
     prisma_client.db.litellm_verificationtoken.group_by = AsyncMock(return_value=[])
-    prisma_client.db.litellm_usertable.find_unique = AsyncMock(
+    prisma_client.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=LiteLLM_UserTable(
             user_id="org_admin_user",
             teams=["team_in_org_A", "team_in_org_B"],
@@ -4394,11 +4394,11 @@ async def test_list_team_v2_org_admin_own_query_keeps_memberships_in_other_orgs(
     assert await list_teams(None) == own_view
     assert await list_teams("org_admin_user", search="team_in_org_B") == ["team_in_org_B"]
     assert await list_teams("other_user") == ["other_team_in_org_A"]
-    prisma_client.db.litellm_usertable.find_unique.assert_awaited_with(
+    prisma_client.writer_db.litellm_usertable.find_unique.assert_awaited_with(
         where={"user_id": "org_admin_user"}, include={"organization_memberships": True}
     )
 
-    prisma_client.db.litellm_usertable.find_unique.side_effect = RuntimeError("db down")
+    prisma_client.writer_db.litellm_usertable.find_unique.side_effect = RuntimeError("db down")
     with pytest.raises(ValueError, match="db down"):
         await list_teams("org_admin_user")
 
@@ -16025,7 +16025,7 @@ async def test_get_team_spend_by_user_team_admin_sees_every_member(mock_db_clien
     alpha = _team_spend_by_user_team("team-alpha", "Team Alpha", Member(user_id="alice", role="admin"), [])
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
     mock_db_client.db.query_raw = AsyncMock(return_value=[])
-    mock_db_client.db.litellm_usertable.find_unique = AsyncMock(
+    mock_db_client.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=_team_spend_by_user_caller("alice", ["team-alpha"])
     )
 
@@ -16047,7 +16047,7 @@ async def test_get_team_spend_by_user_plain_member_only_sees_own_row(mock_db_cli
     mock_db_client.db.litellm_teamtable.find_many = AsyncMock(return_value=[alpha])
     mock_db_client.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
     mock_db_client.db.query_raw = AsyncMock(return_value=[_team_spend_by_user_db_row("team-alpha", "bob", 0.25, 2)])
-    mock_db_client.db.litellm_usertable.find_unique = AsyncMock(
+    mock_db_client.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=_team_spend_by_user_caller("bob", ["team-alpha"])
     )
 
@@ -16068,7 +16068,7 @@ async def test_get_team_spend_by_user_member_of_other_team_gets_404(mock_db_clie
 
     caller = UserAPIKeyAuth(user_id="bob", user_role=LitellmUserRoles.INTERNAL_USER)
     mock_db_client.db.query_raw = AsyncMock(return_value=[])
-    mock_db_client.db.litellm_usertable.find_unique = AsyncMock(
+    mock_db_client.writer_db.litellm_usertable.find_unique = AsyncMock(
         return_value=_team_spend_by_user_caller("bob", ["team-alpha"])
     )
 

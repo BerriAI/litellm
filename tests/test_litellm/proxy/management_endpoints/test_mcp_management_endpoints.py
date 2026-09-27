@@ -7659,7 +7659,7 @@ class TestConnectedAppViewAnnotation:
 
         flags = {server.server_id: server.connected_app_reachable for server in result}
         assert flags == {"server-1": True, "server-2": False}
-        reload_mock.assert_awaited_once_with("test_user_id")
+        reload_mock.assert_awaited_once_with("test_user_id", requires_fresh_policy=False)
         mock_manager.get_allowed_mcp_servers.assert_awaited_once_with(admitted_auth)
 
     @pytest.mark.asyncio
@@ -9411,7 +9411,7 @@ class TestMCPServerResolutionCharacterization:
         server_id: str,
     ) -> tuple[MagicMock, MCPServerManager, UserAPIKeyAuth]:
         team_id: Final = UI_SESSION_TOKEN_TEAM_ID if grant_route == "direct user object_permission" else "lit3974_team"
-        user_id: Final = "lit3974_direct_user"
+        user_id: Final = f"{server_id}:{grant_route}:user"
         key_permission: Final = LiteLLM_ObjectPermissionTable(
             object_permission_id=f"lit3974_{grant_route}_key_permission",
             mcp_servers=None,

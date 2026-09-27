@@ -2249,9 +2249,9 @@ describe("TeamInfoView - the exact bytes the update call sends", () => {
     await openEditorWithAgents(user);
 
     await user.click(within(screen.getByLabelText("agent-1")).getByRole("button"));
-    await user.click(within(screen.getByLabelText("group:group-a")).getByRole("button"));
+    await user.click(within(screen.getByLabelText("group-a")).getByRole("button"));
     expect(screen.queryByLabelText("agent-1")).not.toBeInTheDocument();
-    expect(screen.queryByLabelText("group:group-a")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("group-a")).not.toBeInTheDocument();
 
     const payload = await save(user);
 
