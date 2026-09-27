@@ -1,10 +1,11 @@
 import re
 from collections import deque
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
 from datetime import timedelta
 from functools import reduce, wraps
 from itertools import chain
+from types import MappingProxyType
 from typing import Concatenate, Final, Literal, ParamSpec, TypeVar
 from uuid import UUID, uuid4
 
@@ -73,7 +74,7 @@ def group_document(row: LiteLLM_SCIMResource) -> SCIMGroup:
         {
             **TypeAdapter(dict[str, object]).validate_python(row.document),
             "id": row.id,
-            "members": [{"value": value} for value in row.member_ids],
+            "members": tuple(SCIMMember(value=value) for value in row.member_ids),
         }
     )
 
@@ -87,13 +88,15 @@ async def remove_group_member(tx: Prisma, group: LiteLLM_SCIMResource, member_id
 
 
 def _user_changes(item: SCIMPatchOperation, current: SCIMUser) -> dict[str, object] | SCIMProvisioningFailure:
-    allowed: Final = {
-        "active": "active",
-        "displayname": "displayName",
-        "username": "userName",
-        "name": "name",
-        "emails": "emails",
-    }
+    allowed: Final = MappingProxyType(
+        {
+            "active": "active",
+            "displayname": "displayName",
+            "username": "userName",
+            "name": "name",
+            "emails": "emails",
+        }
+    )
     if item.path is None:
         value: Final = item.value
         if item.op == "remove" or not isinstance(value, dict):
@@ -102,7 +105,7 @@ def _user_changes(item: SCIMPatchOperation, current: SCIMUser) -> dict[str, obje
         if any(key not in allowed.values() for key in changes):
             return SCIMProvisioningFailure(400, "Agent subject and parent identity are immutable")
         return changes
-    name_fields: Final = {"name." + name.lower(): name for name in SCIMUserName.model_fields}
+    name_fields: Final = MappingProxyType({"name." + name.lower(): name for name in SCIMUserName.model_fields})
     name_field: Final = name_fields.get(item.path.lower())
     if name_field is not None:
         return {
@@ -162,7 +165,8 @@ def _patched_members(current: SCIMGroup, item: SCIMPatchOperation) -> tuple[SCIM
     if item.op == "remove":
         removed: Final = frozenset(member.value for member in incoming)
         return tuple(member for member in current.members or () if member.value not in removed) if incoming else ()
-    return tuple({member.value: member for member in (*tuple(current.members or ()), *incoming)}.values())
+    merged: Final = MappingProxyType({member.value: member for member in (*(current.members or ()), *incoming)})
+    return tuple(merged.values())
 
 
 def _patch_group_operation(
@@ -170,12 +174,31 @@ def _patch_group_operation(
 ) -> SCIMGroup | SCIMProvisioningFailure:
     if isinstance(current, SCIMProvisioningFailure):
         return current
-    if (item.path or "").lower() == "displayname" and item.op != "remove" and isinstance(item.value, str):
+    if item.path is None:
+        return _replace_group_attributes(current, item)
+    if item.path.lower() == "displayname" and item.op != "remove" and isinstance(item.value, str):
         return current.model_copy(update={"displayName": item.value})
     members: Final = _patched_members(current, item)
     if isinstance(members, SCIMProvisioningFailure):
         return members
     return current.model_copy(update={"members": list(members)})
+
+
+def _replace_group_attributes(current: SCIMGroup, item: SCIMPatchOperation) -> SCIMGroup | SCIMProvisioningFailure:
+    raw: Final[object] = item.value
+    if item.op == "remove" or not isinstance(raw, dict):
+        return SCIMProvisioningFailure(400, "An object value or attribute path is required")
+    fields: Final = TypeAdapter(Mapping[str, object]).validate_python(raw)
+    if any(key.lower() not in ("displayname", "members") for key in fields):
+        return SCIMProvisioningFailure(400, "Unsupported group PATCH attribute")
+    display_name: Final = next((value for key, value in fields.items() if key.lower() == "displayname"), None)
+    if display_name is not None and (not isinstance(display_name, str) or not display_name):
+        return SCIMProvisioningFailure(400, "Invalid group displayName")
+    renamed: Final = current if display_name is None else current.model_copy(update={"displayName": display_name})
+    member_values: Final = next((value for key, value in fields.items() if key.lower() == "members"), None)
+    if member_values is None:
+        return renamed
+    return _patch_group_operation(renamed, SCIMPatchOperation(op=item.op, path="members", value=member_values))
 
 
 def group_members_after_patch(group: SCIMGroup, patch: SCIMPatchOp) -> SCIMGroup | SCIMProvisioningFailure:
@@ -245,12 +268,14 @@ class AgentProvisioningService:
         from litellm.proxy.management_endpoints.scim.scim_v2 import parse_scim_eq_filter
 
         parsed: Final = parse_scim_eq_filter(filter_value) if filter_value else None
-        fields: Final = {
-            "username": "user_name",
-            "externalid": "external_id",
-            "displayname": "display_name",
-            "id": "id",
-        }
+        fields: Final = MappingProxyType(
+            {
+                "username": "user_name",
+                "externalid": "external_id",
+                "displayname": "display_name",
+                "id": "id",
+            }
+        )
         if filter_value and (parsed is None or parsed[0] not in fields):
             reject(SCIMProvisioningFailure(400, "Unsupported SCIM filter"))
         filter_clause: Final[LiteLLM_SCIMResourceWhereInput] = (
@@ -290,7 +315,8 @@ class AgentProvisioningService:
         return user_document(row) if kind == "Users" else group_document(row)
 
     async def _resource(self, tx: Prisma, kind: Literal["Users", "Groups"], resource_id: str) -> LiteLLM_SCIMResource:
-        row: Final = await tx.litellm_scimresource.find_unique(where={"id": resource_id})
+        where: Final[LiteLLM_SCIMResourceWhereUniqueInput] = {"id": resource_id}
+        row: Final = await tx.litellm_scimresource.find_unique(where=where)
         if row is None or row.source_id != self.source.source_id or row.kind != kind or row.deleted:
             raise HTTPException(404, "SCIM resource not found in this provisioning source")
         return row
@@ -458,8 +484,9 @@ class AgentProvisioningService:
     async def delete(self, kind: Literal["Users", "Groups"], resource_id: str) -> None:
         from litellm.proxy.management_endpoints.scim import scim_v2
 
+        where: Final[LiteLLM_SCIMResourceWhereUniqueInput] = {"id": resource_id}
         async with self.client.tx() as tx:
-            row: Final = await tx.litellm_scimresource.find_unique(where={"id": resource_id})
+            row: Final = await tx.litellm_scimresource.find_unique(where=where)
             if row is None or row.source_id != self.source.source_id or row.kind != kind:
                 raise HTTPException(404, "SCIM resource not found in this provisioning source")
             if row.deleted:
@@ -483,9 +510,8 @@ class AgentProvisioningService:
                 groups: Final = await tx.litellm_scimresource.find_many(where=memberships)
                 for group in groups:
                     await remove_group_member(tx, group, row.id)
-            await tx.litellm_scimresource.update(
-                where={"id": row.id}, data={"active": False, "deleted": True, "member_ids": []}
-            )
+            retired: Final[LiteLLM_SCIMResourceUpdateInput] = {"active": False, "deleted": True, "member_ids": []}
+            await tx.litellm_scimresource.update(where=where, data=retired)
 
     @serialized_source
     async def create_group(self, group: SCIMGroup) -> SCIMGroup:
@@ -602,5 +628,7 @@ class AgentProvisioningService:
             else await scim_v2.update_group(group_id=existing_team.team_id, group=document)
         )
         if group.local_id is None:
+            where: Final[LiteLLM_SCIMResourceWhereUniqueInput] = {"id": group.id}
+            linked: Final[LiteLLM_SCIMResourceUpdateInput] = {"local_id": result.id}
             async with self.client.tx() as tx:
-                await tx.litellm_scimresource.update(where={"id": group.id}, data={"local_id": result.id})
+                await tx.litellm_scimresource.update(where=where, data=linked)
