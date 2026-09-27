@@ -666,12 +666,21 @@ async def verified_human_agent_grants(user_id: str | None, team_id: str | None =
 
 
 async def resolve_delegated_agent_team(
-    user_id: str | None, agent_id: str, team_id: str | None, *, explicit_team: bool
+    user_id: str | None,
+    agent_id: str,
+    team_id: str | None,
+    *,
+    explicit_team: bool,
+    allowed_team_ids: frozenset[str] | None = None,
 ) -> str | None:
     sources: Final = await _verified_human_agent_sources(user_id)
     if any(source is None and agent_id in grants for source, grants in sources):
         return team_id
-    granting_teams: Final = frozenset(source for source, grants in sources if source is not None and agent_id in grants)
+    granting_teams: Final = frozenset(
+        source
+        for source, grants in sources
+        if source is not None and agent_id in grants and (allowed_team_ids is None or source in allowed_team_ids)
+    )
     if team_id in granting_teams:
         return team_id
     if not explicit_team and granting_teams:
