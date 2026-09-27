@@ -1087,6 +1087,9 @@ def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
         for k, v in extra_body.items():
             if k in _LITELLM_INTERNAL_EXTRA_BODY_KEYS:
                 continue
+            if k == "system_instruction":
+                # Sending both spellings of the same proto field is a 400.
+                k = "systemInstruction"
             if k in data_dict and isinstance(data_dict[k], dict) and isinstance(v, dict):
                 data_dict[k].update(v)
             else:

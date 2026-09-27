@@ -184,6 +184,24 @@ def test_system_instruction_uses_canonical_rest_key(custom_llm_provider):
     assert result["systemInstruction"]["parts"][0]["text"] == "You are a concise assistant."
 
 
+def test_extra_body_snake_case_system_instruction_lands_on_the_canonical_key():
+    """A caller still passing the old alias through extra_body must not produce both spellings."""
+    result = _transform_request_body(
+        messages=[
+            {"role": "system", "content": "from messages"},
+            {"role": "user", "content": "ping"},
+        ],
+        model="gemini-2.5-pro",
+        optional_params={"extra_body": {"system_instruction": {"parts": [{"text": "from extra_body"}]}}},
+        custom_llm_provider="gemini",
+        litellm_params={},
+        cached_content=None,
+    )
+
+    assert "system_instruction" not in result
+    assert result["systemInstruction"]["parts"] == [{"text": "from extra_body"}]
+
+
 # Tests for issue #14556: Labels field provider-aware filtering
 def test_google_genai_excludes_labels():
     """Test that Google GenAI/AI Studio endpoints exclude labels when custom_llm_provider='gemini'"""
