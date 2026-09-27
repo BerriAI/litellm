@@ -694,6 +694,12 @@ set_live_deployment_replay(_replay_live_router_model_cost)
 
 
 RETRY_BREADCRUMB_LIMIT: Final = 4
+# Litellm exceptions embed the upstream response body, so a single retry record
+# could hold hundreds of kilobytes: the release-gate test
+# test_failing_requests_do_not_grow_rss_or_stored_request saw the proxy RSS grow
+# 86.8 MB over 300 failing requests against a 48 MB budget. Only the diagnostic
+# head of the message is kept.
+RETRY_BREADCRUMB_EXCEPTION_LIMIT: Final = 500
 
 
 class FallbackAwareStreamWrapper(CustomStreamWrapper):
@@ -8296,11 +8302,17 @@ class Router:
         model_info: Final = request_metadata.get("model_info")
         deployment_id: Final = model_info.get("id") if isinstance(model_info, Mapping) else None
         attempted_retries: Final = request_metadata.get("attempted_retries")
+        exception_string: Final = str(e)
         attempt_record: Final[RetryAttemptRecord] = {
             "model_group": model_group if isinstance(model_group, str) else None,
             "deployment_id": deployment_id if isinstance(deployment_id, str) else None,
             "exception_type": type(e).__name__,
-            "exception_string": str(e),
+            "exception_string": (
+                exception_string[:RETRY_BREADCRUMB_EXCEPTION_LIMIT]
+                + f"... [truncated, {len(exception_string)} chars]"
+                if len(exception_string) > RETRY_BREADCRUMB_EXCEPTION_LIMIT
+                else exception_string
+            ),
             "attempted_retries": attempted_retries if type(attempted_retries) is int else None,
         }
         earlier_breadcrumbs: Final = request_metadata.get("previous_models")
