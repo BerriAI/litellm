@@ -3288,6 +3288,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-host-http"
+version = "0.1.0"
+dependencies = [
+ "axum",
+ "bytes",
+ "futures-util",
+ "http 1.4.2",
+ "litellm-host",
+ "rstest",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-host-python"
 version = "0.1.0"
 dependencies = [
