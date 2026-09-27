@@ -3583,6 +3583,8 @@ class MCPServerManager:
     async def resolve_toolset_tool_permissions(
         self,
         toolset_ids: list[str],
+        *,
+        requires_fresh_policy: bool = False,
     ) -> dict[str, list[str]]:
         """
         Resolve a list of toolset IDs into a mcp_tool_permissions dict.
@@ -3591,6 +3593,10 @@ class MCPServerManager:
         the given toolsets.  Results are cached via ``user_api_key_cache`` (a
         Redis-backed ``DualCache`` in production) so that cache entries are
         shared across workers and cold-cache DB hits are minimised.
+
+        ``requires_fresh_policy`` bypasses the cache and reads the writer so a
+        revocation is honoured on the very next request; a read fault then
+        propagates instead of resolving to no grants.
 
         A row names a tool on the server identified by ``server_id``, so the
         stored name is the tool's own name and is used as written.  It is never
@@ -3606,12 +3612,16 @@ class MCPServerManager:
             return {}
 
         cache_key: Final = "toolset_perms:" + ",".join(sorted(toolset_ids))
-        cached: Final[dict[str, list[str]] | None] = await user_api_key_cache.async_get_cache(key=cache_key)
+        cached: Final[dict[str, list[str]] | None] = (
+            None if requires_fresh_policy else await user_api_key_cache.async_get_cache(key=cache_key)
+        )
         if cached is not None:
             return cached
 
         try:
-            toolsets: Final = await list_mcp_toolsets(prisma_client, toolset_ids=toolset_ids)
+            toolsets: Final = await list_mcp_toolsets(
+                prisma_client, toolset_ids=toolset_ids, use_writer=requires_fresh_policy
+            )
             tool_permissions: Final[dict[str, list[str]]] = {}
             for toolset in toolsets:
                 for tool in toolset.tools:
@@ -3625,6 +3635,8 @@ class MCPServerManager:
             )
             return tool_permissions
         except Exception as e:
+            if requires_fresh_policy:
+                raise
             verbose_logger.warning("Failed to resolve toolset permissions: %s", e)
             return {}
 

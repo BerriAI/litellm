@@ -156,6 +156,7 @@ async def admit_managed_actor(auth: UserAPIKeyAuth, store: AgentIdentityStore | 
         raise_identity_failure(failure)
     auth.managed_agent_policy = agent
     auth.billing_agent_policy = agent
+    auth.requires_fresh_policy = True
     if auth.managed_agent_context is not None and auth.managed_agent_context.mode == "delegated":
         from litellm.proxy.agent_endpoints.auth.agent_permission_handler import verified_human_agent_grants
 
