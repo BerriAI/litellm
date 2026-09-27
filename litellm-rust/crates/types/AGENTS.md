@@ -33,7 +33,7 @@
 - Stream-event data belongs here, but live streams, decoders, framing, buffering, and stream lifecycle decisions do not
   - Keep SSE and AWS framing in `framer`, provider decoding and conversion in `llms`, and call orchestration in `core`
   - `ResponsesWsEvent` belongs here
-  - The existing `ResponsesWsTransformResult` wraps the output of a provider transformation rather than a wire event and belongs with the `llms` Responses transformation contract when that boundary is refactored
+  - `ResponsesWsTransformResult` wraps the output of a provider transformation rather than a wire event and lives in `llms::base_llm::responses::transformation`
   - Protocol error payloads may live here, while operational errors remain in the crate that raises them
 
 - Keep provider-only wire envelopes and transformation-specific projections local until there is a shared API contract to expose

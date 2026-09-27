@@ -79,19 +79,6 @@ impl ResponsesWsEvent {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct ResponsesWsTransformResult {
-    pub events: Vec<ResponsesWsEvent>,
-}
-
-impl ResponsesWsTransformResult {
-    pub fn passthrough(event: ResponsesWsEvent) -> Self {
-        Self {
-            events: vec![event],
-        }
-    }
-}
-
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ResponsesErrorFrame {
     #[serde(rename = "type")]

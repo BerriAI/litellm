@@ -1,9 +1,23 @@
-use litellm_types::responses::streaming_websocket::{ResponsesWsEvent, ResponsesWsTransformResult};
+use litellm_types::responses::streaming_websocket::ResponsesWsEvent;
+use serde::{Deserialize, Serialize};
 
 use crate::Error;
 
 pub const OPENAI_RESPONSES_DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
 pub const OPENAI_RESPONSES_PATH: &str = "/responses";
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ResponsesWsTransformResult {
+    pub events: Vec<ResponsesWsEvent>,
+}
+
+impl ResponsesWsTransformResult {
+    pub fn passthrough(event: ResponsesWsEvent) -> Self {
+        Self {
+            events: vec![event],
+        }
+    }
+}
 
 pub trait ResponsesWebSocketProviderConfig: Sync {
     fn supports_native_websocket(&self) -> bool {
