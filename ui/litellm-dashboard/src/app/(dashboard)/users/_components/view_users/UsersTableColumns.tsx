@@ -64,7 +64,10 @@ function UserRowActions({ user, canViewUserUsage, onUserClick, onDeleteUser, onR
           Copy user ID
         </DropdownMenuItem>
         {canViewUserUsage && (
-          <DropdownMenuItem render={<Link href={usageHrefForUser(user.user_id)} />} data-testid="user-action-view-usage">
+          <DropdownMenuItem
+            render={<Link href={usageHrefForUser(user.user_id)} />}
+            data-testid="user-action-view-usage"
+          >
             <ChartColumn />
             View usage
           </DropdownMenuItem>
