@@ -16,7 +16,10 @@ use litellm_core::messages::{
 use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use serde_json::{Map, Value};
 
-use crate::{Deployment, Error, Gateway};
+use crate::{
+    Deployment, Error, Gateway,
+    metering::{Meter, MeteredStream},
+};
 
 /// Client headers Python forwards to Anthropic-speaking providers on every call.
 const ANTHROPIC_API_HEADERS: [&str; 2] = ["anthropic-version", "anthropic-beta"];
@@ -51,8 +54,13 @@ async fn handle(gateway: &Gateway, headers: &HeaderMap, body: &[u8]) -> Result<R
         .models
         .get(model_name)
         .ok_or_else(|| Error::UnknownModel(model_name.to_owned()))?;
+    let (meter, metering) = Meter::start(
+        model_name,
+        &deployment.model,
+        deployment.custom_llm_provider.as_deref(),
+    );
     let call = project(deployment, body, headers)?;
-    match messages(
+    let mut response = match messages(
         &gateway.resources,
         &gateway.http,
         gateway.secrets.as_ref(),
@@ -60,9 +68,16 @@ async fn handle(gateway: &Gateway, headers: &HeaderMap, body: &[u8]) -> Result<R
     )
     .await?
     {
-        MessagesResponse::Message(message) => Ok(Json(message).into_response()),
-        MessagesResponse::Stream { chunks, .. } => Ok(stream(chunks)),
-    }
+        MessagesResponse::Message(message) => {
+            meter.complete(message.usage.as_ref().unwrap_or(&Value::Null));
+            Json(message).into_response()
+        }
+        MessagesResponse::Stream { chunks, .. } => {
+            stream(MeteredStream::new(chunks, meter).boxed())
+        }
+    };
+    response.extensions_mut().insert(metering);
+    Ok(response)
 }
 
 fn project(

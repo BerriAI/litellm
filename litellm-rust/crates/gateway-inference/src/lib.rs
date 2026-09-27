@@ -7,6 +7,7 @@ mod audio_transcription;
 mod chat_completions;
 mod error;
 pub mod messages;
+mod metering;
 mod ocr;
 mod request;
 
@@ -20,6 +21,7 @@ use litellm_secrets::source::SecretSource;
 
 pub use error::Error;
 pub use litellm_router::{Deployment, Router as ModelList};
+pub use metering::{Metered, Metering};
 
 pub struct Gateway {
     pub resources: CoreResources,

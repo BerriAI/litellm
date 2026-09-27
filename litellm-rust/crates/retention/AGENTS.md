@@ -1,0 +1,2 @@
+- Deletes rows past their retention age and manages SpendLogs partitions, within the batch, run-time, and timeout bounds from `general_settings`
+- Database access is behind `RetentionStore` and `PartitionStore`; this crate owns which rows go and when, never the SQL

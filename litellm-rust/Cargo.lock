@@ -1104,7 +1104,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cfc320937d09e6de266b31b9afb480f197d7a861be86be7cb2ea7e5d1bfffc5e"
 dependencies = [
  "bytes",
+ "futures-core",
  "memchr",
+ "pin-project-lite",
+ "tokio",
+ "tokio-util",
 ]
 
 [[package]]
@@ -1246,6 +1250,18 @@ checksum = "d8d80a2f4f5b554395e47b5d8305bc3d27813bacb73493eb1001e8f76dae29ea"
 dependencies = [
  "cast",
  "itertools 0.13.0",
+]
+
+[[package]]
+name = "cron"
+version = "0.17.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5dcd6f69605c2956916ce24e8af637b754964c9a83f4662d3a2361654cdba09"
+dependencies = [
+ "chrono",
+ "once_cell",
+ "phf",
+ "winnow 0.7.15",
 ]
 
 [[package]]
@@ -3220,15 +3236,24 @@ dependencies = [
  "http-body-util",
  "litellm-config",
  "litellm-core",
+ "litellm-cost",
  "litellm-gateway-auth",
  "litellm-gateway-inference",
  "litellm-http",
+ "litellm-jobs",
  "litellm-llms",
  "litellm-secrets",
+ "litellm-spend",
+ "litellm-spend-redis",
  "litellm-tracing",
+ "percent-encoding",
+ "redis",
  "rstest",
  "serde_json",
+ "thiserror 2.0.19",
+ "time",
  "tokio",
+ "tokio-util",
  "tower",
  "tracing",
  "uuid",
@@ -3261,6 +3286,8 @@ dependencies = [
  "futures-util",
  "litellm-auth",
  "litellm-core",
+ "litellm-cost",
+ "litellm-framing",
  "litellm-http",
  "litellm-llms",
  "litellm-router",
@@ -3270,6 +3297,7 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-util",
  "tower",
  "wiremock",
 ]
@@ -3319,6 +3347,32 @@ dependencies = [
  "tokio",
  "veil",
  "webpki-roots",
+]
+
+[[package]]
+name = "litellm-jobs"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "cron",
+ "rand 0.8.7",
+ "rstest",
+ "tokio",
+ "tokio-util",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
+name = "litellm-jobs-redis"
+version = "0.1.0"
+dependencies = [
+ "litellm-jobs",
+ "redis",
+ "rstest",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
 ]
 
 [[package]]
@@ -3437,6 +3491,18 @@ dependencies = [
  "serde-pickle",
  "serde_json",
  "thiserror 2.0.19",
+]
+
+[[package]]
+name = "litellm-retention"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tokio-util",
+ "tracing",
 ]
 
 [[package]]
@@ -3601,6 +3667,44 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "veil",
+]
+
+[[package]]
+name = "litellm-spend"
+version = "0.1.0"
+dependencies = [
+ "litellm-jobs",
+ "litellm-spend-testing",
+ "rstest",
+ "thiserror 2.0.19",
+ "time",
+ "tokio",
+ "tokio-util",
+ "uuid",
+]
+
+[[package]]
+name = "litellm-spend-redis"
+version = "0.1.0"
+dependencies = [
+ "litellm-spend",
+ "litellm-spend-testing",
+ "percent-encoding",
+ "redis",
+ "rstest",
+ "serde",
+ "serde_json",
+ "thiserror 2.0.19",
+ "tokio",
+ "uuid",
+]
+
+[[package]]
+name = "litellm-spend-testing"
+version = "0.1.0"
+dependencies = [
+ "litellm-spend",
+ "tokio",
 ]
 
 [[package]]
@@ -4199,6 +4303,48 @@ dependencies = [
 ]
 
 [[package]]
+name = "phf"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fd6780a80ae0c52cc120a26a1a42c1ae51b247a253e4e06113d23d2c2edd078"
+dependencies = [
+ "phf_macros",
+ "phf_shared",
+]
+
+[[package]]
+name = "phf_generator"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3c80231409c20246a13fddb31776fb942c38553c51e871f8cbd687a4cfb5843d"
+dependencies = [
+ "phf_shared",
+ "rand 0.8.7",
+]
+
+[[package]]
+name = "phf_macros"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f84ac04429c13a7ff43785d75ad27569f2951ce0ffd30a3321230db2fc727216"
+dependencies = [
+ "phf_generator",
+ "phf_shared",
+ "proc-macro2",
+ "quote",
+ "syn 2.0.119",
+]
+
+[[package]]
+name = "phf_shared"
+version = "0.11.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "67eabc2ef2a60eb7faa00097bd1ffdb5bd28e62bf39990626a582201b7a754e5"
+dependencies = [
+ "siphasher",
+]
+
+[[package]]
 name = "pin-project"
 version = "1.1.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -4738,17 +4884,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2acbc41a996f7652b2ddd9dfd98cc4ff602cfd742ae35382f07f608405ab50ed"
 dependencies = [
  "arcstr",
+ "async-lock",
+ "bytes",
+ "cfg-if",
  "combine",
  "crc16",
+ "futures-util",
  "itoa",
  "num-bigint 0.5.1",
  "percent-encoding",
+ "pin-project-lite",
  "rand 0.10.2",
  "rustls 0.23.42",
  "rustls-native-certs",
  "ryu",
  "sha1_smol",
  "socket2 0.6.5",
+ "tokio",
+ "tokio-util",
  "url",
  "xxhash-rust",
 ]
@@ -5560,6 +5713,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e3a9fe34e3e7a50316060351f37187a3f546bce95496156754b601a5fa71b76e"
 
 [[package]]
+name = "siphasher"
+version = "1.0.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "33f4fe9184a62d842c9ef383018f3306d8ba224fd9d836f56d7288308847c256"
+
+[[package]]
 name = "slab"
 version = "0.4.12"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6019,6 +6178,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]
@@ -6855,6 +7015,9 @@ name = "winnow"
 version = "0.7.15"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "df79d97927682d2fd8adb29682d1140b343be4ac0f08fd68b7765d9c059d3945"
+dependencies = [
+ "memchr",
+]
 
 [[package]]
 name = "winnow"

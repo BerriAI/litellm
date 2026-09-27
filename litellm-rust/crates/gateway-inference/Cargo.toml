@@ -12,6 +12,8 @@ bytes.workspace = true
 futures-util.workspace = true
 litellm-auth.workspace = true
 litellm-core.workspace = true
+litellm-cost.workspace = true
+litellm-framing.workspace = true
 litellm-http.workspace = true
 litellm-llms.workspace = true
 litellm-router.workspace = true
@@ -19,6 +21,8 @@ litellm-secrets.workspace = true
 litellm-types.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tokio-util = { workspace = true, features = ["codec"] }
 
 [dev-dependencies]
 futures-util.workspace = true

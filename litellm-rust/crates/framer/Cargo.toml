@@ -16,7 +16,7 @@ aws-smithy-types = { version = "1.6.1", optional = true }
 bytes = "1"
 futures-util.workspace = true
 thiserror.workspace = true
-tokio-util = { version = "0.7", features = ["codec", "io"] }
+tokio-util = { workspace = true, features = ["codec", "io"] }
 
 [dev-dependencies]
 proptest.workspace = true
