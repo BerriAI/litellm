@@ -54,7 +54,8 @@ FUNCTION_CALL_ATTRIBUTE: Final = "function_call"
 
 _SYNC_ITER_EXHAUSTED: Final = object()
 
-_GCHUNK_FIELDS: Final[frozenset] = frozenset(GChunk.__annotations__)
+_GCHUNK_FIELDS: Final[frozenset[str]] = frozenset(GChunk.__annotations__)
+_GCHUNK_REQUIRED_FIELDS: Final[frozenset[str]] = frozenset(GChunk.__required_keys__)
 _USAGE_COST_HEADER_PROVIDERS: Final[frozenset[str]] = frozenset({LlmProviders.OPENROUTER.value})
 
 
@@ -2467,7 +2468,7 @@ def generic_chunk_has_all_required_fields(chunk: dict) -> bool:
     :param chunk: The dictionary to check.
     :return: True if all required fields are present, False otherwise.
     """
-    return all(key in _GCHUNK_FIELDS for key in chunk)
+    return _GCHUNK_REQUIRED_FIELDS <= chunk.keys() <= _GCHUNK_FIELDS
 
 
 def convert_generic_chunk_to_model_response_stream(
