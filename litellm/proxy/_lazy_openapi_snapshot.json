@@ -10405,14 +10405,20 @@
               "title": "Timeout"
             },
             "unreachable_fallback": {
-              "default": "fail_closed",
-              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.",
-              "enum": [
-                "fail_closed",
-                "fail_open"
+              "anyOf": [
+                {
+                  "enum": [
+                    "fail_closed",
+                    "fail_open"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "Unreachable Fallback",
-              "type": "string"
+              "description": "Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error. 'fail_open' logs a critical error and allows the request to proceed. Unset applies the guardrail's own default: 'agent_365' and 'typesafe' fail open, the others fail closed.",
+              "title": "Unreachable Fallback"
             },
             "violation_message_template": {
               "anyOf": [
@@ -11378,7 +11384,8 @@
                 }
               ],
               "description": "Agent identity reported to Agent 365 with every tool evaluation. When unset, the caller's key alias is used.",
-              "title": "Agent Id"
+              "title": "Agent Id",
+              "ui_hidden": true
             },
             "akto_account_id": {
               "anyOf": [
@@ -12961,7 +12968,8 @@
                 }
               ],
               "description": "Application id of the Agent 365 resource the OBO token is minted for. Defaults to the production resource ea9ffc3e-8a23-4a7d-836d-234d7c7565c1; the Test and PreProd environments use a different id. Falls back to the AGENT365_RESOURCE_APP_ID environment variable.",
-              "title": "Resource App Id"
+              "title": "Resource App Id",
+              "ui_hidden": true
             },
             "rules": {
               "anyOf": [
@@ -13261,14 +13269,20 @@
               "title": "Tracker Api Key"
             },
             "unreachable_fallback": {
-              "default": "fail_closed",
-              "description": "Behavior when the headroom compression service is unreachable or errors. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and forwards the request uncompressed instead of blocking it.",
-              "enum": [
-                "fail_closed",
-                "fail_open"
+              "anyOf": [
+                {
+                  "enum": [
+                    "fail_closed",
+                    "fail_open"
+                  ],
+                  "type": "string"
+                },
+                {
+                  "type": "null"
+                }
               ],
-              "title": "Unreachable Fallback",
-              "type": "string"
+              "description": "Behavior when the guardrail endpoint is unreachable. 'fail_closed' blocks, 'fail_open' allows and logs. Unset applies the guardrail's own default: 'agent_365' and 'typesafe' fail open, the others fail closed.",
+              "title": "Unreachable Fallback"
             },
             "use_v2": {
               "anyOf": [
