@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import asyncio
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
@@ -155,8 +154,8 @@ async def scan_tool_descriptions(
     user_api_key_auth: UserAPIKeyAuth | None,
     raw_headers: Mapping[str, str] | None,
 ) -> ToolDescriptionScan:
-    outcomes: Final = await asyncio.gather(
-        *(_scan_tool(tool, server, proxy_logging_obj, user_api_key_auth, raw_headers) for tool in tools)
+    outcomes: Final = tuple(
+        [await _scan_tool(tool, server, proxy_logging_obj, user_api_key_auth, raw_headers) for tool in tools]
     )
     return ToolDescriptionScan(
         served=tuple(outcome for outcome in outcomes if isinstance(outcome, MCPTool)),

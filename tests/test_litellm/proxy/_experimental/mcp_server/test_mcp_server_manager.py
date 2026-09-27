@@ -14793,6 +14793,46 @@ class TestToolCatalogGuard:
         ]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("cancel_listing", (False, True))
+    async def test_discovery_scans_one_tool_at_a_time(self, catalog_guardrail, cancel_listing: bool):
+        _, proxy_logging_obj = catalog_guardrail
+        upstream: Final = tuple(
+            MCPTool(name=f"lookup_{index}", description="Safe lookup", inputSchema={"type": "object"})
+            for index in range(16)
+        )
+        manager: Final = _catalog_manager(*upstream)
+        started: Final = asyncio.Event()
+        release: Final = asyncio.Event()
+
+        async def hold_scan(**kwargs):
+            started.set()
+            await release.wait()
+            return kwargs["data"]
+
+        proxy_logging_obj.pre_call_hook = AsyncMock(side_effect=hold_scan)
+        listing: Final = asyncio.create_task(
+            manager._get_tools_from_server(_notes_server(), add_prefix=False, proxy_logging_obj=proxy_logging_obj)
+        )
+        try:
+            await asyncio.wait_for(started.wait(), timeout=1)
+            assert proxy_logging_obj.pre_call_hook.await_count == 1
+            if cancel_listing:
+                listing.cancel()
+                with pytest.raises(asyncio.CancelledError):
+                    await listing
+                assert proxy_logging_obj.pre_call_hook.await_count == 1
+            else:
+                release.set()
+                served: Final = await listing
+                assert [tool.name for tool in served] == [tool.name for tool in upstream]
+                assert proxy_logging_obj.pre_call_hook.await_count == len(upstream)
+        finally:
+            release.set()
+            if not listing.done():
+                listing.cancel()
+            await asyncio.gather(listing, return_exceptions=True)
+
+    @pytest.mark.asyncio
     async def test_discovery_scan_cancellation_propagates(self, catalog_guardrail):
         _, proxy_logging_obj = catalog_guardrail
         manager: Final = _catalog_manager(LIST_NOTES)
