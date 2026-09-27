@@ -1,5 +1,4 @@
 use std::sync::Arc;
-use std::task::Poll;
 
 use futures_util::future::{AbortHandle, Abortable};
 use litellm_host::event::WireRequest;
@@ -17,8 +16,13 @@ use crate::adapter::{
     InvokeError, LifecycleEvent, LifecycleStep, Preflight, ProtocolHost, PythonLifecycle,
     missing_state,
 };
-use crate::execution::{poll_async_value, run_async_value, run_sync_value};
+use crate::execution::run_sync_value;
 use crate::handle::{Execution, ExecutionBody, ExecutionStep};
+use crate::inline::{InlineAwait, Started};
+
+#[cfg(test)]
+const RUST_BRIDGE: &str = "litellm.rust_bridge";
+const RUST_BRIDGE_LIFECYCLE: &str = "litellm.rust_bridge.lifecycle";
 
 type ProtocolOf<H> = <H as ProtocolHost>::Protocol;
 type ErrorOf<H> = <ProtocolOf<H> as Protocol>::Error;
@@ -132,7 +136,7 @@ where
     if asynchronous {
         let execution = Py::new(py, Execution::new(driver))?;
         return py
-            .import("litellm.rust_bridge.lifecycle")?
+            .import(RUST_BRIDGE_LIFECYCLE)?
             .getattr("drive")?
             .call1((execution,))
             .map(Bound::unbind);
@@ -140,7 +144,7 @@ where
     match driver.resume(None)? {
         ExecutionStep::Return(value) => Ok(value),
         ExecutionStep::Open(head) => py
-            .import("litellm.rust_bridge.lifecycle")?
+            .import(RUST_BRIDGE_LIFECYCLE)?
             .getattr("SyncStream")?
             .call1((Py::new(py, Execution::suspended(driver))?, head))
             .map(Bound::unbind),
@@ -418,24 +422,22 @@ where
             state.result = Some(result);
             Ok(())
         };
-        if self.asynchronous {
-            let mut future = Box::pin(future);
-            if let Poll::Ready(()) = poll_async_value(py, future.as_mut())? {
-                return Ok(HostStep::Ready(self.take_native_result()?));
-            }
-            let (abort, registration) = AbortHandle::new_pair();
-            self.native_abort = Some(abort);
-            Ok(HostStep::Suspend(
-                run_async_value(py, async move {
-                    Abortable::new(future, registration)
-                        .await
-                        .map_err(|_| PyRuntimeError::new_err("native execution closed"))?
-                })?
-                .unbind(),
-            ))
-        } else {
+        if !self.asynchronous {
             run_sync_value(py, future)?;
-            Ok(HostStep::Ready(self.take_native_result()?))
+            return Ok(HostStep::Ready(self.take_native_result()?));
+        }
+        let (abort, registration) = AbortHandle::new_pair();
+        let started = InlineAwait::start(py, async move {
+            Abortable::new(future, registration)
+                .await
+                .map_err(|_| PyRuntimeError::new_err("native execution closed"))?
+        })?;
+        match started {
+            Started::Ready => Ok(HostStep::Ready(self.take_native_result()?)),
+            Started::Suspended(awaitable) => {
+                self.native_abort = Some(abort);
+                Ok(HostStep::Suspend(awaitable.into_any()))
+            }
         }
     }
 
@@ -576,20 +578,11 @@ mod tests {
     static PYTHON_GLOBALS: Mutex<()> = Mutex::new(());
 
     fn install_lifecycle_module(py: Python<'_>) -> Bound<'_, PyModule> {
-        py.run(
-            pyo3::ffi::c_str!(
-                r#"
-import sys
-import types
-
-sys.modules.setdefault('litellm', types.ModuleType('litellm'))
-sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bridge'))
-"#
-            ),
-            None,
-            None,
-        )
-        .unwrap();
+        let modules = py.import("sys").unwrap().getattr("modules").unwrap();
+        ["litellm", RUST_BRIDGE].into_iter().for_each(|name| {
+            let module = PyModule::new(py, name).unwrap();
+            modules.call_method1("setdefault", (name, module)).unwrap();
+        });
         let source =
             std::ffi::CString::new(include_str!("../../../../litellm/rust_bridge/lifecycle.py"))
                 .unwrap();
@@ -597,7 +590,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             py,
             &source,
             pyo3::ffi::c_str!("lifecycle.py"),
-            pyo3::ffi::c_str!("litellm.rust_bridge.lifecycle"),
+            &std::ffi::CString::new(RUST_BRIDGE_LIFECYCLE).unwrap(),
         )
         .unwrap()
     }
@@ -1091,6 +1084,112 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             Some(stop.value(py).getattr("value").unwrap().extract().unwrap())
         })
         .collect()
+    }
+
+    /// Every chunk arrives from a runtime thread a timer tick after the caller asked for it,
+    /// so each read parks the caller's task and is woken through the loop signal.
+    fn parking_machine() -> CallMachine<Streaming> {
+        CallMachine::new(|host| {
+            Box::pin(async move {
+                host.project().await?;
+                if host.open(Vec::new()).await? == Demand::Detached {
+                    return Ok(());
+                }
+                for chunk in ["first", "second", "third"] {
+                    tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                    if host.deliver(chunk).await? == Demand::Detached {
+                        break;
+                    }
+                }
+                Ok(())
+            })
+        })
+    }
+
+    fn hand_parking_stream(py: Python<'_>, log: &Log) -> Py<PyAny> {
+        let adapter = SyntheticAdapter {
+            log: Log(log.0.clone()),
+            script: AdapterScript::Plain,
+        };
+        run_call(
+            py,
+            parking_machine(),
+            StreamingHost,
+            Box::new(adapter),
+            no_preflight,
+            PyDict::new(py).unbind(),
+            true,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn parked_reads_are_woken_through_the_loop_and_survive_cancellation() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            let cancelled_log = Log::default();
+            let completed_log = Log::default();
+            let locals = PyDict::new(py);
+            locals
+                .set_item("cancelled", hand_parking_stream(py, &cancelled_log))
+                .unwrap();
+            locals
+                .set_item("completed", hand_parking_stream(py, &completed_log))
+                .unwrap();
+            py.run(
+                pyo3::ffi::c_str!(
+                    r#"
+import asyncio
+
+async def consume(handed):
+    stream = await handed
+    return [chunk async for chunk in stream]
+
+async def scenario():
+    task = asyncio.create_task(consume(cancelled))
+    await asyncio.sleep(0.0002)
+    task.cancel()
+    try:
+        await task
+    except asyncio.CancelledError:
+        pass
+    else:
+        raise AssertionError("a parked read ignored cancellation")
+    return await consume(completed)
+
+chunks = asyncio.run(asyncio.wait_for(scenario(), 10))
+"#
+                ),
+                Some(&locals),
+                Some(&locals),
+            )
+            .unwrap();
+            let chunks: Vec<String> = locals
+                .get_item("chunks")
+                .unwrap()
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(chunks, ["first", "second", "third"]);
+            assert!(
+                completed_log
+                    .entries()
+                    .contains(&"succeeded:None".to_string())
+            );
+            let cancelled = cancelled_log.entries();
+            assert!(
+                !cancelled.contains(&"delivered".to_string()),
+                "the cancelled stream delivered a chunk: {cancelled:?}"
+            );
+            assert!(
+                !cancelled.iter().any(|entry| entry.starts_with("succeeded")),
+                "the cancelled stream reported success: {cancelled:?}"
+            );
+        });
     }
 
     #[test]

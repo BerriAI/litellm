@@ -58,7 +58,7 @@ pub fn enter_native() -> PyResult<()> {
 }
 
 #[expect(clippy::disallowed_methods, reason = "this is the gated door")]
-fn runtime() -> PyResult<&'static Runtime> {
+pub(crate) fn runtime() -> PyResult<&'static Runtime> {
     enter_native()?;
     Ok(pyo3_async_runtimes::tokio::get_runtime())
 }
