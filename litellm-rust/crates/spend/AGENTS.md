@@ -1,0 +1,9 @@
+- Turns one finished request (`SpendEvent`) into everything that must be recorded, and owns the write path for each form
+  - Live counters (`Counters`): what budget checks read, incremented per request, never buffered
+  - Sums (`Batch<K, V>` behind `Buffer` and `Store`): entity totals, daily rollups, and budget-window spend differ only in key and tally, and share one `flush`
+    - A batch leaves a buffer by `claim`, which freezes it under a `BatchId` and hides it for the claim's lifetime; only `ack` removes it, so a crash or an unknown commit outcome ends in redelivery, never loss
+    - `Store::commit` must be atomic and idempotent on the `BatchId`; `litellm-spend-testing` holds the checks every backend runs to prove it
+  - Rows (`LogQueue` and `LogSink`): one `SpendLogRow` per request, bounded by bytes, safe to redeliver because `request_id` is unique
+- Storage is behind ports; only in-memory backends live here, and Redis or Postgres backends go in their own crates
+- A shared buffer is also a store, so the Redis transaction-buffer topology is a local-to-shared flush on every pod plus a shared-to-database flush under a one-pod lease
+- No key names, list names, table names, or wire formats of an existing deployment appear here: keys are typed, and a backend receives the layout it must match as an injected value

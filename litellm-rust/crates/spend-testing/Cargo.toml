@@ -1,0 +1,11 @@
+[package]
+name = "litellm-spend-testing"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish = false
+
+[dependencies]
+litellm-spend.workspace = true
+tokio = { workspace = true, features = ["macros"] }

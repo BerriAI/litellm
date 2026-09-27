@@ -1,3 +1,6 @@
+mod error;
+pub mod spend;
+
 use std::{sync::Arc, time::Instant};
 
 use axum::{
@@ -20,6 +23,8 @@ use litellm_llms::base_llm::ocr::settings::OcrSettings;
 use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
+
+pub use error::Error;
 
 pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, litellm_http::Error> {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));

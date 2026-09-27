@@ -1,0 +1,3 @@
+- Backend-neutral contract checks for the `litellm-spend` ports; every `Buffer` and `Store` backend runs them from its own `rstest` suite
+- A check panics with the violated contract, so a backend test is one case per contract and a new backend cannot skip one silently
+- Atomic and idempotent commits cannot be proven by types, so these checks are where those two contracts are enforced

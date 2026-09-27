@@ -1,0 +1,3 @@
+- Redis backends for the `litellm-spend` ports: `Counters` for budget enforcement and `Buffer` / `Store` for the shared transaction buffer
+- Nothing about the persisted layout is written into the commands: counter names come from an injected `CounterNaming`, list names and blob formats from an injected `BatchCodec`
+- `python` holds the implementations that match what Python LiteLLM reads and writes; a new layout is a new implementation of the same traits, passed in by the gateway

@@ -9,16 +9,25 @@ repository.workspace = true
 axum.workspace = true
 http-body-util = "0.1"
 litellm-core.workspace = true
+litellm-cost.workspace = true
 litellm-gateway-inference.workspace = true
 litellm-gateway-auth.workspace = true
 litellm-config.workspace = true
 litellm-http.workspace = true
+litellm-jobs.workspace = true
 litellm-llms.workspace = true
 litellm-secrets.workspace = true
+litellm-spend.workspace = true
+litellm-spend-redis.workspace = true
 litellm-tracing.workspace = true
+percent-encoding.workspace = true
+redis = { version = "1.7.0", features = ["aio", "tokio-comp"] }
 serde_json.workspace = true
+thiserror.workspace = true
+time.workspace = true
 tracing.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, features = ["signal"] }
+tokio-util = { workspace = true, features = ["rt"] }
 uuid.workspace = true
 
 [dev-dependencies]

@@ -1,0 +1,2 @@
+- `LeaseStore` on Redis, generic over redis-rs `aio::ConnectionLike` so standalone, cluster, and test connections all work
+- Key and owner formats are injected through `LeaseNaming`, never written into the commands; `PythonLeaseNaming` is the one that matches Python's `PodLockManager`, so Python and Rust pods exclude each other during a rolling deploy

@@ -1,0 +1,3 @@
+- Runs periodic background jobs: schedule ticks, the one-pod lease around a run, and cancellation on shutdown or lease loss
+- `LeaseStore` is the only coordination port, and each storage backend lives in its own `jobs-<backend>` crate; this crate never talks to Redis or Postgres
+- Job bodies are plain async functions owned by their domain crates, and the gateway registers them, so this crate knows nothing about spend or retention

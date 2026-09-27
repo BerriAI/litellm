@@ -1,0 +1,20 @@
+[package]
+name = "litellm-spend-redis"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+litellm-spend.workspace = true
+percent-encoding.workspace = true
+redis = { version = "1.7.0", features = ["aio", "tokio-comp"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+litellm-spend-testing.workspace = true
+rstest.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread", "time"] }

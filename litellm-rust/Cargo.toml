@@ -53,6 +53,13 @@ litellm-token-counter-huggingface = { path = "crates/token-counter-huggingface" 
 litellm-token-counter-tiktoken = { path = "crates/token-counter-tiktoken" }
 litellm-host-python = { path = "crates/host-python" }
 litellm-python-compat = { path = "crates/python-compat" }
+litellm-jobs = { path = "crates/jobs" }
+litellm-jobs-redis = { path = "crates/jobs-redis" }
+litellm-spend = { path = "crates/spend" }
+litellm-spend-redis = { path = "crates/spend-redis" }
+litellm-spend-testing = { path = "crates/spend-testing" }
+litellm-retention = { path = "crates/retention" }
+litellm-cost = { path = "crates/cost" }
 
 tracing = "0.1"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "multipart"] }
@@ -85,6 +92,7 @@ thiserror = "2.0"
 tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }
 tiktoken-rs = "0.12.0"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "time", "net"] }
+tokio-util = "0.7"
 tokio-tungstenite = { version = "0.24", default-features = false, features = ["connect", "rustls-tls-native-roots"] }
 futures-util = { version = "0.3", default-features = false, features = ["sink", "std"] }
 base64 = "0.22"
