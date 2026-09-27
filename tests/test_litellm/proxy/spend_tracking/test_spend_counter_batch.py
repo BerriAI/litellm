@@ -750,3 +750,130 @@ async def test_update_cache_reads_an_object_redis_gained_right_after_a_batch_rea
         "team_id:team": {"spend": 1.0}
     }
     assert redis.commands.count("MGET team_id:team") == 2
+
+
+class StorePipeline:
+    """Answers queued commands from a store like a real pipeline would."""
+
+    def __init__(self, store: dict[str, object], fail: bool = False) -> None:
+        self.calls: list[tuple] = []
+        self.scripts: set = set()
+        self.store = store
+        self.fail = fail
+        self.execute_count = 0
+
+    def mget(self, keys: list) -> "StorePipeline":
+        self.calls.append(("mget", tuple(keys)))
+        return self
+
+    def get(self, name: str) -> "StorePipeline":
+        self.calls.append(("get", name))
+        return self
+
+    def set(self, name: str, value: object, ex: object = None, **kwargs: object) -> "StorePipeline":
+        self.calls.append(("set", name, value, ex))
+        return self
+
+    def incrbyfloat(self, name: str, amount: float) -> "StorePipeline":
+        self.calls.append(("incrbyfloat", name, amount))
+        return self
+
+    def expire(self, name: str, ttl: int) -> "StorePipeline":
+        self.calls.append(("expire", name, ttl))
+        return self
+
+    def delete(self, name: str) -> "StorePipeline":
+        self.calls.append(("delete", name))
+        return self
+
+    async def execute(self, raise_on_error: bool = True) -> list:
+        import json as _json
+
+        self.execute_count += 1
+        if self.fail:
+            raise ConnectionError("redis down")
+        results: list[object] = []
+        for call in self.calls:
+            if call[0] == "mget":
+                results.append(
+                    [_json.dumps(self.store[k]).encode() if k in self.store else None for k in call[1]]
+                )
+            elif call[0] == "get":
+                results.append(_json.dumps(self.store[call[1]]).encode() if call[1] in self.store else None)
+            elif call[0] == "set":
+                self.store[call[1]] = _json.loads(call[2])
+                results.append(True)
+            elif call[0] == "incrbyfloat":
+                total = float(str(self.store.get(call[1], 0.0))) + call[2]
+                self.store[call[1]] = total
+                results.append(total)
+            elif call[0] == "expire":
+                results.append(True)
+            elif call[0] == "delete":
+                results.append(1 if self.store.pop(call[1], None) is not None else 0)
+        return results
+
+
+class PipelineClient:
+    def __init__(self, store: dict[str, object], fail: bool = False) -> None:
+        self.store = store
+        self.fail = fail
+        self.pipes: list[StorePipeline] = []
+
+    def pipeline(self, transaction: bool = True) -> StorePipeline:
+        pipe = StorePipeline(self.store, self.fail)
+        self.pipes.append(pipe)
+        return pipe
+
+
+class PipelinedRedis(CountingRedis):
+    """A CountingRedis that can also serve a RedisBatch through a recording pipeline."""
+
+    def __init__(self, store: dict[str, object] | None = None, fail: bool = False) -> None:
+        from litellm.caching.redis_cache import RedisCircuitBreaker
+
+        super().__init__(store, fail)
+        self.namespace = None
+        self.client = PipelineClient(self.store, fail)
+        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=2, recovery_timeout=60)
+        self.service_logger_obj = MagicMock()
+        self.service_logger_obj.async_service_failure_hook = AsyncMock()
+        self.service_logger_obj.async_service_success_hook = AsyncMock()
+
+    def init_async_client(self) -> PipelineClient:
+        return self.client
+
+
+@pytest.mark.asyncio
+async def test_bound_counters_and_other_plan_reads_share_one_pipeline_execute():
+    """Inside a request plan the spend MGET and an auth-style MGET on the same cache are one round trip."""
+    from litellm.caching.redis_request_plan import redis_request_plan_scope
+
+    redis = PipelinedRedis({"spend:key:hashed": 1.5, "user:1": 2.0})
+    with redis_request_plan_scope() as plan:
+        batch = SpendCounterBatch(redis)
+        batch.bind(frozenset({"spend:key:hashed"}))
+        auth_read = plan.batch_for(redis).mget(["user:1"])
+
+        assert await batch.read("spend:key:hashed") == (1.5, True)
+        assert await plan.resolve(auth_read) == {"user:1": 2.0}
+        assert plan.rounds == 1
+
+    assert len(redis.client.pipes) == 1
+    assert redis.client.pipes[0].execute_count == 1
+    assert redis.client.pipes[0].calls == [("mget", ("spend:key:hashed",)), ("mget", ("user:1",))]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_planned_mget_drops_the_key_set_so_the_next_read_retries():
+    from litellm.caching.redis_request_plan import redis_request_plan_scope
+
+    redis = PipelinedRedis({"spend:key:hashed": 4.0}, fail=True)
+    with redis_request_plan_scope():
+        batch = SpendCounterBatch(redis)
+        batch.bind(frozenset({"spend:key:hashed"}))
+        assert await batch.read("spend:key:hashed") is None
+
+        redis.fail = False
+        redis.client.fail = False
+        assert await batch.read("spend:key:hashed") == (4.0, True)

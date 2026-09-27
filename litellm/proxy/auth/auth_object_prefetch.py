@@ -4,6 +4,7 @@ the readers and the fallback, so enforcement never depends on this running."""
 
 from __future__ import annotations
 
+import asyncio
 import time
 from collections.abc import Iterator, Mapping, Sequence
 from dataclasses import dataclass
@@ -14,6 +15,7 @@ from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_request_plan import active_redis_request_plan
 from litellm.constants import DEFAULT_IN_MEMORY_TTL
 from litellm.models.organization import LiteLLM_OrganizationTable
 from litellm.models.team import LiteLLM_TeamTableCachedObj
@@ -221,8 +223,14 @@ def _set_in_memory(memory: _InMemoryCache, cache_key: str, value: object, ttl: f
 async def _fill_from_redis(entries: Sequence[_CacheEntry], redis_cache: RedisCache, memory: _InMemoryCache) -> None:
     if not entries:
         return
-    found: Final = _RowValues.validate_python(
-        await redis_cache.async_batch_get_cache(key_list=sorted(entry.cache_key for entry in entries))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped cache API
+    keys: Final = sorted(entry.cache_key for entry in entries)
+    plan: Final = active_redis_request_plan()
+    found: Final = (
+        _RowValues.validate_python(await plan.resolve(plan.batch_for(redis_cache).mget(keys)))
+        if plan is not None
+        else _RowValues.validate_python(
+            await redis_cache.async_batch_get_cache(key_list=keys)  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped cache API
+        )
     )
     for entry, value in ((entry, found.get(entry.cache_key)) for entry in entries):
         if value is not None:
@@ -259,6 +267,14 @@ async def _fetch_rows(
     return _RowValues.validate_python(row) if row is not None else _NO_ROWS
 
 
+def _consume_write_back_failure(future: asyncio.Future[bool]) -> None:
+    if future.cancelled():
+        return
+    exc: Final = future.exception()
+    if exc is not None:
+        verbose_proxy_logger.debug("auth prefetch write-back SET failed: %s", exc)
+
+
 async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: UserApiKeyCache) -> None:
     payloads: Final = tuple(
         (entry.cache_key, CacheCodec.serialize(value, model_type=entry.model_type), entry.ttl)
@@ -267,8 +283,16 @@ async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: U
     memory: Final[_InMemoryCache] = cache.in_memory_cache
     for cache_key, payload, ttl in payloads:
         _set_in_memory(memory, cache_key, payload, cache.default_in_memory_ttl if ttl is None else ttl)
-    if cache.redis_cache is not None:
+    if cache.redis_cache is None:
+        return
+    plan: Final = active_redis_request_plan()
+    if plan is None:
         await cache.redis_cache.async_set_cache_pipeline_with_ttls(payloads)
+        return
+    batch: Final = plan.batch_for(cache.redis_cache)
+    for cache_key, payload, ttl in payloads:
+        future = batch.set(cache_key, payload, cache.redis_cache.get_ttl(ttl=ttl))
+        future.add_done_callback(_consume_write_back_failure)
 
 
 async def _fill_from_db(

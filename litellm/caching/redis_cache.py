@@ -55,6 +55,8 @@ if TYPE_CHECKING:
     from redis.asyncio.client import Pipeline
     from redis.asyncio.cluster import ClusterPipeline
 
+    from litellm.caching.redis_batch import RedisBatch
+
     pipeline = Pipeline
     cluster_pipeline = ClusterPipeline
     async_redis_client = Redis
@@ -786,6 +788,12 @@ class RedisCache(BaseCache):
 
     def _async_commands(self) -> _AsyncRedisCommands:
         return self.init_async_client()
+
+    def batch(self) -> "RedisBatch":
+        """A single-use RedisBatch over this cache: declare commands, then one pipeline executes them."""
+        from litellm.caching.redis_batch import RedisBatch
+
+        return RedisBatch(self)
 
     def check_and_fix_namespace(self, key: str) -> str:
         """

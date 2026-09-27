@@ -11,6 +11,7 @@ from pydantic import TypeAdapter
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import RedisCache
+from litellm.caching.redis_request_plan import RedisRequestPlan, active_redis_request_plan
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.user_api_key_cache import (
     model_access_group_spend_counter_key,
@@ -32,7 +33,7 @@ class SpendCounterBatch:
     ``async_batch_get_cache`` maps a clean miss to ``None`` and drops keys only when Redis failed, so an absent
     key means "read it yourself" and a present ``None`` is an authoritative miss."""
 
-    __slots__ = ("_fetched", "_keys", "_loaded", "_lock", "_open", "_redis_cache")
+    __slots__ = ("_declared", "_declared_keys", "_fetched", "_keys", "_loaded", "_lock", "_open", "_redis_cache")
 
     def __init__(self, redis_cache: RedisCache) -> None:
         self._redis_cache: Final = redis_cache
@@ -41,6 +42,8 @@ class SpendCounterBatch:
         self._keys: frozenset[str] = frozenset()
         self._fetched: frozenset[str] = frozenset()
         self._loaded: Mapping[str, float | None] = _NO_VALUES
+        self._declared: list[tuple[frozenset[str], asyncio.Future[dict[str, object | None]], RedisRequestPlan]] = []
+        self._declared_keys: frozenset[str] = frozenset()
 
     @property
     def counter_keys(self) -> frozenset[str]:
@@ -51,8 +54,18 @@ class SpendCounterBatch:
         return self._open
 
     def bind(self, counter_keys: frozenset[str]) -> None:
-        if self._open:
-            self._keys = self._keys | counter_keys
+        if not self._open:
+            return
+        self._keys = self._keys | counter_keys
+        plan: Final = active_redis_request_plan()
+        if plan is None:
+            return
+        declarable: Final = counter_keys - self._fetched - self._declared_keys
+        if not declarable:
+            return
+        future: Final = plan.batch_for(self._redis_cache).mget(sorted(declarable))
+        self._declared.append((declarable, future, plan))
+        self._declared_keys = self._declared_keys | declarable
 
     def close(self) -> None:
         """Later reads go to Redis directly; call before any read-then-write on the counters."""
@@ -86,10 +99,26 @@ class SpendCounterBatch:
     async def _load(self) -> Mapping[str, float | None]:
         async with self._lock:
             pending: Final = self._keys - self._fetched
-            if pending:
-                self._fetched = self._fetched | pending
-                fetched: Final = await self._fetch(pending)
-                self._loaded = MappingProxyType({**fetched, **self._loaded})
+            if not pending:
+                return self._loaded
+            self._fetched = self._fetched | pending
+            declared: Final = self._declared
+            self._declared = []
+            self._declared_keys = frozenset()
+            values: dict[str, float | None] = {}
+            remaining = pending  # rebind-ok: shrinks by each resolved declared key set
+            for key_set, future, plan in declared:
+                if not key_set & pending:
+                    continue
+                remaining = remaining - key_set
+                try:
+                    values.update(_CounterValues.validate_python(await plan.resolve(future)))
+                except Exception as e:  # noqa: BLE001  # per-key reads take over and apply their own Redis fallback
+                    self._fetched = self._fetched - key_set
+                    verbose_proxy_logger.debug("spend counter batch read failed, falling back to per-key reads: %s", e)
+            if remaining:
+                values.update(await self._fetch(remaining))
+            self._loaded = MappingProxyType({**values, **self._loaded})
             return self._loaded
 
     async def _fetch(self, keys: frozenset[str]) -> Mapping[str, float | None]:

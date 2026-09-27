@@ -2189,6 +2189,21 @@ async def _user_api_key_auth_builder(
                 llm_model_list=llm_model_list,
                 llm_router=llm_router,
             )
+            if llm_router is not None:
+                try:
+                    from litellm.router_utils.routing_read_batch import declare_routing_prefetch
+
+                    prefetch_model: Final = _get_model_from_request_context(
+                        request_data=request_data,
+                        route=route,
+                        request=request,
+                        llm_router=llm_router,
+                        team_id=valid_token.team_id,
+                    )
+                    if isinstance(prefetch_model, str):
+                        await declare_routing_prefetch(llm_router, prefetch_model)
+                except Exception as e:  # noqa: BLE001  # prefetch is best effort and must never fail auth
+                    verbose_proxy_logger.debug("routing prefetch skipped: %s", e)
             await _prefetch_referenced_auth_objects(
                 valid_token, end_user_id=end_user_id, user_api_key_cache=user_api_key_cache, prisma_client=prisma_client
             )

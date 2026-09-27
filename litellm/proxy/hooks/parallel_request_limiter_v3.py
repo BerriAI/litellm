@@ -23,9 +23,11 @@ from typing import (
     Protocol,
     TypeAlias,
     TypedDict,
+    cast,
 )
 
 from pydantic import TypeAdapter
+from redis.commands.core import AsyncScript
 from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
@@ -77,6 +79,7 @@ from litellm.types.utils import (
 
 if TYPE_CHECKING:
     from opentelemetry.trace import Span as _Span
+    from redis.asyncio import Redis
 
     from litellm.proxy.utils import InternalUsageCache as _InternalUsageCache
     from litellm.types.agents import AgentResponse
@@ -531,6 +534,20 @@ class AtomicCounterState(TypedDict):
 DescriptorAtomicGroup: TypeAlias = tuple[list[str], list[int], list[AtomicCounterMeta]]
 
 
+def _later_applied_groups(
+    descriptor_groups: list[DescriptorAtomicGroup],
+    raws: list[list[CacheCounterValue] | Exception],
+    after_index: int,
+) -> list[list[AtomicCounterMeta]]:
+    """Groups after ``after_index`` whose Lua call applied an increment (refund candidates when a
+    batched call is rolled back: with one pipeline the later calls already incremented too)."""
+    return [
+        later_meta
+        for (_k, _a, later_meta), later_raw in zip(descriptor_groups[after_index:], raws[after_index:])
+        if not isinstance(later_raw, Exception) and int(later_raw[0]) != 1
+    ]
+
+
 class CallTypeRateLimiter(Protocol):
     async def async_pre_call_hook(
         self,
@@ -681,6 +698,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     batch_rate_limiter_script: _AsyncLuaScript | None
     token_increment_script: _AsyncLuaScript | None
     check_and_increment_by_n_script: _AsyncLuaScript | None
+    _batch_rate_limiter_raw_script: AsyncScript | None
+    _check_and_increment_by_n_raw_script: AsyncScript | None
     window_guarded_token_increment_script: _AsyncLuaScript | None
     parallel_acquire_script: _AsyncLuaScript | None
     parallel_release_script: _AsyncLuaScript | None
@@ -721,6 +740,11 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.parallel_count_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 PARALLEL_COUNT_SCRIPT
             )
+            raw_client: Final = cast(  # cast-ok: stubs omit register_script on the cluster client
+                "Redis", self.internal_usage_cache.dual_cache.redis_cache.init_async_client()
+            )
+            self._batch_rate_limiter_raw_script = raw_client.register_script(BATCH_RATE_LIMITER_SCRIPT)
+            self._check_and_increment_by_n_raw_script = raw_client.register_script(CHECK_AND_INCREMENT_BY_N_SCRIPT)
         else:
             self.batch_rate_limiter_script = None
             self.token_increment_script = None
@@ -729,6 +753,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             self.parallel_acquire_script = None
             self.parallel_release_script = None
             self.parallel_count_script = None
+            self._batch_rate_limiter_raw_script = None
+            self._check_and_increment_by_n_raw_script = None
 
         self.window_size = int(os.getenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", 60))
 
@@ -1330,12 +1356,37 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if self.batch_rate_limiter_script is None:
             return []
 
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
         key_groups: Final = self._group_keys_by_hash_tag(keys_to_fetch)
         all_cache_values: Final[list[CacheCounterValue | None]] = []
 
+        if self._batch_rate_limiter_raw_script is not None and redis_cache is not None:
+            batch: Final = redis_cache.batch()
+            group_futures: Final = {
+                hash_tag: batch.evalsha(
+                    self._batch_rate_limiter_raw_script, keys=group_keys, args=[now_int, self.window_size]
+                )
+                for hash_tag, group_keys in key_groups.items()
+            }
+            await batch.execute()
+            for hash_tag, group_keys in key_groups.items():
+                try:
+                    group_cache_values: CacheCounterValues = await group_futures[hash_tag]
+                except Exception as e:
+                    log_redis_failure(
+                        verbose_proxy_logger, logging.WARNING, f"Redis Lua script failed for hash tag {hash_tag}", e
+                    )
+                    group_cache_values = await self.in_memory_cache_sliding_window(
+                        keys=group_keys,
+                        now_int=now_int,
+                        window_size=self.window_size,
+                    )
+                all_cache_values.extend(group_cache_values)
+            return all_cache_values
+
         for hash_tag, group_keys in key_groups.items():
             try:
-                group_cache_values: CacheCounterValues = await self.batch_rate_limiter_script(
+                group_cache_values = await self.batch_rate_limiter_script(
                     keys=group_keys,
                     args=[now_int, self.window_size],  # Use integer timestamp
                 )
@@ -1944,17 +1995,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         applied: Final[list[list[AtomicCounterMeta]]] = []
         statuses: Final[list[RateLimitStatus]] = []
         reservation_windows: Final[set[ReservationWindowIdentity]] = set()  # mutable-ok: filled by the group loop
-        raw: list[CacheCounterValue]
 
-        for _idx, (keys, args, meta) in enumerate(descriptor_groups):
-            try:
-                raw = await self.check_and_increment_by_n_script(  # pyright: ignore[reportOptionalCall]  # sole caller guards it is not None
-                    keys=keys,
-                    args=args,
-                )
-            except Exception as e:
+        raws: Final[list[list[CacheCounterValue] | Exception]] = (
+            await self._collect_descriptor_lua_pipelined(descriptor_groups)
+            if self._check_and_increment_by_n_raw_script is not None
+            else await self._collect_descriptor_lua_serial(descriptor_groups)
+        )
+
+        for _idx, ((_keys, _args, meta), raw_or_error) in enumerate(zip(descriptor_groups, raws)):
+            if isinstance(raw_or_error, Exception):
+                e = raw_or_error
                 # Lua failure (timeout, OOM, network partition) leaves Redis
-                # state ambiguous. Refund any prior groups so Redis returns
+                # state ambiguous. Refund every applied group so Redis returns
                 # to its pre-call state, then fall back to in-memory for the
                 # whole call (counters there are independent of Redis).
                 log_redis_failure(
@@ -1965,17 +2017,24 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     f"diverge from Redis until window expires (window_size={self.window_size}s)",
                     e,
                 )
-                await self._refund_applied_descriptor_groups(applied)
+                await self._refund_applied_descriptor_groups(
+                    [*applied, *_later_applied_groups(descriptor_groups, raws, _idx + 1)]
+                )
                 flat_meta: list[AtomicCounterMeta] = [m for _k, _a, group_meta in descriptor_groups for m in group_meta]
                 async with self._check_and_increment_lock:
                     return await self._atomic_check_and_increment_in_memory(
                         per_counter_meta=flat_meta,
                         parent_otel_span=parent_otel_span,
                     )
+            raw = raw_or_error
 
             response = self._build_atomic_response(raw, meta)
             if response["overall_code"] == "OVER_LIMIT":
                 await self._refund_applied_descriptor_groups(applied)
+                if self._check_and_increment_by_n_raw_script is not None:
+                    await self._refund_applied_descriptor_groups(
+                        _later_applied_groups(descriptor_groups, raws, _idx + 1)
+                    )
                 return response
             if len(descriptor_groups) == 1:
                 return response
@@ -1988,6 +2047,46 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             statuses=statuses,
             reservation_windows=frozenset(reservation_windows),
         )
+
+    async def _collect_descriptor_lua_pipelined(
+        self,
+        descriptor_groups: list[DescriptorAtomicGroup],
+    ) -> list[list[CacheCounterValue] | Exception]:
+        """One pipeline for every descriptor's check-and-increment Lua call; per-descriptor
+        results stay positional, failures included."""
+        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
+        script: Final = self._check_and_increment_by_n_raw_script
+        if redis_cache is None or script is None:
+            return []
+        batch: Final = redis_cache.batch()
+        futures: Final = [batch.evalsha(script, keys=keys, args=args) for keys, args, _meta in descriptor_groups]
+        await batch.execute()
+        raws: Final[list[list[CacheCounterValue] | Exception]] = []
+        for future in futures:
+            try:
+                raws.append(await future)
+            except Exception as e:  # noqa: BLE001  # kept positional like a serial-call failure
+                raws.append(e)
+        return raws
+
+    async def _collect_descriptor_lua_serial(
+        self,
+        descriptor_groups: list[DescriptorAtomicGroup],
+    ) -> list[list[CacheCounterValue] | Exception]:
+        """The pre-pipeline path: one Lua call at a time, stopping at the first failure."""
+        raws: Final[list[list[CacheCounterValue] | Exception]] = []
+        for keys, args, _meta in descriptor_groups:
+            try:
+                raws.append(
+                    await self.check_and_increment_by_n_script(  # pyright: ignore[reportOptionalCall]  # sole caller guards it is not None
+                        keys=keys,
+                        args=args,
+                    )
+                )
+            except Exception as e:  # noqa: BLE001  # kept positional like a serial-call failure
+                raws.append(e)
+                break
+        return raws
 
     async def _refund_applied_descriptor_groups(
         self,

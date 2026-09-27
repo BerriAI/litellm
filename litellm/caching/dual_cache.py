@@ -58,6 +58,20 @@ class PendingBatchRead:
     previous_access_times: dict[str, float | None]
 
 
+@dataclass(frozen=True)
+class SharedPendingBatchRead:
+    """Several caches' ``PendingBatchRead`` plus the deduplicated Redis key set one MGET must answer.
+
+    ``results`` already holds every per-cache answer that does not need Redis (in-memory hits,
+    per-cache fallbacks); ``apply_shared_batch_get`` fills in the rest once the shared MGET
+    resolves or fails."""
+
+    results: list[list[object | None] | None]
+    pendings: list[tuple[int, "DualCache", PendingBatchRead]]
+    redis_keys: list[str]
+    shared_redis: "RedisCache | None"
+
+
 class DualCache(BaseCache):
     """
     DualCache is a cache implementation that updates both Redis and an in-memory cache simultaneously.
@@ -398,6 +412,24 @@ class DualCache(BaseCache):
         None when the read raised, the in-memory result when the circuit breaker is open. A cache whose
         Redis client is not the one the first cache uses falls back to its own read.
         """
+        prepared: Final = await DualCache.prepare_shared_batch_get(reads, parent_otel_span=parent_otel_span)
+        if prepared.shared_redis is None or not prepared.redis_keys:
+            return prepared.results
+        try:
+            outcome: dict[str, object] | BaseException = await prepared.shared_redis.async_batch_get_cache(
+                prepared.redis_keys, parent_otel_span=parent_otel_span
+            )
+        except Exception as e:
+            outcome = e
+        return await DualCache.apply_shared_batch_get(prepared, outcome)
+
+    @staticmethod
+    async def prepare_shared_batch_get(
+        reads: Sequence[tuple["DualCache", list[str]]],
+        parent_otel_span: Span | None = None,
+    ) -> SharedPendingBatchRead:
+        """The memory half of `async_batch_get_cache_shared`: serves what memory can, reserves the
+        Redis keys it cannot, and leaves the shared MGET for the caller to issue (or declare)."""
         results: Final[list[list[object | None] | None]] = [None] * len(reads)
         shared_redis: Final = reads[0][0].redis_cache if reads else None
         pendings: Final[list[tuple[int, DualCache, PendingBatchRead]]] = []
@@ -414,25 +446,33 @@ class DualCache(BaseCache):
             results[index] = pending.result
 
         redis_keys: Final = list(dict.fromkeys(key for _, _, pending in pendings for key in pending.redis_keys))
-        if shared_redis is None or not redis_keys:
-            return results
-        try:
-            redis_result: Final = await shared_redis.async_batch_get_cache(
-                redis_keys, parent_otel_span=parent_otel_span
-            )
-        except Exception as e:
-            for index, cache, pending in pendings:
+        return SharedPendingBatchRead(
+            results=results, pendings=pendings, redis_keys=redis_keys, shared_redis=shared_redis
+        )
+
+    @staticmethod
+    async def apply_shared_batch_get(
+        prepared: SharedPendingBatchRead,
+        outcome: dict[str, object] | BaseException,
+    ) -> list[list[object | None] | None]:
+        """The Redis half of `async_batch_get_cache_shared`: merge a resolved shared MGET into each
+        cache's pending read, or map a failed one exactly as that read would have been mapped
+        (None for caches that took part, memory results when the circuit breaker is open, throttle
+        reservations rolled back either way)."""
+        results: Final = prepared.results
+        if isinstance(outcome, BaseException):
+            for index, cache, pending in prepared.pendings:
                 cache._rollback_redis_batch_key_reservations(pending.previous_access_times)
-                if pending.redis_keys and not isinstance(e, RedisCircuitBreakerOpenError):
+                if pending.redis_keys and not isinstance(outcome, RedisCircuitBreakerOpenError):
                     results[index] = None
-            if isinstance(e, RedisCircuitBreakerOpenError):
-                verbose_logger.debug("LiteLLM Cache: async_batch_get_cache_shared served from memory only: %s", e)
+            if isinstance(outcome, RedisCircuitBreakerOpenError):
+                verbose_logger.debug("LiteLLM Cache: async_batch_get_cache_shared served from memory only: %s", outcome)
             else:
-                DualCache._log_shared_batch_get_failure(e)
+                DualCache._log_shared_batch_get_failure(outcome)
             return results
 
-        for index, cache, pending in pendings:
-            own_result = {key: redis_result[key] for key in pending.redis_keys if key in redis_result}
+        for index, cache, pending in prepared.pendings:
+            own_result = {key: outcome[key] for key in pending.redis_keys if key in outcome}
             try:
                 results[index] = await cache._apply_batch_get(pending, own_result)
             except Exception as e:

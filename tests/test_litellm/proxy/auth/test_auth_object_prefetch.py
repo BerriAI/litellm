@@ -336,3 +336,122 @@ async def test_no_redis_goes_straight_to_one_query():
 
     assert prisma.db.query_first.await_count == 1
     assert cache.in_memory_cache.get_cache(f"team_membership:{USER_ID}:{TEAM_ID}") is not None
+
+
+class StorePipeline:
+    def __init__(self, store: dict[str, str]) -> None:
+        self.calls: list[tuple] = []
+        self.scripts: set = set()
+        self.store = store
+        self.execute_count = 0
+
+    def mget(self, keys: list) -> "StorePipeline":
+        self.calls.append(("mget", tuple(keys)))
+        return self
+
+    def get(self, name: str) -> "StorePipeline":
+        self.calls.append(("get", name))
+        return self
+
+    def set(self, name: str, value: object, ex: object = None, **kwargs: object) -> "StorePipeline":
+        self.calls.append(("set", name, ex))
+        self.store[name] = value if isinstance(value, str) else json.dumps(value)
+        return self
+
+    def incrbyfloat(self, name: str, amount: float) -> "StorePipeline":
+        self.calls.append(("incrbyfloat", name, amount))
+        return self
+
+    def expire(self, name: str, ttl: int) -> "StorePipeline":
+        self.calls.append(("expire", name, ttl))
+        return self
+
+    def delete(self, name: str) -> "StorePipeline":
+        self.calls.append(("delete", name))
+        return self
+
+    async def execute(self, raise_on_error: bool = True) -> list:
+        self.execute_count += 1
+        results: list[object] = []
+        for call in self.calls:
+            if call[0] == "mget":
+                results.append([self.store[k].encode() if k in self.store else None for k in call[1]])
+            elif call[0] == "get":
+                results.append(self.store[call[1]].encode() if call[1] in self.store else None)
+            elif call[0] == "set":
+                results.append(True)
+            elif call[0] == "expire":
+                results.append(True)
+            elif call[0] == "delete":
+                results.append(0)
+            elif call[0] == "incrbyfloat":
+                results.append(0.0)
+        return results
+
+
+class PipelineClient:
+    def __init__(self, store: dict[str, str]) -> None:
+        self.store = store
+        self.pipes: list[StorePipeline] = []
+
+    def pipeline(self, transaction: bool = True) -> StorePipeline:
+        pipe = StorePipeline(self.store)
+        self.pipes.append(pipe)
+        return pipe
+
+
+class PipelinedRedis(CountingRedis):
+    def __init__(self, store: dict[str, str] | None = None, fail: bool = False) -> None:
+        from litellm.caching.redis_cache import RedisCircuitBreaker
+
+        super().__init__(store, fail)
+        self.namespace = None
+        self.default_ttl = 3600
+        self.client = PipelineClient(self.store)
+        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=2, recovery_timeout=60)
+        self.service_logger_obj = MagicMock()
+        self.service_logger_obj.async_service_failure_hook = AsyncMock()
+        self.service_logger_obj.async_service_success_hook = AsyncMock()
+
+    def init_async_client(self) -> PipelineClient:
+        return self.client
+
+
+@pytest.mark.asyncio
+async def test_under_a_plan_the_prefetch_is_one_mget_and_the_write_back_rides_the_flush():
+    from litellm.caching.redis_request_plan import redis_request_plan_scope
+
+    redis = PipelinedRedis()
+    prisma = _prisma()
+    with redis_request_plan_scope() as plan:
+        await prefetch_auth_objects(refs=_refs(), user_api_key_cache=_cache(redis), prisma_client=prisma)
+
+        assert plan.rounds == 1
+        assert len(redis.client.pipes) == 1
+        first = redis.client.pipes[0]
+        assert first.execute_count == 1
+        assert [c[0] for c in first.calls] == ["mget"]
+        assert set(first.calls[0][1]) == {
+            USER_ID,
+            f"team_id:{TEAM_ID}",
+            f"{TEAM_ID}_{USER_ID}",
+            f"team_membership:{USER_ID}:{TEAM_ID}",
+            f"org_id:{ORG_ID}",
+            f"org_id:{ORG_ID}:with_budget",
+        }
+        assert len(redis.client.pipes) == 1, "the write-back must not execute its own round trip"
+
+        await plan.flush()
+
+    assert len(redis.client.pipes) == 2
+    second = redis.client.pipes[1]
+    assert second.execute_count == 1
+    assert {c[1] for c in second.calls if c[0] == "set"} == {
+        USER_ID,
+        f"team_id:{TEAM_ID}",
+        f"{TEAM_ID}_{USER_ID}",
+        f"team_membership:{USER_ID}:{TEAM_ID}",
+        f"org_id:{ORG_ID}",
+        f"org_id:{ORG_ID}:with_budget",
+    }
+    assert json.loads(redis.store[f"team_id:{TEAM_ID}"])["team_id"] == TEAM_ID

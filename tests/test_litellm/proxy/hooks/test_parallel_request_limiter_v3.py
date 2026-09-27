@@ -6671,6 +6671,21 @@ async def test_post_call_success_hook_leaves_raw_provider_dict_untouched():
 
 
 class _OpenBreakerRedis:
+    class _OpenBreaker:
+        def is_open(self) -> bool:
+            return True
+
+        generation = 0
+
+    class _Client:
+        def register_script(self, script: str):
+            from tests.unit.caching.redis_batch_fakes import FakeAsyncScript
+
+            return FakeAsyncScript(sha="open-breaker")
+
+    def __init__(self) -> None:
+        self._circuit_breaker = _OpenBreakerRedis._OpenBreaker()
+
     def async_register_script(self, script: str):
         async def refused(keys, args):
             from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
@@ -6678,6 +6693,17 @@ class _OpenBreakerRedis:
             raise RedisCircuitBreakerOpenError("Redis circuit breaker is open")
 
         return refused
+
+    def init_async_client(self) -> "_OpenBreakerRedis._Client":
+        return _OpenBreakerRedis._Client()
+
+    def check_and_fix_namespace(self, key: str) -> str:
+        return key
+
+    def batch(self):
+        from litellm.caching.redis_batch import RedisBatch
+
+        return RedisBatch(self)
 
     async def async_increment_pipeline(self, increment_list, **kwargs):
         from litellm.caching.redis_cache import RedisCircuitBreakerOpenError
@@ -7303,3 +7329,198 @@ async def test_success_tpm_accounting_keeps_the_admission_target_after_an_alias_
     charged: Final = {op["key"]: op["increment_value"] for op in ops}
     assert charged[admission_bucket] == 150 - stash.reserved_tokens
     assert not any(":target-b" in key for key in charged)
+
+
+class _QueuedPipeline:
+    """A pipeline recorder whose execute() replays one scripted result list per call."""
+
+    def __init__(self, result_sets: list[list]) -> None:
+        self.calls: list[tuple] = []
+        self.scripts: set = set()
+        self.result_sets = list(result_sets)
+        self.execute_count = 0
+
+    def mget(self, keys: list):
+        self.calls.append(("mget", tuple(keys)))
+        return self
+
+    def get(self, name: str):
+        self.calls.append(("get", name))
+        return self
+
+    def set(self, name: str, value: object, ex: object = None, **kwargs: object):
+        self.calls.append(("set", name))
+        return self
+
+    def incrbyfloat(self, name: str, amount: float):
+        self.calls.append(("incrbyfloat", name, amount))
+        return self
+
+    def expire(self, name: str, ttl: int):
+        self.calls.append(("expire", name))
+        return self
+
+    def delete(self, name: str):
+        self.calls.append(("delete", name))
+        return self
+
+    def evalsha(self, sha: str, numkeys: int, *keys_and_args: object):
+        self.calls.append(("evalsha", sha, numkeys, tuple(keys_and_args)))
+        return self
+
+    async def execute(self, raise_on_error: bool = True) -> list:
+        self.execute_count += 1
+        return self.result_sets.pop(0) if self.result_sets else []
+
+
+class _ScriptedPipelineClient:
+    def __init__(self, pipe: _QueuedPipeline) -> None:
+        self.pipe = pipe
+        self.registered_scripts: list[str] = []
+
+    def pipeline(self, transaction: bool = True) -> _QueuedPipeline:
+        return self.pipe
+
+    def register_script(self, script: str):
+        from tests.unit.caching.redis_batch_fakes import FakeAsyncScript
+
+        self.registered_scripts.append(script)
+        return FakeAsyncScript(sha=f"sha-{len(self.registered_scripts)}")
+
+
+class _LimiterRedis:
+    """Stands in for RedisCache on the limiter path: pipelines descriptors and records refunds."""
+
+    def __init__(self, pipe: _QueuedPipeline) -> None:
+        from litellm.caching.redis_cache import RedisCircuitBreaker
+        from tests.unit.caching.redis_batch_fakes import RecordingServiceLogger
+
+        self.namespace = None
+        self.client = _ScriptedPipelineClient(pipe)
+        self._circuit_breaker = RedisCircuitBreaker(failure_threshold=2, recovery_timeout=60, enabled=True)
+        self.service_logger_obj = RecordingServiceLogger()
+        self.refunds: list[tuple[str, float]] = []
+
+    def init_async_client(self) -> _ScriptedPipelineClient:
+        return self.client
+
+    def check_and_fix_namespace(self, key: str) -> str:
+        return key
+
+    def _get_cache_logic(self, cached_response):
+        import json as _json
+
+        if cached_response is None:
+            return None
+        if isinstance(cached_response, bytes):
+            cached_response = cached_response.decode()
+        return _json.loads(cached_response)
+
+    def get_ttl(self, **kwargs: object):
+        return None
+
+    def batch(self):
+        from litellm.caching.redis_batch import RedisBatch
+
+        return RedisBatch(self)
+
+    def async_register_script(self, script: str):
+        return self.client.register_script(script)
+
+    async def async_increment(self, key, value: float, ttl=None, parent_otel_span=None, refresh_ttl: bool = False):
+        self.refunds.append((key, value))
+        return 0.0
+
+
+def _pipelined_handler(pipe: _QueuedPipeline) -> _PROXY_MaxParallelRequestsHandler:
+    redis = _LimiterRedis(pipe)
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(DualCache(redis_cache=redis))
+    )
+    handler._test_redis = redis
+    return handler
+
+
+@pytest.mark.asyncio
+async def test_the_sliding_window_fetch_issues_one_evalsha_per_pipeline_not_one_per_call():
+    pipe = _QueuedPipeline([[[1000, 3, 1000, 5]]])
+    handler = _pipelined_handler(pipe)
+
+    values = await handler._execute_redis_batch_rate_limiter_script(
+        keys_to_fetch=["{k:v}:window", "{k:v}:counter", "{k2:v2}:window", "{k2:v2}:counter"],
+        now_int=1000,
+    )
+
+    assert values == [1000, 3, 1000, 5]
+    assert pipe.execute_count == 1
+    evalsha_calls = [c for c in pipe.calls if c[0] == "evalsha"]
+    assert len(evalsha_calls) == 1
+    assert evalsha_calls[0][2] == 4
+
+
+@pytest.mark.asyncio
+async def test_a_failed_sliding_window_evalsha_falls_back_to_in_memory_for_its_group():
+    pipe = _QueuedPipeline([[ConnectionError("lua down")]])
+    handler = _pipelined_handler(pipe)
+
+    values = await handler._execute_redis_batch_rate_limiter_script(
+        keys_to_fetch=["{k:v}:window", "{k:v}:counter"],
+        now_int=1000,
+    )
+
+    assert len(values) == 2, "the in-memory sliding window returns one (window, counter) pair"
+    assert pipe.execute_count == 1
+    assert all(v is not None for v in values)
+
+
+def _descriptor(name: str, requests_per_unit: int) -> RateLimitDescriptor:
+    return RateLimitDescriptor(
+        key="api_key",
+        value=name,
+        rate_limit={"requests_per_unit": requests_per_unit, "window_size": 60},
+    )
+
+
+@pytest.mark.asyncio
+async def test_every_descriptor_lua_call_rides_one_pipeline_and_an_over_limit_refunds_the_rest():
+    ok_raw = [0, 1, 1000]
+    over_raw = [1, 1, 11, 10]
+    pipe = _QueuedPipeline([[ok_raw, ok_raw, over_raw]])
+    handler = _pipelined_handler(pipe)
+
+    descriptors = [_descriptor("k1", 10), _descriptor("k2", 10), _descriptor("k3", 10)]
+    response = await handler.atomic_check_and_increment_by_n(
+        descriptors=descriptors,
+        increments=[{"requests": 1, "tokens": 0}] * 3,
+    )
+
+    assert response["overall_code"] == "OVER_LIMIT"
+    evalsha_calls = [c for c in pipe.calls if c[0] == "evalsha"]
+    assert len(evalsha_calls) == 3, "three descriptors, three evalsha in one pipeline"
+    assert pipe.execute_count == 1
+    refunded = {key for key, _value in handler._test_redis.refunds}
+    assert refunded == {
+        handler.create_rate_limit_keys("api_key", "k1", "requests"),
+        handler.create_rate_limit_keys("api_key", "k2", "requests"),
+    }
+    assert all(value == -1 for _key, value in handler._test_redis.refunds)
+
+
+@pytest.mark.asyncio
+async def test_a_failed_descriptor_evalsha_refunds_the_applied_and_enforces_in_memory():
+    ok_raw = [0, 1, 1000]
+    pipe = _QueuedPipeline([[ok_raw, ConnectionError("lua down")]])
+    handler = _pipelined_handler(pipe)
+
+    descriptors = [_descriptor("k1", 10), _descriptor("k2", 10)]
+    response = await handler.atomic_check_and_increment_by_n(
+        descriptors=descriptors,
+        increments=[{"requests": 1, "tokens": 0}] * 2,
+    )
+
+    assert response["overall_code"] == "OK"
+    assert len(response["statuses"]) == 2
+    assert [key for key, _v in handler._test_redis.refunds] == [
+        handler.create_rate_limit_keys("api_key", "k1", "requests")
+    ]
+    assert pipe.execute_count == 1

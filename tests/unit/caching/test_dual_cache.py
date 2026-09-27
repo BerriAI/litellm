@@ -911,3 +911,36 @@ async def test_shared_batch_read_keeps_a_caches_own_tier_failure_to_itself_like_
 
     assert shared == separate == [None, None, [3]]
     assert redis.async_batch_get_cache.await_args_list[0].args[0] == ["b1", "c1"]
+
+
+@pytest.mark.asyncio
+async def test_split_shared_batch_get_halves_reproduce_the_one_shot_read():
+    redis = _recording_redis({"a2": 2, "b1": 3})
+    first = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis, default_redis_batch_cache_expiry=10)
+    first.in_memory_cache.set_cache("a1", 5)
+    second = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis, default_redis_batch_cache_expiry=10)
+
+    prepared = await DualCache.prepare_shared_batch_get([(first, ["a1", "a2"]), (second, ["b1"])])
+
+    assert prepared.shared_redis is redis
+    assert prepared.redis_keys == ["a2", "b1"], "memory hits are already served and are not declared"
+
+    outcome = {"a2": 2, "b1": 3}
+    assert await DualCache.apply_shared_batch_get(prepared, outcome) == [[5, 2], [3]]
+    assert second.in_memory_cache.get_cache("b1") == 3
+
+
+@pytest.mark.asyncio
+async def test_split_shared_batch_get_maps_a_failed_read_exactly_like_the_one_shot_read():
+    redis = _recording_redis({})
+    first = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis, default_redis_batch_cache_expiry=10)
+    second = DualCache(in_memory_cache=InMemoryCache(), redis_cache=redis, default_redis_batch_cache_expiry=10)
+    second.in_memory_cache.set_cache("b1", 3)
+
+    prepared = await DualCache.prepare_shared_batch_get([(first, ["a1"]), (second, ["b1", "b2"])])
+
+    results = await DualCache.apply_shared_batch_get(prepared, ConnectionError("redis unavailable"))
+
+    assert results == [None, None], "a raised read wipes the whole result for caches that took part"
+    assert "a1" not in first.last_redis_batch_access_time
+    assert "b2" not in second.last_redis_batch_access_time
