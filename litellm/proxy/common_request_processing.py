@@ -1167,12 +1167,10 @@ async def _aclose_late_response(produced: Response) -> None:
 def _late_response_body(produced: object) -> bytes:
     """Bytes for one SSE data frame.
 
-    A late payload may be a dict, raw bytes, or a Response whose ``body`` is either.
+    A late payload may be a mapping, raw bytes or text, or a Response whose ``body`` is one of those.
     """
     payload: Final = (
-        produced
-        if isinstance(produced, (bytes, bytearray, Mapping))
-        else getattr(produced, "body", produced)
+        produced if isinstance(produced, (bytes, bytearray, Mapping)) else getattr(produced, "body", produced)
     )
     if isinstance(payload, (bytes, bytearray)):
         raw: Final = bytes(payload)
@@ -1181,7 +1179,8 @@ def _late_response_body(produced: object) -> bytes:
         text: Final = payload.encode()
         return text or b"{}"
     if isinstance(payload, Mapping):
-        return orjson.dumps(payload)
+        # orjson rejects mappingproxy and other non-dict mappings.
+        return orjson.dumps(dict(payload))
     return b"{}"
 
 
