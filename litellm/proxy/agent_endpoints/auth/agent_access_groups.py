@@ -86,7 +86,19 @@ async def resolve_managed_agent_ceilings(agent: "AgentResponse") -> tuple[AgentA
     async def manual_ids(_agent_id: str) -> AccessGroupIds:
         return tuple(agent.access_group_ids or ())
 
+    async def directory_ids(_agent_id: str) -> AccessGroupIds:
+        return agent.directory_access_group_ids or ()
+
     manual: Final = await resolve_agent_access_group_ceiling(
         agent.agent_id, load_access_group_ids=manual_ids, load_access_group=authoritative_group
     )
-    return (manual,) if manual is not None else ()
+    directory: Final = (
+        await resolve_agent_access_group_ceiling(
+            agent.agent_id, load_access_group_ids=directory_ids, load_access_group=authoritative_group
+        )
+        if agent.directory_access_group_ids
+        else AgentAccessGroupCeiling((), frozenset(), frozenset(), frozenset())
+        if agent.directory_access_group_ids is not None
+        else None
+    )
+    return tuple(ceiling for ceiling in (manual, directory) if ceiling is not None)
