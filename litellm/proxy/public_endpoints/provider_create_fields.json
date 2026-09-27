@@ -3208,6 +3208,34 @@
     "default_model_placeholder": "gpt-3.5-turbo"
   },
   {
+    "provider": "Tsubasa",
+    "provider_display_name": "Tsubasa",
+    "litellm_provider": "tsubasa",
+    "credential_fields": [
+      {
+        "key": "api_key",
+        "label": "API Key",
+        "placeholder": null,
+        "tooltip": "Your Tsubasa API key",
+        "required": true,
+        "field_type": "password",
+        "options": null,
+        "default_value": null
+      },
+      {
+        "key": "api_base",
+        "label": "API Base",
+        "placeholder": "https://api.tsubasa.sh/v1",
+        "tooltip": "Optional: override the Tsubasa API base URL",
+        "required": false,
+        "field_type": "text",
+        "options": null,
+        "default_value": "https://api.tsubasa.sh/v1"
+      }
+    ],
+    "default_model_placeholder": "tsubasa/tsubasa-pro"
+  },
+  {
     "provider": "V0",
     "provider_display_name": "V0",
     "litellm_provider": "v0",

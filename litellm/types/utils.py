@@ -4140,6 +4140,7 @@ class LlmProviders(str, Enum):
     COGNITION = "cognition"
     SCX_AI = "scx-ai"
     DARKBLOOM = "darkbloom"
+    TSUBASA = "tsubasa"
     META = "meta"
     SAIL = "sail"
     LITELLM_AGENT = "litellm_agent"
