@@ -1719,7 +1719,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         anthropic_system_message_content["cache_control"] = system_message_block["cache_control"]
                     anthropic_system_message_list.append(anthropic_system_message_content)
                 elif isinstance(message["content"], list):
-                    content_start: Final = len(anthropic_system_message_list)
+                    content_start: int = len(anthropic_system_message_list)
                     for _content in message["content"]:
                         # Skip empty text blocks - Anthropic API raises errors for empty text
                         text_value = _content.get("text")

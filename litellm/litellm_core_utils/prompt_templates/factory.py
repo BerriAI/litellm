@@ -2407,7 +2407,7 @@ def anthropic_messages_pt(
             ) = messages[msg_i]
             if user_message_types_block["role"] == "user":
                 if isinstance(user_message_types_block["content"], list):
-                    user_content_start: Final = len(user_content)
+                    user_content_start: int = len(user_content)
                     for m in user_message_types_block["content"]:
                         if m.get("type", "") == "image_url":
                             m = cast(ChatCompletionImageObject, m)
@@ -2691,7 +2691,7 @@ def anthropic_messages_pt(
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
                     assistant_content.extend(thinking_blocks)
                 if _content_is_list and _content_list is not None:
-                    assistant_content_start: Final = len(assistant_content)
+                    assistant_content_start: int = len(assistant_content)
                     for m in _content_list:
                         if not isinstance(m, dict):
                             continue
