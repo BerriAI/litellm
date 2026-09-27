@@ -158,6 +158,27 @@ def test_bedrock_invoke_messages_clamps_effort_to_ceiling(local_model_cost_map, 
     assert result["thinking"]["type"] == "adaptive"
 
 
+def test_bedrock_invoke_messages_clamps_explicit_effort_sent_with_alias(local_model_cost_map):
+    config = AmazonAnthropicClaudeMessagesConfig()
+    explicit_output_config = {"effort": "xhigh"}
+    optional_params = {
+        "max_tokens": 1024,
+        "reasoning_effort": "xhigh",
+        "output_config": explicit_output_config,
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="invoke/us.anthropic.claude-opus-4-6-v1",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"]["effort"] == "max"
+    assert explicit_output_config == {"effort": "xhigh"}
+
+
 def test_bedrock_invoke_messages_degrades_xhigh_without_ceiling(local_model_cost_map):
     config = AmazonAnthropicClaudeMessagesConfig()
     optional_params = {"max_tokens": 1024, "reasoning_effort": "xhigh"}
@@ -196,39 +217,44 @@ def test_reasoning_effort_max_accepted_on_sonnet_46_messages(local_model_cost_ma
     assert isinstance(output_config, dict) and output_config.get("effort") == "max"
 
 
-def test_conflicting_unsupported_output_config_effort_is_not_forwarded():
-    with (
-        patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
-            "litellm.llms.anthropic.common_utils.AnthropicModelInfo._is_adaptive_thinking_model",
-            return_value=True,
-        ),
-        patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
-            "litellm.llms.anthropic.chat.transformation.AnthropicConfig._validate_effort_for_model",
-            side_effect=lambda model, effort, provider: (
-                None if effort == "high" else f"effort={effort!r} is not supported by this model. Got model: {model}"
-            ),
-        ),
-        patch(  # test-quality-ok: capability flags live on get_model_info; HTTP cannot isolate the degrade chain
-            "litellm.utils.get_model_info",
-            return_value={
-                "supports_reasoning": True,
-                "supports_max_reasoning_effort": False,
-                "supports_xhigh_reasoning_effort": False,
-            },
-        ),
-    ):
-        optional_params = {
-            "reasoning_effort": "high",
-            "output_config": {"effort": "max"},
-        }
-        AnthropicMessagesConfig._translate_reasoning_effort_to_anthropic(
+def test_explicit_unsupported_output_config_effort_is_rejected_not_rewritten(local_model_cost_map):
+    config = AnthropicMessagesConfig()
+    optional_params = {
+        "max_tokens": 1024,
+        "reasoning_effort": "high",
+        "output_config": {"effort": "xhigh"},
+    }
+
+    with pytest.raises(AnthropicError) as exc_info:
+        config.transform_anthropic_messages_request(
             model="claude-sonnet-4-6",
-            optional_params=optional_params,
-            max_tokens=1024,
-            custom_llm_provider="anthropic",
+            messages=[{"role": "user", "content": "Hello"}],
+            anthropic_messages_optional_request_params=optional_params,
+            litellm_params={},
+            headers={},
         )
-        assert optional_params["output_config"]["effort"] != "max"
-        assert optional_params["output_config"]["effort"] == "high"
+
+    assert exc_info.value.status_code == 400
+    assert "xhigh" in str(exc_info.value)
+
+
+def test_explicit_supported_output_config_effort_wins_over_unsupported_alias(local_model_cost_map):
+    config = AnthropicMessagesConfig()
+    optional_params = {
+        "max_tokens": 1024,
+        "reasoning_effort": "xhigh",
+        "output_config": {"effort": "low"},
+    }
+
+    result = config.transform_anthropic_messages_request(
+        model="claude-sonnet-4-6",
+        messages=[{"role": "user", "content": "Hello"}],
+        anthropic_messages_optional_request_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+
+    assert result["output_config"] == {"effort": "low"}
 
 
 def test_explicit_output_config_wins_over_reasoning_effort():

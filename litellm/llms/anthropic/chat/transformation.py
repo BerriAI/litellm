@@ -418,6 +418,16 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         return None
 
     @staticmethod
+    def degrade_alias_effort_for_model(model: str, effort: str, custom_llm_provider: str) -> str:
+        """Keep an alias-derived effort the gate accepts, else lower it to a tier the model is known to accept.
+
+        Explicit ``output_config.effort`` must not be routed here: a caller naming a native tier gets a 400.
+        """
+        if AnthropicConfig._validate_effort_for_model(model, effort, custom_llm_provider) is None:
+            return effort
+        return normalize_reasoning_effort_value(effort, model, custom_llm_provider)
+
+    @staticmethod
     def _model_supports_effort_param(model: str, custom_llm_provider: str) -> bool:
         """Whether the model accepts ``output_config.effort`` at all.
 
@@ -1267,33 +1277,33 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 type="adaptive",
                 display="summarized",
             )
-        reasoning_effort = normalize_reasoning_effort_value(str(reasoning_effort), model, custom_llm_provider)
-        if reasoning_effort == "low":
+        resolved_effort: Final = normalize_reasoning_effort_value(reasoning_effort, model, custom_llm_provider)
+        if resolved_effort == "low":
             return AnthropicThinkingParam(
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_LOW_THINKING_BUDGET,
             )
-        elif reasoning_effort == "medium":
+        elif resolved_effort == "medium":
             return AnthropicThinkingParam(
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
             )
-        elif reasoning_effort == "high":
+        elif resolved_effort == "high":
             return AnthropicThinkingParam(
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_HIGH_THINKING_BUDGET,
             )
-        elif reasoning_effort == "xhigh":
+        elif resolved_effort == "xhigh":
             return AnthropicThinkingParam(
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
             )
-        elif reasoning_effort == "max":
+        elif resolved_effort == "max":
             return AnthropicThinkingParam(
                 type="enabled",
                 budget_tokens=DEFAULT_REASONING_EFFORT_MAX_THINKING_BUDGET,
             )
-        elif reasoning_effort == "minimal":
+        elif resolved_effort == "minimal":
             return AnthropicThinkingParam(
                 type="enabled",
                 budget_tokens=max(
@@ -1626,7 +1636,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                                 value=effort_value,
                                 llm_provider=self._resolved_provider,
                             )
-                        optional_params["output_config"] = {"effort": mapped_effort}
+                        optional_params["output_config"] = {
+                            "effort": AnthropicConfig.degrade_alias_effort_for_model(
+                                model, mapped_effort, self._resolved_provider
+                            )
+                        }
             elif param == "web_search_options" and isinstance(value, dict):
                 hosted_web_search_tool = self.map_web_search_tool(cast(OpenAIWebSearchOptions, value))
                 self._add_tools_to_optional_params(optional_params=optional_params, tools=[hosted_web_search_tool])
@@ -2124,20 +2138,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         gate_error: Final = self._validate_effort_for_model(model, effort, self._resolved_provider)
         if gate_error is not None:
-            if not isinstance(effort, str):
-                raise litellm.exceptions.BadRequestError(
-                    message=gate_error,
-                    model=model,
-                    llm_provider=self._resolved_provider,
-                )
-            normalized_effort: Final = normalize_reasoning_effort_value(effort, model, self._resolved_provider)
-            if normalized_effort == effort:
-                raise litellm.exceptions.BadRequestError(
-                    message=gate_error,
-                    model=model,
-                    llm_provider=self._resolved_provider,
-                )
-            output_config["effort"] = normalized_effort
+            raise litellm.exceptions.BadRequestError(
+                message=gate_error,
+                model=model,
+                llm_provider=self._resolved_provider,
+            )
         data["output_config"] = output_config
 
     def _resolve_json_mode_non_streaming(

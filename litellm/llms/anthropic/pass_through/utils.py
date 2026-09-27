@@ -74,10 +74,8 @@ def normalize_reasoning_effort_value(
     The accepted set is resolved by the same owner that answers ``/model_group/info``, so a level
     the proxy advertises is a level this path forwards.
 
-    Degradation only happens when the capability set is known and the requested
-    tier is not in it. A model the map does not describe, or a mapped entry that
-    declares no effort metadata, keeps the requested value so third-party
-    Anthropic-compatible deployments are not silently downgraded.
+    Only a known capability set can refuse a tier: a model the map does not describe, or an entry
+    declaring no effort metadata, keeps the requested tier instead of being silently downgraded.
 
     A deployment that refuses every step of a chain falls back to an accepted level read off that
     same set rather than to an assumed one, since an entry naming its levels outright can exclude
