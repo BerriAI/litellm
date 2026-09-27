@@ -117,7 +117,9 @@ fn string_config(
         None => Ok(ConfigValue::Absent),
         Some(Value::Null) => Ok(ConfigValue::ExplicitNone(source)),
         Some(Value::String(value)) => Ok(ConfigValue::Value(Sourced::new(value.clone(), source))),
-        Some(_) => Err(Error::InvalidFieldType(name.to_string())),
+        Some(_) => Err(Error::InvalidConfiguration(format!(
+            "{name} must be a string or null"
+        ))),
     }
 }
 

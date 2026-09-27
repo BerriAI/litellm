@@ -125,7 +125,7 @@ pub fn complete_azure_anthropic_url(
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<String, Error> {
     let api_base = resolve_non_empty(api_base, env_lookup, &[AZURE_API_BASE_ENV])
-        .ok_or_else(|| Error::from(litellm_auth::Error::MissingAzureApiBase))?;
+        .ok_or_else(|| Error::from(litellm_auth::Error::MissingApiBase { provider: "Azure", guidance: "Set `api_base` or the AZURE_API_BASE environment variable. Expected format: https://<resource-name>.services.ai.azure.com/anthropic" }))?;
 
     let api_base = api_base.trim_end_matches('/');
 

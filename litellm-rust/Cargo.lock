@@ -2891,6 +2891,7 @@ dependencies = [
  "http 1.4.2",
  "litellm-auth-types",
  "moka",
+ "rstest",
  "serde_json",
  "sha2 0.10.9",
  "tokio",
@@ -2900,6 +2901,7 @@ dependencies = [
 name = "litellm-auth-types"
 version = "0.1.0"
 dependencies = [
+ "rstest",
  "serde",
  "subtle",
  "thiserror 2.0.19",
@@ -3194,6 +3196,7 @@ version = "0.1.0"
 dependencies = [
  "criterion",
  "proptest",
+ "rstest",
 ]
 
 [[package]]
@@ -3673,6 +3676,7 @@ version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
  "once_cell",
+ "rstest",
  "rustc-hash",
  "thiserror 2.0.19",
  "tiktoken-rs",

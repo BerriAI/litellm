@@ -299,7 +299,7 @@ fn validate_request_credentials(configured: &str) -> Result<&str, Error> {
                 .map(str::to_string)
         });
     if token_uri.as_deref() != Some(GOOGLE_OAUTH_TOKEN_ENDPOINT) {
-        return Err(Error::RequestVertexTokenEndpoint);
+        return Err(Error::InvalidConfiguration("request-controlled Vertex credentials must use the canonical Google OAuth token endpoint".into()));
     }
     Ok(configured)
 }
@@ -376,10 +376,18 @@ fn optional_credentials(
                     .map(SecretValue::new)
                     .map(|value| Sourced::new(value, source))
                     .map(Some)
-                    .map_err(|error| Error::InvalidFieldType(format!("{}: {error}", names[0])));
+                    .map_err(|error| {
+                        Error::InvalidConfiguration(format!(
+                            "{}: {error} must be a string or null",
+                            names[0]
+                        ))
+                    });
             }
             Some(_) => {
-                return Err(Error::InvalidFieldType(names[0].to_string()));
+                return Err(Error::InvalidConfiguration(format!(
+                    "{} must be a string or null",
+                    names[0]
+                )));
             }
         }
     }
@@ -397,7 +405,10 @@ fn optional_string(params: &Map<String, Value>, names: &[&str]) -> Result<Option
             Some(Value::String(value)) if value.trim().is_empty() => continue,
             Some(Value::String(value)) => return Ok(Some(value.clone())),
             Some(_) => {
-                return Err(Error::InvalidFieldType(names[0].to_string()));
+                return Err(Error::InvalidConfiguration(format!(
+                    "{} must be a string or null",
+                    names[0]
+                )));
             }
         }
     }
@@ -411,7 +422,7 @@ fn non_empty_env(env_lookup: &dyn Fn(&str) -> Option<String>, name: &str) -> Opt
 }
 
 fn auth_acquisition_error(error: gcp_auth::Error) -> Error {
-    Error::VertexTokenAcquisition(error.to_string())
+    Error::CredentialAcquisition(format!("Vertex AI credentials: {error}"))
 }
 
 #[cfg(test)]
