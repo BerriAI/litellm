@@ -3,6 +3,7 @@ use litellm_llms::{
     anthropic::chat::transformation::ANTHROPIC_CHAT_COMPLETIONS_CONFIG,
     base_llm::chat::transformation::BaseConfig,
     bedrock::chat::converse_transformation::BEDROCK_CHAT_COMPLETIONS_CONFIG,
+    openai_like::chat::transformation::OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG,
 };
 use serde_json::{Map, Value};
 
@@ -14,6 +15,7 @@ pub(super) fn chat_completions_provider_config(provider: &str) -> Option<&'stati
     match provider {
         "anthropic" => Some(&ANTHROPIC_CHAT_COMPLETIONS_CONFIG),
         "bedrock" => Some(&BEDROCK_CHAT_COMPLETIONS_CONFIG),
+        "openai_like" => Some(&OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG),
         _ => None,
     }
 }
