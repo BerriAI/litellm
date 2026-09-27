@@ -22,7 +22,8 @@ except ImportError:
     # Standalone fallback when running outside full LiteLLM package
     class CustomGuardrail:
         def __init__(self, **kwargs: Any) -> None:
-            pass
+            for k, v in kwargs.items():
+                setattr(self, k, v)
 
 
 class ZTDSGuardrail(CustomGuardrail):
@@ -52,6 +53,7 @@ class ZTDSGuardrail(CustomGuardrail):
         **kwargs: Any,
     ):
         super().__init__(guardrail_name=guardrail_name, **kwargs)
+        self.guardrail_name = guardrail_name or kwargs.get("guardrail_name", "ztds")
         self.enabled_entities = enabled_entities or list(self.PATTERNS.keys())
         self.reverse_on_output = reverse_on_output
         self.enforce_zero_egress = enforce_zero_egress
