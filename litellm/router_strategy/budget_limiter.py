@@ -841,7 +841,7 @@ class RouterBudgetLimiting(CustomLogger):
 
         for _model in model_list:
             _litellm_params = _model.get("litellm_params", {})
-            if _litellm_params.get("max_budget") or _litellm_params.get("budget_duration") is not None:
+            if _litellm_params.get("max_budget") is not None or _litellm_params.get("budget_duration") is not None:
                 return True
         return False
 

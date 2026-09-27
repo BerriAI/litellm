@@ -217,3 +217,45 @@ async def test_provider_budget_boundary_is_unchanged(
     )
 
     assert (kept != []) is expected_kept
+
+
+def test_zero_max_budget_without_duration_initializes_router_budget_limiter() -> None:
+    """A configured zero budget must not be skipped by a truthiness check."""
+    assert RouterBudgetLimiting.should_init_router_budget_limiter(
+        provider_budget_config=None,
+        model_list=[{"litellm_params": {"max_budget": 0}}],
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["provider", "deployment", "tag"])
+async def test_none_max_budget_does_not_block_spend(disable_budget_sync, scope: str) -> None:
+    """An unset budget retains the existing non-blocking behaviour."""
+    limiter = RouterBudgetLimiting(dual_cache=DualCache(), provider_budget_config=None)
+    deployment = _deployment()
+    provider_configs: dict[str, BudgetConfig] = {}
+    deployment_configs: dict[str, BudgetConfig] = {}
+    deployment_providers: list[str | None] = []
+    request_tags: list[str] = []
+
+    if scope == "provider":
+        provider_configs = {"openai": _budget(limit=None)}
+        deployment_providers = ["openai"]
+    elif scope == "deployment":
+        deployment_configs = {"deployment-1": _budget(limit=None)}
+    else:
+        limiter.tag_budget_config = {"prod": _budget(limit=None)}
+        request_tags = ["prod"]
+
+    kept, blocked_info = limiter._filter_out_deployments_above_budget(
+        potential_deployments=[],
+        healthy_deployments=[deployment],
+        provider_configs=provider_configs,
+        deployment_configs=deployment_configs,
+        deployment_providers=deployment_providers,
+        spend_map={},
+        request_tags=request_tags,
+    )
+
+    assert kept == [deployment]
+    assert blocked_info == ""
