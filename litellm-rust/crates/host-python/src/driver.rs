@@ -117,19 +117,12 @@ where
         interrupted: None,
     };
     if asynchronous {
-        let execution = Py::new(py, Execution::new(driver))?;
-        return py
-            .import("litellm.rust_bridge.lifecycle")?
-            .getattr("drive")?
-            .call1((execution,))
-            .map(Bound::unbind);
+        return Execution::new(driver).into_coroutine(py).map(Bound::unbind);
     }
     match driver.resume(None)? {
         ExecutionStep::Return(value) => Ok(value),
-        ExecutionStep::Open(head) => py
-            .import("litellm.rust_bridge.lifecycle")?
-            .getattr("SyncStream")?
-            .call1((Py::new(py, Execution::suspended(driver))?, head))
+        ExecutionStep::Open(head) => Execution::suspended(driver)
+            .into_sync_stream(py, head)
             .map(Bound::unbind),
         ExecutionStep::Await(_) | ExecutionStep::Yield(_) => {
             Err(PyRuntimeError::new_err("sync call suspended"))
