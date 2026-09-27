@@ -232,6 +232,7 @@ def select_tests(changed: tuple[str, ...]) -> tuple[str, ...]:
         (("tests/e2e/guardrails/test_presidio_masking_e2e.py",), ()),
         (("tests/e2e/llm_translation/realtime/test_realtime_pipecat_audio_e2e.py",), ()),
         (("tests/e2e/logging/test_otel_v2_langfuse_generation_output_e2e.py",), ()),
+        (("tests/e2e/logging/test_azure_storage_log_e2e.py",), ()),
         (
             ("tests/e2e/logging/test_team_langfuse_callback_e2e.py",),
             ("tests/e2e/logging/test_team_langfuse_callback_e2e.py",),

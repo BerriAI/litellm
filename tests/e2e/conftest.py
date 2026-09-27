@@ -24,6 +24,7 @@ from typing import Final
 import pytest
 import requests
 from e2e_config import (
+    AZURE_STORAGE_OPT_IN_ENV,
     CLI_DETERMINISM_OPT_IN_ENV,
     CONTROL_PLANE_BASE_URL,
     FIXTURE_DIR,
@@ -72,6 +73,7 @@ OPT_IN_MARKERS: Final = MappingProxyType(
         "otel_v2": OTEL_V2_OPT_IN_ENV,
         "otel_tls": OTEL_TLS_OPT_IN_ENV,
         "secret_manager": SECRET_MANAGER_OPT_IN_ENV,
+        "azure_storage": AZURE_STORAGE_OPT_IN_ENV,
     }
 )
 
@@ -178,6 +180,11 @@ def pytest_configure(config: pytest.Config) -> None:
         "markers",
         "secret_manager: needs a proxy booted from gateway/secret_manager_<system>_ci_config.yml against that live "
         "secret manager; deselected unless E2E_SECRET_MANAGER names the backend (see secret_manager/secret_backends.py)",
+    )
+    config.addinivalue_line(
+        "markers",
+        "azure_storage: needs a gateway booted with callbacks: ['azure_storage'], a license, and the AZURE_STORAGE_* "
+        "env; deselected unless E2E_AZURE_STORAGE is set",
     )
 
 
