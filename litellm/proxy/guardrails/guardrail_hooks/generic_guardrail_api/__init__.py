@@ -30,7 +30,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         api_key=litellm_params.api_key,
         headers=getattr(litellm_params, "headers", None),
         additional_provider_specific_params=getattr(litellm_params, "additional_provider_specific_params", {}),
-        unreachable_fallback=litellm_params.unreachable_fallback or "fail_closed",
+        unreachable_fallback=getattr(litellm_params, "unreachable_fallback", "fail_closed"),
         fail_on_error=getattr(litellm_params, "fail_on_error", True),
         extra_headers=getattr(litellm_params, "extra_headers", None),
         guardrail_name=guardrail.get("guardrail_name", ""),

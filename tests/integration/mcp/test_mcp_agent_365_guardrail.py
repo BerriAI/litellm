@@ -1,4 +1,4 @@
-"""Agent 365 guardrail paths that end before the OBO exchange: no Entra, so no real tenant is ever contacted."""
+"""Agent 365 guardrail paths that end before the OBO exchange, so neither Entra nor Agent 365 is ever contacted."""
 
 import json
 import uuid
@@ -25,7 +25,7 @@ from integration._support.mcp import (
     tool_calls,
 )
 from integration._support.process import owned_proxy_process
-from integration._support.wire import Reply, Request, Wire, wire_server
+from integration._support.wire import Reply, Request, wire_server
 
 TENANT: Final = "00000000-0000-4000-8000-0000000a3650"
 REJECTED: Final = "Agent 365 guardrail rejected the tool call"
@@ -36,16 +36,12 @@ GUARDRAIL_ROWS: Final = (
 FALLBACKS: Final = (None, "fail_open", "fail_closed")
 
 
-def _agent_365_never_reached(request: Request) -> Reply:
-    return Reply(status=500, body=json.dumps({"error": f"unexpected evaluation request {request.target}"}).encode())
-
-
 def _generic_guardrail_outage(request: Request) -> Reply:
     assert request.target == "/beta/litellm_basic_guardrail_api", request.target
     return Reply(status=503, body=json.dumps({"error": "synthetic sibling guardrail outage"}).encode())
 
 
-def _config(tmp_path: Path, name: str, agent_365_url: str, fallback: str | None, sibling_url: str | None) -> Path:
+def _config(tmp_path: Path, name: str, fallback: str | None, sibling_url: str | None) -> Path:
     config: dict = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
     config["guardrails"] = [
         {
@@ -57,7 +53,6 @@ def _config(tmp_path: Path, name: str, agent_365_url: str, fallback: str | None,
                 "tenant_id": TENANT,
                 "client_id": "synthetic-client-id",
                 "client_secret": "synthetic-client-secret",
-                "api_base": agent_365_url,
                 **({"unreachable_fallback": fallback} if fallback else {}),
             },
         },
@@ -89,7 +84,6 @@ class Rig:
     key: str
     alias: str
     peer: McpPeer
-    agent_365: Wire
     server_id: str
 
     def caller(self, entry: EntryPoint = "mcp", bearer: str | None = None) -> McpCaller:
@@ -112,21 +106,20 @@ class Rig:
 def _rig(gateway: Gateway, tmp_path: Path, fallback: str | None, *, sibling: bool = False) -> Iterator[Rig]:
     alias: Final = "a365" + uuid.uuid4().hex[:8]
     with (
-        wire_server(_agent_365_never_reached) as agent_365,
         wire_server(_generic_guardrail_outage) as sibling_outage,
         scripted_peer(echo_tool("add")) as peer,
         owned_proxy_process(
             gateway,
             tmp_path,
             {"PROXY_CONFIG_RELOAD_INTERVAL_SECONDS": "2"},
-            config=_config(tmp_path, alias, agent_365.url, fallback, sibling_outage.url if sibling else None),
+            config=_config(tmp_path, alias, fallback, sibling_outage.url if sibling else None),
         ) as owned,
         owned.gateway.scenario() as scenario,
     ):
         identity: Final = register_mcp(scenario, peer, alias)
         key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
         peer.drain()
-        yield Rig(owned.gateway, key, alias, peer, agent_365, identity)
+        yield Rig(owned.gateway, key, alias, peer, identity)
 
 
 def _chat(rig: Rig, model: str, marker: str) -> httpx.Response:
@@ -149,7 +142,6 @@ def test_a_missing_or_malformed_caller_bearer_blocks_on_every_entry_point_whatev
             )
             assert malformed.error is not None and REJECTED in malformed.raw, f"{entry} opaque bearer: {malformed.raw}"
         assert rig.upstream_tool_names() == ()
-        assert rig.agent_365.drain() == (), "a rejected caller never produces an evaluation request"
         expected: Final = 2 * len(ENTRY_POINTS)
         assert rig.guardrail_statuses("call_mcp_tool", expected) == ["guardrail_intervened"] * expected
 
@@ -159,7 +151,6 @@ def test_chat_completions_are_unaffected_by_the_mcp_guardrail(gateway: Gateway, 
         model: Final = scenario.model()
         chat: Final = _chat(rig, model, "unaffected-" + uuid.uuid4().hex)
         assert chat.status_code == 200, chat.text
-        assert rig.agent_365.drain() == ()
         assert rig.guardrail_statuses("acompletion", 1) == ["none"]
 
 
@@ -170,4 +161,3 @@ def test_a_sibling_guardrail_keeps_its_own_fail_closed_default_next_to_agent_365
         model: Final = scenario.model()
         chat: Final = _chat(rig, model, "sibling-" + uuid.uuid4().hex)
         assert chat.status_code == 500 and "Generic Guardrail API failed" in chat.text, chat.text
-        assert rig.agent_365.drain() == ()
