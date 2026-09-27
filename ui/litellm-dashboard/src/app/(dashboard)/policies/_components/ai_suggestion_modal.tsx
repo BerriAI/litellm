@@ -68,7 +68,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
   const [suggestions, setSuggestions] = useState<SuggestedTemplate[] | null>(null);
   const [explanation, setExplanation] = useState<string | null>(null);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [selectedModel, setSelectedModel] = useState<string | undefined>(undefined);
+  const [selectedModel, setSelectedModel] = useState<string | null>(null);
   const [availableModels, setAvailableModels] = useState<string[]>([]);
   const [isLoadingModels, setIsLoadingModels] = useState(false);
   // Test panel state
@@ -114,7 +114,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
     setSuggestions(null);
     setExplanation(null);
     setSelectedIds(new Set());
-    setSelectedModel(undefined);
+    setSelectedModel(null);
     setShowTestPanel(false);
     setTestInputText("");
     setIsTestLoading(false);
@@ -837,7 +837,7 @@ const AiSuggestionModal: React.FC<AiSuggestionModalProps> = ({
               <SearchSelect
                 options={availableModels.map((m) => ({ label: m, value: m }))}
                 value={selectedModel}
-                onValueChange={(value) => setSelectedModel(value || undefined)}
+                onValueChange={setSelectedModel}
                 placeholder={isLoadingModels ? "Loading models..." : "Select a model to analyze your requirements"}
                 emptyText="No models found"
                 disabled={isLoadingModels}

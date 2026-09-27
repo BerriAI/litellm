@@ -17,6 +17,7 @@ import litellm
 from litellm.proxy import proxy_server
 from litellm.proxy import utils as proxy_utils
 from litellm.proxy.utils import create_model_info_response
+from litellm.types.router import DeploymentModelListingInfo
 
 from .conftest import normalize  # type: ignore[import-not-found]
 
@@ -166,13 +167,16 @@ def test_anthropic_format_carries_router_configured_token_limits(client, auth_as
     built from another entry's lookup shows up as the wrong numbers."""
 
     def _configured(model_name):
-        return (300000, 32000) if model_name == "gpt-4" else (500000, 4096)
+        max_input, max_output = (300000, 32000) if model_name == "gpt-4" else (500000, 4096)
+        return DeploymentModelListingInfo(
+            cost_map_keys=(model_name,), max_input_tokens=max_input, max_output_tokens=max_output
+        )
 
     def _cost_map_lookup(model_id):
         max_input, max_output = (200000, 64000) if model_id == "gpt-4" else (100000, 8000)
         return {"max_input_tokens": max_input, "max_output_tokens": max_output, "mode": "chat"}
 
-    patched_models.get_configured_token_limits = MagicMock(side_effect=_configured)
+    patched_models.get_model_listing_info = MagicMock(side_effect=_configured)
 
     def _resolved(**kwargs):
         return create_model_info_response(**kwargs, get_model_info=_cost_map_lookup)
@@ -343,3 +347,53 @@ def test_anthropic_format_returns_public_team_model_name(
     assert response.status_code == 200
     assert [m["id"] for m in response.json()["data"]] == ["gpt-4-team"]
     assert internal_name not in response.text
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+@pytest.mark.parametrize(
+    "caller_headers",
+    [
+        {"anthropic-version": "2023-06-01", "user-agent": "claude-code/2.1.267"},
+        {"anthropic-version": "2023-06-01", "user-agent": "claude-cli/2.1.267 (external, sdk-cli)"},
+        {"anthropic-version": "2023-06-01", "x-gateway-client": "claude-code"},
+    ],
+)
+def test_anthropic_format_lists_claude_code_view_ids_for_claude_code(
+    client, auth_as, patched_models, monkeypatch, path, caller_headers
+):
+    """Claude Code drops every id without claude/anthropic in it and reads [1m] as its 1M marker, so for Claude
+    Code (its discovery fetch's own user agent, its SDK's, or the gateway-client header a launcher sends) every
+    group is listed under a Claude-shaped id with the marker where the window reaches 1M; the display name stays
+    the served name."""
+
+    def _create_model_info_response(model_id, provider="openai", **kwargs):
+        if model_id != "claude-sonnet":
+            return _stub_model_info_response(model_id=model_id, provider=provider)
+        return {**_stub_model_info_response(model_id=model_id, provider=provider), "max_input_tokens": 1000000}
+
+    patched_models.model_group_alias = {}
+    patched_models.has_model_id.return_value = False
+    patched_models.get_candidate_model_ids_for_route.side_effect = lambda name, team_id=None: frozenset({name}) if name in ("gpt-4", "claude-sonnet") else frozenset()
+    monkeypatch.setattr(proxy_utils, "create_model_info_response", _create_model_info_response)
+
+    with auth_as():
+        response = client.get(path, headers=caller_headers)
+
+    assert response.status_code == 200
+    body = response.json()
+    assert [(m["id"], m["display_name"]) for m in body["data"]] == [
+        ("claude-router-6770742d34", "gpt-4"),
+        ("claude-sonnet[1m]", "claude-sonnet"),
+    ]
+    assert (body["first_id"], body["last_id"]) == ("claude-router-6770742d34", "claude-sonnet[1m]")
+    assert [row["source_model"] for row in body["data"]] == ["gpt-4", "claude-sonnet"]
+
+
+@pytest.mark.parametrize("path", ["/v1/models", "/models"])
+def test_anthropic_format_keeps_served_ids_for_other_anthropic_clients(client, auth_as, patched_models, path):
+    """An Anthropic SDK asking for the vendor shape gets the served ids: the view is Claude Code's alone."""
+    with auth_as():
+        response = client.get(path, headers={"anthropic-version": "2023-06-01", "user-agent": "anthropic-sdk-python/0.40"})
+
+    assert response.status_code == 200
+    assert [m["id"] for m in response.json()["data"]] == ["gpt-4", "claude-sonnet"]

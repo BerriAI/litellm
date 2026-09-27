@@ -1861,3 +1861,87 @@ async def test_tpm_only_model_enforces_priority_and_model_capacity(monkeypatch):
         )
     assert capacity_blocked.value.status_code == 429
     assert "Model capacity reached" in capacity_blocked.value.detail["error"]
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_attaches_priority_headers_to_dict_response():
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        RateLimitResponse,
+        RateLimitStatus,
+        get_or_create_request_stash,
+    )
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    get_or_create_request_stash().rate_limit_response = RateLimitResponse(
+        overall_code="OK",
+        statuses=[
+            RateLimitStatus(
+                code="OK",
+                current_limit=75,
+                limit_remaining=74,
+                rate_limit_type="requests",
+                descriptor_key="priority_model",
+            )
+        ],
+    )
+    response = {
+        "id": "msg_123",
+        "type": "message",
+        "role": "assistant",
+        "content": [],
+        "_hidden_params": {"additional_headers": {"x-litellm-attempted-retries": 0}},
+    }
+
+    await handler.async_post_call_success_hook(
+        data={"model": "anthropic-haiku"},
+        user_api_key_dict=UserAPIKeyAuth(metadata={"priority": "premium"}),
+        response=response,
+    )
+
+    additional_headers = response["_hidden_params"]["additional_headers"]
+    assert additional_headers["x-litellm-attempted-retries"] == 0
+    assert additional_headers["x-ratelimit-priority_model-limit-requests"] == 75
+    assert additional_headers["x-ratelimit-priority_model-remaining-requests"] == 74
+    assert additional_headers["x-litellm-priority"] == "premium"
+    assert additional_headers["x-litellm-rate-limiter-version"] == "v3"
+
+
+@pytest.mark.asyncio
+async def test_post_call_success_hook_leaves_raw_provider_dict_untouched():
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    response = {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
+
+    await handler.async_post_call_success_hook(
+        data={"model": "anthropic-haiku"},
+        user_api_key_dict=UserAPIKeyAuth(metadata={"priority": "premium"}),
+        response=response,
+    )
+
+    assert response == {"id": "msg_123", "type": "message", "role": "assistant", "content": []}
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("team_metadata", "expected_priority_header"),
+    [
+        ({"priority": "优先"}, None),
+        ({"priority": "high"}, "high"),
+        ({}, "default"),
+    ],
+)
+async def test_post_call_success_hook_priority_header_is_always_http_encodable(team_metadata, expected_priority_header):
+    from starlette.responses import Response
+
+    handler = DynamicRateLimitHandler(internal_usage_cache=DualCache())
+    response = {"id": "msg_123", "type": "message", "role": "assistant", "content": [], "_hidden_params": {}}
+
+    await handler.async_post_call_success_hook(
+        data={"model": "anthropic-haiku"},
+        user_api_key_dict=UserAPIKeyAuth(team_id="team-1", team_metadata=team_metadata),
+        response=response,
+    )
+
+    additional_headers = response["_hidden_params"]["additional_headers"]
+    http_response = Response(headers={key: str(value) for key, value in additional_headers.items()})
+    assert http_response.headers.get("x-litellm-priority") == expected_priority_header
+    assert http_response.headers["x-litellm-rate-limiter-version"] == "v3"

@@ -5,8 +5,13 @@ import React, { useMemo, useState } from "react";
 import { useInfiniteKeys } from "@/app/(dashboard)/hooks/keys/useKeys";
 import { useInfiniteUsers } from "@/app/(dashboard)/hooks/users/useUsers";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
-import { useModelCostMap } from "@/app/(dashboard)/hooks/models/useModelCostMap";
-import { useAutoRouters, usePlainModelGroups } from "@/app/(dashboard)/hooks/models/useModels";
+import {
+  useAutoRouters,
+  usePlainChatModelDeployments,
+  usePlainChatModelGroups,
+  usePlainModelGroups,
+} from "@/app/(dashboard)/hooks/models/useModels";
+import { buildModelAvailability, deploymentRefsFromModelInfo, resolveAvailableModels } from "@/lib/autorouter_presets";
 import { MultiSelect } from "@/components/shared/MultiSelect";
 import { PaginatedMultiSelect } from "@/components/shared/PaginatedMultiSelect";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
@@ -24,52 +29,7 @@ type ShadowEvalDirection = ShadowEvalJob["direction"];
 
 const MAX_ROUTERS = 4;
 const MAX_MODELS = 100;
-
 const RECOMMENDED_JUDGE_MODELS = ["anthropic/claude-sonnet-5", "openai/gpt-4o", "gemini/gemini-2.5-pro"] as const;
-
-interface CostMapEntry {
-  litellm_provider?: string;
-  mode?: string;
-}
-
-const useChatModelNames = (): string[] => {
-  const { data: costMap } = useModelCostMap();
-  return useMemo(() => {
-    if (!costMap) return [];
-    const chatModels = Object.entries(costMap as Record<string, CostMapEntry>)
-      .filter(([, value]) => value?.mode === "chat" && value?.litellm_provider)
-      .map(([key, value]) => (key.startsWith(`${value.litellm_provider}/`) ? key : `${value.litellm_provider}/${key}`));
-    return [...new Set(chatModels)].toSorted((a, b) => a.localeCompare(b));
-  }, [costMap]);
-};
-
-const useJudgeModelOptions = (): SearchSelectOption[] => {
-  const chatModels = useChatModelNames();
-  return useMemo(() => {
-    const pinned: SearchSelectOption[] = RECOMMENDED_JUDGE_MODELS.map((model) => ({
-      label: model,
-      value: model,
-      sublabel: "Recommended",
-    }));
-    const pinnedNames = new Set<string>(RECOMMENDED_JUDGE_MODELS);
-    const rest = chatModels.filter((model) => !pinnedNames.has(model)).map((model) => ({ label: model, value: model }));
-    return [...pinned, ...rest];
-  }, [chatModels]);
-};
-
-const useBaselineModelOptions = (): SearchSelectOption[] => {
-  const configuredGroups = usePlainModelGroups();
-  const chatModels = useChatModelNames();
-  return useMemo(() => {
-    const configured = [...configuredGroups]
-      .toSorted((a, b) => a.localeCompare(b))
-      .map((model) => ({ label: model, value: model, sublabel: "Configured on this gateway" }));
-    const rest = chatModels
-      .filter((model) => !configuredGroups.has(model))
-      .map((model) => ({ label: model, value: model }));
-    return [...configured, ...rest];
-  }, [configuredGroups, chatModels]);
-};
 
 const DIRECTION_OPTIONS: readonly { value: ShadowEvalDirection; label: string }[] = [
   { value: "forward", label: "Adoption check: key's traffic vs the router" },
@@ -210,8 +170,8 @@ interface StartFormValidityInputs {
   models: string[];
   routerNames: string[];
   direction: ShadowEvalDirection;
-  baselineModel: string;
-  judgeModel: string;
+  baselineModel: string | null;
+  judgeModel: string | null;
   percentage: string;
   maxBudget: string;
 }
@@ -221,13 +181,13 @@ const startFormValidity = (inputs: StartFormValidityInputs) => {
   const percentageValid = parsedPct >= 0.1 && parsedPct <= 100;
   const parsedMaxBudget = Number.parseFloat(inputs.maxBudget);
   const maxBudgetValid = parsedMaxBudget >= 0.01 && parsedMaxBudget <= 10000;
-  const baselinePicked = inputs.direction === "forward" || inputs.baselineModel !== "";
+  const baselinePicked = inputs.direction === "forward" || Boolean(inputs.baselineModel);
   const targetsPicked = inputs.apiKeyIds.length + inputs.teamIds.length + inputs.userIds.length > 0;
   const routerCountValid = inputs.routerNames.length >= 1 && inputs.routerNames.length <= MAX_ROUTERS;
   const routersMatchDirection = inputs.direction === "forward" || inputs.routerNames.length === 1;
   const routersValid = routerCountValid && routersMatchDirection;
   const scopeValid = routersValid && (inputs.direction === "reverse" || inputs.models.length <= MAX_MODELS);
-  const modelsPicked = scopeValid && inputs.judgeModel !== "" && baselinePicked;
+  const modelsPicked = scopeValid && Boolean(inputs.judgeModel) && baselinePicked;
   const filled = targetsPicked && modelsPicked;
   const boundsValid = percentageValid && maxBudgetValid;
   const valid = Boolean(inputs.accessToken) && filled && boundsValid;
@@ -241,7 +201,7 @@ interface StartBodyInputs {
   models: string[];
   routerNames: string[];
   direction: ShadowEvalDirection;
-  baselineModel: string;
+  baselineModel: string | null;
   shadowPercentage: number;
   durationDays: number;
   maxBudget: number;
@@ -255,7 +215,7 @@ const buildStartBody = (inputs: StartBodyInputs) => ({
   models: inputs.direction === "forward" ? inputs.models : [],
   router_names: inputs.routerNames,
   direction: inputs.direction,
-  ...(inputs.direction === "reverse" ? { baseline_model: inputs.baselineModel } : {}),
+  ...(inputs.direction === "reverse" ? { baseline_model: inputs.baselineModel ?? undefined } : {}),
   shadow_percentage: inputs.shadowPercentage,
   duration_days: inputs.durationDays,
   max_budget: inputs.maxBudget,
@@ -270,18 +230,37 @@ export const StartForm: React.FC = () => {
   const [models, setModels] = useState<string[]>([]);
   const [routerNames, setRouterNames] = useState<string[]>([]);
   const [direction, setDirection] = useState<ShadowEvalDirection>("forward");
-  const [baselineModel, setBaselineModel] = useState("");
+  const [baselineModel, setBaselineModel] = useState<string | null>(null);
   const [percentage, setPercentage] = useState("10");
   const [durationDays, setDurationDays] = useState("7");
-  const [judgeModel, setJudgeModel] = useState("");
+  const [judgeModel, setJudgeModel] = useState<string | null>(null);
   const [maxBudget, setMaxBudget] = useState("10");
   const { data: autoRouters } = useAutoRouters();
-  const judgeModelOptions = useJudgeModelOptions();
-  const baselineModelOptions = useBaselineModelOptions();
   const configuredGroups = usePlainModelGroups();
+  const chatGroups = usePlainChatModelGroups();
+  const chatDeployments = usePlainChatModelDeployments();
   const modelOptions = useMemo<SearchSelectOption[]>(
     () => [...configuredGroups].toSorted((a, b) => a.localeCompare(b)).map((name) => ({ label: name, value: name })),
     [configuredGroups],
+  );
+  const chatOptions = useMemo(
+    () => modelOptions.filter((option) => chatGroups.has(option.value)),
+    [modelOptions, chatGroups],
+  );
+  const chatAvailability = useMemo(
+    () => buildModelAvailability(chatGroups, deploymentRefsFromModelInfo(chatDeployments)),
+    [chatDeployments, chatGroups],
+  );
+  const recommendedJudgeModels = useMemo(
+    () => new Set(RECOMMENDED_JUDGE_MODELS.flatMap((model) => resolveAvailableModels(model, chatAvailability))),
+    [chatAvailability],
+  );
+  const judgeOptions = useMemo(
+    () =>
+      chatOptions.map((option) =>
+        recommendedJudgeModels.has(option.value) ? { ...option, sublabel: "Recommended" } : option,
+      ),
+    [chatOptions, recommendedJudgeModels],
   );
   const start = useStartShadowEval();
 
@@ -307,6 +286,7 @@ export const StartForm: React.FC = () => {
   };
   const { parsedPct, parsedMaxBudget, percentageValid, maxBudgetValid, valid } = startFormValidity(validityInputs);
   const handleStart = () => {
+    if (!valid || !judgeModel) return;
     const bodyInputs: StartBodyInputs = {
       apiKeyIds,
       teamIds,
@@ -434,7 +414,7 @@ export const StartForm: React.FC = () => {
           {direction === "reverse" && (
             <Field label="Baseline model">
               <SearchSelect
-                options={baselineModelOptions}
+                options={chatOptions}
                 value={baselineModel}
                 onValueChange={setBaselineModel}
                 placeholder="Select a baseline model"
@@ -444,7 +424,7 @@ export const StartForm: React.FC = () => {
           )}
           <Field label="Judge model" className="sm:col-span-2">
             <SearchSelect
-              options={judgeModelOptions}
+              options={judgeOptions}
               value={judgeModel}
               onValueChange={setJudgeModel}
               placeholder="Select a judge model"

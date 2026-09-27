@@ -1,9 +1,14 @@
 import re
+from collections.abc import Mapping
 from copy import deepcopy
 from enum import Enum
+from functools import lru_cache
+from types import MappingProxyType
 from typing import Any, Final, Literal, cast, get_type_hints
 
 import httpx
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_logger
@@ -19,6 +24,76 @@ from litellm.types.llms.vertex_ai import (
 )
 from litellm.types.utils import TokenCountResponse
 from litellm.utils import supports_response_schema, supports_system_messages
+
+VERTEX_SELF_DEPLOYED_ENDPOINT_UNSUPPORTED_PARAMS: Final = frozenset(
+    {
+        "audio",
+        "max_retries",
+        "modalities",
+        "prediction",
+        "prompt_cache_key",
+        "prompt_cache_retention",
+        "safety_identifier",
+        "service_tier",
+        "store",
+        "web_search_options",
+    }
+)
+
+
+class VertexAILyriaModelInfo(TypedDict):
+    vertex_ai_audio_api: ReadOnly[Literal["lyria_predict", "lyria_interactions"]]
+    supported_audio_formats: ReadOnly[tuple[Literal["mp3", "wav"], ...]]
+    output_cost_per_image: NotRequired[ReadOnly[float]]
+
+
+_VERTEX_AI_LYRIA_MODEL_INFO_ADAPTER: Final = TypeAdapter(VertexAILyriaModelInfo)
+
+
+def _validate_vertex_ai_lyria_model_info(raw_model_info: object) -> VertexAILyriaModelInfo | None:
+    if raw_model_info is None:
+        return None
+    try:
+        return _VERTEX_AI_LYRIA_MODEL_INFO_ADAPTER.validate_python(raw_model_info)
+    except ValidationError:
+        return None
+
+
+@lru_cache(maxsize=1)
+def _bundled_vertex_ai_lyria_model_infos() -> Mapping[str, VertexAILyriaModelInfo]:
+    from litellm.litellm_core_utils.get_model_cost_map import GetModelCostMap
+
+    return MappingProxyType(
+        {
+            model_key: lyria_model_info
+            for model_key, raw_model_info in GetModelCostMap.load_local_model_cost_map().items()
+            if (lyria_model_info := _validate_vertex_ai_lyria_model_info(raw_model_info)) is not None
+        }
+    )
+
+
+def _vertex_ai_lyria_model_key(model: str) -> str:
+    return model if model.startswith("vertex_ai/") else f"vertex_ai/{model}"
+
+
+def _vertex_ai_lyria_generation_cost(model_info: VertexAILyriaModelInfo | None) -> float | None:
+    return None if model_info is None else model_info.get("output_cost_per_image")
+
+
+def get_vertex_ai_lyria_model_info(model: str) -> VertexAILyriaModelInfo | None:
+    model_key: Final = _vertex_ai_lyria_model_key(model)
+    runtime_model_info: Final = _validate_vertex_ai_lyria_model_info(litellm.model_cost.get(model_key))
+    return runtime_model_info or _bundled_vertex_ai_lyria_model_infos().get(model_key)
+
+
+def get_vertex_ai_lyria_generation_cost(model: str) -> float | None:
+    model_key: Final = _vertex_ai_lyria_model_key(model)
+    runtime_cost: Final = _vertex_ai_lyria_generation_cost(
+        _validate_vertex_ai_lyria_model_info(litellm.model_cost.get(model_key))
+    )
+    if runtime_cost is not None:
+        return runtime_cost
+    return _vertex_ai_lyria_generation_cost(_bundled_vertex_ai_lyria_model_infos().get(model_key))
 
 
 class VertexAIError(BaseLLMException):
@@ -308,6 +383,40 @@ def get_vertex_base_model_name(model: str) -> str:
             return model.replace(route, "", 1)
 
     return model
+
+
+def vertex_model_garden_model_id_in_json_body(model: str) -> bool:
+    """
+    Vertex catalog / publisher models are addressed as publisher/model (e.g.
+    xai/grok-4.1-fast-reasoning) on the shared OpenAPI URL, with the id in the JSON body.
+
+    Deployed Model Garden endpoints are typically a single segment (often numeric)
+    and use .../endpoints/{ENDPOINT_ID}/chat/completions with an empty model field.
+    """
+    return "/" in model
+
+
+def is_vertex_self_deployed_openai_compatible_endpoint(model: str) -> bool:
+    local_model: Final = model.removeprefix("vertex_ai/")
+    route: Final = get_vertex_ai_model_route(local_model)
+    if route == VertexAIModelRoute.GEMMA:
+        return True
+    return route == VertexAIModelRoute.MODEL_GARDEN and not vertex_model_garden_model_id_in_json_body(
+        get_vertex_base_model_name(local_model)
+    )
+
+
+def get_vertex_ai_fine_tuned_endpoint_id(model: str) -> str | None:
+    """
+    Fine-tuned Gemini deployments are addressed by a numeric endpoint id,
+    configured as `vertex_ai/<id>` or `vertex_ai/gemini/<id>`.
+
+    Returns the endpoint id, or None when `model` is a regular publisher model.
+    Mirrors the online chat path in `_get_vertex_url`, which sends numeric
+    models to `endpoints/{id}` instead of `publishers/google/models/{model}`.
+    """
+    candidate: Final = model.split("/")[-1] if "gemini/" in model else model
+    return candidate if candidate.isdigit() else None
 
 
 def validate_vertex_location(vertex_location: str | None) -> str:

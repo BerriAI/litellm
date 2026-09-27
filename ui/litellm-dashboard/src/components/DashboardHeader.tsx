@@ -20,15 +20,12 @@ import { useWorker } from "@/hooks/useWorker";
 import { useDisableShowPrompts } from "@/app/(dashboard)/hooks/useDisableShowPrompts";
 import { clearTokenCookies } from "@/utils/cookieUtils";
 import { clearStoredReturnUrl, getLoginUrl } from "@/utils/returnUrlUtils";
-
-interface DashboardHeaderProps {
-  page: string;
-}
+import { usePathname } from "next/navigation";
 
 // Top bar for the dashboard shell. Sits only over the content column (the brand
 // lives in the sidebar header); mirrors the design's breadcrumb-left / tools-right layout.
-export function DashboardHeader({ page }: DashboardHeaderProps) {
-  const { title } = getBreadcrumb(page);
+export function DashboardHeader() {
+  const { title } = getBreadcrumb(usePathname());
   const { isControlPlane, selectedWorker } = useWorker();
   const showWorkerSwitch = isControlPlane && selectedWorker !== null;
   const hideCommunityLinks = useDisableShowPrompts();

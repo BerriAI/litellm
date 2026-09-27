@@ -1,13 +1,18 @@
 import asyncio
 import json
-from litellm._uuid import uuid
-from typing import Optional, cast
+from types import MappingProxyType, SimpleNamespace
+from typing import Final, Mapping, Optional, cast
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
+from litellm._uuid import uuid
+from tests.test_litellm.proxy.management_endpoints.jwt_key_mapping_doubles import (
+    CascadingJWTMappingTable,
+    JWTMappingRow,
+)
 
 
 @pytest.mark.asyncio
@@ -498,8 +503,9 @@ async def test_organization_info_includes_user_email(monkeypatch):
     """
     Test that GET /organization/info returns user_email in members list.
     """
-    from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
     from datetime import datetime
+
+    from litellm.proxy._types import LiteLLM_OrganizationMembershipTable
 
     # Simulate a membership row with a nested user object that has user_email
     raw_membership = {
@@ -572,6 +578,10 @@ async def test_organization_member_add_rejects_unauthorized_caller(patched_org_p
     # ``organization_member_add`` catches HTTPException in its
     # catch-all and re-wraps as ProxyException with the original status
     # code preserved.
+    from unittest.mock import Mock
+
+    from fastapi import Request
+
     from litellm.proxy._types import (
         OrganizationMemberAddRequest,
         OrgMember,
@@ -580,9 +590,6 @@ async def test_organization_member_add_rejects_unauthorized_caller(patched_org_p
     from litellm.proxy.management_endpoints.organization_endpoints import (
         organization_member_add,
     )
-    from unittest.mock import Mock
-
-    from fastapi import Request
 
     data = OrganizationMemberAddRequest(
         organization_id="org-victim",
@@ -618,6 +625,137 @@ async def test_organization_member_update_rejects_unauthorized_caller(patched_or
             user_api_key_dict=unauthorized_caller,
         )
     assert exc.value.status_code == 403
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "budget_payload",
+    [{"max_budget_in_organization": None}, {}],
+    ids=["explicit-null", "omitted"],
+)
+async def test_organization_member_add_budget_omission_and_null_leave_budget_unset(budget_payload, monkeypatch):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import (
+        LiteLLM_OrganizationMembershipTable,
+        LiteLLM_UserTable,
+        LitellmUserRoles,
+        OrganizationMemberAddRequest,
+        UserAPIKeyAuth,
+    )
+    from litellm.proxy.management_endpoints.organization_endpoints import organization_member_add
+
+    user = LiteLLM_UserTable(user_id="user-1", user_role="internal_user")
+    async def create_membership(data):
+        return LiteLLM_OrganizationMembershipTable(
+            user_id="user-1",
+            organization_id="org-1",
+            user_role="internal_user",
+            budget_id=data.get("budget_id"),
+            created_at=datetime(2024, 1, 1),
+            updated_at=datetime(2024, 1, 1),
+        )
+
+    mock_db = SimpleNamespace(
+        litellm_organizationtable=SimpleNamespace(find_unique=AsyncMock(return_value=SimpleNamespace())),
+        litellm_usertable=SimpleNamespace(find_unique=AsyncMock(return_value=user)),
+        litellm_organizationmembership=SimpleNamespace(create=create_membership),
+    )
+    mock_prisma = SimpleNamespace(db=mock_db)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._verify_org_access",
+        AsyncMock(),
+    )
+
+    response = await organization_member_add(
+        data=OrganizationMemberAddRequest(
+            organization_id="org-1",
+            member={"role": "internal_user", "user_id": "user-1"},
+            **budget_payload,
+        ),
+        http_request=MagicMock(),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response.updated_organization_memberships[0].budget_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "budget_payload",
+    [{"max_budget_in_organization": None}, {}],
+    ids=["explicit-null", "omitted"],
+)
+async def test_organization_member_update_budget_omission_and_null_preserve_existing_budget(
+    budget_payload, monkeypatch
+):
+    from datetime import datetime
+    from types import SimpleNamespace
+
+    from litellm.proxy._types import LitellmUserRoles, OrganizationMemberUpdateRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints import organization_endpoints
+
+    class BudgetState:
+        def __init__(self) -> None:
+            self.max_budget: float | None = 100.0
+
+        def store(self, max_budget: float | None) -> None:
+            self.max_budget = max_budget
+
+    budget_state = BudgetState()
+
+    def membership_row():
+        row = MagicMock()
+        row.budget_id = "budget-1"
+
+        def dump(**_):
+            return {
+                "user_id": "user-1",
+                "organization_id": "org-1",
+                "user_role": "internal_user",
+                "budget_id": "budget-1",
+                "created_at": datetime(2024, 1, 1),
+                "updated_at": datetime(2024, 1, 1),
+                "litellm_budget_table": {"budget_id": "budget-1", "max_budget": budget_state.max_budget},
+            }
+
+        row.model_dump.side_effect = dump
+        return row
+
+    async def update_budget(*, budget_obj, user_api_key_dict):
+        budget_state.store(budget_obj.max_budget)
+
+    mock_db = SimpleNamespace(
+        litellm_organizationtable=SimpleNamespace(find_unique=AsyncMock(return_value=SimpleNamespace())),
+        litellm_organizationmembership=SimpleNamespace(
+            find_unique=AsyncMock(side_effect=[membership_row(), membership_row()]),
+            update=AsyncMock(),
+        ),
+        litellm_usertable=SimpleNamespace(
+            find_unique=AsyncMock(return_value=SimpleNamespace(user_role="internal_user"))
+        ),
+    )
+    mock_prisma = SimpleNamespace(db=mock_db)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    monkeypatch.setattr(organization_endpoints, "update_budget", update_budget)
+    monkeypatch.setattr(
+        "litellm.proxy.management_endpoints.organization_endpoints._verify_org_access",
+        AsyncMock(),
+    )
+
+    response = await organization_endpoints.organization_member_update(
+        data=OrganizationMemberUpdateRequest(
+            organization_id="org-1",
+            user_id="user-1",
+            **budget_payload,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response.litellm_budget_table is not None
+    assert response.litellm_budget_table.max_budget == 100.0
 
 
 @pytest.mark.asyncio
@@ -1181,3 +1319,229 @@ async def test_find_member_if_email_missing_row_raises_documented_400():
             "non-existent user_email in LiteLLM_UserTable. Use 'user_id' instead."
         )
     }
+
+
+@pytest.mark.asyncio
+async def test_new_organization_rejects_shared_alias_tool_permission_key():
+    """/organization/new creates its permission row through its own helper, so the
+    ambiguous mcp_tool_permissions key check (LIT-4982) has to run there too."""
+    from litellm.proxy._types import LiteLLM_ObjectPermissionBase, NewOrganizationRequest
+    from litellm.proxy.management_endpoints.organization_endpoints import (
+        _set_object_permission,
+    )
+
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(
+        return_value=[
+            MagicMock(server_id="wiki-a-id", alias="wiki", server_name="wiki_a"),
+            MagicMock(server_id="wiki-b-id", alias="wiki", server_name="wiki_b"),
+        ]
+    )
+    prisma_client.db.litellm_objectpermissiontable.create = AsyncMock()
+    data = NewOrganizationRequest(
+        organization_alias="org",
+        object_permission=LiteLLM_ObjectPermissionBase(mcp_tool_permissions={"wiki": ["ask_question"]}),
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _set_object_permission(data=data, prisma_client=prisma_client)
+
+    assert exc_info.value.status_code == 400
+    assert "wiki-a-id" in str(exc_info.value.detail)
+    assert "wiki-b-id" in str(exc_info.value.detail)
+    prisma_client.db.litellm_objectpermissiontable.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_new_organization_temp_budget_fields_go_to_budget_row_not_metadata(monkeypatch):
+    """temp_budget_increase/expiry are budget columns and also key-metadata field names, so
+    /organization/new must write them to the budget row and keep the datetime out of the org
+    metadata JSON (a datetime there broke JSON serialization and 500'd the request)."""
+    from datetime import datetime, timezone
+
+    from litellm.proxy._types import LitellmUserRoles, NewOrganizationRequest, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.organization_endpoints import new_organization
+    from litellm.proxy.utils import PrismaClient
+
+    expiry = datetime(2099, 1, 1, tzinfo=timezone.utc)
+    prisma_client = MagicMock()
+    prisma_client.jsonify_object = MagicMock(side_effect=lambda data: PrismaClient.jsonify_object(prisma_client, data))
+    prisma_client.db.litellm_usertable.find_unique = AsyncMock(return_value=None)
+    prisma_client.db.litellm_budgettable.create = AsyncMock(return_value=MagicMock(budget_id="budget-1"))
+    prisma_client.db.litellm_organizationtable.create = AsyncMock(return_value={"organization_id": "org-1"})
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", MagicMock())
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+
+    response = await new_organization(
+        data=NewOrganizationRequest(
+            organization_alias="org",
+            max_budget=10,
+            temp_budget_increase=5,
+            temp_budget_expiry=expiry,
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert response == {"organization_id": "org-1"}
+    budget_write = prisma_client.db.litellm_budgettable.create.await_args.kwargs["data"]
+    assert (budget_write["max_budget"], budget_write["temp_budget_increase"], budget_write["temp_budget_expiry"]) == (
+        10,
+        5,
+        expiry,
+    )
+    org_write = prisma_client.db.litellm_organizationtable.create.await_args.kwargs["data"]
+    assert org_write["budget_id"] == "budget-1"
+    assert json.loads(org_write.get("metadata", "{}")) == {}
+
+
+def test_v2_update_organization_is_in_openapi_schema():
+    """PATCH /v2/organization/{organization_id} is documented in the generated OpenAPI spec."""
+    from fastapi import FastAPI
+
+    from litellm.proxy.management_endpoints.organization_endpoints import router
+
+    app = FastAPI()
+    app.include_router(router)
+
+    v2_path = app.openapi()["paths"]["/v2/organization/{organization_id}"]
+    assert v2_path["patch"]["tags"] == ["organization management"]
+    assert "OrganizationUpdateRequestV2" in json.dumps(v2_path["patch"]["requestBody"])
+
+
+def _organization_route_targets() -> list[tuple[str, str]]:
+    from fastapi.routing import APIRoute
+
+    from litellm.proxy.management_endpoints.organization_endpoints import router
+
+    return [
+        (method, route.path.replace("{organization_id}", "org-under-test"))
+        for route in router.routes
+        if isinstance(route, APIRoute)
+        for method in sorted(route.methods - {"HEAD", "OPTIONS"})
+    ]
+
+
+_ORGANIZATION_ROUTE_REQUESTS: Final[Mapping[tuple[str, str], Mapping[str, object]]] = MappingProxyType(
+    {
+        ("POST", "/organization/new"): {"json": {"organization_alias": "org-under-test"}},
+        ("DELETE", "/organization/delete"): {"json": {"organization_ids": ["org-under-test"]}},
+        ("GET", "/organization/info"): {"params": {"organization_id": "org-under-test"}},
+        ("POST", "/organization/info"): {"json": {"organizations": ["org-under-test"]}},
+        ("POST", "/organization/member_add"): {
+            "json": {"organization_id": "org-under-test", "member": {"user_id": "user-1", "role": "internal_user"}}
+        },
+        ("PATCH", "/organization/member_update"): {"json": {"organization_id": "org-under-test", "user_id": "user-1"}},
+        ("DELETE", "/organization/member_delete"): {"json": {"organization_id": "org-under-test", "user_id": "user-1"}},
+    }
+)
+
+
+def _organization_request(method: str, path: str) -> Mapping[str, object]:
+    return _ORGANIZATION_ROUTE_REQUESTS.get((method, path), {"json": {}})
+
+
+def _organization_test_client() -> TestClient:
+    from fastapi import FastAPI
+
+    from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+    from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+    from litellm.proxy.management_endpoints.organization_endpoints import router
+    from litellm.proxy.proxy_server import openai_exception_handler
+
+    app = FastAPI()
+    app.include_router(router)
+    app.add_exception_handler(ProxyException, openai_exception_handler)
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(
+        api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN
+    )
+    return TestClient(app, raise_server_exceptions=False)
+
+
+@pytest.mark.parametrize(("method", "path"), _organization_route_targets())
+def test_organization_routes_are_blocked_without_enterprise_license(monkeypatch, method, path):
+    """Every /organization route is enterprise-only, even for a proxy admin sending a valid request."""
+    import litellm.proxy.proxy_server as proxy_server
+
+    monkeypatch.setattr(proxy_server, "premium_user", False, raising=False)
+    monkeypatch.setattr(proxy_server, "prisma_client", None, raising=False)
+
+    response = _organization_test_client().request(method, path, **_organization_request(method, path))
+
+    assert response.status_code == 403
+    assert "Organizations" in response.json()["detail"]["error"]
+
+
+@pytest.mark.parametrize(("method", "path"), _organization_route_targets())
+def test_organization_routes_reach_their_handler_with_enterprise_license(monkeypatch, method, path):
+    """The same request a license refuses above now reaches the handler, which is the code reporting the missing database."""
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy._types import CommonProxyErrors
+
+    monkeypatch.setattr(proxy_server, "premium_user", True, raising=False)
+    monkeypatch.setattr(proxy_server, "prisma_client", None, raising=False)
+
+    response = _organization_test_client().request(method, path, **_organization_request(method, path))
+
+    assert response.status_code == 500
+    assert any(
+        message in response.text for message in (CommonProxyErrors.db_not_connected_error.value, "No db connected")
+    )
+
+
+@pytest.mark.asyncio
+async def test_delete_organization_evicts_the_cache_of_the_keys_it_deletes(monkeypatch):
+    """/organization/delete bulk-deletes the org's keys without going through /key/delete, so the
+    key objects and the jwt_key_mapping entries (issuer-scoped ones included) pointing at them
+    must be evicted here, or a deleted key keeps authenticating and a JWT identity keeps resolving
+    a token hash that no longer exists until the TTLs expire. The FK cascade drops the mapping
+    rows with the key rows, so the cache keys have to be read before the delete (LIT-5387)."""
+    from litellm.proxy._types import DeleteOrganizationRequest, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.auth.auth_checks import jwt_key_mapping_cache_key
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.organization_endpoints import delete_organization
+
+    doomed_cache_keys: Final = (
+        "hashed-org-key",
+        jwt_key_mapping_cache_key("sub", "svc-account", None),
+        jwt_key_mapping_cache_key("sub", "svc-account", "https://issuer.example"),
+    )
+    kept_cache_keys: Final = ("hashed-other-key", jwt_key_mapping_cache_key("sub", "other-account", None))
+    kept_row: Final = JWTMappingRow("hashed-other-key", "sub", "other-account")
+    jwt_table: Final = CascadingJWTMappingTable(
+        [
+            JWTMappingRow("hashed-org-key", "sub", "svc-account"),
+            JWTMappingRow("hashed-org-key", "sub", "svc-account", "https://issuer.example"),
+            kept_row,
+        ]
+    )
+    cache: Final = UserApiKeyCache()
+    for cache_key in (*doomed_cache_keys, *kept_cache_keys):
+        cache.set_cache(key=cache_key, value={"retained": True})
+
+    prisma_client: Final = AsyncMock()
+    prisma_client.db.litellm_verificationtoken.find_many = AsyncMock(
+        return_value=[SimpleNamespace(token="hashed-org-key")]
+    )
+
+    async def cascading_delete_many(where):
+        jwt_table.cascade(("hashed-org-key",))
+        return 1
+
+    prisma_client.db.litellm_verificationtoken.delete_many = AsyncMock(side_effect=cascading_delete_many)
+    prisma_client.db.litellm_jwtkeymapping = jwt_table
+    prisma_client.db.litellm_organizationtable.delete = AsyncMock(return_value=MagicMock())
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.premium_user", True, raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", prisma_client)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", None)
+
+    await delete_organization(
+        data=DeleteOrganizationRequest(organization_ids=["org-doomed"]),
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    assert all(cache.get_cache(key=cache_key) is None for cache_key in doomed_cache_keys)
+    assert all(cache.get_cache(key=cache_key) == {"retained": True} for cache_key in kept_cache_keys)
+    assert jwt_table.rows == (kept_row,)

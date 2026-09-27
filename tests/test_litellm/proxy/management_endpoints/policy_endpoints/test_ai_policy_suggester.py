@@ -265,7 +265,7 @@ class TestSuggesterRejectsModelsWithoutToolCalling:
 
     def test_a_model_without_forced_tool_choice_support_remains_eligible(self, local_model_cost_map):
         supported_params = litellm.get_supported_openai_params(
-            model="amazon.nova-pro-v1:0",
+            model="meta.llama4-scout-17b-instruct-v1:0",
             custom_llm_provider="bedrock",
         )
 

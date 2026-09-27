@@ -79,13 +79,16 @@ const ToolArgumentControl: React.FC<{
     return (
       <select
         {...control}
-        value={(control.value as string) ?? ""}
+        value={control.value == null ? -1 : prop.enum.indexOf(String(control.value))}
+        onChange={(event) => control.onChange(prop.enum?.[Number(event.target.value)] ?? null)}
         className="w-full rounded-lg border border-input bg-transparent px-3 py-2 text-sm shadow-xs transition-colors focus:border-ring focus:ring-3 focus:ring-ring/50 focus:outline-hidden"
       >
-        {!field.required && <option value="">Select {field.key}</option>}
-        {prop.enum.map((option) => (
-          <option key={option} value={option}>
-            {option}
+        <option value={-1} disabled={field.required}>
+          Select {field.key}
+        </option>
+        {prop.enum.map((option, index) => (
+          <option key={option} value={index}>
+            {option === "" ? "Empty string" : option}
           </option>
         ))}
       </select>
@@ -108,8 +111,8 @@ const ToolArgumentControl: React.FC<{
   if (prop.type === "boolean") {
     return (
       <Select
-        items={field.required ? BOOLEAN_ITEMS : [{ value: "", label: `Select ${field.key}` }, ...BOOLEAN_ITEMS]}
-        value={control.value ?? ""}
+        items={field.required ? BOOLEAN_ITEMS : [{ value: null, label: `Select ${field.key}` }, ...BOOLEAN_ITEMS]}
+        value={control.value ?? null}
         onValueChange={control.onChange}
       >
         <SelectTrigger
@@ -121,7 +124,7 @@ const ToolArgumentControl: React.FC<{
           <SelectValue placeholder={`Select ${field.key}`} />
         </SelectTrigger>
         <SelectContent>
-          {!field.required && <SelectItem value="">Select {field.key}</SelectItem>}
+          {!field.required && <SelectItem value={null}>Select {field.key}</SelectItem>}
           <SelectItem value={true}>True</SelectItem>
           <SelectItem value={false}>False</SelectItem>
         </SelectContent>

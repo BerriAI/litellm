@@ -17,6 +17,11 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
     encrypt_value_helper,
 )
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+from litellm.proxy.common_utils.openai_error_payload import (
+    error_status_code,
+    openai_error_param,
+    openai_error_type,
+)
 from litellm.types.realtime import (
     RealtimeClientSecretRequest,
     RealtimeClientSecretResponse,
@@ -304,15 +309,15 @@ async def create_realtime_client_secret(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", http_status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, http_status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, http_status.HTTP_400_BAD_REQUEST),
             )
         raise ProxyException(
             message=getattr(e, "message", str(e)),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+            type=openai_error_type(e, error_status_code(e, 500)),
+            param=openai_error_param(e),
+            code=error_status_code(e, 500),
         )
 
     if upstream_resp.status_code != 200:
@@ -495,15 +500,15 @@ async def proxy_realtime_calls(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e)),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", http_status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, http_status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, http_status.HTTP_400_BAD_REQUEST),
             )
         raise ProxyException(
             message=getattr(e, "message", str(e)),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+            type=openai_error_type(e, error_status_code(e, 500)),
+            param=openai_error_param(e),
+            code=error_status_code(e, 500),
         )
 
     return Response(
@@ -608,15 +613,15 @@ async def create_realtime_transcription_session(
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "detail", getattr(e, "message", str(e))),
-                type=getattr(e, "type", "None"),
-                param=getattr(e, "param", "None"),
-                code=getattr(e, "status_code", http_status.HTTP_400_BAD_REQUEST),
+                type=openai_error_type(e, error_status_code(e, http_status.HTTP_400_BAD_REQUEST)),
+                param=openai_error_param(e),
+                code=error_status_code(e, http_status.HTTP_400_BAD_REQUEST),
             )
         raise ProxyException(
             message=getattr(e, "message", str(e)),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
+            type=openai_error_type(e, error_status_code(e, 500)),
+            param=openai_error_param(e),
+            code=error_status_code(e, 500),
         )
 
     if upstream_resp.status_code != 200:

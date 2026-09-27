@@ -21,9 +21,8 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.utils import Choices
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.types.utils import ModelResponse
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
@@ -198,7 +197,7 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> "ModelResponse":
@@ -247,4 +246,4 @@ class AmazonMoonshotConfig(AmazonInvokeConfig, MoonshotChatConfig):
 
     def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BedrockError:
         """Return the appropriate error class for Bedrock."""
-        return BedrockError(status_code=status_code, message=error_message)
+        return BedrockError(status_code=status_code, message=error_message, headers=headers)

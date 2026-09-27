@@ -422,7 +422,7 @@ def test_apply_patch_ops_invalid_entitlements_value_raises_400():
     patch_ops = SCIMPatchOp(
         Operations=[
             SCIMPatchOperation(
-                op="replace", path="entitlements", value=[{"display": "no value"}]
+                op="replace", path="entitlements", value=[42]
             )
         ]
     )
@@ -431,6 +431,22 @@ def test_apply_patch_ops_invalid_entitlements_value_raises_400():
         _apply_patch_ops(existing_user=_user_with_metadata({}), patch_ops=patch_ops)
 
     assert exc_info.value.status_code == 400
+
+
+def test_apply_patch_ops_replace_entitlements_without_value_member_is_stored_as_sent():
+    patch_ops = SCIMPatchOp(
+        Operations=[
+            SCIMPatchOperation(
+                op="replace", path="entitlements", value=[{"groups": ["S0506MKA55L"]}]
+            )
+        ]
+    )
+
+    update_data, _ = _apply_patch_ops(
+        existing_user=_user_with_metadata({}), patch_ops=patch_ops
+    )
+
+    assert update_data["metadata"]["scim_entitlements"] == [{"groups": ["S0506MKA55L"]}]
 
 
 def test_apply_patch_ops_add_without_value_raises_400_naming_value_member():

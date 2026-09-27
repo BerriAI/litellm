@@ -1,19 +1,22 @@
 from typing import Any, Final
 
 import litellm
-from litellm.types.utils import ImageResponse
+from litellm.litellm_core_utils.llm_cost_calc.utils import resolve_image_model_info
+from litellm.types.utils import ImageResponse, ModelInfo
 
 
 def cost_calculator(
     model: str,
     image_response: Any,
+    model_info: ModelInfo | None = None,
 ) -> float:
     """
     AI/ML flux image generation cost calculator
     """
-    _model_info: Final = litellm.get_model_info(
+    _model_info: Final = resolve_image_model_info(
         model=model,
         custom_llm_provider=litellm.LlmProviders.AIML.value,
+        model_info=model_info,
     )
     output_cost_per_image: Final[float] = _model_info.get("output_cost_per_image") or 0.0
     num_images: int = 0

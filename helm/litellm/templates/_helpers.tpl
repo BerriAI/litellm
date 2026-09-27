@@ -257,6 +257,14 @@ IAM_TOKEN_DB_AUTH / AZURE_POSTGRESQL_AUTH toggle that only the writer sets.
 - name: DATABASE_SCHEMA
   value: {{ .schema | quote }}
 {{- end }}
+{{- if .sslMode }}
+- name: DATABASE_SSLMODE
+  value: {{ .sslMode | quote }}
+{{- end }}
+{{- if .sslRootCert }}
+- name: DATABASE_SSLROOTCERT
+  value: {{ .sslRootCert | quote }}
+{{- end }}
 {{- if and .useIAMAuth .useAzureEntraAuth }}
 {{- fail "database.writer.useIAMAuth and database.writer.useAzureEntraAuth are mutually exclusive: the database password can only come from one token source" }}
 {{- end }}
@@ -361,6 +369,20 @@ harmless no-op for the Job and authoritative for the app pods.
 {{- end -}}
 
 {{/*
+In-container PgBouncer env for the gateway container. Under IAM or Entra auth the pooler mints and renews the database token itself.
+*/}}
+{{- define "litellm.connectionPoolEnv" -}}
+{{- with .Values.database.connectionPool -}}
+- name: LITELLM_PGBOUNCER_ENABLED
+  value: "true"
+- name: LITELLM_PGBOUNCER_MAX_DB_CONNECTIONS
+  value: {{ required "database.connectionPool.maxDbConnections is required when the pool is enabled" .maxDbConnections | quote }}
+- name: LITELLM_PGBOUNCER_MAX_CLIENT_CONN
+  value: {{ required "database.connectionPool.maxClientConn is required when the pool is enabled" .maxClientConn | quote }}
+{{- end }}
+{{- end -}}
+
+{{/*
 PodDisruptionBudget shared by gateway, backend, and ui.
 
 Invoke with a dict:
@@ -440,4 +462,37 @@ ImplementationSpecific
 {{- else -}}
 {{- .pathType -}}
 {{- end -}}
+{{- end -}}
+
+{{- define "litellm.gateway.prometheusMultiprocDir" -}}/tmp/litellm_prometheus_multiproc{{- end -}}
+
+{{/*
+Directory of the collector's unix socket, shared by the gateway and
+collector containers through an emptyDir. Empty when the sidecar is off
+or gateway.collector.address is a tcp://127.0.0.1:<port> address.
+*/}}
+{{- define "litellm.gateway.collectorSocketDir" -}}
+{{- if and .Values.gateway.collector.enabled (hasPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- dir (trimPrefix "unix://" .Values.gateway.collector.address) -}}
+{{- end -}}
+{{- end -}}
+
+{{/*
+LITELLM_COLLECTOR_* env shared by the producer (gateway container) and the
+consumer (collector container), so both agree on the transport and the
+shutdown drain window.
+*/}}
+{{- define "litellm.gateway.collectorEnv" -}}
+{{- with .Values.gateway.collector }}
+- name: LITELLM_COLLECTOR_ENABLED
+  value: "true"
+- name: LITELLM_COLLECTOR_ADDRESS
+  value: {{ .address | quote }}
+- name: LITELLM_COLLECTOR_BUFFER_SIZE
+  value: {{ .bufferSize | quote }}
+- name: LITELLM_COLLECTOR_ON_UNAVAILABLE
+  value: {{ .onUnavailable | quote }}
+- name: LITELLM_COLLECTOR_DRAIN_TIMEOUT_SECONDS
+  value: {{ .drainTimeoutSeconds | quote }}
+{{- end }}
 {{- end -}}

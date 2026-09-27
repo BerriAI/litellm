@@ -20,13 +20,13 @@ export interface GuardrailEntity {
 }
 
 export interface GuardrailInformation {
-  duration: number;
-  end_time: number;
-  start_time: number;
+  duration: number | null;
+  end_time: number | null;
+  start_time: number | null;
   guardrail_mode: string | string[] | Record<string, unknown> | null;
   guardrail_name: string;
   guardrail_status: string;
-  guardrail_response: GuardrailEntity[] | BedrockGuardrailResponse;
+  guardrail_response: GuardrailEntity[] | BedrockGuardrailResponse | string;
   masked_entity_count: Record<string, number>;
   guardrail_usage?: Record<string, number>;
   guardrail_cost?: number;
