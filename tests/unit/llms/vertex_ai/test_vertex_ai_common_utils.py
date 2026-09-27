@@ -829,6 +829,60 @@ def test_convert_schema_types_type_array_conversion():
     assert input_schema["required"] == ["studio"]
 
 
+def test_convert_schema_types_preserves_nullable_primitive_constraints():
+    """Nullable primitive constraints must stay on the non-null anyOf branch."""
+    from litellm.llms.vertex_ai.common_utils import _convert_schema_types
+
+    input_schema = {
+        "type": "object",
+        "properties": {
+            "status": {
+                "type": ["string", "null"],
+                "enum": ["open", "closed"],
+                "pattern": "^(open|closed)$",
+                "minLength": 4,
+                "maxLength": 6,
+            },
+            "timestamp": {
+                "type": ["string", "null"],
+                "format": "date-time",
+            },
+            "count": {
+                "type": ["integer", "null"],
+                "minimum": 0,
+                "maximum": 10,
+            },
+        },
+    }
+
+    _convert_schema_types(input_schema)
+
+    assert input_schema["properties"]["status"] == {
+        "anyOf": [
+            {
+                "type": "string",
+                "enum": ["open", "closed"],
+                "pattern": "^(open|closed)$",
+                "minLength": 4,
+                "maxLength": 6,
+            },
+            {"type": "null"},
+        ]
+    }
+    assert input_schema["properties"]["timestamp"] == {
+        "anyOf": [
+            {"type": "string", "format": "date-time"},
+            {"type": "null"},
+        ]
+    }
+    assert input_schema["properties"]["count"] == {
+        "anyOf": [
+            {"type": "integer", "minimum": 0, "maximum": 10},
+            {"type": "null"},
+        ]
+    }
+
+
 def test_fix_enum_empty_strings():
     """
     Test _fix_enum_empty_strings function replaces empty strings with None in enum arrays.
@@ -1753,5 +1807,4 @@ def test_get_vertex_ai_lyria_model_info_is_none_for_non_lyria_speech_models(mode
     from litellm.llms.vertex_ai.common_utils import get_vertex_ai_lyria_model_info
 
     assert get_vertex_ai_lyria_model_info(model=model) is None
-
 

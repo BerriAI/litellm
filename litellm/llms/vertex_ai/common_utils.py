@@ -1015,6 +1015,14 @@ def _convert_schema_types(schema, depth=0):
                 "minProperties",
                 "maxProperties",
             }
+            primitive_common_fields: Final = {"enum"}
+            string_specific_fields: Final = {
+                "format",
+                "pattern",
+                "minLength",
+                "maxLength",
+            }
+            numeric_specific_fields: Final = {"minimum", "maximum"}
 
             any_of: Final[list[dict[str, object]]] = []
             for t in type_val:
@@ -1034,13 +1042,29 @@ def _convert_schema_types(schema, depth=0):
                             item_schema[field] = deepcopy(schema[field])
                     any_of.append(item_schema)
                 else:
-                    # For primitive types, only include the type
-                    any_of.append({"type": t})
+                    # Keep constraints on the primitive branch. If they stay
+                    # on the parent, _filter_anyof_fields drops them because
+                    # Vertex only accepts anyOf there.
+                    item_schema: dict[str, object] = {"type": t}
+                    fields = set(primitive_common_fields)
+                    if t == "string":
+                        fields.update(string_specific_fields)
+                    elif t in ("integer", "number"):
+                        fields.update(numeric_specific_fields)
+                    for field in fields:
+                        if field in schema:
+                            item_schema[field] = deepcopy(schema[field])
+                    any_of.append(item_schema)
 
-            # Remove type-specific fields from parent if we moved them into anyOf
-            has_object_or_array: Final = any(t in ("object", "array") for t in type_val if isinstance(t, str))
-            if has_object_or_array:
-                for field in type_specific_fields:
+            # Remove fields moved into anyOf branches from the parent.
+            fields_moved_into_any_of: Final = (
+                type_specific_fields
+                | primitive_common_fields
+                | string_specific_fields
+                | numeric_specific_fields
+            )
+            if any(t != "null" for t in type_val if isinstance(t, str)):
+                for field in fields_moved_into_any_of:
                     schema.pop(field, None)
 
             schema["anyOf"] = any_of
