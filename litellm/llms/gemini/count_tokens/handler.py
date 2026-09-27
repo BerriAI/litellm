@@ -1,5 +1,6 @@
 from collections.abc import Sequence
-from typing import Any, Final
+from typing import Any, Final, cast
+from urllib.parse import quote
 
 import httpx
 
@@ -48,47 +49,54 @@ def build_count_tokens_request(
     return with_both
 
 
+def _part_without_function_response_id(part: object) -> object:
+    if not isinstance(part, dict):
+        return part
+    function_response: Final = cast(  # cast-ok: request JSON, keys are strings
+        dict[str, object], part
+    ).get("functionResponse")
+    if not isinstance(function_response, dict):
+        return part
+    return part | {
+        "functionResponse": {
+            key: value
+            for key, value in cast(  # cast-ok: request JSON, keys are strings
+                dict[str, object], function_response
+            ).items()
+            if key != "id" and value is not None
+        }
+    }
+
+
+def _content_without_function_response_ids(content: object) -> object:
+    if not isinstance(content, dict):
+        return content
+    parts: Final = cast(dict[str, object], content).get("parts")  # cast-ok: request JSON, keys are strings
+    if not isinstance(parts, list):
+        return content
+    return content | {
+        "parts": [
+            _part_without_function_response_id(part)
+            for part in cast(list[object], parts)  # cast-ok: isinstance already proved a list
+        ]
+    }
+
+
 class GoogleAIStudioTokenCounter:
     def _clean_contents_for_gemini_api(self, contents: Any) -> Any:
         """
-        Clean up contents to remove unsupported fields for the Gemini API.
-
-        The Google Gemini API doesn't recognize the 'id' field in function responses,
-        so we need to remove it to prevent 400 Bad Request errors.
-
-        Args:
-            contents: The contents to clean up
-
-        Returns:
-            Cleaned contents with unsupported fields removed
+        The Gemini API rejects an 'id' field in function responses with a 400, so drop it.
         """
-        import copy
-
-        # Handle None or empty contents
         if not contents:
             return contents
-
-        cleaned_contents: Final = copy.deepcopy(contents)
-
-        for content in cleaned_contents:
-            parts = content.get("parts") if isinstance(content, dict) else None
-            if not isinstance(parts, list):
-                continue
-            for part in parts:
-                function_response = part.get("functionResponse") if isinstance(part, dict) else None
-                if isinstance(function_response, dict):
-                    part["functionResponse"] = {
-                        key: value for key, value in function_response.items() if key != "id" and value is not None
-                    }
-
-        return cleaned_contents
+        return [_content_without_function_response_ids(content) for content in contents]
 
     def _construct_url(self, model: str, api_base: str | None = None) -> str:
         """
         Construct the URL for the Google Gen AI Studio countTokens endpoint.
         """
         base_url: Final = api_base or "https://generativelanguage.googleapis.com"
-        return f"{base_url}/v1beta/models/{model}:countTokens"
+        return f"{base_url}/v1beta/models/{quote(model, safe='')}:countTokens"
 
     async def validate_environment(
         self,
@@ -163,7 +171,7 @@ class GoogleAIStudioTokenCounter:
         headers, url = await self.validate_environment(
             api_key=api_key,
             api_base=api_base,
-            headers={},  # mutable-ok: validate_environment merges into this dict
+            headers=None,
             model=model,
             litellm_params=kwargs,
         )
@@ -180,6 +188,7 @@ class GoogleAIStudioTokenCounter:
                 url=url,
                 headers=headers,
                 json=request_body,  # pyright: ignore[reportArgumentType]  # post() takes a bare dict; a TypedDict is one at runtime
+                timeout=timeout,
             )
             response.raise_for_status()
 

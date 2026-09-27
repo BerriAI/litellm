@@ -1,5 +1,6 @@
 import json
 import sys
+from urllib.parse import unquote
 
 import httpx
 import pytest
@@ -97,6 +98,51 @@ async def test_acount_tokens_uses_deployment_api_base():
     )
 
     assert recorded[-1].url == "https://explicit.example.com/v1beta/models/gemini-2.5-flash:countTokens"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "model",
+    ["gemini-2.5-flash:generateContent#", "gemini-2.5-flash:generateContent?alt=sse&x=", "x/../../v1/files/abc"],
+)
+async def test_acount_tokens_keeps_the_model_name_inside_one_count_path_segment(model: str):
+    recorded: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        recorded.append(request)
+        return httpx.Response(200, json={"totalTokens": 4})
+
+    await GoogleAIStudioTokenCounter().acount_tokens(
+        model=model,
+        contents=[{"role": "user", "parts": [{"text": "hi"}]}],
+        api_key="test-key",
+        client=httpx.AsyncClient(transport=httpx.MockTransport(_handler)),
+    )
+
+    url = recorded[-1].url
+    model_segment, verb = url.raw_path.decode().removeprefix("/v1beta/models/").split(":")
+    assert (unquote(model_segment), verb, url.query, url.fragment) == (model, "countTokens", b"", "")
+
+
+@pytest.mark.asyncio
+async def test_count_tokens_applies_the_deployment_timeout_to_the_count_request():
+    from litellm.llms.gemini.common_utils import GoogleAIStudioTokenCounter as GeminiTokenCounter
+
+    recorded: list[httpx.Request] = []
+
+    def _handler(request: httpx.Request) -> httpx.Response:
+        recorded.append(request)
+        return httpx.Response(200, json={"totalTokens": 4})
+
+    await GeminiTokenCounter().count_tokens(
+        model_to_use="gemini-2.5-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        contents=None,
+        deployment={"litellm_params": {"api_key": "test-key", "timeout": 3.5}},
+        client=httpx.AsyncClient(transport=httpx.MockTransport(_handler), timeout=600),
+    )
+
+    assert set(recorded[-1].extensions["timeout"].values()) == {3.5}
 
 
 @pytest.mark.asyncio
