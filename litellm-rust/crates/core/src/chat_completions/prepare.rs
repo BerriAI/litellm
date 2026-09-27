@@ -1,7 +1,9 @@
 use litellm_auth::SecretValue;
 use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
+use litellm_core_utils::settings::Lookup;
 use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
+use litellm_secrets::source::Secrets;
 use litellm_types::llms::openai::ChatMessage;
 use serde_json::Value;
 
@@ -83,8 +85,9 @@ fn validate_environment(
     request: &ResolvedChatCompletionsRequest<'_>,
     model: &str,
     config: &dyn BaseConfig,
+    secrets: &dyn Lookup,
 ) -> Result<ValidatedEnvironment, Error> {
-    let env_lookup = |key: &str| std::env::var(key).ok();
+    let env_lookup = |key: &str| secrets.get(key);
     let forwarded = string_headers(request.extra_headers.clone())?;
     let validated = config.validate_environment(
         forwarded,
@@ -101,11 +104,13 @@ fn validate_environment(
 
 pub(super) fn prepare_provider_request(
     request: ResolvedChatCompletionsRequest<'_>,
+    secrets: Secrets,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
-    let environment = validate_environment(&request, &request.model, request.config)?;
+    let environment =
+        validate_environment(&request, &request.model, request.config, secrets.as_ref())?;
     let model = request.model;
     let config = request.config;
-    let env_lookup = |key: &str| std::env::var(key).ok();
+    let env_lookup = |key: &str| secrets.get(key);
     let url = config.get_complete_url(
         request.api_base,
         &model,
@@ -123,6 +128,7 @@ pub(super) fn prepare_provider_request(
         body: transformed.body,
         optional_params: request.optional_params,
         environment,
+        secrets,
         timeout: request.timeout,
         api_key: request.api_key.map(|key| SecretValue::new(key.to_string())),
     })
@@ -143,7 +149,10 @@ mod tests {
     fn prepare_chat_completions_call(
         request: ChatCompletionsRequest<'_>,
     ) -> Result<ProviderChatCompletionsRequest, Error> {
-        prepare_provider_request(resolve_request(request)?)
+        prepare_provider_request(
+            resolve_request(request)?,
+            std::sync::Arc::new(|_: &str| None),
+        )
     }
 
     /// The headers as they go on the wire, credential applied.

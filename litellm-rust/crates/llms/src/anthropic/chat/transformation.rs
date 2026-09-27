@@ -1,21 +1,22 @@
 use litellm_auth::SecretValue;
 use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
-    prompt_templates::factory::{build_conversation, Conversation},
+    prompt_templates::factory::{Conversation, build_conversation},
 };
 use litellm_types::{
     llms::openai::ChatMessage,
     utils::{ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse},
 };
 use serde::Deserialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 use crate::{
+    Error,
     anthropic::{
         chat::handler::ModelResponseIterator,
         common_utils::{
-            complete_anthropic_url, forwarded_oauth_bearer, resolve_anthropic_api_key,
-            API_KEY_PLACEMENT,
+            API_KEY_PLACEMENT, complete_anthropic_url, forwarded_oauth_bearer,
+            resolve_anthropic_api_key,
         },
     },
     base_llm::{
@@ -24,13 +25,11 @@ use crate::{
         chat::{
             streaming::{ChatStream, StreamShape},
             transformation::{
-                unsupported_message, unsupported_param, BaseConfig, Headers,
-                ProviderChatRequestData, ProviderChatResponseData, Unsupported,
-                ValidatedEnvironment,
+                BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
+                Unsupported, ValidatedEnvironment, unsupported_message, unsupported_param,
             },
         },
     },
-    Error,
 };
 
 /// Anthropic parameter names, post `map_openai_params`, that the Rust path can
@@ -83,6 +82,17 @@ pub struct AnthropicConfig;
 pub const ANTHROPIC_CHAT_COMPLETIONS_CONFIG: AnthropicConfig = AnthropicConfig;
 
 impl BaseConfig for AnthropicConfig {
+    fn secret_names(&self) -> Vec<&'static str> {
+        use crate::anthropic::common_utils::{
+            ANTHROPIC_API_BASE_ENV, ANTHROPIC_API_KEY_ENV, ANTHROPIC_BASE_URL_ENV,
+        };
+        vec![
+            ANTHROPIC_API_KEY_ENV,
+            ANTHROPIC_API_BASE_ENV,
+            ANTHROPIC_BASE_URL_ENV,
+        ]
+    }
+
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
     }

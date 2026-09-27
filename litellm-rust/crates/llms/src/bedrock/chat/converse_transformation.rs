@@ -70,6 +70,14 @@ pub struct AmazonConverseConfig;
 pub const BEDROCK_CHAT_COMPLETIONS_CONFIG: AmazonConverseConfig = AmazonConverseConfig;
 
 impl BaseConfig for AmazonConverseConfig {
+    fn secret_names(&self) -> Vec<&'static str> {
+        litellm_auth_aws::constants::SECRET_NAMES
+            .iter()
+            .copied()
+            .chain([AWS_BEARER_TOKEN_BEDROCK])
+            .collect()
+    }
+
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)] {
         SUPPORTED_PARAMS
     }

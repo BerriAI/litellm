@@ -33,6 +33,7 @@ pub(super) async fn execute(
         body,
         optional_params,
         environment,
+        secrets,
         timeout,
         api_key,
     } = request;
@@ -43,7 +44,7 @@ pub(super) async fn execute(
         secret_fields: Vec::new(),
         api_key,
     };
-    let authenticated = resolve_auth(auth, environment, &|key| std::env::var(key).ok()).await?;
+    let authenticated = resolve_auth(auth, environment, &|key| secrets.get(key)).await?;
     let wire = hooks
         .before_send(
             WireRequest {
@@ -203,6 +204,7 @@ mod tests {
                 timeout: None,
             })
             .unwrap(),
+            std::sync::Arc::new(|_: &str| None),
         )
         .unwrap()
     }

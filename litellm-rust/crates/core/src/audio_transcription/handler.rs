@@ -15,7 +15,7 @@ pub async fn execute_audio_transcription_provider_call(
     auth: &litellm_auth::AuthServices,
     request: ProviderAudioTranscriptionRequest,
 ) -> Result<Value, Error> {
-    let env_lookup = |key: &str| std::env::var(key).ok();
+    let env_lookup = |key: &str| request.secrets.get(key);
     let authenticated = resolve_auth(auth, request.environment.clone(), &env_lookup).await?;
     let response = crate::outbound::outbound_request(
         authenticated,

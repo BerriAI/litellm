@@ -4,14 +4,15 @@ use litellm_auth_aws::{
     resolve_bedrock_region,
 };
 use litellm_core_utils::core_helpers::json_type_name;
+use litellm_types::audio_transcription::AudioTranscriptionResponseData;
 use serde_json::{Map, Value, json};
 
 use crate::{
     Error,
     base_llm::{
         audio_transcription::transformation::{
-            AudioTranscriptionRequestData, AudioTranscriptionResponseData,
-            BaseAudioTranscriptionConfig, Headers, ValidatedEnvironment,
+            AudioTranscriptionRequestData, BaseAudioTranscriptionConfig, Headers,
+            ValidatedEnvironment,
         },
         auth::AuthScheme,
     },
@@ -52,6 +53,10 @@ fn optional_string<'a>(params: &'a Map<String, Value>, key: &str) -> Option<&'a 
 }
 
 impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
+    fn secret_names(&self) -> Vec<&'static str> {
+        litellm_auth_aws::constants::SECRET_NAMES.to_vec()
+    }
+
     fn get_supported_openai_params(&self) -> &'static [&'static str] {
         SUPPORTED_PARAMS
     }
@@ -132,6 +137,10 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
             "{}/model/{model_id}/converse",
             endpoint.trim_end_matches('/')
         ))
+    }
+
+    fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
+        &[("Content-Type", "application/json")]
     }
 
     fn validate_environment(

@@ -3148,8 +3148,6 @@ dependencies = [
  "reqwest 0.12.28",
  "rstest",
  "rstest_reuse",
- "rustls 0.23.42",
- "rustls-native-certs",
  "serde",
  "serde_json",
  "sha2 0.10.9",
@@ -3308,6 +3306,7 @@ dependencies = [
 name = "litellm-http"
 version = "0.1.0"
 dependencies = [
+ "futures-util",
  "http 1.4.2",
  "hyper-util",
  "litellm-core-utils",
@@ -3315,11 +3314,13 @@ dependencies = [
  "reqwest 0.12.28",
  "rstest",
  "rustls 0.23.42",
+ "rustls-native-certs",
  "serde",
  "serde_json",
  "tempfile",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-tungstenite",
  "veil",
  "webpki-roots",
 ]

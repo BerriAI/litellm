@@ -1,3 +1,4 @@
+use litellm_secrets::source::Secrets;
 use std::time::Duration;
 
 use litellm_auth::SecretValue;
@@ -46,6 +47,7 @@ pub struct ProviderChatCompletionsRequest {
     /// The forwarded and default headers plus how the call authenticates; the credential
     /// itself is applied when the request is sent.
     pub environment: ValidatedEnvironment,
+    pub secrets: Secrets,
     pub timeout: Option<Duration>,
     pub api_key: Option<SecretValue>,
 }
