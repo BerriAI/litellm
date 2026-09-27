@@ -267,47 +267,64 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     }
 }
 
+enum PageSelection<'a> {
+    Omitted,
+    Indices(BTreeSet<i64>),
+    Native(Vec<&'a str>),
+}
+
+impl<'a> PageSelection<'a> {
+    fn parse(value: Option<&'a Value>) -> Result<Self, Error> {
+        match value {
+            None | Some(Value::Null) => Ok(Self::Omitted),
+            Some(Value::Array(pages)) if pages.is_empty() => Ok(Self::Omitted),
+            Some(Value::Array(pages)) if pages.iter().all(Value::is_number) => Ok(Self::Indices(
+                pages
+                    .iter()
+                    .map(|page| {
+                        let index = page
+                            .as_i64()
+                            .ok_or_else(|| Error::Pages("page index is out of range".into()))?;
+                        if index < 0 {
+                            return Err(Error::Pages("negative page index".into()));
+                        }
+                        index
+                            .checked_add(1)
+                            .ok_or_else(|| Error::Pages("page index is out of range".into()))
+                    })
+                    .collect::<Result<BTreeSet<_>, _>>()?,
+            )),
+            Some(Value::Array(tokens)) => Ok(Self::Native(
+                tokens
+                    .iter()
+                    .map(|token| {
+                        token.as_str().ok_or_else(|| {
+                            Error::Pages("expected only integers or only strings".into())
+                        })
+                    })
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            Some(Value::String(range)) => Ok(Self::Native(range.split(',').collect())),
+            Some(_) => Err(Error::Pages(
+                "expected an array of integers or strings, or a native page range".into(),
+            )),
+        }
+    }
+}
+
 fn normalize_pages_param(pages: Option<&Value>) -> Result<Option<String>, Error> {
-    let normalized = match pages {
-        None | Some(Value::Null) => return Ok(None),
-        Some(Value::Array(pages)) if pages.is_empty() => return Ok(None),
-        Some(Value::Array(pages)) if pages.iter().all(Value::is_number) => pages
-            .iter()
-            .map(|page| {
-                let page = page
-                    .as_i64()
-                    .ok_or_else(|| Error::Pages("page index is out of range".into()))?;
-                if page < 0 {
-                    return Err(Error::Pages("negative page index".into()));
-                }
-                page.checked_add(1)
-                    .ok_or_else(|| Error::Pages("page index is out of range".into()))
-            })
-            .collect::<Result<BTreeSet<_>, _>>()?
+    let normalized = match PageSelection::parse(pages)? {
+        PageSelection::Omitted => return Ok(None),
+        PageSelection::Indices(indices) => indices
             .into_iter()
             .map(|page| page.to_string())
             .collect::<Vec<_>>()
             .join(","),
-        Some(Value::Array(tokens)) => tokens
-            .iter()
-            .map(|token| {
-                token
-                    .as_str()
-                    .map(str::trim)
-                    .ok_or_else(|| Error::Pages("expected only integers or only strings".into()))
-            })
-            .collect::<Result<Vec<_>, _>>()?
-            .join(","),
-        Some(Value::String(range)) => range
-            .split(',')
+        PageSelection::Native(tokens) => tokens
+            .into_iter()
             .map(str::trim)
             .collect::<Vec<_>>()
             .join(","),
-        Some(_) => {
-            return Err(Error::Pages(
-                "expected an array of integers or strings, or a native page range".into(),
-            ));
-        }
     };
     if !normalized.split(',').all(valid_page_token) {
         return Err(Error::Pages("invalid native page range".into()));
@@ -331,19 +348,32 @@ fn valid_page_token(token: &str) -> bool {
     }
 }
 
-fn normalize_features_param(features: Option<&Value>) -> Result<Option<String>, Error> {
-    let tokens = match features {
-        None | Some(Value::Null) => return Ok(None),
-        Some(Value::Array(names)) => names
-            .iter()
-            .map(|name| name.as_str().ok_or(Error::Features))
-            .collect::<Result<Vec<_>, _>>()?,
-        Some(Value::String(names)) => names.split(',').collect(),
-        Some(_) => return Err(Error::Features),
-    };
-    if tokens.is_empty() {
-        return Ok(None);
+enum FeatureSelection<'a> {
+    Omitted,
+    Names(Vec<&'a str>),
+}
+
+impl<'a> FeatureSelection<'a> {
+    fn parse(value: Option<&'a Value>) -> Result<Self, Error> {
+        match value {
+            None | Some(Value::Null) => Ok(Self::Omitted),
+            Some(Value::Array(names)) if names.is_empty() => Ok(Self::Omitted),
+            Some(Value::Array(names)) => Ok(Self::Names(
+                names
+                    .iter()
+                    .map(|name| name.as_str().ok_or(Error::Features))
+                    .collect::<Result<Vec<_>, _>>()?,
+            )),
+            Some(Value::String(names)) => Ok(Self::Names(names.split(',').collect())),
+            Some(_) => Err(Error::Features),
+        }
     }
+}
+
+fn normalize_features_param(features: Option<&Value>) -> Result<Option<String>, Error> {
+    let FeatureSelection::Names(tokens) = FeatureSelection::parse(features)? else {
+        return Ok(None);
+    };
     let normalized = tokens.iter().map(|token| token.trim()).collect::<Vec<_>>();
     if !normalized.iter().all(|token| {
         let Some((first, rest)) = token.as_bytes().split_first() else {
@@ -775,6 +805,20 @@ mod tests {
     }
 
     #[rstest]
+    #[case::negative(json!([-1]), "invalid OCR pages: negative page index")]
+    #[case::overflow(json!([i64::MAX]), "invalid OCR pages: page index is out of range")]
+    #[case::float(json!([1.0]), "invalid OCR pages: page index is out of range")]
+    #[case::mixed(json!([1, "2"]), "invalid OCR pages: expected only integers or only strings")]
+    #[case::invalid_native(json!("a,b"), "invalid OCR pages: invalid native page range")]
+    #[case::wrong_shape(json!({"page": 1}), "invalid OCR pages: expected an array of integers or strings, or a native page range")]
+    fn page_mapping_keeps_error_decisions(#[case] input: Value, #[case] expected: &str) {
+        assert_eq!(
+            map(json!({"pages": input})).unwrap_err().to_string(),
+            expected
+        );
+    }
+
+    #[rstest]
     #[case(json!(["keyValuePairs"]), "keyValuePairs")]
     #[case(json!(["keyValuePairs", "languages"]), "keyValuePairs,languages")]
     #[case(json!("keyValuePairs"), "keyValuePairs")]
@@ -802,6 +846,20 @@ mod tests {
     #[test]
     fn empty_feature_list_is_omitted() {
         assert_eq!(map(json!({"features": []})).unwrap().features, None);
+    }
+
+    #[rstest]
+    #[case::missing(json!({}))]
+    #[case::null(json!({"pages": null, "features": null}))]
+    #[case::empty_arrays(json!({"pages": [], "features": []}))]
+    fn omitted_selections_remain_omitted(#[case] input: Value) {
+        assert_eq!(
+            map(input).unwrap(),
+            DocumentIntelligenceParams {
+                pages: None,
+                features: None
+            }
+        );
     }
 
     #[tokio::test]

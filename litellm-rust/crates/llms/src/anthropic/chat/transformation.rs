@@ -150,12 +150,8 @@ impl BaseConfig for AnthropicConfig {
                     role: "assistant".to_string(),
                     content: (!text.is_empty()).then_some(text),
                 },
-                finish_reason: finish_reason_for(
-                    body.get("stop_reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or(""),
-                )
-                .to_string(),
+                finish_reason: finish_reason_for(body.get("stop_reason").and_then(Value::as_str))
+                    .to_string(),
             }],
             usage: usage_from_parts(
                 field("input_tokens"),

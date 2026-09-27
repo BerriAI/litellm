@@ -4,27 +4,69 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use litellm_types::utils::{ChatCompletionsUsage, PromptTokensDetails};
 
-/// OpenAI finish reasons, mirroring Python's `_FINISH_REASON_MAP` for the
-/// reasons the providers on this route can emit. Python warns and falls back to
-/// `stop` for anything unmapped, so do the same.
-const FINISH_REASONS: &[(&str, &str)] = &[
-    ("end_turn", "stop"),
-    ("stop_sequence", "stop"),
-    ("max_tokens", "length"),
-    ("refusal", "content_filter"),
-    ("compaction", "length"),
-    ("guardrail_intervened", "content_filter"),
-    ("content_filtered", "content_filter"),
-    ("content_filter", "content_filter"),
-    ("stop", "stop"),
-    ("length", "length"),
-];
+enum ProviderFinishReason {
+    EndTurn,
+    StopSequence,
+    MaxTokens,
+    Refusal,
+    Compaction,
+    GuardrailIntervened,
+    ContentFiltered,
+    ContentFilter,
+    Stop,
+    Length,
+}
 
-pub fn finish_reason_for(provider_reason: &str) -> &'static str {
-    FINISH_REASONS
-        .iter()
-        .find(|(reason, _)| *reason == provider_reason)
-        .map_or("stop", |(_, mapped)| *mapped)
+impl ProviderFinishReason {
+    fn parse(reason: &str) -> Option<Self> {
+        match reason {
+            "end_turn" => Some(Self::EndTurn),
+            "stop_sequence" => Some(Self::StopSequence),
+            "max_tokens" => Some(Self::MaxTokens),
+            "refusal" => Some(Self::Refusal),
+            "compaction" => Some(Self::Compaction),
+            "guardrail_intervened" => Some(Self::GuardrailIntervened),
+            "content_filtered" => Some(Self::ContentFiltered),
+            "content_filter" => Some(Self::ContentFilter),
+            "stop" => Some(Self::Stop),
+            "length" => Some(Self::Length),
+            _ => None,
+        }
+    }
+}
+
+enum FinishReason {
+    Stop,
+    Length,
+    ContentFilter,
+}
+
+impl FinishReason {
+    fn as_str(&self) -> &'static str {
+        match self {
+            Self::Stop => "stop",
+            Self::Length => "length",
+            Self::ContentFilter => "content_filter",
+        }
+    }
+}
+
+pub fn finish_reason_for(provider_reason: Option<&str>) -> &'static str {
+    match provider_reason.and_then(ProviderFinishReason::parse) {
+        Some(
+            ProviderFinishReason::MaxTokens
+            | ProviderFinishReason::Compaction
+            | ProviderFinishReason::Length,
+        ) => FinishReason::Length,
+        Some(
+            ProviderFinishReason::Refusal
+            | ProviderFinishReason::GuardrailIntervened
+            | ProviderFinishReason::ContentFiltered
+            | ProviderFinishReason::ContentFilter,
+        ) => FinishReason::ContentFilter,
+        _ => FinishReason::Stop,
+    }
+    .as_str()
 }
 
 /// Python folds cache tokens into `prompt_tokens` and reports the split under
@@ -67,28 +109,26 @@ pub fn json_type_name(value: &serde_json::Value) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
+
     use super::*;
 
-    #[test]
-    fn maps_every_reason_the_route_can_observe() {
-        assert_eq!(finish_reason_for("end_turn"), "stop");
-        assert_eq!(finish_reason_for("stop_sequence"), "stop");
-        assert_eq!(finish_reason_for("max_tokens"), "length");
-        assert_eq!(finish_reason_for("refusal"), "content_filter");
-        assert_eq!(finish_reason_for("guardrail_intervened"), "content_filter");
-        // Converse emits these two, and folding them into `stop` would report a
-        // filtered completion as a normal one.
-        assert_eq!(finish_reason_for("content_filtered"), "content_filter");
-        assert_eq!(finish_reason_for("content_filter"), "content_filter");
-    }
-
-    #[test]
-    fn defaults_an_unmapped_reason_to_stop_like_python() {
-        // Python warns and falls back to `stop` for a reason its own map does
-        // not carry, so only a reason absent from `_FINISH_REASON_MAP` belongs
-        // here.
-        assert_eq!(finish_reason_for("something_new"), "stop");
-        assert_eq!(finish_reason_for(""), "stop");
+    #[rstest]
+    #[case::end_turn(Some("end_turn"), "stop")]
+    #[case::stop_sequence(Some("stop_sequence"), "stop")]
+    #[case::max_tokens(Some("max_tokens"), "length")]
+    #[case::compaction(Some("compaction"), "length")]
+    #[case::refusal(Some("refusal"), "content_filter")]
+    #[case::guardrail(Some("guardrail_intervened"), "content_filter")]
+    #[case::content_filtered(Some("content_filtered"), "content_filter")]
+    #[case::content_filter(Some("content_filter"), "content_filter")]
+    #[case::stop(Some("stop"), "stop")]
+    #[case::length(Some("length"), "length")]
+    #[case::unknown(Some("something_new"), "stop")]
+    #[case::empty(Some(""), "stop")]
+    #[case::missing(None, "stop")]
+    fn normalizes_provider_finish_reasons(#[case] input: Option<&str>, #[case] expected: &str) {
+        assert_eq!(finish_reason_for(input), expected);
     }
 
     #[test]

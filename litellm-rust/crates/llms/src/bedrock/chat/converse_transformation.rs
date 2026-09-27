@@ -216,10 +216,8 @@ impl BaseConfig for AmazonConverseConfig {
                     // on this path alone.
                     content: Some(text),
                 },
-                finish_reason: finish_reason_for(
-                    body.get("stopReason").and_then(Value::as_str).unwrap_or(""),
-                )
-                .to_string(),
+                finish_reason: finish_reason_for(body.get("stopReason").and_then(Value::as_str))
+                    .to_string(),
             }],
             usage,
         })
