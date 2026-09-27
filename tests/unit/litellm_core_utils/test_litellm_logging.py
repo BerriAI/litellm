@@ -19,6 +19,7 @@ from openai import AsyncOpenAI
 from openai._legacy_response import HttpxBinaryResponseContent
 
 import litellm
+from litellm._internal_context import in_post_response_phase
 from litellm._logging import session_id_var, trace_id_var
 from litellm.constants import REDACTED_BY_LITELLM, SENTRY_PII_DENYLIST
 from litellm.cost_calculator import ocr_batch_cost
@@ -1615,6 +1616,48 @@ async def test_logfire_logger_accepts_env_vars_for_base_url(monkeypatch):
         logging_module._in_memory_loggers.clear()
 
 
+@pytest.mark.parametrize(
+    ("api_host", "expected_endpoint"),
+    [
+        (None, "https://app.langtrace.ai/api/trace"),
+        ("http://langtrace.internal:3000/", "http://langtrace.internal:3000/api/trace"),
+        ("http://langtrace.internal:3000/api/trace", "http://langtrace.internal:3000/api/trace"),
+    ],
+)
+def test_langtrace_callback_exports_to_api_trace_with_x_api_key(
+    monkeypatch: pytest.MonkeyPatch, api_host: str | None, expected_endpoint: str
+) -> None:
+    """The exporter must post to Langtrace's complete /api/trace path with the key in x-api-key,
+    without leaking it into the process-wide OTEL_EXPORTER_OTLP_TRACES_HEADERS."""
+    from opentelemetry.exporter.otlp.proto.http.trace_exporter import OTLPSpanExporter
+
+    from litellm.integrations.opentelemetry import OpenTelemetry
+    from litellm.litellm_core_utils import litellm_logging as logging_module
+
+    api_key: Final = "synthetic-langtrace-key"
+    monkeypatch.setenv("LANGTRACE_API_KEY", api_key)
+    monkeypatch.delenv("LANGTRACE_API_HOST", raising=False)
+    monkeypatch.delenv("OTEL_EXPORTER_OTLP_TRACES_HEADERS", raising=False)
+    if api_host is not None:
+        monkeypatch.setenv("LANGTRACE_API_HOST", api_host)
+    logging_module._in_memory_loggers.clear()
+    try:
+        logger: Final = logging_module._init_custom_logger_compatible_class(
+            logging_integration="langtrace",
+            internal_usage_cache=None,
+            llm_router=None,
+            custom_logger_init_args={},
+        )
+        assert type(logger) is OpenTelemetry and logger.callback_name == "langtrace"
+        exporter: Final = logger._get_span_processor().span_exporter
+        assert isinstance(exporter, OTLPSpanExporter)
+        assert exporter._endpoint == expected_endpoint
+        assert exporter._headers == {"x-api-key": api_key}
+        assert "OTEL_EXPORTER_OTLP_TRACES_HEADERS" not in os.environ
+    finally:
+        logging_module._in_memory_loggers.clear()
+
+
 @pytest.mark.asyncio
 async def test_logging_result_for_bridge_calls(logging_obj):
     """
@@ -1968,6 +2011,62 @@ def test_success_handler_runs_sync_callbacks_for_sync_requests(logging_obj, call
 
     dummy_logger.log_success_event.assert_called_once()
     dummy_logger.log_stream_event.assert_not_called()
+
+
+class _PhaseRecordingLogger(CustomLogger):
+    """Records whether each success callback ran inside the post-response phase."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.phases: list[bool] = []
+
+    def log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.phases.append(in_post_response_phase())
+
+    async def async_log_success_event(self, kwargs, response_obj, start_time, end_time) -> None:
+        self.phases.append(in_post_response_phase())
+
+
+def _success_response() -> ModelResponse:
+    return ModelResponse(
+        id="resp-123",
+        model="gpt-4o-mini",
+        choices=[{"message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop", "index": 0}],
+        usage={"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    )
+
+
+def test_success_handler_runs_sync_callbacks_in_the_post_response_phase(logging_obj):
+    """Service spans logged by success callbacks must detach from the request trace even
+    while the server span is still open, so the callbacks run inside the phase marker."""
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {}
+    logging_obj.litellm_params = {}
+    recorder = _PhaseRecordingLogger()
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[recorder]):
+        logging_obj.success_handler(result=_success_response())
+
+    assert recorder.phases == [True], "log_success_event must observe the post-response phase"
+    assert in_post_response_phase() is False, "the phase must end with the handler"
+
+
+@pytest.mark.asyncio
+async def test_async_success_handler_runs_async_callbacks_in_the_post_response_phase(logging_obj):
+    logging_obj.stream = False
+    logging_obj.model_call_details["litellm_params"] = {"acompletion": True}
+    logging_obj.litellm_params = logging_obj.model_call_details["litellm_params"]
+    recorder = _PhaseRecordingLogger()
+
+    with patch.object(logging_obj, "get_combined_callback_list", return_value=[recorder]):
+        await logging_obj.async_success_handler(
+            result=_success_response(),
+            start_time=datetime.datetime.now(datetime.timezone.utc),
+            end_time=datetime.datetime.now(datetime.timezone.utc),
+        )
+
+    assert recorder.phases == [True], "async_log_success_event must observe the post-response phase"
+    assert in_post_response_phase() is False, "the phase must not leak into the request task"
 
 
 def test_is_sync_litellm_request():
