@@ -67,7 +67,6 @@ const OPTIONS: OptionConfig[] = [
     label: "Team Usage",
     description: "View usage by team",
     icon: <Users className="size-4" />,
-    adminOnly: true,
   },
   {
     value: "customer",

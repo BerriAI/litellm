@@ -96,16 +96,13 @@ describe("UsageViewSelect", () => {
     expect(offers(container, optionName)).toBe(expected);
   });
 
-  it.each([
-    ["Team Usage", false],
-    ["Tag Usage", true],
-  ] as const)("should offer %s to an internal user: %s", async (optionName, expected) => {
+  it.each(["Team Usage", "Tag Usage"])("should keep %s available to an internal user", async (optionName) => {
     const user = userEvent.setup();
     const { container } = render(
       <UsageViewSelect value="global" onChange={mockOnChange} userRole="Internal User" canViewTagUsage={true} />,
     );
 
     await openMenu(user);
-    expect(offers(container, optionName)).toBe(expected);
+    expect(offers(container, optionName)).toBe(true);
   });
 });

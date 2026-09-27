@@ -14,6 +14,8 @@ import type { Organization } from "@/components/networking";
 import * as networking from "@/components/networking";
 import UsagePage from "./UsagePageView";
 
+const mockEntityUsageMounted = vi.hoisted(() => vi.fn());
+
 // Polyfill ResizeObserver for test environment
 beforeAll(() => {
   if (typeof window !== "undefined" && !window.ResizeObserver) {
@@ -29,7 +31,6 @@ beforeAll(() => {
 vi.mock("@/components/networking", () => ({
   userDailyActivityCall: vi.fn(),
   userDailyActivityAggregatedCall: vi.fn(),
-  teamDailyActivityAggregatedCall: vi.fn(),
   gatewayDailyActivityCall: vi.fn(),
   tagListCall: vi.fn(),
 }));
@@ -52,7 +53,6 @@ vi.mock("@/components/UsagePage/components/EntityUsage/TopKeyView", () => ({
 
 vi.mock("./EntityUsage/EntityUsage", async () => {
   const React = await import("react");
-  const { teamDailyActivityAggregatedCall } = await import("@/components/networking");
   const EntityUsage = ({
     entityType,
     entityList,
@@ -65,9 +65,7 @@ vi.mock("./EntityUsage/EntityUsage", async () => {
     onSelectedEntitiesChange: (ids: readonly string[]) => void;
   }) => {
     React.useEffect(() => {
-      if (entityType === "team") {
-        void teamDailyActivityAggregatedCall("test-token", new Date(), new Date(), ["team-1"]);
-      }
+      mockEntityUsageMounted(entityType);
     }, [entityType]);
     return (
       <div
@@ -199,7 +197,6 @@ vi.mock("@/app/(dashboard)/hooks/users/useUsers", () => ({
 describe("UsagePage", () => {
   const mockUserDailyActivityAggregatedCall = vi.mocked(networking.userDailyActivityAggregatedCall);
   const mockUserDailyActivityCall = vi.mocked(networking.userDailyActivityCall);
-  const mockTeamDailyActivityAggregatedCall = vi.mocked(networking.teamDailyActivityAggregatedCall);
   const mockTagListCall = vi.mocked(networking.tagListCall);
   const mockGatewayDailyActivityCall = vi.mocked(networking.gatewayDailyActivityCall);
   const mockUseCustomers = vi.mocked(useCustomers);
@@ -357,8 +354,10 @@ describe("UsagePage", () => {
     userRole: "Internal User",
     userRoleLabel: "Internal User",
     isViewOnly: false,
+    loginMethod: null,
     premiumUser: true,
     disabledPersonalKeyCreation: false,
+    passwordResetRequired: false,
     showSSOBanner: false,
   };
 
@@ -416,7 +415,7 @@ describe("UsagePage", () => {
     } as any);
     mockUserDailyActivityAggregatedCall.mockClear();
     mockUserDailyActivityCall.mockClear();
-    mockTeamDailyActivityAggregatedCall.mockClear();
+    mockEntityUsageMounted.mockClear();
     mockTagListCall.mockClear();
     mockGatewayDailyActivityCall.mockClear();
     mockUserDailyActivityAggregatedCall.mockResolvedValue(mockSpendData);
@@ -842,8 +841,14 @@ describe("UsagePage", () => {
       expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
     });
 
+    const usageSelect = screen.getByTestId("usage-view-select");
     act(() => {
-      fireEvent.change(screen.getByTestId("usage-view-select"), { target: { value: usageView } });
+      fireEvent.change(usageSelect, { target: { value: "team" } });
+    });
+    expect(screen.getAllByText("Entity Usage").length).toBeGreaterThan(0);
+
+    act(() => {
+      fireEvent.change(usageSelect, { target: { value: usageView } });
     });
 
     expect(screen.queryByText("Entity Usage")).not.toBeInTheDocument();
@@ -1512,16 +1517,16 @@ describe("UsagePage", () => {
       expect(screen.queryByTestId("entity-usage")).not.toBeInTheDocument();
     });
 
-    it("does not render or fetch a disallowed team view for an internal user", async () => {
+    it("does not render a disallowed customer view for an internal user", async () => {
       mockUseAuthorized.mockReturnValue(nonAdminSession);
 
-      renderAt("?view=team&team=team-1");
+      renderAt("?view=customer&customer=c-1");
 
       await waitFor(() => {
         expect(mockUserDailyActivityAggregatedCall).toHaveBeenCalled();
       });
+      expect(mockEntityUsageMounted).not.toHaveBeenCalledWith("customer");
       expect(screen.queryByTestId("entity-usage")).not.toBeInTheDocument();
-      expect(mockTeamDailyActivityAggregatedCall).not.toHaveBeenCalled();
     });
 
     it("never fetches another user's usage for a non-admin who opens their link", async () => {
