@@ -151,13 +151,21 @@ class DualCache(BaseCache):
         # Update both Redis and in-memory cache
         try:
             if self.in_memory_cache is not None:
-                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
-                    kwargs["ttl"] = self.default_in_memory_ttl
+                mem_kwargs = dict(kwargs)  # mutable-ok: per-tier copy; tiers must not share a ttl
+                if "ttl" not in mem_kwargs and self.default_in_memory_ttl is not None:
+                    mem_kwargs["ttl"] = self.default_in_memory_ttl
 
-                self.in_memory_cache.set_cache(key, value, **kwargs)
+                self.in_memory_cache.set_cache(key, value, **mem_kwargs)
 
             if self.redis_cache is not None and local_only is False:
-                self.redis_cache.set_cache(key, value, **kwargs)
+                redis_kwargs = dict(kwargs)  # mutable-ok: per-tier copy; tiers must not share a ttl
+                if "ttl" not in redis_kwargs:
+                    redis_ttl = self.default_redis_ttl
+                    if redis_ttl is None:
+                        redis_ttl = self.default_in_memory_ttl
+                    if redis_ttl is not None:
+                        redis_kwargs["ttl"] = redis_ttl
+                self.redis_cache.set_cache(key, value, **redis_kwargs)
         except Exception as e:
             print_verbose(e)
 
@@ -506,12 +514,20 @@ class DualCache(BaseCache):
         print_verbose(f"async set cache: cache key: {key}; local_only: {local_only}; value: {value}")
         try:
             if self.in_memory_cache is not None:
-                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
-                    kwargs["ttl"] = self.default_in_memory_ttl
-                await self.in_memory_cache.async_set_cache(key, value, **kwargs)
+                mem_kwargs = dict(kwargs)  # mutable-ok: per-tier copy; tiers must not share a ttl
+                if "ttl" not in mem_kwargs and self.default_in_memory_ttl is not None:
+                    mem_kwargs["ttl"] = self.default_in_memory_ttl
+                await self.in_memory_cache.async_set_cache(key, value, **mem_kwargs)
 
             if self.redis_cache is not None and local_only is False:
-                await self.redis_cache.async_set_cache(key, value, **kwargs)
+                redis_kwargs = dict(kwargs)  # mutable-ok: per-tier copy; tiers must not share a ttl
+                if "ttl" not in redis_kwargs:
+                    redis_ttl = self.default_redis_ttl
+                    if redis_ttl is None:
+                        redis_ttl = self.default_in_memory_ttl
+                    if redis_ttl is not None:
+                        redis_kwargs["ttl"] = redis_ttl
+                await self.redis_cache.async_set_cache(key, value, **redis_kwargs)
         except Exception as e:
             log_redis_failure(
                 verbose_logger, logging.ERROR, "LiteLLM Cache: exception in async add_cache", e, with_traceback=True
@@ -549,13 +565,21 @@ class DualCache(BaseCache):
         print_verbose(f"async batch set cache: cache keys: {cache_list}; local_only: {local_only}")
         try:
             if self.in_memory_cache is not None:
-                if "ttl" not in kwargs and self.default_in_memory_ttl is not None:
-                    kwargs["ttl"] = self.default_in_memory_ttl
-                await self.in_memory_cache.async_set_cache_pipeline(cache_list=cache_list, **kwargs)
+                mem_kwargs = dict(kwargs)  # mutable-ok: per-tier copy; tiers must not share a ttl
+                if "ttl" not in mem_kwargs and self.default_in_memory_ttl is not None:
+                    mem_kwargs["ttl"] = self.default_in_memory_ttl
+                await self.in_memory_cache.async_set_cache_pipeline(cache_list=cache_list, **mem_kwargs)
 
             if self.redis_cache is not None and local_only is False:
+                redis_kwargs = dict(kwargs)  # mutable-ok: per-tier copy; tiers must not share a ttl
+                if "ttl" not in redis_kwargs:
+                    redis_ttl = self.default_redis_ttl
+                    if redis_ttl is None:
+                        redis_ttl = self.default_in_memory_ttl
+                    if redis_ttl is not None:
+                        redis_kwargs["ttl"] = redis_ttl
                 await self.redis_cache.async_set_cache_pipeline(
-                    cache_list=cache_list, ttl=kwargs.pop("ttl", None), **kwargs
+                    cache_list=cache_list, ttl=redis_kwargs.pop("ttl", None), **redis_kwargs
                 )
         except Exception as e:
             log_redis_failure(
