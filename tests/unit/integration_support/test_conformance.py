@@ -114,6 +114,7 @@ def test_owned_proxy_isolates_automatic_coverage_unless_requested(
 def test_runner_requires_conformance_for_selected_files(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selected: str, missing_required: bool
 ) -> None:
+    monkeypatch.syspath_prepend(str(Path(__file__).resolve().parents[2]))
     from integration import run
     from integration._support.conformance import required_conformance_nodes
 
