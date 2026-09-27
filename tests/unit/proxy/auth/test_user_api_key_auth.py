@@ -1794,3 +1794,94 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
         "the mapped-key branch returns before the shared virtual-key checks, so the "
         "user's per-model budget is never attached and never enforced"
     )
+
+
+def _multipart_edit_request(boundary: str, parts: tuple[tuple[str, str | None, bytes], ...]):
+    from starlette.requests import Request as StarletteRequest
+
+    body = (
+        b"".join(
+            f'--{boundary}\r\nContent-Disposition: form-data; name="{name}"'.encode()
+            + (f'; filename="{filename}"\r\nContent-Type: application/octet-stream'.encode() if filename else b"")
+            + b"\r\n\r\n"
+            + value
+            + b"\r\n"
+            for name, filename, value in parts
+        )
+        + f"--{boundary}--\r\n".encode()
+    )
+
+    async def receive():
+        return {"type": "http.request", "body": body, "more_body": False}
+
+    return StarletteRequest(
+        {
+            "type": "http",
+            "method": "POST",
+            "path": "/v1/images/edits",
+            "query_string": b"",
+            "headers": [(b"content-type", f"multipart/form-data; boundary={boundary}".encode())],
+        },
+        receive,
+    )
+
+
+@pytest.mark.asyncio
+async def test_flux2_edit_reservation_counts_every_repeated_image_upload(monkeypatch):
+    import struct
+
+    from litellm.caching.dual_cache import DualCache
+    from litellm.proxy.auth.user_api_key_auth import _reserve_budget_after_common_checks
+    from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
+    from litellm.proxy.utils import ProxyLogging
+    from litellm.router import Router
+
+    key_cache = DualCache()
+    monkeypatch.setattr(litellm.proxy.proxy_server, "spend_counter_cache", DualCache())
+    monkeypatch.setattr(litellm.proxy.proxy_server, "user_api_key_cache", key_cache)
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    key = UserAPIKeyAuth(token="key-flux2-two-references", spend=0.0, max_budget=1.0)
+    await key_cache.async_set_cache(key=key.token, value=key)
+    square_png = b"\x89PNG\r\n\x1a\n" + (13).to_bytes(4, "big") + b"IHDR" + struct.pack(">II", 1024, 1024)
+    photo_jpeg = b"\xff\xd8\xff\xc0" + struct.pack(">HBHHB", 17, 8, 3024, 4032, 3) + b"\x01\x22\x00"
+    request = _multipart_edit_request(
+        "flux2",
+        (
+            ("model", None, b"flux2-pro"),
+            ("prompt", None, b"make it blue"),
+            ("size", None, b"1024x1024"),
+            ("image[]", "square.png", square_png),
+            ("image[]", "photo.jpg", photo_jpeg),
+            ("mask", "mask.png", square_png),
+        ),
+    )
+    router = Router(
+        model_list=[
+            {
+                "model_name": "flux2-pro",
+                "litellm_params": {"model": "azure_ai/flux.2-pro", "api_base": "https://foundry.test", "api_key": "k"},
+            }
+        ]
+    )
+
+    await _reserve_budget_after_common_checks(
+        user_api_key_auth_obj=key,
+        request_data=await _read_request_body(request=request),
+        route="/v1/images/edits",
+        llm_router=router,
+        team_object=None,
+        user_object=None,
+        prisma_client=None,
+        user_api_key_cache=key_cache,
+        proxy_logging_obj=ProxyLogging(user_api_key_cache=key_cache),
+        skip_budget_checks=False,
+        general_settings={},
+        request=request,
+    )
+
+    catalog_entry = litellm.model_cost["azure_ai/flux.2-pro"]
+    additional_megapixel = catalog_entry["input_cost_per_pixel"] * 1024 * 1024
+    assert key.budget_reservation is not None
+    assert key.budget_reservation["reserved_cost"] == pytest.approx(
+        catalog_entry["output_cost_per_image"] + 2 * additional_megapixel
+    )

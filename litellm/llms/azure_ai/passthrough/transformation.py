@@ -213,10 +213,14 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
 
 
 def _record_relayed_reference_pixels(image_response: ImageResponse, request_data: Mapping[str, object]) -> None:
-    references: Final = tuple(request_data.get(field) for field in FLUX2_REFERENCE_IMAGE_FIELDS)
-    reference_pixels: Final = tuple(_relayed_image_pixels(value) for value in references if value not in (None, ""))
+    reference_pixels: Final = relayed_reference_pixels(request_data)
     if reference_pixels:
         record_reference_pixels(image_response, reference_pixels)
+
+
+def relayed_reference_pixels(request_data: Mapping[str, object]) -> tuple[int | None, ...]:
+    references: Final = tuple(request_data.get(field) for field in FLUX2_REFERENCE_IMAGE_FIELDS)
+    return tuple(_relayed_image_pixels(value) for value in references if value not in (None, ""))
 
 
 def _relayed_image_pixels(value: object) -> int | None:

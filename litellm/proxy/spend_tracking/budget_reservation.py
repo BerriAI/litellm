@@ -11,11 +11,17 @@ from types import MappingProxyType
 from typing import Final, NoReturn, SupportsFloat, SupportsIndex, SupportsInt, cast
 
 from fastapi import HTTPException, status
+from starlette.datastructures import UploadFile
 
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.duration_parser import duration_in_seconds
 from litellm.litellm_core_utils.llm_cost_calc.tiered_pricing import select_tier_for_input, tier_rate
+from litellm.litellm_core_utils.llm_cost_calc.utils import deployment_pricing
+from litellm.litellm_core_utils.token_counter import image_pixels_from_bytes
+from litellm.llms.azure_ai.image_generation.cost_calculator import JPEG_HEADER_PREFIX_BYTES, estimate_flux2_cost
+from litellm.llms.azure_ai.image_generation.flux_transformation import AzureFoundryFluxImageGenerationConfig
+from litellm.llms.azure_ai.passthrough.transformation import relayed_reference_pixels
 from litellm.proxy._types import (
     Litellm_EntityType,
     LiteLLM_TeamMembership,
@@ -42,6 +48,9 @@ from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.router import Router
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.types.router import DeploymentTypedDict
+from litellm.types.utils import ModelInfo
+
+IMAGE_UPLOAD_FIELDS: Final = ("image", "image[]")
 
 
 @dataclass
@@ -55,6 +64,12 @@ class _BudgetCounter:
     spend_log_entity_id: str | None = None
     window_duration: str | None = None
     window_start: datetime | None = None
+
+
+@dataclass(frozen=True, slots=True, kw_only=True)
+class _Flux2Deployment:
+    model: str
+    pricing: ModelInfo | None
 
 
 _COUNTER_ENTITY_TYPES: Final[Mapping[str, str]] = {
@@ -260,6 +275,7 @@ async def reserve_budget_for_request(
     apply_user_budget_to_team_keys: bool = False,
     fail_closed_budget_enforcement: bool = False,
     raw_body: bytes | None = None,
+    reference_images: Sequence[UploadFile] = (),
 ) -> dict | None:
     if valid_token is None or not RouteChecks.is_llm_api_route(route=route):
         return None
@@ -296,6 +312,12 @@ async def reserve_budget_for_request(
         route=route,
         llm_router=llm_router,
         input_token_counts=input_token_counts,
+        reference_pixels=await _flux2_reference_pixels(
+            request_body=request_body,
+            route=route,
+            llm_router=llm_router,
+            reference_images=reference_images,
+        ),
     )
     # estimate_request_max_cost still returns None when the model is unknown
     # to the cost map (no token-priced cost fields, e.g. image/audio routes).
@@ -1192,6 +1214,7 @@ def estimate_request_max_cost(
     route: str,
     llm_router: Router | None,
     input_token_counts: Mapping[str, int] | None = None,
+    reference_pixels: tuple[int | None, ...] = (),
 ) -> float | None:
     estimates = [
         _estimate_request_max_cost_for_model(
@@ -1200,6 +1223,7 @@ def estimate_request_max_cost(
             model=model_name,
             llm_router=llm_router,
             input_tokens=(input_token_counts or {}).get(model_name),
+            reference_pixels=reference_pixels,
         )
         for model_name in _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
     ]
@@ -1292,6 +1316,7 @@ def _estimate_request_max_cost_for_model(
     model: str,
     llm_router: Router | None,
     input_tokens: int | None = None,
+    reference_pixels: tuple[int | None, ...] = (),
 ) -> float | None:
     estimates: Final = [
         _max_cost_for_cost_info(
@@ -1303,8 +1328,82 @@ def _estimate_request_max_cost_for_model(
         )
         for model_info in _get_model_cost_infos(model=model, llm_router=llm_router)
     ]
-    valid_estimates: Final = [estimate for estimate in estimates if estimate is not None]
+    flux2_estimates: Final = tuple(
+        _flux2_cost(deployment, request_body, reference_pixels)
+        for deployment in _flux2_deployments(model=model, llm_router=llm_router)
+    )
+    valid_estimates: Final = [estimate for estimate in (*estimates, *flux2_estimates) if estimate is not None]
     return max(valid_estimates) if valid_estimates else None
+
+
+def _flux2_cost(
+    deployment: _Flux2Deployment,
+    request_body: Mapping[str, object],
+    reference_pixels: tuple[int | None, ...],
+) -> float | None:
+    try:
+        return estimate_flux2_cost(
+            model=deployment.model,
+            model_info=deployment.pricing,
+            request_params=request_body,
+            reference_pixels=reference_pixels,
+        )
+    except Exception:  # noqa: BLE001  # get_model_info raises a bare Exception for an unmapped model
+        verbose_proxy_logger.debug("Unable to price %s for budget reservation", deployment.model, exc_info=True)
+        return None
+
+
+def _flux2_deployments(model: str, llm_router: Router | None) -> tuple[_Flux2Deployment, ...]:
+    if llm_router is None:
+        return (_Flux2Deployment(model=model, pricing=None),) if _is_azure_ai_flux2(model, None) else ()
+    return tuple(
+        flux2_deployment
+        for deployment in llm_router.get_model_list(model_name=model) or ()
+        if (flux2_deployment := _flux2_deployment(deployment)) is not None
+    )
+
+
+def _flux2_deployment(deployment: DeploymentTypedDict) -> _Flux2Deployment | None:
+    litellm_params: Final = _get_value(deployment, "litellm_params")
+    backend_model: Final = _get_value(litellm_params, "model")
+    custom_llm_provider: Final = _get_value(litellm_params, "custom_llm_provider")
+    if not isinstance(backend_model, str) or not _is_azure_ai_flux2(
+        backend_model, custom_llm_provider if isinstance(custom_llm_provider, str) else None
+    ):
+        return None
+    model_id: Final = _get_value(_get_value(deployment, "model_info"), "id")
+    registered_prices: Final = litellm.model_cost.get(model_id) if isinstance(model_id, str) else None
+    return _Flux2Deployment(model=backend_model, pricing=deployment_pricing(registered_prices))
+
+
+def _is_azure_ai_flux2(model: str, custom_llm_provider: str | None) -> bool:
+    if not AzureFoundryFluxImageGenerationConfig.is_flux2_model(model):
+        return False
+    try:
+        _, provider, _, _ = litellm.get_llm_provider(model=model, custom_llm_provider=custom_llm_provider)
+    except litellm.BadRequestError:
+        return False
+    return provider == litellm.LlmProviders.AZURE_AI.value
+
+
+async def _flux2_reference_pixels(
+    request_body: Mapping[str, object],
+    route: str,
+    llm_router: Router | None,
+    reference_images: Sequence[UploadFile],
+) -> tuple[int | None, ...]:
+    models: Final = _get_request_models(request_body=request_body, route=route, llm_router=llm_router)
+    if not any(_flux2_deployments(model=model, llm_router=llm_router) for model in models):
+        return ()
+    uploaded_pixels: Final = tuple([await _upload_pixels(upload) for upload in reference_images])
+    return uploaded_pixels + relayed_reference_pixels(request_body)
+
+
+async def _upload_pixels(upload: UploadFile) -> int | None:
+    await upload.seek(0)
+    header: Final = await upload.read(JPEG_HEADER_PREFIX_BYTES)
+    await upload.seek(0)
+    return image_pixels_from_bytes(header)
 
 
 def _max_cost_for_cost_info(

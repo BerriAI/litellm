@@ -19,8 +19,10 @@ from litellm.types.utils import ImageResponse, ModelInfo
 
 MEGAPIXEL: Final = 1024 * 1024
 MAX_LONE_REFERENCE_MEGAPIXELS: Final = 4
+MAX_LONE_REFERENCE_PIXELS: Final = MAX_LONE_REFERENCE_MEGAPIXELS * MEGAPIXEL
 IMAGE_HEADER_BASE64_PREFIX_CHARS: Final = 64 * 1024
 JPEG_HEADER_BASE64_PREFIX_CHARS: Final = 512 * 1024
+JPEG_HEADER_PREFIX_BYTES: Final = JPEG_HEADER_BASE64_PREFIX_CHARS * 3 // 4
 REFERENCE_IMAGE_PIXELS_HIDDEN_PARAM: Final = "reference_image_pixels"
 DEPLOYMENT_PER_IMAGE_PRICE_KEYS: Final = ("output_cost_per_image", "input_cost_per_image")
 _REFERENCE_PIXELS: Final = TypeAdapter(tuple[Annotated[int, Field(strict=True, gt=0)] | None, ...])
@@ -221,18 +223,64 @@ def cost_calculator(
     raise ValueError(f"image_response must be of type ImageResponse got type={type(image_response)}")
 
 
+def estimate_flux2_cost(
+    model: str,
+    model_info: ModelInfo | None,
+    request_params: Mapping[str, object],
+    reference_pixels: tuple[int | None, ...],
+) -> float:
+    """
+    Upper bound on what a FLUX.2 generation or edit will cost, for admission checks before the call.
+    A reference of unknown size counts as the largest a lone reference is billed at, and an edit without
+    a size is assumed to return its largest reference, capped the same way
+    """
+    prices: Final = _flux2_prices(
+        resolve_image_model_info(
+            model=model, custom_llm_provider=litellm.LlmProviders.AZURE_AI.value, model_info=model_info
+        ),
+        model_info,
+    )
+    references: Final = tuple(MAX_LONE_REFERENCE_PIXELS if pixels is None else pixels for pixels in reference_pixels)
+    output_megapixels: Final = _billable_megapixels(_estimated_output_pixels(request_params, references))
+    image_cost: Final = prices.first_megapixel + prices.additional_megapixel * (output_megapixels - 1)
+    image_count: Final = max(_positive_int(request_params.get(key)) or 1 for key in ("n", "num_images"))
+    return image_cost * image_count + prices.additional_megapixel * _billable_reference_megapixels(model, references)
+
+
+def _estimated_output_pixels(request_params: Mapping[str, object], references: tuple[int, ...]) -> int:
+    size: Final = request_params.get("size")
+    requested_pixels: Final = _size_pixels(_requested_size(size if isinstance(size, str) else None, request_params))
+    return requested_pixels or max((min(pixels, MAX_LONE_REFERENCE_PIXELS) for pixels in references), default=MEGAPIXEL)
+
+
 def _output_size(
     size: str | None, optional_params: Mapping[str, object] | None, image_response: ImageResponse
 ) -> str | None:
-    width: Final = optional_params.get("width") if optional_params else None
-    height: Final = optional_params.get("height") if optional_params else None
-    if type(width) is int and type(height) is int and width > 0 and height > 0:
+    return _requested_size(size, optional_params) or image_response.size
+
+
+def _requested_size(size: str | None, params: Mapping[str, object] | None) -> str | None:
+    width: Final = _positive_int(params.get("width")) if params else None
+    height: Final = _positive_int(params.get("height")) if params else None
+    if width is not None and height is not None:
         return f"{width}x{height}"
-    return size or image_response.size
+    return size
+
+
+def _positive_int(value: object) -> int | None:
+    match value:
+        case bool():
+            return None
+        case int() if value > 0:
+            return value
+        case str() if value.isdecimal() and int(value) > 0:
+            return int(value)
+        case _:
+            return None
 
 
 def _size_pixels(size: str | None) -> int | None:
     dimensions: Final = (size or "").lower().replace("-x-", "x").split("x")
-    if len(dimensions) != 2 or not all(dimension.isdigit() for dimension in dimensions):
+    if len(dimensions) != 2 or not all(dimension.isdecimal() for dimension in dimensions):
         return None
     return int(dimensions[0]) * int(dimensions[1])

@@ -6,6 +6,7 @@ from typing import Annotated, Any, Final, Union, get_args, get_origin
 
 import orjson
 from fastapi import Request, UploadFile, status
+from starlette.datastructures import UploadFile as StarletteUploadFile
 from typing_extensions import NotRequired, ReadOnly, Required
 
 from litellm._logging import verbose_proxy_logger
@@ -240,6 +241,19 @@ async def read_raw_json_body(request: Request | None) -> bytes | None:
         return await request.body()
     except RuntimeError:
         return None
+
+
+async def read_form_uploads(request: Request | None, field_names: Collection[str]) -> tuple[StarletteUploadFile, ...]:
+    if request is None or _safe_get_request_parsed_body(request=request) is None:
+        return ()
+    if not _is_form_content_type(_safe_get_request_headers(request=request).get("content-type", "")):
+        return ()
+    form_data: Final = await request.form()
+    return tuple(
+        value
+        for field_name, value in form_data.multi_items()
+        if field_name in field_names and isinstance(value, StarletteUploadFile)
+    )
 
 
 def _safe_get_request_parsed_body(request: Request | None) -> dict | None:

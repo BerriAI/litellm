@@ -113,6 +113,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_set_request_parsed_body,
     is_opaque_audio_pass_through_request,
     populate_request_with_path_params,
+    read_form_uploads,
     read_raw_json_body,
     rewrite_request_model,
 )
@@ -3107,6 +3108,7 @@ async def _reserve_budget_after_common_checks(
     user_api_key_auth_obj.budget_reservation = None
     if not skip_budget_checks and general_settings.get("disable_budget_reservation") is not True:
         from litellm.proxy.spend_tracking.budget_reservation import (
+            IMAGE_UPLOAD_FIELDS,
             reserve_budget_for_request,
         )
 
@@ -3125,6 +3127,7 @@ async def _reserve_budget_after_common_checks(
             apply_user_budget_to_team_keys=general_settings.get("apply_user_budget_to_team_keys") is True,
             fail_closed_budget_enforcement=general_settings.get("fail_closed_budget_enforcement") is True,
             raw_body=await read_raw_json_body(request=request),
+            reference_images=await read_form_uploads(request=request, field_names=IMAGE_UPLOAD_FIELDS),
         )
     if request is not None:
         reservation: Final = user_api_key_auth_obj.budget_reservation
