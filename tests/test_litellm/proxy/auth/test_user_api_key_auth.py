@@ -9501,6 +9501,8 @@ async def test_managed_jwt_cannot_be_downgraded_into_virtual_key_mapping(monkeyp
         ("POST", "/a2a/agent", {"jsonrpc": "2.0", "id": "1", "method": "tasks/get", "params": {"id": "t"}}, False),
         ("POST", "/a2a/agent", {"jsonrpc": "2.0", "id": "1", "method": "message/send", "params": {}}, True),
         ("POST", "/a2a/agent", {"jsonrpc": "2.0", "id": "1", "method": "message/stream", "params": {}}, True),
+        ("POST", "/a2a/agent", {"method": "message/send", "model": "free-model", "params": {}}, True),
+        ("POST", "/a2a/agent", {"method": "message/stream", "model": "free-model", "params": {}}, True),
     ],
 )
 async def test_human_agent_discovery_does_not_reserve_target_budget_but_send_and_stream_do(
@@ -9541,6 +9543,13 @@ async def test_human_agent_discovery_does_not_reserve_target_budget_but_send_and
     for name, value in {
         **_proxy_attrs_for_centralized_checks(),
         "prisma_client": database,
+        "llm_router": litellm.Router(
+            model_list=[{
+                "model_name": "free-model",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+                "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
+            }]
+        ) if body.get("model") else None,
         "proxy_logging_obj": MagicMock(post_call_failure_hook=AsyncMock(return_value=None)),
     }.items():
         monkeypatch.setattr(proxy_server, name, value)
@@ -9566,3 +9575,22 @@ async def test_human_agent_discovery_does_not_reserve_target_budget_but_send_and
     reserve.assert_awaited_once()
     reserved: Final = reserve.call_args.kwargs["valid_token"]
     assert reserved is auth and (reserved.billing_agent_policy is not None) is billed, (http_method, body.get("method"))
+
+
+@pytest.mark.parametrize("invocation_cost,skipped", [(None, True), (0.0, True), (0.25, False)])
+def test_free_model_only_waives_budgets_without_a_paid_agent_invocation(
+    invocation_cost: float | None, skipped: bool
+) -> None:
+    from typing import Final
+
+    from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
+
+    router: Final = litellm.Router(model_list=[{
+        "model_name": "free-model",
+        "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "test-key"},
+        "model_info": {"input_cost_per_token": 0, "output_cost_per_token": 0},
+    }])
+    assert _should_skip_budget_checks(
+        request_data={"model": "free-model"}, route="/chat/completions", request=None,
+        llm_router=router, agent_invocation_cost=invocation_cost,
+    ) is skipped
