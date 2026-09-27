@@ -45,7 +45,7 @@ impl Route {
     }
 }
 
-/// What the host does to the wire request in `before_send`.
+/// What the host does to the wire request in `before_provider_request`.
 #[derive(Clone, Copy, Debug)]
 enum Guardrail {
     Detached,
@@ -53,7 +53,7 @@ enum Guardrail {
 }
 
 impl Guardrail {
-    fn before_send(self, wire: WireRequest) -> WireRequest {
+    fn before_provider_request(self, wire: WireRequest) -> WireRequest {
         let Value::Object(fields) = wire.body else {
             return wire;
         };
@@ -96,8 +96,8 @@ async fn provider_document(route: Route, guardrail: Guardrail) -> Value {
         json!({"type": document_type, document_type: format!("{}/scan.png", documents.uri())}),
         route.options(),
     );
-    let host =
-        LocalOcrHost::new(request).with_before_send(move |wire, _| Ok(guardrail.before_send(wire)));
+    let host = LocalOcrHost::new(request)
+        .with_before_send(move |wire, _| Ok(guardrail.before_provider_request(wire)));
 
     perform_with(host).await.unwrap();
 
@@ -139,6 +139,7 @@ async fn a_document_replaced_by_the_host_reaches_the_provider(
     );
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn an_empty_byte_document_fails_before_sending() {
     let upstream = upstream([pages_response()]).await;
@@ -156,6 +157,7 @@ async fn an_empty_byte_document_fails_before_sending() {
     assert!(received(&upstream).await.is_empty());
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn a_missing_path_document_fails_before_sending() {
     let upstream = upstream([pages_response()]).await;

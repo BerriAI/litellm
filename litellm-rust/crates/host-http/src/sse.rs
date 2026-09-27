@@ -1,49 +1,58 @@
-use std::{convert::Infallible, marker::PhantomData};
-
+use axum::response::{IntoResponse, Response};
 use bytes::Bytes;
-use http::{HeaderValue, Response, header::CONTENT_TYPE};
+use http::{HeaderValue, header::CONTENT_TYPE};
 use litellm_host::protocol::Protocol;
 
-use crate::{Error, StreamAdapter};
+use crate::{Error, ResponseEncoder, StreamEncoder, Unary};
 
-pub struct Sse<P, F> {
+pub struct Sse<P, C, F> {
+    response: Unary<P, C>,
     stream_error: F,
-    protocol: PhantomData<fn() -> P>,
 }
 
-impl<P, F> Sse<P, F> {
-    pub fn new(stream_error: F) -> Self {
+impl<P, C, F> Sse<P, C, F> {
+    pub fn new(response: C, stream_error: F) -> Self {
         Self {
+            response: Unary::new(response),
             stream_error,
-            protocol: PhantomData,
         }
     }
 }
 
-impl<P, F> StreamAdapter for Sse<P, F>
+impl<P, C, F, R> ResponseEncoder for Sse<P, C, F>
 where
-    P: Protocol<Op = Infallible, Chunk = Bytes>,
-    F: Fn(Error<P::Error>) -> Bytes + Send + Sync + 'static,
+    P: Protocol,
+    C: Fn(P::Response) -> R + Send + Sync,
+    F: Send + Sync,
+    R: IntoResponse,
 {
     type Protocol = P;
 
-    async fn custom_op(&self, op: Infallible) -> Result<(), P::Error> {
-        match op {}
+    fn encode_response(&self, response: P::Response) -> Result<Response, P::Error> {
+        self.response.encode_response(response)
     }
+}
 
-    fn head(&self, _: P::StreamHead) -> Result<Response<()>, P::Error> {
-        let mut response = Response::new(());
+impl<P, C, F, R> StreamEncoder for Sse<P, C, F>
+where
+    P: Protocol<Chunk = Bytes>,
+    C: Fn(P::Response) -> R + Send + Sync + 'static,
+    F: Fn(Error<P::Error>) -> Bytes + Send + Sync + 'static,
+    R: IntoResponse,
+{
+    fn encode_stream_head(&self, _: P::StreamHead) -> Result<http::Response<()>, P::Error> {
+        let mut response = http::Response::new(());
         response
             .headers_mut()
             .insert(CONTENT_TYPE, HeaderValue::from_static("text/event-stream"));
         Ok(response)
     }
 
-    fn chunk(&self, chunk: Bytes) -> Result<Bytes, P::Error> {
+    fn encode_chunk(&self, chunk: Bytes) -> Result<Bytes, P::Error> {
         Ok(chunk)
     }
 
-    fn stream_error(&self, error: Error<P::Error>) -> Bytes {
+    fn encode_stream_error(&self, error: Error<P::Error>) -> Bytes {
         (self.stream_error)(error)
     }
 }

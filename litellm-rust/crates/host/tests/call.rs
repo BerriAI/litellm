@@ -1,3 +1,4 @@
+use litellm_host::protocol::StreamDelivery;
 use std::{
     convert::Infallible,
     sync::{
@@ -8,11 +9,11 @@ use std::{
 
 use futures_util::{StreamExt, stream};
 use litellm_host::{
-    call::{CallObserver, CallOutput, HostedCompletion, hosted_call, observe_call, observe_unary},
+    call::{CallOutput, HostedCompletion, hosted_call},
     event::CallEvent,
-    host::{Demand, HostOp},
+    lifecycle::{CallObserver, observe_call, observe_unary},
     machine::{Machine, MachineFault, MachineStep},
-    protocol::Protocol,
+    protocol::{Demand, Protocol, Suspension},
 };
 use rstest::{fixture, rstest};
 
@@ -24,8 +25,8 @@ struct TestProtocol;
 impl Protocol for TestProtocol {
     type Response = &'static str;
     type Error = TestError;
-    type Projection = usize;
-    type Op = Infallible;
+    type Request = usize;
+    type HostCall = Infallible;
     type Chunk = usize;
     type StreamHead = &'static str;
 }
@@ -48,7 +49,7 @@ async fn delivery_obeys_demand_and_distinguishes_detachment(
 ) {
     let polls = Arc::new(AtomicUsize::new(0));
     let stream_polls = polls.clone();
-    let mut machine = hosted_call::<TestProtocol, _, _>(move |count, _| async move {
+    let mut machine = hosted_call::<TestProtocol, _, _>(3, move |count, _, _| async move {
         let chunks = stream::iter((0..count).map(Ok))
             .inspect(move |_| {
                 stream_polls.fetch_add(1, Ordering::SeqCst);
@@ -59,12 +60,9 @@ async fn delivery_obeys_demand_and_distinguishes_detachment(
             chunks,
         })
     });
-    let MachineStep::Host(HostOp::Project(reply)) = machine.resume().await.unwrap() else {
-        panic!()
-    };
-    assert_eq!(polls.load(Ordering::SeqCst), 0);
-    reply.send(3);
-    let MachineStep::Host(HostOp::Open(head, reply)) = machine.resume().await.unwrap() else {
+    let MachineStep::Suspended(Suspension::Stream(StreamDelivery::Open(head, reply))) =
+        machine.resume().await.unwrap()
+    else {
         panic!()
     };
     assert_eq!(head, "headers");
@@ -77,7 +75,7 @@ async fn delivery_obeys_demand_and_distinguishes_detachment(
     let mut delivered = Vec::new();
     let completed = loop {
         match machine.resume().await.unwrap() {
-            MachineStep::Host(HostOp::Deliver(chunk, reply)) => {
+            MachineStep::Suspended(Suspension::Stream(StreamDelivery::Chunk(chunk, reply))) => {
                 delivered.push(chunk);
                 assert_eq!(polls.load(Ordering::SeqCst), delivered.len());
                 reply.send(if detach_after == Some(delivered.len()) {
@@ -191,31 +189,33 @@ async fn cancelling_provider_execution_releases_the_lifecycle(observer: Arc<Obse
 #[rstest]
 #[tokio::test]
 async fn a_hosted_detachment_is_reported_as_cancellation(observer: Arc<Observer>) {
-    struct DetachingHost(Arc<Observer>);
-    impl litellm_host::host::Host<TestProtocol> for DetachingHost {
-        async fn project(&self) -> Result<usize, TestError> {
-            Ok(1)
-        }
-        async fn custom_op(&self, op: Infallible) -> Result<(), TestError> {
-            match op {}
-        }
-        async fn open(&self, _: &'static str) -> Result<Demand, TestError> {
+    struct DetachingConsumer;
+    impl litellm_host::in_process::StreamConsumer<TestProtocol> for DetachingConsumer {
+        async fn open_stream(&self, _: &'static str) -> Result<Demand, TestError> {
             Ok(Demand::Detached)
         }
-        async fn emit(&self, event: &CallEvent) -> Result<(), TestError> {
-            self.0.observe(event.clone());
-            Ok(())
+        async fn send_chunk(&self, _: usize) -> Result<Demand, TestError> {
+            panic!("detached consumers must not receive chunks")
         }
     }
-    let machine = hosted_call::<TestProtocol, _, _>(|count, _| async move {
+
+    let machine = hosted_call::<TestProtocol, _, _>(1, |count, _, _| async move {
         Ok(CallOutput::Stream {
             head: "headers",
             chunks: stream::iter((0..count).map(Ok)).boxed(),
         })
     });
-    let completion = litellm_host::run::run_hosted(machine, &DetachingHost(observer.clone()))
-        .await
-        .unwrap();
+    let completion = litellm_host::in_process::run_hosted(
+        machine,
+        litellm_host::in_process::Host {
+            services: &(),
+            hooks: &(),
+            stream: &DetachingConsumer,
+            observer: Some(observer.as_ref()),
+        },
+    )
+    .await
+    .unwrap();
     assert_eq!(completion, HostedCompletion::Detached);
     assert!(matches!(
         &observer.0.lock().unwrap()[..],

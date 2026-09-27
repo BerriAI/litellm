@@ -48,7 +48,7 @@ pub(super) async fn execute(
     };
     let authenticated = resolve_auth(auth, environment, &|key| std::env::var(key).ok()).await?;
     let wire = hooks
-        .before_send(
+        .before_provider_request(
             WireRequest {
                 url,
                 headers: authenticated.headers,
@@ -89,7 +89,7 @@ pub(super) async fn execute(
     let text = response.text().await.map_err(network)?;
     debug!(body = text.as_str(), "provider response body");
     hooks
-        .emit(MachineEvent::ResponseReceived {
+        .on_event(MachineEvent::ResponseReceived {
             raw: RawResponse { body: text.clone() },
         })
         .await
@@ -216,6 +216,7 @@ mod tests {
         "data: {\"type\":\"ping\"}\n\n",
         Some("event: ping\ndata: {\"type\":\"ping\"}\n\n")
     )]
+    #[rstest::rstest]
     #[case::invalid_event("data: invalid\n\ndata: {\"type\":\"ping\"}\n\n", None)]
     #[tokio::test]
     async fn decoded_streams_encode_events_and_stop_at_the_first_error(

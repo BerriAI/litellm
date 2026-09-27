@@ -12,8 +12,8 @@ struct DiagnosticMachine;
 impl Protocol for DiagnosticMachine {
     type Response = ();
     type Error = String;
-    type Projection = ();
-    type Op = ();
+    type Request = ();
+    type HostCall = ();
     type Chunk = ();
     type StreamHead = ();
 }
@@ -109,7 +109,7 @@ fn http_warning(py: Python<'_>) -> PyResult<()> {
     crate::http::call_config(py, &PyDict::new(py), false).map(|_| ())
 }
 
-#[test]
+#[rstest::rstest]
 fn native_events_reach_python_with_levels_context_reentry_and_http_deduplication() {
     if std::env::var_os("LITELLM_LOGGER_TEST_PROCESS").is_none() {
         let output = Command::new(std::env::current_exe().unwrap())

@@ -1,6 +1,6 @@
 use litellm_core::ocr::{
     document::prepare_document,
-    route::{Ocr, OcrOp, OcrProjection, ocr_machine},
+    route::{Ocr, OcrCall, OcrOp, ocr_machine},
     types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, decode_request},
 };
@@ -48,7 +48,7 @@ async fn perform(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error
 }
 
 async fn perform_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Error> {
-    litellm_host::run::run_hosted(ocr_machine(ocr_client()), &host)
+    litellm_host::in_process::run_hosted(ocr_machine(ocr_client())(host.request()?), host.runtime())
         .await
         .map(completed)
 }
@@ -140,7 +140,7 @@ type Observer = Box<dyn Fn(&CallEvent) + Send + Sync>;
 
 struct LocalOcrHost {
     request: Mutex<Option<LiteLLMOcrRequest<OcrDocumentInput>>>,
-    before_send: Option<BeforeSend>,
+    before_provider_request: Option<BeforeSend>,
     observer: Option<Observer>,
 }
 
@@ -148,20 +148,20 @@ impl LocalOcrHost {
     fn new(request: LiteLLMOcrRequest<OcrDocumentInput>) -> Self {
         Self {
             request: Mutex::new(Some(request)),
-            before_send: None,
+            before_provider_request: None,
             observer: None,
         }
     }
 
     fn with_before_send(
         self,
-        before_send: impl Fn(WireRequest, &RequestContext) -> Result<WireRequest, Error>
+        before_provider_request: impl Fn(WireRequest, &RequestContext) -> Result<WireRequest, Error>
         + Send
         + Sync
         + 'static,
     ) -> Self {
         Self {
-            before_send: Some(Box::new(before_send)),
+            before_provider_request: Some(Box::new(before_provider_request)),
             ..self
         }
     }
@@ -174,20 +174,29 @@ impl LocalOcrHost {
     }
 }
 
-impl litellm_host::host::Host<Ocr> for LocalOcrHost {
-    async fn project(&self) -> Result<OcrProjection, Error> {
+impl LocalOcrHost {
+    pub fn request(&self) -> Result<OcrCall, Error> {
         self.request
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take()
-            .map(|request| OcrProjection {
+            .map(|request| OcrCall {
                 request,
                 caller_token: false,
             })
             .ok_or_else(|| Error::InvalidRequest("OCR request was already projected".into()))
     }
-
-    async fn custom_op(&self, op: OcrOp) -> Result<(), Error> {
+    pub fn runtime(&self) -> litellm_host::in_process::Host<'_, Self, Self, ()> {
+        litellm_host::in_process::Host {
+            services: self,
+            hooks: self,
+            stream: &(),
+            observer: Some(self),
+        }
+    }
+}
+impl litellm_host::services::HostCallHandler<Ocr> for LocalOcrHost {
+    async fn handle_host_call(&self, op: OcrOp) -> Result<(), Error> {
         match op {
             OcrOp::AcquireAzureAdToken(_) => {
                 Err(Error::Auth(litellm_auth::Error::AzureTokenAcquisition(
@@ -196,22 +205,36 @@ impl litellm_host::host::Host<Ocr> for LocalOcrHost {
             }
         }
     }
+}
 
-    async fn before_send(
+impl litellm_host::lifecycle::CallObserver for LocalOcrHost {
+    fn observe(&self, event: litellm_host::event::CallEvent) {
+        if let Some(observer) = &self.observer {
+            observer(&event);
+        }
+    }
+}
+impl litellm_host::hooks::RouteHooks<<Ocr as litellm_host::protocol::Protocol>::Error>
+    for LocalOcrHost
+{
+    async fn before_provider_request(
         &self,
         wire: WireRequest,
-        context: &RequestContext,
+        context: RequestContext,
     ) -> Result<WireRequest, Error> {
-        match &self.before_send {
-            Some(before_send) => before_send(wire, context),
+        match &self.before_provider_request {
+            Some(before_provider_request) => before_provider_request(wire, &context),
             None => Ok(wire),
         }
     }
-
-    async fn emit(&self, event: &CallEvent) -> Result<(), Error> {
-        if let Some(observer) = &self.observer {
-            observer(event);
-        }
+    async fn on_event(
+        &self,
+        event: litellm_host::event::MachineEvent,
+    ) -> Result<(), <Ocr as litellm_host::protocol::Protocol>::Error> {
+        litellm_host::lifecycle::CallObserver::observe(
+            self,
+            litellm_host::event::CallEvent::Machine(event),
+        );
         Ok(())
     }
 }

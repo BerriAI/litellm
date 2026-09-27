@@ -1,7 +1,4 @@
-use std::{
-    convert::Infallible,
-    sync::{Mutex, mpsc},
-};
+use std::sync::{Mutex, mpsc};
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
@@ -9,7 +6,7 @@ use litellm_core::messages::{
     MessagesResponse, messages,
     route::{Messages, MessagesStreamHead},
 };
-use litellm_host::host::{Demand, Host};
+use litellm_host::protocol::Demand;
 use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::rstest;
 use tokio::{
@@ -73,21 +70,53 @@ impl RecordingStreamHost {
     }
 }
 
-impl Host<Messages> for RecordingStreamHost {
-    async fn project(&self) -> Result<MessagesCall, Error> {
-        self.call.project().await
+impl RecordingStreamHost {
+    pub fn request(&self) -> Result<MessagesCall, Error> {
+        self.call.request()
     }
-
-    async fn custom_op(&self, op: Infallible) -> Result<(), Error> {
-        match op {}
+    pub fn runtime(&self) -> litellm_host::in_process::Host<'_, (), Self, Self> {
+        litellm_host::in_process::Host {
+            services: &(),
+            hooks: self,
+            stream: self,
+            observer: Some(self),
+        }
     }
+}
 
-    async fn open(&self, head: MessagesStreamHead) -> Result<Demand, Error> {
+impl litellm_host::in_process::StreamConsumer<Messages> for RecordingStreamHost {
+    async fn open_stream(&self, head: MessagesStreamHead) -> Result<Demand, Error> {
         Ok(self.record(Seen::Open(head.headers)))
     }
-
-    async fn deliver(&self, chunk: Bytes) -> Result<Demand, Error> {
+    async fn send_chunk(&self, chunk: Bytes) -> Result<Demand, Error> {
         Ok(self.record(Seen::Deliver(chunk)))
+    }
+}
+impl litellm_host::lifecycle::CallObserver for RecordingStreamHost {
+    fn observe(&self, _: litellm_host::event::CallEvent) {}
+}
+impl litellm_host::hooks::RouteHooks<<Messages as litellm_host::protocol::Protocol>::Error>
+    for RecordingStreamHost
+{
+    async fn before_provider_request(
+        &self,
+        wire: litellm_host::event::WireRequest,
+        _: litellm_host::event::RequestContext,
+    ) -> Result<
+        litellm_host::event::WireRequest,
+        <Messages as litellm_host::protocol::Protocol>::Error,
+    > {
+        Ok(wire)
+    }
+    async fn on_event(
+        &self,
+        event: litellm_host::event::MachineEvent,
+    ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
+        litellm_host::lifecycle::CallObserver::observe(
+            self,
+            litellm_host::event::CallEvent::Machine(event),
+        );
+        Ok(())
     }
 }
 
@@ -107,7 +136,11 @@ fn sse_response() -> ResponseTemplate {
 }
 
 async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Error> {
-    litellm_host::run::run_hosted(machine(Arc::new(RecordingSecrets::empty())), host).await
+    litellm_host::in_process::run_hosted(
+        machine(Arc::new(RecordingSecrets::empty()))(host.request()?),
+        host.runtime(),
+    )
+    .await
 }
 
 #[rstest]
@@ -196,6 +229,7 @@ async fn a_detached_caller_receives_nothing_more(call: MessagesCall, #[case] det
     status_response(429, json!({"type": "error", "error": {"type": "rate_limit_error", "message": "slow down"}})),
     r#"{"type":"error","error":{"type":"rate_limit_error","message":"slow down"}}"#
 )]
+#[rstest::rstest]
 #[tokio::test]
 async fn an_upstream_error_fails_the_call_without_opening_the_stream(
     call: MessagesCall,

@@ -1,7 +1,9 @@
 //! The one machine every route runs on: the route's provider future as a
-//! [`Coroutine`] that yields [`HostOp`]s, each answered through its own typed reply. No
+//! [`Coroutine`] that yields [`Suspension`]s, each answered through its own typed reply. No
 //! task is spawned; dropping the machine drops the in-flight call.
 
+use crate::protocol::HookRequest;
+use crate::protocol::StreamDelivery;
 use std::{future::Future, pin::Pin};
 
 use litellm_coroutine::{Co, Coroutine, CoroutineState, ResumeError};
@@ -9,8 +11,7 @@ use litellm_coroutine::{Co, Coroutine, CoroutineState, ResumeError};
 use super::{HostFailure, Interrupted, Machine, MachineStep, Step};
 use crate::{
     event::{MachineEvent, RequestContext, WireRequest},
-    host::{Demand, HostOp, Reply},
-    protocol::Protocol,
+    protocol::{Demand, Protocol, Reply, Suspension},
 };
 
 /// The machine's own failures, distinct from anything the provider call reports.
@@ -25,73 +26,112 @@ pub enum MachineFault {
 pub type ExecuteFuture<R, C = <R as Protocol>::Response> =
     Pin<Box<dyn Future<Output = Result<C, <R as Protocol>::Error>> + Send>>;
 
-/// The provider side of the machine: how the in-flight call reaches its host.
-pub struct HostChannel<R: Protocol> {
-    co: Co<HostOp<R>>,
+pub struct CallContext<P: Protocol> {
+    pub services: HostServices<P>,
+    pub hooks: ChannelHooks<P>,
+    pub stream: StreamSender<P>,
 }
 
-impl<R: Protocol> Clone for HostChannel<R> {
+struct Channel<P: Protocol>(Co<Suspension<P>>);
+
+impl<P: Protocol> Clone for Channel<P> {
     fn clone(&self) -> Self {
-        Self {
-            co: self.co.clone(),
-        }
+        Self(self.0.clone())
     }
 }
 
-impl<R: Protocol> HostChannel<R>
+impl<P: Protocol> Channel<P>
 where
-    R::Error: From<MachineFault>,
+    P::Error: From<MachineFault>,
 {
-    async fn yield_<A: Send>(
+    async fn request_reply<A: Send>(
         &self,
-        ask: impl FnOnce(Reply<A>) -> HostOp<R> + Send,
-    ) -> Result<A, R::Error> {
-        self.co
-            .yield_(ask)
+        request: impl FnOnce(Reply<A>) -> Suspension<P> + Send,
+    ) -> Result<A, P::Error> {
+        self.0
+            .yield_(request)
             .await
             .map_err(|_| MachineFault::Abandoned.into())
     }
+}
 
-    pub async fn project(&self) -> Result<R::Projection, R::Error> {
-        self.yield_(HostOp::Project).await
-    }
+pub struct HostServices<P: Protocol>(Channel<P>);
 
-    /// Asks the host to perform the custom operation `ask` builds around its reply, as in
-    /// `host.custom_op(OcrOp::AcquireAzureAdToken)`.
-    pub async fn custom_op<A: Send>(
-        &self,
-        ask: impl FnOnce(Reply<A>) -> R::Op + Send,
-    ) -> Result<A, R::Error> {
-        self.yield_(|reply| HostOp::Custom(ask(reply))).await
-    }
-
-    pub async fn before_send(
-        &self,
-        wire: WireRequest,
-        context: RequestContext,
-    ) -> Result<WireRequest, R::Error> {
-        self.yield_(|reply| HostOp::BeforeSend {
-            wire: Box::new(wire),
-            context: Box::new(context),
-            reply,
-        })
-        .await
-    }
-
-    pub async fn emit(&self, event: MachineEvent) -> Result<(), R::Error> {
-        self.yield_(|reply| HostOp::Emit(event, reply)).await
-    }
-
-    pub async fn open(&self, head: R::StreamHead) -> Result<Demand, R::Error> {
-        self.yield_(|reply| HostOp::Open(head, reply)).await
-    }
-
-    pub async fn deliver(&self, chunk: R::Chunk) -> Result<Demand, R::Error> {
-        self.yield_(|reply| HostOp::Deliver(chunk, reply)).await
+impl<P: Protocol> Clone for HostServices<P> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
     }
 }
 
-type CallCoroutine<R, C> = Coroutine<HostOp<R>, Result<C, <R as Protocol>::Error>>;
+impl<P: Protocol> HostServices<P>
+where
+    P::Error: From<MachineFault>,
+{
+    pub async fn call<A: Send>(
+        &self,
+        request: impl FnOnce(Reply<A>) -> P::HostCall + Send,
+    ) -> Result<A, P::Error> {
+        self.0
+            .request_reply(|reply| Suspension::HostCall(request(reply)))
+            .await
+    }
+}
+
+pub struct ChannelHooks<P: Protocol>(Channel<P>);
+
+impl<P: Protocol> Clone for ChannelHooks<P> {
+    fn clone(&self) -> Self {
+        Self(self.0.clone())
+    }
+}
+
+impl<P: Protocol> crate::hooks::RouteHooks<P::Error> for ChannelHooks<P>
+where
+    P::Error: From<MachineFault>,
+{
+    async fn before_provider_request(
+        &self,
+        wire: WireRequest,
+        context: RequestContext,
+    ) -> Result<WireRequest, P::Error> {
+        self.0
+            .request_reply(|reply| {
+                Suspension::Hook(HookRequest::BeforeProviderRequest {
+                    wire: Box::new(wire),
+                    context: Box::new(context),
+                    reply,
+                })
+            })
+            .await
+    }
+
+    async fn on_event(&self, event: MachineEvent) -> Result<(), P::Error> {
+        self.0
+            .request_reply(|reply| Suspension::Hook(HookRequest::Event(event, reply)))
+            .await
+    }
+}
+
+pub struct StreamSender<P: Protocol>(Channel<P>);
+
+impl<P: Protocol> StreamSender<P>
+where
+    P::Error: From<MachineFault>,
+{
+    pub async fn open_stream(&self, head: P::StreamHead) -> Result<Demand, P::Error> {
+        self.0
+            .request_reply(|reply| Suspension::Stream(StreamDelivery::Open(head, reply)))
+            .await
+    }
+
+    pub async fn send_chunk(&self, chunk: P::Chunk) -> Result<Demand, P::Error> {
+        self.0
+            .request_reply(|reply| Suspension::Stream(StreamDelivery::Chunk(chunk, reply)))
+            .await
+    }
+}
+
+type CallCoroutine<R, C> = Coroutine<Suspension<R>, Result<C, <R as Protocol>::Error>>;
 
 pub struct CallMachine<R: Protocol, C = <R as Protocol>::Response> {
     coroutine: CallCoroutine<R, C>,
@@ -102,10 +142,17 @@ where
     R::Error: From<MachineFault>,
 {
     pub fn new(
-        execute: impl FnOnce(HostChannel<R>) -> ExecuteFuture<R, C> + Send + 'static,
+        execute: impl FnOnce(CallContext<R>) -> ExecuteFuture<R, C> + Send + 'static,
     ) -> Self {
         Self {
-            coroutine: Coroutine::new(|co| execute(HostChannel { co })),
+            coroutine: Coroutine::new(|co| {
+                let channel = Channel(co);
+                execute(CallContext {
+                    services: HostServices(channel.clone()),
+                    hooks: ChannelHooks(channel.clone()),
+                    stream: StreamSender(channel),
+                })
+            }),
         }
     }
 }
@@ -125,7 +172,7 @@ where
                 .await
                 .map_err(MachineFault::Protocol)?
             {
-                CoroutineState::Yielded(op) => Ok(MachineStep::Host(op)),
+                CoroutineState::Yielded(op) => Ok(MachineStep::Suspended(op)),
                 CoroutineState::Complete(outcome) => outcome.map(MachineStep::Complete),
             }
         })

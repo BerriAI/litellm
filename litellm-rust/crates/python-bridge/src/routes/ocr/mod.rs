@@ -57,7 +57,7 @@ fn run_ocr(
         py,
         if asynchronous { ASYNC_SURFACE } else { SURFACE },
         PublicCall::capture(&request, &args, &kwargs)?,
-        crate::logger::LoggedMachine::new(ocr_machine(client)),
+        move |request| crate::logger::LoggedMachine::new(ocr_machine(client)(request)),
         OcrPythonHost::new(request.unbind()),
         crate::preflight::sdk_preflight,
         asynchronous,
@@ -127,7 +127,7 @@ mod tests {
 
     use crate::python_settings::PythonSettings;
 
-    #[test]
+    #[rstest::rstest]
     fn provider_defaults_distinguish_falsey_values_and_exact_true() {
         Python::initialize();
         Python::attach(|py| {

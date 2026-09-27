@@ -1,52 +1,35 @@
 use std::future::Future;
 
-use crate::{
-    event::{MachineEvent, RequestContext, WireRequest},
-    machine::{HostChannel, MachineFault},
-    protocol::Protocol,
-};
+use crate::event::{MachineEvent, RequestContext, WireRequest};
 
 /// What a route reaches for mid-call: the send-time rewrite and the events it reports.
 /// Python's `logging_obj.pre_call` and `post_call`, in that order.
 pub trait RouteHooks<E>: Send + Sync {
-    fn observer(&self) -> Option<std::sync::Arc<dyn crate::call::CallObserver>> {
+    fn observer(&self) -> Option<std::sync::Arc<dyn crate::lifecycle::CallObserver>> {
         None
     }
 
-    fn before_send(
+    fn before_provider_request(
         &self,
         wire: WireRequest,
         context: RequestContext,
     ) -> impl Future<Output = Result<WireRequest, E>> + Send;
 
-    fn emit(&self, event: MachineEvent) -> impl Future<Output = Result<(), E>> + Send;
+    fn on_event(&self, event: MachineEvent) -> impl Future<Output = Result<(), E>> + Send;
 }
 
 /// No host: the wire request goes out as prepared and nothing observes the call.
 impl<E> RouteHooks<E> for () {
-    async fn before_send(&self, wire: WireRequest, _: RequestContext) -> Result<WireRequest, E> {
+    async fn before_provider_request(
+        &self,
+        wire: WireRequest,
+        _: RequestContext,
+    ) -> Result<WireRequest, E> {
         Ok(wire)
     }
 
-    async fn emit(&self, _: MachineEvent) -> Result<(), E> {
+    async fn on_event(&self, _: MachineEvent) -> Result<(), E> {
         Ok(())
-    }
-}
-
-impl<R: Protocol> RouteHooks<R::Error> for HostChannel<R>
-where
-    R::Error: From<MachineFault>,
-{
-    async fn before_send(
-        &self,
-        wire: WireRequest,
-        context: RequestContext,
-    ) -> Result<WireRequest, R::Error> {
-        HostChannel::before_send(self, wire, context).await
-    }
-
-    async fn emit(&self, event: MachineEvent) -> Result<(), R::Error> {
-        HostChannel::emit(self, event).await
     }
 }
 
@@ -57,10 +40,13 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::protocol::HookRequest;
     use crate::{
         event::RawResponse,
-        host::HostOp,
+        machine::MachineFault,
         machine::{CallMachine, Machine, MachineStep},
+        protocol::Protocol,
+        protocol::Suspension,
     };
 
     struct Unit;
@@ -71,8 +57,8 @@ mod tests {
     impl Protocol for Unit {
         type Response = (WireRequest, ());
         type Error = Fault;
-        type Projection = ();
-        type Op = Infallible;
+        type Request = ();
+        type HostCall = Infallible;
         type Chunk = Infallible;
         type StreamHead = Infallible;
     }
@@ -101,13 +87,19 @@ mod tests {
         }
     }
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn the_channel_yields_each_hook_as_its_op_and_returns_the_answer() {
         let mut machine = CallMachine::<Unit>::new(|channel| {
             Box::pin(async move {
-                let sent = RouteHooks::before_send(&channel, wire("prepared"), context()).await?;
-                RouteHooks::emit(
-                    &channel,
+                let sent = RouteHooks::before_provider_request(
+                    &channel.hooks,
+                    wire("prepared"),
+                    context(),
+                )
+                .await?;
+                RouteHooks::on_event(
+                    &channel.hooks,
                     MachineEvent::ResponseReceived {
                         raw: RawResponse { body: "raw".into() },
                     },
@@ -117,9 +109,13 @@ mod tests {
             })
         });
 
-        let Ok(MachineStep::Host(HostOp::BeforeSend { wire, reply, .. })) = machine.resume().await
+        let Ok(MachineStep::Suspended(Suspension::Hook(HookRequest::BeforeProviderRequest {
+            wire,
+            reply,
+            ..
+        }))) = machine.resume().await
         else {
-            panic!("before_send yields BeforeSend");
+            panic!("before_provider_request yields BeforeSend");
         };
         assert_eq!(wire.url, "prepared");
         reply.send(WireRequest {
@@ -127,8 +123,10 @@ mod tests {
             ..*wire
         });
 
-        let Ok(MachineStep::Host(HostOp::Emit(event, reply))) = machine.resume().await else {
-            panic!("emit yields Emit");
+        let Ok(MachineStep::Suspended(Suspension::Hook(HookRequest::Event(event, reply)))) =
+            machine.resume().await
+        else {
+            panic!("on_event yields Emit");
         };
         assert!(matches!(event, MachineEvent::ResponseReceived { .. }));
         reply.send(());
@@ -139,9 +137,10 @@ mod tests {
         assert_eq!(sent.url, "rewritten");
     }
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn no_hooks_pass_the_wire_request_through() {
-        let sent = RouteHooks::<Fault>::before_send(&(), wire("prepared"), context())
+        let sent = RouteHooks::<Fault>::before_provider_request(&(), wire("prepared"), context())
             .await
             .unwrap();
         assert_eq!(sent.url, "prepared");

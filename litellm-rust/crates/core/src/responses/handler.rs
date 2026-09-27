@@ -20,7 +20,7 @@ pub(super) async fn execute(
 ) -> Result<ResponsesOutput, Error> {
     let authenticated = resolve_auth(auth, request.environment, &|_| None).await?;
     let wire = hooks
-        .before_send(
+        .before_provider_request(
             WireRequest {
                 url: request.url,
                 headers: authenticated.headers,
@@ -70,7 +70,7 @@ pub(super) async fn execute(
     }
     let body = response.text().await.map_err(network)?;
     hooks
-        .emit(MachineEvent::ResponseReceived {
+        .on_event(MachineEvent::ResponseReceived {
             raw: RawResponse { body: body.clone() },
         })
         .await

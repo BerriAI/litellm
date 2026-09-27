@@ -162,6 +162,7 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsReq
 #[case::missing_usage(
     r#"{"model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}"#
 )]
+#[rstest::rstest]
 #[case::tool_use_block(r#"{"model":"m","content":[{"type":"tool_use","id":"t","name":"f","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}"#)]
 #[case::not_json("not json")]
 #[tokio::test]
@@ -348,9 +349,11 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
         .into(),
     );
     let response = if hosted {
-        let result = litellm_host::run::run_hosted(
-            chat_completions_machine(&resources(), &http_config()).unwrap(),
-            &host,
+        let result = litellm_host::in_process::run_hosted(
+            chat_completions_machine(&resources(), &http_config()).unwrap()(
+                host.request().unwrap(),
+            ),
+            host.runtime(),
         )
         .await
         .unwrap();
@@ -408,14 +411,14 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
     };
     struct FailingHook;
     impl RouteHooks<Error> for FailingHook {
-        async fn before_send(
+        async fn before_provider_request(
             &self,
             wire: WireRequest,
             _: RequestContext,
         ) -> Result<WireRequest, Error> {
             Ok(wire)
         }
-        async fn emit(&self, _: MachineEvent) -> Result<(), Error> {
+        async fn on_event(&self, _: MachineEvent) -> Result<(), Error> {
             Err(Error::InvalidRequest("callback rejected".into()))
         }
     }

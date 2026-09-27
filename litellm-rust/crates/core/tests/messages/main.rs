@@ -1,5 +1,3 @@
-use litellm_host::host::Host;
-use std::convert::Infallible;
 use std::{
     sync::{Arc, Mutex},
     time::Duration,
@@ -100,7 +98,7 @@ fn headers<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Option<Ma
     )
 }
 
-fn machine(secrets: Arc<dyn SecretSource>) -> MessagesMachine {
+fn machine(secrets: Arc<dyn SecretSource>) -> impl FnOnce(MessagesCall) -> MessagesMachine {
     messages_machine(&support::resources(), &http_config(), secrets)
         .expect("default HTTP settings build a client")
 }
@@ -109,7 +107,8 @@ async fn run_with(
     secrets: Arc<RecordingSecrets>,
     call: MessagesCall,
 ) -> Result<MessagesOutput, Error> {
-    litellm_host::run::run_hosted(machine(secrets), &LocalMessagesHost::new(call)).await
+    let host = LocalMessagesHost::new(call);
+    litellm_host::in_process::run_hosted(machine(secrets)(host.request()?), host.runtime()).await
 }
 
 /// Runs the route with a secret source that knows nothing, so no environment leaks in.
@@ -138,16 +137,48 @@ impl LocalMessagesHost {
     }
 }
 
-impl Host<Messages> for LocalMessagesHost {
-    async fn project(&self) -> Result<MessagesCall, Error> {
+impl LocalMessagesHost {
+    pub fn request(&self) -> Result<MessagesCall, Error> {
         self.call
             .lock()
             .unwrap_or_else(|error| error.into_inner())
             .take()
             .ok_or_else(|| Error::InvalidRequest("messages request was already projected".into()))
     }
+    pub fn runtime(&self) -> litellm_host::in_process::Host<'_, (), Self, ()> {
+        litellm_host::in_process::Host {
+            services: &(),
+            hooks: self,
+            stream: &(),
+            observer: Some(self),
+        }
+    }
+}
 
-    async fn custom_op(&self, op: Infallible) -> Result<(), Error> {
-        match op {}
+impl litellm_host::lifecycle::CallObserver for LocalMessagesHost {
+    fn observe(&self, _: litellm_host::event::CallEvent) {}
+}
+impl litellm_host::hooks::RouteHooks<<Messages as litellm_host::protocol::Protocol>::Error>
+    for LocalMessagesHost
+{
+    async fn before_provider_request(
+        &self,
+        wire: litellm_host::event::WireRequest,
+        _: litellm_host::event::RequestContext,
+    ) -> Result<
+        litellm_host::event::WireRequest,
+        <Messages as litellm_host::protocol::Protocol>::Error,
+    > {
+        Ok(wire)
+    }
+    async fn on_event(
+        &self,
+        event: litellm_host::event::MachineEvent,
+    ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
+        litellm_host::lifecycle::CallObserver::observe(
+            self,
+            litellm_host::event::CallEvent::Machine(event),
+        );
+        Ok(())
     }
 }

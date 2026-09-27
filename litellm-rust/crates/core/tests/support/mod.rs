@@ -170,7 +170,7 @@ impl SecretSource for RecordingSecrets {
 }
 
 pub struct RecordingCall<P: litellm_host::protocol::Protocol> {
-    pub request: Mutex<Option<P::Projection>>,
+    pub request: Mutex<Option<P::Request>>,
     pub events: Arc<CallEvents>,
     pub chunks: Mutex<Vec<P::Chunk>>,
     pub head: Mutex<Option<P::StreamHead>>,
@@ -179,14 +179,14 @@ pub struct RecordingCall<P: litellm_host::protocol::Protocol> {
 #[derive(Default)]
 pub struct CallEvents(pub Mutex<Vec<litellm_host::event::CallEvent>>);
 
-impl litellm_host::call::CallObserver for CallEvents {
+impl litellm_host::lifecycle::CallObserver for CallEvents {
     fn observe(&self, event: litellm_host::event::CallEvent) {
         self.0.lock().unwrap().push(event);
     }
 }
 
 impl<P: litellm_host::protocol::Protocol> RecordingCall<P> {
-    pub fn new(request: P::Projection) -> Self {
+    pub fn new(request: P::Request) -> Self {
         Self {
             request: Mutex::new(Some(request)),
             events: Arc::new(CallEvents::default()),
@@ -199,11 +199,11 @@ impl<P: litellm_host::protocol::Protocol> RecordingCall<P> {
 impl<P: litellm_host::protocol::Protocol> litellm_host::hooks::RouteHooks<P::Error>
     for RecordingCall<P>
 {
-    fn observer(&self) -> Option<Arc<dyn litellm_host::call::CallObserver>> {
+    fn observer(&self) -> Option<Arc<dyn litellm_host::lifecycle::CallObserver>> {
         Some(self.events.clone())
     }
 
-    async fn before_send(
+    async fn before_provider_request(
         &self,
         wire: litellm_host::event::WireRequest,
         _: litellm_host::event::RequestContext,
@@ -218,7 +218,7 @@ impl<P: litellm_host::protocol::Protocol> litellm_host::hooks::RouteHooks<P::Err
         })
     }
 
-    async fn emit(&self, event: litellm_host::event::MachineEvent) -> Result<(), P::Error> {
+    async fn on_event(&self, event: litellm_host::event::MachineEvent) -> Result<(), P::Error> {
         self.events
             .0
             .lock()
@@ -228,43 +228,54 @@ impl<P: litellm_host::protocol::Protocol> litellm_host::hooks::RouteHooks<P::Err
     }
 }
 
-impl<P> litellm_host::host::Host<P> for RecordingCall<P>
+impl<P> RecordingCall<P>
 where
-    P: litellm_host::protocol::Protocol<Op = std::convert::Infallible>,
+    P: litellm_host::protocol::Protocol<HostCall = std::convert::Infallible>,
     P::Error: From<litellm_host::machine::MachineFault>,
 {
-    async fn project(&self) -> Result<P::Projection, P::Error> {
+    pub fn request(&self) -> Result<P::Request, P::Error> {
         self.request
             .lock()
             .unwrap()
             .take()
             .ok_or_else(|| litellm_host::machine::MachineFault::Abandoned.into())
     }
-
-    async fn custom_op(&self, op: std::convert::Infallible) -> Result<(), P::Error> {
-        match op {}
+    pub fn runtime(&self) -> litellm_host::in_process::Host<'_, (), Self, Self> {
+        litellm_host::in_process::Host {
+            services: &(),
+            hooks: self,
+            stream: self,
+            observer: Some(self),
+        }
     }
+}
 
-    async fn before_send(
+impl<P> litellm_host::in_process::StreamConsumer<P> for RecordingCall<P>
+where
+    P: litellm_host::protocol::Protocol<HostCall = std::convert::Infallible>,
+    P::Error: From<litellm_host::machine::MachineFault>,
+{
+    async fn open_stream(
         &self,
-        wire: litellm_host::event::WireRequest,
-        context: &litellm_host::event::RequestContext,
-    ) -> Result<litellm_host::event::WireRequest, P::Error> {
-        litellm_host::hooks::RouteHooks::before_send(self, wire, context.clone()).await
-    }
-
-    async fn emit(&self, event: &litellm_host::event::CallEvent) -> Result<(), P::Error> {
-        self.events.0.lock().unwrap().push(event.clone());
-        Ok(())
-    }
-
-    async fn open(&self, head: P::StreamHead) -> Result<litellm_host::host::Demand, P::Error> {
+        head: P::StreamHead,
+    ) -> Result<litellm_host::protocol::Demand, P::Error> {
         *self.head.lock().unwrap() = Some(head);
-        Ok(litellm_host::host::Demand::More)
+        Ok(litellm_host::protocol::Demand::More)
     }
-
-    async fn deliver(&self, chunk: P::Chunk) -> Result<litellm_host::host::Demand, P::Error> {
+    async fn send_chunk(
+        &self,
+        chunk: P::Chunk,
+    ) -> Result<litellm_host::protocol::Demand, P::Error> {
         self.chunks.lock().unwrap().push(chunk);
-        Ok(litellm_host::host::Demand::More)
+        Ok(litellm_host::protocol::Demand::More)
+    }
+}
+impl<P> litellm_host::lifecycle::CallObserver for RecordingCall<P>
+where
+    P: litellm_host::protocol::Protocol<HostCall = std::convert::Infallible>,
+    P::Error: From<litellm_host::machine::MachineFault>,
+{
+    fn observe(&self, event: litellm_host::event::CallEvent) {
+        self.events.0.lock().unwrap().push(event.clone());
     }
 }

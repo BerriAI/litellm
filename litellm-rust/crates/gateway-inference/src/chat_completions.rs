@@ -40,8 +40,7 @@ async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response,
     let machine =
         chat_completions_machine(&gateway.resources, &gateway.http).map_err(RouteError::from)?;
     let response = litellm_host_http::serve_unary(
-        machine,
-        ChatCompletionsCall {
+        machine(ChatCompletionsCall {
             model: deployment.model.clone(),
             messages,
             optional_params: body
@@ -53,9 +52,10 @@ async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response,
             custom_llm_provider: deployment.custom_llm_provider.clone(),
             extra_headers: None,
             timeout: deployment.timeout,
-        },
+        }),
         (),
-        Json,
+        (),
+        litellm_host_http::Unary::new(Json),
     )
     .await?;
     Ok(response)

@@ -60,7 +60,7 @@ pub async fn chat_completions_with_hooks(
     request: ChatCompletionsRequest<'_>,
     hooks: &impl litellm_host::hooks::RouteHooks<Error>,
 ) -> Result<ChatCompletionsResponse, Error> {
-    litellm_host::call::observe_unary(hooks.observer(), async {
+    litellm_host::lifecycle::observe_unary(hooks.observer(), async {
         let http = resources.pool.client(config, ClientVariant::Provider)?;
         execute(&http, &resources.auth, request, hooks).await
     })

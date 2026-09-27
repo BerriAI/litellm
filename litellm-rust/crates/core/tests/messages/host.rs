@@ -1,10 +1,7 @@
-use std::{convert::Infallible, sync::Mutex};
+use std::sync::Mutex;
 
 use litellm_core::messages::route::Messages;
-use litellm_host::{
-    event::{CallEvent, MachineEvent, RequestContext, WireRequest},
-    host::Host,
-};
+use litellm_host::event::{CallEvent, MachineEvent, RequestContext, WireRequest};
 use litellm_llms::anthropic::common_utils::AnthropicModelCapabilities;
 use rstest::rstest;
 
@@ -12,7 +9,7 @@ use super::*;
 
 type Rewrite = Box<dyn Fn(WireRequest) -> Result<WireRequest, Error> + Send + Sync>;
 
-/// Projects like `LocalMessagesHost`, answers `before_send` through `rewrite`, and keeps
+/// Projects like `LocalMessagesHost`, answers `before_provider_request` through `rewrite`, and keeps
 /// every event the driver emits.
 struct RecordingHost {
     call: LocalMessagesHost,
@@ -50,19 +47,32 @@ impl RecordingHost {
     }
 }
 
-impl Host<Messages> for RecordingHost {
-    async fn project(&self) -> Result<MessagesCall, Error> {
-        self.call.project().await
+impl RecordingHost {
+    pub fn request(&self) -> Result<MessagesCall, Error> {
+        self.call.request()
     }
-
-    async fn custom_op(&self, op: Infallible) -> Result<(), Error> {
-        match op {}
+    pub fn runtime(&self) -> litellm_host::in_process::Host<'_, (), Self, ()> {
+        litellm_host::in_process::Host {
+            services: &(),
+            hooks: self,
+            stream: &(),
+            observer: Some(self),
+        }
     }
+}
 
-    async fn before_send(
+impl litellm_host::lifecycle::CallObserver for RecordingHost {
+    fn observe(&self, event: litellm_host::event::CallEvent) {
+        self.events.lock().unwrap().push(event.clone());
+    }
+}
+impl litellm_host::hooks::RouteHooks<<Messages as litellm_host::protocol::Protocol>::Error>
+    for RecordingHost
+{
+    async fn before_provider_request(
         &self,
         wire: WireRequest,
-        context: &RequestContext,
+        context: RequestContext,
     ) -> Result<WireRequest, Error> {
         self.optional_params
             .lock()
@@ -70,15 +80,24 @@ impl Host<Messages> for RecordingHost {
             .push(context.optional_params.clone());
         (self.rewrite)(wire)
     }
-
-    async fn emit(&self, event: &CallEvent) -> Result<(), Error> {
-        self.events.lock().unwrap().push(event.clone());
+    async fn on_event(
+        &self,
+        event: litellm_host::event::MachineEvent,
+    ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
+        litellm_host::lifecycle::CallObserver::observe(
+            self,
+            litellm_host::event::CallEvent::Machine(event),
+        );
         Ok(())
     }
 }
 
 async fn run_through(host: &RecordingHost) -> Result<MessagesOutput, Error> {
-    litellm_host::run::run_hosted(machine(Arc::new(RecordingSecrets::empty())), host).await
+    litellm_host::in_process::run_hosted(
+        machine(Arc::new(RecordingSecrets::empty()))(host.request()?),
+        host.runtime(),
+    )
+    .await
 }
 
 fn authenticated(call: MessagesCall, api_base: String) -> MessagesCall {
@@ -197,6 +216,6 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     run_through(&host).await.expect("messages call succeeds");
 
     let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
-        .unwrap_or_else(|seen| panic!("before_send runs once, saw {}", seen.len()));
+        .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
     assert_eq!(optional_params, json!({"max_tokens": 16}));
 }

@@ -31,7 +31,7 @@ pub async fn messages_with_hooks(
     call: MessagesCall,
     hooks: &impl litellm_host::hooks::RouteHooks<Error>,
 ) -> Result<MessagesResponse, Error> {
-    litellm_host::call::observe_call(hooks.observer(), async {
+    litellm_host::lifecycle::observe_call(hooks.observer(), async {
         let http = resources.pool.client(config, ClientVariant::Provider)?;
         execute(&http, &resources.auth, secrets, call, hooks).await
     })

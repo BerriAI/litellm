@@ -19,8 +19,8 @@ pub struct Responses;
 impl Protocol for Responses {
     type Response = ResponsesApiResponse;
     type Error = Error;
-    type Projection = ResponsesCall;
-    type Op = Infallible;
+    type Request = ResponsesCall;
+    type HostCall = Infallible;
     type Chunk = Bytes;
     type StreamHead = ResponsesStreamHead;
 }
@@ -29,10 +29,15 @@ pub fn responses_machine(
     resources: &crate::resources::CoreResources,
     config: &HttpClientConfig,
     secrets: Arc<dyn SecretSource>,
-) -> Result<HostedMachine<Responses>, litellm_http::Error> {
+) -> Result<
+    impl FnOnce(ResponsesCall) -> HostedMachine<Responses> + Send + Sync + use<>,
+    litellm_http::Error,
+> {
     let http = resources.pool.client(config, ClientVariant::Provider)?;
     let auth = resources.auth.clone();
-    Ok(hosted_call(move |call, host| async move {
-        super::execute(&http, &auth, secrets.as_ref(), call, &host).await
-    }))
+    Ok(move |request| {
+        hosted_call(request, move |call, _, hooks| async move {
+            super::execute(&http, &auth, secrets.as_ref(), call, &hooks).await
+        })
+    })
 }

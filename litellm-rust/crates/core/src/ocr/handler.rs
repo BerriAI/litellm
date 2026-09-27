@@ -57,12 +57,18 @@ impl<'a, H> OcrCallHooks<'a, H> {
 }
 
 impl<H: RouteHooks<Error>> CallHooks<Error> for OcrCallHooks<'_, H> {
-    fn before_send(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, Error>> {
-        Box::pin(self.hooks.before_send(wire, self.context.clone()))
+    fn before_provider_request(
+        &self,
+        wire: WireRequest,
+    ) -> BoxFuture<'_, Result<WireRequest, Error>> {
+        Box::pin(
+            self.hooks
+                .before_provider_request(wire, self.context.clone()),
+        )
     }
 
     fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
-        Box::pin(self.hooks.emit(MachineEvent::ResponseReceived {
+        Box::pin(self.hooks.on_event(MachineEvent::ResponseReceived {
             raw: RawResponse {
                 body: String::from_utf8_lossy(body).into_owned(),
             },

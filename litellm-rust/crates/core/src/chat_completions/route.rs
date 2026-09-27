@@ -17,8 +17,8 @@ pub struct ChatCompletions;
 impl Protocol for ChatCompletions {
     type Response = ChatCompletionsResponse;
     type Error = Error;
-    type Projection = ChatCompletionsCall;
-    type Op = Infallible;
+    type Request = ChatCompletionsCall;
+    type HostCall = Infallible;
     type Chunk = Infallible;
     type StreamHead = Infallible;
 }
@@ -26,24 +26,30 @@ impl Protocol for ChatCompletions {
 pub fn chat_completions_machine(
     resources: &crate::resources::CoreResources,
     config: &HttpClientConfig,
-) -> Result<HostedMachine<ChatCompletions>, litellm_http::Error> {
+) -> Result<
+    impl FnOnce(ChatCompletionsCall) -> HostedMachine<ChatCompletions> + Send + Sync + use<>,
+    litellm_http::Error,
+> {
     let http = resources.pool.client(config, ClientVariant::Provider)?;
     let auth = resources.auth.clone();
-    Ok(hosted_call(
-        move |call: ChatCompletionsCall, host| async move {
-            let request = ChatCompletionsRequest {
-                model: &call.model,
-                messages: call.messages,
-                optional_params: call.optional_params,
-                api_key: call.api_key.as_deref(),
-                api_base: call.api_base.as_deref(),
-                custom_llm_provider: call.custom_llm_provider.as_deref(),
-                extra_headers: call.extra_headers,
-                timeout: call.timeout,
-            };
-            super::execute(&http, &auth, request, &host)
-                .await
-                .map(CallOutput::Complete)
-        },
-    ))
+    Ok(move |request| {
+        hosted_call(
+            request,
+            move |call: ChatCompletionsCall, _, hooks| async move {
+                let request = ChatCompletionsRequest {
+                    model: &call.model,
+                    messages: call.messages,
+                    optional_params: call.optional_params,
+                    api_key: call.api_key.as_deref(),
+                    api_base: call.api_base.as_deref(),
+                    custom_llm_provider: call.custom_llm_provider.as_deref(),
+                    extra_headers: call.extra_headers,
+                    timeout: call.timeout,
+                };
+                super::execute(&http, &auth, request, &hooks)
+                    .await
+                    .map(CallOutput::Complete)
+            },
+        )
+    })
 }

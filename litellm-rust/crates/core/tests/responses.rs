@@ -47,7 +47,9 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
         )
         .unwrap();
         let HostedCompletion::Complete(response) =
-            litellm_host::run::run_hosted(machine, &host).await.unwrap()
+            litellm_host::in_process::run_hosted(machine(host.request().unwrap()), host.runtime())
+                .await
+                .unwrap()
         else {
             panic!()
         };
@@ -109,7 +111,9 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
         )
         .unwrap();
         assert_eq!(
-            litellm_host::run::run_hosted(machine, &host).await.unwrap(),
+            litellm_host::in_process::run_hosted(machine(host.request().unwrap()), host.runtime())
+                .await
+                .unwrap(),
             HostedCompletion::StreamEnded
         );
         (

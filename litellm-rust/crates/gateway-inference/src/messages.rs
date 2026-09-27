@@ -45,8 +45,9 @@ async fn handle(
     let call = project(deployment, body, headers)?;
     let machine = messages_machine(&gateway.resources, &gateway.http, gateway.secrets.clone())
         .map_err(RouteError::from)?;
-    let stream = Sse::<Messages, _>::new(|error| Bytes::from(Error::from(error).sse_frame()));
-    Ok(litellm_host_http::serve(machine, call, (), Json, stream).await?)
+    let stream =
+        Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
+    Ok(litellm_host_http::serve(machine(call), (), (), stream).await?)
 }
 
 fn project(

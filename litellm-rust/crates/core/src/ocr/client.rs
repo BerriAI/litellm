@@ -23,7 +23,7 @@ pub fn perform_with_hooks<'a>(
     hooks: &'a impl RouteHooks<Error>,
 ) -> futures_util::future::BoxFuture<'a, Result<LiteLLMOcrResponse, Error>> {
     Box::pin(async move {
-        litellm_host::call::observe_unary(hooks.observer(), async {
+        litellm_host::lifecycle::observe_unary(hooks.observer(), async {
             let caller_document = matches!(&request.document, OcrDocumentInput::Document(_));
             let prepared = prepare_request_document(request).await?;
             let execute: futures_util::future::BoxFuture<'_, Result<LiteLLMOcrResponse, Error>> =

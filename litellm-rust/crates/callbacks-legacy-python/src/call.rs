@@ -4,7 +4,7 @@
 //! this crate holds them.
 
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
-use litellm_host_python::{Preflight, ProtocolHost, lookup, run_call};
+use litellm_host_python::{Preflight, PythonBinding, PythonHostCalls, lookup, run_call};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -71,20 +71,20 @@ pub fn run_legacy_call<H, M>(
     py: Python<'_>,
     surface: LegacySurface,
     call: PublicCall,
-    machine: M,
+    start: impl FnOnce(<H::Protocol as Protocol>::Request) -> M + Send + Sync + 'static,
     host: H,
     preflight: Preflight,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>>
 where
-    H: ProtocolHost + 'static,
+    H: PythonBinding + PythonHostCalls<H::Protocol> + 'static,
     M: Machine<Protocol = H::Protocol> + 'static,
     M::Complete: Into<HostedCompletion<<H::Protocol as Protocol>::Response>>,
 {
     let arguments = call.kwargs.clone_ref(py);
     run_call(
         py,
-        machine,
+        start,
         host,
         LegacyLogging::new(py, surface, call, asynchronous),
         preflight,
@@ -111,7 +111,7 @@ mod tests {
         (call, locals)
     }
 
-    #[test]
+    #[rstest::rstest]
     fn capture_copies_the_keyword_dict_without_copying_its_values() {
         Python::initialize();
         Python::attach(|py| {

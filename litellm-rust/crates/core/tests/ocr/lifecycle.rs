@@ -1,13 +1,10 @@
 use std::sync::{Arc, Mutex};
 
 use litellm_core::ocr::{
-    route::{Ocr, OcrOp, OcrProjection, ocr_machine},
+    route::{Ocr, OcrCall, OcrOp, ocr_machine},
     types::OcrDocumentInput,
 };
-use litellm_host::{
-    event::{CallEvent, MachineEvent, RequestContext, WireRequest},
-    host::Host,
-};
+use litellm_host::event::{CallEvent, MachineEvent, RequestContext, WireRequest};
 use rstest::rstest;
 
 use super::*;
@@ -30,7 +27,10 @@ fn recording_host(
     let before_send_events = events.clone();
     LocalOcrHost::new(request)
         .with_before_send(move |wire, _| {
-            before_send_events.lock().unwrap().push("before_send");
+            before_send_events
+                .lock()
+                .unwrap()
+                .push("before_provider_request");
             match block {
                 true => Err(Error::InvalidRequest("blocked".into())),
                 false => Ok(wire),
@@ -39,6 +39,7 @@ fn recording_host(
         .with_observer(move |event| events.lock().unwrap().push(event_name(event)))
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn hooks_run_in_order_and_one_success_is_emitted() {
     let upstream = upstream([pages_response()]).await;
@@ -54,11 +55,12 @@ async fn hooks_run_in_order_and_one_success_is_emitted() {
 
     assert_eq!(
         *events.lock().unwrap(),
-        ["started", "before_send", "response", "success"]
+        ["started", "before_provider_request", "response", "success"]
     );
     assert_eq!(received(&upstream).await.len(), 1);
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn a_blocking_before_send_prevents_the_call_and_emits_one_failure() {
     let upstream = upstream([pages_response()]).await;
@@ -78,11 +80,12 @@ async fn a_blocking_before_send_prevents_the_call_and_emits_one_failure() {
     );
     assert_eq!(
         *events.lock().unwrap(),
-        ["started", "before_send", "failure"]
+        ["started", "before_provider_request", "failure"]
     );
     assert!(received(&upstream).await.is_empty());
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn an_upstream_failure_emits_one_terminal_failure() {
     let upstream = upstream([status_response(500, json!({"error": "failed"}))]).await;
@@ -98,11 +101,12 @@ async fn an_upstream_failure_emits_one_terminal_failure() {
     assert!(result.is_err());
     assert_eq!(
         *events.lock().unwrap(),
-        ["started", "before_send", "failure"]
+        ["started", "before_provider_request", "failure"]
     );
     assert_eq!(received(&upstream).await.len(), 1);
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn an_invalid_provider_response_is_observed_before_normalization_fails() {
     let upstream = upstream([json_response(json!({"pages": "invalid"}))]).await;
@@ -121,6 +125,7 @@ async fn an_invalid_provider_response_is_observed_before_normalization_fails() {
     assert_eq!(*observed.lock().unwrap(), [r#"{"pages":"invalid"}"#]);
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn headers_returned_by_before_send_are_sent() {
     let upstream = upstream([pages_response()]).await;
@@ -148,9 +153,10 @@ async fn before_send_context(request: LiteLLMOcrRequest) -> (WireRequest, Reques
     });
     perform_with(host).await.unwrap();
     let context = observed.lock().unwrap().take();
-    context.expect("before_send ran")
+    context.expect("before_provider_request ran")
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn before_send_sees_the_route_its_params_and_the_body() {
     let upstream = upstream([pages_response()]).await;
@@ -188,22 +194,31 @@ async fn before_send_names_the_secret_params(#[case] options: Value, #[case] sec
     assert_eq!(context.secret_fields, secrets);
 }
 
-/// Hands the route a caller-owned Azure token and rewrites the bearer in `before_send`.
+/// Hands the route a caller-owned Azure token and rewrites the bearer in `before_provider_request`.
 struct CallerTokenHost {
     request: Mutex<Option<LiteLLMOcrRequest>>,
     trace: Mutex<Vec<String>>,
 }
 
-impl Host<Ocr> for CallerTokenHost {
-    async fn project(&self) -> Result<OcrProjection, Error> {
+impl CallerTokenHost {
+    pub fn request(&self) -> Result<OcrCall, Error> {
         self.trace.lock().unwrap().push("project".into());
-        Ok(OcrProjection {
+        Ok(OcrCall {
             request: self.request.lock().unwrap().take().unwrap(),
             caller_token: true,
         })
     }
-
-    async fn custom_op(&self, op: OcrOp) -> Result<(), Error> {
+    pub fn runtime(&self) -> litellm_host::in_process::Host<'_, Self, Self, ()> {
+        litellm_host::in_process::Host {
+            services: self,
+            hooks: self,
+            stream: &(),
+            observer: Some(self),
+        }
+    }
+}
+impl litellm_host::services::HostCallHandler<Ocr> for CallerTokenHost {
+    async fn handle_host_call(&self, op: OcrOp) -> Result<(), Error> {
         match op {
             OcrOp::AcquireAzureAdToken(reply) => {
                 self.trace.lock().unwrap().push("token".into());
@@ -214,11 +229,18 @@ impl Host<Ocr> for CallerTokenHost {
             }
         }
     }
+}
 
-    async fn before_send(
+impl litellm_host::lifecycle::CallObserver for CallerTokenHost {
+    fn observe(&self, _: litellm_host::event::CallEvent) {}
+}
+impl litellm_host::hooks::RouteHooks<<Ocr as litellm_host::protocol::Protocol>::Error>
+    for CallerTokenHost
+{
+    async fn before_provider_request(
         &self,
         wire: WireRequest,
-        _: &RequestContext,
+        _: RequestContext,
     ) -> Result<WireRequest, Error> {
         let is_authorization = |name: &str| name.eq_ignore_ascii_case("authorization");
         let authorization = wire
@@ -230,7 +252,7 @@ impl Host<Ocr> for CallerTokenHost {
         self.trace
             .lock()
             .unwrap()
-            .push(format!("before_send:{authorization}"));
+            .push(format!("before_provider_request:{authorization}"));
         let headers = wire
             .headers
             .into_iter()
@@ -241,8 +263,19 @@ impl Host<Ocr> for CallerTokenHost {
             .collect();
         Ok(WireRequest { headers, ..wire })
     }
+    async fn on_event(
+        &self,
+        event: litellm_host::event::MachineEvent,
+    ) -> Result<(), <Ocr as litellm_host::protocol::Protocol>::Error> {
+        litellm_host::lifecycle::CallObserver::observe(
+            self,
+            litellm_host::event::CallEvent::Machine(event),
+        );
+        Ok(())
+    }
 }
 
+#[rstest::rstest]
 #[tokio::test]
 async fn the_callers_azure_token_is_acquired_before_before_send_which_can_still_replace_it() {
     let upstream = upstream([pages_response()]).await;
@@ -255,13 +288,20 @@ async fn the_callers_azure_token_is_acquired_before_before_send_which_can_still_
         trace: Mutex::new(Vec::new()),
     };
 
-    litellm_host::run::run_hosted(ocr_machine(ocr_client()), &host)
-        .await
-        .unwrap();
+    litellm_host::in_process::run_hosted(
+        ocr_machine(ocr_client())(host.request().unwrap()),
+        host.runtime(),
+    )
+    .await
+    .unwrap();
 
     assert_eq!(
         *host.trace.lock().unwrap(),
-        ["project", "token", "before_send:Bearer caller-token"]
+        [
+            "project",
+            "token",
+            "before_provider_request:Bearer caller-token"
+        ]
     );
     assert_eq!(
         only_request(&upstream).await.header_values("authorization"),
@@ -272,7 +312,7 @@ async fn the_callers_azure_token_is_acquired_before_before_send_which_can_still_
 #[rstest]
 #[tokio::test]
 async fn direct_execution_uses_hooks_without_a_machine() {
-    use litellm_host::{call::CallObserver, hooks::RouteHooks};
+    use litellm_host::{hooks::RouteHooks, lifecycle::CallObserver};
 
     struct Hooks(Arc<super::support::CallEvents>);
 
@@ -281,7 +321,7 @@ async fn direct_execution_uses_hooks_without_a_machine() {
             Some(self.0.clone())
         }
 
-        async fn before_send(
+        async fn before_provider_request(
             &self,
             wire: WireRequest,
             _: RequestContext,
@@ -296,7 +336,7 @@ async fn direct_execution_uses_hooks_without_a_machine() {
             })
         }
 
-        async fn emit(&self, event: MachineEvent) -> Result<(), Error> {
+        async fn on_event(&self, event: MachineEvent) -> Result<(), Error> {
             self.0.observe(CallEvent::Machine(event));
             Ok(())
         }
