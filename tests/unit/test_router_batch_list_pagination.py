@@ -18,6 +18,8 @@ def _deployment(api_key: str) -> dict:
 
 
 async def _fake_alist_batches(**kwargs: object) -> OpenAIBatchListResponse:
+    if kwargs.get("custom_llm_provider") != "mistral":
+        raise ValueError("a mistral key sent down the default openai list path")
     token: Final = TOKEN_BY_KEY[str(kwargs["api_key"])]
     return OpenAIBatchListResponse(
         data=(), first_id=None, last_id=None, has_more=token is not None, next_page_token=token
@@ -33,3 +35,13 @@ async def test_alist_batches_keeps_the_page_token_a_deployment_returned(monkeypa
 
     assert result["has_more"] is True
     assert result["next_page_token"] == "1"
+
+
+@pytest.mark.asyncio
+async def test_alist_batches_lists_with_each_deployments_own_provider(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(litellm, "alist_batches", _fake_alist_batches)
+    router: Final = Router(model_list=[_deployment("key-with-more-pages")])
+
+    result: Final = await router.alist_batches(model="mistral-ocr", limit=3)
+
+    assert result["has_more"] is True
