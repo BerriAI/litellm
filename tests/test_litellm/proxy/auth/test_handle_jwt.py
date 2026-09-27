@@ -8106,6 +8106,7 @@ async def test_delegated_jwt_uses_granting_team_policy_before_route_authorizatio
         AsyncMock(return_value=(("granting-team", frozenset(("delegated-agent",))),)),
     )
     team: Final = LiteLLM_TeamTable(team_id="granting-team", models=["allowed-model"], max_budget=5)
+
     async def team_policy(team_id: str, **kwargs: object) -> LiteLLM_TeamTable:
         return team if team_id == team.team_id else LiteLLM_TeamTable(team_id=team_id)
 
@@ -8125,10 +8126,14 @@ async def test_delegated_jwt_uses_granting_team_policy_before_route_authorizatio
         issuer,
         "gateway",
         "delegated-team",
-        {"sub": "human", **(
-            {"team_alias": "other-team"} if team_claim == "alias:other-team"
-            else {"team": team_claim} if team_claim else {}
-        )},
+        {
+            "sub": "human",
+            **(
+                {"team_alias": "other-team"}
+                if team_claim == "alias:other-team"
+                else {"team": team_claim} if team_claim else {}
+            ),
+        },
     )
     pending: Final = JWTAuthManager.authorize_jwt(
         api_key=token,

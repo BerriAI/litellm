@@ -408,7 +408,7 @@ class JWTHandler:
 
         return []
 
-    def get_all_jwt_team_ids(self, token: dict) -> list[str]:
+    def get_all_jwt_team_ids(self, token: dict[str, object]) -> list[str]:
         """
         Return team IDs from both the plural ``team_ids_jwt_field`` and the
         singular ``team_id_jwt_field`` claim (string or list of strings), as a
@@ -532,7 +532,7 @@ class JWTHandler:
             team_id = default_value
         return team_id
 
-    def get_team_alias(self, token: dict, default_value: str | None) -> str | None:
+    def get_team_alias(self, token: dict[str, object], default_value: str | None) -> str | None:
         """
         Extract team name/alias from JWT token using the configured team_alias_jwt_field.
 
@@ -2740,9 +2740,10 @@ class JWTAuthManager:
             from litellm.proxy.agent_endpoints.auth.agent_permission_handler import resolve_delegated_agent_team
 
             claimed_teams: Final = frozenset(handler.get_all_jwt_team_ids(jwt_valid_token))
-            scoped_teams: Final = (
-                claimed_teams
-                or (frozenset((team_id,)) if team_id and handler.get_team_alias(jwt_valid_token, default_value=None) else None)
+            scoped_teams: Final = claimed_teams or (
+                frozenset((team_id,))
+                if team_id and handler.get_team_alias(jwt_valid_token, default_value=None)
+                else None
             )
             granting_team: Final = await resolve_delegated_agent_team(
                 managed.user_id,
