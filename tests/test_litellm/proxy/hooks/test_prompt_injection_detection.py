@@ -203,6 +203,17 @@ class _RecordingRouter(Router):
         return await super().acompletion(model=model, messages=messages, stream=stream)
 
 
+def _recording_router(verdict: str) -> _RecordingRouter:
+    return _RecordingRouter(
+        model_list=[
+            {
+                "model_name": "moderation-model",
+                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake", "mock_response": verdict},
+            }
+        ]
+    )
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("call_type", sorted(REQUEST_BY_CALL_TYPE))
 async def test_every_unified_call_type_rejects_prompt_injection(
@@ -371,24 +382,24 @@ async def test_moderation_hook_skips_llm_check_without_prompt_text():
 
 
 @pytest.mark.asyncio
-async def test_llm_check_scans_text_attachments(monkeypatch: pytest.MonkeyPatch):
-    router = _RecordingRouter(
-        model_list=[
-            {
-                "model_name": "moderation-model",
-                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake", "mock_response": "SAFE"},
-            }
-        ]
-    )
+@pytest.mark.parametrize(
+    ("call_type", "build"),
+    [
+        ("acompletion", _chat_with_text_and_file),
+        ("aresponses", _responses_with_text_and_input_file),
+        ("anthropic_messages", _messages_with_text_and_document),
+    ],
+)
+async def test_llm_check_judges_text_attachments_and_prompt_in_one_call(
+    monkeypatch: pytest.MonkeyPatch, call_type: CallTypesLiteral, build: RequestBuilder
+):
+    router = _recording_router(verdict="SAFE")
 
     await _proxy_during_call(
-        monkeypatch,
-        _moderation_detector(verdict="SAFE", router=router),
-        _chat_with_text_and_file("attached text"),
-        "acompletion",
+        monkeypatch, _moderation_detector(verdict="SAFE", router=router), build("attached text"), call_type
     )
 
-    assert router.seen_prompts == ("attached text", SAFE)
+    assert router.seen_prompts == (f"attached text\n{SAFE}",)
 
 
 @pytest.mark.asyncio
@@ -403,11 +414,16 @@ async def test_llm_check_scans_text_attachments(monkeypatch: pytest.MonkeyPatch)
 async def test_llm_check_judges_attachment_only_input(
     monkeypatch: pytest.MonkeyPatch, call_type: CallTypesLiteral, build: RequestBuilder
 ):
+    router = _recording_router(verdict="UNSAFE")
+
     with pytest.raises(HTTPException) as exc_info:
-        await _proxy_during_call(monkeypatch, _moderation_detector(verdict="UNSAFE"), build(INJECTION), call_type)
+        await _proxy_during_call(
+            monkeypatch, _moderation_detector(verdict="UNSAFE", router=router), build(INJECTION), call_type
+        )
 
     assert exc_info.value.status_code == 400
     assert _error(exc_info.value)["error"] == REJECTION_MESSAGE
+    assert router.seen_prompts == (INJECTION,)
 
 
 def _moderation(text: str | list[str]) -> dict[str, object]:
@@ -468,14 +484,7 @@ async def test_responses_tool_outputs_are_scanned(monkeypatch: pytest.MonkeyPatc
 
 @pytest.mark.asyncio
 async def test_llm_check_judges_responses_tool_outputs(monkeypatch: pytest.MonkeyPatch):
-    router = _RecordingRouter(
-        model_list=[
-            {
-                "model_name": "moderation-model",
-                "litellm_params": {"model": "openai/gpt-5.6", "api_key": "sk-fake", "mock_response": "SAFE"},
-            }
-        ]
-    )
+    router = _recording_router(verdict="SAFE")
 
     await _proxy_during_call(
         monkeypatch,

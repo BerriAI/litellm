@@ -1,6 +1,7 @@
 import asyncio
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass
 from difflib import SequenceMatcher
 from itertools import chain
 from typing import ClassVar, Final, Literal
@@ -109,28 +110,11 @@ def _plain_request_texts(request_data: Mapping[str, object]) -> tuple[str, ...]:
     return tuple(chain.from_iterable(_strings(request_data.get(field)) for field in PLAIN_TEXT_REQUEST_FIELDS))
 
 
-class _PromptInjectionLLMJudge(CustomGuardrail):
-    def __init__(self, params: LiteLLMPromptInjectionParams, llm_api_name: str, router: Router) -> None:
-        super().__init__(
-            guardrail_name=GUARDRAIL_NAME,
-            supported_event_hooks=[GuardrailEventHooks.during_call],
-            event_hook=[GuardrailEventHooks.during_call],
-            default_on=True,
-        )
-        self.params = params
-        self.llm_api_name = llm_api_name
-        self.router = router
-
-    async def apply_guardrail(
-        self,
-        inputs: GenericGuardrailAPIInputs,
-        request_data: dict[str, object],
-        input_type: Literal["request", "response"],
-        logging_obj: LiteLLMLoggingObj | None = None,
-    ) -> GenericGuardrailAPIInputs:
-        if input_type == "request":
-            await self.reject_injection(inputs.get("texts", ()))
-        return inputs
+@dataclass(frozen=True, slots=True)
+class _PromptInjectionLLMJudge:
+    params: LiteLLMPromptInjectionParams
+    llm_api_name: str
+    router: Router
 
     async def reject_injection(self, texts: Iterable[str]) -> None:
         prompt: Final = "\n".join(texts)
@@ -155,6 +139,38 @@ class _PromptInjectionLLMJudge(CustomGuardrail):
             return False
         content: Final = response.choices[0].message.content
         return isinstance(content, str) and fail_call_string in content
+
+
+class _RequestJudge(CustomGuardrail):
+    def __init__(self, judge: _PromptInjectionLLMJudge, attachment_texts: tuple[str, ...]) -> None:
+        super().__init__(
+            guardrail_name=GUARDRAIL_NAME,
+            supported_event_hooks=[GuardrailEventHooks.during_call],
+            event_hook=[GuardrailEventHooks.during_call],
+            default_on=True,
+        )
+        self.judge = judge
+        self.attachment_texts = attachment_texts
+        self.judged = False
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        if input_type == "request":
+            await self.judge_with_attachments(inputs.get("texts", ()))
+        return inputs
+
+    async def judge_with_attachments(self, texts: Iterable[str]) -> None:
+        self.judged = True
+        await self.judge.reject_injection(chain(self.attachment_texts, texts))
+
+    async def judge_attachments_unless_judged(self) -> None:
+        if not self.judged:
+            await self.judge.reject_injection(self.attachment_texts)
 
 
 class _OPTIONAL_PromptInjectionDetection(CustomGuardrail):
@@ -288,14 +304,15 @@ class _OPTIONAL_PromptInjectionDetection(CustomGuardrail):
         return inputs
 
     async def _judge_request(self, judge: _PromptInjectionLLMJudge, data: dict[str, object], call_type: str) -> None:
-        await judge.reject_injection(_attachment_texts(data))
+        request_judge: Final = _RequestJudge(judge, _attachment_texts(data))
         handler: Final = _translation_handler(call_type)
         if handler is None:
-            await judge.reject_injection(_plain_request_texts(data))
+            await request_judge.judge_with_attachments(_plain_request_texts(data))
             return
         await handler.process_input_messages(
-            data=data, guardrail_to_apply=judge, litellm_logging_obj=_logging_obj(data)
+            data=data, guardrail_to_apply=request_judge, litellm_logging_obj=_logging_obj(data)
         )
+        await request_judge.judge_attachments_unless_judged()
 
     async def async_moderation_hook(
         self,
