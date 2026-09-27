@@ -77,7 +77,7 @@ def math_service(
         if ctx.method == "initialize":
             requested: Final = InitializeRequestParams.model_validate(ctx.params).protocol_version
             returned: Final = InitializeResult.model_validate(result).protocol_version
-            record({"body": {}, "negotiation": {"requested": requested, "returned": returned}})
+            record({"body": {}, "headers": {}, "negotiation": {"requested": requested, "returned": returned}})
         return result
 
     service.middleware.append(capture_negotiation)
