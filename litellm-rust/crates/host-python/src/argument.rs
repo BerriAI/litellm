@@ -1,4 +1,7 @@
 use pyo3::{prelude::*, types::PyDict};
+use serde_json::{Map, Value};
+
+use crate::marshal::from_py;
 
 /// The caller's own object for a public argument: the keyword if given, even an explicit
 /// `None`, else the bound request's attribute. Every reader of a public Python call uses
@@ -12,6 +15,21 @@ pub fn lookup<'py>(
         return Ok(Some(value));
     }
     request.getattr_opt(name)
+}
+
+/// The arguments in `names` that `argument` finds, as JSON keyed by name.
+pub fn json_fields<'py>(
+    names: impl IntoIterator<Item = &'static str>,
+    argument: impl Fn(&str) -> PyResult<Option<Bound<'py, PyAny>>>,
+) -> PyResult<Map<String, Value>> {
+    names
+        .into_iter()
+        .filter_map(|name| match argument(name) {
+            Ok(Some(value)) => Some(from_py(&value).map(|value| (name.to_string(), value))),
+            Ok(None) => None,
+            Err(error) => Some(Err(error)),
+        })
+        .collect()
 }
 
 #[cfg(test)]

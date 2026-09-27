@@ -82,38 +82,56 @@ pub fn finalize(
     Ok(())
 }
 
+/// The awaitables of the `litellm.utils` deployment hook fan-outs.
 pub struct DeploymentHooks;
 
 impl DeploymentHooks {
-    pub fn before_call(
+    pub fn pre_call(
         py: Python<'_>,
+        logger: &PythonLogger,
         kwargs: &Py<PyDict>,
         call_type: &str,
     ) -> PyResult<Py<PyAny>> {
-        python::DeploymentHooks::BeforeDeploymentCall
-            .call(py, (kwargs, call_type))
+        python::DeploymentHooks::PreCall
+            .call(py, (logger.object(py), kwargs, call_type))
             .map(Bound::unbind)
     }
 
-    pub fn after_success(
+    pub fn post_call_success(
         py: Python<'_>,
         kwargs: &Py<PyDict>,
         response: &Option<Py<PyAny>>,
         call_type: &str,
     ) -> PyResult<Py<PyAny>> {
-        python::DeploymentHooks::AfterDeploymentSuccess
+        python::DeploymentHooks::PostCallSuccess
             .call(py, (kwargs, response, call_type))
             .map(Bound::unbind)
     }
 
-    pub fn after_failure(
+    pub fn post_call_failure(
         py: Python<'_>,
         kwargs: &Py<PyDict>,
         error: &Py<PyBaseException>,
         call_type: &str,
     ) -> PyResult<Py<PyAny>> {
-        python::DeploymentHooks::AfterDeploymentFailure
+        python::DeploymentHooks::PostCallFailure
             .call(py, (kwargs, error, call_type))
+            .map(Bound::unbind)
+    }
+}
+
+/// The awaitable of the Messages handler's `async_pre_request_hook` fan-out.
+pub struct MessagesHandler;
+
+impl MessagesHandler {
+    pub fn execute_pre_request_hooks(
+        py: Python<'_>,
+        model: &str,
+        messages: &Bound<'_, PyAny>,
+        kwargs: &Bound<'_, PyDict>,
+    ) -> PyResult<Py<PyAny>> {
+        python::MessagesHandler::ExecutePreRequestHooks
+            .call(py, (model, messages, kwargs))
             .map(Bound::unbind)
     }
 }

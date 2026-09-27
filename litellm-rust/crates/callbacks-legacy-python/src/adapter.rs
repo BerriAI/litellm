@@ -3,10 +3,10 @@
 //! `@client` path makes them.
 
 use litellm_host::event::{
-    FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest, epoch_seconds,
+    FailureOrigin, MachineEvent, PublicRequest, RequestContext, Timing, WireRequest, epoch_seconds,
 };
 use litellm_host_python::{
-    LifecycleEvent, LifecycleStep, PythonLifecycle, from_py, missing_state, to_py,
+    LifecycleEvent, LifecycleStep, PythonLifecycle, from_py, json_fields, missing_state, to_py,
 };
 use pyo3::{
     exceptions::{PyBaseException, PyException},
@@ -17,7 +17,7 @@ use pyo3::{
 use serde_json::Value;
 
 use crate::{
-    DeploymentHooks, LegacyCallbacks, PublicCall, PythonLogger,
+    DeploymentHooks, LegacyCallbacks, MessagesHandler, PublicCall, PythonLogger,
     deferred::{PendingLogging, PendingSuccess},
     finalize, is_internal_call,
     python::Streaming,
@@ -49,9 +49,10 @@ struct DeliveredStream {
 }
 
 enum Pending {
+    PreRequest(Box<PublicRequest>),
     DeploymentPreCall,
-    DeploymentPostCall,
-    DeploymentFailure,
+    DeploymentPostCallSuccess,
+    DeploymentPostCallFailure,
     AsyncFailure,
 }
 
@@ -293,15 +294,45 @@ impl PythonLifecycle for LegacyLogging {
         )?;
         self.logger = Some(result.logger()?);
         self.call.set_kwargs(result.kwargs()?);
+        self.call
+            .kwargs()
+            .bind(py)
+            .set_item("litellm_logging_obj", self.logger()?.object(py))?;
         if self.runs_deployment_hooks() {
             self.pending = Some(Pending::DeploymentPreCall);
-            return Ok(LifecycleStep::Await(DeploymentHooks::before_call(
+            return Ok(LifecycleStep::Await(DeploymentHooks::pre_call(
                 py,
+                self.logger()?,
                 self.call.kwargs(),
                 self.surface.call_type,
             )?));
         }
         self.prepare(py)
+    }
+
+    fn pre_request(&mut self, py: Python<'_>, request: PublicRequest) -> PyResult<LifecycleStep> {
+        if !self.asynchronous {
+            return Ok(LifecycleStep::Params(request.params));
+        }
+        let kwargs = self.call.kwargs().bind(py).copy()?;
+        for name in request.fields {
+            if !kwargs.contains(name)?
+                && let Some(value) = self.call.lookup(py, name)?
+            {
+                kwargs.set_item(name, value)?;
+            }
+        }
+        let params = PyDict::new(py);
+        params.set_item("custom_llm_provider", &request.custom_llm_provider)?;
+        kwargs.set_item("litellm_params", params)?;
+        let messages = match self.call.lookup(py, "messages")? {
+            Some(messages) => messages,
+            None => to_py(py, &request.messages)?.into_bound(py),
+        };
+        let awaitable =
+            MessagesHandler::execute_pre_request_hooks(py, &request.model, &messages, &kwargs)?;
+        self.pending = Some(Pending::PreRequest(Box::new(request)));
+        Ok(LifecycleStep::Await(awaitable))
     }
 
     fn before_send(
@@ -357,8 +388,8 @@ impl PythonLifecycle for LegacyLogging {
         self.end = Some(datetime(py, timing.end_time)?);
         self.response = Some(response);
         if self.runs_deployment_hooks() {
-            self.pending = Some(Pending::DeploymentPostCall);
-            return Ok(LifecycleStep::Await(DeploymentHooks::after_success(
+            self.pending = Some(Pending::DeploymentPostCallSuccess);
+            return Ok(LifecycleStep::Await(DeploymentHooks::post_call_success(
                 py,
                 self.call.kwargs(),
                 &self.response,
@@ -410,8 +441,8 @@ impl PythonLifecycle for LegacyLogging {
                     && self.runs_deployment_hooks()
                 {
                     let error = self.error.as_ref().ok_or_else(missing_state)?;
-                    self.pending = Some(Pending::DeploymentFailure);
-                    return Ok(LifecycleStep::Await(DeploymentHooks::after_failure(
+                    self.pending = Some(Pending::DeploymentPostCallFailure);
+                    return Ok(LifecycleStep::Await(DeploymentHooks::post_call_failure(
                         py,
                         self.call.kwargs(),
                         error,
@@ -445,16 +476,30 @@ impl PythonLifecycle for LegacyLogging {
 
     fn resume(&mut self, py: Python<'_>, result: PyResult<Py<PyAny>>) -> PyResult<LifecycleStep> {
         match self.pending.take().ok_or_else(missing_state)? {
+            Pending::PreRequest(request) => {
+                let returned = result?;
+                if returned.is_none(py) {
+                    return Ok(LifecycleStep::Params(request.params));
+                }
+                let view = returned.into_bound(py).cast_into::<PyDict>()?.copy()?;
+                if view.contains("litellm_params")? {
+                    view.del_item("litellm_params")?;
+                }
+                let params =
+                    json_fields(request.fields.iter().copied(), |name| view.get_item(name))?;
+                self.call.set_kwargs(view.unbind());
+                Ok(LifecycleStep::Params(params))
+            }
             Pending::DeploymentPreCall => {
                 self.call
                     .set_kwargs(result?.into_bound(py).cast_into::<PyDict>()?.unbind());
                 self.prepare(py)
             }
-            Pending::DeploymentPostCall => {
+            Pending::DeploymentPostCallSuccess => {
                 self.response = Some(result?);
                 self.finalize(py)
             }
-            Pending::DeploymentFailure => self.dispatch_failure(py),
+            Pending::DeploymentPostCallFailure => self.dispatch_failure(py),
             Pending::AsyncFailure => match result {
                 Err(failure) if is_cancellation(py, &failure) => Err(failure),
                 _ => Ok(LifecycleStep::Done),
@@ -1679,6 +1724,218 @@ logger = FailingLogger()
                 &locals,
                 c"assert logger.names() == ['restore'], logger.calls",
             );
+        });
+    }
+}
+
+#[cfg(test)]
+mod pre_request_hooks_tests {
+    use std::ffi::CStr;
+
+    use litellm_host::event::PublicRequest;
+    use litellm_host_python::{LifecycleStep, PythonLifecycle};
+    use pyo3::{exceptions::PyRuntimeError, prelude::*, types::PyDict};
+    use rstest::rstest;
+    use serde_json::{Map, Value, json};
+
+    use super::LegacyLogging;
+    use crate::test_support::{legacy_call, local, namespace, run};
+
+    const CALL: &CStr = c"
+tool = {'name': 'original_tool', 'input_schema': {'type': 'object'}}
+tools = [tool]
+messages = [{'role': 'user', 'content': 'hi'}]
+kwargs = {'logger': logger, 'model': 'claude', 'messages': messages, 'tools': tools, 'max_tokens': 16}
+logger.hooks = {'pre': lambda kwargs: kwargs}
+";
+
+    fn object(value: Value) -> Map<String, Value> {
+        let Value::Object(map) = value else {
+            panic!("expected a json object, got {value}");
+        };
+        map
+    }
+
+    fn request() -> PublicRequest {
+        PublicRequest {
+            model: "claude".into(),
+            custom_llm_provider: "anthropic".into(),
+            messages: json!([{"role": "user", "content": "hi"}]),
+            params: object(json!({
+                "tools": [{"name": "original_tool", "input_schema": {"type": "object"}}],
+                "max_tokens": 16,
+            })),
+            fields: &["tools", "stream", "tool_choice", "max_tokens"],
+        }
+    }
+
+    /// A call past `begin` and its deployment hook, where the route projects it.
+    fn prepared(py: Python<'_>, locals: &Bound<'_, PyDict>, asynchronous: bool) -> LegacyLogging {
+        let mut logging = legacy_call(py, locals, asynchronous);
+        let kwargs = local(locals, "kwargs")
+            .cast_into::<PyDict>()
+            .unwrap()
+            .unbind();
+        match logging.begin(py, kwargs, 0.0).unwrap() {
+            LifecycleStep::Await(hook_result) => {
+                logging.resume(py, Ok(hook_result)).unwrap();
+            }
+            LifecycleStep::Arguments(_) => {}
+            _ => panic!("begin ends in the prepared arguments"),
+        }
+        logging
+    }
+
+    fn awaiting(step: LifecycleStep) -> Py<PyAny> {
+        let LifecycleStep::Await(awaitable) = step else {
+            panic!("expected the hooks' awaitable");
+        };
+        awaitable
+    }
+
+    fn params(step: LifecycleStep) -> Map<String, Value> {
+        let LifecycleStep::Params(params) = step else {
+            panic!("expected the answered params");
+        };
+        params
+    }
+
+    fn expose_view(py: Python<'_>, locals: &Bound<'_, PyDict>, logging: &LegacyLogging) {
+        locals
+            .set_item("view", logging.call.kwargs().clone_ref(py))
+            .unwrap();
+    }
+
+    #[rstest]
+    #[case::synchronous(false)]
+    #[case::asynchronous(true)]
+    fn pre_request_hooks_run_only_for_asynchronous_calls(#[case] asynchronous: bool) {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, CALL);
+            let mut logging = prepared(py, &locals, asynchronous);
+            let step = logging.pre_request(py, request()).unwrap();
+            let names: Vec<String> = local(&locals, "logger")
+                .call_method0("names")
+                .unwrap()
+                .extract()
+                .unwrap();
+            assert_eq!(names.contains(&"pre_request".to_string()), asynchronous);
+            match step {
+                LifecycleStep::Await(_) => {
+                    assert!(asynchronous, "a sync call has no loop to await on")
+                }
+                LifecycleStep::Params(answered) => {
+                    assert!(!asynchronous, "an async call awaits its hooks");
+                    assert_eq!(answered, request().params);
+                }
+                _ => panic!("pre_request awaits the hooks or answers unchanged"),
+            }
+        });
+    }
+
+    #[test]
+    fn the_hooks_receive_the_callers_objects_and_the_resolved_provider() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, CALL);
+            let mut logging = prepared(py, &locals, true);
+            awaiting(logging.pre_request(py, request()).unwrap());
+            run(
+                py,
+                &locals,
+                c"
+[(model, hooked_messages, hooked)] = [value for name, value in logger.calls if name == 'pre_request']
+assert model == 'claude'
+assert hooked_messages is messages
+assert hooked['tools'] is tools
+assert hooked['litellm_params'] == {'custom_llm_provider': 'anthropic'}
+assert hooked['litellm_logging_obj'] is logger
+assert hooked['max_tokens'] == 16
+",
+            );
+        });
+    }
+
+    #[test]
+    fn edits_the_hooks_return_reach_the_route_and_every_later_reader() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, CALL);
+            run(
+                py,
+                &locals,
+                c"
+renamed = [{'name': 'renamed_tool', 'input_schema': {'type': 'object'}}]
+logger.hooks['pre_request'] = lambda model, messages, kwargs: {
+    **kwargs, 'tools': renamed, 'stream': False, 'max_agentic_loops': 3
+}
+",
+            );
+            let mut logging = prepared(py, &locals, true);
+            let returned = awaiting(logging.pre_request(py, request()).unwrap());
+            let answered = params(logging.resume(py, Ok(returned)).unwrap());
+            assert_eq!(
+                answered,
+                object(json!({
+                    "tools": [{"name": "renamed_tool", "input_schema": {"type": "object"}}],
+                    "stream": false,
+                    "max_tokens": 16,
+                }))
+            );
+            expose_view(py, &locals, &logging);
+            run(
+                py,
+                &locals,
+                c"
+assert view['tools'] is renamed
+assert view['stream'] is False
+assert view['max_agentic_loops'] == 3
+assert 'litellm_params' not in view
+assert view['litellm_logging_obj'] is logger
+",
+            );
+        });
+    }
+
+    #[test]
+    fn hooks_that_return_none_change_nothing() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, CALL);
+            run(
+                py,
+                &locals,
+                c"logger.hooks['pre_request'] = lambda model, messages, kwargs: None",
+            );
+            let mut logging = prepared(py, &locals, true);
+            let returned = awaiting(logging.pre_request(py, request()).unwrap());
+            let answered = params(logging.resume(py, Ok(returned)).unwrap());
+            assert_eq!(answered, request().params);
+            expose_view(py, &locals, &logging);
+            run(
+                py,
+                &locals,
+                c"
+assert view['tools'] is tools
+assert 'stream' not in view
+assert 'litellm_params' not in view
+",
+            );
+        });
+    }
+
+    #[test]
+    fn a_raising_hook_fails_the_call_with_its_error() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, CALL);
+            let mut logging = prepared(py, &locals, true);
+            awaiting(logging.pre_request(py, request()).unwrap());
+            let failure = PyRuntimeError::new_err("hook refused");
+            let raised = failure.value(py).clone();
+            let error = logging.resume(py, Err(failure)).err().unwrap();
+            assert!(error.value(py).is(&raised));
         });
     }
 }

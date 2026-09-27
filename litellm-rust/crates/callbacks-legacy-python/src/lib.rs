@@ -20,7 +20,7 @@ pub(crate) use adapter::LegacyLogging;
 pub use adapter::{LegacySurface, PassThroughStream};
 pub use call::{PublicCall, run_legacy_call};
 pub(crate) use callbacks::{LegacyCallbacks, is_internal_call};
-pub(crate) use logger::{DeploymentHooks, PythonLogger, finalize, setup};
+pub(crate) use logger::{DeploymentHooks, MessagesHandler, PythonLogger, finalize, setup};
 
 #[cfg(test)]
 mod test_support;

@@ -3400,11 +3400,10 @@ class ProxyBaseLLMRequestProcessing:
         Extracted as a static method so tests can exercise the production
         gating logic directly rather than reimplementing the finally block.
         """
-        if getattr(logging_obj, "call_type", None) in ("ocr", "aocr"):
-            pending: Final = getattr(logging_obj, "_native_pending_logging", None)
-            if pending is not None:
-                logging_obj._native_pending_logging = None  # rebind-ok: consume the native OCR release signal once
-                pending.release(not exception_raised)
+        pending: Final = getattr(logging_obj, "_native_pending_logging", None)
+        if pending is not None:
+            logging_obj._native_pending_logging = None  # rebind-ok: consume the native release signal once
+            pending.release(not exception_raised)
         _enqueue_fn: Final = getattr(logging_obj, "_enqueue_deferred_logging", None)
         if _enqueue_fn is None:
             return
@@ -3817,9 +3816,22 @@ class ProxyBaseLLMRequestProcessing:
                     request_data,
                     client_disconnected,
                 )
+            if hasattr(response, "aclose"):
+                try:
+                    await response.aclose()
+                except BaseException as e:  # noqa: BLE001  # stream teardown must continue after a close failure
+                    verbose_proxy_logger.debug(
+                        "async_streaming_data_generator: error closing response stream: %s",
+                        e,
+                    )
             if recorded_client_disconnect:
                 deferred_stream_logging_armed: Final = _deferred_stream_logging_is_armed(request_data)
-                ProxyLogging._fire_deferred_stream_logging(request_data)
+                deferred_logging_task: Final = ProxyLogging._fire_deferred_stream_logging(request_data)
+                if deferred_logging_task is not None:
+                    try:
+                        await deferred_logging_task
+                    except BaseException as e:  # noqa: BLE001  # logging failures must not interrupt disconnect cleanup
+                        verbose_proxy_logger.debug("Error flushing deferred disconnect logging: %s", e)
                 # A disconnect-time success event (the deferred-guardrail flush
                 # above, or the partial-spend billing below) releases the
                 # request's max_parallel_requests slot through the limiter's
@@ -3839,14 +3851,6 @@ class ProxyBaseLLMRequestProcessing:
                 ):
                     await proxy_logging_obj._arelease_max_parallel_requests_on_disconnect(user_api_key_dict)
 
-            if hasattr(response, "aclose"):
-                try:
-                    await response.aclose()
-                except BaseException as e:  # noqa: BLE001
-                    verbose_proxy_logger.debug(
-                        "async_streaming_data_generator: error closing response stream: %s",
-                        e,
-                    )
             logging_obj: Final = request_data.get("litellm_logging_obj")
             if (
                 not stream_completed

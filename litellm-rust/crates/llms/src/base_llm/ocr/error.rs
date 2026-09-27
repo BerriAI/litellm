@@ -1,5 +1,7 @@
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum Error {
+    #[error(transparent)]
+    HostFault(#[from] litellm_host::MachineFault),
     #[error("upstream OCR error ({status}): {body}")]
     Provider {
         status: u16,
@@ -110,16 +112,6 @@ pub enum Error {
     Headers(#[from] litellm_http::request::HeaderError),
     #[error(transparent)]
     Http(#[from] litellm_http::Error),
-}
-
-impl From<litellm_host::machine::MachineFault> for Error {
-    fn from(fault: litellm_host::machine::MachineFault) -> Self {
-        use litellm_host::machine::MachineFault;
-        Self::InvalidRequest(match fault {
-            MachineFault::Abandoned => "OCR host driver was abandoned".into(),
-            MachineFault::Protocol(message) => format!("OCR {message}"),
-        })
-    }
 }
 
 impl From<litellm_core_utils::call_arguments::ArgumentError> for Error {

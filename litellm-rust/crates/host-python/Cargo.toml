@@ -11,6 +11,7 @@ litellm-host.workspace = true
 bytes.workspace = true
 futures-util.workspace = true
 serde.workspace = true
+serde_json.workspace = true
 tokio = { workspace = true, features = ["rt", "sync"] }
 
 pyo3.workspace = true
@@ -19,4 +20,3 @@ pythonize = "0.29.0"
 
 [dev-dependencies]
 rstest.workspace = true
-serde_json.workspace = true

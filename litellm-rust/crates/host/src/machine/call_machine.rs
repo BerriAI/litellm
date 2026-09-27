@@ -4,23 +4,18 @@
 
 use std::{future::Future, pin::Pin};
 
-use litellm_coroutine::{Co, Coroutine, CoroutineState, ResumeError};
+use litellm_coroutine::{Co, Coroutine, CoroutineState};
 
 use super::{HostFailure, Interrupted, Machine, MachineStep, Step};
+use serde_json::{Map, Value};
+
 use crate::{
-    event::{MachineEvent, RequestContext, WireRequest},
-    host::{Demand, HostOp, Reply},
+    event::{MachineEvent, PublicRequest, RequestContext, WireRequest},
+    host::{Demand, HostOp, Reply, Verdict},
     protocol::Protocol,
 };
 
-/// The machine's own failures, distinct from anything the provider call reports.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MachineFault {
-    /// The host dropped an op's reply unanswered, or went away while the call waited.
-    Abandoned,
-    /// The host resumed the call out of turn.
-    Protocol(ResumeError),
-}
+use crate::MachineFault;
 
 pub type ExecuteFuture<R> =
     Pin<Box<dyn Future<Output = Result<<R as Protocol>::Response, <R as Protocol>::Error>> + Send>>;
@@ -38,10 +33,7 @@ impl<R: Protocol> Clone for HostChannel<R> {
     }
 }
 
-impl<R: Protocol> HostChannel<R>
-where
-    R::Error: From<MachineFault>,
-{
+impl<R: Protocol> HostChannel<R> {
     async fn yield_<A: Send>(
         &self,
         ask: impl FnOnce(Reply<A>) -> HostOp<R> + Send,
@@ -63,6 +55,25 @@ where
         ask: impl FnOnce(Reply<A>) -> R::Op + Send,
     ) -> Result<A, R::Error> {
         self.yield_(|reply| HostOp::Custom(ask(reply))).await
+    }
+
+    pub async fn pre_request(
+        &self,
+        request: PublicRequest,
+    ) -> Result<Map<String, Value>, R::Error> {
+        self.yield_(|reply| HostOp::PreRequest {
+            request: Box::new(request),
+            reply,
+        })
+        .await
+    }
+
+    pub async fn after_response(&self, response: R::Response) -> Result<Verdict<R>, R::Error> {
+        self.yield_(|reply| HostOp::AfterResponse {
+            response: Box::new(response),
+            reply,
+        })
+        .await
     }
 
     pub async fn before_send(
@@ -98,10 +109,7 @@ pub struct CallMachine<R: Protocol> {
     coroutine: CallCoroutine<R>,
 }
 
-impl<R: Protocol> CallMachine<R>
-where
-    R::Error: From<MachineFault>,
-{
+impl<R: Protocol> CallMachine<R> {
     pub fn new(execute: impl FnOnce(HostChannel<R>) -> ExecuteFuture<R> + Send + 'static) -> Self {
         Self {
             coroutine: Coroutine::new(|co| execute(HostChannel { co })),
@@ -109,10 +117,7 @@ where
     }
 }
 
-impl<R: Protocol> Machine for CallMachine<R>
-where
-    R::Error: From<MachineFault>,
-{
+impl<R: Protocol> Machine for CallMachine<R> {
     type Protocol = R;
     type Complete = R::Response;
 

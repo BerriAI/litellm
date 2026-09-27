@@ -459,6 +459,25 @@ pub fn is_encrypted_reasoning_block(block: &ContentBlock) -> bool {
     field.is_some_and(|value| value.starts_with(ENCRYPTED_REASONING_SIGNATURE_PREFIX))
 }
 
+pub fn is_anthropic_invalid_thinking_block_error(error_text: &str) -> bool {
+    let lower = error_text.to_lowercase();
+    lower.contains("thinking")
+        && ((lower.contains("signature")
+            && (lower.contains("invalid") || lower.contains("valid string")))
+            || lower.contains("must contain thinking"))
+}
+
+pub fn strip_thinking_blocks_from_anthropic_messages(
+    messages: Vec<AnthropicMessage>,
+) -> Vec<AnthropicMessage> {
+    retain_blocks(messages, |block| {
+        !matches!(
+            block.block_type.as_deref(),
+            Some("thinking" | "redacted_thinking")
+        )
+    })
+}
+
 pub fn strip_encrypted_reasoning_blocks(messages: Vec<AnthropicMessage>) -> Vec<AnthropicMessage> {
     retain_blocks(messages, |block| !is_encrypted_reasoning_block(block))
 }
@@ -818,6 +837,37 @@ mod tests {
     #[fixture]
     fn unmapped() -> AnthropicModelCapabilities {
         AnthropicModelCapabilities::default()
+    }
+
+    #[rstest]
+    #[case::invalid_signature("Invalid `signature` in `thinking` block", true)]
+    #[case::missing_signature("thinking.signature.str: Input should be a valid string", true)]
+    #[case::empty_thinking("each thinking block must contain thinking", true)]
+    #[case::unrelated("invalid tool signature", false)]
+    fn detects_recoverable_thinking_errors(#[case] message: &str, #[case] recoverable: bool) {
+        assert_eq!(
+            is_anthropic_invalid_thinking_block_error(message),
+            recoverable
+        );
+    }
+
+    #[test]
+    fn stripping_replayed_thinking_preserves_tools_and_drops_empty_turns() {
+        let input = json!([
+            {"role": "user", "content": "question"},
+            {"role": "assistant", "content": [{"type": "redacted_thinking", "data": "opaque"}]},
+            {"role": "assistant", "content": [
+                {"type": "thinking", "thinking": "reason", "signature": "invalid"},
+                {"type": "tool_use", "id": "call", "name": "lookup", "input": {}}
+            ]}
+        ]);
+        assert_eq!(
+            apply(strip_thinking_blocks_from_anthropic_messages, input.clone()),
+            json!([
+                input[0],
+                {"role": "assistant", "content": [input[2]["content"][1]]}
+            ])
+        );
     }
 
     #[rstest]

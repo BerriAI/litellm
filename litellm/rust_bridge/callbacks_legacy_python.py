@@ -21,6 +21,7 @@ from typing import (
 )
 
 if TYPE_CHECKING:
+    from litellm.integrations.custom_logger import CustomLogger
     from litellm.litellm_core_utils.litellm_logging import Logging
 
 
@@ -175,15 +176,21 @@ class StreamingLogBuilder(Protocol):
     ) -> Coroutine[object, object, None]: ...
 
 
-class DeploymentHook(Protocol):
+class PreRequestHook(Protocol):
+    def __call__(
+        self, model: str, messages: object, kwargs: Mapping[str, object]
+    ) -> Awaitable[Mapping[str, object] | None]: ...
+
+
+class PreCallDeploymentHook(Protocol):
     def __call__(self, kwargs: dict[str, object], call_type: str) -> Awaitable[object]: ...
 
 
-class DeploymentSuccessHook(Protocol):
+class PostCallSuccessDeploymentHook(Protocol):
     def __call__(self, request_data: dict[str, object], response: object, call_type: object) -> Awaitable[object]: ...
 
 
-class DeploymentFailureHook(Protocol):
+class PostCallFailureDeploymentHook(Protocol):
     def __call__(self, request_data: Mapping[str, object], exception: Exception, call_type: str) -> Awaitable[None]: ...
 
 
@@ -283,30 +290,63 @@ def is_internal_call() -> bool:
     return internal.get()
 
 
-def before_deployment_call(kwargs: dict[str, object], call_type: str) -> Awaitable[object]:
+async def _run_pre_request_hook(
+    callback: CustomLogger, model: str, messages: object, kwargs: Mapping[str, object]
+) -> Mapping[str, object] | None:
+    hook: Final = cast(  # cast-ok: preserve caller objects at the legacy hook boundary
+        PreRequestHook, callback.async_pre_request_hook
+    )
+    return await hook(model, messages, kwargs)
+
+
+async def execute_pre_request_hooks(model: str, messages: object, kwargs: Mapping[str, object]) -> Mapping[str, object]:
+    from litellm import callbacks
+    from litellm.integrations.custom_logger import CustomLogger
+
+    view: Mapping[str, object] = kwargs  # rebind-ok: each callback consumes the previous callback's returned view
+    for callback in callbacks:
+        if not isinstance(callback, CustomLogger):
+            continue
+        if (updated := await _run_pre_request_hook(callback, model, messages, view)) is not None:
+            view = updated
+    return view
+
+
+async def async_pre_call_deployment_hook(logger: Logging, kwargs: dict[str, object], call_type: str) -> object:
+    from pydantic import TypeAdapter
+
     from litellm import utils
 
     hook: Final = cast(  # cast-ok: bounded adapter for the untyped deployment hook
-        DeploymentHook, utils.async_pre_call_deployment_hook
+        PreCallDeploymentHook, utils.async_pre_call_deployment_hook
     )
-    return hook(kwargs, call_type)
+    result: Final = await hook(kwargs, call_type)
+    prepared: Final = TypeAdapter(dict[str, object]).validate_python(result)
+    stream: Final = prepared.get("stream")
+    if isinstance(stream, bool):
+        logger.stream = stream  # rebind-ok: synchronize the caller-owned logger after deployment hooks
+    return result
 
 
-def after_deployment_success(kwargs: dict[str, object], response: object, call_type: str) -> Awaitable[object]:
+def async_post_call_success_deployment_hook(
+    kwargs: dict[str, object], response: object, call_type: str
+) -> Awaitable[object]:
     from litellm import utils
     from litellm.types.utils import CallTypes
 
     hook: Final = cast(  # cast-ok: bounded adapter for the untyped deployment hook
-        DeploymentSuccessHook, utils.async_post_call_success_deployment_hook
+        PostCallSuccessDeploymentHook, utils.async_post_call_success_deployment_hook
     )
     return hook(kwargs, response, CallTypes(call_type))
 
 
-def after_deployment_failure(kwargs: dict[str, object], error: Exception, call_type: str) -> Awaitable[None]:
+def async_post_call_failure_deployment_hook(
+    kwargs: dict[str, object], error: Exception, call_type: str
+) -> Awaitable[None]:
     from litellm import utils
 
     hook: Final = cast(  # cast-ok: bounded adapter for the untyped deployment hook
-        DeploymentFailureHook, utils.async_post_call_failure_deployment_hook
+        PostCallFailureDeploymentHook, utils.async_post_call_failure_deployment_hook
     )
     return hook(kwargs, error, call_type)
 

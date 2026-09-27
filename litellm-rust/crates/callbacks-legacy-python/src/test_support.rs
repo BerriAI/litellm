@@ -76,11 +76,12 @@ FAKES = {
     'restore_context': lambda logger: logger.record('restore', None),
     'custom_pricing_fields': lambda: ('ocr_cost_per_page',),
     'is_internal_call': lambda: legacy.is_internal.get(),
-    'before_deployment_call': lambda kwargs, call_type: kwargs['logger'].hook('pre', kwargs, call_type),
-    'after_deployment_success': lambda kwargs, response, call_type: kwargs['logger'].hook(
+    'execute_pre_request_hooks': lambda model, messages, kwargs: kwargs['logger'].pre_request(model, messages, kwargs),
+    'async_pre_call_deployment_hook': lambda logger, kwargs, call_type: kwargs['logger'].hook('pre', kwargs, call_type),
+    'async_post_call_success_deployment_hook': lambda kwargs, response, call_type: kwargs['logger'].hook(
         'success', response, call_type
     ),
-    'after_deployment_failure': lambda kwargs, error, call_type: kwargs['logger'].hook('failure', error, call_type),
+    'async_post_call_failure_deployment_hook': lambda kwargs, error, call_type: kwargs['logger'].hook('failure', error, call_type),
     'stream_opened': lambda logger: logger.record('stream_opened', None),
     'stream_success': lambda logger, request_body, chunks, start, end, first_chunk: logger.record(
         'stream_success', list(chunks)
@@ -131,6 +132,10 @@ class StubLogger:
     def hook(self, phase, value, call_type):
         self.record(phase + '_hook', call_type)
         return self.hooks.get(phase, lambda value: 'awaitable')(value)
+
+    def pre_request(self, model, messages, kwargs):
+        self.record('pre_request', (model, messages, kwargs))
+        return self.hooks.get('pre_request', lambda model, messages, kwargs: 'awaitable')(model, messages, kwargs)
 
     def failure_handler(self, error, trace, start, end):
         self.record('failure_handler', error)

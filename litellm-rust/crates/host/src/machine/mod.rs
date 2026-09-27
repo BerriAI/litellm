@@ -5,7 +5,7 @@ use std::future::Future;
 use std::pin::Pin;
 
 pub use auth::{HostTokenProvider, TokenProtocol};
-pub use call_machine::{CallMachine, ExecuteFuture, HostChannel, MachineFault};
+pub use call_machine::{CallMachine, ExecuteFuture, HostChannel};
 
 use crate::host::HostOp;
 use crate::protocol::Protocol;

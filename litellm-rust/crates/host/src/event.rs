@@ -1,6 +1,6 @@
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 /// Seconds since the Unix epoch, on one clock for every host.
 pub fn epoch_seconds() -> f64 {
@@ -37,6 +37,17 @@ pub struct RequestContext {
     pub secret_fields: Vec<String>,
     /// The credential the route resolved for the provider call.
     pub api_key: Option<litellm_auth::SecretValue>,
+}
+
+/// The caller's request as the route reads it before the provider transform, offered to
+/// the host for rewriting. `fields` names everything an answer may set.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PublicRequest {
+    pub model: String,
+    pub custom_llm_provider: String,
+    pub messages: Value,
+    pub params: Map<String, Value>,
+    pub fields: &'static [&'static str],
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
