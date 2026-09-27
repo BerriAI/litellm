@@ -1,3 +1,7 @@
+mod client;
+mod diagnostic;
+pub use client::{CallBuilder, CoreClient};
+
 pub mod audio_transcription;
 pub mod chat_completions;
 pub mod constants;

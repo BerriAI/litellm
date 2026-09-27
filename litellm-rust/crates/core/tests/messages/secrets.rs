@@ -43,7 +43,7 @@ async fn the_credential_and_base_come_from_the_secret_source(
     .await
     .expect("messages call succeeds");
 
-    assert!(matches!(output, MessagesOutput::Message(_)));
+    assert!(matches!(output, MessagesOutput::Complete(_)));
     let request = only_request(&upstream).await;
     assert_eq!(request.url.path(), path);
     assert_eq!(request.header("x-api-key"), Some("sk-from-manager"));
@@ -90,8 +90,7 @@ async fn a_secret_manager_failure_fails_the_call_before_sending(call: MessagesCa
         },
     )
     .await
-    .err()
-    .expect("a secret manager failure fails the call");
+    .expect_err("a secret manager failure fails the call");
 
     assert!(
         matches!(&error, Error::Secret(source) if matches!(source.source_error(), litellm_secrets::Error::ManagedSecretMissing)),
@@ -193,8 +192,7 @@ async fn azure_without_a_base_anywhere_fails_before_sending(call: MessagesCall) 
         },
     )
     .await
-    .err()
-    .expect("azure needs a base");
+    .expect_err("azure needs a base");
 
     assert_eq!(error, Error::Auth(litellm_auth::Error::MissingAzureApiBase));
 }

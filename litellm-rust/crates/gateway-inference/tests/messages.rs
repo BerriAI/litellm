@@ -14,10 +14,14 @@ use wiremock::{
 };
 
 #[rstest]
-#[case(false)]
-#[case(true)]
+#[case::anthropic("anthropic/test-model", "/v1/messages")]
+#[case::azure("azure_ai/test-model", "/anthropic/v1/messages")]
 #[tokio::test]
-async fn messages_reaches_the_provider_and_preserves_json_or_sse(#[case] streaming: bool) {
+async fn messages_reaches_the_provider_and_preserves_json_or_sse(
+    #[case] model: &str,
+    #[case] upstream_path: &str,
+    #[values(false, true)] streaming: bool,
+) {
     let upstream = MockServer::start().await;
     let message = json!({"id": "msg_test", "type": "message", "role": "assistant",
         "model": "test-model", "content": [{"type": "text", "text": "hello"}],
@@ -29,15 +33,20 @@ async fn messages_reaches_the_provider_and_preserves_json_or_sse(#[case] streami
         ResponseTemplate::new(200).set_body_json(message.clone())
     };
     let messages = json!([{"role": "user", "content": "hi"}]);
-    Mock::given(method("POST")).and(path("/v1/messages"))
+    Mock::given(method("POST")).and(path(upstream_path))
         .and(header("x-api-key", "test-key"))
         .and(header("anthropic-beta", "test-feature"))
+        .and(header("anthropic-version", "test-version"))
         .and(body_json(json!({"model": "test-model", "messages": messages, "max_tokens": 16, "stream": streaming})))
         .respond_with(template).expect(1).mount(&upstream).await;
     let request = Request::post("/v1/messages")
         .header("content-type", "application/json").header("anthropic-beta", "test-feature")
+        .header("anthropic-version", "test-version")
+        .header("x-api-key", "caller-key")
+        .header("authorization", "Bearer proxy-key")
+        .header("x-request-id", "caller-request")
         .body(Body::from(json!({"model": "public/model", "messages": messages, "max_tokens": 16, "stream": streaming}).to_string())).unwrap();
-    let response = support::app("anthropic/test-model", &upstream.uri())
+    let response = support::app(model, &upstream.uri())
         .oneshot(request)
         .await
         .unwrap();
@@ -50,6 +59,10 @@ async fn messages_reaches_the_provider_and_preserves_json_or_sse(#[case] streami
         assert_eq!(body["content"], message["content"]);
         assert_eq!(body["usage"], message["usage"]);
     }
+    let requests = upstream.received_requests().await.unwrap();
+    assert_eq!(requests.len(), 1);
+    assert!(!requests[0].headers.contains_key("authorization"));
+    assert!(!requests[0].headers.contains_key("x-request-id"));
 }
 
 #[tokio::test]
@@ -118,4 +131,53 @@ async fn a_stream_that_fails_after_opening_ends_with_an_sse_error_frame() {
     let error: serde_json::Value = serde_json::from_str(frame.trim_end()).unwrap();
     assert_eq!(error["type"], "error");
     assert_eq!(error["error"]["type"], "api_error");
+}
+
+#[rstest]
+#[tokio::test]
+async fn hosted_provider_failure_preserves_status_body_and_request_id() {
+    let upstream = MockServer::start().await;
+    let error =
+        json!({"type": "error", "error": {"type": "rate_limit_error", "message": "retry later"}});
+    Mock::given(method("POST"))
+        .and(path("/v1/messages"))
+        .respond_with(ResponseTemplate::new(429).set_body_json(error.clone()))
+        .expect(1)
+        .mount(&upstream)
+        .await;
+    let request = Request::post("/v1/messages")
+        .header("content-type", "application/json")
+        .header("x-request-id", "host-http-request")
+        .body(Body::from(json!({
+            "model": "public/model", "messages": [{"role": "user", "content": "hi"}], "max_tokens": 16,
+        }).to_string()))
+        .unwrap();
+    let response = support::app("anthropic/test-model", &upstream.uri())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 429);
+    let body = support::json(response).await;
+    assert_eq!(body["type"], error["type"]);
+    assert_eq!(body["error"], error["error"]);
+    assert_eq!(body["request_id"], "host-http-request");
+}
+
+#[rstest]
+#[case::messages("/v1/messages")]
+#[case::chat("/v1/chat/completions")]
+#[case::model_path("/engines/path-model/chat/completions")]
+#[case::ocr("/ocr")]
+#[case::transcription("/audio/transcriptions")]
+#[tokio::test]
+async fn model_permissions_prevent_provider_calls(#[case] path: &str) {
+    let upstream = MockServer::start().await;
+    let app = support::app_with_permissions(
+        "anthropic/test-model",
+        &upstream.uri(),
+        litellm_gateway_auth::Permissions::None,
+    );
+    let response = support::post(app, path, json!({"model": "public/model"})).await;
+    assert_eq!(response.status(), 403);
+    assert!(upstream.received_requests().await.unwrap().is_empty());
 }

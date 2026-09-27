@@ -9,24 +9,20 @@ mod error;
 pub mod messages;
 mod ocr;
 mod request;
+mod responses;
 
 use std::sync::Arc;
 
 use axum::{Router, routing::post};
-use litellm_core::resources::CoreResources;
-use litellm_http::HttpClientConfig;
-use litellm_llms::base_llm::ocr::handler::OcrClient;
-use litellm_secrets::source::SecretSource;
+use litellm_core::CoreClient;
 
 pub use error::Error;
-pub use litellm_router::{Deployment, Router as ModelList};
+pub use litellm_router::{Deployment, Router as ModelRouter};
+pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
-    pub resources: CoreResources,
-    pub http: HttpClientConfig,
-    pub secrets: Arc<dyn SecretSource>,
-    pub models: ModelList,
-    pub ocr: OcrClient,
+    pub core: CoreClient,
+    pub models: ModelRouter,
 }
 
 pub fn router(gateway: Arc<Gateway>) -> Router {
@@ -36,18 +32,15 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         .route("/v1/ocr", post(ocr::create))
         .route("/chat/completions", post(chat_completions::create))
         .route("/v1/chat/completions", post(chat_completions::create))
-        .route("/engines/{*path}", post(chat_completions::deployment))
-        .route(
-            "/openai/deployments/{*path}",
-            post(chat_completions::deployment),
-        )
+        .nest("/engines/{model}", model_routes())
+        .nest("/openai/deployments/{model}", model_routes())
         .route("/audio/transcriptions", post(audio_transcription::create))
         .route(
             "/v1/audio/transcriptions",
             post(audio_transcription::create),
         )
-        .route("/responses", post(request::unsupported))
-        .route("/v1/responses", post(request::unsupported))
+        .route("/responses", post(responses::create))
+        .route("/v1/responses", post(responses::create))
         .route("/embeddings", post(request::unsupported))
         .route("/v1/embeddings", post(request::unsupported))
         .route("/completions", post(request::unsupported))
@@ -56,4 +49,14 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
             request::MAX_BODY_BYTES,
         ))
         .with_state(gateway)
+}
+
+fn model_routes() -> Router<Arc<Gateway>> {
+    Router::new()
+        .route(
+            "/chat/completions",
+            post(chat_completions::create_from_model_path),
+        )
+        .route("/embeddings", post(request::unsupported))
+        .route("/completions", post(request::unsupported))
 }

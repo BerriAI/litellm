@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use litellm_core::chat_completions::{
-    Error, chat_completions, chat_completions_decline_reason, types::ChatCompletionsRequest,
+    Error, chat_completions_decline_reason, types::ChatCompletionsRequest,
 };
 use litellm_http::transport::Error as TransportError;
 use litellm_types::utils::ChatCompletionsResponse;
@@ -15,7 +15,7 @@ use support::*;
 const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
 
 async fn complete(request: ChatCompletionsRequest<'_>) -> Result<ChatCompletionsResponse, Error> {
-    chat_completions(&support::resources(), &http_config(), request).await
+    client().chat_completions(request).await
 }
 
 fn object(value: Value) -> Map<String, Value> {
@@ -162,6 +162,7 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsReq
 #[case::missing_usage(
     r#"{"model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}"#
 )]
+#[rstest::rstest]
 #[case::tool_use_block(r#"{"model":"m","content":[{"type":"tool_use","id":"t","name":"f","input":{}}],"stop_reason":"tool_use","usage":{"input_tokens":1,"output_tokens":1}}"#)]
 #[case::not_json("not json")]
 #[tokio::test]
@@ -322,4 +323,143 @@ async fn a_declined_request_fails_the_call_before_sending(
 
     assert_eq!(error, Error::Unsupported("streaming"));
     assert!(received(&upstream).await.is_empty());
+}
+
+#[rstest]
+#[case::direct(false)]
+#[case::hosted(true)]
+#[tokio::test]
+async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
+    request: ChatCompletionsRequest<'static>,
+    #[case] hosted: bool,
+) {
+    use litellm_core::chat_completions::route::ChatCompletions;
+    use litellm_host::{call::HostedCompletion, event::CallEvent};
+
+    let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
+    let base = upstream.uri();
+    let host = RecordingCall::<ChatCompletions>::new(
+        ChatCompletionsRequest {
+            api_base: Some(&base),
+            ..request
+        }
+        .into(),
+    );
+    let response = if hosted {
+        let result = litellm_host::in_process::run_hosted(
+            client().chat_completions_machine().unwrap()(host.request().unwrap()),
+            host.runtime(),
+        )
+        .await
+        .unwrap();
+        let HostedCompletion::Complete(response) = result else {
+            panic!("expected a complete response")
+        };
+        response
+    } else {
+        let call = host.request.lock().unwrap().take().unwrap();
+        let client = client();
+        let builder = client
+            .chat_completions(ChatCompletionsRequest {
+                model: &call.model,
+                messages: call.messages,
+                optional_params: call.optional_params,
+                api_key: call.api_key.as_deref(),
+                api_base: call.api_base.as_deref(),
+                custom_llm_provider: call.custom_llm_provider.as_deref(),
+                extra_headers: call.extra_headers,
+                timeout: call.timeout,
+            })
+            .with_hooks(&host);
+        assert!(host.events.0.lock().unwrap().is_empty());
+        assert!(received(&upstream).await.is_empty());
+        builder.await.unwrap()
+    };
+    assert_eq!(
+        response.choices[0].message.content.as_deref(),
+        Some("hello")
+    );
+    assert_eq!(
+        only_request(&upstream).await.header("x-hook"),
+        Some("called")
+    );
+    let events = host.events.0.lock().unwrap();
+    assert!(matches!(
+        &events[..],
+        [
+            CallEvent::Started { .. },
+            CallEvent::Machine(_),
+            CallEvent::Succeeded { .. }
+        ]
+    ));
+}
+
+#[rstest]
+#[tokio::test]
+async fn a_post_call_hook_failure_never_looks_safe_to_retry(
+    request: ChatCompletionsRequest<'static>,
+) {
+    use litellm_host::{
+        event::{MachineEvent, RequestContext, WireRequest},
+        hooks::RouteHooks,
+    };
+    struct FailingHook;
+    impl RouteHooks<Error> for FailingHook {
+        async fn before_provider_request(
+            &self,
+            wire: WireRequest,
+            _: RequestContext,
+        ) -> Result<WireRequest, Error> {
+            Ok(wire)
+        }
+        async fn on_event(&self, _: MachineEvent) -> Result<(), Error> {
+            Err(Error::InvalidRequest("callback rejected".into()))
+        }
+    }
+    let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
+    let base = upstream.uri();
+    let error = client()
+        .chat_completions(ChatCompletionsRequest {
+            api_base: Some(&base),
+            ..request
+        })
+        .with_hooks(&FailingHook)
+        .await
+        .unwrap_err();
+    assert_eq!(error.phase(), litellm_core::error::Phase::AfterSend);
+    let Error::PostCallHook(source) = error else {
+        panic!("expected retained callback error")
+    };
+    assert_eq!(*source, Error::InvalidRequest("callback rejected".into()));
+    assert_eq!(received(&upstream).await.len(), 1);
+}
+
+#[rstest]
+#[tokio::test]
+async fn completed_chat_records_route_and_resolved_provider(
+    request: ChatCompletionsRequest<'static>,
+    traces: TraceCapture,
+) {
+    let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
+    let base = upstream.uri();
+    let model = request.model;
+    traces
+        .logger()
+        .instrument(complete(ChatCompletionsRequest {
+            api_base: Some(&base),
+            ..request
+        }))
+        .await
+        .unwrap();
+    let summaries = traces.summaries("litellm.route");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0]["route"], "chat_completions");
+    assert_eq!(summaries[0]["model"], model);
+    assert_eq!(summaries[0]["provider"], "anthropic");
+    assert_eq!(
+        summaries[0]["resolved_model"],
+        only_request(&upstream).await.json()["model"]
+    );
+    assert_eq!(summaries[0]["outcome"], "success");
+    assert_eq!(summaries[0]["stream"], false);
 }

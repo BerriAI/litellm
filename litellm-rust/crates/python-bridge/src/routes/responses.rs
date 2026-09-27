@@ -1,3 +1,5 @@
+mod host;
+
 use litellm_core::responses::websocket::ResponsesWebSocketConnection as RustResponsesWebSocketConnection;
 use pyo3::{
     prelude::*,
@@ -10,30 +12,91 @@ use crate::{
     marshal::{marshal_headers, optional_timeout},
 };
 
-#[pyfunction]
-#[pyo3(signature = (request, args, kwargs))]
-pub(crate) fn responses(
+fn run_public(
+    py: Python<'_>,
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
+    asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    drop((request, args, kwargs));
-    Err(RustBridgeDeclined::new_err(
-        "native responses route is not implemented",
-    ))
+    use super::inference::InferenceHost;
+    use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
+    let host = InferenceHost::new(
+        request.clone().unbind(),
+        "litellm.rust_bridge.responses.route_host",
+    );
+    if let Some(reason) = py
+        .import("litellm.rust_bridge.responses.route_host")?
+        .getattr("decline_reason")?
+        .call1((&request,))?
+        .extract::<Option<String>>()?
+    {
+        return Err(RustBridgeDeclined::new_err(reason));
+    }
+    let admission = host::project(&host, py, &kwargs)?;
+    if admission
+        .custom_llm_provider
+        .as_deref()
+        .is_some_and(|provider| provider != "openai")
+        || admission
+            .model
+            .strip_prefix("openai/")
+            .unwrap_or(&admission.model)
+            .contains('/')
+    {
+        return Err(RustBridgeDeclined::new_err(
+            "native HTTP responses provider",
+        ));
+    }
+    if admission
+        .optional_params
+        .get("stream")
+        .is_some_and(|value| value == &serde_json::Value::Bool(true))
+    {
+        return Err(RustBridgeDeclined::new_err(
+            "native Python responses streaming",
+        ));
+    }
+    let machine = crate::http::call_client(py, &kwargs, asynchronous)?
+        .responses_machine()
+        .map_err(crate::http::client_error)?;
+    run_legacy_call(
+        py,
+        LegacySurface {
+            call_type: if asynchronous {
+                "aresponses"
+            } else {
+                "responses"
+            },
+            input_description: "Responses",
+            stream: None,
+        },
+        PublicCall::capture(&request, &args, &kwargs)?,
+        move |request| crate::logger::LoggedMachine::new(machine(request)),
+        host::ResponsesPythonHost(host),
+        crate::preflight::sdk_preflight,
+        asynchronous,
+    )
 }
 
 #[pyfunction]
-#[pyo3(signature = (request, args, kwargs))]
-pub(crate) fn aresponses(
+pub(crate) fn responses(
+    py: Python<'_>,
     request: Bound<'_, PyAny>,
     args: Bound<'_, PyTuple>,
     kwargs: Bound<'_, PyDict>,
 ) -> PyResult<Py<PyAny>> {
-    drop((request, args, kwargs));
-    Err(RustBridgeDeclined::new_err(
-        "native responses route is not implemented",
-    ))
+    run_public(py, request, args, kwargs, false)
+}
+
+#[pyfunction]
+pub(crate) fn aresponses(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    run_public(py, request, args, kwargs, true)
 }
 
 #[pyclass]
@@ -89,28 +152,8 @@ mod tests {
     use std::{ffi::CString, time::Duration};
 
     use futures_util::{SinkExt, StreamExt};
-    use pyo3::{
-        prelude::*,
-        types::{PyDict, PyTuple},
-    };
+    use pyo3::{prelude::*, types::PyDict};
 
-    use crate::errors::RustBridgeDeclined;
-
-    #[test]
-    fn both_entrypoints_decline_before_provider_execution() {
-        Python::initialize();
-        Python::attach(|py| {
-            let request = PyDict::new(py);
-            let args = PyTuple::empty(py);
-            let kwargs = PyDict::new(py);
-
-            for entrypoint in [super::responses, super::aresponses] {
-                let error = entrypoint(request.clone().into_any(), args.clone(), kwargs.clone())
-                    .expect_err("native responses must decline until a route machine exists");
-                assert!(error.is_instance_of::<RustBridgeDeclined>(py));
-            }
-        });
-    }
     use tokio::net::TcpListener;
     use tokio_tungstenite::{accept_async, tungstenite::Message};
 

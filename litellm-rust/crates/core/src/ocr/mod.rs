@@ -1,5 +1,5 @@
 pub mod arguments;
-pub mod client;
+mod client;
 pub mod document;
 pub(crate) mod handler;
 pub(crate) mod prepare;
