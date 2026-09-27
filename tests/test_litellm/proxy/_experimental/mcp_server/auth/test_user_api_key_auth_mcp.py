@@ -369,7 +369,9 @@ class TestMCPRequestHandler:
             result = await MCPRequestHandler._get_allowed_mcp_servers_for_key(user_api_key_auth)
 
         assert result == ["server-a"]
-        mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(toolset_ids=["toolset-1"])
+        mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(
+            toolset_ids=["toolset-1"], requires_fresh_policy=False
+        )
 
     async def test_get_allowed_mcp_servers_for_key_skips_toolset_resolution_when_none_granted(self):
         user_api_key_auth = UserAPIKeyAuth(api_key="test-key", user_id="test-user")
@@ -4147,7 +4149,7 @@ async def test_get_allowed_mcp_servers_for_team_uses_helper():
                 "group-server2",
             }
 
-            mock_get_access_group_servers.assert_called_once_with(["dev-group"])
+            mock_get_access_group_servers.assert_called_once_with(["dev-group"], requires_fresh_policy=False)
     finally:
         for sid in ("direct-server1", "direct-server2"):
             global_mcp_server_manager.registry.pop(sid, None)
@@ -4316,7 +4318,7 @@ async def test_get_allowed_mcp_servers_for_key_prefers_in_memory_permission():
 
         assert set(result) == {"direct-server", "group-server"}
         mock_get_perm.assert_not_called()
-        mock_access_groups.assert_called_once_with(["grp-alpha"])
+        mock_access_groups.assert_called_once_with(["grp-alpha"], requires_fresh_policy=False)
     finally:
         global_mcp_server_manager.registry.pop("direct-server", None)
 
@@ -4721,7 +4723,9 @@ class TestAgentMCPPermissions:
             result = await MCPRequestHandler.get_allowed_mcp_servers_for_agent(user_api_key_auth)
 
         assert sorted(result) == ["server-a", "server-direct"]
-        mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(toolset_ids=["toolset-1"])
+        mock_manager.resolve_toolset_tool_permissions.assert_awaited_once_with(
+            toolset_ids=["toolset-1"], requires_fresh_policy=False
+        )
 
     async def test_get_allowed_mcp_servers_toolset_only_agent_caps_key_servers(self):
         """Regression: an agent whose only grant is a toolset used to resolve to [] and place
