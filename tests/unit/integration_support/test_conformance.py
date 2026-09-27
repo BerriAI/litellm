@@ -1,11 +1,39 @@
 import hashlib
 import json
+import os
 from pathlib import Path
 from typing import Final
+from unittest.mock import Mock, patch
 
 import pytest
 from tests.integration._support.conformance import read_checks, verify_archive, prefixed_request
 from pydantic import ValidationError
+
+
+@pytest.mark.parametrize("explicit", (False, True))
+def test_owned_proxy_isolates_automatic_coverage_unless_requested(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, explicit: bool
+) -> None:
+    from integration._support.client import Gateway
+    from integration._support.process import owned_proxy_process
+
+    monkeypatch.setenv("COVERAGE_PROCESS_CONFIG", "parent-config")
+    monkeypatch.setenv("COVERAGE_PROCESS_START", "parent.toml")
+    overrides: Final = {"COVERAGE_PROCESS_CONFIG": "child-config"} if explicit else {}
+    gateway: Final = Gateway(Mock(), "owner-key", "http://upstream")
+    with (
+        patch("integration._support.process.subprocess.Popen") as spawn,
+        patch("integration._support.process.httpx.Client") as client,
+        patch("integration._support.process.group_members", return_value=()),
+    ):
+        spawn.return_value.poll.return_value = None
+        client.return_value.__enter__.return_value.get.return_value.status_code = 200
+        with owned_proxy_process(gateway, tmp_path, overrides):
+            child: Final = spawn.call_args.kwargs["env"]
+            assert child["COVERAGE_PROCESS_CONFIG"] == ("child-config" if explicit else "")
+            assert child["COVERAGE_PROCESS_START"] == ""
+            assert child["LITELLM_MASTER_KEY"] == gateway.key
+    assert os.environ["COVERAGE_PROCESS_CONFIG"] == "parent-config"
 
 
 def test_changed_archive_is_rejected(tmp_path: Path) -> None:
