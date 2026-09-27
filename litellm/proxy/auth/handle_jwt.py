@@ -2739,8 +2739,17 @@ class JWTAuthManager:
         if managed is not None:
             from litellm.proxy.agent_endpoints.auth.agent_permission_handler import resolve_delegated_agent_team
 
+            claimed_teams: Final = frozenset(handler.get_all_jwt_team_ids(jwt_valid_token))
+            scoped_teams: Final = (
+                claimed_teams
+                or (frozenset((team_id,)) if team_id and handler.get_team_alias(jwt_valid_token, default_value=None) else None)
+            )
             granting_team: Final = await resolve_delegated_agent_team(
-                managed.user_id, managed.agent_id, team_id, explicit_team=header_team is not None
+                managed.user_id,
+                managed.agent_id,
+                team_id,
+                explicit_team=header_team is not None,
+                allowed_team_ids=None if handler.litellm_jwtauth.fallback_to_db_teams else scoped_teams,
             )
             if granting_team is not None and granting_team != team_id:
                 if not JWTAuthManager._is_team_route_allowed(route, request_method, handler):

@@ -8055,9 +8055,20 @@ def test_managed_issuer_requires_configured_audience_validation(
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("team_route_allowed", [True, False])
+@pytest.mark.parametrize(
+    "team_route_allowed,team_claim,db_fallback",
+    [
+        (True, None, False),
+        (False, None, False),
+        (True, "other-team", False),
+        (True, "granting-team", False),
+        (True, "other-team", True),
+        (True, "alias:other-team", False),
+        (True, "alias:other-team", True),
+    ],
+)
 async def test_delegated_jwt_uses_granting_team_policy_before_route_authorization(
-    monkeypatch: pytest.MonkeyPatch, team_route_allowed: bool
+    monkeypatch: pytest.MonkeyPatch, team_route_allowed: bool, team_claim: str | None, db_fallback: bool
 ) -> None:
     from litellm.proxy.agent_endpoints.auth import agent_permission_handler
     from litellm.proxy.auth import handle_jwt
@@ -8078,7 +8089,12 @@ async def test_delegated_jwt_uses_granting_team_policy_before_route_authorizatio
     handler.update_environment(
         database,
         cache,
-        LiteLLM_JWTAuth(team_allowed_routes=["/chat/completions" if team_route_allowed else "/embeddings"]),
+        LiteLLM_JWTAuth(
+            team_allowed_routes=["/chat/completions" if team_route_allowed else "/embeddings"],
+            team_id_jwt_field="team",
+            team_alias_jwt_field="team_alias",
+            fallback_to_db_teams=db_fallback,
+        ),
     )
     context: Final = ManagedAgentContext(
         agent_id="delegated-agent", binding_revision="revision", mode="delegated", user_id="human"
@@ -8090,15 +8106,30 @@ async def test_delegated_jwt_uses_granting_team_policy_before_route_authorizatio
         AsyncMock(return_value=(("granting-team", frozenset(("delegated-agent",))),)),
     )
     team: Final = LiteLLM_TeamTable(team_id="granting-team", models=["allowed-model"], max_budget=5)
-    load_team: Final = AsyncMock(return_value=team)
+    async def team_policy(team_id: str, **kwargs: object) -> LiteLLM_TeamTable:
+        return team if team_id == team.team_id else LiteLLM_TeamTable(team_id=team_id)
+
+    load_team: Final = AsyncMock(side_effect=team_policy)
     monkeypatch.setattr(handle_jwt, "get_team_object", load_team)
+    monkeypatch.setattr(
+        handle_jwt, "get_team_object_by_alias", AsyncMock(return_value=LiteLLM_TeamTable(team_id="other-team"))
+    )
     monkeypatch.setattr(
         handle_jwt,
         "get_user_object",
         AsyncMock(return_value=LiteLLM_UserTable(user_id="human", teams=["granting-team", "other-team"])),
     )
     monkeypatch.setattr(handle_jwt, "get_team_membership", AsyncMock(return_value=None))
-    token: Final = _encode_rsa_jwt(private_key, issuer, "gateway", "delegated-team", {"sub": "human"})
+    token: Final = _encode_rsa_jwt(
+        private_key,
+        issuer,
+        "gateway",
+        "delegated-team",
+        {"sub": "human", **(
+            {"team_alias": "other-team"} if team_claim == "alias:other-team"
+            else {"team": team_claim} if team_claim else {}
+        )},
+    )
     pending: Final = JWTAuthManager.authorize_jwt(
         api_key=token,
         jwt_handler=handler,
@@ -8111,16 +8142,18 @@ async def test_delegated_jwt_uses_granting_team_policy_before_route_authorizatio
         parent_otel_span=None,
         proxy_logging_obj=MagicMock(),
     )
-    if not team_route_allowed:
+    if not team_route_allowed or (team_claim in ("other-team", "alias:other-team") and not db_fallback):
         with pytest.raises(HTTPException) as failure:
             await pending
         assert failure.value.status_code == 403
-        assert "granting team" in failure.value.detail
-        load_team.assert_not_awaited()
+        if team_claim is None:
+            assert "granting team" in failure.value.detail
+            load_team.assert_not_awaited()
         return
     result: Final = await pending
     assert result["team_id"] == "granting-team"
     assert result["team_object"] == team
     assert result["user_id"] == "human"
     assert result["managed_agent_context"] == context
-    assert load_team.call_args_list[0].kwargs["check_db_only"] is True
+    if team_claim != "granting-team":
+        assert any(call.kwargs.get("check_db_only") is True for call in load_team.call_args_list)
