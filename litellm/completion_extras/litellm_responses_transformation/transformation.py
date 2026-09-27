@@ -833,18 +833,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         return cast(list[dict[str, object]], response_output)
 
     @classmethod
-    def _recover_output_items_from_raw_sse(cls, raw_sse: str | None) -> list[dict[str, object]]:
-        if not raw_sse or not isinstance(raw_sse, str):
-            return []
-
+    def recover_output_items_from_chunks(cls, parsed_chunks: Iterable[Mapping[str, object]]) -> list[dict[str, object]]:
         recovered_output_items: Final[dict[int, dict[str, object]]] = {}
         recovered_text_only_items: Final[dict[int, dict[str, object]]] = {}
 
-        for chunk in raw_sse.splitlines():
-            parsed_chunk = parse_sse_json_chunk(chunk)
-            if parsed_chunk is None:
-                continue
-
+        for parsed_chunk in parsed_chunks:
             event_type = parsed_chunk.get("type")
 
             if event_type == ResponsesAPIStreamEvents.RESPONSE_COMPLETED:
@@ -880,6 +873,16 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             return [item for _, item in sorted(merged_items.items())]
 
         return []
+
+    @classmethod
+    def _recover_output_items_from_raw_sse(cls, raw_sse: str | None) -> list[dict[str, object]]:
+        if not raw_sse or not isinstance(raw_sse, str):
+            return []
+
+        parsed_chunks: Final = tuple(
+            parsed_chunk for chunk in raw_sse.splitlines() if (parsed_chunk := parse_sse_json_chunk(chunk)) is not None
+        )
+        return cls.recover_output_items_from_chunks(parsed_chunks)
 
     @classmethod
     def _recover_output_items_from_logging(cls, logging_obj: "LiteLLMLoggingObj") -> list[dict[str, object]]:

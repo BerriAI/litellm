@@ -2,12 +2,13 @@
 Handler for transforming /chat/completions api requests to litellm.responses requests
 """
 
-from collections.abc import AsyncIterable, Coroutine, Iterable
+from collections.abc import AsyncIterable, Coroutine, Iterable, Mapping
 from typing import TYPE_CHECKING, Any, Final, Union
 
+from pydantic import BaseModel
 from typing_extensions import TypedDict
 
-from litellm.types.llms.openai import ResponsesAPIResponse
+from litellm.types.llms.openai import ResponsesAPIResponse, ResponsesAPIStreamEvents
 
 if TYPE_CHECKING:
     from litellm import CustomStreamWrapper, LiteLLMLoggingObj, ModelResponse
@@ -54,16 +55,31 @@ class ResponsesToCompletionBridgeHandler:
     def _coerce_response_object(
         response_obj: object,
         hidden_params: dict | None,
+        stream_events: Iterable[object] = (),
     ) -> "ResponsesAPIResponse":
         if isinstance(response_obj, ResponsesAPIResponse):
-            response = response_obj
+            base_response = response_obj
         elif isinstance(response_obj, dict):
             try:
-                response = ResponsesAPIResponse(**response_obj)
+                base_response = ResponsesAPIResponse(**response_obj)
             except Exception:
-                response = ResponsesAPIResponse.model_construct(**response_obj)
+                base_response = ResponsesAPIResponse.model_construct(**response_obj)
         else:
             raise ValueError("Unexpected responses stream payload")
+
+        from .transformation import LiteLLMResponsesTransformationHandler
+
+        parsed_chunks: Final = tuple(
+            payload
+            for event in stream_events
+            if (payload := ResponsesToCompletionBridgeHandler._stream_event_payload(event)) is not None
+        )
+        recovered_output: Final = LiteLLMResponsesTransformationHandler.recover_output_items_from_chunks(parsed_chunks)
+        response: Final = (
+            base_response
+            if base_response.output or not recovered_output
+            else base_response.model_copy(update={"output": recovered_output})
+        )
 
         if hidden_params:
             existing: Final = getattr(response, "_hidden_params", None)
@@ -74,9 +90,24 @@ class ResponsesToCompletionBridgeHandler:
                     existing.setdefault(key, value)
         return response
 
+    @staticmethod
+    def _stream_event_payload(event: object) -> Mapping[str, object] | None:
+        if isinstance(event, Mapping):
+            return event
+        if isinstance(event, BaseModel):
+            return event.model_dump()
+        return None
+
+    @staticmethod
+    def _is_recoverable_stream_event(event: object) -> bool:
+        event_type: Final = event.get("type") if isinstance(event, Mapping) else getattr(event, "type", None)
+        return event_type in (
+            ResponsesAPIStreamEvents.OUTPUT_ITEM_DONE,
+            ResponsesAPIStreamEvents.OUTPUT_TEXT_DONE,
+        )
+
     def _collect_response_from_stream(self, stream_iter: Iterable[object]) -> "ResponsesAPIResponse":
-        for _ in stream_iter:
-            pass
+        stream_events: Final = tuple(event for event in stream_iter if self._is_recoverable_stream_event(event))
 
         completed: Final[object] = getattr(stream_iter, "completed_response", None)
         response_obj: Final[object] = getattr(completed, "response", None) if completed else None
@@ -84,14 +115,13 @@ class ResponsesToCompletionBridgeHandler:
             raise ValueError("Stream ended without a completed response")
 
         hidden_params: Final = getattr(stream_iter, "_hidden_params", None)
-        response: Final = self._coerce_response_object(response_obj, hidden_params)
+        response: Final = self._coerce_response_object(response_obj, hidden_params, stream_events)
         if not isinstance(response, ResponsesAPIResponse):
             raise ValueError("Stream completed response is invalid")
         return response
 
     async def _collect_response_from_stream_async(self, stream_iter: AsyncIterable[object]) -> "ResponsesAPIResponse":
-        async for _ in stream_iter:
-            pass
+        stream_events: Final = tuple([event async for event in stream_iter if self._is_recoverable_stream_event(event)])
 
         completed: Final[object] = getattr(stream_iter, "completed_response", None)
         response_obj: Final[object] = getattr(completed, "response", None) if completed else None
@@ -99,7 +129,7 @@ class ResponsesToCompletionBridgeHandler:
             raise ValueError("Stream ended without a completed response")
 
         hidden_params: Final = getattr(stream_iter, "_hidden_params", None)
-        response: Final = self._coerce_response_object(response_obj, hidden_params)
+        response: Final = self._coerce_response_object(response_obj, hidden_params, stream_events)
         if not isinstance(response, ResponsesAPIResponse):
             raise ValueError("Stream completed response is invalid")
         return response

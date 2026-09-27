@@ -1,8 +1,8 @@
 from datetime import datetime
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
-
 
 import litellm
 from litellm.completion_extras.litellm_responses_transformation.handler import (
@@ -10,6 +10,7 @@ from litellm.completion_extras.litellm_responses_transformation.handler import (
 )
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLogging
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.router import GenericLiteLLMParams
 from litellm.types.utils import ModelResponse
 
@@ -216,6 +217,66 @@ def _completed_chat_response() -> ModelResponse:
             }
         ],
     )
+
+
+def _empty_responses_response() -> ResponsesAPIResponse:
+    return ResponsesAPIResponse.model_construct(output=[], error=None)
+
+
+def _output_item_done_event() -> dict:
+    return {
+        "type": "response.output_item.done",
+        "output_index": 0,
+        "item": {
+            "type": "message",
+            "id": "msg_from_stream",
+            "role": "assistant",
+            "status": "completed",
+            "content": [
+                {
+                    "type": "output_text",
+                    "text": "Recovered from stream",
+                    "annotations": [],
+                }
+            ],
+        },
+    }
+
+
+class _SyncResponsesStream:
+    def __init__(self, response: ResponsesAPIResponse):
+        self.completed_response = SimpleNamespace(response=response)
+        self._hidden_params = {}
+
+    def __iter__(self):
+        return iter((_output_item_done_event(), self.completed_response))
+
+
+class _AsyncResponsesStream:
+    def __init__(self, response: ResponsesAPIResponse):
+        self.completed_response = SimpleNamespace(response=response)
+        self._hidden_params = {}
+
+    async def __aiter__(self):
+        for event in (_output_item_done_event(), self.completed_response):
+            yield event
+
+
+def test_collect_response_from_stream_recovers_output_items():
+    bridge = ResponsesToCompletionBridgeHandler()
+
+    response = bridge._collect_response_from_stream(_SyncResponsesStream(_empty_responses_response()))
+
+    assert response.output == [_output_item_done_event()["item"]]
+
+
+@pytest.mark.asyncio
+async def test_collect_response_from_async_stream_recovers_output_items():
+    bridge = ResponsesToCompletionBridgeHandler()
+
+    response = await bridge._collect_response_from_stream_async(_AsyncResponsesStream(_empty_responses_response()))
+
+    assert response.output == [_output_item_done_event()["item"]]
 
 
 @pytest.mark.asyncio
