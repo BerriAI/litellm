@@ -17,9 +17,10 @@ from __future__ import annotations
 import itertools
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Final, Protocol, assert_never, cast, runtime_checkable
+from typing import TYPE_CHECKING, Final, Protocol, cast, runtime_checkable
 
 from pydantic import BaseModel, ConfigDict, TypeAdapter, ValidationError
+from typing_extensions import assert_never
 
 import litellm
 from litellm.integrations.custom_guardrail import CustomGuardrail
