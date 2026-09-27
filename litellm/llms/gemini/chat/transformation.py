@@ -102,7 +102,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "include_server_side_tool_invocations",
             "service_tier",
         ]
-        if supports_reasoning(model, custom_llm_provider="gemini"):
+        if supports_reasoning(model, custom_llm_provider="gemini") or self._is_gemini_3_or_newer(model):
             supported_params.append("reasoning_effort")
             supported_params.append("thinking")
         if self.is_model_gemini_audio_model(model):

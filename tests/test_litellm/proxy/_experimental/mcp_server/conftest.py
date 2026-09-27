@@ -44,3 +44,37 @@ def _hermetic_server_root_path():
     finally:
         if saved is not None:
             os.environ["SERVER_ROOT_PATH"] = saved
+
+
+@pytest.fixture
+def config_only_mcp_manager_factory():
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
+
+    class ConfigOnlyManager(MCPServerManager):
+        def initialize_tool_name_to_mcp_server_name_mapping(self):
+            return None
+
+    return ConfigOnlyManager
+
+
+@pytest.fixture
+def _mcp_request_ctx():
+    def _mcp_request_ctx(**overrides):
+        from types import SimpleNamespace
+
+        from mcp.server.context import ServerRequestContext
+
+        kwargs = {
+            "session": SimpleNamespace(),
+            "lifespan_context": {},
+            "protocol_version": "2025-06-18",
+            "method": "",
+            "params": None,
+            "request_id": 1,
+            "meta": None,
+            "request": None,
+        }
+        kwargs.update(overrides)
+        return ServerRequestContext(**kwargs)
+
+    return _mcp_request_ctx

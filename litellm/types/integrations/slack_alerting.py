@@ -1,11 +1,12 @@
 import os
 import time
+from collections.abc import Mapping
 from datetime import datetime as dt
 from enum import Enum
 from typing import Any, Final, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
@@ -233,6 +234,18 @@ DEFAULT_ALERT_TYPES: Final[list[AlertType]] = [
     # Fallback alerts
     AlertType.fallback_reports,
 ]
+
+
+class AlertText(TypedDict):
+    text: ReadOnly[str]
+
+
+class AlertQueueItem(TypedDict):
+    url: ReadOnly[str]
+    headers: ReadOnly[Mapping[str, str]]
+    payload: ReadOnly[AlertText]
+    alert_type: ReadOnly[AlertType | str]
+    format: NotRequired[ReadOnly[str]]
 
 
 class HangingRequestData(BaseModel):

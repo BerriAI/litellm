@@ -3,6 +3,7 @@
 
 import { v4 as uuidv4 } from "uuid";
 import { getProxyBaseUrl, getGlobalLitellmHeaderName } from "@/components/networking";
+import { type CustomHeaders, withRequiredHeaders } from "@/components/llm_calls/request_headers";
 import { A2ATaskMetadata } from "@/components/chat_ui/types";
 
 interface A2AMessagePart {
@@ -116,6 +117,7 @@ export const makeA2ASendMessageRequest = async (
   onA2AMetadata?: (metadata: A2ATaskMetadata) => void,
   customBaseUrl?: string,
   guardrails?: string[],
+  customHeaders?: CustomHeaders,
 ): Promise<void> => {
   const proxyBaseUrl = customBaseUrl || getProxyBaseUrl();
   const url = proxyBaseUrl ? `${proxyBaseUrl}/a2a/${agentId}/message/send` : `/a2a/${agentId}/message/send`;
@@ -146,10 +148,10 @@ export const makeA2ASendMessageRequest = async (
   try {
     const response = await fetch(url, {
       method: "POST",
-      headers: {
+      headers: withRequiredHeaders(customHeaders ?? {}, {
         [getGlobalLitellmHeaderName()]: `Bearer ${accessToken}`,
         "Content-Type": "application/json",
-      },
+      }),
       body: JSON.stringify(jsonRpcRequest),
       signal,
     });

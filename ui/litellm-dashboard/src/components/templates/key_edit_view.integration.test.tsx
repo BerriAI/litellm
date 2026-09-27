@@ -69,6 +69,15 @@ vi.mock("../organisms/create_key_button", () => ({
   fetchTeamModels: vi.fn().mockResolvedValue(["team-model-1", "team-model-2"]),
 }));
 
+vi.mock("@/app/(dashboard)/hooks/budgets/useBudgetOptions", () => ({
+  useBudgetOptions: () => ({
+    data: [
+      { budget_id: "svc-a-budget", max_budget: 0.5, created_at: "", updated_at: "" },
+      { budget_id: "svc-b-budget", max_budget: 100, created_at: "", updated_at: "" },
+    ],
+  }),
+}));
+
 const routerSettingsMocks = vi.hoisted(() => ({
   receivedValue: undefined as { router_settings: Record<string, unknown> } | undefined,
   editedValue: null as Record<string, unknown> | null,
@@ -174,6 +183,7 @@ describe("KeyEditView", () => {
     key_name: "sk-...TUuw",
     key_alias: "asdasdas",
     spend: 0,
+    total_spend: 0,
     max_budget: 0,
     expires: "null",
     models: [],
@@ -181,6 +191,9 @@ describe("KeyEditView", () => {
     config: {},
     user_id: "default_user_id",
     team_id: null,
+    project_id: null,
+    key_type: null,
+    last_active: null,
     max_parallel_requests: 10,
     metadata: {
       logging: [],
@@ -188,6 +201,7 @@ describe("KeyEditView", () => {
     },
     tpm_limit: 10,
     rpm_limit: 10,
+    tpd_limit: 250000,
     duration: "30d",
     budget_duration: "30d",
     budget_reset_at: "never",
@@ -289,6 +303,7 @@ describe("KeyEditView", () => {
               fallbacks: [{ "gpt-4": ["gpt-4o", "gpt-4o-mini"] }],
             }),
           }),
+          expect.any(Array),
         );
       });
     });
@@ -309,6 +324,7 @@ describe("KeyEditView", () => {
               fallbacks: null,
             }),
           }),
+          expect.any(Array),
         );
       });
     });
@@ -618,7 +634,10 @@ describe("KeyEditView", () => {
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => {
-      expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ throttle_on_budget_exceeded: true }));
+      expect(onSubmitMock).toHaveBeenCalledWith(
+        expect.objectContaining({ throttle_on_budget_exceeded: true }),
+        expect.any(Array),
+      );
     });
   });
 
@@ -648,7 +667,10 @@ describe("KeyEditView", () => {
     await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
     await waitFor(() => {
-      expect(onSubmitMock).toHaveBeenCalledWith(expect.objectContaining({ enable_prompt_caching: true }));
+      expect(onSubmitMock).toHaveBeenCalledWith(
+        expect.objectContaining({ enable_prompt_caching: true }),
+        expect.any(Array),
+      );
     });
   });
 
@@ -1512,7 +1534,10 @@ describe("KeyEditView", () => {
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
 
       await waitFor(() => {
-        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ organization_id: null, team_id: null }));
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({ organization_id: null, team_id: null }),
+          expect.any(Array),
+        );
       });
       expect(JSON.parse(JSON.stringify(onSubmit.mock.calls[0][0]))).toMatchObject({
         organization_id: null,
@@ -1554,7 +1579,9 @@ describe("KeyEditView", () => {
       await userEvent.click(await screen.findByRole("button", { name: "Detach from project" }));
       await userEvent.click(screen.getByRole("button", { name: /save changes/i }));
       const expectedDetach = { project_id: null, organization_id: "org-1", team_id: "group-maple", models: key.models };
-      await waitFor(() => expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expectedDetach)));
+      await waitFor(() =>
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining(expectedDetach), expect.any(Array)),
+      );
       expect(screen.getByRole("combobox", { name: "Team ID" })).toBeDisabled();
       view.rerender(renderEditor({ ...key, project_id: null }));
       expect(screen.getByRole("combobox", { name: "Team ID" })).toBeEnabled();
@@ -1804,6 +1831,89 @@ describe("KeyEditView", () => {
     });
   });
 
+  describe("default customer budget", () => {
+    const serviceAccountKey = (endUserBudgetId?: string): KeyResponse => ({
+      ...MOCK_KEY_DATA,
+      metadata: {
+        service_account_id: "svc-a",
+        ...(endUserBudgetId === undefined ? {} : { end_user_budget_id: endUserBudgetId }),
+      },
+    });
+
+    const renderEditView = (keyData: KeyResponse, userRole: string = "Admin") => {
+      const onSubmit = vi.fn().mockResolvedValue(undefined);
+      renderWithProviders(
+        <KeyEditView
+          keyData={keyData}
+          onCancel={() => {}}
+          onSubmit={onSubmit}
+          accessToken={"test-token"}
+          userID={"test-user"}
+          userRole={userRole}
+          premiumUser={false}
+        />,
+      );
+      return onSubmit;
+    };
+
+    const budgetField = () => screen.findByRole("combobox", { name: "Default Customer Budget" });
+    const save = async () => userEvent.click(await screen.findByRole("button", { name: /save changes/i }));
+
+    it("shows the stored budget and leaves it off an edit that did not touch it", async () => {
+      const onSubmit = renderEditView(serviceAccountKey("svc-a-budget"));
+
+      expect(await budgetField()).toHaveValue("svc-a-budget");
+      await save();
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalled();
+      });
+      expect(onSubmit.mock.calls[0][0]).not.toHaveProperty("end_user_budget_id");
+    });
+
+    it("sends the newly chosen budget id", async () => {
+      const onSubmit = renderEditView(serviceAccountKey());
+      const user = userEvent.setup();
+
+      await chooseSelectOption(user, await budgetField(), /svc-b-budget/);
+      await save();
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(
+          expect.objectContaining({ end_user_budget_id: "svc-b-budget" }),
+          expect.any(Array),
+        );
+      });
+    });
+
+    it("sends an empty string when the stored budget is cleared so the backend removes it", async () => {
+      const onSubmit = renderEditView(serviceAccountKey("svc-a-budget"));
+
+      await budgetField();
+      await userEvent.click(screen.getByRole("button", { name: "Clear" }));
+      await save();
+
+      await waitFor(() => {
+        expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ end_user_budget_id: "" }), expect.any(Array));
+      });
+    });
+
+    it("keeps the stored budget visible but read-only for a non-admin", async () => {
+      renderEditView(serviceAccountKey("svc-a-budget"), "Internal User");
+
+      const field = await budgetField();
+      expect(field).toHaveValue("svc-a-budget");
+      expect(field).toBeDisabled();
+    });
+
+    it("does not render the control on a plain key that has no budget to show", async () => {
+      renderEditView(MOCK_KEY_DATA);
+
+      await screen.findByRole("button", { name: /save changes/i });
+      expect(screen.queryByRole("combobox", { name: "Default Customer Budget" })).not.toBeInTheDocument();
+    });
+  });
+
   describe("estimated output tokens", () => {
     const renderEditView = (
       keyData: KeyResponse,
@@ -1986,6 +2096,7 @@ describe("KeyEditView", () => {
     tpm_limit_type: null,
     rpm_limit: 10,
     rpm_limit_type: null,
+    tpd_limit: 250000,
     throttle_on_budget_exceeded: false,
     enable_prompt_caching: false,
     max_parallel_requests: 10,
@@ -2178,6 +2289,32 @@ describe("KeyEditView", () => {
         expect(onSubmitMock).toHaveBeenCalled();
       });
       expect(onSubmitMock.mock.calls[0][0].tags).toEqual(["test-tag", "typed-tag"]);
+    });
+
+    it("moves a tags array typed into the metadata JSON into the Tags control on blur", async () => {
+      renderForPayload(vi.fn().mockResolvedValue(undefined));
+      await screen.findByRole("button", { name: /save changes/i });
+
+      const metadata = screen.getByLabelText("Metadata");
+      fireEvent.change(metadata, { target: { value: '{"tags": ["pilot-tag"], "env": "non-prod"}' } });
+      fireEvent.blur(metadata);
+
+      expect(await screen.findByText("pilot-tag")).toBeInTheDocument();
+      expect(metadata).toHaveValue('{\n  "env": "non-prod"\n}');
+    });
+
+    it("carries a tags array typed into the metadata JSON into the payload even without a blur", async () => {
+      const onSubmitMock = vi.fn().mockResolvedValue(undefined);
+      renderForPayload(onSubmitMock);
+      await screen.findByRole("button", { name: /save changes/i });
+
+      fireEvent.change(screen.getByLabelText("Metadata"), { target: { value: '{"tags": ["pilot-tag"]}' } });
+      fireEvent.submit(screen.getByRole("button", { name: /save changes/i }));
+
+      await waitFor(() => {
+        expect(onSubmitMock).toHaveBeenCalled();
+      });
+      expect(onSubmitMock.mock.calls[0][0]).toMatchObject({ tags: ["test-tag", "pilot-tag"], metadata: "{}" });
     });
 
     const pickFromCombobox = async (inputLabel: RegExp | string, optionName: RegExp | string) => {
@@ -2479,5 +2616,33 @@ describe("KeyEditView", () => {
         expect(onSubmitMock.mock.calls[0][0]).toStrictEqual({ token: "test-token-123", rpm_limit: "25" });
       },
     );
+  });
+
+  describe("disable_global_guardrails toggle gating", () => {
+    const renderAs = (userRole: string) =>
+      renderWithProviders(
+        <KeyEditView
+          keyData={MOCK_KEY_DATA}
+          onCancel={() => {}}
+          onSubmit={async () => {}}
+          accessToken="test-token"
+          userID="test-user"
+          userRole={userRole}
+          premiumUser={true}
+        />,
+      );
+
+    it("hides the switch from a non-admin", async () => {
+      renderAs("Internal User");
+      await screen.findByRole("button", { name: /save changes/i });
+
+      expect(screen.queryByRole("switch", { name: /disable global guardrails/i })).not.toBeInTheDocument();
+    });
+
+    it("shows the switch to a proxy admin", async () => {
+      renderAs("Admin");
+
+      expect(await screen.findByRole("switch", { name: /disable global guardrails/i })).toBeInTheDocument();
+    });
   });
 });

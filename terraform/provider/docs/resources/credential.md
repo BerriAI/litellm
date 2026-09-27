@@ -130,6 +130,7 @@ The following arguments are supported:
 * `credential_values` - (Required, Sensitive) Map of sensitive credential values such as API keys, tokens, etc.
 * `model_id` - (Optional) Model ID associated with this credential.
 * `credential_info` - (Optional) Map of additional non-sensitive information about the credential.
+* `adopt_existing` - (Optional, default `false`) Take over a credential of this name that already exists on the proxy instead of failing. Turning this on overwrites the existing credential's values with the ones in this configuration.
 
 ## Attributes Reference
 
