@@ -1509,7 +1509,7 @@ class TestVertexResponsesBatchInputTranslation:
         )
 
         request = row["request"]
-        assert request["system_instruction"] == {"parts": [{"text": "be terse"}]}
+        assert request["systemInstruction"] == {"parts": [{"text": "be terse"}]}
         assert [content["role"] for content in request["contents"]] == ["user", "model", "user"]
         assert request["contents"][-1]["parts"] == [{"text": "and 3+3?"}]
         assert request["generationConfig"]["max_output_tokens"] == 32
@@ -1607,7 +1607,7 @@ class TestVertexResponsesBatchInputTranslation:
         (row,) = _wrap_entries([entry])
 
         request = row["request"]
-        assert request["system_instruction"] == {"parts": [{"text": "be terse"}]}
+        assert request["systemInstruction"] == {"parts": [{"text": "be terse"}]}
         assert request["contents"] == [{"role": "user", "parts": [{"text": "ping"}]}]
 
 
