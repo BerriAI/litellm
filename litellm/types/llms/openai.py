@@ -490,7 +490,6 @@ class CreateFileRequest(TypedDict, total=False):
     file: Required[FileTypes]
     purpose: Required[CREATE_FILE_REQUESTS_PURPOSE]
     expires_after: FileExpiresAfter | None
-    project: str | None
     extra_headers: dict[str, str] | None
     extra_body: dict[str, str] | None
     timeout: float | None
@@ -547,7 +546,6 @@ class CreateBatchRequest(TypedDict, total=False):
 class LiteLLMBatchCreateRequest(CreateBatchRequest, total=False):
     model: str
     disable_fallbacks: ReadOnly[bool]
-    project: str | None
 
 
 class RetrieveBatchRequest(TypedDict, total=False):
