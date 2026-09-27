@@ -60,10 +60,18 @@ fn audio_fields(audio: Value) -> Result<AudioInput, Error> {
         .filter(|value| !value.is_empty())
         .ok_or(Error::MissingField("audio.data"))?;
     let format = object.get("format").cloned().ok_or_else(|| {
-        Error::InvalidRequest("audio.format must be wav, mp3, flac, or ogg".to_string().into())
+        Error::InvalidRequest(
+            "audio.format must be wav, mp3, flac, or ogg"
+                .to_string()
+                .into(),
+        )
     })?;
     let format: AudioFormat = serde_json::from_value(format).map_err(|_| {
-        Error::InvalidRequest("audio.format must be wav, mp3, flac, or ogg".to_string().into())
+        Error::InvalidRequest(
+            "audio.format must be wav, mp3, flac, or ogg"
+                .to_string()
+                .into(),
+        )
     })?;
     Ok(AudioInput {
         data: data.to_string(),
@@ -131,7 +139,9 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
             })?;
         if response.message_content_is_non_text() {
             return Err(Error::InvalidResponse(
-                "Bedrock response contains non-text transcript content".to_string().into(),
+                "Bedrock response contains non-text transcript content"
+                    .to_string()
+                    .into(),
             ));
         }
         Ok(AudioTranscriptionResponseData {
