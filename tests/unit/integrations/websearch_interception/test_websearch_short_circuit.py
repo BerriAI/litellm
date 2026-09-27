@@ -481,6 +481,5 @@ class TestShortCircuitEntryPoint:
 
         assert result is not None
         mock_search.assert_called_once_with(expected_query)
-        tool_use_block = next((b for b in result["content"] if b["type"] == "server_tool_use"), None)
-        if tool_use_block is not None:
-            assert tool_use_block["input"]["query"] == expected_query
+        tool_use_block = next(b for b in result["content"] if b["type"] == "server_tool_use")
+        assert tool_use_block["input"]["query"] == expected_query
