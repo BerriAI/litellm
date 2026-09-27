@@ -296,6 +296,71 @@ async def test_agent_budget_carries_existing_spend_into_its_counter() -> None:
 
 
 @pytest.mark.asyncio
+async def test_agent_budget_recovers_conservatively_after_scope_eviction() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxBudgetPerSessionHandler(InternalUsageCache(cache))
+    session_id: Final = "scope-eviction-session"
+    registry: Final = AgentRegistry()
+    registry.register_agent(_make_mock_agent(10.0, "agent-a"))
+    registry.register_agent(_make_mock_agent(10.0, "agent-b"))
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
+        await handler._increment_agent_spend(session_id, "agent-a", 0.4)
+        await cache.async_delete_cache(key=handler._make_agent_scope_cache_key(session_id))
+        # Lost per-agent detail falls back to the aggregate, rather than resetting spend.
+        assert await handler._get_agent_spend(session_id, "agent-b") == pytest.approx(0.4)
+        assert await handler._increment_agent_spend(session_id, "agent-a", 0.1) == pytest.approx(0.5)
+
+
+@pytest.mark.asyncio
+async def test_agent_budget_fails_closed_when_scope_loses_migration_total() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxBudgetPerSessionHandler(InternalUsageCache(cache))
+    session_id: Final = "inconsistent-scope-session"
+    registry: Final = AgentRegistry()
+    registry.register_agent(_make_mock_agent(10.0, "agent-a"))
+    scope_key: Final = handler._make_agent_scope_cache_key(session_id)
+    await cache.async_set_cache(key=handler._make_legacy_cache_key(session_id), value=0.4)
+    await cache.async_set_cache(key=scope_key, value={})
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
+        with pytest.raises(RuntimeError, match="missing its migration total"):
+            await handler._increment_agent_spend(session_id, "agent-a", 0.1)
+
+
+@pytest.mark.asyncio
+async def test_agent_budget_registers_redis_scripts_when_redis_is_attached_late() -> None:
+    class FakeRedisCache:
+        def __init__(self) -> None:
+            self.scripts: list[str] = []
+            self.calls: list[dict[str, object]] = []
+
+        def async_register_script(self, source: str):
+            self.scripts.append(source)
+
+            async def call(**kwargs: object) -> object:
+                self.calls.append(kwargs)
+                return "0.1"
+
+            return call
+
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxBudgetPerSessionHandler(InternalUsageCache(cache))
+    redis_cache: Final = FakeRedisCache()
+    cache.redis_cache = redis_cache
+    registry: Final = AgentRegistry()
+    registry.register_agent(_make_mock_agent(10.0, "agent-a"))
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
+        await handler._increment_agent_spend("late-redis", "agent-a", 0.1)
+        assert await handler._get_agent_spend("late-redis", "agent-a") == pytest.approx(0.1)
+
+    assert len(redis_cache.scripts) == 2
+    assert len(redis_cache.calls) == 2
+    assert all(len(call["keys"]) == 2 for call in redis_cache.calls)
+
+
+@pytest.mark.asyncio
 async def test_agent_budget_tracks_old_and_new_pods_without_mixing_new_agent_spend() -> None:
     cache: Final = DualCache()
     handler: Final = _PROXY_MaxBudgetPerSessionHandler(InternalUsageCache(cache))
@@ -358,7 +423,11 @@ async def test_agent_spend_is_recorded_before_a_budget_is_configured() -> None:
 
 @pytest.mark.asyncio
 async def test_agent_budget_redis_errors_are_not_retried_or_read_locally() -> None:
-    handler: Final = _PROXY_MaxBudgetPerSessionHandler(InternalUsageCache(DualCache()))
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxBudgetPerSessionHandler(InternalUsageCache(cache))
+    redis_cache: Final = object()
+    cache.redis_cache = redis_cache
+    handler._registered_redis_cache = redis_cache
     increment_calls = 0
     read_calls = 0
 
@@ -405,10 +474,8 @@ async def test_redis_budget_migration_is_atomic_and_preserves_session_ttl() -> N
     with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
         try:
             legacy_key: Final = handler._make_legacy_cache_key(session_id)
-            total_new_key: Final = handler._make_total_new_cache_key(session_id)
-            agent_a_key: Final = handler._make_cache_key(session_id, "agent-a")
-            agent_b_key: Final = handler._make_cache_key(session_id, "agent-b")
-            keys.extend((legacy_key, total_new_key, agent_a_key, agent_b_key))
+            agent_scope_key: Final = handler._make_agent_scope_cache_key(session_id)
+            keys.extend((legacy_key, agent_scope_key))
             await redis.async_set_cache(key=legacy_key, value=0.5, ttl=30)
             legacy_redis_key: Final = redis.check_and_fix_namespace(legacy_key)
             initial_ttl: Final = await redis_client.pttl(legacy_redis_key)
@@ -420,32 +487,32 @@ async def test_redis_budget_migration_is_atomic_and_preserves_session_ttl() -> N
             assert await handler._get_agent_spend(session_id, "agent-a") == pytest.approx(1.2)
             assert await handler._get_agent_spend(session_id, "agent-b") == pytest.approx(0.8)
 
-            hash_tags: Final = {key[key.index("{") : key.index("}") + 1] for key in keys[:4]}
+            hash_tags: Final = {key[key.index("{") : key.index("}") + 1] for key in keys[:2]}
             assert len(hash_tags) == 1
-            sidecar_ttl: Final = await redis_client.pttl(redis.check_and_fix_namespace(total_new_key))
-            agent_ttl: Final = await redis_client.pttl(redis.check_and_fix_namespace(agent_a_key))
+            sidecar_ttl: Final = await redis_client.pttl(redis.check_and_fix_namespace(agent_scope_key))
             current_ttl: Final = await redis_client.pttl(legacy_redis_key)
-            assert current_ttl <= sidecar_ttl <= current_ttl + 1100
-            assert sidecar_ttl <= agent_ttl <= sidecar_ttl + 1100
+            assert 0 <= sidecar_ttl <= current_ttl
             assert current_ttl <= initial_ttl
             await asyncio.sleep(0.25)
             before_increment_ttl: Final = await redis_client.pttl(legacy_redis_key)
-            before_increment_sidecar_ttl: Final = await redis_client.pttl(redis.check_and_fix_namespace(total_new_key))
+            before_increment_sidecar_ttl: Final = await redis_client.pttl(
+                redis.check_and_fix_namespace(agent_scope_key)
+            )
             await handler._increment_agent_spend(session_id, "agent-a", 0.01)
             after_increment_ttl: Final = await redis_client.pttl(legacy_redis_key)
-            after_increment_sidecar_ttl: Final = await redis_client.pttl(redis.check_and_fix_namespace(total_new_key))
+            after_increment_sidecar_ttl: Final = await redis_client.pttl(redis.check_and_fix_namespace(agent_scope_key))
             assert after_increment_ttl <= before_increment_ttl + 50
             assert after_increment_sidecar_ttl <= before_increment_sidecar_ttl + 50
 
+            # Losing the hash evicts migration and agent counters together; the aggregate remains a safe baseline.
+            await redis_client.delete(redis.check_and_fix_namespace(agent_scope_key))
+            assert await handler._get_agent_spend(session_id, "agent-b") == pytest.approx(1.31)
+            await handler._increment_agent_spend(session_id, "agent-a", 0.01)
+            assert await handler._get_agent_spend(session_id, "agent-a") == pytest.approx(1.32)
+
             concurrent_legacy_key: Final = handler._make_legacy_cache_key(concurrent_session)
-            keys.extend(
-                (
-                    concurrent_legacy_key,
-                    handler._make_total_new_cache_key(concurrent_session),
-                    handler._make_cache_key(concurrent_session, "agent-a"),
-                    handler._make_cache_key(concurrent_session, "agent-b"),
-                )
-            )
+            concurrent_scope_key: Final = handler._make_agent_scope_cache_key(concurrent_session)
+            keys.extend((concurrent_legacy_key, concurrent_scope_key))
             await redis.async_set_cache(key=concurrent_legacy_key, value=5.0, ttl=30)
             await asyncio.gather(
                 *(handler._increment_agent_spend(concurrent_session, "agent-a", 0.01) for _ in range(100)),
@@ -454,13 +521,18 @@ async def test_redis_budget_migration_is_atomic_and_preserves_session_ttl() -> N
             assert await handler._get_agent_spend(concurrent_session, "agent-a") == pytest.approx(6.0)
             assert await handler._get_agent_spend(concurrent_session, "agent-b") == pytest.approx(5.5)
 
+            saved_total_new: Final = await redis_client.hget(
+                redis.check_and_fix_namespace(agent_scope_key), "__total_new"
+            )
+            await redis_client.hdel(redis.check_and_fix_namespace(agent_scope_key), "__total_new")
+            with pytest.raises(Exception, match="agent session scope is missing its migration total"):
+                await handler._get_agent_spend(session_id, "agent-a")
+            assert saved_total_new is not None
+            await redis_client.hset(redis.check_and_fix_namespace(agent_scope_key), "__total_new", saved_total_new)
+
             await redis_client.pexpire(legacy_redis_key, 100)
             await asyncio.sleep(0.15)
             with pytest.raises(Exception, match="legacy session spend expired before agent scope"):
-                await handler._get_agent_spend(session_id, "agent-a")
-
-            await redis_client.delete(redis.check_and_fix_namespace(total_new_key))
-            with pytest.raises(Exception, match="agent session spend exists without migration total"):
                 await handler._get_agent_spend(session_id, "agent-a")
         finally:
             await redis_client.delete(*(redis.check_and_fix_namespace(key) for key in keys))

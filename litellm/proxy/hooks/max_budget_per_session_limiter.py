@@ -43,16 +43,15 @@ else:
 # Cluster. Old proxy instances continue to update the aggregate key.
 MAX_BUDGET_SESSION_INCREMENT_SCRIPT: Final = """
 local legacy_key = KEYS[1]
-local total_new_key = KEYS[2]
-local agent_key = KEYS[3]
+local agent_scope_key = KEYS[2]
 local amount = tonumber(ARGV[1])
 local ttl = tonumber(ARGV[2])
+local agent_field = ARGV[3]
+if amount == nil or amount <= 0 or amount ~= amount or math.abs(amount) == math.huge then
+    return redis.error_reply('agent session spend increment is invalid')
+end
 
-if redis.call('EXISTS', total_new_key) == 0 then
-    if redis.call('EXISTS', agent_key) == 1 then
-        return redis.error_reply('agent session spend exists without migration total')
-    end
-
+if redis.call('EXISTS', agent_scope_key) == 0 then
     if redis.call('EXISTS', legacy_key) == 0 then
         redis.call('SET', legacy_key, '0')
         redis.call('PEXPIRE', legacy_key, ttl * 1000)
@@ -62,10 +61,13 @@ if redis.call('EXISTS', total_new_key) == 0 then
     if legacy_ttl == -2 then
         return redis.error_reply('legacy session spend expired during migration')
     end
+    if legacy_ttl >= 0 and legacy_ttl <= 1 then
+        return redis.error_reply('legacy session spend is expiring before agent scope')
+    end
 
-    redis.call('SET', total_new_key, '0')
+    redis.call('HSET', agent_scope_key, '__total_new', '0')
     if legacy_ttl >= 0 then
-        redis.call('PEXPIRE', total_new_key, legacy_ttl + 1000)
+        redis.call('PEXPIRE', agent_scope_key, legacy_ttl - 1)
     end
 end
 
@@ -73,33 +75,58 @@ if redis.call('EXISTS', legacy_key) == 0 then
     return redis.error_reply('legacy session spend expired before agent scope')
 end
 
-local legacy_value = tonumber(redis.call('INCRBYFLOAT', legacy_key, amount))
-local total_new_value = tonumber(redis.call('INCRBYFLOAT', total_new_key, amount))
-local agent_existed = redis.call('EXISTS', agent_key)
-local agent_value = tonumber(redis.call('INCRBYFLOAT', agent_key, amount))
-if agent_existed == 0 then
-    local migration_ttl = redis.call('PTTL', total_new_key)
-    if migration_ttl >= 0 then
-        redis.call('PEXPIRE', agent_key, migration_ttl + 1000)
-    end
+local total_new_raw = redis.call('HGET', agent_scope_key, '__total_new')
+if total_new_raw == false then
+    return redis.error_reply('agent session scope is missing its migration total')
+end
+local total_new_value = tonumber(total_new_raw)
+if total_new_value == nil or total_new_value ~= total_new_value or math.abs(total_new_value) == math.huge then
+    return redis.error_reply('agent session migration total is not numeric')
+end
+local agent_raw = redis.call('HGET', agent_scope_key, agent_field)
+local agent_value = tonumber(agent_raw or '0')
+if agent_value == nil or agent_value ~= agent_value or math.abs(agent_value) == math.huge then
+    return redis.error_reply('agent session counter is not numeric')
+end
+if math.abs(total_new_value + amount) == math.huge or math.abs(agent_value + amount) == math.huge then
+    return redis.error_reply('agent session spend increment is out of range')
 end
 
-return tostring(math.max(legacy_value - total_new_value, 0) + agent_value)
+local legacy_value = tonumber(redis.call('INCRBYFLOAT', legacy_key, amount))
+local next_total_new = tonumber(redis.call('HINCRBYFLOAT', agent_scope_key, '__total_new', amount))
+local next_agent_value = tonumber(redis.call('HINCRBYFLOAT', agent_scope_key, agent_field, amount))
+
+return tostring(math.max(legacy_value - next_total_new, 0) + next_agent_value)
 """
 
 MAX_BUDGET_SESSION_GET_AGENT_SPEND_SCRIPT: Final = """
-local legacy_value = tonumber(redis.call('GET', KEYS[1])) or 0
-local total_new_value = tonumber(redis.call('GET', KEYS[2]))
-local agent_value = tonumber(redis.call('GET', KEYS[3])) or 0
+local legacy_key = KEYS[1]
+local agent_scope_key = KEYS[2]
+local legacy_value = tonumber(redis.call('GET', legacy_key)) or 0
 
-if total_new_value == nil then
-    if redis.call('EXISTS', KEYS[3]) == 1 then
-        return redis.error_reply('agent session spend exists without migration total')
-    end
-    return tostring(math.max(legacy_value, agent_value))
+if redis.call('EXISTS', agent_scope_key) == 0 then
+    return tostring(legacy_value)
 end
-if redis.call('EXISTS', KEYS[1]) == 0 then
+
+if redis.call('EXISTS', legacy_key) == 0 then
     return redis.error_reply('legacy session spend expired before agent scope')
+end
+
+local total_new_raw = redis.call('HGET', agent_scope_key, '__total_new')
+if total_new_raw == false then
+    return redis.error_reply('agent session scope is missing its migration total')
+end
+local total_new_value = tonumber(total_new_raw)
+if total_new_value == nil or total_new_value ~= total_new_value or math.abs(total_new_value) == math.huge then
+    return redis.error_reply('agent session migration total is not numeric')
+end
+local agent_raw = redis.call('HGET', agent_scope_key, ARGV[1])
+local agent_value = 0
+if agent_raw ~= false then
+    agent_value = tonumber(agent_raw)
+    if agent_value == nil or agent_value ~= agent_value or math.abs(agent_value) == math.huge then
+        return redis.error_reply('agent session counter is not numeric')
+    end
 end
 
 return tostring(math.max(legacy_value - total_new_value, 0) + agent_value)
@@ -125,6 +152,7 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
         self._local_lock = asyncio.Lock()
         self.increment_script: Callable[..., Awaitable[object]] | None = None
         self.get_agent_spend_script: Callable[..., Awaitable[object]] | None = None
+        self._registered_redis_cache: object | None = None
         self.ttl = int(
             os.getenv(
                 "LITELLM_MAX_BUDGET_PER_SESSION_TTL",
@@ -132,19 +160,27 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             )
         )
 
-        if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.increment_script = cast(
-                Callable[..., Awaitable[object]],
-                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                    MAX_BUDGET_SESSION_INCREMENT_SCRIPT
-                ),
-            )
-            self.get_agent_spend_script = cast(
-                Callable[..., Awaitable[object]],
-                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
-                    MAX_BUDGET_SESSION_GET_AGENT_SPEND_SCRIPT
-                ),
-            )
+        self._ensure_redis_scripts()
+
+    def _ensure_redis_scripts(self) -> None:
+        redis_cache = self.internal_usage_cache.dual_cache.redis_cache
+        if redis_cache is None:
+            self.increment_script = None
+            self.get_agent_spend_script = None
+            self._registered_redis_cache = None
+            return
+        if redis_cache is self._registered_redis_cache:
+            return
+
+        self.increment_script = cast(
+            Callable[..., Awaitable[object]],
+            redis_cache.async_register_script(MAX_BUDGET_SESSION_INCREMENT_SCRIPT),
+        )
+        self.get_agent_spend_script = cast(
+            Callable[..., Awaitable[object]],
+            redis_cache.async_register_script(MAX_BUDGET_SESSION_GET_AGENT_SPEND_SCRIPT),
+        )
+        self._registered_redis_cache = redis_cache
 
     async def async_pre_call_hook(
         self,
@@ -265,27 +301,52 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
             return float(max_budget)
         return None
 
-    def _make_cache_key(self, session_id: str, agent_id: str) -> str:
+    def _make_agent_scope_cache_key(self, session_id: str) -> str:
+        return f"{{session_budget:{session_id}}}:agent-scope"
+
+    def _make_agent_scope_field(self, agent_id: str) -> str:
         from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
 
         stable_agent_id: Final = json.dumps(global_agent_registry.stable_agent_id(agent_id), separators=(",", ":"))
-        return f"{{session_budget:{session_id}}}:agent:{stable_agent_id}:spend"
+        return f"agent:{stable_agent_id}"
 
     def _make_legacy_cache_key(self, session_id: str) -> str:
         return f"{{session_budget:{session_id}}}:spend"
 
-    def _make_total_new_cache_key(self, session_id: str) -> str:
-        return f"{{session_budget:{session_id}}}:agent-scope-total"
+    async def _get_local_scope(self, cache_key: str) -> dict[str, object] | None:
+        result: Final[object | None] = cast(
+            object | None,
+            await self.internal_usage_cache.async_get_cache(
+                key=cache_key,
+                litellm_parent_otel_span=None,
+                local_only=True,
+            ),
+        )
+        if result is None:
+            return None
+        if isinstance(result, dict) and all(isinstance(key, str) for key in result):
+            return cast(dict[str, object], result)
+        raise RuntimeError("Agent session scope cache has an invalid value")
+
+    @staticmethod
+    def _get_scope_spend(scope: dict[str, object], field: str) -> float:
+        value = scope.get(field)
+        if value is None:
+            return 0.0
+        if isinstance(value, (int, float, str, bytes)):
+            return float(value)
+        raise RuntimeError("Agent session scope has an invalid counter")
 
     async def _get_agent_spend(self, session_id: str, agent_id: str) -> float:
         legacy_key: Final = self._make_legacy_cache_key(session_id)
-        total_new_key: Final = self._make_total_new_cache_key(session_id)
-        agent_key: Final = self._make_cache_key(session_id, agent_id)
+        agent_scope_key: Final = self._make_agent_scope_cache_key(session_id)
+        agent_field: Final = self._make_agent_scope_field(agent_id)
+        self._ensure_redis_scripts()
         if self.get_agent_spend_script is not None:
             try:
                 result: Final[object] = await self.get_agent_spend_script(
-                    keys=[legacy_key, total_new_key, agent_key],
-                    args=[],
+                    keys=[legacy_key, agent_scope_key],
+                    args=[agent_field],
                 )
                 if isinstance(result, (int, float, str, bytes)):
                     return float(result)
@@ -300,15 +361,19 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
                 raise
 
         legacy_value: Final = await self._get_local_spend(legacy_key)
-        total_new_value: Final = await self._get_local_spend(total_new_key)
-        agent_value: Final = await self._get_local_spend(agent_key)
+        agent_scope: Final = await self._get_local_scope(agent_scope_key)
         if legacy_value is None:
-            if total_new_value is not None:
+            if agent_scope is not None:
                 raise RuntimeError("Legacy session spend expired before agent scope")
-            return float(agent_value or 0.0)
-        if total_new_value is None:
-            return max(float(legacy_value), float(agent_value or 0.0))
-        return max(float(legacy_value) - float(total_new_value), 0.0) + float(agent_value or 0.0)
+            return 0.0
+        if agent_scope is None:
+            return float(legacy_value)
+        raw_total_new = agent_scope.get("__total_new")
+        if not isinstance(raw_total_new, (int, float, str, bytes)):
+            raise RuntimeError("Agent session scope is missing its migration total")
+        total_new_value = float(raw_total_new)
+        agent_value = self._get_scope_spend(agent_scope, agent_field)
+        return max(float(legacy_value) - total_new_value, 0.0) + agent_value
 
     async def _get_local_spend(self, cache_key: str) -> float | None:
         result: Final[object | None] = cast(
@@ -325,13 +390,14 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
     async def _increment_agent_spend(self, session_id: str, agent_id: str, amount: float) -> float:
         legacy_key: Final = self._make_legacy_cache_key(session_id)
-        total_new_key: Final = self._make_total_new_cache_key(session_id)
-        agent_key: Final = self._make_cache_key(session_id, agent_id)
+        agent_scope_key: Final = self._make_agent_scope_cache_key(session_id)
+        agent_field: Final = self._make_agent_scope_field(agent_id)
+        self._ensure_redis_scripts()
         if self.increment_script is not None:
             try:
                 result: Final[object] = await self.increment_script(
-                    keys=[legacy_key, total_new_key, agent_key],
-                    args=[str(amount), self.ttl],
+                    keys=[legacy_key, agent_scope_key],
+                    args=[str(amount), self.ttl, agent_field],
                 )
                 if isinstance(result, (int, float, str, bytes)):
                     return float(result)
@@ -347,35 +413,39 @@ class _PROXY_MaxBudgetPerSessionHandler(CustomLogger):
 
         async with self._local_lock:
             legacy_value = await self._get_local_spend(legacy_key)
-            total_new_value = await self._get_local_spend(total_new_key)
-            agent_value = await self._get_local_spend(agent_key)
+            agent_scope = await self._get_local_scope(agent_scope_key)
             if legacy_value is None:
-                if total_new_value is not None:
+                if agent_scope is not None:
                     raise RuntimeError("Legacy session spend expired before agent scope")
                 legacy_value = 0.0
-            total_new_value = total_new_value or 0.0
-            agent_value = agent_value or 0.0
+            if agent_scope is None:
+                total_new_value = 0.0
+                agent_value = 0.0
+            else:
+                raw_total_new = agent_scope.get("__total_new")
+                if not isinstance(raw_total_new, (int, float, str, bytes)):
+                    raise RuntimeError("Agent session scope is missing its migration total")
+                total_new_value = float(raw_total_new)
+                agent_value = self._get_scope_spend(agent_scope, agent_field)
             new_legacy: Final = float(legacy_value) + amount
             new_total_new: Final = float(total_new_value) + amount
             new_agent: Final = float(agent_value) + amount
             await self.internal_usage_cache.async_set_cache(
                 key=legacy_key,
                 value=new_legacy,
-                ttl=self.ttl if legacy_value == 0.0 else None,
+                ttl=self.ttl,
                 litellm_parent_otel_span=None,
                 local_only=True,
             )
             await self.internal_usage_cache.async_set_cache(
-                key=total_new_key,
-                value=new_total_new,
-                ttl=self.ttl + 1 if total_new_value == 0.0 else None,
-                litellm_parent_otel_span=None,
-                local_only=True,
-            )
-            await self.internal_usage_cache.async_set_cache(
-                key=agent_key,
-                value=new_agent,
-                ttl=self.ttl + 1 if agent_value == 0.0 else None,
+                key=agent_scope_key,
+                value={
+                    **(agent_scope or {}),
+                    "__total_new": new_total_new,
+                    agent_field: new_agent,
+                },
+                # Keep this map on a shorter rolling TTL than the aggregate fallback.
+                ttl=max(self.ttl - 1, 0),
                 litellm_parent_otel_span=None,
                 local_only=True,
             )

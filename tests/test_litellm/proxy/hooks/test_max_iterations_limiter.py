@@ -264,9 +264,71 @@ async def test_agent_iteration_limit_keeps_count_from_an_existing_session() -> N
     assert rejected.value.status_code == 429
     assert "Current count: 3" in str(rejected.value.detail)
     legacy_count: Final = await cache.async_get_cache(key=handler._make_legacy_cache_key(session_id))
-    total_new_count: Final = await cache.async_get_cache(key=handler._make_total_new_cache_key(session_id))
-    agent_count: Final = await cache.async_get_cache(key=handler._make_cache_key(session_id, "agent-test-123"))
-    assert legacy_count - total_new_count + agent_count == 3
+    scope: Final = await cache.async_get_cache(key=handler._make_agent_scope_cache_key(session_id))
+    agent_field: Final = handler._make_agent_scope_field("agent-test-123")
+    assert isinstance(scope, dict)
+    assert legacy_count - scope["__total_new"] + scope[agent_field] == 3
+
+
+@pytest.mark.asyncio
+async def test_agent_iteration_recovers_conservatively_after_scope_eviction() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxIterationsHandler(InternalUsageCache(cache))
+    session_id: Final = "scope-eviction-session"
+    registry: Final = AgentRegistry()
+    registry.register_agent(_make_mock_agent(20, "agent-a"))
+    registry.register_agent(_make_mock_agent(20, "agent-b"))
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
+        assert await handler._increment_agent_and_get(session_id, "agent-a") == 1
+        await cache.async_delete_cache(key=handler._make_agent_scope_cache_key(session_id))
+        # With the migration scope gone, prior usage becomes a conservative shared baseline.
+        assert await handler._increment_agent_and_get(session_id, "agent-b") == 2
+        assert await handler._increment_agent_and_get(session_id, "agent-a") == 2
+
+
+@pytest.mark.asyncio
+async def test_agent_iteration_fails_closed_when_scope_loses_migration_total() -> None:
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxIterationsHandler(InternalUsageCache(cache))
+    session_id: Final = "inconsistent-scope-session"
+    scope_key: Final = handler._make_agent_scope_cache_key(session_id)
+    await cache.async_set_cache(key=handler._make_legacy_cache_key(session_id), value=1)
+    await cache.async_set_cache(key=scope_key, value={'agent:"agent-a"': 1})
+
+    with pytest.raises(RuntimeError, match="missing its migration total"):
+        await handler._increment_agent_and_get(session_id, "agent-a")
+
+
+@pytest.mark.asyncio
+async def test_agent_iteration_registers_redis_scripts_when_redis_is_attached_late() -> None:
+    class FakeRedisCache:
+        def __init__(self) -> None:
+            self.scripts: list[str] = []
+            self.calls: list[dict[str, object]] = []
+
+        def async_register_script(self, source: str):
+            self.scripts.append(source)
+
+            async def call(**kwargs: object) -> object:
+                self.calls.append(kwargs)
+                return 1
+
+            return call
+
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxIterationsHandler(InternalUsageCache(cache))
+    redis_cache: Final = FakeRedisCache()
+    cache.redis_cache = redis_cache
+    registry: Final = AgentRegistry()
+    registry.register_agent(_make_mock_agent(10, "agent-a"))
+
+    with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
+        assert await handler._increment_agent_and_get("late-redis", "agent-a") == 1
+
+    assert len(redis_cache.scripts) == 1
+    assert len(redis_cache.calls) == 1
+    assert len(redis_cache.calls[0]["keys"]) == 2
 
 
 @pytest.mark.asyncio
@@ -292,7 +354,11 @@ async def test_agent_iteration_counter_tracks_old_and_new_pods_independently() -
 
 @pytest.mark.asyncio
 async def test_agent_iteration_redis_error_is_not_retried_or_counted_locally() -> None:
-    handler: Final = _PROXY_MaxIterationsHandler(InternalUsageCache(DualCache()))
+    cache: Final = DualCache()
+    handler: Final = _PROXY_MaxIterationsHandler(InternalUsageCache(cache))
+    redis_cache: Final = object()
+    cache.redis_cache = redis_cache
+    handler._registered_redis_cache = redis_cache
     calls = 0
 
     async def fail_after_attempt(**_kwargs: object) -> object:
@@ -328,15 +394,8 @@ async def test_redis_iteration_migration_is_atomic_and_preserves_session_ttl() -
     with patch("litellm.proxy.agent_endpoints.agent_registry.global_agent_registry", registry):
         try:
             legacy_key: Final = handler._make_legacy_cache_key(session_id)
-            total_new_key: Final = handler._make_total_new_cache_key(session_id)
-            keys.extend(
-                (
-                    legacy_key,
-                    total_new_key,
-                    handler._make_cache_key(session_id, "agent-a"),
-                    handler._make_cache_key(session_id, "agent-b"),
-                )
-            )
+            agent_scope_key: Final = handler._make_agent_scope_cache_key(session_id)
+            keys.extend((legacy_key, agent_scope_key))
             await redis.async_set_cache(key=legacy_key, value=3, ttl=30)
             legacy_redis_key: Final = redis.check_and_fix_namespace(legacy_key)
             initial_ttl: Final = await redis_client.pttl(legacy_redis_key)
@@ -349,20 +408,18 @@ async def test_redis_iteration_migration_is_atomic_and_preserves_session_ttl() -
             assert await handler._increment_agent_and_get(session_id, "agent-a") == 6
             assert await handler._increment_agent_and_get(session_id, "agent-b") == 6
 
-            sidecar_ttl: Final = await redis_client.pttl(redis.check_and_fix_namespace(total_new_key))
-            agent_ttl: Final = await redis_client.pttl(
-                redis.check_and_fix_namespace(handler._make_cache_key(session_id, "agent-a"))
-            )
+            sidecar_ttl: Final = await redis_client.pttl(redis.check_and_fix_namespace(agent_scope_key))
             current_ttl: Final = await redis_client.pttl(legacy_redis_key)
-            assert current_ttl <= sidecar_ttl <= current_ttl + 1100
-            assert sidecar_ttl <= agent_ttl <= sidecar_ttl + 1100
+            assert 0 <= sidecar_ttl <= current_ttl
             assert current_ttl <= initial_ttl
             await asyncio.sleep(0.25)
             before_increment_ttl: Final = await redis_client.pttl(legacy_redis_key)
-            before_increment_sidecar_ttl: Final = await redis_client.pttl(redis.check_and_fix_namespace(total_new_key))
+            before_increment_sidecar_ttl: Final = await redis_client.pttl(
+                redis.check_and_fix_namespace(agent_scope_key)
+            )
             assert await handler._increment_agent_and_get(session_id, "agent-a") == 7
             after_increment_ttl: Final = await redis_client.pttl(legacy_redis_key)
-            after_increment_sidecar_ttl: Final = await redis_client.pttl(redis.check_and_fix_namespace(total_new_key))
+            after_increment_sidecar_ttl: Final = await redis_client.pttl(redis.check_and_fix_namespace(agent_scope_key))
             assert after_increment_ttl <= before_increment_ttl + 50
             assert after_increment_sidecar_ttl <= before_increment_sidecar_ttl + 50
 
@@ -371,13 +428,23 @@ async def test_redis_iteration_migration_is_atomic_and_preserves_session_ttl() -
             )
             assert sorted(values) == list(range(8, 108))
 
+            # Losing the hash evicts migration and agent counters together; the aggregate remains a safe baseline.
+            await redis_client.delete(redis.check_and_fix_namespace(agent_scope_key))
+            assert await handler._increment_agent_and_get(session_id, "agent-b") == 110
+            assert await handler._increment_agent_and_get(session_id, "agent-a") == 110
+
+            saved_total_new: Final = await redis_client.hget(
+                redis.check_and_fix_namespace(agent_scope_key), "__total_new"
+            )
+            await redis_client.hdel(redis.check_and_fix_namespace(agent_scope_key), "__total_new")
+            with pytest.raises(Exception, match="agent session scope is missing its migration total"):
+                await handler._increment_agent_and_get(session_id, "agent-a")
+            assert saved_total_new is not None
+            await redis_client.hset(redis.check_and_fix_namespace(agent_scope_key), "__total_new", saved_total_new)
+
             await redis_client.pexpire(legacy_redis_key, 100)
             await asyncio.sleep(0.15)
             with pytest.raises(Exception, match="legacy session count expired before agent scope"):
-                await handler._increment_agent_and_get(session_id, "agent-a")
-
-            await redis_client.delete(redis.check_and_fix_namespace(total_new_key))
-            with pytest.raises(Exception, match="agent session count exists without migration total"):
                 await handler._increment_agent_and_get(session_id, "agent-a")
         finally:
             await redis_client.delete(*(redis.check_and_fix_namespace(key) for key in keys))

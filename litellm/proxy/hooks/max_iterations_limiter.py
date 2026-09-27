@@ -45,14 +45,10 @@ if #KEYS == 1 then
     return current
 end
 
-local total_new_key = KEYS[2]
-local agent_key = KEYS[3]
+local agent_scope_key = KEYS[2]
 local ttl = tonumber(ARGV[1])
-if redis.call('EXISTS', total_new_key) == 0 then
-    if redis.call('EXISTS', agent_key) == 1 then
-        return redis.error_reply('agent session count exists without migration total')
-    end
-
+local agent_field = ARGV[2]
+if redis.call('EXISTS', agent_scope_key) == 0 then
     if redis.call('EXISTS', legacy_key) == 0 then
         redis.call('SET', legacy_key, '0')
         redis.call('PEXPIRE', legacy_key, ttl * 1000)
@@ -62,10 +58,13 @@ if redis.call('EXISTS', total_new_key) == 0 then
     if legacy_ttl == -2 then
         return redis.error_reply('legacy session count expired during migration')
     end
+    if legacy_ttl >= 0 and legacy_ttl <= 1 then
+        return redis.error_reply('legacy session count is expiring before agent scope')
+    end
 
-    redis.call('SET', total_new_key, '0')
+    redis.call('HSET', agent_scope_key, '__total_new', '0')
     if legacy_ttl >= 0 then
-        redis.call('PEXPIRE', total_new_key, legacy_ttl + 1000)
+        redis.call('PEXPIRE', agent_scope_key, legacy_ttl - 1)
     end
 end
 
@@ -73,16 +72,30 @@ if redis.call('EXISTS', legacy_key) == 0 then
     return redis.error_reply('legacy session count expired before agent scope')
 end
 
-local legacy_value = redis.call('INCR', legacy_key)
-local total_new_value = redis.call('INCR', total_new_key)
-local agent_existed = redis.call('EXISTS', agent_key)
-local agent_value = redis.call('INCR', agent_key)
-if agent_existed == 0 then
-    local migration_ttl = redis.call('PTTL', total_new_key)
-    if migration_ttl >= 0 then
-        redis.call('PEXPIRE', agent_key, migration_ttl + 1000)
-    end
+local total_new_raw = redis.call('HGET', agent_scope_key, '__total_new')
+if total_new_raw == false then
+    return redis.error_reply('agent session scope is missing its migration total')
 end
+if string.match(total_new_raw, '^%d+$') == nil then
+    return redis.error_reply('agent session migration total is not an integer')
+end
+local validated_total_new = tonumber(total_new_raw)
+if validated_total_new == nil or validated_total_new >= 9223372036854774784 then
+    return redis.error_reply('agent session migration total is out of range')
+end
+
+local agent_raw = redis.call('HGET', agent_scope_key, agent_field)
+if agent_raw ~= false and string.match(agent_raw, '^%d+$') == nil then
+    return redis.error_reply('agent session counter is not an integer')
+end
+local validated_agent_value = tonumber(agent_raw or '0')
+if validated_agent_value >= 9223372036854774784 then
+    return redis.error_reply('agent session counter is out of range')
+end
+
+local legacy_value = redis.call('INCR', legacy_key)
+local total_new_value = redis.call('HINCRBY', agent_scope_key, '__total_new', 1)
+local agent_value = redis.call('HINCRBY', agent_scope_key, agent_field, 1)
 
 return math.max(legacy_value - total_new_value, 0) + agent_value
 """
@@ -117,14 +130,25 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         self.internal_usage_cache = internal_usage_cache
         self._local_lock = asyncio.Lock()
         self.increment_script: Callable[..., Awaitable[object]] | None = None
+        self._registered_redis_cache: object | None = None
         self.ttl = int(os.getenv("LITELLM_MAX_ITERATIONS_TTL", DEFAULT_MAX_ITERATIONS_TTL))
 
-        # Register Lua script with Redis if available (same pattern as v3 limiter)
-        if self.internal_usage_cache.dual_cache.redis_cache is not None:
-            self.increment_script = cast(
-                Callable[..., Awaitable[object]],
-                self.internal_usage_cache.dual_cache.redis_cache.async_register_script(MAX_ITERATIONS_INCREMENT_SCRIPT),
-            )
+        self._ensure_redis_scripts()
+
+    def _ensure_redis_scripts(self) -> None:
+        redis_cache = self.internal_usage_cache.dual_cache.redis_cache
+        if redis_cache is None:
+            self.increment_script = None
+            self._registered_redis_cache = None
+            return
+        if redis_cache is self._registered_redis_cache:
+            return
+
+        self.increment_script = cast(
+            Callable[..., Awaitable[object]],
+            redis_cache.async_register_script(MAX_ITERATIONS_INCREMENT_SCRIPT),
+        )
+        self._registered_redis_cache = redis_cache
 
     async def async_pre_call_hook(
         self,
@@ -219,25 +243,32 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
             return int(max_iterations)
         return None
 
-    def _make_cache_key(self, session_id: str, agent_id: str | None = None) -> str:
-        """
-        Create cache key for session iteration counter.
-
-        Agent-scoped counters share the legacy session hash tag so migration
-        scripts can atomically update both scopes on Redis Cluster.
-        """
-        if agent_id is None:
-            return f"{{session_iterations:{session_id}}}:count"
-        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
-
-        stable_agent_id: Final = json.dumps(global_agent_registry.stable_agent_id(agent_id), separators=(",", ":"))
-        return f"{{session_iterations:{session_id}}}:agent:{stable_agent_id}:count"
-
     def _make_legacy_cache_key(self, session_id: str) -> str:
         return f"{{session_iterations:{session_id}}}:count"
 
-    def _make_total_new_cache_key(self, session_id: str) -> str:
-        return f"{{session_iterations:{session_id}}}:agent-scope-total"
+    def _make_agent_scope_cache_key(self, session_id: str) -> str:
+        return f"{{session_iterations:{session_id}}}:agent-scope"
+
+    def _make_agent_scope_field(self, agent_id: str) -> str:
+        from litellm.proxy.agent_endpoints.agent_registry import global_agent_registry
+
+        stable_agent_id: Final = json.dumps(global_agent_registry.stable_agent_id(agent_id), separators=(",", ":"))
+        return f"agent:{stable_agent_id}"
+
+    async def _get_local_scope(self, cache_key: str) -> dict[str, object] | None:
+        result: Final[object | None] = cast(
+            object | None,
+            await self.internal_usage_cache.async_get_cache(
+                key=cache_key,
+                litellm_parent_otel_span=None,
+                local_only=True,
+            ),
+        )
+        if result is None:
+            return None
+        if isinstance(result, dict) and all(isinstance(key, str) for key in result):
+            return cast(dict[str, object], result)
+        raise RuntimeError("Agent session scope cache has an invalid value")
 
     async def _get_local_count(self, cache_key: str) -> int | None:
         local_result: Final[object | None] = cast(
@@ -253,6 +284,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
         return None
 
     async def _increment_legacy_and_get(self, cache_key: str) -> int:
+        self._ensure_redis_scripts()
         if self.increment_script is not None:
             result: Final[object] = await self.increment_script(
                 keys=[cache_key],
@@ -268,7 +300,7 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
             await self.internal_usage_cache.async_set_cache(
                 key=cache_key,
                 value=new_value,
-                ttl=self.ttl if current is None else None,
+                ttl=self.ttl,
                 litellm_parent_otel_span=None,
                 local_only=True,
             )
@@ -276,13 +308,14 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
     async def _increment_agent_and_get(self, session_id: str, agent_id: str) -> int:
         legacy_key: Final = self._make_legacy_cache_key(session_id)
-        total_new_key: Final = self._make_total_new_cache_key(session_id)
-        agent_key: Final = self._make_cache_key(session_id, agent_id)
+        agent_scope_key: Final = self._make_agent_scope_cache_key(session_id)
+        agent_field: Final = self._make_agent_scope_field(agent_id)
+        self._ensure_redis_scripts()
         if self.increment_script is not None:
             try:
                 result: Final[object] = await self.increment_script(
-                    keys=[legacy_key, total_new_key, agent_key],
-                    args=[self.ttl],
+                    keys=[legacy_key, agent_scope_key],
+                    args=[self.ttl, agent_field],
                 )
                 if isinstance(result, (int, float, str, bytes)):
                     return int(result)
@@ -296,35 +329,41 @@ class _PROXY_MaxIterationsHandler(CustomLogger):
 
         async with self._local_lock:
             legacy_value = await self._get_local_count(legacy_key)
-            total_new_value = await self._get_local_count(total_new_key)
-            agent_value = await self._get_local_count(agent_key)
+            agent_scope = await self._get_local_scope(agent_scope_key)
             if legacy_value is None:
-                if total_new_value is not None:
+                if agent_scope is not None:
                     raise RuntimeError("Legacy session count expired before agent scope")
                 legacy_value = 0
-            total_new_value = total_new_value or 0
-            agent_value = agent_value or 0
+            total_new_value = 0
+            agent_value = 0
+            if agent_scope is not None:
+                raw_total_new = agent_scope.get("__total_new")
+                if not isinstance(raw_total_new, (int, float, str, bytes)):
+                    raise RuntimeError("Agent session scope is missing its migration total")
+                raw_agent_value = agent_scope.get(agent_field, 0)
+                if not isinstance(raw_agent_value, (int, float, str, bytes)):
+                    raise RuntimeError("Agent session scope has an invalid counter")
+                total_new_value = int(raw_total_new)
+                agent_value = int(raw_agent_value)
             new_legacy: Final = legacy_value + 1
             new_total_new: Final = total_new_value + 1
             new_agent: Final = agent_value + 1
             await self.internal_usage_cache.async_set_cache(
                 key=legacy_key,
                 value=new_legacy,
-                ttl=self.ttl if legacy_value == 0 else None,
+                ttl=self.ttl,
                 litellm_parent_otel_span=None,
                 local_only=True,
             )
             await self.internal_usage_cache.async_set_cache(
-                key=total_new_key,
-                value=new_total_new,
-                ttl=self.ttl + 1 if total_new_value == 0 else None,
-                litellm_parent_otel_span=None,
-                local_only=True,
-            )
-            await self.internal_usage_cache.async_set_cache(
-                key=agent_key,
-                value=new_agent,
-                ttl=self.ttl + 1 if agent_value == 0 else None,
+                key=agent_scope_key,
+                value={
+                    **(agent_scope or {}),
+                    "__total_new": new_total_new,
+                    agent_field: new_agent,
+                },
+                # Keep this map on a shorter rolling TTL than the aggregate fallback.
+                ttl=max(self.ttl - 1, 0),
                 litellm_parent_otel_span=None,
                 local_only=True,
             )

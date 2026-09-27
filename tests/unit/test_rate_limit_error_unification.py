@@ -842,7 +842,7 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
 
         internal_cache = MagicMock()
         internal_cache.dual_cache = DualCache()
-        internal_cache.async_get_cache = AsyncMock(return_value=10.0)
+        internal_cache.async_get_cache = AsyncMock(side_effect=[10.0, None])
         handler = _PROXY_MaxBudgetPerSessionHandler(
             internal_usage_cache=internal_cache,
         )
