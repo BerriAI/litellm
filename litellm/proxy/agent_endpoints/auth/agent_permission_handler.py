@@ -674,6 +674,6 @@ async def resolve_delegated_agent_team(
     granting_teams: Final = {source for source, grants in sources if source is not None and agent_id in grants}
     if team_id in granting_teams:
         return team_id
-    if not explicit_team and len(granting_teams) == 1:
-        return next(iter(granting_teams))
+    if not explicit_team and granting_teams:
+        return min(granting_teams)
     raise HTTPException(403, "Select a team that grants access to this agent using x-litellm-team-id")
