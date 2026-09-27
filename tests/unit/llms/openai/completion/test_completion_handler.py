@@ -6,6 +6,9 @@ Regression tests for https://github.com/BerriAI/litellm/issues/27410
 """
 
 
+import asyncio
+
+import httpx
 import pytest
 import respx
 from httpx import Response
@@ -13,6 +16,7 @@ from httpx import Response
 
 import litellm
 from litellm import atext_completion, text_completion
+from litellm.integrations.custom_logger import CustomLogger
 
 
 @pytest.fixture(autouse=True)
@@ -88,3 +92,36 @@ async def test_acompletion_forwards_client_headers_to_provider(
 
     request_headers = mock_completions_endpoint.calls.last.request.headers
     assert request_headers["x-mycorp-llmcall-id"] == "abc-123"
+
+class _FailureCounter(CustomLogger):
+    def __init__(self):
+        self.failures = 0
+
+    async def async_log_failure_event(self, kwargs, response_obj, start_time, end_time):
+        self.failures += 1
+
+
+@pytest.mark.parametrize(
+    ("provider_response", "expected_error"),
+    [
+        pytest.param(httpx.ConnectError("connection refused"), litellm.APIConnectionError, id="connection-refused"),
+        pytest.param(Response(500, json={"error": {"message": "boom"}}), litellm.InternalServerError, id="5xx-before-first-byte"),
+    ],
+)
+@respx.mock
+async def test_astream_failing_before_first_byte_logs_one_failure(provider_response, expected_error, monkeypatch):
+    respx.post("https://api.openai.com/v1/completions").mock(side_effect=provider_response)
+    counter = _FailureCounter()
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setattr(litellm, "callbacks", [counter])
+    monkeypatch.setattr(litellm, "_async_failure_callback", [counter])
+
+    response = await atext_completion(
+        model="gpt-3.5-turbo-instruct", prompt="hello", max_tokens=5, stream=True, max_retries=0
+    )
+    with pytest.raises(expected_error):
+        async for _ in response:
+            pass
+    await asyncio.sleep(0.5)
+
+    assert counter.failures == 1
