@@ -311,7 +311,6 @@ class WebSearchInterceptionLogger(CustomLogger):
             cleaned = cleaned[1:-1].strip()
         return cleaned if (cleaned or prefix) else raw_message.strip()
 
-
     async def try_short_circuit_search(
         self,
         model: str,
