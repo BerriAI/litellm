@@ -309,45 +309,13 @@ async def reserve_budget_for_request(
                 counters=counters,
                 fail_closed_budget_enforcement=fail_closed_budget_enforcement,
             )
-            current_spend_by_counter_key: Final = {
-                counter.counter_key: await _get_current_counter_value(counter=counter) for counter in reservable
-            }
-            for group in _reservation_groups(
-                counters=reservable,
-                current_spend_by_counter_key=current_spend_by_counter_key,
+            reservation_cost = await _reserve_reservable_counters(
+                reservable=reservable,
+                valid_token=valid_token,
+                applied_entries=applied_entries,
                 reservation_cost=reservation_cost,
-            ):
-                charged_cost = reservation_cost
-                entries = tuple(
-                    _counter_to_reservation_entry(counter=counter, reserved_cost=charged_cost) for counter in group
-                )
-                applied_entries.extend(entries)
-                reserved_values = await _reserve_counters(
-                    counters=group, entries=entries, reservation_cost=charged_cost
-                )
-                if reserved_values is None:
-                    for entry in entries:
-                        applied_entries.remove(entry)
-                    if fail_closed_budget_enforcement:
-                        _raise_reservation_unavailable(counter_key=group[0].counter_key)
-                    continue
-                for counter, entry, reserved_value in zip(group, entries, reserved_values):
-                    if entry not in applied_entries:
-                        continue
-                    if reserved_value is not None:
-                        current_spend = reserved_value - (charged_cost - reservation_cost)
-                    else:
-                        current_spend = current_spend_by_counter_key[counter.counter_key] + reservation_cost
-                    if current_spend > counter.max_budget:
-                        reservation_cost = await _apply_over_budget_reservation_policy(
-                            counter=counter,
-                            valid_token=valid_token,
-                            entry=entry,
-                            applied_entries=applied_entries,
-                            reservation_cost=reservation_cost,
-                            current_spend=current_spend,
-                            fail_closed_budget_enforcement=fail_closed_budget_enforcement,
-                        )
+                fail_closed_budget_enforcement=fail_closed_budget_enforcement,
+            )
     except Exception:
         await _release_applied_entries_best_effort(
             entries=applied_entries,
@@ -1001,6 +969,53 @@ async def _initialize_reservation_counter(counter: _BudgetCounter) -> None:
                 exc_info=True,
             )
         raise _CounterReservationUnavailable
+
+
+async def _reserve_reservable_counters(
+    reservable: Sequence[_BudgetCounter],
+    valid_token: UserAPIKeyAuth | None,
+    applied_entries: list[dict[str, float | str]],
+    reservation_cost: float,
+    fail_closed_budget_enforcement: bool,
+) -> float:
+    """Charge the counters group by group (see ``_reservation_groups``), settling the over-budget policy on each
+    group before the next is charged, and hand back the reservation cost the policy left standing."""
+    current_spend_by_counter_key: Final = {
+        counter.counter_key: await _get_current_counter_value(counter=counter) for counter in reservable
+    }
+    for group in _reservation_groups(
+        counters=reservable,
+        current_spend_by_counter_key=current_spend_by_counter_key,
+        reservation_cost=reservation_cost,
+    ):
+        charged_cost = reservation_cost
+        entries = tuple(_counter_to_reservation_entry(counter=counter, reserved_cost=charged_cost) for counter in group)
+        applied_entries.extend(entries)
+        reserved_values = await _reserve_counters(counters=group, entries=entries, reservation_cost=charged_cost)
+        if reserved_values is None:
+            for entry in entries:
+                applied_entries.remove(entry)
+            if fail_closed_budget_enforcement:
+                _raise_reservation_unavailable(counter_key=group[0].counter_key)
+            continue
+        for counter, entry, reserved_value in zip(group, entries, reserved_values):
+            if entry not in applied_entries:
+                continue
+            if reserved_value is not None:
+                current_spend = reserved_value - (charged_cost - reservation_cost)
+            else:
+                current_spend = current_spend_by_counter_key[counter.counter_key] + reservation_cost
+            if current_spend > counter.max_budget:
+                reservation_cost = await _apply_over_budget_reservation_policy(
+                    counter=counter,
+                    valid_token=valid_token,
+                    entry=entry,
+                    applied_entries=applied_entries,
+                    reservation_cost=reservation_cost,
+                    current_spend=current_spend,
+                    fail_closed_budget_enforcement=fail_closed_budget_enforcement,
+                )
+    return reservation_cost
 
 
 def _reservation_groups(
