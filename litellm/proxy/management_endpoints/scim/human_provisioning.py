@@ -164,6 +164,8 @@ class SourceHumanProvisioner:
             if isinstance(change, SCIMUser)
             else reduce(patched_username, change.Operations, row.user_name)
         )
+        if username is None:
+            raise HTTPException(400, "userName is required")
         if isinstance(change, SCIMPatchOp):
             validate_human_patch(change)
         local_filter: Final[LiteLLM_UserTableWhereUniqueInput] = {"user_id": row.local_id}

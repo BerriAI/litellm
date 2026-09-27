@@ -3,9 +3,10 @@ import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from itertools import chain, groupby
 from operator import itemgetter
-from types import MappingProxyType
+from types import MappingProxyType, ModuleType
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call
 
@@ -61,6 +62,7 @@ from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_MANAGED_TEAM_METADATA_KEY,
     SCIM_TEAM_DATA_METADATA_KEY,
     SCIMGroup,
+    SCIMListResponse,
     SCIMMember,
     SCIMPatchOp,
     SCIMPatchOperation,
@@ -510,12 +512,7 @@ async def test_scim_collection_endpoints_clamp_requested_page_size(
 ):
     """SCIM list endpoints accept zero and cap larger client page requests."""
     mock_prisma_client = MagicMock()
-    mock_prisma_client.db = MagicMock()
-    table = MagicMock()
-    table.find_many = AsyncMock(return_value=[])
-    table.count = AsyncMock(return_value=0)
-    mock_prisma_client.db.litellm_usertable = table
-    mock_prisma_client.db.litellm_teamtable = table
+    query_raw = _writer_query_raw(mock_prisma_client, AsyncMock(side_effect=([], [{"total": 0}])))
     mocker.patch(  # test-quality-ok: HTTP validation requires an in-memory database boundary.
         "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
         AsyncMock(return_value=mock_prisma_client),
@@ -525,12 +522,9 @@ async def test_scim_collection_endpoints_clamp_requested_page_size(
         response = await client.get(f"/scim/v2/{endpoint}?startIndex=1&count={requested_count}")
 
     assert response.status_code == 200
-    table.find_many.assert_awaited_once_with(
-        where={},
-        skip=0,
-        take=effective_count,
-        order={"created_at": "desc"},
-    )
+    page_sql, filter_value, limit, offset = query_raw.await_args_list[0].args
+    assert "LIMIT $2 OFFSET $3" in page_sql
+    assert (filter_value, limit, offset) == (None, effective_count, 0)
     assert response.json()["itemsPerPage"] == 0
 
 
@@ -6627,3 +6621,227 @@ async def test_empty_source_ownership_lookup_never_queries_the_writer(mocker: Mo
     prisma: Final = mocker.MagicMock()
     assert await scim_v2._source_owned_ids(prisma, "Users", ()) == frozenset()
     prisma.writer_db.litellm_scimresource.find_many.assert_not_called()
+
+
+@dataclass(frozen=True, slots=True)
+class _Directory:
+    """Legacy rows plus the set a provisioning source owns; ``query_raw`` evaluates the route's
+    ``NOT EXISTS`` page/count statements against them, ``find_many`` only hydrates the ids it is handed."""
+
+    users: tuple[LiteLLM_UserTable, ...]
+    teams: tuple[LiteLLM_TeamTable, ...]
+    owned_local_ids: frozenset[str]
+
+    def _unowned(self, sql: str, filter_value: str | None) -> tuple[str, ...]:
+        rows: Final[Sequence[LiteLLM_UserTable | LiteLLM_TeamTable]] = (
+            self.users if 'FROM "LiteLLM_UserTable"' in sql else self.teams
+        )
+        assert 'NOT EXISTS (SELECT 1 FROM "LiteLLM_SCIMResource"' in sql, sql
+        ordered: Final = sorted(rows, key=lambda row: row.created_at or datetime.min, reverse=True)
+        ids: Final = tuple(
+            row.user_id if isinstance(row, LiteLLM_UserTable) else row.team_id
+            for row in ordered
+            if self._matches(row, filter_value)
+        )
+        return tuple(local_id for local_id in ids if local_id not in self.owned_local_ids)
+
+    @staticmethod
+    def _matches(row: LiteLLM_UserTable | LiteLLM_TeamTable, filter_value: str | None) -> bool:
+        if filter_value is None:
+            return True
+        if isinstance(row, LiteLLM_TeamTable):
+            return row.team_alias == filter_value
+        return filter_value in (row.user_id, row.user_email)
+
+    async def query_raw(self, sql: str, *params: object) -> tuple[Mapping[str, object], ...]:
+        filter_value: Final = params[0]
+        assert filter_value is None or isinstance(filter_value, str)
+        unowned: Final = self._unowned(sql, filter_value)
+        if sql.startswith("SELECT COUNT(*)"):
+            return ({"total": len(unowned)},)
+        assert "LIMIT $2 OFFSET $3" in sql and len(params) == 3, (sql, params)
+        limit, offset = params[1], params[2]
+        assert isinstance(limit, int) and isinstance(offset, int)
+        return tuple({"local_id": local_id} for local_id in unowned[offset : offset + limit])
+
+    def hydrate(self, key: str) -> AsyncMock:
+        rows: Final[Sequence[LiteLLM_UserTable | LiteLLM_TeamTable]] = self.users if key == "user_id" else self.teams
+
+        async def _find_many(where: Mapping[str, object]) -> tuple[LiteLLM_UserTable | LiteLLM_TeamTable, ...]:
+            wanted: Final = frozenset(_filter_subjects(where[key]))
+            assert len(wanted) <= scim_v2_module().SCIM_MAX_PAGE_SIZE, len(wanted)
+            return tuple(row for row in rows if _local_id(row) in wanted)
+
+        return AsyncMock(side_effect=_find_many)
+
+
+def _local_id(row: LiteLLM_UserTable | LiteLLM_TeamTable) -> str:
+    return row.user_id if isinstance(row, LiteLLM_UserTable) else row.team_id
+
+
+def _writer_query_raw(prisma: MagicMock, query_raw: AsyncMock) -> AsyncMock:
+    """Route ``async with prisma.tx() as tx: tx.query_raw(...)`` to ``query_raw``."""
+    prisma.tx.return_value.__aenter__.return_value.query_raw = query_raw
+    return query_raw
+
+
+def scim_v2_module() -> ModuleType:
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    return scim_v2
+
+
+def _directory_prisma(mocker: MockerFixture, directory: _Directory) -> MagicMock:
+    prisma: Final = mocker.MagicMock()
+    _writer_query_raw(prisma, AsyncMock(side_effect=directory.query_raw))
+    prisma.db.litellm_usertable.find_many = directory.hydrate("user_id")
+    prisma.db.litellm_teamtable.find_many = directory.hydrate("team_id")
+    prisma.writer_db.litellm_scimresource.find_many = AsyncMock(
+        side_effect=AssertionError("legacy listing must not materialise the owned resource set")
+    )
+    return prisma
+
+
+def _listing_route_stubs(mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch, prisma: MagicMock) -> None:
+    scim_v2: Final = scim_v2_module()
+    monkeypatch.setattr(scim_v2, "_agent_provisioning_service", AsyncMock(return_value=None))
+    monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", AsyncMock(return_value=prisma))
+    monkeypatch.setattr(scim_v2, "_get_team_member_user_ids_from_team", AsyncMock(return_value=[]))
+    monkeypatch.setattr(scim_v2, "_get_team_members_display", AsyncMock(return_value=[]))
+    mocker.patch.object(
+        scim_v2.ScimTransformations,
+        "transform_litellm_user_to_scim_user",
+        AsyncMock(side_effect=lambda user: SCIMUser(schemas=[], id=user.user_id, userName=user.user_id)),
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["Users", "Groups"])
+async def test_legacy_key_listing_does_not_see_source_owned_records(
+    kind: str, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /Users and /Groups from a non-source key hide what GET /{id} already refuses with 403,
+    and totalResults counts only the visible records."""
+    scim_v2: Final = scim_v2_module()
+    directory: Final = _Directory(
+        users=(_OWNED_HUMAN, _ORDINARY_USER),
+        teams=(LiteLLM_TeamTable(team_id="directory-team", team_alias="directory"), _LEGACY_TEAM),
+        owned_local_ids=frozenset({_OWNED_HUMAN.user_id, "directory-team"}),
+    )
+    _listing_route_stubs(mocker, monkeypatch, _directory_prisma(mocker, directory))
+    auth: Final = UserAPIKeyAuth(token="legacy-hash")
+
+    listed: Final = (
+        await scim_v2.get_users(startIndex=1, count=10, filter=None, auth=auth)
+        if kind == "Users"
+        else await scim_v2.get_groups(startIndex=1, count=10, filter=None, auth=auth)
+    )
+
+    assert [resource.id for resource in listed.Resources] == ["ordinary-user" if kind == "Users" else "legacy-team"]
+    assert listed.totalResults == 1
+
+
+def _large_directory(owned: int, legacy: int) -> _Directory:
+    """``owned`` source-owned users and teams interleaved by creation time with ``legacy`` ordinary ones."""
+    epoch: Final = datetime(2026, 1, 1, tzinfo=timezone.utc)
+    users: Final = tuple(
+        LiteLLM_UserTable(
+            user_id=f"u{index:06d}", user_email=f"u{index}@example.com", created_at=epoch + timedelta(seconds=index)
+        )
+        for index in range(owned + legacy)
+    )
+    teams: Final = tuple(
+        LiteLLM_TeamTable(
+            team_id=f"t{index:06d}", team_alias=f"team {index}", created_at=epoch + timedelta(seconds=index)
+        )
+        for index in range(owned + legacy)
+    )
+    owned_ids: Final = frozenset(
+        chain(
+            (f"u{index:06d}" for index in range(0, owned + legacy, 2)),
+            (f"t{index:06d}" for index in range(0, owned + legacy, 2)),
+        )
+    )
+    return _Directory(users=users, teams=teams, owned_local_ids=owned_ids)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["Users", "Groups"])
+async def test_legacy_key_listing_pages_a_large_directory_without_materialising_owned_ids(
+    kind: str, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Twenty thousand rows, half owned by a source: every page is the newest unowned rows in order,
+    totalResults is the unowned count, hydration reads one page of ids and the owned set is never loaded."""
+    scim_v2: Final = scim_v2_module()
+    directory: Final = _large_directory(owned=10_000, legacy=10_000)
+    prisma: Final = _directory_prisma(mocker, directory)
+    _listing_route_stubs(mocker, monkeypatch, prisma)
+    auth: Final = UserAPIKeyAuth(token="legacy-hash")
+    prefix: Final = "u" if kind == "Users" else "t"
+
+    async def _page(start_index: int) -> SCIMListResponse:
+        if kind == "Users":
+            return await scim_v2.get_users(startIndex=start_index, count=100, filter=None, auth=auth)
+        return await scim_v2.get_groups(startIndex=start_index, count=100, filter=None, auth=auth)
+
+    first, second, last = await _page(1), await _page(101), await _page(9_901)
+
+    newest_unowned: Final = tuple(f"{prefix}{index:06d}" for index in range(19_999, -1, -1) if index % 2)
+    assert [resource.id for resource in first.Resources] == list(newest_unowned[:100])
+    assert [resource.id for resource in second.Resources] == list(newest_unowned[100:200])
+    assert [resource.id for resource in last.Resources] == list(newest_unowned[9_900:])
+    assert (first.totalResults, second.totalResults, last.totalResults) == (10_000, 10_000, 10_000)
+    assert (first.itemsPerPage, second.itemsPerPage, last.itemsPerPage) == (100, 100, 100)
+    prisma.writer_db.litellm_scimresource.find_many.assert_not_called()
+    assert prisma.tx.return_value.__aenter__.return_value.query_raw.await_count == 6
+
+
+@pytest.mark.asyncio
+async def test_legacy_key_username_filter_ignores_source_owned_match(
+    mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The Okta deprovisioning lookup ``userName eq`` finds an ordinary user but reports total 0 for an owned one."""
+    scim_v2: Final = scim_v2_module()
+    directory: Final = _Directory(
+        users=(_OWNED_HUMAN, _ORDINARY_USER), teams=(), owned_local_ids=frozenset({_OWNED_HUMAN.user_id})
+    )
+    _listing_route_stubs(mocker, monkeypatch, _directory_prisma(mocker, directory))
+    auth: Final = UserAPIKeyAuth(token="legacy-hash")
+
+    owned: Final = await scim_v2.get_users(
+        startIndex=1, count=10, filter=f'userName eq "{_OWNED_HUMAN.user_email}"', auth=auth
+    )
+    ordinary: Final = await scim_v2.get_users(
+        startIndex=1, count=10, filter=f'userName eq "{_ORDINARY_USER.user_email}"', auth=auth
+    )
+
+    assert (owned.totalResults, owned.Resources) == (0, [])
+    assert (ordinary.totalResults, [resource.id for resource in ordinary.Resources]) == (1, ["ordinary-user"])
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ["Users", "Groups"])
+async def test_trusted_listing_keeps_the_plain_legacy_query(
+    kind: str, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """With no key (trusted flow) the route still lists every row through the legacy Prisma query."""
+    scim_v2: Final = scim_v2_module()
+    prisma: Final = mocker.MagicMock()
+    _writer_query_raw(prisma, AsyncMock(side_effect=AssertionError("trusted listing must not change query shape")))
+    prisma.db.litellm_usertable.find_many = AsyncMock(return_value=(_OWNED_HUMAN, _ORDINARY_USER))
+    prisma.db.litellm_usertable.count = AsyncMock(return_value=2)
+    prisma.db.litellm_teamtable.find_many = AsyncMock(return_value=(_LEGACY_TEAM,))
+    prisma.db.litellm_teamtable.count = AsyncMock(return_value=1)
+    _listing_route_stubs(mocker, monkeypatch, prisma)
+
+    listed: Final = (
+        await scim_v2.get_users(startIndex=1, count=10, filter=None, auth=None)
+        if kind == "Users"
+        else await scim_v2.get_groups(startIndex=1, count=10, filter='displayName eq "legacy"', auth=None)
+    )
+
+    assert listed.totalResults == (2 if kind == "Users" else 1)
+    table: Final = prisma.db.litellm_usertable if kind == "Users" else prisma.db.litellm_teamtable
+    table.find_many.assert_awaited_once_with(
+        where={} if kind == "Users" else {"team_alias": "legacy"}, skip=0, take=10, order={"created_at": "desc"}
+    )
