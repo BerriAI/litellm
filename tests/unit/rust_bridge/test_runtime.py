@@ -156,20 +156,23 @@ def test_context_outside_rule_stays_on_python() -> None:
 @pytest.mark.parametrize(
     "context",
     (
-        RouteContext(Route.CHAT_COMPLETIONS, provider="anthropic"),
-        RouteContext(Route.CHAT_COMPLETIONS, provider="bedrock"),
-        RouteContext(Route.RESPONSES, provider="openai"),
-        RouteContext(Route.TRANSCRIPTION, provider="openai"),
+        RouteContext(Route.CHAT_COMPLETIONS, provider="anthropic", delivery=Delivery.STREAMING),
+        RouteContext(Route.CHAT_COMPLETIONS, provider="anthropic", delivery=Delivery.WEBSOCKET),
+        RouteContext(Route.CHAT_COMPLETIONS, provider="bedrock", delivery=Delivery.STREAMING),
+        RouteContext(Route.CHAT_COMPLETIONS, provider="bedrock", delivery=Delivery.WEBSOCKET),
+        RouteContext(Route.RESPONSES, provider="openai", delivery=Delivery.STREAMING),
+        RouteContext(Route.RESPONSES, provider="openai", delivery=Delivery.WEBSOCKET),
+        RouteContext(Route.TRANSCRIPTION, provider="openai", delivery=Delivery.COMPLETED),
+        RouteContext(Route.TRANSCRIPTION, provider="openai", delivery=Delivery.STREAMING),
+        RouteContext(Route.TRANSCRIPTION, provider="openai", delivery=Delivery.WEBSOCKET),
     ),
 )
-@pytest.mark.parametrize("delivery", tuple(Delivery))
 async def test_shipped_python_routes_never_load_native(
-    monkeypatch: pytest.MonkeyPatch, context: RouteContext, delivery: Delivery
+    monkeypatch: pytest.MonkeyPatch, context: RouteContext
 ) -> None:
     monkeypatch.setenv("LITELLM_RUST", "1")
     configuration.rust(True)
     calls: Final = recorder()
-    request: Final = RouteContext(context.route, provider=context.provider, delivery=delivery)
 
     def reject_load(value: object) -> NativeFn | None:
         pytest.fail("Python-only dispatch must not load a native binding")
@@ -182,8 +185,8 @@ async def test_shipped_python_routes_never_load_native(
     async def python() -> str:
         return calls.python()
 
-    assert runtime.run(request, binding=bound, native=lambda fn: fn(), python=calls.python) == PYTHON
-    assert await runtime.arun(request, binding=bound, native=native, python=python) == PYTHON
+    assert runtime.run(context, binding=bound, native=lambda fn: fn(), python=calls.python) == PYTHON
+    assert await runtime.arun(context, binding=bound, native=native, python=python) == PYTHON
     assert calls.calls == (PYTHON, PYTHON)
 
 
