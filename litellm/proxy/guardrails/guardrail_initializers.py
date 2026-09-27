@@ -297,3 +297,14 @@ def initialize_panw_prisma_airs(litellm_params, guardrail):
     litellm.logging_callback_manager.add_litellm_callback(_panw_callback)
 
     return _panw_callback
+
+
+def initialize_ztds(litellm_params: LitellmParams, guardrail: Guardrail):
+    from litellm.proxy.guardrails.guardrail_hooks.ztds import ZTDSGuardrail
+
+    _ztds_object = ZTDSGuardrail(
+        reverse_on_output=getattr(litellm_params, "reverse_on_output", True),
+    )
+    litellm.logging_callback_manager.add_litellm_callback(_ztds_object)
+    return _ztds_object
+
