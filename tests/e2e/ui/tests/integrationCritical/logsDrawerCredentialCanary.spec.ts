@@ -41,8 +41,16 @@ test("the Logs drawer renders the stored request without the deployment api_key"
     "/config/field/info?field_name=store_prompts_in_spend_logs",
     { headers: auth },
   );
-  expect(setting.status(), await setting.text()).toBe(200);
-  const promptsStored: boolean = (await setting.json()).field_value === true;
+  // A fresh database has no stored value, and the route answers 400 "... is not set".
+  const settingText = await setting.text();
+  expect(
+    setting.status() === 200 || settingText.includes("is not set"),
+    settingText,
+  ).toBe(true);
+  const promptsStored: boolean | null =
+    setting.status() === 200
+      ? JSON.parse(settingText).field_value === true
+      : null;
   let modelId = "";
   try {
     await post(request, "/config/update", {
@@ -158,8 +166,15 @@ test("the Logs drawer renders the stored request without the deployment api_key"
     ).toBe(false);
   } finally {
     if (modelId) await post(request, "/model/delete", { id: modelId });
-    await post(request, "/config/update", {
-      general_settings: { store_prompts_in_spend_logs: promptsStored },
-    });
+    if (promptsStored === null) {
+      await post(request, "/config/field/delete", {
+        config_type: "general_settings",
+        field_name: "store_prompts_in_spend_logs",
+      });
+    } else {
+      await post(request, "/config/update", {
+        general_settings: { store_prompts_in_spend_logs: promptsStored },
+      });
+    }
   }
 });
