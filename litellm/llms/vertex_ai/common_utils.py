@@ -1038,31 +1038,21 @@ def _convert_schema_types(schema, depth=0):
                     any_of.append({"type": "null"})
                     continue
 
-                # For object/array types, include type-specific fields
-                if t in ("object", "array"):
-                    item_schema: dict[str, object] = {"type": t}
-                    # Move type-specific fields into this anyOf item
-                    for field in type_specific_fields:
-                        if field in schema:
-                            item_schema[field] = deepcopy(schema[field])
-                    any_of.append(item_schema)
-                else:
-                    # For primitive types, carry the scalar constraint keywords
-                    # into the branch so they survive _filter_anyof_fields
-                    item_schema: dict[str, object] = {"type": t}
-                    for field in scalar_constraint_fields:
-                        if field in schema:
-                            item_schema[field] = deepcopy(schema[field])
-                    any_of.append(item_schema)
+                item_schema: dict[str, object] = {"type": t}
+                # For object/array types, move the type-specific fields into
+                # the branch; for primitives, carry the scalar constraint
+                # keywords so they survive _filter_anyof_fields.
+                branch_fields = type_specific_fields if t in ("object", "array") else scalar_constraint_fields
+                for field in branch_fields:
+                    if field in schema:
+                        item_schema[field] = deepcopy(schema[field])
+                any_of.append(item_schema)
 
-            # Remove type-specific fields from parent if we moved them into anyOf
+            # Remove the fields we moved into anyOf branches from the parent
             has_object_or_array: Final = any(t in ("object", "array") for t in type_val if isinstance(t, str))
-            if has_object_or_array:
-                for field in type_specific_fields:
-                    schema.pop(field, None)
-            else:
-                for field in scalar_constraint_fields:
-                    schema.pop(field, None)
+            parent_fields = type_specific_fields if has_object_or_array else scalar_constraint_fields
+            for field in parent_fields:
+                schema.pop(field, None)
 
             schema["anyOf"] = any_of
             schema.pop("type")
