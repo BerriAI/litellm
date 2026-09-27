@@ -211,6 +211,7 @@ class UserProvisionerHelpers:
         await _assert_legacy_source_access(auth, "Users", existing_user.user_id)
         requested_teams: Final = list(dict.fromkeys(new_user_request.teams or []))
         new_teams: Final = requested_teams if requested_teams else list(existing_user.teams or [])
+        await _assert_legacy_team_changes_unowned(auth, existing_user.teams or [], new_teams)
 
         if new_user_request.user_id != existing_user.user_id:
             verbose_proxy_logger.info(
@@ -553,6 +554,19 @@ async def _assert_legacy_source_access(
     client: Final = await _get_prisma_client_or_raise_exception()
     if await _source_owned_ids(client, kind, (local_id,)):
         raise HTTPException(403, "This record is owned by a different provisioning source")
+
+
+async def _assert_legacy_team_changes_unowned(
+    auth: UserAPIKeyAuth | None, current: Sequence[str], proposed: Sequence[str]
+) -> None:
+    if auth is None:
+        return
+    changed: Final = tuple(frozenset(current) ^ frozenset(proposed))
+    if not changed:
+        return
+    client: Final = await _get_prisma_client_or_raise_exception()
+    if await _source_owned_ids(client, "Groups", changed):
+        raise HTTPException(403, "Team membership is owned by a different provisioning source")
 
 
 _FOLDED_EMAIL_USERS_SQL: Final = """
@@ -1905,6 +1919,7 @@ async def create_user(
 
         # Extract data from SCIM user
         user_data: Final = _extract_scim_user_data(user)
+        await _assert_legacy_team_changes_unowned(auth, (), user_data["teams"] or [])
 
         # Check if user already exists
         if user.userName:
@@ -2017,6 +2032,7 @@ async def update_user(
         # SCIM User.groups is readOnly (RFC 7643 4.1.2): IdPs sync membership via /Groups and send
         # no groups or `groups: []` on profile PUTs, so empty means unspecified, not "remove from every team"
         target_teams: Final = user_data["teams"] or existing_user.teams
+        await _assert_legacy_team_changes_unowned(auth, existing_user.teams or [], target_teams or [])
         await _handle_team_membership_changes(
             user_id=user_id,
             existing_teams=existing_user.teams,
@@ -2610,6 +2626,8 @@ async def patch_user(
             existing_user=existing_user,
             patch_ops=patch_ops,
         )
+
+        await _assert_legacy_team_changes_unowned(auth, existing_user.teams or [], tuple(final_team_set))
 
         patched_metadata: Final = update_data.get("metadata")
         new_active: Final = _scim_active_value(patched_metadata if isinstance(patched_metadata, Mapping) else None)

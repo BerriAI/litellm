@@ -6907,3 +6907,82 @@ async def test_source_token_cannot_read_or_merge_global_placeholders(
     database.db.litellm_usertable.find_unique.assert_not_called()
     database.db.litellm_usertable.delete.assert_not_called()
     database.db.litellm_teammembership.create.assert_not_called()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ["create", "replace", "patch-add", "patch-replace"])
+async def test_legacy_user_routes_cannot_join_a_source_owned_team(
+    route: str, mocker: MockerFixture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    prisma: Final = _legacy_membership_prisma(mocker)
+
+    async def owned(_client: object, kind: str, ids: tuple[str, ...]) -> frozenset[str]:
+        return frozenset(ids) & {"directory-team"} if kind == "Groups" else frozenset()
+
+    monkeypatch.setattr(scim_v2, "_source_owned_ids", owned)
+    monkeypatch.setattr(scim_v2, "_agent_provisioning_service", AsyncMock(return_value=None))
+    monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", AsyncMock(return_value=prisma))
+    monkeypatch.setattr(scim_v2, "_check_user_exists", AsyncMock(return_value=_ORDINARY_USER))
+    monkeypatch.setattr(scim_v2, "_get_scim_admin_group", AsyncMock(return_value=None))
+    create: Final = AsyncMock(side_effect=AssertionError("user creation must follow ownership validation"))
+    roster: Final = AsyncMock(side_effect=AssertionError("roster writes must follow ownership validation"))
+    monkeypatch.setattr(scim_v2, "new_user", create)
+    monkeypatch.setattr(scim_v2, "_handle_team_membership_changes", roster)
+    user: Final = SCIMUser(schemas=[], userName="new-user", groups=[{"value": "directory-team"}])
+    auth: Final = UserAPIKeyAuth(token="legacy-hash")
+    with pytest.raises((HTTPException, ProxyException)) as failure:
+        if route == "create":
+            await scim_v2.create_user(user=user, auth=auth)
+        elif route == "replace":
+            await scim_v2.update_user(user_id="ordinary-user", user=user, auth=auth)
+        else:
+            await scim_v2.patch_user(
+                user_id="ordinary-user",
+                patch_ops=SCIMPatchOp(
+                    Operations=[
+                        SCIMPatchOperation(
+                            op=route.removeprefix("patch-"), path="groups", value=[{"value": "directory-team"}]
+                        )
+                    ]
+                ),
+                auth=auth,
+            )
+    status: Final = failure.value.status_code if isinstance(failure.value, HTTPException) else failure.value.code
+    assert str(status) == "403"
+    create.assert_not_awaited()
+    roster.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "current,proposed,trusted,denied",
+    [
+        ((), ("ordinary-team",), False, False),
+        ((), ("directory-team",), True, False),
+        (("directory-team",), ("directory-team",), False, False),
+        (("directory-team",), (), False, True),
+    ],
+)
+async def test_legacy_team_changes_preserve_directory_ownership(
+    current: tuple[str, ...],
+    proposed: tuple[str, ...],
+    trusted: bool,
+    denied: bool,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from litellm.proxy.management_endpoints.scim import scim_v2
+
+    async def owned(_client: object, kind: str, ids: tuple[str, ...]) -> frozenset[str]:
+        assert kind == "Groups"
+        return frozenset(ids) & {"directory-team"}
+
+    monkeypatch.setattr(scim_v2, "_get_prisma_client_or_raise_exception", AsyncMock(return_value=object()))
+    monkeypatch.setattr(scim_v2, "_source_owned_ids", owned)
+    if denied:
+        with pytest.raises(HTTPException) as failure:
+            await scim_v2._assert_legacy_team_changes_unowned(UserAPIKeyAuth(), current, proposed)
+        assert failure.value.status_code == 403
+    else:
+        await scim_v2._assert_legacy_team_changes_unowned(None if trusted else UserAPIKeyAuth(), current, proposed)
