@@ -275,7 +275,7 @@ def sse_events(text: str) -> tuple[tuple[str, dict[str, object]], ...]:
     )
 
 
-def _start_usage(usage: Mapping) -> dict[str, JsonValue]:
+def _start_usage(usage: Mapping[str, JsonValue]) -> dict[str, JsonValue]:
     return {key: value for key, value in usage.items() if key != "output_tokens"}
 
 
