@@ -5,9 +5,7 @@ use litellm_host::{
     protocol::Protocol,
     protocol::Reply,
 };
-use litellm_llms::base_llm::ocr::{
-    error::Error, handler::OcrClient, transformation::LiteLLMOcrResponse,
-};
+use litellm_llms::base_llm::ocr::{error::Error, transformation::LiteLLMOcrResponse};
 
 use crate::ocr::types::{LiteLLMOcrRequest, OcrDocumentInput};
 
@@ -41,22 +39,27 @@ impl TokenProtocol for Ocr {
 
 pub type OcrMachine = HostedMachine<Ocr>;
 
-pub fn ocr_machine(client: OcrClient) -> impl FnOnce(OcrCall) -> OcrMachine + Send + Sync {
-    move |request| {
-        hosted_call(
-            request,
-            move |projection: OcrCall, services, hooks| async move {
-                let request = LiteLLMOcrRequest {
-                    azure_ad_token_provider: projection
-                        .caller_token
-                        .then(|| HostTokenProvider::handle(services))
-                        .or(projection.request.azure_ad_token_provider),
-                    ..projection.request
-                };
-                super::client::perform_with_hooks(&client, request, &hooks)
-                    .await
-                    .map(CallOutput::Complete)
-            },
-        )
+impl crate::CoreClient {
+    pub fn ocr_machine(
+        &self,
+    ) -> Result<impl FnOnce(OcrCall) -> OcrMachine + Send + Sync + use<>, litellm_http::Error> {
+        let client = self.ocr_client()?;
+        Ok(move |request| {
+            hosted_call(
+                request,
+                move |projection: OcrCall, services, hooks| async move {
+                    let request = LiteLLMOcrRequest {
+                        azure_ad_token_provider: projection
+                            .caller_token
+                            .then(|| HostTokenProvider::handle(services))
+                            .or(projection.request.azure_ad_token_provider),
+                        ..projection.request
+                    };
+                    super::client::execute(&client, request, &hooks)
+                        .await
+                        .map(CallOutput::Complete)
+                },
+            )
+        })
     }
 }

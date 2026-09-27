@@ -7,31 +7,32 @@ pub mod route;
 pub mod types;
 
 use litellm_host::hooks::RouteHooks;
-use litellm_http::{ClientVariant, HttpClientConfig};
 use litellm_secrets::source::SecretSource;
 use types::{ResponsesCall, ResponsesOutput};
 
-pub async fn responses(
-    resources: &crate::resources::CoreResources,
-    config: &HttpClientConfig,
-    secrets: &dyn SecretSource,
-    call: ResponsesCall,
-) -> Result<ResponsesOutput, Error> {
-    responses_with_hooks(resources, config, secrets, call, &()).await
-}
+impl crate::CoreClient {
+    pub async fn responses(&self, call: ResponsesCall) -> Result<ResponsesOutput, Error> {
+        self.responses_with_hooks(call, &()).await
+    }
 
-pub async fn responses_with_hooks(
-    resources: &crate::resources::CoreResources,
-    config: &HttpClientConfig,
-    secrets: &dyn SecretSource,
-    call: ResponsesCall,
-    hooks: &impl RouteHooks<Error>,
-) -> Result<ResponsesOutput, Error> {
-    litellm_host::lifecycle::observe_call(hooks.observer(), async {
-        let http = resources.pool.client(config, ClientVariant::Provider)?;
-        execute(&http, &resources.auth, secrets, call, hooks).await
-    })
-    .await
+    pub async fn responses_with_hooks(
+        &self,
+        call: ResponsesCall,
+        hooks: &impl RouteHooks<Error>,
+    ) -> Result<ResponsesOutput, Error> {
+        litellm_host::lifecycle::observe_call(hooks.observer(), async {
+            let http = self.provider_http()?;
+            execute(
+                &http,
+                &self.resources().auth,
+                self.secret_source().as_ref(),
+                call,
+                hooks,
+            )
+            .await
+        })
+        .await
+    }
 }
 
 async fn execute(

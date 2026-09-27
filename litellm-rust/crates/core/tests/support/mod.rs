@@ -24,6 +24,15 @@ pub fn resources() -> litellm_core::resources::CoreResources {
     litellm_core::resources::CoreResources::new(Arc::new(http_pool()))
 }
 
+#[rstest::fixture]
+pub fn client() -> litellm_core::CoreClient {
+    client_with_secrets(Arc::new(RecordingSecrets::empty()))
+}
+
+pub fn client_with_secrets(secrets: Arc<dyn SecretSource>) -> litellm_core::CoreClient {
+    litellm_core::CoreClient::new(resources(), http_config(), secrets)
+}
+
 pub fn http_config() -> HttpClientConfig {
     Resolution::from(&HttpSettings::default()).config
 }

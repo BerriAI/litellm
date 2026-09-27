@@ -6,9 +6,7 @@ use axum::{
     extract::{Path, State},
     response::{IntoResponse, Response},
 };
-use litellm_core::chat_completions::{
-    Error as RouteError, route::chat_completions_machine, types::ChatCompletionsCall,
-};
+use litellm_core::chat_completions::{Error as RouteError, types::ChatCompletionsCall};
 use serde_json::{Map, Value};
 
 use crate::{Error, Gateway, JsonObject, request};
@@ -45,8 +43,10 @@ async fn handle(
     let deployment = request::resolve_deployment(gateway, &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let messages = body.get("messages").cloned().unwrap_or_default();
-    let machine =
-        chat_completions_machine(&gateway.resources, &gateway.http).map_err(RouteError::from)?;
+    let machine = gateway
+        .core
+        .chat_completions_machine()
+        .map_err(RouteError::from)?;
     let response = litellm_host_http::serve_unary(
         machine(ChatCompletionsCall {
             model: deployment.model.clone(),

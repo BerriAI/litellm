@@ -34,7 +34,7 @@ async fn drive_until(
     Vec<&'static str>,
     OcrMachine,
 ) {
-    let mut machine = ocr_machine(ocr_client())(host.request().unwrap());
+    let mut machine = ocr_client().ocr_machine().unwrap()(host.request().unwrap());
     let mut ops = Vec::new();
     let outcome = loop {
         let op = match machine.resume().await {
@@ -181,7 +181,7 @@ async fn a_before_send_failure_ends_the_call_without_reaching_transport(
 async fn resuming_before_answering_keeps_the_pending_operation() {
     let upstream = upstream([pages_response()]).await;
     let request = ocr_request("mistral/model", &upstream.uri(), json!({}));
-    let mut machine = ocr_machine(ocr_client())(OcrCall {
+    let mut machine = ocr_client().ocr_machine().unwrap()(OcrCall {
         request,
         caller_token: false,
     });
@@ -244,7 +244,7 @@ async fn interrupt_drops_provider_captures_before_returning() {
         },
     )));
     let host = LocalOcrHost::new(request);
-    let mut machine = ocr_machine(ocr_client())(host.request().unwrap());
+    let mut machine = ocr_client().ocr_machine().unwrap()(host.request().unwrap());
 
     drive_until_notified(&mut machine, &host, &entered).await;
     assert!(!dropped.load(Ordering::SeqCst));
@@ -280,7 +280,7 @@ async fn interrupting_an_in_flight_provider_request_closes_its_connection() {
         while socket.read(&mut buffer).await.unwrap() != 0 {}
     });
     let host = LocalOcrHost::new(ocr_request("mistral/model", &base, json!({})));
-    let mut machine = ocr_machine(ocr_client())(host.request().unwrap());
+    let mut machine = ocr_client().ocr_machine().unwrap()(host.request().unwrap());
 
     drive_until_notified(&mut machine, &host, &received).await;
     let cancelled = Error::InvalidRequest("cancelled".into());

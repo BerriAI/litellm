@@ -57,13 +57,9 @@ fn run_public(
             "native Python responses streaming",
         ));
     }
-    let config = crate::http::call_config(py, &kwargs, asynchronous)?;
-    let machine = litellm_core::responses::route::responses_machine(
-        crate::http::resources(),
-        &config,
-        crate::secrets::source(py)?,
-    )
-    .map_err(crate::http::client_error)?;
+    let machine = crate::http::call_client(py, &kwargs, asynchronous)?
+        .responses_machine()
+        .map_err(crate::http::client_error)?;
     run_legacy_call(
         py,
         LegacySurface {

@@ -1,7 +1,7 @@
 use std::sync::{Arc, Mutex};
 
 use litellm_core::ocr::{
-    route::{Ocr, OcrCall, OcrOp, ocr_machine},
+    route::{Ocr, OcrCall, OcrOp},
     types::OcrDocumentInput,
 };
 use litellm_host::event::{CallEvent, MachineEvent, RequestContext, WireRequest};
@@ -289,7 +289,7 @@ async fn the_callers_azure_token_is_acquired_before_before_send_which_can_still_
     };
 
     litellm_host::in_process::run_hosted(
-        ocr_machine(ocr_client())(host.request().unwrap()),
+        ocr_client().ocr_machine().unwrap()(host.request().unwrap()),
         host.runtime(),
     )
     .await
@@ -347,13 +347,13 @@ async fn direct_execution_uses_hooks_without_a_machine() {
     )])
     .await;
     let events = Arc::new(super::support::CallEvents::default());
-    let result = litellm_core::ocr::client::perform_with_hooks(
-        &ocr_client(),
-        ocr_request("mistral/model", &upstream.uri(), json!({})),
-        &Hooks(events.clone()),
-    )
-    .await
-    .unwrap();
+    let result = ocr_client()
+        .ocr_with_hooks(
+            ocr_request("mistral/model", &upstream.uri(), json!({})),
+            &Hooks(events.clone()),
+        )
+        .await
+        .unwrap();
     assert_eq!(result.pages[0].markdown, "direct");
     assert_eq!(
         only_request(&upstream).await.header("x-direct-hook"),

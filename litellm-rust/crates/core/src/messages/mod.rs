@@ -1,6 +1,6 @@
 //! The Anthropic Messages call, the Rust equivalent of Python's `litellm.messages()`.
 //!
-//! [`messages`] prepares the provider request and sends it in process. [`route`] runs the
+//! [`CoreClient::messages`](crate::CoreClient::messages) prepares the provider request and sends it in process. [`route`] runs the
 //! same two steps as a machine for a host that answers the call's operations itself.
 
 mod common_utils;
@@ -9,33 +9,34 @@ mod prepare;
 pub mod route;
 mod types;
 
-use litellm_http::{ClientVariant, HttpClientConfig};
 use litellm_secrets::source::SecretSource;
 
 pub use crate::error::RouteError as Error;
 pub use types::{MessagesCall, MessagesResponse, MessagesShaping, messages_body};
 
-pub async fn messages(
-    resources: &crate::resources::CoreResources,
-    config: &HttpClientConfig,
-    secrets: &dyn SecretSource,
-    call: MessagesCall,
-) -> Result<MessagesResponse, Error> {
-    messages_with_hooks(resources, config, secrets, call, &()).await
-}
+impl crate::CoreClient {
+    pub async fn messages(&self, call: MessagesCall) -> Result<MessagesResponse, Error> {
+        self.messages_with_hooks(call, &()).await
+    }
 
-pub async fn messages_with_hooks(
-    resources: &crate::resources::CoreResources,
-    config: &HttpClientConfig,
-    secrets: &dyn SecretSource,
-    call: MessagesCall,
-    hooks: &impl litellm_host::hooks::RouteHooks<Error>,
-) -> Result<MessagesResponse, Error> {
-    litellm_host::lifecycle::observe_call(hooks.observer(), async {
-        let http = resources.pool.client(config, ClientVariant::Provider)?;
-        execute(&http, &resources.auth, secrets, call, hooks).await
-    })
-    .await
+    pub async fn messages_with_hooks(
+        &self,
+        call: MessagesCall,
+        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+    ) -> Result<MessagesResponse, Error> {
+        litellm_host::lifecycle::observe_call(hooks.observer(), async {
+            let http = self.provider_http()?;
+            execute(
+                &http,
+                &self.resources().auth,
+                self.secret_source().as_ref(),
+                call,
+                hooks,
+            )
+            .await
+        })
+        .await
+    }
 }
 
 async fn execute(

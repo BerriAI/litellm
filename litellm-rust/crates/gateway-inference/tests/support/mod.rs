@@ -7,15 +7,14 @@ use axum::{
     response::Response,
 };
 use futures_util::future::BoxFuture;
-use litellm_core::resources::CoreResources;
+use litellm_core::{CoreClient, resources::CoreResources};
 use litellm_gateway_inference::{Deployment, Gateway, router};
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
-use litellm_llms::base_llm::ocr::settings::OcrSettings;
 use litellm_secrets::{SecretValue, source::SecretSource};
 use serde_json::Value;
 use tower::ServiceExt;
 
-struct NoSecrets;
+pub struct NoSecrets;
 
 impl SecretSource for NoSecrets {
     fn get_secret_str<'a>(
@@ -39,19 +38,8 @@ pub fn app_with_permissions(
     let http = Resolution::from(&HttpSettings::default()).config;
     let secrets = Arc::new(NoSecrets);
     let resources = CoreResources::new(pool);
-    let ocr = resources
-        .ocr_client(
-            &http,
-            Default::default(),
-            OcrSettings::default(),
-            secrets.clone(),
-        )
-        .unwrap();
     router(Arc::new(Gateway {
-        resources,
-        http,
-        secrets,
-        ocr,
+        core: CoreClient::new(resources, http, secrets),
         models: [(
             "public/model".into(),
             Deployment {

@@ -130,10 +130,10 @@ mcp_servers:
     let shutdown = CancellationToken::new();
     let mcp = litellm_gateway::build_mcp(
         &config,
-        inference.secrets.clone(),
+        inference.core.secret_source().clone(),
         shutdown.clone(),
-        &inference.resources.pool,
-        &inference.http,
+        &inference.core.resources().pool,
+        inference.core.http_config(),
     )
     .await
     .unwrap()
@@ -248,8 +248,8 @@ async fn rejects_unsupported_or_invalid_settings_before_serving(
         &config,
         Arc::new(NoSecrets),
         CancellationToken::new(),
-        &inference.resources.pool,
-        &inference.http,
+        &inference.core.resources().pool,
+        inference.core.http_config(),
     )
     .await;
     let error = result.err().expect("startup must fail").to_string();
@@ -265,10 +265,10 @@ async fn mcp_is_optional_and_requires_admission_credentials_when_enabled() {
     assert!(
         litellm_gateway::build_mcp(
             &empty,
-            inference.secrets.clone(),
+            inference.core.secret_source().clone(),
             CancellationToken::new(),
-            &inference.resources.pool,
-            &inference.http
+            &inference.core.resources().pool,
+            inference.core.http_config()
         )
         .await
         .unwrap()
@@ -278,10 +278,10 @@ async fn mcp_is_optional_and_requires_admission_credentials_when_enabled() {
         Config::from_yaml("mcp_servers: {docs: {url: 'http://127.0.0.1:1/mcp'}}").unwrap();
     let error = litellm_gateway::build_mcp(
         &enabled,
-        inference.secrets.clone(),
+        inference.core.secret_source().clone(),
         CancellationToken::new(),
-        &inference.resources.pool,
-        &inference.http,
+        &inference.core.resources().pool,
+        inference.core.http_config(),
     )
     .await
     .err()
@@ -334,8 +334,8 @@ async fn refuses_unimplemented_global_mcp_policy(#[case] settings: &str) {
         &config,
         Arc::new(NoSecrets),
         CancellationToken::new(),
-        &inference.resources.pool,
-        &inference.http,
+        &inference.core.resources().pool,
+        inference.core.http_config(),
     )
     .await
     .err()

@@ -10,10 +10,7 @@ use axum::{
     http::HeaderMap,
     response::{IntoResponse, Response},
 };
-use litellm_core::messages::{
-    Error as RouteError, MessagesCall, messages_body,
-    route::{Messages, messages_machine},
-};
+use litellm_core::messages::{Error as RouteError, MessagesCall, messages_body, route::Messages};
 use litellm_host_http::Sse;
 use serde_json::{Map, Value};
 
@@ -44,8 +41,7 @@ async fn handle(
     let deployment = request::resolve_deployment(gateway, &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let call = project(deployment, body, headers)?;
-    let machine = messages_machine(&gateway.resources, &gateway.http, gateway.secrets.clone())
-        .map_err(RouteError::from)?;
+    let machine = gateway.core.messages_machine().map_err(RouteError::from)?;
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
     Ok(litellm_host_http::serve(machine(call), (), (), stream).await?)

@@ -7,8 +7,7 @@ use axum::{
     http::Request,
 };
 use litellm_core::{
-    chat_completions::{chat_completions, types::ChatCompletionsRequest},
-    resources::CoreResources,
+    CoreClient, chat_completions::types::ChatCompletionsRequest, resources::CoreResources,
 };
 use litellm_http::{HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver};
 use rstest::rstest;
@@ -83,10 +82,8 @@ async fn chat_errors_come_from_core(
     let resources = CoreResources::new(Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver))));
     let http = Resolution::from(&HttpSettings::default()).config;
     let fields = fields.as_object().unwrap();
-    let error = chat_completions(
-        &resources,
-        &http,
-        ChatCompletionsRequest {
+    let error = CoreClient::new(resources, http, Arc::new(support::NoSecrets))
+        .chat_completions(ChatCompletionsRequest {
             model: "anthropic/test-model",
             messages: fields.get("messages").cloned().unwrap_or_default(),
             optional_params: fields
@@ -99,10 +96,9 @@ async fn chat_errors_come_from_core(
             custom_llm_provider: None,
             extra_headers: None,
             timeout: None,
-        },
-    )
-    .await
-    .unwrap_err();
+        })
+        .await
+        .unwrap_err();
     let body = fields
         .iter()
         .map(|(name, value)| (name.clone(), value.clone()))

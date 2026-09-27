@@ -3,7 +3,7 @@ use std::sync::{Mutex, mpsc};
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
 use litellm_core::messages::{
-    MessagesResponse, messages,
+    MessagesResponse,
     route::{Messages, MessagesStreamHead},
 };
 use litellm_host::protocol::Demand;
@@ -337,17 +337,13 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
     #[case] provider: &str,
 ) {
     let upstream = upstream([sse_response()]).await;
-    let response = messages(
-        &support::resources(),
-        &http_config(),
-        &RecordingSecrets::empty(),
-        MessagesCall {
+    let response = client()
+        .messages(MessagesCall {
             custom_llm_provider: Some(provider.into()),
             ..streaming(call, upstream.uri())
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
 
     let MessagesResponse::Stream { head, chunks } = response else {
         panic!("a streaming request returns a stream");
@@ -364,15 +360,11 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
 #[tokio::test]
 async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall) {
     let upstream = upstream([ResponseTemplate::new(429).set_body_string("slow down")]).await;
-    let error = messages(
-        &support::resources(),
-        &http_config(),
-        &RecordingSecrets::empty(),
-        streaming(call, upstream.uri()),
-    )
-    .await
-    .err()
-    .expect("upstream failure is returned by messages()");
+    let error = client()
+        .messages(streaming(call, upstream.uri()))
+        .await
+        .err()
+        .expect("upstream failure is returned by messages()");
 
     assert_eq!(
         error,
@@ -394,15 +386,10 @@ async fn dropping_the_sdk_stream_closes_the_unfinished_upstream(
     let (base, connection) = stalling_upstream().await;
     let response = tokio::time::timeout(
         Duration::from_secs(5),
-        messages(
-            &support::resources(),
-            &http_config(),
-            &RecordingSecrets::empty(),
-            MessagesCall {
-                timeout: Some(Duration::from_secs(30)),
-                ..streaming(call, base)
-            },
-        ),
+        client().messages(MessagesCall {
+            timeout: Some(Duration::from_secs(30)),
+            ..streaming(call, base)
+        }),
     )
     .await
     .expect("messages() returns before the upstream finishes")
@@ -431,17 +418,13 @@ async fn dropping_the_sdk_stream_closes_the_unfinished_upstream(
 #[tokio::test]
 async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesCall) {
     let (base, connection) = stalling_upstream().await;
-    let response = messages(
-        &support::resources(),
-        &http_config(),
-        &RecordingSecrets::empty(),
-        MessagesCall {
+    let response = client()
+        .messages(MessagesCall {
             timeout: Some(Duration::from_millis(300)),
             ..streaming(call, base)
-        },
-    )
-    .await
-    .unwrap();
+        })
+        .await
+        .unwrap();
 
     let MessagesResponse::Stream { mut chunks, .. } = response else {
         panic!("a streaming request returns a stream");

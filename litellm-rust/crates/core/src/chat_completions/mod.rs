@@ -1,7 +1,7 @@
 //! The `/chat/completions` call, the Rust equivalent of Python's
 //! `litellm.completion()`.
 //!
-//! [`chat_completions`] is the top-level entrypoint: give it a model, the
+//! [`CoreClient::chat_completions`](crate::CoreClient::chat_completions) is the top-level entrypoint: give it a model, the
 //! OpenAI-shaped message list, the provider-mapped optional params, and
 //! credentials, and it resolves the provider, translates the conversation,
 //! calls the provider, and returns a typed OpenAI-shaped response.
@@ -12,20 +12,11 @@ pub use crate::error::RouteError as Error;
 mod common_utils;
 pub(crate) mod handler;
 mod prepare;
-use litellm_http::{ClientVariant, HttpClientConfig};
 use litellm_types::utils::ChatCompletionsResponse;
 use prepare::{parse_messages, prepare_provider_request, resolve_provider_config, resolve_request};
 use serde_json::{Map, Value};
 
 use crate::chat_completions::types::ChatCompletionsRequest;
-
-pub async fn chat_completions(
-    resources: &crate::resources::CoreResources,
-    config: &HttpClientConfig,
-    request: ChatCompletionsRequest<'_>,
-) -> Result<ChatCompletionsResponse, Error> {
-    chat_completions_with_hooks(resources, config, request, &()).await
-}
 
 /// Whether the core would accept this request, without resolving credentials or
 /// touching the network.
@@ -54,17 +45,25 @@ pub fn chat_completions_decline_reason(
         .map(|reason| reason.0)
 }
 
-pub async fn chat_completions_with_hooks(
-    resources: &crate::resources::CoreResources,
-    config: &HttpClientConfig,
-    request: ChatCompletionsRequest<'_>,
-    hooks: &impl litellm_host::hooks::RouteHooks<Error>,
-) -> Result<ChatCompletionsResponse, Error> {
-    litellm_host::lifecycle::observe_unary(hooks.observer(), async {
-        let http = resources.pool.client(config, ClientVariant::Provider)?;
-        execute(&http, &resources.auth, request, hooks).await
-    })
-    .await
+impl crate::CoreClient {
+    pub async fn chat_completions(
+        &self,
+        request: ChatCompletionsRequest<'_>,
+    ) -> Result<ChatCompletionsResponse, Error> {
+        self.chat_completions_with_hooks(request, &()).await
+    }
+
+    pub async fn chat_completions_with_hooks(
+        &self,
+        request: ChatCompletionsRequest<'_>,
+        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+    ) -> Result<ChatCompletionsResponse, Error> {
+        litellm_host::lifecycle::observe_unary(hooks.observer(), async {
+            let http = self.provider_http()?;
+            execute(&http, &self.resources().auth, request, hooks).await
+        })
+        .await
+    }
 }
 
 async fn execute(

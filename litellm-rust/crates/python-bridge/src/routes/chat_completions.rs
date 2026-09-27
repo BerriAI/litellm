@@ -4,12 +4,11 @@ use pyo3::types::{PyDict, PyTuple};
 
 use crate::errors::RustBridgeDeclined;
 use crate::logger::{run_async, run_sync};
+use litellm_core::CoreClient;
 use litellm_core::chat_completions::{
-    Error, chat_completions as run_chat_completions, chat_completions_decline_reason,
-    types::ChatCompletionsRequest,
+    Error, chat_completions_decline_reason, types::ChatCompletionsRequest,
 };
 use litellm_host_python::from_py_argument;
-use litellm_http::HttpClientConfig;
 use litellm_types::utils::ChatCompletionsResponse;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
@@ -23,7 +22,7 @@ use crate::{
 };
 
 async fn execute(
-    config: HttpClientConfig,
+    client: CoreClient,
     messages: Vec<Value>,
     optional_params: Map<String, Value>,
     options: RouteOptions,
@@ -36,10 +35,8 @@ async fn execute(
         extra_headers,
         timeout,
     } = options;
-    run_chat_completions(
-        crate::http::resources(),
-        &config,
-        ChatCompletionsRequest {
+    client
+        .chat_completions(ChatCompletionsRequest {
             model: &model,
             messages: Value::Array(messages),
             optional_params,
@@ -48,9 +45,8 @@ async fn execute(
             custom_llm_provider: custom_llm_provider.as_deref(),
             extra_headers,
             timeout,
-        },
-    )
-    .await
+        })
+        .await
 }
 
 #[pyfunction]
@@ -95,11 +91,11 @@ pub(crate) fn chat_completions(
         extra_headers,
         timeout: optional_timeout(timeout_seconds),
     };
-    let config = crate::http::call_config(py, &PyDict::new(py), false)?;
+    let client = crate::http::call_client(py, &PyDict::new(py), false)?;
     run_sync(
         py,
         execute(
-            config,
+            client,
             messages,
             optional_params.unwrap_or_default(),
             options,
@@ -133,11 +129,11 @@ pub(crate) fn achat_completions<'py>(
         extra_headers,
         timeout: optional_timeout(timeout_seconds),
     };
-    let config = crate::http::call_config(py, &PyDict::new(py), true)?;
+    let client = crate::http::call_client(py, &PyDict::new(py), true)?;
     run_async(
         py,
         execute(
-            config,
+            client,
             messages,
             optional_params.unwrap_or_default(),
             options,
@@ -185,12 +181,9 @@ fn run_public(
             "native Python chat_completions streaming",
         ));
     }
-    let config = crate::http::call_config(py, &kwargs, asynchronous)?;
-    let machine = litellm_core::chat_completions::route::chat_completions_machine(
-        crate::http::resources(),
-        &config,
-    )
-    .map_err(crate::http::client_error)?;
+    let machine = crate::http::call_client(py, &kwargs, asynchronous)?
+        .chat_completions_machine()
+        .map_err(crate::http::client_error)?;
     run_legacy_call(
         py,
         LegacySurface {

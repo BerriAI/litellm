@@ -1,12 +1,10 @@
-use std::{convert::Infallible, sync::Arc};
+use std::convert::Infallible;
 
 use bytes::Bytes;
 use litellm_host::{
     call::{HostedCompletion, HostedMachine, hosted_call},
     protocol::Protocol,
 };
-use litellm_http::{ClientVariant, HttpClientConfig};
-use litellm_secrets::source::SecretSource;
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 
 use super::{Error, MessagesCall};
@@ -31,19 +29,20 @@ impl Protocol for Messages {
 
 pub type MessagesMachine = HostedMachine<Messages>;
 
-pub fn messages_machine(
-    resources: &crate::resources::CoreResources,
-    config: &HttpClientConfig,
-    secrets: Arc<dyn SecretSource>,
-) -> Result<
-    impl FnOnce(super::MessagesCall) -> MessagesMachine + Send + Sync + use<>,
-    litellm_http::Error,
-> {
-    let http = resources.pool.client(config, ClientVariant::Provider)?;
-    let auth = resources.auth.clone();
-    Ok(move |request| {
-        hosted_call(request, move |call, _, hooks| async move {
-            super::execute(&http, &auth, secrets.as_ref(), call, &hooks).await
+impl crate::CoreClient {
+    pub fn messages_machine(
+        &self,
+    ) -> Result<
+        impl FnOnce(super::MessagesCall) -> MessagesMachine + Send + Sync + use<>,
+        litellm_http::Error,
+    > {
+        let http = self.provider_http()?;
+        let auth = self.resources().auth.clone();
+        let secrets = self.secret_source().clone();
+        Ok(move |request| {
+            hosted_call(request, move |call, _, hooks| async move {
+                super::execute(&http, &auth, secrets.as_ref(), call, &hooks).await
+            })
         })
-    })
+    }
 }

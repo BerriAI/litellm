@@ -1,14 +1,12 @@
 use litellm_core::ocr::{
     document::prepare_document,
-    route::{Ocr, OcrCall, OcrOp, ocr_machine},
+    route::{Ocr, OcrCall, OcrOp},
     types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, decode_request},
 };
 use litellm_host::event::{CallEvent, RequestContext, WireRequest};
-use litellm_http::Client;
 use litellm_llms::base_llm::ocr::{
     error::Error,
-    handler::OcrClient,
     transformation::{LiteLLMOcrResponse, OcrDocument},
 };
 use serde_json::{Map, Value, json};
@@ -39,18 +37,24 @@ fn object(value: Value) -> Map<String, Value> {
     map
 }
 
-fn ocr_client() -> OcrClient {
-    OcrClient::for_test(Client::plain_for_test(), Client::no_redirect_for_test())
+fn ocr_client() -> litellm_core::CoreClient {
+    client().with_url_policy(litellm_http::media::UrlPolicy {
+        validate: false,
+        allowed_hosts: Vec::new(),
+    })
 }
 
 async fn perform(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
-    litellm_core::ocr::client::perform(&ocr_client(), request).await
+    ocr_client().ocr(request).await
 }
 
 async fn perform_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Error> {
-    litellm_host::in_process::run_hosted(ocr_machine(ocr_client())(host.request()?), host.runtime())
-        .await
-        .map(completed)
+    litellm_host::in_process::run_hosted(
+        ocr_client().ocr_machine().unwrap()(host.request()?),
+        host.runtime(),
+    )
+    .await
+    .map(completed)
 }
 
 fn wire(model: &str, base: &str, document: Value, options: Value) -> OcrWireRequest {

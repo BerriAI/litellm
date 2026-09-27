@@ -5,7 +5,7 @@ use std::{
 
 use litellm_core::messages::{
     Error, MessagesCall, MessagesShaping,
-    route::{Messages, MessagesMachine, MessagesOutput, messages_machine},
+    route::{Messages, MessagesMachine, MessagesOutput},
 };
 use litellm_http::{HttpSettings, Resolution};
 use litellm_secrets::source::SecretSource;
@@ -99,7 +99,8 @@ fn headers<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Option<Ma
 }
 
 fn machine(secrets: Arc<dyn SecretSource>) -> impl FnOnce(MessagesCall) -> MessagesMachine {
-    messages_machine(&support::resources(), &http_config(), secrets)
+    client_with_secrets(secrets)
+        .messages_machine()
         .expect("default HTTP settings build a client")
 }
 

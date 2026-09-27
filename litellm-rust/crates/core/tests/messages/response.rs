@@ -1,6 +1,6 @@
 use litellm_core::{
     Phase,
-    messages::{MessagesResponse, messages, messages_body},
+    messages::{MessagesResponse, messages_body},
 };
 use litellm_http::transport::Error as TransportError;
 use rstest::rstest;
@@ -183,16 +183,16 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
         ..HttpSettings::default()
     };
 
-    let response = messages(
-        &support::resources(),
-        &Resolution::from(&settings).config,
-        &RecordingSecrets::empty(),
-        MessagesCall {
-            api_key: Some("sk-ant".into()),
-            api_base: Some(base),
-            ..call
-        },
+    let response = litellm_core::CoreClient::new(
+        support::resources(),
+        Resolution::from(&settings).config,
+        Arc::new(RecordingSecrets::empty()),
     )
+    .messages(MessagesCall {
+        api_key: Some("sk-ant".into()),
+        api_base: Some(base),
+        ..call
+    })
     .await
     .expect("messages request succeeds");
 

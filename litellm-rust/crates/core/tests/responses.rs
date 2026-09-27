@@ -2,8 +2,7 @@ use std::sync::Arc;
 
 use futures_util::TryStreamExt;
 use litellm_core::responses::{
-    responses_with_hooks,
-    route::{Responses, responses_machine},
+    route::Responses,
     types::{ResponsesCall, ResponsesOutput},
 };
 use litellm_host::{call::HostedCompletion, event::CallEvent};
@@ -40,12 +39,7 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
         ..call
     });
     let response = if hosted {
-        let machine = responses_machine(
-            &resources(),
-            &http_config(),
-            Arc::new(RecordingSecrets::empty()),
-        )
-        .unwrap();
+        let machine = client().responses_machine().unwrap();
         let HostedCompletion::Complete(response) =
             litellm_host::in_process::run_hosted(machine(host.request().unwrap()), host.runtime())
                 .await
@@ -56,15 +50,9 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
         response
     } else {
         let call = host.request.lock().unwrap().take().unwrap();
-        let ResponsesOutput::Complete(response) = responses_with_hooks(
-            &resources(),
-            &http_config(),
-            &RecordingSecrets::empty(),
-            call,
-            &host,
-        )
-        .await
-        .unwrap() else {
+        let ResponsesOutput::Complete(response) =
+            client().responses_with_hooks(call, &host).await.unwrap()
+        else {
             panic!()
         };
         response
@@ -104,12 +92,7 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
         ..call
     });
     let (headers, bytes) = if hosted {
-        let machine = responses_machine(
-            &resources(),
-            &http_config(),
-            Arc::new(RecordingSecrets::empty()),
-        )
-        .unwrap();
+        let machine = client().responses_machine().unwrap();
         assert_eq!(
             litellm_host::in_process::run_hosted(machine(host.request().unwrap()), host.runtime())
                 .await
@@ -122,15 +105,9 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
         )
     } else {
         let call = host.request.lock().unwrap().take().unwrap();
-        let ResponsesOutput::Stream { head, chunks } = responses_with_hooks(
-            &resources(),
-            &http_config(),
-            &RecordingSecrets::empty(),
-            call,
-            &host,
-        )
-        .await
-        .unwrap() else {
+        let ResponsesOutput::Stream { head, chunks } =
+            client().responses_with_hooks(call, &host).await.unwrap()
+        else {
             panic!()
         };
         assert_eq!(host.events.0.lock().unwrap().len(), 1);
@@ -162,17 +139,7 @@ async fn provider_failures_emit_failure_once(
         ..call
     });
     let call = host.request.lock().unwrap().take().unwrap();
-    assert!(
-        responses_with_hooks(
-            &resources(),
-            &http_config(),
-            &RecordingSecrets::empty(),
-            call,
-            &host
-        )
-        .await
-        .is_err()
-    );
+    assert!(client().responses_with_hooks(call, &host).await.is_err());
     assert_eq!(received(&upstream).await.len(), 1);
     let events = host.events.0.lock().unwrap();
     assert!(matches!(events.last(), Some(CallEvent::Failed { .. })));
@@ -202,14 +169,17 @@ async fn credentials_and_endpoint_are_resolved_only_when_needed(
     .await;
     let base = upstream.uri();
     let key = "resolved-test-key";
-    let secrets =
-        RecordingSecrets::new([("OPENAI_API_KEY", key), ("OPENAI_BASE_URL", base.as_str())]);
+    let secrets = Arc::new(RecordingSecrets::new([
+        ("OPENAI_API_KEY", key),
+        ("OPENAI_BASE_URL", base.as_str()),
+    ]));
     let call = ResponsesCall {
         api_key: explicit.then(|| key.into()),
         api_base: explicit.then(|| base.clone()),
         ..call
     };
-    litellm_core::responses::responses(&resources(), &http_config(), &secrets, call)
+    client_with_secrets(secrets.clone())
+        .responses(call)
         .await
         .unwrap();
     assert_eq!(
@@ -234,7 +204,7 @@ async fn unsupported_providers_fail_before_secrets_or_transport(
     #[case] provider: &str,
 ) {
     let upstream = upstream([]).await;
-    let secrets = RecordingSecrets::failing();
+    let secrets = Arc::new(RecordingSecrets::failing());
     let call = ResponsesCall {
         model: model.into(),
         custom_llm_provider: Some(provider.into()),
@@ -242,7 +212,8 @@ async fn unsupported_providers_fail_before_secrets_or_transport(
         ..call
     };
     assert!(
-        litellm_core::responses::responses(&resources(), &http_config(), &secrets, call)
+        client_with_secrets(secrets.clone())
+            .responses(call)
             .await
             .is_err()
     );

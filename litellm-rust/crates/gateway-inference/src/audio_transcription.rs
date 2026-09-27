@@ -3,7 +3,7 @@ use std::{path::Path, sync::Arc};
 
 use axum::{Json, extract::State, response::IntoResponse};
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_core::audio_transcription::{audio_transcription, types::AudioTranscriptionRequest};
+use litellm_core::audio_transcription::types::AudioTranscriptionRequest;
 use serde_json::{Value, json};
 
 use crate::{
@@ -41,10 +41,9 @@ async fn handle(
         }
         None => body.get("audio").cloned().unwrap_or_default(),
     };
-    Ok(audio_transcription(
-        &gateway.resources,
-        &gateway.http,
-        AudioTranscriptionRequest {
+    Ok(gateway
+        .core
+        .audio_transcription(AudioTranscriptionRequest {
             model: &deployment.model,
             audio,
             api_key: deployment.api_key.as_deref(),
@@ -56,7 +55,6 @@ async fn handle(
                 .filter(|(name, _)| !matches!(name.as_str(), "model" | "audio"))
                 .collect(),
             timeout: deployment.timeout,
-        },
-    )
-    .await?)
+        })
+        .await?)
 }

@@ -15,14 +15,13 @@ use axum::{
 use http_body_util::BodyExt;
 
 use litellm_config::Config;
-use litellm_core::resources::CoreResources;
+use litellm_core::{CoreClient, resources::CoreResources};
 use litellm_gateway_auth::Auth;
 use litellm_gateway_inference::{Gateway, ModelRouter};
 use litellm_http::{
     ClientVariant, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
     media::PublicDnsResolver,
 };
-use litellm_llms::base_llm::ocr::settings::OcrSettings;
 use litellm_secrets::source::EnvironmentSecrets;
 use litellm_tracing::ByteChunk;
 use uuid::Uuid;
@@ -63,19 +62,10 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, Error> {
         Arc::new(EnvironmentSecrets::python_compatible(client)),
     ));
     let resources = CoreResources::new(pool);
-    let ocr = resources.ocr_client(
-        &http,
-        Default::default(),
-        OcrSettings::default(),
-        secrets.clone(),
-    )?;
 
     Ok(Arc::new(Gateway {
-        resources,
-        http,
-        secrets,
+        core: CoreClient::new(resources, http, secrets),
         models: ModelRouter::from_model_list(&config.model_list),
-        ocr,
     }))
 }
 
@@ -128,7 +118,7 @@ pub fn router(
     ui: Option<Router>,
     mcp: Option<Router>,
 ) -> Router {
-    let auth = Auth::from_config(config, inference.secrets.clone());
+    let auth = Auth::from_config(config, inference.core.secret_source().clone());
     let inference = litellm_gateway_inference::router(inference)
         .merge(mcp.unwrap_or_default())
         .route_layer(axum::middleware::from_fn(auth::bind_session_owner))

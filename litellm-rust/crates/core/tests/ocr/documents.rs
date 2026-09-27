@@ -182,3 +182,45 @@ async fn a_missing_path_document_fails_before_sending() {
     );
     assert!(received(&upstream).await.is_empty());
 }
+
+#[rstest]
+#[case::blocked(false)]
+#[case::allowed(true)]
+#[tokio::test]
+async fn configured_client_preserves_document_url_policy(#[case] allowed: bool) {
+    let documents = document_server().await;
+    let upstream = upstream([pages_response()]).await;
+    let document_url = format!("{}/scan.png", documents.uri());
+    let authority = documents.address().to_string();
+    let client = client().with_url_policy(litellm_http::media::UrlPolicy {
+        validate: true,
+        allowed_hosts: allowed.then_some(authority).into_iter().collect(),
+    });
+    let host = LocalOcrHost::new(ocr_request_with_document(
+        "azure_ai/model",
+        &upstream.uri(),
+        json!({"type": "document_url", "document_url": document_url}),
+        json!({}),
+    ));
+    let machine = client.ocr_machine().unwrap();
+    drop(client);
+    let result =
+        litellm_host::in_process::run_hosted(machine(host.request().unwrap()), host.runtime())
+            .await;
+
+    if !allowed {
+        assert!(matches!(result, Err(Error::BlockedDocumentUrl)));
+        assert!(received(&documents).await.is_empty());
+        assert!(received(&upstream).await.is_empty());
+        return;
+    }
+    result.unwrap();
+    assert_eq!(only_request(&documents).await.url.path(), "/scan.png");
+    assert_eq!(
+        only_request(&upstream).await.json()["document"]["document_url"],
+        format!(
+            "data:image/png;base64,{}",
+            base64::engine::general_purpose::STANDARD.encode(SERVED_DOCUMENT)
+        )
+    );
+}

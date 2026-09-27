@@ -14,21 +14,15 @@ mod responses;
 use std::sync::Arc;
 
 use axum::{Router, routing::post};
-use litellm_core::resources::CoreResources;
-use litellm_http::HttpClientConfig;
-use litellm_llms::base_llm::ocr::handler::OcrClient;
-use litellm_secrets::source::SecretSource;
+use litellm_core::CoreClient;
 
 pub use error::Error;
 pub use litellm_router::{Deployment, Router as ModelRouter};
 pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
-    pub resources: CoreResources,
-    pub http: HttpClientConfig,
-    pub secrets: Arc<dyn SecretSource>,
+    pub core: CoreClient,
     pub models: ModelRouter,
-    pub ocr: OcrClient,
 }
 
 pub fn router(gateway: Arc<Gateway>) -> Router {

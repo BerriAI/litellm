@@ -72,10 +72,10 @@ async fn main() -> Result<(), Box<dyn Error>> {
     });
     let mcp = litellm_gateway::build_mcp(
         &config,
-        inference.secrets.clone(),
+        inference.core.secret_source().clone(),
         shutdown.clone(),
-        &inference.resources.pool,
-        &inference.http,
+        &inference.core.resources().pool,
+        inference.core.http_config(),
     )
     .await?;
     let mcp_router = mcp.as_ref().map(|gateway| {
