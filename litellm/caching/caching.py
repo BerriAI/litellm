@@ -394,10 +394,6 @@ class Cache:
                     param_value = kwargs[param]
                     cache_key += f"{param}: {param_value}"
                 elif kwargs[param] is not None and param not in _warned_dropped_cache_params:
-                    # Provider-specific param (e.g. ollama num_ctx) is being excluded
-                    # from the cache key. Two requests differing only in this param
-                    # will collide and the second gets the first's cached response.
-                    # Warn once per param; set enable_caching_on_provider_specific_optional_params=True to include it.
                     _warned_dropped_cache_params.add(param)
                     verbose_logger.warning(
                         "litellm.cache: provider-specific param '%s' is excluded from the cache key by default, "
