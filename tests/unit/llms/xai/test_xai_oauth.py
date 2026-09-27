@@ -783,7 +783,8 @@ def test_proxy_cli_xai_oauth_login_uses_single_authenticator(monkeypatch):
     class FakeAuthenticator:
         auth_file = "/tmp/xai-oauth-auth.json"
 
-        def __init__(self):
+        def __init__(self, auth_file=None):
+            self.requested_auth_file = auth_file
             instances.append(self)
 
         def login(self):
@@ -797,5 +798,6 @@ def test_proxy_cli_xai_oauth_login_uses_single_authenticator(monkeypatch):
 
     assert result.exit_code == 0
     assert len(instances) == 1
+    assert instances[0].requested_auth_file is None
     assert "Credentials saved to /tmp/xai-oauth-auth.json" in result.output
     assert "Access token expires at 1234567890" in result.output

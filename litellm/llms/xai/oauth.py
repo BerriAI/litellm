@@ -82,23 +82,23 @@ def _default_xai_oauth_token_dir() -> str:
 
 
 def resolve_xai_oauth_auth_file(auth_file: str | None, token_dir: str) -> str:
-    requested: Final = auth_file or get_secret_str("XAI_OAUTH_AUTH_FILE") or "auth.json"
-    candidate: Final = requested if os.path.isabs(requested) else os.path.join(token_dir, requested)
-    resolved: Final = os.path.realpath(candidate)
-    allowed: Final = os.path.realpath(token_dir)
-    if resolved == allowed or resolved.startswith(allowed + os.sep):
+    if not auth_file:
+        return os.path.join(token_dir, get_secret_str("XAI_OAUTH_AUTH_FILE") or "auth.json")
+    resolved: Final = os.path.realpath(os.path.join(token_dir, auth_file))
+    if resolved.startswith(os.path.realpath(token_dir) + os.sep):
         return resolved
     raise XAIOAuthError("xAI OAuth auth file must stay inside the token directory")
 
 
-def oauth_auth_file_for_account(account: str, token_dir: str) -> str:
+def oauth_auth_file_for_account(account: str) -> str:
     if not _XAI_OAUTH_ACCOUNT_NAME_RE.fullmatch(account):
         raise ValueError("xAI OAuth account must match ^[A-Za-z0-9_-]+$")
-    return resolve_xai_oauth_auth_file(f"auth-{account}.json", token_dir)
+    return f"auth-{account}.json"
 
 
-def is_xai_spending_limit_error(*, custom_llm_provider: str, status_code: int, error_str: str) -> bool:
-    return custom_llm_provider == "xai" and status_code == 403 and "spending-limit" in error_str
+def xai_oauth_token_file(litellm_params: Mapping[str, object] | None) -> str | None:
+    token_file: Final = (litellm_params or {}).get("xai_oauth_token_file")
+    return token_file if isinstance(token_file, str) else None
 
 
 class _CallbackHandler(BaseHTTPRequestHandler):
