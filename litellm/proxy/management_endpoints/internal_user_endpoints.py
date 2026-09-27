@@ -85,6 +85,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.utils import handle_exception_on_proxy, hash_password
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.organization_repository import OrganizationRepository
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import (
@@ -3138,7 +3139,7 @@ async def _resolve_export_users(
 ) -> Mapping[str, _ExportUserLabel]:
     if not user_ids:
         return MappingProxyType({})
-    users: Final = await _user_table(prisma_client).find_many(where={"user_id": {"in": list(user_ids)}})
+    users: Final = await find_many_in(_user_table(prisma_client), "user_id", user_ids)
     return MappingProxyType(
         {user.user_id: _ExportUserLabel(email=user.user_email, alias=user.user_alias) for user in users}
     )
