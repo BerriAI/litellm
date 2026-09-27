@@ -216,6 +216,8 @@ dev = [
     "responses==0.26.0",
     "respx==0.22.0",
     "ruff==0.15.3",
+    "hatchling==1.32.0",
+    "maturin==1.15.0",
     "types-requests==2.32.4.20260107",
     "types-setuptools==75.8.0.20250225",
     "types-redis==4.6.0.20241004",
@@ -302,8 +304,9 @@ benchmarks = [
 ]
 
 [build-system]
-requires = ["maturin==1.15.0"]
-build-backend = "maturin"
+requires = ["maturin==1.15.0", "hatchling==1.32.0"]
+build-backend = "litellm_build_backend"
+backend-path = ["scripts"]
 
 [tool.maturin]
 manifest-path = "litellm-rust/crates/python-bridge/Cargo.toml"
@@ -318,10 +321,25 @@ include = [
     "litellm/router_strategy/complexity_router/artifacts/*.json",
     "litellm/router_strategy/complexity_router/fuse_presets.json",
     "litellm/proxy/client/cli/commands/codex_base_instructions.md",
+    { path = "scripts/litellm_build_backend.py", format = "sdist" },
 ]
 exclude = [
     "litellm/proxy/enterprise",
     "litellm/proxy/enterprise/**",
+    "**/__pycache__",
+    "**/__pycache__/**",
+    "**/.pytest_cache",
+    "**/.pytest_cache/**",
+    "**/.ruff_cache",
+    "**/.ruff_cache/**",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["litellm"]
+exclude = [
+    "litellm/proxy/enterprise",
+    "litellm/proxy/enterprise/**",
+    "litellm/rust_bridge/_native*.so",
     "**/__pycache__",
     "**/__pycache__/**",
     "**/.pytest_cache",
