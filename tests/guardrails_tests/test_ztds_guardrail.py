@@ -6,7 +6,12 @@ https://datatracker.ietf.org/doc/draft-sibiryakov-ztds-protocol/
 
 import asyncio
 import unittest
-from litellm.proxy.guardrails.guardrail_hooks.ztds import ZTDSGuardrail
+import os, sys
+try:
+    from litellm.proxy.guardrails.guardrail_hooks.ztds import ZTDSGuardrail
+except ImportError:
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    from ztds import ZTDSGuardrail
 
 
 class MockMessage:
