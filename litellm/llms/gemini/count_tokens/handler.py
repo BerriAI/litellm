@@ -1,15 +1,51 @@
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Sequence
+from typing import Any, Final
 
 import httpx
 
 import litellm
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
+from litellm.types.llms.gemini import GeminiCountTokensRequest
+from litellm.types.llms.vertex_ai import ContentType, SystemInstructions, Tools
 from litellm.types.utils import LlmProviders
 
-if TYPE_CHECKING:
-    from litellm.types.google_genai.main import GenerateContentContentListUnionDict
-else:
-    GenerateContentContentListUnionDict = Any
+# acount_tokens binds these itself, so forwarding a deployment's copy would raise a duplicate-keyword TypeError
+ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS: Final = frozenset({"self", "system_instruction", "tools", "client"})
+
+
+def build_count_tokens_request(
+    model: str,
+    contents: Sequence[ContentType],
+    system_instruction: SystemInstructions | None,
+    tools: Sequence[Tools] | None,
+) -> GeminiCountTokensRequest:
+    model_name: Final = f"models/{model}"
+    if tools is None:
+        if system_instruction is None:
+            bare: Final[GeminiCountTokensRequest] = {"contents": contents}
+            return bare
+        with_system: Final[GeminiCountTokensRequest] = {
+            "generateContentRequest": {
+                "model": model_name,
+                "contents": contents,
+                "systemInstruction": system_instruction,
+            }
+        }
+        return with_system
+    if system_instruction is None:
+        with_tools: Final[GeminiCountTokensRequest] = {
+            "generateContentRequest": {"model": model_name, "contents": contents, "tools": tools}
+        }
+        return with_tools
+    with_both: Final[GeminiCountTokensRequest] = {
+        "generateContentRequest": {
+            "model": model_name,
+            "contents": contents,
+            "systemInstruction": system_instruction,
+            "tools": tools,
+        }
+    }
+    return with_both
 
 
 class GoogleAIStudioTokenCounter:
@@ -28,8 +64,6 @@ class GoogleAIStudioTokenCounter:
         """
         import copy
 
-        from google.genai.types import FunctionResponse
-
         # Handle None or empty contents
         if not contents:
             return contents
@@ -37,13 +71,15 @@ class GoogleAIStudioTokenCounter:
         cleaned_contents: Final = copy.deepcopy(contents)
 
         for content in cleaned_contents:
-            parts = content["parts"]
+            parts = content.get("parts") if isinstance(content, dict) else None
+            if not isinstance(parts, list):
+                continue
             for part in parts:
-                if "functionResponse" in part:
-                    function_response_data = part["functionResponse"]
-                    function_response_part = FunctionResponse(**function_response_data)
-                    function_response_part.id = None
-                    part["functionResponse"] = function_response_part.model_dump(exclude_none=True)
+                function_response = part.get("functionResponse") if isinstance(part, dict) else None
+                if isinstance(function_response, dict):
+                    part["functionResponse"] = {
+                        key: value for key, value in function_response.items() if key != "id" and value is not None
+                    }
 
         return cleaned_contents
 
@@ -84,6 +120,9 @@ class GoogleAIStudioTokenCounter:
         api_key: str | None = None,
         api_base: str | None = None,
         timeout: float | httpx.Timeout | None = None,
+        system_instruction: SystemInstructions | None = None,
+        tools: Sequence[Tools] | None = None,
+        client: httpx.AsyncClient | AsyncHTTPHandler | None = None,
         **kwargs: object,
     ) -> dict[str, Any]:
         """
@@ -96,6 +135,9 @@ class GoogleAIStudioTokenCounter:
             api_key: Optional Google API key (will fall back to environment)
             api_base: Optional API base URL (defaults to Google Gen AI Studio)
             timeout: Optional timeout for the request
+            system_instruction: Optional system instruction to count with the contents
+            tools: Optional Gemini tools to count with the contents
+            client: Optional HTTP client to send the request with
             **kwargs: Additional parameters
 
         Returns:
@@ -118,28 +160,27 @@ class GoogleAIStudioTokenCounter:
             litellm.APIConnectionError: If the connection fails
             Exception: For any other unexpected errors
         """
-
-        # Prepare headers
         headers, url = await self.validate_environment(
             api_key=api_key,
             api_base=api_base,
-            headers={},
+            headers={},  # mutable-ok: validate_environment merges into this dict
             model=model,
             litellm_params=kwargs,
         )
-
-        # Prepare request body - clean up contents to remove unsupported fields
-        cleaned_contents: Final = self._clean_contents_for_gemini_api(contents)
-        request_body: Final = {"contents": cleaned_contents}
-
-        async_httpx_client: Final = get_async_httpx_client(
-            llm_provider=LlmProviders.GEMINI,
+        request_body: Final = build_count_tokens_request(
+            model=model,
+            contents=self._clean_contents_for_gemini_api(contents),
+            system_instruction=system_instruction,
+            tools=tools,
         )
+        async_httpx_client: Final = client or get_async_httpx_client(llm_provider=LlmProviders.GEMINI)
 
         try:
-            response: Final = await async_httpx_client.post(url=url, headers=headers, json=request_body)
-
-            # Check for HTTP errors
+            response: Final = await async_httpx_client.post(
+                url=url,
+                headers=headers,
+                json=request_body,  # pyright: ignore[reportArgumentType]  # post() takes a bare dict; a TypedDict is one at runtime
+            )
             response.raise_for_status()
 
             # Parse response

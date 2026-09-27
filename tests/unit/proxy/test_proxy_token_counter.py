@@ -2,6 +2,7 @@
 # 1. Generate a Key, and use it to make a call
 
 
+import json
 import logging
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1247,3 +1248,140 @@ async def test_anthropic_endpoint_429_rate_limit_error_format():
     finally:
         anthropic_endpoints._read_request_body = original_read_request_body
         proxy_server.count_request_tokens = original_count_request_tokens
+
+
+_GEMINI_COUNT_TOKENS_URL = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:countTokens"
+_WEATHER_TOOL = {
+    "name": "get_weather",
+    "description": "Weather for a city",
+    "input_schema": {"type": "object", "properties": {"city": {"type": "string"}}, "required": ["city"]},
+}
+
+
+def _gemini_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "gemini-count",
+                "litellm_params": {"model": "gemini/gemini-2.5-flash", "api_key": "fake-gemini-key"},
+            }
+        ]
+    )
+
+
+async def _count_through_anthropic_route(monkeypatch, body: dict[str, object]) -> dict:
+    import litellm.proxy.anthropic_endpoints.endpoints as anthropic_endpoints
+
+    async def read_body(request):
+        return body
+
+    monkeypatch.setattr(anthropic_endpoints, "_read_request_body", read_body)
+    return await anthropic_count_tokens(MagicMock(spec=Request), MagicMock())
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_route_sends_system_and_tools_to_gemini(monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    count_route = respx_mock.post(_GEMINI_COUNT_TOKENS_URL).mock(
+        return_value=httpx.Response(200, json={"totalTokens": 41})
+    )
+
+    response = await _count_through_anthropic_route(
+        monkeypatch,
+        {
+            "model": "gemini-count",
+            "system": "You are terse.",
+            "tools": [_WEATHER_TOOL],
+            "messages": [{"role": "user", "content": "weather in Paris?"}],
+        },
+    )
+
+    assert response == {"input_tokens": 41}
+    sent = json.loads(count_route.calls.last.request.content)["generateContentRequest"]
+    assert sent["systemInstruction"] == {"parts": [{"text": "You are terse."}]}
+    assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == ["get_weather"]
+
+
+def _mock_gemini_count(monkeypatch, respx_mock):
+    monkeypatch.setattr(litellm.proxy.proxy_server, "llm_router", _gemini_router())
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    return respx_mock.post(_GEMINI_COUNT_TOKENS_URL).mock(return_value=httpx.Response(200, json={"totalTokens": 58}))
+
+
+_TOOL_ROUND_TRIP_CONTENTS = [
+    {"role": "user", "parts": [{"text": "weather in Paris?"}]},
+    {"role": "model", "parts": [{"function_call": {"name": "get_weather", "args": {"city": "Paris"}}}]},
+    {"role": "user", "parts": [{"function_response": {"name": "get_weather", "response": {"content": "18C"}}}]},
+]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_count_tokens_route_sends_tool_round_trip_to_gemini(monkeypatch, respx_mock):
+    count_route = _mock_gemini_count(monkeypatch, respx_mock)
+
+    response = await _count_through_anthropic_route(
+        monkeypatch,
+        {
+            "model": "gemini-count",
+            "tools": [_WEATHER_TOOL],
+            "messages": [
+                {"role": "user", "content": "weather in Paris?"},
+                {
+                    "role": "assistant",
+                    "content": [
+                        {"type": "tool_use", "id": "toolu_1", "name": "get_weather", "input": {"city": "Paris"}}
+                    ],
+                },
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "toolu_1", "content": "18C"}]},
+            ],
+        },
+    )
+
+    assert response == {"input_tokens": 58}
+    sent = json.loads(count_route.calls.last.request.content)["generateContentRequest"]
+    assert sent["contents"] == _TOOL_ROUND_TRIP_CONTENTS
+    assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == ["get_weather"]
+
+
+@pytest.mark.asyncio
+async def test_utils_token_counter_sends_openai_tool_round_trip_to_gemini(monkeypatch, respx_mock):
+    count_route = _mock_gemini_count(monkeypatch, respx_mock)
+
+    response = await token_counter(
+        request=TokenCountRequest(
+            model="gemini-count",
+            messages=[
+                {"role": "system", "content": "You are terse."},
+                {"role": "user", "content": "weather in Paris?"},
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_1",
+                            "type": "function",
+                            "function": {"name": "get_weather", "arguments": '{"city": "Paris"}'},
+                        }
+                    ],
+                },
+                {"role": "tool", "tool_call_id": "call_1", "content": "18C"},
+            ],
+            tools=[
+                {
+                    "type": "function",
+                    "function": {
+                        "name": "get_weather",
+                        "parameters": _WEATHER_TOOL["input_schema"],
+                    },
+                }
+            ],
+        ),
+        call_endpoint=True,
+    )
+
+    assert response.total_tokens == 58
+    sent = json.loads(count_route.calls.last.request.content)["generateContentRequest"]
+    assert sent["systemInstruction"] == {"parts": [{"text": "You are terse."}]}
+    assert sent["contents"] == _TOOL_ROUND_TRIP_CONTENTS
+    assert [declaration["name"] for declaration in sent["tools"][0]["function_declarations"]] == ["get_weather"]

@@ -3,7 +3,7 @@ import datetime
 import json
 import math
 from collections.abc import Mapping, Sequence
-from typing import Any, Final
+from typing import TYPE_CHECKING, Any, Final, cast
 
 import httpx
 
@@ -13,7 +13,11 @@ from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllMessageValues
-from litellm.types.utils import TokenCountResponse
+from litellm.types.llms.vertex_ai import ContentType
+from litellm.types.utils import CountTokensMessageFormat, TokenCountResponse
+
+if TYPE_CHECKING:
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 
 GEMINI_IMAGE_ASPECT_RATIOS: Final[dict[str, float]] = {
     "1:1": 1 / 1,
@@ -491,29 +495,100 @@ class GoogleAIStudioTokenCounter(BaseTokenCounter):
         request_model: str = "",
         tools: list[dict[str, object]] | None = None,
         system: object | None = None,
+        client: "httpx.AsyncClient | AsyncHTTPHandler | None" = None,
+    ) -> TokenCountResponse | None:
+        return await self._count_tokens(
+            model_to_use=model_to_use,
+            messages=messages,
+            contents=contents,
+            deployment=deployment,
+            request_model=request_model,
+            tools=tools,
+            system=system,
+            client=client,
+            message_format="openai",
+        )
+
+    async def count_anthropic_messages_tokens(
+        self,
+        model_to_use: str,
+        messages: list[dict[str, object]] | None,
+        contents: list[dict[str, object]] | None,
+        deployment: dict[str, Any] | None = None,
+        request_model: str = "",
+        tools: list[dict[str, object]] | None = None,
+        system: object | None = None,
+        client: "httpx.AsyncClient | AsyncHTTPHandler | None" = None,
+    ) -> TokenCountResponse | None:
+        return await self._count_tokens(
+            model_to_use=model_to_use,
+            messages=messages,
+            contents=contents,
+            deployment=deployment,
+            request_model=request_model,
+            tools=tools,
+            system=system,
+            client=client,
+            message_format="anthropic",
+        )
+
+    async def _count_tokens(
+        self,
+        model_to_use: str,
+        messages: list[dict[str, object]] | None,
+        contents: list[dict[str, object]] | None,
+        deployment: dict[str, Any] | None,
+        request_model: str,
+        tools: list[dict[str, object]] | None,
+        system: object | None,
+        client: "httpx.AsyncClient | AsyncHTTPHandler | None",
+        message_format: CountTokensMessageFormat,
     ) -> TokenCountResponse | None:
         import copy
 
-        from litellm.llms.gemini.count_tokens.handler import GoogleAIStudioTokenCounter
-
-        deployment = deployment or {}
-        count_tokens_params_request: Final = copy.deepcopy(deployment.get("litellm_params", {}))
-        count_tokens_params: Final = {
-            "model": model_to_use,
-            "contents": contents,
-        }
-        count_tokens_params_request.update(count_tokens_params)
-        result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
-            **count_tokens_params_request,
+        from litellm.llms.gemini.count_tokens.handler import (
+            ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS,
+            GoogleAIStudioTokenCounter,
+        )
+        from litellm.llms.gemini.count_tokens.transformation import (
+            GeminiCountTokensPayload,
+            build_count_tokens_payload,
         )
 
-        if result is not None:
-            return TokenCountResponse(
-                total_tokens=result.get("totalTokens", 0),
-                request_model=request_model,
-                model_used=model_to_use,
-                tokenizer_type=result.get("tokenizer_used", ""),
-                original_response=result,
-            )
+        if contents is None and not messages:
+            return None
 
-        return None
+        litellm_params: Final = (deployment or {}).get("litellm_params", {})
+        payload: Final = (
+            await build_count_tokens_payload(
+                model=model_to_use,
+                messages=messages or (),
+                system=system,
+                tools=(*(litellm_params.get("tools") or ()), *(tools or ())) or None,
+                message_format=message_format,
+            )
+            if contents is None
+            else GeminiCountTokensPayload(
+                contents=cast(tuple[ContentType, ...], tuple(contents)),  # cast-ok: native contents pass through
+                system_instruction=None,
+                tools=None,
+            )
+        )
+        count_tokens_params_request: Final = {
+            key: copy.deepcopy(value)
+            for key, value in litellm_params.items()
+            if key not in ACOUNT_TOKENS_DEPLOYMENT_RESERVED_KEYS
+        } | {"model": model_to_use, "contents": payload.contents}
+        result: Final = await GoogleAIStudioTokenCounter().acount_tokens(
+            system_instruction=payload.system_instruction,
+            tools=payload.tools,
+            client=client,
+            **count_tokens_params_request,
+        )
+        return TokenCountResponse(
+            total_tokens=result.get("totalTokens", 0),
+            request_model=request_model,
+            model_used=model_to_use,
+            tokenizer_type=result.get("tokenizer_used", ""),
+            original_response=result,
+        )
