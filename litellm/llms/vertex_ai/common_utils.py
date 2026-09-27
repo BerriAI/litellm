@@ -1058,10 +1058,7 @@ def _convert_schema_types(schema, depth=0):
 
             # Remove fields moved into anyOf branches from the parent.
             fields_moved_into_any_of: Final = (
-                type_specific_fields
-                | primitive_common_fields
-                | string_specific_fields
-                | numeric_specific_fields
+                type_specific_fields | primitive_common_fields | string_specific_fields | numeric_specific_fields
             )
             if any(t != "null" for t in type_val if isinstance(t, str)):
                 for field in fields_moved_into_any_of:
