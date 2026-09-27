@@ -1,7 +1,7 @@
 use axum::{
     body::Bytes,
-    extract::{FromRequest, Multipart, Request},
-    http::Uri,
+    extract::{FromRequest, FromRequestParts, Multipart, OriginalUri, Request},
+    http::request::Parts,
     response::Response,
 };
 use serde_json::{Map, Value};
@@ -18,6 +18,22 @@ pub(crate) struct Upload {
 }
 
 pub struct JsonObject(pub Map<String, Value>);
+
+pub struct RequestId(pub Option<String>);
+
+impl<S: Send + Sync> FromRequestParts<S> for RequestId {
+    type Rejection = std::convert::Infallible;
+
+    async fn from_request_parts(parts: &mut Parts, _: &S) -> Result<Self, Self::Rejection> {
+        Ok(Self(
+            parts
+                .headers
+                .get("x-request-id")
+                .and_then(|value| value.to_str().ok())
+                .map(str::to_owned),
+        ))
+    }
+}
 
 impl<S: Send + Sync> FromRequest<S> for JsonObject {
     type Rejection = Error;
@@ -105,9 +121,6 @@ async fn parse_multipart(mut multipart: Multipart) -> Result<InferenceBody, Erro
             if bytes.len() > MAX_FILE_BYTES {
                 return Err(Error::BodyTooLarge);
             }
-            if bytes.is_empty() {
-                return Err(Error::InvalidBody("uploaded file is empty".into()));
-            }
             upload = Some(Upload {
                 bytes,
                 file_name,
@@ -119,11 +132,6 @@ async fn parse_multipart(mut multipart: Multipart) -> Result<InferenceBody, Erro
             fields.insert(name, value);
         }
     }
-    if upload.is_none() {
-        return Err(Error::InvalidBody(
-            "multipart request requires a file field".into(),
-        ));
-    }
     Ok(InferenceBody { fields, upload })
 }
 
@@ -134,7 +142,7 @@ fn multipart_error(error: axum::extract::multipart::MultipartError) -> Error {
     Error::InvalidBody(error.to_string())
 }
 
-pub(crate) async fn unsupported(uri: Uri) -> Response {
+pub(crate) async fn unsupported(OriginalUri(uri): OriginalUri) -> Response {
     Error::Unsupported(uri.path().to_owned()).openai_response()
 }
 

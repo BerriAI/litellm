@@ -1,6 +1,8 @@
 mod support;
 
 use axum::{body::Body, http::Request};
+use litellm_gateway_inference::Error;
+use litellm_llms::base_llm::ocr::{error::Error as OcrError, transformation::OcrDocument};
 use rstest::rstest;
 use serde_json::{Value, json};
 use tower::ServiceExt;
@@ -118,30 +120,16 @@ async fn invalid_ocr_requests_do_not_call_the_provider(#[case] body: Value) {
 }
 
 #[rstest]
-#[case::missing_boundary("multipart/form-data", "", None)]
-#[case::missing_file(
-    "multipart/form-data; boundary=test",
-    "--test--\r\n",
-    Some("requires a file")
-)]
-#[case::empty_file(
-    "multipart/form-data; boundary=test",
-    "--test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.pdf\"\r\n\r\n\r\n--test--\r\n",
-    Some("uploaded file is empty")
-)]
 #[tokio::test]
-async fn invalid_uploads_use_an_openai_error_envelope(
-    #[case] content_type: &str,
-    #[case] payload: &str,
-    #[case] message: Option<&str>,
+async fn malformed_multipart_uses_an_openai_error_envelope(
     #[values("/v1/ocr", "/v1/audio/transcriptions")] route: &str,
 ) {
     let upstream = MockServer::start().await;
     let response = support::app("mistral/test-ocr", &upstream.uri())
         .oneshot(
             Request::post(route)
-                .header("content-type", content_type)
-                .body(Body::from(payload.to_owned()))
+                .header("content-type", "multipart/form-data")
+                .body(Body::empty())
                 .unwrap(),
         )
         .await
@@ -152,8 +140,49 @@ async fn invalid_uploads_use_an_openai_error_envelope(
     assert_eq!(body["error"]["code"], 400);
     let error_message = body["error"]["message"].as_str().unwrap();
     assert!(!error_message.is_empty());
-    if let Some(message) = message {
-        assert!(error_message.contains(message));
-    }
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[case::missing_document(
+    "/v1/ocr", "mistral/test-ocr", "",
+    Error::Ocr(OcrDocument::try_from(Value::Null).unwrap_err()),
+)]
+#[case::empty_document(
+    "/v1/ocr",
+    "mistral/test-ocr",
+    "--test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.pdf\"\r\n\r\n\r\n",
+    Error::Ocr(OcrError::EmptyFile)
+)]
+#[case::empty_audio(
+    "/v1/audio/transcriptions", "bedrock/test-model",
+    "--test\r\nContent-Disposition: form-data; name=\"file\"; filename=\"test.wav\"\r\n\r\n\r\n",
+    Error::Route(litellm_llms::Error::MissingField("audio.data").into()),
+)]
+#[tokio::test]
+async fn upload_validation_errors_come_from_core(
+    #[case] route: &str,
+    #[case] model: &str,
+    #[case] file: &str,
+    #[case] error: Error,
+) {
+    let upstream = MockServer::start().await;
+    let payload = format!(
+        "--test\r\nContent-Disposition: form-data; name=\"model\"\r\n\r\npublic/model\r\n{file}--test--\r\n"
+    );
+    let response = support::app(model, &upstream.uri())
+        .oneshot(
+            Request::post(route)
+                .header("content-type", "multipart/form-data; boundary=test")
+                .body(Body::from(payload))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 400);
+    assert_eq!(
+        support::json(response).await,
+        support::json(error.openai_response()).await
+    );
     assert!(upstream.received_requests().await.unwrap().is_empty());
 }

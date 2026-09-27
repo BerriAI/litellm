@@ -6,7 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-axum = { workspace = true, features = ["json", "multipart"] }
+axum = { workspace = true, features = ["json", "multipart", "original-uri"] }
 base64.workspace = true
 bytes.workspace = true
 litellm-auth.workspace = true

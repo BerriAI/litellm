@@ -32,15 +32,10 @@ async fn handle(
                 .as_deref()
                 .and_then(|name| Path::new(name).extension())
                 .and_then(|extension| extension.to_str())
-                .ok_or_else(|| {
-                    Error::InvalidBody("audio file requires a filename extension".into())
-                })?;
-            json!({"data": STANDARD.encode(upload.bytes), "format": format.to_ascii_lowercase()})
+                .map(str::to_ascii_lowercase);
+            json!({"data": STANDARD.encode(upload.bytes), "format": format})
         }
-        None => body
-            .get("audio")
-            .cloned()
-            .ok_or_else(|| Error::InvalidBody("audio is required".into()))?,
+        None => body.get("audio").cloned().unwrap_or_default(),
     };
     Ok(audio_transcription(
         &gateway.resources,

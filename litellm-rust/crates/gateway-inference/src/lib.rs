@@ -7,7 +7,6 @@ mod audio_transcription;
 mod chat_completions;
 mod error;
 pub mod messages;
-mod model_path;
 mod ocr;
 mod request;
 
@@ -21,7 +20,7 @@ use litellm_secrets::source::SecretSource;
 
 pub use error::Error;
 pub use litellm_router::{Deployment, Router as ModelRouter};
-pub use request::JsonObject;
+pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
     pub resources: CoreResources,
@@ -38,8 +37,8 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
         .route("/v1/ocr", post(ocr::create))
         .route("/chat/completions", post(chat_completions::create))
         .route("/v1/chat/completions", post(chat_completions::create))
-        .route("/engines/{*path}", post(model_path::dispatch))
-        .route("/openai/deployments/{*path}", post(model_path::dispatch))
+        .nest("/engines/{model}", model_routes())
+        .nest("/openai/deployments/{model}", model_routes())
         .route("/audio/transcriptions", post(audio_transcription::create))
         .route(
             "/v1/audio/transcriptions",
@@ -55,4 +54,14 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
             request::MAX_BODY_BYTES,
         ))
         .with_state(gateway)
+}
+
+fn model_routes() -> Router<Arc<Gateway>> {
+    Router::new()
+        .route(
+            "/chat/completions",
+            post(chat_completions::create_from_model_path),
+        )
+        .route("/embeddings", post(request::unsupported))
+        .route("/completions", post(request::unsupported))
 }

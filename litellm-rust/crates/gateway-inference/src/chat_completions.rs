@@ -1,6 +1,10 @@
 use std::sync::Arc;
 
-use axum::{Json, extract::State, response::Response};
+use axum::{
+    Json,
+    extract::{Path, State},
+    response::Response,
+};
 use litellm_core::chat_completions::{
     Error as RouteError, route::chat_completions_machine, types::ChatCompletionsCall,
 };
@@ -16,29 +20,23 @@ pub(crate) async fn create(
 }
 
 pub(crate) async fn create_from_model_path(
-    gateway: &Gateway,
-    model: &str,
+    State(gateway): State<Arc<Gateway>>,
+    Path(model): Path<String>,
     JsonObject(body): JsonObject,
 ) -> Result<Response, Error> {
     let body = if body.get("model").is_some_and(|model| !model.is_null()) {
         body
     } else {
         body.into_iter()
-            .chain([("model".into(), Value::String(model.into()))])
+            .chain([("model".into(), Value::String(model))])
             .collect()
     };
-    handle(gateway, body).await
+    handle(&gateway, body).await
 }
 
 async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(gateway, &body)?;
-    if body.get("stream").and_then(Value::as_bool) == Some(true) {
-        return Err(Error::Unsupported("streaming chat completions".into()));
-    }
-    let messages = body
-        .get("messages")
-        .cloned()
-        .ok_or_else(|| Error::InvalidBody("messages is required".into()))?;
+    let messages = body.get("messages").cloned().unwrap_or_default();
     let machine =
         chat_completions_machine(&gateway.resources, &gateway.http).map_err(RouteError::from)?;
     let response = litellm_host_http::serve_unary(
@@ -48,7 +46,7 @@ async fn handle(gateway: &Gateway, body: Map<String, Value>) -> Result<Response,
             messages,
             optional_params: body
                 .into_iter()
-                .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages" | "stream"))
+                .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages"))
                 .collect(),
             api_key: deployment.api_key.clone(),
             api_base: deployment.api_base.clone(),

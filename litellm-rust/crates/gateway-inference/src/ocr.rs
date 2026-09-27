@@ -41,12 +41,7 @@ async fn handle(
             file_name: upload.file_name,
             mime_type: upload.mime_type,
         },
-        None => OcrDocument::try_from(
-            body.get("document")
-                .cloned()
-                .ok_or_else(|| Error::InvalidBody("document is required".into()))?,
-        )?
-        .into(),
+        None => OcrDocument::try_from(body.get("document").cloned().unwrap_or_default())?.into(),
     };
     let format = body
         .get("req_format")
