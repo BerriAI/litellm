@@ -21,6 +21,22 @@ is_internal_call: Final[ContextVar[bool]] = ContextVar("is_internal_call", defau
 # moment they can land on either side of a window boundary and disagree with each other.
 _billing_time: Final[ContextVar[datetime | None]] = ContextVar("billing_time", default=None)
 
+_post_response: Final[ContextVar[bool]] = ContextVar("post_response", default=False)
+
+
+@contextmanager
+def post_response_phase() -> Generator[None]:
+    """Work the caller no longer waits for (success callbacks, response-cache writes), including tasks it spawns."""
+    token: Final = _post_response.set(True)
+    try:
+        yield
+    finally:
+        _post_response.reset(token)
+
+
+def in_post_response_phase() -> bool:
+    return _post_response.get()
+
 
 @contextmanager
 def pinned_billing_time(moment: datetime) -> Generator[None]:

@@ -11,6 +11,7 @@ import litellm
 from litellm._logging import verbose_router_logger
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import get_metadata_variable_name_from_kwargs, safe_deep_copy
+from litellm.litellm_core_utils.get_llm_provider_logic import inferred_provider
 from litellm.litellm_core_utils.sensitive_data_masker import mask_sensitive_structure
 from litellm.router_utils.add_retry_fallback_headers import (
     add_fallback_headers_to_response,
@@ -236,6 +237,13 @@ def _check_stripped_model_group(model_group: str, fallback_key: str) -> bool:
     return False
 
 
+def _provider_prefixed_model_group(model_group: str, fallback_keys: Sequence[str]) -> str | None:
+    if "/" in model_group or not any(key.endswith(f"/{model_group}") for key in fallback_keys):
+        return None
+    provider: Final = inferred_provider(model_group)
+    return f"{provider}/{model_group}" if provider else None
+
+
 PRE_ROUTING_SELECTED_MODEL_KEY: Final = "pre_routing_selected_model"
 _ROUTER_METADATA_BUCKETS: Final = ("metadata", "litellm_metadata")
 
@@ -439,22 +447,26 @@ def get_fallback_model_group(fallbacks: list[Any], model_group: str) -> tuple[li
     Checks:
     - exact match
     - stripped model group match
+    - provider-prefixed model group match
     - generic fallback
     """
     generic_fallback_idx: int | None = None
     stripped_model_fallback: list[str] | None = None
     fallback_model_group: list[str] | None = None
+    fallback_keys: Final = tuple(next(iter(item)) for item in fallbacks if isinstance(item, dict) and item)
+    prefixed_model_group: Final = _provider_prefixed_model_group(model_group, fallback_keys)
     ## check for specific model group-specific fallbacks
     for idx, item in enumerate(fallbacks):
         if isinstance(item, dict):
-            if list(item.keys())[0] == model_group:  # check exact match
+            fallback_key = next(iter(item))
+            if fallback_key == model_group:  # check exact match
                 fallback_model_group = item[model_group]
                 break
-            elif _check_stripped_model_group(
-                model_group=model_group, fallback_key=list(item.keys())[0]
+            elif fallback_key == prefixed_model_group or _check_stripped_model_group(
+                model_group=model_group, fallback_key=fallback_key
             ):  # check generic fallback
-                stripped_model_fallback = item[list(item.keys())[0]]
-            elif list(item.keys())[0] == "*":  # check generic fallback
+                stripped_model_fallback = item[fallback_key]
+            elif fallback_key == "*":  # check generic fallback
                 generic_fallback_idx = idx
         elif isinstance(item, str):
             fallback_model_group = [item]

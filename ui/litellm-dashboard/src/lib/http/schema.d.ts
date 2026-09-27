@@ -14615,6 +14615,34 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/spend/capture_rate": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        /**
+         * Get Spend Capture Rate
+         * @description Compare the spend LiteLLM captured for a provider against that provider's own bill, per UTC day.
+         *
+         *     Admin only. Reads the provider's billing API with the billing credential set on the proxy
+         *     (OpenAI: `OPENAI_ADMIN_KEY`) and sums `LiteLLM_DailyUserSpend` for the same days.
+         *
+         *     Example:
+         *     ```
+         *     curl -H "Authorization: Bearer sk-1234"       "http://localhost:4000/spend/capture_rate?provider=openai&start_date=2026-09-17&end_date=2026-09-23"
+         *     ```
+         */
+        get: operations["get_spend_capture_rate_spend_capture_rate_get"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/spend/keys": {
         parameters: {
             query?: never;
@@ -26859,6 +26887,41 @@ export interface components {
              */
             threshold_step: number;
         };
+        /** CaptureRateDay */
+        CaptureRateDay: {
+            /** Capture Rate */
+            capture_rate: number | null;
+            /** Captured Spend */
+            captured_spend: number;
+            /** Date */
+            date: string;
+            /** Provider Spend */
+            provider_spend: number;
+        };
+        /** CaptureRateReport */
+        CaptureRateReport: {
+            /** Below Threshold */
+            below_threshold: boolean;
+            /** Capture Rate */
+            capture_rate: number | null;
+            /** Captured Spend */
+            captured_spend: number;
+            /** Days */
+            days: components["schemas"]["CaptureRateDay"][];
+            /** End Date */
+            end_date: string;
+            /**
+             * Provider
+             * @constant
+             */
+            provider: "openai";
+            /** Provider Spend */
+            provider_spend: number;
+            /** Start Date */
+            start_date: string;
+            /** Threshold */
+            threshold: number;
+        };
         /** ChangePasswordRequest */
         ChangePasswordRequest: {
             /** Current Password */
@@ -28152,6 +28215,11 @@ export interface components {
              */
             enforce_fallback_model_access?: boolean | null;
             /**
+             * Fail Closed Rate Limit Enforcement
+             * @description reject requests with a 503 while the rate limit counters in Redis are unreachable, instead of enforcing tpm/rpm/max_parallel_requests limits per pod from memory (which admits up to N times the limit across N pods)
+             */
+            fail_closed_rate_limit_enforcement?: boolean | null;
+            /**
              * Failed Login Block Seconds
              * @description How long a blocked source address, or source address and username, stays blocked. Every attempt from a blocked key, right or wrong, is refused with 429 before the password is checked; the block is not extended by refused attempts. Set under `general_settings` in config.yaml. Defaults to 300
              */
@@ -28258,6 +28326,11 @@ export interface components {
              */
             maximum_autorouter_session_retention_period?: string | null;
             /**
+             * Maximum Daily Tag Spend Retention Period
+             * @description Maximum retention period for per-day tag spend aggregate rows (e.g., '90d'). Rows whose day is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. Only historical tag usage analytics are affected; tag budgets read the lifetime counter.
+             */
+            maximum_daily_tag_spend_retention_period?: string | null;
+            /**
              * Maximum Health Check Retention Period
              * @description Maximum retention period for health-check rows (e.g., '30d'). Rows whose checked_at is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. Set this well above health_check_interval because /health and the UI read the latest row per model.
              */
@@ -28287,6 +28360,11 @@ export interface components {
              * @description Maximum retention period for spend logs (e.g., '7d' for 7 days). Logs older than this will be deleted.
              */
             maximum_spend_logs_retention_period?: string | null;
+            /**
+             * Mcp Advertised Versions
+             * @description MCP revisions enabled by the gateway. Defaults to all completed legacy revisions. Modern protocol serving and Apps/Tasks remain disabled.
+             */
+            mcp_advertised_versions?: ("2024-11-05" | "2025-03-26" | "2025-06-18" | "2025-11-25")[] | null;
             /**
              * Mcp Allowed Clients
              * @description MCP client applications admitted by the gateway, each an {alias, value} pair where alias is the name shown in the dashboard and logs and value is the identity that must match exactly. When set, every MCP request must carry a client identity equal to one of the values: a JWT caller is identified by the claim named in litellm_jwtauth.mcp_client_id_jwt_field, any other caller by the header named in mcp_client_id_header. A request with no resolvable identity, or an unlisted one, is rejected with 403. Unset means every client is admitted.
@@ -28390,6 +28468,8 @@ export interface components {
             reject_clientside_metadata_tags?: boolean | null;
             /** @description Spreads the proxy's scheduled background jobs (spend flushes, budget resets, config reloads, exports) across a window instead of firing them together on every replica. On by default; set to tune the window, pin a job, or turn it off. */
             scheduled_job_stagger?: components["schemas"]["ScheduledJobStaggerSettings"] | null;
+            /** @description Daily check of the spend LiteLLM captured against the provider's own bill (OpenAI via OPENAI_ADMIN_KEY). Publishes litellm_spend_capture_rate per provider and alerts when the ratio over the lookback window falls under the threshold (default 0.9). Off unless set. */
+            spend_capture_rate_check?: components["schemas"]["SpendCaptureRateCheckSettings"] | null;
             /**
              * Store Model In Db
              * @description If True, models and config are stored in and loaded from the database. Default is False.
@@ -32424,10 +32504,10 @@ export interface components {
             } | null;
             /**
              * Status
-             * @description Health status: 'healthy', 'unhealthy', 'unknown'
+             * @description Health status: 'healthy', 'unhealthy', 'unknown', or 'reachable' (requires include_reachability=true; authentication and tools unchecked)
              * @default unknown
              */
-            status: ("healthy" | "unhealthy" | "unknown") | null;
+            status: ("healthy" | "reachable" | "unhealthy" | "unknown") | null;
             /** Subject Token Type */
             subject_token_type?: string | null;
             /** Submitted At */
@@ -32875,6 +32955,8 @@ export interface components {
             azure_username?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
+            /** Bucket Name */
+            bucket_name?: string | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -32885,6 +32967,8 @@ export interface components {
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Creation Input Token Cost Above 200K Tokens */
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 200K Tokens Batches */
+            cache_creation_input_token_cost_above_200k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens */
             cache_creation_input_token_cost_above_272k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Batches */
@@ -32909,6 +32993,8 @@ export interface components {
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
             cache_read_input_token_cost_above_200k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 200K Tokens Batches */
+            cache_read_input_token_cost_above_200k_tokens_batches?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Priority */
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens */
@@ -32921,6 +33007,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
+            /** Cache Read Input Token Cost Balanced */
+            cache_read_input_token_cost_balanced?: number | null;
             /** Cache Read Input Token Cost Batches */
             cache_read_input_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost Flex */
@@ -32987,6 +33075,8 @@ export interface components {
             input_cost_per_token_above_128k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens */
             input_cost_per_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Batches */
+            input_cost_per_token_above_200k_tokens_batches?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
@@ -32999,6 +33089,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
+            /** Input Cost Per Token Balanced */
+            input_cost_per_token_balanced?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -33110,6 +33202,8 @@ export interface components {
             output_cost_per_token_above_128k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens */
             output_cost_per_token_above_200k_tokens?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Batches */
+            output_cost_per_token_above_200k_tokens_batches?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
@@ -33122,6 +33216,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
+            /** Output Cost Per Token Balanced */
+            output_cost_per_token_balanced?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -42370,6 +42466,35 @@ export interface components {
             /** Model */
             model?: string | null;
         };
+        /**
+         * SpendCaptureRateCheckSettings
+         * @description ``general_settings.spend_capture_rate_check``: the daily check of captured spend against the provider bill.
+         */
+        SpendCaptureRateCheckSettings: {
+            /**
+             * Lookback Days
+             * @default 7
+             */
+            lookback_days: number;
+            /**
+             * Openai Project Ids
+             * @description Scope the OpenAI bill to these project ids; empty compares against the whole organization. Captured spend is never scoped, so list every project LiteLLM's OpenAI keys belong to
+             * @default []
+             */
+            openai_project_ids: string[];
+            /**
+             * Providers
+             * @default [
+             *       "openai"
+             *     ]
+             */
+            providers: "openai"[];
+            /**
+             * Threshold
+             * @default 0.9
+             */
+            threshold: number;
+        };
         /** SpendMetrics */
         SpendMetrics: {
             /**
@@ -46631,6 +46756,8 @@ export interface components {
             azure_username?: string | null;
             /** Bedrock Tags */
             bedrock_tags?: unknown[] | null;
+            /** Bucket Name */
+            bucket_name?: string | null;
             /** Budget Duration */
             budget_duration?: string | null;
             /** Cache Creation Input Audio Token Cost */
@@ -46641,6 +46768,8 @@ export interface components {
             cache_creation_input_token_cost_above_1hr?: number | null;
             /** Cache Creation Input Token Cost Above 200K Tokens */
             cache_creation_input_token_cost_above_200k_tokens?: number | null;
+            /** Cache Creation Input Token Cost Above 200K Tokens Batches */
+            cache_creation_input_token_cost_above_200k_tokens_batches?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens */
             cache_creation_input_token_cost_above_272k_tokens?: number | null;
             /** Cache Creation Input Token Cost Above 272K Tokens Batches */
@@ -46665,6 +46794,8 @@ export interface components {
             cache_read_input_token_cost?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens */
             cache_read_input_token_cost_above_200k_tokens?: number | null;
+            /** Cache Read Input Token Cost Above 200K Tokens Batches */
+            cache_read_input_token_cost_above_200k_tokens_batches?: number | null;
             /** Cache Read Input Token Cost Above 200K Tokens Priority */
             cache_read_input_token_cost_above_200k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 272K Tokens */
@@ -46677,6 +46808,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
+            /** Cache Read Input Token Cost Balanced */
+            cache_read_input_token_cost_balanced?: number | null;
             /** Cache Read Input Token Cost Batches */
             cache_read_input_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost Flex */
@@ -46743,6 +46876,8 @@ export interface components {
             input_cost_per_token_above_128k_tokens?: number | null;
             /** Input Cost Per Token Above 200K Tokens */
             input_cost_per_token_above_200k_tokens?: number | null;
+            /** Input Cost Per Token Above 200K Tokens Batches */
+            input_cost_per_token_above_200k_tokens_batches?: number | null;
             /** Input Cost Per Token Above 200K Tokens Priority */
             input_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 272K Tokens */
@@ -46755,6 +46890,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
+            /** Input Cost Per Token Balanced */
+            input_cost_per_token_balanced?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -46866,6 +47003,8 @@ export interface components {
             output_cost_per_token_above_128k_tokens?: number | null;
             /** Output Cost Per Token Above 200K Tokens */
             output_cost_per_token_above_200k_tokens?: number | null;
+            /** Output Cost Per Token Above 200K Tokens Batches */
+            output_cost_per_token_above_200k_tokens_batches?: number | null;
             /** Output Cost Per Token Above 200K Tokens Priority */
             output_cost_per_token_above_200k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 272K Tokens */
@@ -46878,6 +47017,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
+            /** Output Cost Per Token Balanced */
+            output_cost_per_token_balanced?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -65624,6 +65765,46 @@ export interface operations {
             };
         };
     };
+    get_spend_capture_rate_spend_capture_rate_get: {
+        parameters: {
+            query: {
+                /** @description First UTC day of the range, YYYY-MM-DD */
+                start_date: string;
+                /** @description Last UTC day of the range, YYYY-MM-DD, inclusive */
+                end_date: string;
+                /** @description Provider whose bill to compare against; needs OPENAI_ADMIN_KEY set on the proxy */
+                provider?: "openai";
+                /** @description Ratio under which the report flags below_threshold */
+                threshold?: number;
+                /** @description Scope the OpenAI bill to these project ids; omit to compare against the whole organization. Captured spend is never scoped, so pass every project LiteLLM's OpenAI keys belong to */
+                project_ids?: string[] | null;
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["CaptureRateReport"];
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
     spend_key_fn_spend_keys_get: {
         parameters: {
             query?: never;
@@ -72031,6 +72212,8 @@ export interface operations {
             query?: {
                 /** @description Server IDs to check. If not provided, checks all accessible servers. */
                 server_ids?: string[] | null;
+                /** @description Allow the 'reachable' status for responding servers whose authentication is unchecked. */
+                include_reachability?: boolean;
             };
             header?: never;
             path?: never;
@@ -72182,7 +72365,10 @@ export interface operations {
     };
     fetch_mcp_server_v1_mcp_server__server_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Allow the 'reachable' status for responding servers whose authentication is unchecked. */
+                include_reachability?: boolean;
+            };
             header?: never;
             path: {
                 server_id: string;
