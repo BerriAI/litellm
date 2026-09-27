@@ -941,7 +941,6 @@ async def test_delegated_target_grants_do_not_borrow_another_teams_authority(
     monkeypatch: pytest.MonkeyPatch, team_id: str | None, expected: set[str]
 ) -> None:
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
-    from litellm.proxy.agent_endpoints.auth import agent_permission_handler as permissions
     from litellm.types.agents import AgentResponse
     from litellm.types.proxy.agent_identity import ManagedAgentContext
 
