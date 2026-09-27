@@ -24,12 +24,12 @@ pub(crate) async fn create_from_model_path(
     Path(model): Path<String>,
     JsonObject(body): JsonObject,
 ) -> Result<impl IntoResponse, Error> {
-    let body = if body.get("model").is_some_and(|model| !model.is_null()) {
-        body
-    } else {
-        body.into_iter()
+    let body = match body.get("model") {
+        None | Some(Value::Null) => body
+            .into_iter()
             .chain([("model".into(), Value::String(model))])
-            .collect()
+            .collect(),
+        Some(_) => body,
     };
     handle(&gateway, body).await
 }
