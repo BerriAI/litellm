@@ -196,13 +196,13 @@ def test_content_response_fetches_cdn_via_shared_client():
     video_resp = MagicMock()
     video_resp.content = b"mp4-bytes"
     video_resp.raise_for_status.return_value = None
-    with patch(
-        "litellm.llms.xai.videos.transformation._get_httpx_client",
-        return_value=cdn,
-    ), patch(
-        "litellm.llms.xai.videos.transformation.safe_get",
-        return_value=video_resp,
-    ) as safe_get:
+    with (
+        patch("litellm.module_level_client", cdn),
+        patch(
+            "litellm.llms.xai.videos.transformation.safe_get",
+            return_value=video_resp,
+        ) as safe_get,
+    ):
         body = XAIVideoConfig().transform_video_content_response(status, logging_obj=MagicMock())
     assert body == b"mp4-bytes"
     safe_get.assert_called_once_with(cdn, "https://vidgen.x.ai/x.mp4")
@@ -219,20 +219,20 @@ async def test_async_content_response_does_not_use_sync_client():
     video_resp = MagicMock()
     video_resp.content = b"async-mp4"
     video_resp.raise_for_status.return_value = None
-    with patch(
-        "litellm.llms.xai.videos.transformation.get_async_httpx_client",
-        return_value=async_client,
-    ), patch(
-        "litellm.llms.xai.videos.transformation._get_httpx_client",
-    ) as sync_client, patch(
-        "litellm.llms.xai.videos.transformation.async_safe_get",
-        new=AsyncMock(return_value=video_resp),
-    ) as async_safe_get:
-        body = await XAIVideoConfig().async_transform_video_content_response(
-            status, logging_obj=MagicMock()
-        )
+    with (
+        patch(
+            "litellm.llms.xai.videos.transformation.get_async_httpx_client",
+            return_value=async_client,
+        ),
+        patch("litellm.module_level_client") as sync_client,
+        patch(
+            "litellm.llms.xai.videos.transformation.async_safe_get",
+            new=AsyncMock(return_value=video_resp),
+        ) as async_safe_get,
+    ):
+        body = await XAIVideoConfig().async_transform_video_content_response(status, logging_obj=MagicMock())
     assert body == b"async-mp4"
-    sync_client.assert_not_called()
+    assert sync_client.method_calls == []
     async_safe_get.assert_awaited_once_with(async_client, "https://vidgen.x.ai/x.mp4")
 
 
@@ -265,10 +265,7 @@ def test_content_response_rejects_internal_cdn_host():
     def boom(*args, **kwargs):
         raise AssertionError("unsafe CDN fetch must not run")
 
-    with patch(
-        "litellm.llms.xai.videos.transformation._get_httpx_client",
-        return_value=MagicMock(get=boom),
-    ):
+    with patch("litellm.module_level_client", MagicMock(get=boom)):
         with pytest.raises((SSRFError, ValueError)):
             XAIVideoConfig().transform_video_content_response(status, logging_obj=MagicMock())
 
@@ -309,9 +306,7 @@ async def test_async_content_response_rejects_internal_cdn_host():
         return_value=MagicMock(get=boom),
     ):
         with pytest.raises((SSRFError, ValueError)):
-            await XAIVideoConfig().async_transform_video_content_response(
-                status, logging_obj=MagicMock()
-            )
+            await XAIVideoConfig().async_transform_video_content_response(status, logging_obj=MagicMock())
 
 
 @pytest.mark.asyncio
@@ -329,9 +324,7 @@ async def test_async_content_response_fetches_public_cdn_via_async_safe_get():
         new=AsyncMock(return_value=video_resp),
         create=True,
     ) as async_safe_get:
-        body = await XAIVideoConfig().async_transform_video_content_response(
-            status, logging_obj=MagicMock()
-        )
+        body = await XAIVideoConfig().async_transform_video_content_response(status, logging_obj=MagicMock())
     assert body == b"async-safe-mp4"
     async_safe_get.assert_awaited()
     assert async_safe_get.call_args.args[1] == "https://vidgen.x.ai/x.mp4"
