@@ -305,6 +305,7 @@ async def reserve_budget_for_request(
 
     applied_entries: Final[list[dict[str, float | str]]] = []
     reserved: Final[list[tuple[_BudgetCounter, dict[str, float | str]]]] = []
+    increments_applied = False  # rebind-ok: flipped once when the shared pipeline commits
     try:
         with _counters_batch_scope(frozenset(counter.counter_key for counter in counters)):
             for counter in counters:
@@ -328,10 +329,12 @@ async def reserve_budget_for_request(
                 applied_entries=applied_entries,
                 fail_closed_budget_enforcement=fail_closed_budget_enforcement,
             )
+            increments_applied = True
+            initial_reservation_cost: Final = reservation_cost
 
             for (counter, entry), reserved_value in zip(reserved, reserved_values):
                 if reserved_value is not None:
-                    current_spend = reserved_value
+                    current_spend = reserved_value - (initial_reservation_cost - reservation_cost)
                 else:
                     cached_spend = current_spend_by_counter_key.get(counter.counter_key)
                     if cached_spend is None:
@@ -349,10 +352,11 @@ async def reserve_budget_for_request(
                     )
                     continue
     except Exception:
-        await _release_applied_entries_best_effort(
-            entries=applied_entries,
-            default_reserved_cost=reservation_cost,
-        )
+        if increments_applied:
+            await _release_applied_entries_best_effort(
+                entries=applied_entries,
+                default_reserved_cost=reservation_cost,
+            )
         raise
 
     if not applied_entries:
@@ -976,9 +980,13 @@ async def _reserve_counters_in_one_pipeline(
     applied_entries: list[dict[str, float | str]],
     fail_closed_budget_enforcement: bool,
 ) -> tuple[float | None, ...]:
-    """Every initialized counter is incremented by ``reservation_cost`` in one pipeline. A failed pipeline has
-    already invalidated each counter, so every entry is dropped like the per-counter failure path did."""
-    from litellm.proxy.proxy_server import increment_spend_counters_pipeline
+    """Every initialized counter is incremented by ``reservation_cost`` in one pipeline. On failure each counter is
+    invalidated (the Redis pipeline already did so) and every entry is dropped like the per-counter failure path did."""
+    from litellm.proxy.proxy_server import (
+        _invalidate_spend_counter,  # pyright: ignore[reportPrivateUsage]  # sibling spend counter writers import it the same way
+        increment_spend_counters_pipeline,
+        spend_counter_cache,
+    )
 
     try:
         return await increment_spend_counters_pipeline(
@@ -994,6 +1002,11 @@ async def _reserve_counters_in_one_pipeline(
                 counter.counter_key,
             )
             applied_entries.remove(entry)
+        if spend_counter_cache.redis_cache is None:
+            await asyncio.gather(
+                *(_invalidate_spend_counter(counter_key=counter.counter_key) for counter, _ in reserved),
+                return_exceptions=True,
+            )
         if fail_closed_budget_enforcement and reserved:
             _raise_reservation_unavailable(counter_key=reserved[0][0].counter_key)
         reserved.clear()

@@ -1919,7 +1919,7 @@ async def test_fail_closed_releases_earlier_counters_before_503(
         counter_cache.in_memory_cache.get_cache(
             key="spend:key:key-budget-fail-closed-release"
         )
-        == 0.0
+        is None
     )
 
 
@@ -1984,32 +1984,26 @@ async def test_should_release_tracked_entry_when_reservation_fails_after_increme
 
     import litellm.proxy.proxy_server as ps
 
-    original_increment_counter = ps._increment_spend_counter_cache
+    original_increment = ps.SpendCounterReseed.increment_in_memory
     first_increment = True
 
-    async def fail_after_increment(counter_key: str, increment: float):
+    async def fail_after_increment(**kwargs):
         nonlocal first_increment
         if first_increment:
             first_increment = False
-            await counter_cache.async_increment_cache(key=counter_key, value=increment)
+            await counter_cache.async_increment_cache(key=kwargs["counter_key"], value=kwargs["increment"])
             raise RuntimeError("lost increment response")
-        return await original_increment_counter(
-            counter_key=counter_key,
-            increment=increment,
-        )
+        return await original_increment(**kwargs)
 
     with (
         patch(
             "litellm.proxy.spend_tracking.budget_reservation.estimate_request_max_cost",
             return_value=0.5,
         ),
-        patch(
-            "litellm.proxy.proxy_server._increment_spend_counter_cache",
+        patch.object(
+            ps.SpendCounterReseed,
+            "increment_in_memory",
             side_effect=fail_after_increment,
-        ),
-        patch(
-            "litellm.proxy.proxy_server._invalidate_spend_counter",
-            side_effect=RuntimeError("invalidate unavailable"),
         ),
     ):
         reservation = await reserve_budget_for_request(
@@ -2027,7 +2021,7 @@ async def test_should_release_tracked_entry_when_reservation_fails_after_increme
     assert reservation is None
     assert counter_cache.in_memory_cache.get_cache(
         key="spend:key:key-budget-reserve-after-increment-failure"
-    ) == pytest.approx(0.0)
+    ) is None
 
 
 @pytest.mark.asyncio

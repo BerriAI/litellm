@@ -677,3 +677,46 @@ def test_a_scope_opened_inside_an_open_scope_joins_its_batch_and_a_closed_one_ge
             assert inner is not outer
             assert inner is not None and inner.counter_keys == {"spend:key:c"}
         assert active_spend_counter_batch() is outer
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_init_failure_never_touches_the_initialized_counters(monkeypatch):
+    from fastapi import HTTPException
+
+    redis = CountingRedis({"spend:key:hashed": 1.0, "spend:team:team": 2.0})
+    monkeypatch.setattr(ps, "spend_counter_cache", _spend_counter_cache(redis))
+    monkeypatch.setattr(ps, "prisma_client", None)
+    _patch_reservation_estimates(monkeypatch)
+    original_ensure = ps._ensure_spend_counter_initialized
+
+    async def _fail_team_init(counter_key: str, **kwargs: object) -> object:
+        if counter_key == "spend:team:team":
+            raise RuntimeError("redis down")
+        return await original_ensure(counter_key=counter_key, **kwargs)
+
+    monkeypatch.setattr(ps, "_ensure_spend_counter_initialized", _fail_team_init)
+
+    with pytest.raises(HTTPException) as exc:
+        await _reserve_key_and_team(fail_closed=True)
+
+    assert exc.value.status_code == 503
+    assert redis.store == {"spend:key:hashed": 1.0, "spend:team:team": 2.0}
+    assert not any(cmd.startswith(("INCRBYFLOAT", "PIPELINE", "DECR")) for cmd in redis.commands)
+
+
+@pytest.mark.asyncio
+async def test_later_counters_are_judged_against_the_resized_reservation_cost(monkeypatch):
+    redis = CountingRedis({"spend:key:hashed": 8.0, "spend:team:team": 99.0})
+    monkeypatch.setattr(ps, "spend_counter_cache", _spend_counter_cache(redis))
+    monkeypatch.setattr(ps, "prisma_client", None)
+    _patch_reservation_estimates(monkeypatch, reservation_cost=5.0)
+
+    reservation = await _reserve_key_and_team(team_max_budget=100.0)
+
+    assert reservation is not None
+    assert reservation["reserved_cost"] == 1.0
+    assert [entry["reserved_cost"] for entry in reservation["entries"]] == [1.0, 1.0]
+    assert {key: round(redis.store[key], 6) for key in RESERVATION_KEYS} == {
+        "spend:key:hashed": 9.0,
+        "spend:team:team": 100.0,
+    }

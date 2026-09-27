@@ -6188,31 +6188,30 @@ async def test_tag_cache_update_called():
         "tag_name": "test-tag",
         "spend": 10.0,
     }
+    cache.in_memory_cache.set_cache(key="tag:test-tag", value=mock_tag_obj)
 
-    with patch.object(cache, "async_get_cache", new=AsyncMock(return_value=mock_tag_obj)) as mock_get_cache:
-        with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
-            await litellm.proxy.proxy_server.update_cache(
-                token=None,
-                user_id=None,
-                end_user_id=None,
-                team_id=None,
-                response_cost=5.0,
-                parent_otel_span=None,
-                tags=["test-tag"],
-            )
+    with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+        await litellm.proxy.proxy_server.update_cache(
+            token=None,
+            user_id=None,
+            end_user_id=None,
+            team_id=None,
+            response_cost=5.0,
+            parent_otel_span=None,
+            tags=["test-tag"],
+        )
 
-            await asyncio.sleep(0.1)
+        await asyncio.sleep(0.1)
 
-            mock_get_cache.assert_awaited_once_with(key="tag:test-tag")
-            mock_set_cache.assert_awaited_once()
+        mock_set_cache.assert_awaited_once()
 
-            call_args = mock_set_cache.call_args
-            cache_list = call_args.kwargs["cache_list"]
+        call_args = mock_set_cache.call_args
+        cache_list = call_args.kwargs["cache_list"]
 
-            assert len(cache_list) == 1
-            cache_key, cache_value = cache_list[0]
-            assert cache_key == "tag:test-tag"
-            assert cache_value["spend"] == 15.0
+        assert len(cache_list) == 1
+        cache_key, cache_value = cache_list[0]
+        assert cache_key == "tag:test-tag"
+        assert cache_value["spend"] == 15.0
 
 
 @pytest.mark.asyncio
@@ -6234,42 +6233,34 @@ async def test_tag_cache_update_multiple_tags():
     mock_tag1_obj = {"tag_name": "tag1", "spend": 10.0}
     mock_tag2_obj = {"tag_name": "tag2", "spend": 20.0}
 
-    async def mock_get_cache_side_effect(key):
-        if key == "tag:tag1":
-            return mock_tag1_obj
-        elif key == "tag:tag2":
-            return mock_tag2_obj
-        return None
+    cache.in_memory_cache.set_cache(key="tag:tag1", value=mock_tag1_obj)
+    cache.in_memory_cache.set_cache(key="tag:tag2", value=mock_tag2_obj)
 
-    with patch.object(
-        cache, "async_get_cache", new=AsyncMock(side_effect=mock_get_cache_side_effect)
-    ) as mock_get_cache:
-        with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
-            await litellm.proxy.proxy_server.update_cache(
-                token=None,
-                user_id=None,
-                end_user_id=None,
-                team_id=None,
-                response_cost=5.0,
-                parent_otel_span=None,
-                tags=["tag1", "tag2"],
-            )
+    with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+        await litellm.proxy.proxy_server.update_cache(
+            token=None,
+            user_id=None,
+            end_user_id=None,
+            team_id=None,
+            response_cost=5.0,
+            parent_otel_span=None,
+            tags=["tag1", "tag2"],
+        )
 
-            await asyncio.sleep(0.1)
+        await asyncio.sleep(0.1)
 
-            assert mock_get_cache.call_count == 2
-            mock_set_cache.assert_awaited_once()
+        mock_set_cache.assert_awaited_once()
 
-            call_args = mock_set_cache.call_args
-            cache_list = call_args.kwargs["cache_list"]
+        call_args = mock_set_cache.call_args
+        cache_list = call_args.kwargs["cache_list"]
 
-            assert len(cache_list) == 2
+        assert len(cache_list) == 2
 
-            tag_updates = {cache_key: cache_value for cache_key, cache_value in cache_list}
-            assert "tag:tag1" in tag_updates
-            assert "tag:tag2" in tag_updates
-            assert tag_updates["tag:tag1"]["spend"] == 15.0
-            assert tag_updates["tag:tag2"]["spend"] == 25.0
+        tag_updates = {cache_key: cache_value for cache_key, cache_value in cache_list}
+        assert "tag:tag1" in tag_updates
+        assert "tag:tag2" in tag_updates
+        assert tag_updates["tag:tag1"]["spend"] == 15.0
+        assert tag_updates["tag:tag2"]["spend"] == 25.0
 
 
 @pytest.mark.asyncio
@@ -6286,26 +6277,22 @@ async def test_update_cache_pipeline_honors_user_api_key_cache_ttl():
     cache = DualCache(default_in_memory_ttl=300)
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
     try:
-        with patch.object(
-            cache,
-            "async_get_cache",
-            new=AsyncMock(return_value={"tag_name": "active-tag", "spend": 1.0}),
-        ):
-            with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
-                await litellm.proxy.proxy_server.update_cache(
-                    token=None,
-                    user_id=None,
-                    end_user_id=None,
-                    team_id=None,
-                    response_cost=5.0,
-                    parent_otel_span=None,
-                    tags=["active-tag"],
-                )
+        cache.in_memory_cache.set_cache(key="tag:active-tag", value={"tag_name": "active-tag", "spend": 1.0})
+        with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+            await litellm.proxy.proxy_server.update_cache(
+                token=None,
+                user_id=None,
+                end_user_id=None,
+                team_id=None,
+                response_cost=5.0,
+                parent_otel_span=None,
+                tags=["active-tag"],
+            )
 
-                await asyncio.sleep(0.1)
+            await asyncio.sleep(0.1)
 
-                mock_set_cache.assert_awaited_once()
-                assert mock_set_cache.call_args.kwargs["ttl"] == 300
+            mock_set_cache.assert_awaited_once()
+            assert mock_set_cache.call_args.kwargs["ttl"] == 300
     finally:
         setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
 
@@ -6376,40 +6363,34 @@ async def test_update_cache_global_proxy_spend_scalar_stays_shared():
     admin_name = litellm.proxy.proxy_server.litellm_proxy_admin_name
     global_key = "{}:spend".format(admin_name)
 
-    async def fake_get(key, **kwargs):
-        if key == "user-lit":
-            return {"user_id": "user-lit", "spend": 1.0}
-        if key == global_key:
-            return 10.0
-        return None
-
     original_cache = litellm.proxy.proxy_server.user_api_key_cache
     cache = DualCache(default_in_memory_ttl=300)
+    cache.in_memory_cache.set_cache(key="user-lit", value={"user_id": "user-lit", "spend": 1.0})
+    cache.in_memory_cache.set_cache(key=global_key, value=10.0)
     setattr(litellm.proxy.proxy_server, "user_api_key_cache", cache)
     try:
-        with patch.object(cache, "async_get_cache", new=AsyncMock(side_effect=fake_get)):
-            with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
-                await litellm.proxy.proxy_server.update_cache(
-                    token=None,
-                    user_id="user-lit",
-                    end_user_id=None,
-                    team_id=None,
-                    response_cost=5.0,
-                    parent_otel_span=None,
-                )
+        with patch.object(cache, "async_set_cache_pipeline", new=AsyncMock()) as mock_set_cache:
+            await litellm.proxy.proxy_server.update_cache(
+                token=None,
+                user_id="user-lit",
+                end_user_id=None,
+                team_id=None,
+                response_cost=5.0,
+                parent_otel_span=None,
+            )
 
-                pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
-                if pending:
-                    await asyncio.wait(pending, timeout=5)
+            pending = [t for t in asyncio.all_tasks() if t is not asyncio.current_task()]
+            if pending:
+                await asyncio.wait(pending, timeout=5)
 
-                calls = mock_set_cache.await_args_list
-                local_keys = [k for c in calls if c.kwargs.get("local_only") is True for k, _ in c.kwargs["cache_list"]]
-                shared_keys = [
-                    k for c in calls if c.kwargs.get("local_only") is not True for k, _ in c.kwargs["cache_list"]
-                ]
-                assert "user-lit" in local_keys
-                assert global_key not in local_keys
-                assert shared_keys == [global_key]
+            calls = mock_set_cache.await_args_list
+            local_keys = [k for c in calls if c.kwargs.get("local_only") is True for k, _ in c.kwargs["cache_list"]]
+            shared_keys = [
+                k for c in calls if c.kwargs.get("local_only") is not True for k, _ in c.kwargs["cache_list"]
+            ]
+            assert "user-lit" in local_keys
+            assert global_key not in local_keys
+            assert shared_keys == [global_key]
     finally:
         setattr(litellm.proxy.proxy_server, "user_api_key_cache", original_cache)
 
