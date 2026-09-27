@@ -1,15 +1,21 @@
-use crate::error::Error;
-use crate::http_utils::{has_header, string_headers};
-#[cfg(feature = "bedrock-auth")]
-use crate::providers::bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG;
-use crate::routing_utils::provider::{CustomLlmProvider, get_custom_llm_provider};
+use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
+use litellm_http::request::string_headers;
+use litellm_http::request::with_default_headers;
+use litellm_llms::{
+    base_llm::{
+        audio_transcription::transformation::BaseAudioTranscriptionConfig,
+        auth::ValidatedEnvironment,
+    },
+    bedrock::audio_transcription::BEDROCK_AUDIO_TRANSCRIPTION_CONFIG,
+};
+use litellm_secrets::source::SecretSource;
 
-use super::transformation::{AudioTranscriptionAuth, AudioTranscriptionProviderConfig};
-use super::types::{AudioTranscriptionRequest, ProviderAudioTranscriptionRequest};
+use super::Error;
+use crate::audio_transcription::types::{
+    AudioTranscriptionRequest, ProviderAudioTranscriptionRequest,
+};
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-fn provider_config(provider: &str) -> Option<&'static dyn AudioTranscriptionProviderConfig> {
-    #[cfg(feature = "bedrock-auth")]
+fn provider_config(provider: &str) -> Option<&'static dyn BaseAudioTranscriptionConfig> {
     if provider == "bedrock" {
         return Some(&BEDROCK_AUDIO_TRANSCRIPTION_CONFIG);
     }
@@ -17,9 +23,9 @@ fn provider_config(provider: &str) -> Option<&'static dyn AudioTranscriptionProv
     None
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub fn prepare_audio_transcription_provider_call(
+pub async fn prepare_audio_transcription_provider_call(
     request: AudioTranscriptionRequest<'_>,
+    secrets: &dyn SecretSource,
 ) -> Result<ProviderAudioTranscriptionRequest, Error> {
     let provider_info = get_custom_llm_provider(request.model, request.custom_llm_provider)
         .or_else(|| {
@@ -38,19 +44,16 @@ pub fn prepare_audio_transcription_provider_call(
     let model = provider_info.model.to_string();
     let config = provider_config(provider_info.custom_llm_provider)
         .ok_or_else(|| Error::InvalidProvider(provider_info.custom_llm_provider.to_string()))?;
-    let env_lookup = |key: &str| std::env::var(key).ok();
-    let mut headers = string_headers("audio transcription", request.extra_headers)?;
-    let auth = config.auth_strategy(&model, &request.optional_params, &env_lookup)?;
-    if matches!(auth, AudioTranscriptionAuth::Bearer)
-        && !has_header(&headers, "authorization")
-        && let Some(api_key) = request.api_key
-    {
-        headers.push(("Authorization".to_string(), format!("Bearer {api_key}")));
-    }
-    if !has_header(&headers, "content-type") {
-        headers.push(("Content-Type".to_string(), "application/json".to_string()));
-    }
-    let url = config.complete_url(
+    let snapshot = secrets.resolve(&config.secret_names()).await?;
+    let env_lookup = |key: &str| snapshot.get(key);
+    let forwarded = string_headers("audio transcription", request.extra_headers)?;
+    let validated =
+        config.validate_environment(forwarded, &model, &request.optional_params, &env_lookup)?;
+    let environment = ValidatedEnvironment {
+        headers: with_default_headers(validated.headers, config.default_headers()),
+        auth: validated.auth,
+    };
+    let url = config.get_complete_url(
         request.api_base,
         &model,
         &request.optional_params,
@@ -58,17 +61,15 @@ pub fn prepare_audio_transcription_provider_call(
     )?;
     let filtered_params = config.map_transcription_params(&request.optional_params);
     let transformed =
-        config.transform_transcription_request(&model, request.audio, filtered_params)?;
+        config.transform_audio_transcription_request(&model, request.audio, filtered_params)?;
     Ok(ProviderAudioTranscriptionRequest {
         model,
         custom_llm_provider: provider_info.custom_llm_provider.to_string(),
         config,
         url,
         body: transformed.body,
-        upstream_headers: headers,
-        auth,
-        #[cfg(feature = "bedrock-auth")]
-        optional_params: request.optional_params,
+        environment,
+        secrets: snapshot,
         timeout: request.timeout,
     })
 }

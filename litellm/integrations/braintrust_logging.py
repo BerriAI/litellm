@@ -139,13 +139,13 @@ class BraintrustLogger(CustomLogger):
             ):
                 output = None
             elif response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
-                output = response_obj["choices"][0]["message"].json()
+                output = response_obj.choices[0].message.json()
                 choices = response_obj["choices"]
             elif response_obj is not None and isinstance(response_obj, litellm.TextCompletionResponse):
                 output = response_obj.choices[0].text
                 choices = response_obj.choices
             elif response_obj is not None and isinstance(response_obj, litellm.ImageResponse):
-                output = response_obj["data"]
+                output = response_obj.data
 
             litellm_params: Final = kwargs.get("litellm_params", {}) or {}
             dynamic_metadata: Final = litellm_params.get("metadata", {}) or {}
@@ -264,13 +264,13 @@ class BraintrustLogger(CustomLogger):
             ):
                 output = None
             elif response_obj is not None and isinstance(response_obj, litellm.ModelResponse):
-                output = response_obj["choices"][0]["message"].json()
+                output = response_obj.choices[0].message.json()
                 choices = response_obj["choices"]
             elif response_obj is not None and isinstance(response_obj, litellm.TextCompletionResponse):
                 output = response_obj.choices[0].text
                 choices = response_obj.choices
             elif response_obj is not None and isinstance(response_obj, litellm.ImageResponse):
-                output = response_obj["data"]
+                output = response_obj.data
 
             litellm_params: Final = kwargs.get("litellm_params", {})
             dynamic_metadata: Final = litellm_params.get("metadata", {}) or {}

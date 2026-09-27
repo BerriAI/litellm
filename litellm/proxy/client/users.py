@@ -1,3 +1,4 @@
+from collections.abc import Mapping
 from typing import Any, Final
 
 import requests
@@ -50,7 +51,7 @@ class UsersManagementClient:
         response.raise_for_status()
         return response.json()
 
-    def create_user(self, user_data: dict[str, Any]) -> dict[str, Any]:
+    def create_user(self, user_data: Mapping[str, object]) -> dict[str, Any]:
         """Create a new user (POST /user/new)"""
         url: Final = f"{self.base_url}/user/new"
         response: Final = requests.post(url, headers=self._get_headers(), json=user_data, timeout=self.timeout)

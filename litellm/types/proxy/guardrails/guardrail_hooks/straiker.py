@@ -83,6 +83,9 @@ class StraikerWebhookResponse(BaseModel):
 
     action: StraikerWebhookAction = "NONE"
     blocked_reason: str | None = None
+    #: The controls that blocked this turn, when the platform names them. Empty for a block
+    #: that comes from state rather than content, such as an engaged kill switch.
+    blocked_by: tuple[str, ...] = ()
     texts: list[str] | None = None
     schema_version: str | None = None
     turn_id: str | None = Field(default=None, alias="turnId")
@@ -124,6 +127,36 @@ class StraikerGuardrailConfigModelOptionalParams(BaseModel):
         default=524288,
         gt=0,
         description="Maximum serialized webhook payload size sent to Straiker.",
+    )
+    api_version: Literal["v1", "v3"] | None = Field(
+        default=None,
+        description=(
+            "Straiker detect API the gateway calls. 'v1' posts the structured webhook envelope "
+            "to /api/v1/detect/webhook (legacy Defend, UUID collection key). 'v3' relays the "
+            "provider request and response to /api/v3/detect, the v3 platform's only detect "
+            "route, which accepts only an sk_agt_ integration key. Unset: chosen from the key "
+            "prefix, so a v3 key needs no extra configuration."
+        ),
+    )
+    agent_ref: str | None = Field(
+        default=None,
+        description=(
+            "v3 only. Names the Straiker agent this route's traffic belongs to when one gateway "
+            "fronts several applications, sent as x-s6r-agent. A client-supplied x-s6r-agent header "
+            "wins. Names ONE agent, never a kind of agent: Straiker keys per-agent state on it, so "
+            "sharing a value across applications merges them into one agent."
+        ),
+    )
+    client: str | None = Field(
+        default=None,
+        description=(
+            "v3 only. Optional x-s6r-client routing hint. Leave unset on a shared gateway; set it on a "
+            "route that serves a single application."
+        ),
+    )
+    format_hint: Literal["anthropic.messages", "openai.chat"] | None = Field(
+        default=None,
+        description="v3 only. Optional x-s6r-format hint. Only breaks the messages-array tie between formats.",
     )
     custom_headers: dict[str, str] | None = Field(
         default=None,

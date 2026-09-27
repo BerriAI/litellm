@@ -24,7 +24,7 @@ from typing import (
 import fastapi
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from pydantic import TypeAdapter
-from typing_extensions import ReadOnly
+from typing_extensions import ReadOnly, assert_never
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -32,11 +32,18 @@ from litellm.constants import (
     EMPTY_MAPPING,
     LITELLM_TRUNCATED_PAYLOAD_FIELD,
     LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME,
+    SPEND_CAPTURE_RATE_MAX_RANGE_DAYS,
 )
 from litellm.litellm_core_utils.classifier_logging import classifier_audit_fields, classifier_input_snapshot
 from litellm.proxy._types import *
 from litellm.proxy._types import ProviderBudgetResponse, ProviderBudgetResponseObject
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+from litellm.proxy.spend_tracking.spend_capture_rate import (
+    ProviderBillingCredentialMissing,
+    ProviderBillingRequestFailed,
+    capture_rate_report,
+)
 
 # NOTE: Avoid module-level import from common_utils: proxy_server imports this
 # module while common_utils may pull proxy_server during init, which can leave
@@ -52,6 +59,7 @@ from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
+from litellm.types.proxy.spend_capture_rate import CaptureRateReport, SpendCaptureProvider
 
 if TYPE_CHECKING:
     from prisma import models as prisma_models
@@ -69,6 +77,18 @@ _SESSION_KEY_EXPR: Final = "COALESCE(NULLIF(session_id, ''), request_id)"
 _SESSION_GROUP_KEY_SQL: Final = f"{_SESSION_KEY_EXPR}, api_key"
 _MCP_CALL_TYPES_SQL: Final = "('call_mcp_tool', 'list_mcp_tools')"
 _AGENT_CALL_TYPE_SQL: Final = "'asend_message'"
+_BATCH_CALL_TYPES_SQL: Final = "('acreate_batch', 'create_batch', 'aretrieve_batch', 'retrieve_batch')"
+_SPAN_TYPE_SQL_CONDITIONS: Final[Mapping[str, str]] = MappingProxyType(
+    {
+        "mcp": f"call_type IN {_MCP_CALL_TYPES_SQL}",
+        "agent": f"call_type = {_AGENT_CALL_TYPE_SQL}",
+        "batch": f"call_type IN {_BATCH_CALL_TYPES_SQL}",
+        "llm": (
+            f"(call_type NOT IN {_MCP_CALL_TYPES_SQL} AND call_type != {_AGENT_CALL_TYPE_SQL} "
+            f"AND call_type NOT IN {_BATCH_CALL_TYPES_SQL})"
+        ),
+    }
+)
 _SPEND_LOG_LIST_COLUMNS: Final = """
                 request_id, call_type, api_key, spend, total_tokens,
                 prompt_tokens, completion_tokens, "startTime", "endTime",
@@ -176,6 +196,7 @@ class _SessionSpendRow(TypedDict):
     api_key: ReadOnly[str]
     session_total_count: ReadOnly[int]
     session_total_spend: float
+    session_total_duration_ms: ReadOnly[int]
     mcp_tool_call_count: int
     mcp_tool_call_spend: float
     session_cache_hit_count: ReadOnly[int]
@@ -194,6 +215,7 @@ _SESSION_MODEL_NAME_MAX_LEN: Final = 256
 class _SessionSpendStats(NamedTuple):
     session_total_count: int
     session_total_spend: float
+    session_total_duration_ms: int
     mcp_tool_call_count: int
     mcp_tool_call_spend: float
     session_cache_hit_count: int
@@ -1170,6 +1192,84 @@ async def get_global_activity_exceptions(
 
 
 @router.get(
+    "/spend/capture_rate",
+    tags=["Budget & Spend Tracking"],  # mutable-ok: FastAPI tags kwarg is list-typed
+    dependencies=(Depends(user_api_key_auth),),
+    response_model=CaptureRateReport,
+)
+async def get_spend_capture_rate(
+    start_date: Annotated[date, fastapi.Query(description="First UTC day of the range, YYYY-MM-DD")],
+    end_date: Annotated[date, fastapi.Query(description="Last UTC day of the range, YYYY-MM-DD, inclusive")],
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+    provider: Annotated[
+        SpendCaptureProvider,
+        fastapi.Query(description="Provider whose bill to compare against; needs OPENAI_ADMIN_KEY set on the proxy"),
+    ] = "openai",
+    threshold: Annotated[
+        float, fastapi.Query(gt=0, le=1, description="Ratio under which the report flags below_threshold")
+    ] = 0.9,
+    project_ids: Annotated[
+        list[str] | None,
+        fastapi.Query(
+            description=(
+                "Scope the OpenAI bill to these project ids; omit to compare against the whole organization. Captured "
+                "spend is never scoped, so pass every project LiteLLM's OpenAI keys belong to"
+            )
+        ),
+    ] = None,
+) -> CaptureRateReport:
+    """
+    Compare the spend LiteLLM captured for a provider against that provider's own bill, per UTC day.
+
+    Admin only. Reads the provider's billing API with the billing credential set on the proxy
+    (OpenAI: `OPENAI_ADMIN_KEY`) and sums `LiteLLM_DailyUserSpend` for the same days.
+
+    Example:
+    ```
+    curl -H "Authorization: Bearer sk-1234" \
+      "http://localhost:4000/spend/capture_rate?provider=openai&start_date=2026-09-17&end_date=2026-09-23"
+    ```
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if not _is_admin_view_safe(user_api_key_dict):
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Only proxy admins can read the capture rate")
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=CommonProxyErrors.db_not_connected_error.value
+        )
+    if end_date < start_date:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="end_date must not be before start_date")
+    if (end_date - start_date).days >= SPEND_CAPTURE_RATE_MAX_RANGE_DAYS:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Date range too large; maximum is {SPEND_CAPTURE_RATE_MAX_RANGE_DAYS} days",
+        )
+    result: Final = await capture_rate_report(
+        prisma_client,
+        provider=provider,
+        start_date=start_date,
+        end_date=end_date,
+        threshold=threshold,
+        openai_project_ids=tuple(project_ids or ()),
+    )
+    match result:
+        case ProviderBillingCredentialMissing(env_var=env_var):
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail=f"{env_var} is not set on the proxy, so the {provider} bill cannot be read",
+            )
+        case ProviderBillingRequestFailed(detail=detail):
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY, detail=f"Could not read the {provider} bill: {detail}"
+            )
+        case CaptureRateReport():
+            return result
+        case _:
+            assert_never(result)
+
+
+@router.get(
     "/global/spend/provider",
     tags=["Budget & Spend Tracking"],
     dependencies=[Depends(user_api_key_auth)],
@@ -1826,7 +1926,7 @@ async def get_key_spend_report(
     scoped_api_key = _resolve_spend_report_scope(
         user_api_key_dict=user_api_key_dict,
         requested=requested,
-        caller_value=user_api_key_dict.api_key,
+        caller_value=LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict),
         scope_name="api_key",
     )
     db_response: Sequence[Mapping[str, object]] | None = await _query_raw_or_none(
@@ -2309,6 +2409,13 @@ async def calculate_spend(request: SpendCalculateRequest):
                 param=getattr(e, "param", "None"),
                 code=getattr(e, "status_code", status.HTTP_400_BAD_REQUEST),
             )
+        if isinstance(e, litellm.exceptions.ModelNotMappedError):
+            raise ProxyException(
+                message=str(e),
+                type="invalid_request_error",
+                param="model",
+                code=status.HTTP_400_BAD_REQUEST,
+            )
         error_msg: Final = f"{e}"
         raise ProxyException(
             message=getattr(e, "message", error_msg),
@@ -2407,6 +2514,10 @@ async def ui_view_spend_logs(
     cache_hit_filter: str | None = fastapi.Query(
         default=None,
         description="Filter logs by cache state: 'hit' or 'miss'. Miss includes legacy rows with a null/unknown cache state",
+    ),
+    span_type: str | None = fastapi.Query(
+        default=None,
+        description="Filter logs by span type: llm, agent, mcp, or batch",
     ),
     model: str | None = fastapi.Query(default=None, description="Filter logs by model"),
     model_id: str | None = fastapi.Query(
@@ -2508,6 +2619,13 @@ async def ui_view_spend_logs(
             message=f"Invalid cache_hit_filter: {cache_hit_filter}. Must be one of: hit, miss",
             type="bad_request",
             param="cache_hit_filter",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
+    if isinstance(span_type, str) and span_type not in _SPAN_TYPE_SQL_CONDITIONS:
+        raise ProxyException(
+            message=f"Invalid span_type: {span_type}. Must be one of: llm, agent, mcp, batch",
+            type="bad_request",
+            param="span_type",
             code=status.HTTP_400_BAD_REQUEST,
         )
 
@@ -2773,6 +2891,10 @@ async def ui_view_spend_logs(
             sql_conditions.append("LOWER(cache_hit) = 'true'")
         elif cache_hit_filter == "miss":
             sql_conditions.append("(cache_hit IS NULL OR LOWER(cache_hit) != 'true')")
+
+        span_type_condition: Final = _span_type_sql_condition(span_type)
+        if span_type_condition is not None:
+            sql_conditions.append(span_type_condition)
 
         if exclude_internal_health_checks:
             sql_conditions.append(f"api_key NOT IN (${p}, ${p + 1})")
@@ -4543,6 +4665,12 @@ async def _build_ui_spend_logs_response(
                     SELECT session_id, api_key,
                            COUNT(*)::int AS session_total_count,
                            COALESCE(SUM(spend), 0)::double precision AS session_total_spend,
+                           COALESCE(SUM(
+                               COALESCE(
+                                   request_duration_ms,
+                                   (EXTRACT(EPOCH FROM ("endTime" - "startTime")) * 1000)::INTEGER
+                               )
+                           ), 0)::bigint AS session_total_duration_ms,
                            COUNT(*) FILTER (
                                WHERE call_type IN {_MCP_CALL_TYPES_SQL}
                            )::int AS mcp_tool_call_count,
@@ -4584,6 +4712,7 @@ async def _build_ui_spend_logs_response(
                 (row["session_id"], row["api_key"]): _SessionSpendStats(
                     session_total_count=int(row.get("session_total_count") or 0),
                     session_total_spend=float(row.get("session_total_spend") or 0.0),
+                    session_total_duration_ms=int(row.get("session_total_duration_ms") or 0),
                     mcp_tool_call_count=int(row.get("mcp_tool_call_count") or 0),
                     mcp_tool_call_spend=float(row.get("mcp_tool_call_spend") or 0.0),
                     session_cache_hit_count=int(row.get("session_cache_hit_count") or 0),
@@ -4615,6 +4744,7 @@ async def _build_ui_spend_logs_response(
             row_dict["session_total_count"] = session_stats.session_total_count if session_stats else 1
             if session_stats:
                 row_dict["session_total_spend"] = session_stats.session_total_spend
+                row_dict["session_total_duration_ms"] = session_stats.session_total_duration_ms
                 if session_stats.mcp_tool_call_count:
                     row_dict["mcp_tool_call_count"] = session_stats.mcp_tool_call_count
                     row_dict["mcp_tool_call_spend"] = session_stats.mcp_tool_call_spend
@@ -4661,6 +4791,12 @@ def _build_status_filter_condition(status_filter: str | None) -> Mapping[str, ob
         return {"OR": [{"status": {"equals": "success"}}, {"status": None}]}
     else:
         return {"status": {"equals": status_filter}}
+
+
+def _span_type_sql_condition(span_type: str | None) -> str | None:
+    if span_type is None:
+        return None
+    return _SPAN_TYPE_SQL_CONDITIONS.get(span_type)
 
 
 def _is_admin_view_safe(user_api_key_dict: UserAPIKeyAuth) -> bool:

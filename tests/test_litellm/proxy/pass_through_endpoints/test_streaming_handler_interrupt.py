@@ -7,8 +7,14 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
+import respx
 
 import litellm
+import litellm.proxy.pass_through_endpoints.llm_provider_handlers.tinyfish_passthrough_logging_handler as tinyfish_handler_module
+from litellm.proxy.pass_through_endpoints.llm_provider_handlers.tinyfish_passthrough_logging_handler import (
+    mark_sse_poller_spawned,
+    sse_poller_spawned,
+)
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
@@ -838,3 +844,286 @@ async def test_chunk_processor_bills_partial_google_usage_on_mid_stream_exceptio
     assert failure_payload["completion_tokens"] == 12
     assert failure_payload["response_cost"] > 12 * 3.75e-06
     assert isinstance(recorder.failure_kwargs[0]["exception"], httpx.ReadTimeout)
+
+
+class TestTinyFishStreamBilling:
+    """SSE billing is owned by the detached poller spawned on the first run_id frame; it must
+    survive gen.aclose() (client disconnect) and the stream-end path must not double-bill."""
+
+    RUNS_URL = "https://agent.tinyfish.ai/v1/runs/run-sse-1?screenshots=none"
+    SSE_ROUTE = "https://agent.tinyfish.ai/v1/automation/run-sse"
+
+    @pytest.fixture
+    def tinyfish_env(self, monkeypatch):
+        monkeypatch.setenv("TINYFISH_API_KEY", "sk-tf-test")
+        monkeypatch.delenv("TINYFISH_COST_PER_STEP", raising=False)
+        monkeypatch.delenv("TINYFISH_AGENT_API_BASE", raising=False)
+        # aiohttp transport bypasses respx; force plain httpx and drop any cached aiohttp client
+        monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+        litellm.in_memory_llm_clients_cache.flush_cache()
+
+    def _tinyfish_logging_obj(self):
+        obj = _unarmed_logging_obj()
+        obj.model_call_details = {}
+        obj.dispatch_success_handlers = AsyncMock()
+        return obj
+
+    def _spawned_since(self, tasks_before):
+        return tinyfish_handler_module._BACKGROUND_BILLING_TASKS - tasks_before
+
+    @pytest.mark.asyncio
+    async def test_run_id_split_across_chunks_spawns_one_poller(self, tinyfish_env):
+        chunks = [
+            b'data: {"run_id": "run-s',
+            b'se-1", "event": "INITIALIZED"}\n\n',
+            b'data: {"run_id": "run-sse-1", "event": "COMPLETE"}\n\n',
+        ]
+        logging_obj = self._tinyfish_logging_obj()
+        tasks_before = set(tinyfish_handler_module._BACKGROUND_BILLING_TASKS)
+
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.get(self.RUNS_URL).respond(
+                json={"run_id": "run-sse-1", "status": "COMPLETED", "num_of_steps": 2, "result": "ok"}
+            )
+            received = []
+            async for chunk in PassThroughStreamingHandler.chunk_processor(
+                response=_make_streaming_response(chunks),
+                request_body={"url": "https://scrapeme.live/shop", "goal": "extract"},
+                litellm_logging_obj=logging_obj,
+                endpoint_type=EndpointType.TINYFISH,
+                start_time=datetime.now(),
+                passthrough_success_handler_obj=MagicMock(),
+                url_route=self.SSE_ROUTE,
+                route_streaming_logging=AsyncMock(),
+            ):
+                received.append(chunk)
+
+            assert received == chunks
+            assert sse_poller_spawned(logging_obj)
+            spawned = self._spawned_since(tasks_before)
+            assert len(spawned) == 1
+            await asyncio.gather(*spawned)
+
+        logging_obj.dispatch_success_handlers.assert_awaited_once()
+        assert logging_obj.dispatch_success_handlers.await_args.kwargs["response_cost"] == pytest.approx(0.032)
+
+    @pytest.mark.asyncio
+    async def test_poller_survives_client_disconnect_and_bills(self, tinyfish_env):
+        chunks = [
+            b'data: {"run_id": "run-sse-1", "event": "INITIALIZED"}\n\n',
+            b'data: {"run_id": "run-sse-1", "event": "ACTION"}\n\n',
+        ]
+        logging_obj = self._tinyfish_logging_obj()
+        tasks_before = set(tinyfish_handler_module._BACKGROUND_BILLING_TASKS)
+
+        with respx.mock(assert_all_called=True) as upstream:
+            upstream.get(self.RUNS_URL).respond(
+                json={"run_id": "run-sse-1", "status": "COMPLETED", "num_of_steps": 2, "result": "ok"}
+            )
+            gen = PassThroughStreamingHandler.chunk_processor(
+                response=_make_streaming_response(chunks),
+                request_body={"url": "https://scrapeme.live/shop", "goal": "extract"},
+                litellm_logging_obj=logging_obj,
+                endpoint_type=EndpointType.TINYFISH,
+                start_time=datetime.now(),
+                passthrough_success_handler_obj=MagicMock(),
+                url_route=self.SSE_ROUTE,
+                route_streaming_logging=AsyncMock(),
+            )
+            await gen.__anext__()
+            spawned = self._spawned_since(tasks_before)
+            assert len(spawned) == 1
+            await gen.aclose()
+
+            task = next(iter(spawned))
+            assert not task.cancelled()
+            await task
+
+        logging_obj.dispatch_success_handlers.assert_awaited_once()
+        assert logging_obj.dispatch_success_handlers.await_args.kwargs["response_cost"] == pytest.approx(0.032)
+
+    @pytest.mark.asyncio
+    async def test_stream_without_run_id_spawns_nothing(self, tinyfish_env):
+        logging_obj = self._tinyfish_logging_obj()
+        tasks_before = set(tinyfish_handler_module._BACKGROUND_BILLING_TASKS)
+
+        async for _ in PassThroughStreamingHandler.chunk_processor(
+            response=_make_streaming_response([b": keepalive\n\n", b'data: {"event": "HEARTBEAT"}\n\n']),
+            request_body={},
+            litellm_logging_obj=logging_obj,
+            endpoint_type=EndpointType.TINYFISH,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route=self.SSE_ROUTE,
+            route_streaming_logging=AsyncMock(),
+        ):
+            pass
+
+        assert not sse_poller_spawned(logging_obj)
+        assert self._spawned_since(tasks_before) == set()
+
+    @pytest.mark.asyncio
+    async def test_stream_end_skips_dispatch_when_poller_owns_billing(self, tinyfish_env):
+        logging_obj = self._tinyfish_logging_obj()
+        mark_sse_poller_spawned(logging_obj)
+
+        await PassThroughStreamingHandler._route_streaming_logging_to_handler(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route=self.SSE_ROUTE,
+            request_body={},
+            endpoint_type=EndpointType.TINYFISH,
+            start_time=datetime.now(),
+            raw_bytes=[b'data: {"run_id": "run-sse-1", "event": "COMPLETE"}\n\n'],
+            end_time=datetime.now(),
+        )
+
+        logging_obj.dispatch_success_handlers.assert_not_awaited()
+
+    @pytest.mark.asyncio
+    async def test_stream_end_fallback_still_logs_when_no_poller_spawned(self, tinyfish_env):
+        logging_obj = self._tinyfish_logging_obj()
+
+        await PassThroughStreamingHandler._route_streaming_logging_to_handler(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route=self.SSE_ROUTE,
+            request_body={},
+            endpoint_type=EndpointType.TINYFISH,
+            start_time=datetime.now(),
+            raw_bytes=[b": keepalive\n\n"],
+            end_time=datetime.now(),
+        )
+
+        logging_obj.dispatch_success_handlers.assert_awaited_once()
+        assert logging_obj.dispatch_success_handlers.await_args.kwargs["response_cost"] is None
+
+    @pytest.mark.asyncio
+    async def test_upstream_error_after_spawn_skips_failure_dispatch(self, tinyfish_env):
+        logging_obj = self._tinyfish_logging_obj()
+        logging_obj.dispatch_failure_handlers = MagicMock()
+        tasks_before = set(tinyfish_handler_module._BACKGROUND_BILLING_TASKS)
+
+        async def _aiter_bytes():
+            yield b'data: {"run_id": "run-sse-1", "event": "INITIALIZED"}\n\n'
+            raise httpx.ReadTimeout("upstream died")
+
+        response = MagicMock(spec=httpx.Response)
+        response.status_code = 200
+        response.aiter_bytes = _aiter_bytes
+
+        async def _consume():
+            async for _ in PassThroughStreamingHandler.chunk_processor(
+                response=response,
+                request_body={},
+                litellm_logging_obj=logging_obj,
+                endpoint_type=EndpointType.TINYFISH,
+                start_time=datetime.now(),
+                passthrough_success_handler_obj=MagicMock(),
+                url_route=self.SSE_ROUTE,
+                route_streaming_logging=AsyncMock(),
+            ):
+                pass
+
+        with pytest.raises(httpx.ReadTimeout):
+            await _consume()
+
+        spawned = self._spawned_since(tasks_before)
+        assert len(spawned) == 1
+        # the poller owns the single row; a failure dispatch would collide on its request_id
+        logging_obj.dispatch_failure_handlers.assert_not_called()
+        for task in spawned:
+            task.cancel()
+
+    @pytest.mark.asyncio
+    async def test_unterminated_run_id_frame_late_spawns_poller(self, tinyfish_env):
+        logging_obj = self._tinyfish_logging_obj()
+        tasks_before = set(tinyfish_handler_module._BACKGROUND_BILLING_TASKS)
+
+        await PassThroughStreamingHandler._route_streaming_logging_to_handler(
+            litellm_logging_obj=logging_obj,
+            passthrough_success_handler_obj=MagicMock(),
+            url_route=self.SSE_ROUTE,
+            request_body={},
+            endpoint_type=EndpointType.TINYFISH,
+            start_time=datetime.now(),
+            raw_bytes=[b'data: {"run_id": "run-sse-1", "event": "INITIALIZED"}'],
+            end_time=datetime.now(),
+        )
+
+        spawned = self._spawned_since(tasks_before)
+        assert len(spawned) == 1
+        assert sse_poller_spawned(logging_obj)
+        # the poller polls to terminal instead of the old single fetch that mispriced a RUNNING run at $0
+        logging_obj.dispatch_success_handlers.assert_not_awaited()
+        for task in spawned:
+            task.cancel()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "deferred_dispatch_armed",
+    [False, True],
+    ids=["enqueued-at-end-of-stream", "parked-for-deferred-dispatch"],
+)
+async def test_chunk_processor_claims_the_budget_reservation_before_handing_it_to_the_cost_callback(
+    deferred_dispatch_armed: bool,
+):
+    reservation = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+    response = _make_streaming_response([b"event-1", b"event-2"])
+    logging_obj = _unarmed_logging_obj()
+    logging_obj.litellm_params = {"metadata": {"user_api_key_budget_reservation": reservation}}
+    if deferred_dispatch_armed:
+        logging_obj._on_deferred_stream_complete = AsyncMock()
+    claimed_when_the_callback_ran = []
+
+    async def cost_callback(**kwargs):
+        claimed_when_the_callback_ran.append(reservation["callback_bound"])
+
+    async for _ in PassThroughStreamingHandler.chunk_processor(
+        response=response,
+        request_body={"model": "claude-3-haiku"},
+        litellm_logging_obj=logging_obj,
+        endpoint_type=EndpointType.GENERIC,
+        start_time=datetime.now(),
+        passthrough_success_handler_obj=MagicMock(),
+        url_route="/bedrock/model/claude/invoke-with-response-stream",
+        route_streaming_logging=cost_callback,
+    ):
+        pass
+
+    if deferred_dispatch_armed:
+        (parked_cost_callback,) = logging_obj._deferred_stream_complete_args
+        await parked_cost_callback
+    else:
+        await GLOBAL_LOGGING_WORKER.flush()
+
+    assert reservation["callback_bound"] is True
+    assert claimed_when_the_callback_ran == [True]
+
+
+@pytest.mark.asyncio
+async def test_chunk_processor_leaves_the_budget_reservation_for_the_request_end_release_when_the_cost_callback_cannot_be_enqueued():
+    reservation = {"reserved_cost": 0.5, "entries": [], "finalized": False, "callback_bound": False}
+    response = _make_streaming_response([b"event-1", b"event-2"])
+    logging_obj = _unarmed_logging_obj()
+    logging_obj.litellm_params = {"metadata": {"user_api_key_budget_reservation": reservation}}
+
+    def refuse_to_enqueue(async_coroutine):
+        async_coroutine.close()
+        raise RuntimeError("logging worker is shutting down")
+
+    with patch.object(GLOBAL_LOGGING_WORKER, "ensure_initialized_and_enqueue", side_effect=refuse_to_enqueue):
+        async for _ in PassThroughStreamingHandler.chunk_processor(
+            response=response,
+            request_body={"model": "claude-3-haiku"},
+            litellm_logging_obj=logging_obj,
+            endpoint_type=EndpointType.GENERIC,
+            start_time=datetime.now(),
+            passthrough_success_handler_obj=MagicMock(),
+            url_route="/bedrock/model/claude/invoke-with-response-stream",
+            route_streaming_logging=AsyncMock(),
+        ):
+            pass
+
+    assert reservation["callback_bound"] is False
