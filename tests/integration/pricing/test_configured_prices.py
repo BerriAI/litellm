@@ -1,6 +1,9 @@
+import asyncio
 import json
+import os
 import uuid
 from collections.abc import Iterator, Mapping
+from hashlib import sha256
 from pathlib import Path
 from typing import Final
 
@@ -12,6 +15,96 @@ from litellm import get_model_info
 from tests.integration._support.client import Gateway, eventually, object_value, string_value
 from tests.integration._support.database import read_rows
 from tests.integration._support.process import owned_proxy
+from tests.integration._support.upstream import delete_scenario, register_scenario
+from tests.integration.cost_calculation.cost_tracking_case import RealtimeResponse
+from tests.integration.pricing.test_realtime_cached_audio_pricing import one_realtime_turn
+
+REALTIME_MODEL: Final = "gpt-realtime-2"
+REALTIME_INPUT_TEXT_TOKENS: Final = 10
+REALTIME_INPUT_AUDIO_TOKENS: Final = 20
+REALTIME_OUTPUT_TEXT_TOKENS: Final = 5
+REALTIME_OUTPUT_AUDIO_TOKENS: Final = 7
+
+
+def _realtime_response_done() -> RealtimeResponse:
+    return RealtimeResponse(
+        content_type="application/x-realtime",
+        events=(
+            {
+                "type": "response.done",
+                "event_id": "evt_$REQUEST_ID",
+                "response": {
+                    "id": "resp_$REQUEST_ID",
+                    "object": "realtime.response",
+                    "status": "completed",
+                    "output": [],
+                    "usage": {
+                        "total_tokens": REALTIME_INPUT_TEXT_TOKENS
+                        + REALTIME_INPUT_AUDIO_TOKENS
+                        + REALTIME_OUTPUT_TEXT_TOKENS
+                        + REALTIME_OUTPUT_AUDIO_TOKENS,
+                        "input_tokens": REALTIME_INPUT_TEXT_TOKENS + REALTIME_INPUT_AUDIO_TOKENS,
+                        "output_tokens": REALTIME_OUTPUT_TEXT_TOKENS + REALTIME_OUTPUT_AUDIO_TOKENS,
+                        "input_token_details": {
+                            "text_tokens": REALTIME_INPUT_TEXT_TOKENS,
+                            "audio_tokens": REALTIME_INPUT_AUDIO_TOKENS,
+                            "cached_tokens": 0,
+                        },
+                        "output_token_details": {
+                            "text_tokens": REALTIME_OUTPUT_TEXT_TOKENS,
+                            "audio_tokens": REALTIME_OUTPUT_AUDIO_TOKENS,
+                        },
+                    },
+                },
+            },
+        ),
+    )
+
+
+@pytest.mark.parametrize(
+    ("input_text_rate", "input_audio_rate", "output_text_rate", "output_audio_rate"),
+    ((0.001, 0.002, 0.003, 0.004), (0.0, 0.0, 0.0, 0.0)),
+    ids=("custom_rates", "zero_rated"),
+)
+def test_realtime_session_is_charged_at_the_deployment_configured_rates(
+    gateway: Gateway,
+    input_text_rate: float,
+    input_audio_rate: float,
+    output_text_rate: float,
+    output_audio_rate: float,
+) -> None:
+    with gateway.scenario() as scenario:
+        scenario_id: Final = f"realtime-configured-price-{uuid.uuid4().hex[:12]}"
+        handle: Final = register_scenario(scenario_id, _realtime_response_done())
+        scenario.cleanups.callback(delete_scenario, handle)
+        key: Final = scenario.key()
+        model: Final = scenario.model(
+            model=f"openai/{REALTIME_MODEL}",
+            api_key=scenario_id,
+            api_base=gateway.upstream_url.rstrip("/"),
+            input_cost_per_token=input_text_rate,
+            input_cost_per_audio_token=input_audio_rate,
+            output_cost_per_token=output_text_rate,
+            output_cost_per_audio_token=output_audio_rate,
+        )
+        session: Final = asyncio.run(one_realtime_turn(os.environ["INTEGRATION_PROXY_URL"].rstrip("/"), key, model))
+        assert session.get("type") == "session.created", session
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT spend, call_type FROM "LiteLLM_SpendLogs" WHERE api_key = %s',
+                (sha256(key.encode()).hexdigest(),),
+            ),
+            lambda values: len(values) == 1,
+            seconds=70,
+        )
+        assert rows[0]["call_type"] == "_arealtime", rows
+        assert float(str(rows[0]["spend"])) == pytest.approx(
+            REALTIME_INPUT_TEXT_TOKENS * input_text_rate
+            + REALTIME_INPUT_AUDIO_TOKENS * input_audio_rate
+            + REALTIME_OUTPUT_TEXT_TOKENS * output_text_rate
+            + REALTIME_OUTPUT_AUDIO_TOKENS * output_audio_rate,
+            abs=1e-9,
+        ), rows
 
 
 @pytest.mark.covers("quota_management.spend_tracking.custom_price.matches_input_rates")

@@ -49,6 +49,7 @@ DEFAULT_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SE
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_S3_BATCH_SIZE: Final = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
 DEFAULT_S3_MAX_CONCURRENT_UPLOADS: Final = int(os.getenv("DEFAULT_S3_MAX_CONCURRENT_UPLOADS", "16"))
+DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY: Final = get_env_int("DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY", 200)
 # https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 MAX_S3_OBJECT_KEY_BYTES: Final = 1024
 S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
@@ -166,6 +167,9 @@ MCP_OAUTH2_TOKEN_EXPIRY_BUFFER_SECONDS: Final = int(os.getenv("MCP_OAUTH2_TOKEN_
 MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE: Final = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_MAX_SIZE", "200"))
 MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL: Final = int(os.getenv("MCP_OAUTH2_TOKEN_CACHE_DEFAULT_TTL", "3600"))
 MCP_SSO_ASSERTION_CACHE_TTL_SECONDS: Final = int(os.getenv("MCP_SSO_ASSERTION_CACHE_TTL_SECONDS", "60"))
+
+# mcp_tool_permissions entry that grants every current and future tool on a server
+MCP_ALL_TOOLS_WILDCARD: Final = "*"
 
 # Default npm cache directory for STDIO MCP servers.
 # npm/npx needs a writable cache dir; in containers the default (~/.npm)
@@ -327,6 +331,7 @@ REALTIME_CREDENTIAL_RESOLUTION_TIMEOUT_SECONDS: Final = float(
 WEBSOCKET_CLOSE_REASON_MAX_BYTES: Final = 123
 
 DEEPGRAM_DEFAULT_API_BASE: Final = "https://api.deepgram.com/v1"
+NADIR_DEFAULT_API_BASE: Final = "https://api.getnadir.com/v1"
 DEEPGRAM_LISTEN_DEFAULT_MODEL: Final = "nova-3"
 
 BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY: Final = "litellm.bedrock_realtime.pending_session_update"
@@ -594,6 +599,7 @@ FIREWORKS_AI_DEFAULT_CACHE_READ_RATE_RATIO: Final = 0.5
 #### Logging callback constants ####
 REDACTED_BY_LITELM_STRING: Final = "REDACTED_BY_LITELM"
 MAX_LANGFUSE_INITIALIZED_CLIENTS: Final = int(os.getenv("MAX_LANGFUSE_INITIALIZED_CLIENTS", 50))
+LANGFUSE_SHUTDOWN_FLUSH_TIMEOUT_MILLIS: Final = 10_000
 # Backpressure + lifetime bounds for the /v1/messages streaming relay (see
 # BaseAnthropicMessagesStreamingIterator.async_sse_wrapper). The relay queue is
 # bounded so a slow client throttles the upstream pump instead of letting it
@@ -708,6 +714,7 @@ LITELLM_CHAT_PROVIDERS: Final = [
     "gigachat",
     "nvidia_nim",
     "cerebras",
+    "nadir",
     "baseten",
     "ai21_chat",
     "volcengine",
@@ -901,6 +908,7 @@ openai_compatible_endpoints: Final[list] = [
     "codestral.mistral.ai/v1/fim/completions",
     "api.groq.com/openai/v1",
     "https://integrate.api.nvidia.com/v1",
+    NADIR_DEFAULT_API_BASE,
     "api.deepseek.com/v1",
     "api.together.ai/v1",
     "api.together.xyz/v1",
@@ -938,6 +946,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.libertai.io/v1",
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
+    "https://api.sailresearch.com/v1",
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
@@ -1013,6 +1022,7 @@ openai_compatible_providers: Final[list] = [
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "scx-ai",
+    "sail",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
@@ -1600,6 +1610,8 @@ ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS: Final = {
 # e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
 # Works for all LLM pass-through endpoints (Vertex AI, Anthropic, Bedrock, etc.)
 PASS_THROUGH_HEADER_PREFIX: Final = "x-pass-"
+INTERNAL_KWARG_PREFIX: Final = "_litellm_"
+CONTROL_OPTIONS_KEY: Final = f"{INTERNAL_KWARG_PREFIX}control"
 
 AZURE_SPEECH_CUSTOM_LLM_PROVIDER: Final = "azure_speech"
 AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX: Final = "/azure_speech"
@@ -1945,6 +1957,15 @@ SENTRY_DENYLIST: Final = [
     "auth_token",
     "jwt_token",
     "private_key",
+    "authorization",
+    "api-key",
+    "x-api-key",
+    "x-goog-api-key",
+    "ocp-apim-subscription-key",
+    "x-litellm-api-key",
+    "x-mcp-auth",
+    "cookie",
+    "set-cookie",
     "SLACK_WEBHOOK_URL",
     "ALERTING_WEBHOOK_URL",
     "webhook_url",
@@ -1967,6 +1988,12 @@ SENTRY_DENYLIST: Final = [
 ]
 SENTRY_PII_DENYLIST: Final = [
     "user_id",
+    "user_email",
+    "end_user_id",
+    "user_api_key_hash",
+    "user_api_key_user_id",
+    "user_api_key_user_email",
+    "user_api_key_end_user_id",
     "email",
     "phone",
     "address",

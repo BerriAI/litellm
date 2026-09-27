@@ -1,10 +1,11 @@
+use std::convert::Infallible;
+
 use bytes::Bytes;
 use litellm_core::messages::{
-    Error,
-    route::{Messages, MessagesCall, MessagesOp, MessagesOpResult, MessagesOutput},
-    types::MessagesShaping,
+    Error, MessagesCall, MessagesShaping, messages_body,
+    route::{Messages, MessagesOutput, MessagesStreamHead},
 };
-use litellm_host_python::{InvokeError, RouteHost, from_py, lookup, to_py};
+use litellm_host_python::{InvokeError, ProtocolHost, from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
 use litellm_types::utils::ProviderSpecificHeaders;
 use pyo3::{
@@ -16,7 +17,7 @@ use pyo3::{
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::{RustUpstreamError, messages_error_to_pyerr},
+    errors::{RustUpstreamError, route_error_to_pyerr},
     marshal::{optional_timeout, python_timeout_seconds},
 };
 
@@ -74,22 +75,31 @@ fn native_error(py: Python<'_>, error: Error) -> PyResult<PyErr> {
             error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
             Ok(error)
         }
-        other => Ok(messages_error_to_pyerr(other)),
+        Error::MissingField(field) => {
+            let error = PyValueError::new_err(format!("missing required field: {field}"));
+            error.value(py).setattr(REQUEST_ERROR_MARKER, true)?;
+            Ok(error)
+        }
+        other => Ok(route_error_to_pyerr(other)),
     }
 }
 
 /// The Python side of the Messages route: projects the prepared arguments and builds the
 /// public response, chunks and exceptions.
-pub(super) struct MessagesRouteHost {
+pub(super) struct MessagesPythonHost {
     request: Py<PyAny>,
 }
 
-impl MessagesRouteHost {
+impl MessagesPythonHost {
     pub(super) fn new(request: Py<PyAny>) -> Self {
         Self { request }
     }
 
-    fn project(&self, py: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<MessagesCall> {
+    fn projection(
+        &self,
+        py: Python<'_>,
+        arguments: &Bound<'_, PyDict>,
+    ) -> PyResult<Result<MessagesCall, Error>> {
         let request = self.request.bind(py);
         let argument = |name: &str| -> PyResult<Option<Bound<'_, PyAny>>> {
             Ok(lookup(arguments, request, name)?.filter(|value| !value.is_none()))
@@ -121,17 +131,20 @@ impl MessagesRouteHost {
             .flatten();
         let custom_llm_provider = string("custom_llm_provider")?;
         let shaping = self.shaping(py, &model, custom_llm_provider.as_deref(), arguments)?;
-        Ok(MessagesCall {
-            model,
+        let api_key = string("api_key")?;
+        let api_base = string("api_base")?;
+        let extra_headers = self.merged_headers(py, arguments)?;
+        let provider_specific_header = self.provider_specific_header(py, arguments)?;
+        Ok(messages_body(body).map(|body| MessagesCall {
             body,
-            api_key: string("api_key")?,
-            api_base: string("api_base")?,
-            extra_headers: self.merged_headers(py, arguments)?,
-            provider_specific_header: self.provider_specific_header(py, arguments)?,
+            api_key,
+            api_base,
+            extra_headers,
+            provider_specific_header,
             custom_llm_provider,
             timeout: optional_timeout(timeout),
             shaping,
-        })
+        }))
     }
 
     fn merged_headers(
@@ -208,22 +221,22 @@ impl MessagesRouteHost {
     }
 }
 
-impl RouteHost for MessagesRouteHost {
-    type Route = Messages;
+impl ProtocolHost for MessagesPythonHost {
+    type Protocol = Messages;
     type Failure = PyErr;
 
-    fn invoke(
+    fn project(
         &mut self,
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
-        op: MessagesOp,
-    ) -> Result<MessagesOpResult, InvokeError<Error>> {
-        match op {
-            MessagesOp::ProjectRequest => self
-                .project(py, arguments)
-                .map(|call| MessagesOpResult::Request(Box::new(call)))
-                .map_err(|error| InvokeError::Python(self.map_failure(py, error))),
-        }
+    ) -> Result<MessagesCall, InvokeError<Error>> {
+        self.projection(py, arguments)
+            .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
+            .map_err(InvokeError::Native)
+    }
+
+    fn invoke(&mut self, _: Python<'_>, op: Infallible) -> Result<(), InvokeError<Error>> {
+        match op {}
     }
 
     fn complete(&mut self, py: Python<'_>, response: MessagesOutput) -> PyResult<Py<PyAny>> {
@@ -235,6 +248,13 @@ impl RouteHost for MessagesRouteHost {
                 .map(Bound::unbind),
             MessagesOutput::Streamed => Ok(py.None()),
         }
+    }
+
+    fn head(&mut self, py: Python<'_>, head: MessagesStreamHead) -> PyResult<Py<PyAny>> {
+        py.import(ROUTE_HOST_MODULE)?
+            .getattr("stream_hidden_params")?
+            .call1((to_py(py, &head.headers)?,))
+            .map(Bound::unbind)
     }
 
     fn chunk(&mut self, py: Python<'_>, chunk: Bytes) -> PyResult<Py<PyAny>> {
@@ -298,6 +318,7 @@ mod tests {
 
     #[rstest]
     #[case::rejected_request(Error::InvalidRequest("does not support top_k=5".into()), true)]
+    #[case::missing_field(Error::MissingField("max_tokens"), true)]
     #[case::unresolvable_provider(Error::InvalidProvider("openai".into()), false)]
     #[case::upstream_failure(
         Error::Transport(TransportError::Http { status: 400, body: "bad".into() }),

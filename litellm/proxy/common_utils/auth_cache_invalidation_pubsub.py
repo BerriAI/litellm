@@ -74,12 +74,6 @@ def _message_from_data(data: object) -> _CacheInvalidationMessage | None:
 async def _publish_to_redis(redis_cache: "RedisCache", cache_key: str, message: str) -> None:
     try:
         client: Final = _pubsub_capable_client(redis_cache)
-        if client is None:
-            verbose_proxy_logger.debug(
-                "auth cache invalidation publish for %s skipped: cluster redis client has no pub/sub support",
-                cache_key,
-            )
-            return
         async with _in_flight_publishes:
             await client.publish(auth_cache_invalidation_channel(redis_cache), message)
     except Exception as e:  # noqa: BLE001  # best-effort publish; mutations must never fail on redis errors
@@ -185,12 +179,6 @@ class AuthCacheInvalidationSubscriber:
         while True:
             try:
                 client = _pubsub_capable_client(self._redis_cache)
-                if client is None:
-                    verbose_proxy_logger.warning(
-                        "auth cache invalidation subscriber disabled: cluster redis client has no pub/sub support; "
-                        "cross-worker eviction falls back to the local cache TTL"
-                    )
-                    return
                 pubsub = client.pubsub()
                 try:
                     await pubsub.subscribe(auth_cache_invalidation_channel(self._redis_cache))

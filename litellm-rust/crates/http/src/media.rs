@@ -12,7 +12,7 @@ use reqwest::{
     dns::{Addrs, Name, Resolve, Resolving},
 };
 
-use crate::{ClientVariant, HttpClientConfig, HttpClientPool};
+use crate::{Client, ClientVariant, HttpClientConfig, HttpClientPool};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
@@ -93,8 +93,8 @@ type ProxyMatch = Arc<dyn Fn(&Url) -> bool + Send + Sync>;
 
 #[derive(Clone)]
 pub struct MediaFetcher {
-    pinned: reqwest::Client,
-    unpinned: reqwest::Client,
+    pinned: Client,
+    unpinned: Client,
     uses_proxy: ProxyMatch,
     address_resolver: Arc<dyn AddressResolver>,
     url_policy: UrlPolicy,
@@ -154,7 +154,7 @@ impl MediaFetcher {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn for_test(client: reqwest::Client) -> Self {
+    pub fn for_test(client: Client) -> Self {
         Self {
             pinned: client.clone(),
             unpinned: client,
@@ -230,7 +230,7 @@ impl MediaFetcher {
         }
     }
 
-    async fn client_for(&self, url: &Url) -> Result<&reqwest::Client, Error> {
+    async fn client_for(&self, url: &Url) -> Result<&Client, Error> {
         if !self.url_policy.validate {
             return Ok(&self.unpinned);
         }
@@ -520,10 +520,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf; charset=binary\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
         )
         .await;
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("test client builds");
+        let client = Client::no_redirect_for_test();
         let media = MediaFetcher::for_test(client)
             .fetch(url, policy(3, 0))
             .await
@@ -539,10 +536,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nContent-Type: application/pdf\r\nContent-Length: 3\r\nConnection: close\r\n\r\nabc",
         )
         .await;
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("test client builds");
+        let client = Client::no_redirect_for_test();
         let error = MediaFetcher::for_test(client)
             .fetch(url, policy(2, 0))
             .await
@@ -557,10 +551,7 @@ mod tests {
             b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n2\r\nab\r\n2\r\ncd\r\n0\r\n\r\n",
         )
         .await;
-        let client = reqwest::Client::builder()
-            .redirect(reqwest::redirect::Policy::none())
-            .build()
-            .expect("test client builds");
+        let client = Client::no_redirect_for_test();
         let error = MediaFetcher::for_test(client)
             .fetch(url, policy(3, 0))
             .await

@@ -6,7 +6,7 @@ use std::{
 
 use reqwest::dns::Resolve;
 
-use crate::{config::HttpClientConfig, error::Error, proxy::EnvironmentProxies};
+use crate::{client::Client, config::HttpClientConfig, error::Error, proxy::EnvironmentProxies};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum ClientVariant {
@@ -48,7 +48,7 @@ impl HttpClientPool {
         &self,
         config: &HttpClientConfig,
         variant: ClientVariant,
-    ) -> Result<reqwest::Client, Error> {
+    ) -> Result<Client, Error> {
         let effective = match variant {
             ClientVariant::Media => HttpClientConfig {
                 client_certificate: None,
@@ -65,7 +65,7 @@ impl HttpClientPool {
         if let Some(pooled) = self.lock().get(&key)
             && pooled.built_at.elapsed() < self.ttl
         {
-            return Ok(pooled.client.clone());
+            return Ok(Client::new(pooled.client.clone()));
         }
         let client = self
             .apply(variant, reqwest::ClientBuilder::try_from(&key.0)?)
@@ -77,7 +77,7 @@ impl HttpClientPool {
                 built_at: Instant::now(),
             },
         );
-        Ok(client)
+        Ok(Client::new(client))
     }
 
     fn lock(&self) -> MutexGuard<'_, Clients> {
@@ -116,7 +116,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{HttpSettings, Resolution, Verify};
+    use crate::{ClientIdentity, HttpSettings, Resolution, Verify};
 
     struct FixedResolver(SocketAddr);
 
@@ -288,7 +288,9 @@ mod tests {
     fn media_variant_never_loads_the_client_certificate() {
         let pool = pool();
         let with_identity = HttpClientConfig {
-            client_certificate: Some(std::env::temp_dir().join("litellm-http-absent-client.pem")),
+            client_certificate: Some(ClientIdentity::Pem(
+                std::env::temp_dir().join("litellm-http-absent-client.pem"),
+            )),
             ..config("a")
         };
         assert!(
