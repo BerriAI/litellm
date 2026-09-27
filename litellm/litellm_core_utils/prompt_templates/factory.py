@@ -2483,12 +2483,18 @@ def anthropic_messages_pt(
                         len(user_content) > user_content_start
                         and user_message_types_block.get("cache_control") is not None
                         and not any(
-                            m.get("cache_control") is not None
-                            for m in user_message_types_block["content"]
-                            if isinstance(m, dict)
+                            "cache_control" in content and content["cache_control"] is not None
+                            for content in user_content[user_content_start:]
                         )
                     ):
-                        add_cache_control_to_content(user_content[-1], dict(user_message_types_block))
+                        cached_user_content: AnthropicMessagesUserMessageValues = copy.copy(user_content[-1])
+                        add_cache_control_to_content(
+                            anthropic_content_element=cast(
+                                dict[str, object], cached_user_content
+                            ),  # cast-ok: copied TypedDict is a dict
+                            original_content_element=user_message_types_block,
+                        )
+                        user_content[-1] = cached_user_content
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
@@ -2548,6 +2554,12 @@ def anthropic_messages_pt(
                     if _tc_id and isinstance(_tc_id, str) and _tc_id.startswith("srvtoolu_"):
                         _has_server_tool_calls = True
                         break
+
+            _content_is_list: bool = "content" in assistant_content_block and isinstance(
+                assistant_content_block["content"], list
+            )
+            _content_list = assistant_content_block.get("content") if _content_is_list else None
+            assistant_content_start: int = len(assistant_content)
 
             if (
                 thinking_blocks is not None
@@ -2672,10 +2684,6 @@ def anthropic_messages_pt(
                 # duplication and preserve the original interleaved order.
                 # Fixes the gap where list-content messages bypass INTERLEAVED
                 # MODE and still get thinking blocks prepended out of order.
-                _content_is_list = "content" in assistant_content_block and isinstance(
-                    assistant_content_block["content"], list
-                )
-                _content_list = assistant_content_block.get("content") if _content_is_list else None
                 _list_has_thinking = False
                 if _content_is_list and _content_list is not None:
                     for _item in _content_list:
@@ -2691,7 +2699,7 @@ def anthropic_messages_pt(
                 ):  # IMPORTANT: ADD THIS FIRST, ELSE ANTHROPIC WILL RAISE AN ERROR
                     assistant_content.extend(thinking_blocks)
                 if _content_is_list and _content_list is not None:
-                    assistant_content_start: int = len(assistant_content)
+                    assistant_content_start = len(assistant_content)
                     for m in _content_list:
                         if not isinstance(m, dict):
                             continue
@@ -2722,12 +2730,6 @@ def anthropic_messages_pt(
                         # Pass through as-is since these are Anthropic-native content types
                         elif m.get("type", "") == "server_tool_use" or m.get("type", "").endswith("_tool_result"):
                             assistant_content.append(m)
-                    if (
-                        len(assistant_content) > assistant_content_start
-                        and assistant_content_block.get("cache_control") is not None
-                        and not any(m.get("cache_control") is not None for m in _content_list if isinstance(m, dict))
-                    ):
-                        add_cache_control_to_content(assistant_content[-1], dict(assistant_content_block))
                 elif (
                     "content" in assistant_content_block
                     and isinstance(assistant_content_block["content"], str)
@@ -2781,6 +2783,24 @@ def anthropic_messages_pt(
 
             if assistant_function_call is not None:
                 assistant_content.extend(convert_function_to_anthropic_tool_invoke(assistant_function_call))
+
+            if (
+                _content_is_list
+                and len(assistant_content) > assistant_content_start
+                and assistant_content_block.get("cache_control") is not None
+                and not any(
+                    "cache_control" in content and content["cache_control"] is not None
+                    for content in assistant_content[assistant_content_start:]
+                )
+            ):
+                cached_assistant_content: AnthropicMessagesAssistantMessageValues = copy.copy(assistant_content[-1])
+                add_cache_control_to_content(
+                    anthropic_content_element=cast(
+                        dict[str, object], cached_assistant_content
+                    ),  # cast-ok: copied TypedDict is a dict
+                    original_content_element=assistant_content_block,
+                )
+                assistant_content[-1] = cached_assistant_content
 
             msg_i += 1
 
@@ -4530,6 +4550,7 @@ class BedrockConverseMessagesProcessor:
                     message=messages[msg_i],
                     assistant_continue_message=assistant_continue_message,
                 )
+                assistant_message_content_start: int = len(assistant_content)
                 _assistant_content = assistant_message_block.get("content", None)
                 thinking_blocks = cast(
                     list[ChatCompletionThinkingBlock] | None,
@@ -4597,6 +4618,18 @@ class BedrockConverseMessagesProcessor:
                 _tool_calls = assistant_message_block.get("tool_calls", [])
                 if _tool_calls:
                     assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls, model=model))
+
+                if (
+                    isinstance(_assistant_content, list)
+                    and len(assistant_content) > assistant_message_content_start
+                    and assistant_message_block.get("cache_control") is not None
+                    and not any("cachePoint" in block for block in assistant_content[assistant_message_content_start:])
+                ):
+                    _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
+                        assistant_message_block, block_type="content_block", model=model
+                    )
+                    if _cache_point_block is not None:
+                        assistant_content.append(_cache_point_block)
 
                 msg_i += 1
 
@@ -4915,6 +4948,7 @@ def _bedrock_converse_messages_pt(
                 message=messages[msg_i],
                 assistant_continue_message=assistant_continue_message,
             )
+            assistant_message_content_start: int = len(assistant_content)
             _assistant_content = assistant_message_block.get("content", None)
             thinking_blocks = cast(
                 list[ChatCompletionThinkingBlock] | None,
@@ -4983,6 +5017,18 @@ def _bedrock_converse_messages_pt(
             _tool_calls = assistant_message_block.get("tool_calls", [])
             if _tool_calls:
                 assistant_content.extend(_convert_to_bedrock_tool_call_invoke(_tool_calls, model=model))
+
+            if (
+                isinstance(_assistant_content, list)
+                and len(assistant_content) > assistant_message_content_start
+                and assistant_message_block.get("cache_control") is not None
+                and not any("cachePoint" in block for block in assistant_content[assistant_message_content_start:])
+            ):
+                _cache_point_block = litellm.AmazonConverseConfig().get_cache_point_block(
+                    assistant_message_block, block_type="content_block", model=model
+                )
+                if _cache_point_block is not None:
+                    assistant_content.append(_cache_point_block)
 
             msg_i += 1
 

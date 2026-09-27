@@ -2409,6 +2409,24 @@ def test_translate_system_list_content_preserves_message_cache_control(block_cac
     assert result == expected
 
 
+def test_translate_system_skipped_list_block_does_not_suppress_message_cache_control():
+    messages: Final = [
+        {
+            "role": "system",
+            "content": [
+                {"type": "text", "text": "", "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+                {"type": "text", "text": "retained"},
+            ],
+            "cache_control": {"type": "ephemeral"},
+        },
+        {"role": "user", "content": "hi"},
+    ]
+
+    result: Final = AnthropicConfig().translate_system_message(messages)
+
+    assert result == [{"type": "text", "text": "retained", "cache_control": {"type": "ephemeral"}}]
+
+
 # ============ Dynamic max_tokens Tests ============
 
 

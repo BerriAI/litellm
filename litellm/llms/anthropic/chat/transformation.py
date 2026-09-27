@@ -1745,8 +1745,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                         and system_message_block.get("cache_control") is not None
                         and not any(
                             content.get("cache_control") is not None
-                            for content in message["content"]
-                            if isinstance(content, dict)
+                            for content in anthropic_system_message_list[content_start:]
                         )
                     ):
                         anthropic_system_message_list[-1]["cache_control"] = system_message_block["cache_control"]
