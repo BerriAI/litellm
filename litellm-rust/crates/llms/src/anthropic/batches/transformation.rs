@@ -4,7 +4,7 @@ use serde_json::Value;
 use time::OffsetDateTime;
 use url::Url;
 
-use crate::{Error, anthropic::common_utils::resolve_anthropic_api_base};
+use crate::{anthropic::common_utils::resolve_anthropic_api_base, Error};
 
 const BATCHES_PATH_SUFFIX: &str = "/v1/messages/batches";
 
@@ -35,6 +35,18 @@ pub struct AnthropicMessageBatch {
     pub archived_at: Option<String>,
     #[serde(default)]
     pub request_counts: AnthropicBatchRequestCounts,
+}
+
+#[derive(Deserialize)]
+struct BatchResultRecord {
+    result: BatchResult,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum BatchResult {
+    Succeeded { message: AnthropicMessagesResponse },
+    Errored { error: Value },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -234,11 +246,21 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
     fn transform_batch_results(&self, body: &str) -> Result<Vec<AnthropicMessagesResponse>, Error> {
         body.lines()
             .filter(|line| !line.trim().is_empty())
-            .filter_map(|line| serde_json::from_str::<Value>(line.trim()).ok())
-            .map(|record| {
-                serde_json::from_value(record["result"]["message"].clone()).map_err(|error| {
-                    Error::InvalidResponse(format!("invalid Anthropic batch result: {error}"))
-                })
+            .enumerate()
+            .map(|(index, line)| {
+                let record: BatchResultRecord =
+                    serde_json::from_str(line.trim()).map_err(|error| {
+                        Error::InvalidResponse(format!(
+                            "invalid Anthropic batch result on line {}: {error}",
+                            index + 1
+                        ))
+                    })?;
+                match record.result {
+                    BatchResult::Succeeded { message } => Ok(message),
+                    BatchResult::Errored { error } => Err(Error::InvalidResponse(format!(
+                        "Anthropic batch request failed: {error}"
+                    ))),
+                }
             })
             .collect()
     }
@@ -310,9 +332,8 @@ mod tests {
     }
 
     #[test]
-    fn extracts_message_responses_from_ndjson_and_skips_non_json_lines() {
-        let body = r#"not-json
-{"result":{"message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":"end_turn","stop_sequence":null}}}
+    fn extracts_successful_message_responses_from_ndjson() {
+        let body = r#"{"result":{"type":"succeeded","message":{"id":"msg_1","type":"message","role":"assistant","model":"claude-test","content":[],"stop_reason":"end_turn","stop_sequence":null}}}
 "#;
         let messages = ANTHROPIC_BATCHES_TRANSFORMATION
             .transform_batch_results(body)
@@ -320,6 +341,20 @@ mod tests {
 
         assert_eq!(messages.len(), 1);
         assert_eq!(messages[0].id, "msg_1");
+    }
+
+    #[test]
+    fn reports_malformed_and_unsuccessful_batch_results() {
+        assert!(matches!(
+            ANTHROPIC_BATCHES_TRANSFORMATION.transform_batch_results("not-json"),
+            Err(Error::InvalidResponse(message)) if message.contains("line 1")
+        ));
+        assert!(matches!(
+            ANTHROPIC_BATCHES_TRANSFORMATION.transform_batch_results(
+                r#"{"result":{"type":"errored","error":{"type":"invalid_request_error"}}}"#
+            ),
+            Err(Error::InvalidResponse(message)) if message.contains("request failed")
+        ));
     }
 
     #[test]

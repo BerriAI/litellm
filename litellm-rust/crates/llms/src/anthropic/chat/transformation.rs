@@ -1,21 +1,21 @@
 use litellm_auth::SecretValue;
 use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
-    prompt_templates::factory::{Conversation, build_conversation},
+    prompt_templates::factory::{build_conversation, Conversation},
 };
 use litellm_types::{
     llms::openai::ChatMessage,
     utils::{ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse},
 };
-use serde_json::{Map, Value, json};
+use serde::Deserialize;
+use serde_json::{json, Map, Value};
 
 use crate::{
-    Error,
     anthropic::{
         chat::handler::ModelResponseIterator,
         common_utils::{
-            API_KEY_PLACEMENT, complete_anthropic_url, forwarded_oauth_bearer,
-            resolve_anthropic_api_key,
+            complete_anthropic_url, forwarded_oauth_bearer, resolve_anthropic_api_key,
+            API_KEY_PLACEMENT,
         },
     },
     base_llm::{
@@ -24,11 +24,13 @@ use crate::{
         chat::{
             streaming::{ChatStream, StreamShape},
             transformation::{
-                BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-                Unsupported, ValidatedEnvironment, unsupported_message, unsupported_param,
+                unsupported_message, unsupported_param, BaseConfig, Headers,
+                ProviderChatRequestData, ProviderChatResponseData, Unsupported,
+                ValidatedEnvironment,
             },
         },
     },
+    Error,
 };
 
 /// Anthropic parameter names, post `map_openai_params`, that the Rust path can
@@ -47,6 +49,34 @@ const SUPPORTED_PARAMS: &[(&str, &str)] = &[
     ("top_p", "top_p"),
     ("stop", "stop_sequences"),
 ];
+
+#[derive(Deserialize)]
+struct MessageResponse {
+    model: String,
+    content: Vec<ContentBlock>,
+    usage: MessageUsage,
+    stop_reason: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "snake_case")]
+enum ContentBlock {
+    Text {
+        text: String,
+    },
+    #[serde(other)]
+    Other,
+}
+
+#[derive(Deserialize)]
+struct MessageUsage {
+    input_tokens: u64,
+    output_tokens: u64,
+    #[serde(default)]
+    cache_read_input_tokens: Option<u64>,
+    #[serde(default)]
+    cache_creation_input_tokens: Option<u64>,
+}
 
 pub struct AnthropicConfig;
 
@@ -84,60 +114,45 @@ impl BaseConfig for AnthropicConfig {
         _model: &str,
         response: ProviderChatResponseData,
     ) -> Result<ChatCompletionsResponse, Error> {
-        let body = response
-            .body
-            .as_object()
-            .ok_or_else(|| Error::InvalidResponse("messages response is not an object".into()))?;
-
-        let content = body
-            .get("content")
-            .and_then(Value::as_array)
-            .ok_or(Error::MissingField("content"))?;
+        let body: MessageResponse = serde_json::from_value(response.body).map_err(|error| {
+            Error::InvalidResponse(format!("invalid messages response: {error}"))
+        })?;
         // The route declines tool and thinking requests, so a non-text block
         // means the response carries something this path never asked for.
         // Decline rather than silently dropping it; the host falls back.
-        if content
+        if body
+            .content
             .iter()
-            .any(|block| block.get("type").and_then(Value::as_str) != Some("text"))
+            .any(|block| matches!(block, ContentBlock::Other))
         {
             return Err(Error::Unsupported("non-text response content block"));
         }
-        let text: String = content
-            .iter()
-            .filter_map(|block| block.get("text").and_then(Value::as_str))
+        let text = body
+            .content
+            .into_iter()
+            .map(|block| match block {
+                ContentBlock::Text { text } => text,
+                ContentBlock::Other => String::new(),
+            })
             .collect();
-
-        let usage = body
-            .get("usage")
-            .and_then(Value::as_object)
-            .ok_or(Error::MissingField("usage"))?;
-        let field = |name: &str| usage.get(name).and_then(Value::as_u64).unwrap_or(0);
 
         Ok(ChatCompletionsResponse {
             created: unix_now(),
-            model: body
-                .get("model")
-                .and_then(Value::as_str)
-                .ok_or(Error::MissingField("model"))?
-                .to_string(),
+            model: body.model,
             choices: vec![ChatCompletionsChoice {
                 index: 0,
                 message: ChatCompletionsChoiceMessage {
                     role: "assistant".to_string(),
                     content: (!text.is_empty()).then_some(text),
                 },
-                finish_reason: finish_reason_for(
-                    body.get("stop_reason")
-                        .and_then(Value::as_str)
-                        .unwrap_or(""),
-                )
-                .to_string(),
+                finish_reason: finish_reason_for(body.stop_reason.as_deref().unwrap_or(""))
+                    .to_string(),
             }],
             usage: usage_from_parts(
-                field("input_tokens"),
-                field("output_tokens"),
-                field("cache_read_input_tokens"),
-                field("cache_creation_input_tokens"),
+                body.usage.input_tokens,
+                body.usage.output_tokens,
+                body.usage.cache_read_input_tokens.unwrap_or(0),
+                body.usage.cache_creation_input_tokens.unwrap_or(0),
             ),
         })
     }
