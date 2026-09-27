@@ -321,3 +321,139 @@ async def test_update_spend_logs_multiple_batches_with_failure():
 
     # Verify all logs were cleared from transactions
     assert len(prisma_client.spend_log_transactions) == 0
+
+
+@pytest.mark.asyncio
+async def test_tool_usage_transactions_requeued_on_transient_db_error():
+    """
+    Test that when flush_tool_usage_transactions fails due to a transient database
+    transport error, the batch is requeued at the head of the queue instead of being permanently dropped.
+    """
+    from litellm.proxy.utils import update_spend_logs_job
+
+    prisma_client = MockPrismaClient()
+    proxy_logging_obj = create_mock_proxy_logging()
+
+    # Pre-populate tool usage transactions
+    initial_transactions = [
+        {"id": "tool_1", "tool_name": "calculator"},
+        {"id": "tool_2", "tool_name": "web_search"},
+    ]
+    prisma_client.tool_usage_transactions = list(initial_transactions)
+
+    with patch(
+        "litellm.proxy.db.spend_log_tool_index.flush_tool_usage_transactions",
+        new=AsyncMock(side_effect=httpx.ConnectError("Can't reach database server")),
+    ):
+        await update_spend_logs_job(prisma_client, None, proxy_logging_obj)
+
+    # Tool usage transactions should be requeued at the head of the queue
+    assert len(prisma_client.tool_usage_transactions) == 2
+    assert prisma_client.tool_usage_transactions == initial_transactions
+
+
+@pytest.mark.asyncio
+async def test_tool_usage_transactions_dropped_on_permanent_error():
+    """
+    Test that when flush_tool_usage_transactions fails due to a non-transient error,
+    the batch is dropped so it does not loop forever.
+    """
+    from litellm.proxy.utils import update_spend_logs_job
+
+    prisma_client = MockPrismaClient()
+    proxy_logging_obj = create_mock_proxy_logging()
+
+    prisma_client.tool_usage_transactions = [
+        {"id": "tool_1", "tool_name": "poison_row"},
+    ]
+
+    with patch(
+        "litellm.proxy.db.spend_log_tool_index.flush_tool_usage_transactions",
+        new=AsyncMock(side_effect=ValueError("Invalid data payload")),
+    ):
+        await update_spend_logs_job(prisma_client, None, proxy_logging_obj)
+
+    # Permanent error drops the batch to avoid poison loops
+    assert len(prisma_client.tool_usage_transactions) == 0
+
+
+@pytest.mark.asyncio
+async def test_autorouter_turn_transactions_requeued_on_transient_db_error():
+    """
+    Test that when flush_autorouter_turn_transactions fails due to a transient database
+    transport error, the batch is requeued at the head of the queue instead of being permanently dropped.
+    """
+    from litellm.proxy.utils import update_spend_logs_job
+
+    prisma_client = MockPrismaClient()
+    proxy_logging_obj = create_mock_proxy_logging()
+
+    initial_turns = [
+        {"id": "turn_1", "session_id": "sess_123"},
+        {"id": "turn_2", "session_id": "sess_456"},
+    ]
+    prisma_client.autorouter_turn_transactions = list(initial_turns)
+
+    with patch(
+        "litellm.proxy.db.autorouter_session_rollup.flush_autorouter_turn_transactions",
+        new=AsyncMock(side_effect=httpx.ConnectError("Connection refused")),
+    ):
+        await update_spend_logs_job(prisma_client, None, proxy_logging_obj)
+
+    # Autorouter turn transactions should be requeued at the head of the queue
+    assert len(prisma_client.autorouter_turn_transactions) == 2
+    assert prisma_client.autorouter_turn_transactions == initial_turns
+
+
+@pytest.mark.asyncio
+async def test_autorouter_turn_transactions_dropped_on_permanent_error():
+    """
+    Test that when flush_autorouter_turn_transactions fails due to a non-transient error,
+    the batch is dropped so it does not loop forever.
+    """
+    from litellm.proxy.utils import update_spend_logs_job
+
+    prisma_client = MockPrismaClient()
+    proxy_logging_obj = create_mock_proxy_logging()
+
+    prisma_client.autorouter_turn_transactions = [
+        {"id": "turn_1", "session_id": "bad_turn"},
+    ]
+
+    with patch(
+        "litellm.proxy.db.autorouter_session_rollup.flush_autorouter_turn_transactions",
+        new=AsyncMock(side_effect=ValueError("Invalid session data")),
+    ):
+        await update_spend_logs_job(prisma_client, None, proxy_logging_obj)
+
+    # Permanent error drops the batch
+    assert len(prisma_client.autorouter_turn_transactions) == 0
+
+
+@pytest.mark.asyncio
+async def test_tool_usage_and_autorouter_turn_requeued_on_cancelled_error():
+    """
+    Test that when flush is cancelled via asyncio.CancelledError, batches are requeued
+    and CancelledError is re-raised.
+    """
+    from litellm.proxy.utils import update_spend_logs_job
+
+    prisma_client = MockPrismaClient()
+    proxy_logging_obj = create_mock_proxy_logging()
+
+    prisma_client.tool_usage_transactions = [
+        {"id": "tool_cancel", "tool_name": "calc"},
+    ]
+
+    with patch(
+        "litellm.proxy.db.spend_log_tool_index.flush_tool_usage_transactions",
+        new=AsyncMock(side_effect=asyncio.CancelledError()),
+    ):
+        with pytest.raises(asyncio.CancelledError):
+            await update_spend_logs_job(prisma_client, None, proxy_logging_obj)
+
+    # Must be requeued when cancelled
+    assert len(prisma_client.tool_usage_transactions) == 1
+    assert prisma_client.tool_usage_transactions[0]["id"] == "tool_cancel"
+
+

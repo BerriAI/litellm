@@ -7543,6 +7543,10 @@ async def update_spend_logs_job(
         await _run_spend_logs_job(prisma_client, db_writer_client, proxy_logging_obj)
 
 
+def _is_transient_spend_log_write_error(e: Exception) -> bool:
+    return PrismaDBExceptionHandler.is_database_transport_error(e) or PrismaDBExceptionHandler.is_deadlock_error(e)
+
+
 async def _run_spend_logs_job(
     prisma_client: PrismaClient,
     db_writer_client: AsyncHTTPHandler | None,
@@ -7588,8 +7592,8 @@ async def _run_spend_logs_job(
         )
 
     # Tool usage tracking: drain the request-time queue into the tool index and the
-    # LiteLLM_DailyToolSpend rollup. Never retried; a dropped batch is permanently
-    # absent from the rollup, so failures log at error.
+    # LiteLLM_DailyToolSpend rollup. On transient DB connectivity errors the batch is
+    # requeued at the head of the queue; non-transient data rejections are logged and dropped.
     async with prisma_client._tool_usage_transactions_lock:
         tool_usage_to_process: Final = prisma_client.tool_usage_transactions[:MAX_LOGS_PER_INTERVAL]
         prisma_client.tool_usage_transactions = prisma_client.tool_usage_transactions[len(tool_usage_to_process) :]
@@ -7600,12 +7604,29 @@ async def _run_spend_logs_job(
             prisma_client=prisma_client,
             transactions=tool_usage_to_process,
         )
-    except Exception as tool_tracking_err:
-        verbose_proxy_logger.error(
-            "Spend tracking - tool usage flush failed; %s tool usage transactions dropped: %s",
+    except asyncio.CancelledError:
+        async with prisma_client._tool_usage_transactions_lock:
+            prisma_client.tool_usage_transactions = tool_usage_to_process + prisma_client.tool_usage_transactions
+        verbose_proxy_logger.warning(
+            "Spend tracking - tool usage flush cancelled, requeued %d rows for the next flush",
             len(tool_usage_to_process),
-            tool_tracking_err,
         )
+        raise
+    except Exception as tool_tracking_err:  # noqa: BLE001  # drain failure must not abort spend job
+        if _is_transient_spend_log_write_error(tool_tracking_err):
+            async with prisma_client._tool_usage_transactions_lock:
+                prisma_client.tool_usage_transactions = tool_usage_to_process + prisma_client.tool_usage_transactions
+            verbose_proxy_logger.warning(
+                "Spend tracking - tool usage flush hit transient DB error (%s); requeued %d rows for the next flush",
+                tool_tracking_err,
+                len(tool_usage_to_process),
+            )
+        else:
+            verbose_proxy_logger.error(
+                "Spend tracking - tool usage flush failed; %s tool usage transactions dropped: %s",
+                len(tool_usage_to_process),
+                tool_tracking_err,
+            )
 
     await flush_baseline_accounting(prisma_client)
 
@@ -7622,12 +7643,33 @@ async def _run_spend_logs_job(
             prisma_client=prisma_client,
             transactions=autorouter_turns_to_process,
         )
-    except Exception as autorouter_tracking_err:  # noqa: BLE001  # a drain bug must not abort the spend job
-        verbose_proxy_logger.error(
-            "Spend tracking - auto-router session rollup drain failed; %s turn transactions dropped: %s",
+    except asyncio.CancelledError:
+        async with prisma_client._autorouter_turn_transactions_lock:
+            prisma_client.autorouter_turn_transactions = (
+                autorouter_turns_to_process + prisma_client.autorouter_turn_transactions
+            )
+        verbose_proxy_logger.warning(
+            "Spend tracking - auto-router turn drain cancelled, requeued %d rows for the next flush",
             len(autorouter_turns_to_process),
-            autorouter_tracking_err,
         )
+        raise
+    except Exception as autorouter_tracking_err:  # noqa: BLE001  # a drain bug must not abort the spend job
+        if _is_transient_spend_log_write_error(autorouter_tracking_err):
+            async with prisma_client._autorouter_turn_transactions_lock:
+                prisma_client.autorouter_turn_transactions = (
+                    autorouter_turns_to_process + prisma_client.autorouter_turn_transactions
+                )
+            verbose_proxy_logger.warning(
+                "Spend tracking - auto-router session rollup drain hit transient DB error (%s); requeued %d rows for the next flush",
+                autorouter_tracking_err,
+                len(autorouter_turns_to_process),
+            )
+        else:
+            verbose_proxy_logger.error(
+                "Spend tracking - auto-router session rollup drain failed; %s turn transactions dropped: %s",
+                len(autorouter_turns_to_process),
+                autorouter_tracking_err,
+            )
 
     try:
         from litellm.proxy.db.shadow_eval_funnel import flush_shadow_eval_funnel
@@ -7766,10 +7808,6 @@ async def _monitor_spend_logs_queue(
 
 
 MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH: Final = 256
-
-
-def _is_transient_spend_log_write_error(e: Exception) -> bool:
-    return PrismaDBExceptionHandler.is_database_transport_error(e) or PrismaDBExceptionHandler.is_deadlock_error(e)
 
 
 async def _create_spend_logs_with_poison_isolation(
