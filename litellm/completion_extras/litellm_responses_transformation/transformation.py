@@ -87,7 +87,6 @@ def _offset_citation_indices(fields: Mapping[str, object], offset: int) -> dict[
 
 
 def _offset_annotation(annotation: Mapping[str, object], offset: int) -> dict[str, object]:
-    """Shift citation indices in either the flat Responses form or the nested Chat Completions ``url_citation`` form."""
     citation: Final = annotation.get("url_citation")
     if isinstance(citation, dict):
         return {**annotation, "url_citation": _offset_citation_indices(citation, offset)}
