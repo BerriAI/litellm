@@ -37,6 +37,19 @@ def qualify_provider_stripped_model(model: str, custom_llm_provider: str) -> str
     return f"{custom_llm_provider}/{model}"
 
 
+def qualify_agentic_followup_model(patch_model: str | None, model: str, custom_llm_provider: str) -> str:
+    """Resolve the model an agentic follow-up re-dispatches.
+
+    A hook that qualified its own patched model owns that choice, including a cross-provider
+    one, so only a bare patched model and the request's provider-stripped model get a prefix.
+    """
+    if patch_model is None:
+        return qualify_provider_stripped_model(model, custom_llm_provider)
+    if "/" in patch_model:
+        return patch_model
+    return qualify_provider_stripped_model(patch_model, custom_llm_provider)
+
+
 def safe_divide_seconds(seconds: float, denominator: float, default: float | None = None) -> float | None:
     """
     Safely divide seconds by denominator, handling zero division.
