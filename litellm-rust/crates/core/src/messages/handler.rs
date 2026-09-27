@@ -86,6 +86,7 @@ pub(super) async fn execute(
             provider_name,
         ));
     }
+    let headers = response.headers().clone();
     let text = response.text().await.map_err(network)?;
     debug!(body = text.as_str(), "provider response body");
     hooks
@@ -93,8 +94,10 @@ pub(super) async fn execute(
             raw: RawResponse { body: text.clone() },
         })
         .await?;
-    decode_response(config, &body.model, &text)
-        .map(|message| MessagesResponse::Message(Box::new(message)))
+    decode_response(config, &body.model, &text).map(|message| MessagesResponse::Message {
+        headers,
+        message: Box::new(message),
+    })
 }
 
 fn serialize_failure(err: serde_json::Error) -> Error {
@@ -154,11 +157,7 @@ fn streaming_response(
     decoder: Option<StreamDecoder>,
     provider: &'static str,
 ) -> MessagesResponse {
-    let headers = response
-        .headers()
-        .iter()
-        .filter_map(|(name, value)| Some((name.to_string(), value.to_str().ok()?.to_string())))
-        .collect();
+    let headers = response.headers().clone();
     let chunks = match decoder {
         None => futures_util::stream::try_unfold(response, move |mut response| async move {
             let chunk = response.chunk().await.map_err(network)?;

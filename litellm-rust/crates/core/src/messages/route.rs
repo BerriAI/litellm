@@ -17,14 +17,17 @@ use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessag
 use super::{Error, MessagesCall, MessagesResponse, handler::execute, prepare::prepare};
 
 pub enum MessagesOutput {
-    Message(Box<AnthropicMessagesResponse>),
+    Message {
+        headers: reqwest::header::HeaderMap,
+        message: Box<AnthropicMessagesResponse>,
+    },
     /// Every chunk already reached the host through `Deliver`.
     Streamed,
 }
 
 /// The upstream response as the caller sees it at stream hand-off, before any chunk.
 pub struct MessagesStreamHead {
-    pub headers: Vec<(String, String)>,
+    pub headers: reqwest::header::HeaderMap,
 }
 
 pub struct Messages;
@@ -101,7 +104,9 @@ async fn drive(
     let call = host.project().await?;
     let request = prepare(call, secrets.as_ref()).await?;
     match execute(&http, &auth, request, &host).await? {
-        MessagesResponse::Message(message) => Ok(MessagesOutput::Message(message)),
+        MessagesResponse::Message { headers, message } => {
+            Ok(MessagesOutput::Message { headers, message })
+        }
         MessagesResponse::Stream {
             headers,
             mut chunks,

@@ -146,7 +146,7 @@ async fn the_raw_upstream_text_is_emitted_once_for_a_message(call: MessagesCall)
 
     let output = run_through(&host).await.expect("messages call succeeds");
 
-    assert!(matches!(output, MessagesOutput::Message(_)));
+    assert!(matches!(output, MessagesOutput::Message { .. }));
     let [emitted] = <[String; 1]>::try_from(host.raw_responses())
         .unwrap_or_else(|raws| panic!("expected one raw response, got {}", raws.len()));
     assert_eq!(serde_json::from_str::<Value>(&emitted).unwrap(), raw);

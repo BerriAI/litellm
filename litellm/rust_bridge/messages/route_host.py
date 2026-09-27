@@ -10,6 +10,7 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.anthropic.pass_through.utils import is_reasoning_auto_summary_enabled
+from litellm.router_utils.add_retry_fallback_headers import _add_headers_to_response
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.messages.entrypoints import LiteLLMMessagesRequest
 from litellm.types.llms.anthropic_messages.anthropic_response import AnthropicMessagesResponse
@@ -47,10 +48,16 @@ class MessagesShaping:
     additional_drop_params: Sequence[str]
 
 
-def response(value: Mapping[str, object]) -> AnthropicMessagesResponse:
+def response(
+    value: Mapping[str, object],
+    headers: Sequence[tuple[str, str]] = (),
+) -> AnthropicMessagesResponse:
+    response_value = dict(value)
+    if headers:
+        _add_headers_to_response(response_value, dict(httpx.Headers(list(headers)).items()))
     return cast(  # cast-ok: AnthropicMessagesResponse is a TypedDict over the normalized native payload
         AnthropicMessagesResponse,
-        dict(value),  # mutable-ok: the public Messages response is a TypedDict the caller may annotate in place
+        response_value,  # mutable-ok: the public Messages response is a TypedDict the caller may annotate in place
     )
 
 

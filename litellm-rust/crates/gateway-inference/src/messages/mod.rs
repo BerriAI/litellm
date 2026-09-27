@@ -60,8 +60,10 @@ async fn handle(gateway: &Gateway, headers: &HeaderMap, body: &[u8]) -> Result<R
     )
     .await?
     {
-        MessagesResponse::Message(message) => Ok(Json(message).into_response()),
-        MessagesResponse::Stream { chunks, .. } => Ok(stream(chunks)),
+        MessagesResponse::Message { headers, message } => {
+            Ok((headers, Json(message)).into_response())
+        }
+        MessagesResponse::Stream { headers, chunks } => Ok(stream(headers, chunks)),
     }
 }
 
@@ -107,16 +109,18 @@ fn anthropic_api_headers(headers: &HeaderMap) -> Option<ProviderSpecificHeaders>
 
 /// A chunk that fails after the stream opened is delivered as an SSE error frame, since
 /// the status line already went out; the stream ends on it.
-fn stream(chunks: BoxStream<'static, Result<Bytes, RouteError>>) -> Response {
+fn stream(headers: HeaderMap, chunks: BoxStream<'static, Result<Bytes, RouteError>>) -> Response {
     let body = chunks.map(|chunk| {
         Ok::<_, Infallible>(
             chunk.unwrap_or_else(|error| Bytes::from(Error::Route(error).sse_frame())),
         )
     });
-    (
-        StatusCode::OK,
-        [(header::CONTENT_TYPE, "text/event-stream")],
-        Body::from_stream(body),
-    )
-        .into_response()
+    let mut response_headers = headers;
+    response_headers.insert(
+        header::CONTENT_TYPE,
+        "text/event-stream"
+            .parse()
+            .expect("static content type is valid"),
+    );
+    (StatusCode::OK, response_headers, Body::from_stream(body)).into_response()
 }

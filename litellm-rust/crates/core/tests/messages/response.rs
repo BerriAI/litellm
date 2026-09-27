@@ -181,7 +181,8 @@ async fn a_provider_slower_than_the_timeout_fails_the_call(call: MessagesCall) {
 #[rstest]
 #[tokio::test]
 async fn the_facade_sends_through_the_injected_http_pool_configuration(call: MessagesCall) {
-    let upstream = upstream([message_response()]).await;
+    let upstream =
+        upstream([message_response().insert_header("x-upstream-request-id", "req-123")]).await;
     let base = upstream.uri();
     let settings = HttpSettings {
         user_agent: Some("host-owned/1".into()),
@@ -201,10 +202,11 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
     .await
     .expect("messages request succeeds");
 
-    let MessagesResponse::Message(message) = response else {
+    let MessagesResponse::Message { headers, message } = response else {
         panic!("a non-streaming request returns a message");
     };
     assert_eq!(message.id, "msg_1");
+    assert_eq!(headers.get("x-upstream-request-id").unwrap(), "req-123");
     let sent = only_request(&upstream).await;
     assert_eq!(sent.header("x-api-key"), Some("sk-ant"));
     assert_eq!(sent.header("user-agent"), Some("host-owned/1"));

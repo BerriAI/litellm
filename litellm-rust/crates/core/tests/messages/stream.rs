@@ -28,7 +28,7 @@ const UPSTREAM_HEADERS: [(&str, &str); 2] = [
 const SSE_BODY: &str = "event: message_start\ndata: {\"type\":\"message_start\"}\n\nevent: message_stop\ndata: {\"type\":\"message_stop\"}\n\n";
 
 enum Seen {
-    Open(Vec<(String, String)>),
+    Open(reqwest::header::HeaderMap),
     Deliver(Bytes),
 }
 
@@ -128,9 +128,9 @@ async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: Me
         .filter(|(name, _)| {
             UPSTREAM_HEADERS
                 .iter()
-                .any(|(upstream, _)| upstream == name)
+                .any(|(upstream, _)| upstream == &name.as_str())
         })
-        .map(|(name, value)| (name.as_str(), value.as_str()))
+        .map(|(name, value)| (name.as_str(), value.to_str().unwrap()))
         .collect();
     assert_eq!(surfaced, UPSTREAM_HEADERS);
     let delivered: Vec<u8> = chunks
@@ -321,7 +321,10 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
         panic!("a streaming request returns a stream");
     };
     for (name, value) in UPSTREAM_HEADERS {
-        assert!(headers.contains(&(name.into(), value.into())));
+        assert_eq!(
+            headers.get(name).and_then(|value| value.to_str().ok()),
+            Some(value)
+        );
     }
     let delivered = chunks.try_collect::<Vec<_>>().await.unwrap().concat();
     assert_eq!(delivered, SSE_BODY.as_bytes());
