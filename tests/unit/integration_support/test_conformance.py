@@ -45,6 +45,41 @@ def test_owned_proxy_isolates_automatic_coverage_unless_requested(
     assert os.environ["COVERAGE_PROCESS_CONFIG"] == "parent-config"
 
 
+@pytest.mark.parametrize("selected", ("test_mcp_transports.py", "test_mcp_credentials.py", ""))
+@pytest.mark.parametrize("missing_required", (False, True))
+def test_runner_requires_conformance_for_selected_files(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, selected: str, missing_required: bool
+) -> None:
+    from integration import run
+    from integration._support.conformance import required_conformance_nodes
+
+    files: Final = tuple(
+        str(path.relative_to(Path.cwd()))
+        for path in sorted((Path.cwd() / "tests/integration/mcp").glob("test_*.py"))
+        if not selected or path.name == selected
+    )
+    required: Final = tuple(node for node in required_conformance_nodes() if node.split("::")[0] in files)
+    collected: Final = required + tuple(f"{path}::other" for path in files)
+    omitted: Final = required[:1] if missing_required else ()
+    (tmp_path / "execution.json").write_text(
+        json.dumps(
+            {
+                "collected": collected,
+                "passed": tuple(n for n in collected if n not in omitted),
+                "skipped": omitted,
+                "complete": True,
+            }
+        )
+    )
+    monkeypatch.setattr("sys.argv", ["run.py", "mcp", "--results", str(tmp_path), *(files if selected else ())])
+    with patch("integration.run.subprocess.call", return_value=0):
+        if omitted:
+            with pytest.raises(AssertionError, match="conformance"):
+                run.main()
+        else:
+            assert run.main() == 0
+
+
 def test_changed_archive_is_rejected(tmp_path: Path) -> None:
     archive: Final = tmp_path / "reference.tar.gz"
     archive.write_bytes(b"changed reference")
@@ -252,6 +287,7 @@ def test_unrelated_rpc_response_cannot_supply_negotiation() -> None:
 )
 def test_only_initialize_is_captured(body: bytes, expected: bool) -> None:
     assert is_initialization(body) is expected
+
 
 @pytest.mark.parametrize(
     "scenario,identities",
