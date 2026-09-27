@@ -468,7 +468,11 @@ mod tests {
                 shaping,
             ),
             Err(Error::InvalidRequest(
-                "metadata.user_id must be a string, got 123".to_string()
+                litellm_llms::ErrorDetail::InvalidValue {
+                    field: "metadata.user_id",
+                    expected: "a string",
+                    actual: json!(123),
+                }
             ))
         );
     }

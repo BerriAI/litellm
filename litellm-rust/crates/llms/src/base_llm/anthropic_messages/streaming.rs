@@ -10,17 +10,18 @@ pub type StreamDecoder = fn(ByteStream) -> EventStream;
 
 pub fn anthropic_sse_event_stream(bytes: ByteStream) -> EventStream {
     Box::pin(frames(bytes, SseCodec::default()).map(|event| {
-        let event = event
-            .map_err(|error| Error::InvalidResponse(format!("stream framing failed: {error}")))?;
+        let event = event.map_err(|error| {
+            Error::InvalidResponse(crate::ErrorDetail::failed("stream framing", error))
+        })?;
         serde_json::from_str(&event.data).map_err(|error| {
-            Error::InvalidResponse(format!("Anthropic stream event is invalid: {error}"))
+            Error::InvalidResponse(crate::ErrorDetail::invalid("Anthropic stream event", error))
         })
     }))
 }
 
 pub fn encode_anthropic_sse(event: &AnthropicMessagesStreamEvent) -> Result<Bytes, Error> {
     let data = serde_json::to_value(event).map_err(|error| {
-        Error::InvalidResponse(format!("Anthropic stream event is invalid: {error}"))
+        Error::InvalidResponse(crate::ErrorDetail::invalid("Anthropic stream event", error))
     })?;
     let name = data
         .get("type")

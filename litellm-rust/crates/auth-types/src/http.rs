@@ -29,10 +29,9 @@ pub fn apply_credential(
         .iter()
         .any(|(name, _)| name.eq_ignore_ascii_case(placement.header_name()))
     {
-        return Err(Error::InvalidConfiguration(format!(
-            "credential header {} already exists",
-            placement.header_name()
-        )));
+        return Err(Error::InvalidConfiguration(
+            crate::ErrorDetail::DuplicateHeader(placement.header_name()),
+        ));
     }
     let value = match placement {
         CredentialPlacement::Bearer => format!("Bearer {credential}"),

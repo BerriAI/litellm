@@ -40,9 +40,9 @@ impl ResponsesWebSocketConnection {
         for (name, value) in headers {
             let header_name = name
                 .parse::<HeaderName>()
-                .map_err(|error| Error::InvalidRequest(error.to_string()))?;
+                .map_err(|error| Error::InvalidRequest(error.to_string().into()))?;
             let header_value = HeaderValue::from_str(value)
-                .map_err(|error| Error::InvalidRequest(error.to_string()))?;
+                .map_err(|error| Error::InvalidRequest(error.to_string().into()))?;
             request.headers_mut().insert(header_name, header_value);
         }
         let connect = connect_upstream(request);
@@ -89,7 +89,7 @@ impl ResponsesWebSocketConnection {
             Some(Ok(Message::Text(text))) => Ok(Some(text)),
             Some(Ok(Message::Binary(bytes))) => String::from_utf8(bytes.to_vec())
                 .map(Some)
-                .map_err(|error| Error::InvalidResponse(error.to_string())),
+                .map_err(|error| Error::InvalidResponse(error.to_string().into())),
             Some(Ok(Message::Close(_))) | None => Ok(None),
             Some(Ok(_)) => Ok(None),
             Some(Err(error)) => Err(Error::Transport(litellm_http::transport::Error::Network(

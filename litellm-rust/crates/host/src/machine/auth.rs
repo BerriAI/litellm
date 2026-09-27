@@ -41,7 +41,7 @@ where
             self.channel
                 .custom_op(R::acquire_token_op)
                 .await
-                .map_err(|error| Error::CredentialAcquisition(error.to_string()))
+                .map_err(|error| Error::CredentialAcquisition(error.to_string().into()))
         })
     }
 }

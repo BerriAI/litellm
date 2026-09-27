@@ -40,7 +40,11 @@ fn audio_fields(audio: Value) -> Result<(String, String), Error> {
         .and_then(Value::as_str)
         .filter(|value| matches!(*value, "wav" | "mp3" | "flac" | "ogg"))
         .ok_or_else(|| {
-            Error::InvalidRequest("audio.format must be wav, mp3, flac, or ogg".to_string())
+            Error::InvalidRequest(
+                "audio.format must be wav, mp3, flac, or ogg"
+                    .to_string()
+                    .into(),
+            )
         })?;
     Ok((data.to_string(), format.to_string()))
 }
@@ -105,7 +109,7 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
             .and_then(|value| value.get("content"))
             .and_then(Value::as_array)
             .ok_or_else(|| {
-                Error::InvalidResponse("Bedrock response has no output content".to_string())
+                Error::InvalidResponse("Bedrock response has no output content".to_string().into())
             })?;
         let mut text = String::new();
         for block in content {

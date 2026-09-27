@@ -95,20 +95,19 @@ pub struct ThinkingContext {
 }
 
 fn unmapped_effort(effort: &Value) -> Error {
-    let choices = ReasoningEffort::ALL
-        .map(|effort| format!("'{}'", effort.as_str()))
-        .join(", ");
-    Error::InvalidRequest(format!(
-        "Unmapped reasoning effort: {}. Must be one of: {choices}.",
-        repr(&from_json(effort.clone()))
-    ))
+    Error::InvalidRequest(crate::ErrorDetail::InvalidChoice {
+        field: "reasoning effort",
+        actual: repr(&from_json(effort.clone())),
+        choices: ReasoningEffort::ALL.map(|effort| effort.as_str()).into(),
+    })
 }
 
 fn unsupported_effort(level: EffortLevel, model: &str) -> Error {
-    Error::InvalidRequest(format!(
-        "effort='{}' is not supported by this model. Got model: {model}",
-        level.as_str()
-    ))
+    Error::InvalidRequest(crate::ErrorDetail::UnsupportedValue {
+        field: "effort",
+        value: level.as_str(),
+        model: model.into(),
+    })
 }
 
 fn output_effort(effort: ReasoningEffort) -> Option<EffortLevel> {
@@ -775,10 +774,10 @@ mod tests {
         #[case] input: Value,
         #[case] expected_message: String,
     ) {
-        assert_eq!(
-            translate(capabilities, input),
-            Err(Error::InvalidRequest(expected_message))
-        );
+        let Error::InvalidRequest(detail) = translate(capabilities, input).unwrap_err() else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(detail.to_string(), expected_message);
     }
 
     #[rstest]

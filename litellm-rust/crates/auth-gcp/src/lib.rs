@@ -377,17 +377,19 @@ fn optional_credentials(
                     .map(|value| Sourced::new(value, source))
                     .map(Some)
                     .map_err(|error| {
-                        Error::InvalidConfiguration(format!(
-                            "{}: {error} must be a string or null",
-                            names[0]
+                        Error::InvalidConfiguration(litellm_auth_types::ErrorDetail::failed(
+                            "credential serialization",
+                            error,
                         ))
                     });
             }
             Some(_) => {
-                return Err(Error::InvalidConfiguration(format!(
-                    "{} must be a string or null",
-                    names[0]
-                )));
+                return Err(Error::InvalidConfiguration(
+                    litellm_auth_types::ErrorDetail::InvalidType {
+                        field: names[0].into(),
+                        expected: "a string or null",
+                    },
+                ));
             }
         }
     }
@@ -405,10 +407,12 @@ fn optional_string(params: &Map<String, Value>, names: &[&str]) -> Result<Option
             Some(Value::String(value)) if value.trim().is_empty() => continue,
             Some(Value::String(value)) => return Ok(Some(value.clone())),
             Some(_) => {
-                return Err(Error::InvalidConfiguration(format!(
-                    "{} must be a string or null",
-                    names[0]
-                )));
+                return Err(Error::InvalidConfiguration(
+                    litellm_auth_types::ErrorDetail::InvalidType {
+                        field: names[0].into(),
+                        expected: "a string or null",
+                    },
+                ));
             }
         }
     }
@@ -422,7 +426,10 @@ fn non_empty_env(env_lookup: &dyn Fn(&str) -> Option<String>, name: &str) -> Opt
 }
 
 fn auth_acquisition_error(error: gcp_auth::Error) -> Error {
-    Error::CredentialAcquisition(format!("Vertex AI credentials: {error}"))
+    Error::CredentialAcquisition(litellm_auth_types::ErrorDetail::failed(
+        "Vertex AI credentials",
+        error,
+    ))
 }
 
 #[cfg(test)]

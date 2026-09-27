@@ -150,8 +150,9 @@ fn batches_base_url(
     } else {
         format!("{api_base}{BATCHES_PATH_SUFFIX}")
     };
-    Url::parse(&complete_url)
-        .map_err(|error| Error::InvalidRequest(format!("invalid Anthropic API base: {error}")))
+    Url::parse(&complete_url).map_err(|error| {
+        Error::InvalidRequest(crate::ErrorDetail::invalid("Anthropic API base", error))
+    })
 }
 
 impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
@@ -254,16 +255,20 @@ impl AnthropicBatchesConfig for AnthropicBatchesTransformation {
             .map(|(index, line)| {
                 let record: BatchResultRecord =
                     serde_json::from_str(line.trim()).map_err(|error| {
-                        Error::InvalidResponse(format!(
-                            "invalid Anthropic batch result on line {}: {error}",
-                            index + 1
-                        ))
+                        Error::InvalidResponse(crate::ErrorDetail::InvalidLine {
+                            subject: "Anthropic batch result",
+                            line: index + 1,
+                            source: crate::ErrorSource::new(error),
+                        })
                     })?;
                 match record.result {
                     BatchResult::Succeeded { message } => Ok(*message),
-                    BatchResult::Errored { error } => Err(Error::InvalidResponse(format!(
-                        "Anthropic batch request failed: {error}"
-                    ))),
+                    BatchResult::Errored { error } => {
+                        Err(Error::InvalidResponse(crate::ErrorDetail::RemoteFailure {
+                            operation: "Anthropic batch request",
+                            detail: error,
+                        }))
+                    }
                 }
             })
             .collect()
@@ -351,13 +356,13 @@ mod tests {
     fn reports_malformed_and_unsuccessful_batch_results() {
         assert!(matches!(
             ANTHROPIC_BATCHES_TRANSFORMATION.transform_batch_results("not-json"),
-            Err(Error::InvalidResponse(message)) if message.contains("line 1")
+            Err(Error::InvalidResponse(message)) if message.to_string().contains("line 1")
         ));
         assert!(matches!(
             ANTHROPIC_BATCHES_TRANSFORMATION.transform_batch_results(
                 r#"{"result":{"type":"errored","error":{"type":"invalid_request_error"}}}"#
             ),
-            Err(Error::InvalidResponse(message)) if message.contains("request failed")
+            Err(Error::InvalidResponse(message)) if message.to_string().contains("request failed")
         ));
     }
 

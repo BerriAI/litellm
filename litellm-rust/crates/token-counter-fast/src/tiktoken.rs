@@ -31,7 +31,7 @@ impl MergeRanks {
     ) -> Result<Self, Error> {
         Self::from_entries(pairs.into_iter().map(|(bytes, rank)| {
             if rank == NO_RANK {
-                return Err(Error::Ranks(format!("rank {rank} is reserved")));
+                return Err(Error::Ranks(crate::RankError::Reserved(rank)));
             }
             Ok((Box::from(bytes), rank))
         }))
@@ -42,7 +42,7 @@ impl MergeRanks {
     ) -> Result<Self, Error> {
         let ranks = entries.collect::<Result<FxHashMap<_, _>, _>>()?;
         if let Some(byte) = (0..=u8::MAX).find(|byte| !ranks.contains_key(&[*byte][..])) {
-            return Err(Error::Ranks(format!("byte 0x{byte:02X} has no token")));
+            return Err(Error::Ranks(crate::RankError::MissingByte(byte)));
         }
         Ok(Self(ranks))
     }
@@ -88,15 +88,15 @@ impl MergeRanks {
 fn parse_line(line: &str) -> Result<(Box<[u8]>, Rank), Error> {
     let (token, rank) = line
         .split_once(' ')
-        .ok_or_else(|| Error::Ranks(format!("line without a rank: {line:?}")))?;
+        .ok_or_else(|| Error::Ranks(crate::RankError::MissingRank(line.into())))?;
     let bytes = STANDARD
         .decode(token)
-        .map_err(|error| Error::Ranks(format!("token is not base64: {error}")))?;
+        .map_err(|error| Error::Ranks(crate::RankError::InvalidToken(error)))?;
     let rank = rank
         .parse()
-        .map_err(|error| Error::Ranks(format!("rank is not an integer: {error}")))?;
+        .map_err(|error| Error::Ranks(crate::RankError::InvalidRank(error)))?;
     if rank == NO_RANK {
-        return Err(Error::Ranks(format!("rank {rank} is reserved")));
+        return Err(Error::Ranks(crate::RankError::Reserved(rank)));
     }
     Ok((bytes.into_boxed_slice(), rank))
 }
@@ -245,11 +245,17 @@ mod tests {
     }
 
     #[rstest::rstest]
-    #[case::missing_rank("IQ==")]
-    #[case::invalid_rank("IQ== x")]
-    #[case::invalid_base64("!!! 1")]
-    #[case::single_byte_rank("IQ== 1")]
-    fn malformed_rank_files_are_rejected(#[case] rank_file: &str) {
-        assert!(MergeRanks::parse(rank_file).is_err());
+    #[case::missing_rank("IQ==", "line without a rank: \"IQ==\"")]
+    #[case::invalid_rank("IQ== x", "rank is not an integer:")]
+    #[case::invalid_base64("!!! 1", "token is not base64:")]
+    #[case::single_byte_rank("IQ== 1", "byte 0x00 has no token")]
+    fn malformed_rank_files_are_rejected(#[case] rank_file: &str, #[case] detail: &str) {
+        let error = MergeRanks::parse(rank_file)
+            .err()
+            .expect("invalid rank file");
+        assert!(matches!(error, Error::Ranks(_)));
+        assert!(error.to_string().starts_with(&format!(
+            "failed to load tokenizer: tiktoken rank file: {detail}"
+        )));
     }
 }

@@ -125,7 +125,7 @@ impl BaseConfig for AnthropicConfig {
         response: ProviderChatResponseData,
     ) -> Result<ChatCompletionsResponse, Error> {
         let body: MessageResponse = serde_json::from_value(response.body).map_err(|error| {
-            Error::InvalidResponse(format!("invalid messages response: {error}"))
+            Error::InvalidResponse(crate::ErrorDetail::invalid("messages response", error))
         })?;
         // The route declines tool and thinking requests, so a non-text block
         // means the response carries something this path never asked for.

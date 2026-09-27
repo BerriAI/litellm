@@ -42,8 +42,12 @@ pub async fn execute_audio_transcription_provider_call(
             body: truncate_error_body(&text),
         }));
     }
-    let response_json = serde_json::from_str(&text)
-        .map_err(|error| Error::InvalidResponse(format!("invalid audio response JSON: {error}")))?;
+    let response_json = serde_json::from_str(&text).map_err(|error| {
+        Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+            "audio response JSON",
+            error,
+        ))
+    })?;
     Ok(request
         .config
         .transform_audio_transcription_response(&request.model, response_json)?

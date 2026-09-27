@@ -30,7 +30,10 @@ pub fn messages_body(body: Map<String, Value>) -> Result<AnthropicMessagesReques
 }
 
 pub(super) fn invalid_request(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(format!("invalid Anthropic messages request: {err}"))
+    Error::InvalidRequest(litellm_llms::ErrorDetail::invalid(
+        "Anthropic messages request",
+        err,
+    ))
 }
 
 pub enum MessagesResponse {

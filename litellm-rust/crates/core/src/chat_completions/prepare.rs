@@ -47,8 +47,12 @@ pub(super) fn resolve_provider_config<'a>(
 }
 
 pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error> {
-    serde_json::from_value(messages)
-        .map_err(|err| Error::InvalidRequest(format!("invalid chat completions messages: {err}")))
+    serde_json::from_value(messages).map_err(|err| {
+        Error::InvalidRequest(litellm_llms::ErrorDetail::invalid(
+            "chat completions messages",
+            err,
+        ))
+    })
 }
 
 pub(super) fn resolve_request(
@@ -62,7 +66,7 @@ pub(super) fn resolve_request(
     let messages = parse_messages(request.messages)?;
     if messages.is_empty() {
         return Err(Error::InvalidRequest(
-            "chat completions requires at least one message".to_string(),
+            "chat completions requires at least one message".into(),
         ));
     }
     if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params) {
@@ -391,7 +395,11 @@ mod tests {
                 json!([]),
                 json!({}),
             )),
-            Error::InvalidRequest("chat completions requires at least one message".to_string())
+            Error::InvalidRequest(
+                "chat completions requires at least one message"
+                    .to_string()
+                    .into()
+            )
         );
         assert!(matches!(
             decline(request(

@@ -407,10 +407,17 @@ fn declines_a_response_carrying_a_non_text_block() {
 #[case::missing_usage(json!({"model": "test-model", "content": []}))]
 #[case::missing_model(json!({"content": [], "usage": {"input_tokens": 1, "output_tokens": 1}}))]
 fn errors_on_a_response_missing_required_fields(#[case] body: Value) {
-    assert!(matches!(
-        transform_response(body),
-        Err(Error::InvalidResponse(_))
-    ));
+    let error = transform_response(body).expect_err("invalid response");
+    assert!(matches!(error, Error::InvalidResponse(_)));
+    let source = std::iter::successors(Some(&error as &dyn std::error::Error), |error| {
+        error.source()
+    })
+    .find_map(|error| error.downcast_ref::<serde_json::Error>())
+    .expect("the JSON decoding source is preserved");
+    assert_eq!(
+        error.to_string(),
+        format!("invalid response: invalid messages response: {source}")
+    );
 }
 
 #[test]

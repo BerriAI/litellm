@@ -47,3 +47,28 @@ fn display_preserves_failure_phase_and_caller_context(
 ) {
     assert_eq!(error.to_string(), expected);
 }
+
+#[rstest]
+#[case::configuration(true)]
+#[case::acquisition(false)]
+fn contextual_failures_keep_the_original_source(#[case] configuration: bool) {
+    use litellm_auth_types::ErrorDetail;
+
+    let detail = ErrorDetail::failed(
+        "test credential",
+        std::io::Error::from(std::io::ErrorKind::PermissionDenied),
+    );
+    let error = if configuration {
+        Error::InvalidConfiguration(detail)
+    } else {
+        Error::CredentialAcquisition(detail)
+    };
+    let source = std::iter::successors(Some(&error as &dyn std::error::Error), |error| {
+        error.source()
+    })
+    .find_map(|error| error.downcast_ref::<std::io::Error>())
+    .expect("the original credential error remains available");
+    assert_eq!(source.kind(), std::io::ErrorKind::PermissionDenied);
+    assert!(error.to_string().contains("test credential failed:"));
+    assert!(error.to_string().ends_with(&source.to_string()));
+}

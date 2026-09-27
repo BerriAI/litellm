@@ -504,7 +504,7 @@ fn declines_a_response_carrying_a_tool_use_block() {
 fn errors_on_a_response_missing_required_fields() {
     assert_eq!(
         transform_response(json!("nope")).expect_err("not an object"),
-        Error::InvalidResponse("converse response is not an object".to_string())
+        Error::InvalidResponse("converse response is not an object".to_string().into())
     );
     assert_eq!(
         transform_response(json!({"usage": {}})).expect_err("no output"),

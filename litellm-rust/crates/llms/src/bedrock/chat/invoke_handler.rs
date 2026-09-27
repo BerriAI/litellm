@@ -28,15 +28,18 @@ struct InvokeChunkPayload {
 pub fn decode_invoke_chunk(message: Message) -> Result<Value, Error> {
     let payload: InvokeChunkPayload =
         serde_json::from_slice(message.payload()).map_err(|error| {
-            Error::InvalidResponse(format!("Bedrock event payload is invalid: {error}"))
+            Error::InvalidResponse(crate::ErrorDetail::invalid("Bedrock event payload", error))
         })?;
     let chunk = base64::engine::general_purpose::STANDARD
         .decode(payload.bytes)
         .map_err(|error| {
-            Error::InvalidResponse(format!("Bedrock event payload has invalid base64: {error}"))
+            Error::InvalidResponse(crate::ErrorDetail::invalid(
+                "Bedrock event payload base64",
+                error,
+            ))
         })?;
     serde_json::from_slice(&chunk).map_err(|error| {
-        Error::InvalidResponse(format!("Anthropic stream event is invalid: {error}"))
+        Error::InvalidResponse(crate::ErrorDetail::invalid("Anthropic stream event", error))
     })
 }
 
@@ -47,17 +50,15 @@ where
     E: std::error::Error + Send + Sync + 'static,
 {
     frames(input, AwsEventStreamCodec).map(|message| {
-        decode_invoke_chunk(
-            message.map_err(|error| {
-                Error::InvalidResponse(format!("stream framing failed: {error}"))
-            })?,
-        )
+        decode_invoke_chunk(message.map_err(|error| {
+            Error::InvalidResponse(crate::ErrorDetail::failed("stream framing", error))
+        })?)
     })
 }
 
 pub fn decode_invoke_anthropic_chunk(chunk: Value) -> Result<AnthropicMessagesStreamEvent, Error> {
     serde_json::from_value(chunk).map_err(|error| {
-        Error::InvalidResponse(format!("Anthropic stream event is invalid: {error}"))
+        Error::InvalidResponse(crate::ErrorDetail::invalid("Anthropic stream event", error))
     })
 }
 

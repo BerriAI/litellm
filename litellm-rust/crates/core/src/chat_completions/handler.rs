@@ -94,7 +94,10 @@ pub(super) async fn execute(
         .await?;
 
     let body: Value = serde_json::from_str(&text).map_err(|err| {
-        Error::InvalidResponse(format!("invalid chat completions response JSON: {err}"))
+        Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+            "chat completions response JSON",
+            err,
+        ))
     })?;
     config
         .transform_response(&model, ProviderChatResponseData { body })
@@ -115,7 +118,7 @@ pub(super) fn as_response_error(err: Error) -> Error {
     match err {
         already @ (Error::InvalidResponse(_)
         | Error::Transport(litellm_http::transport::Error::Http { .. })) => already,
-        other => Error::InvalidResponse(other.to_string()),
+        other => Error::InvalidResponse(other.to_string().into()),
     }
 }
 
@@ -277,7 +280,7 @@ mod tests {
         for original in [
             Error::MissingField("usage"),
             Error::Unsupported("non-text response content block"),
-            Error::InvalidRequest("whatever".to_string()),
+            Error::InvalidRequest("whatever".to_string().into()),
             Error::Auth(litellm_auth::Error::InvalidHeader),
         ] {
             let label = format!("{original:?}");

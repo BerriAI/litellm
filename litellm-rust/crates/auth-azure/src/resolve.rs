@@ -465,9 +465,11 @@ fn oidc_reference(
 
 fn non_empty_reference(value: &str, kind: &str) -> Result<String, Error> {
     if value.is_empty() {
-        return Err(Error::InvalidConfiguration(format!(
-            "{kind} cannot be empty"
-        )));
+        return Err(Error::InvalidConfiguration(
+            litellm_auth_types::ErrorDetail::Empty {
+                subject: kind.into(),
+            },
+        ));
     }
     Ok(value.to_string())
 }
@@ -516,7 +518,7 @@ mod tests {
                         expires_on: None,
                     })
                 } else {
-                    Err(Error::CredentialAcquisition(format!("{kind} failed")))
+                    Err(Error::CredentialAcquisition(kind.into()))
                 }
             })
         }

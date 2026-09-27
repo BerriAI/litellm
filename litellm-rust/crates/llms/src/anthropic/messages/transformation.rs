@@ -206,9 +206,12 @@ fn messages_carry_output_config(messages: &[AnthropicMessage]) -> bool {
 }
 
 fn unsupported_param(model: &str, param: &str, value: &str, hint: &str) -> Error {
-    Error::InvalidRequest(format!(
-        "{model} does not support {param}={value}. {hint}To drop unsupported params, set `litellm.drop_params = True`."
-    ))
+    Error::InvalidRequest(crate::ErrorDetail::UnsupportedParameter {
+        model: model.into(),
+        param: param.into(),
+        value: value.into(),
+        hint: hint.into(),
+    })
 }
 
 fn drop_unsupported_params(
@@ -392,10 +395,6 @@ mod tests {
                 &MessagesTransformContext::with_lookup(capabilities, drop_params, &no_env),
             )
             .map(|transformed| serde_json::to_value(transformed).unwrap())
-    }
-
-    fn invalid(message: &str) -> Result<Value, Error> {
-        Err(Error::InvalidRequest(message.to_string()))
     }
 
     fn advisor_history() -> Value {
@@ -582,7 +581,11 @@ mod tests {
         #[case] fields: Value,
         #[case] message: &str,
     ) {
-        assert_eq!(transform(fields, capabilities, false), invalid(message));
+        let Error::InvalidRequest(detail) = transform(fields, capabilities, false).unwrap_err()
+        else {
+            panic!("expected an invalid request");
+        };
+        assert_eq!(detail.to_string(), message);
     }
 
     #[rstest]

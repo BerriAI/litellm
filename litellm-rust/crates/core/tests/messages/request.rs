@@ -402,7 +402,7 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
         .err()
         .expect("an unsupported param is rejected without drop_params");
     assert!(
-        matches!(&error, Error::InvalidRequest(message) if message.contains(rejected_as)),
+        matches!(&error, Error::InvalidRequest(message) if message.to_string().contains(rejected_as)),
         "{error:?}"
     );
     assert!(received(&upstream).await.is_empty());

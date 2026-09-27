@@ -133,7 +133,7 @@ impl NativeAzureTokenAcquirer {
         let token = credential
             .get_token(&[scope.as_str()], None)
             .await
-            .map_err(|error| Error::CredentialAcquisition(error.to_string()))?;
+            .map_err(|error| Error::CredentialAcquisition(error.to_string().into()))?;
         let expires_on = u64::try_from(token.expires_on.unix_timestamp())
             .ok()
             .map(|seconds| UNIX_EPOCH + Duration::from_secs(seconds));
@@ -444,7 +444,10 @@ fn build_credential(
             .map(|credential| credential as Arc<dyn TokenCredential>),
     }
     .map_err(|error| {
-        Error::InvalidConfiguration(format!("Azure credential initialization failed: {error}"))
+        Error::InvalidConfiguration(litellm_auth_types::ErrorDetail::failed(
+            "Azure credential initialization",
+            error,
+        ))
     })
 }
 
