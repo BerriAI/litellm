@@ -9,9 +9,11 @@ they may send a stale `mcp-session-id` header. This test verifies that:
 
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
+
+import pytest
+
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.mcp import MCPAuth
-import pytest
 
 
 class TestHandleStaleMcpSession:
@@ -261,7 +263,7 @@ async def test_stale_mcp_session_id_is_stripped():
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
-            return_value=(MagicMock(), None, None, None, None, None),
+            return_value=(UserAPIKeyAuth(), None, None, None, None, None),
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
@@ -338,7 +340,7 @@ async def test_delete_stale_mcp_session_returns_success():
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
-            return_value=(MagicMock(), None, None, None, None, None),
+            return_value=(UserAPIKeyAuth(), None, None, None, None, None),
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
@@ -492,7 +494,7 @@ async def test_valid_mcp_session_id_is_preserved():
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
-            return_value=(MagicMock(), None, None, None, None, None),
+            return_value=(UserAPIKeyAuth(), None, None, None, None, None),
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
@@ -555,7 +557,7 @@ async def test_no_mcp_session_id_header_works_normally():
         patch(
             "litellm.proxy._experimental.mcp_server.server.extract_mcp_auth_context",
             new_callable=AsyncMock,
-            return_value=(MagicMock(), None, None, None, None, None),
+            return_value=(UserAPIKeyAuth(), None, None, None, None, None),
         ),
         patch(
             "litellm.proxy._experimental.mcp_server.server.set_auth_context",
