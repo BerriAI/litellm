@@ -5575,7 +5575,11 @@ def completion(
             if bridges_to_responses_api
             else kwargs.get("allowed_openai_params")
         )
-        caller_metadata: Final = get_requester_metadata(metadata) if metadata is not None else None
+        caller_metadata: Final = (
+            get_requester_metadata(metadata)
+            if isinstance(metadata, dict) and "requester_metadata" in metadata
+            else None
+        )
         optional_param_args: Final = {
             "functions": functions,
             "function_call": function_call,

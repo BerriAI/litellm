@@ -67,7 +67,7 @@ async def test_sail_chat_stream_sends_metadata_window_and_bills_matching_price(
     stream: Final = await litellm.acompletion(
         model=MODEL,
         messages=MESSAGES,
-        metadata={"completion_window": "flex"},
+        metadata={"requester_metadata": {"completion_window": "flex"}},
         stream=True,
         stream_options={"include_usage": True},
         litellm_call_id=spend_capture.call_id,
@@ -104,7 +104,7 @@ async def test_sail_chat_accepts_caller_metadata_window_with_or_without_preview(
     await litellm.acompletion(
         model=MODEL,
         messages=MESSAGES,
-        metadata={"completion_window": caller_window},
+        metadata={"requester_metadata": {"completion_window": caller_window}},
         litellm_call_id=spend_capture.call_id,
     )
 
@@ -134,6 +134,24 @@ async def test_sail_chat_forwards_only_caller_metadata_from_proxy_shape(
     body: Final = sent_body(chat_route)
     assert "user_api_key_hash" not in json.dumps(body)
     assert body["metadata"] == caller
+
+
+@pytest.mark.asyncio
+async def test_sail_chat_ignores_sdk_metadata_kwarg_without_proxy_snapshot(
+    sail_env: None, chat_route: respx.Route, spend_capture: SpendCapture
+) -> None:
+    await litellm.acompletion(
+        model=MODEL,
+        messages=MESSAGES,
+        metadata={"completion_window": "flex", "team": "abc"},
+        litellm_call_id=spend_capture.call_id,
+    )
+
+    body: Final = sent_body(chat_route)
+    assert "metadata" not in body
+    await spend_capture.settled_cost()
+    assert spend_capture.optional_params is not None
+    assert "service_tier" not in spend_capture.optional_params
 
 
 @pytest.mark.asyncio
@@ -207,7 +225,7 @@ async def test_sail_chat_accepts_matching_tier_and_metadata_window(
         model=MODEL,
         messages=MESSAGES,
         service_tier=service_tier,
-        metadata={"completion_window": caller_window},
+        metadata={"requester_metadata": {"completion_window": caller_window}},
     )
 
     assert _window(sent_body(chat_route)) == caller_window
@@ -219,7 +237,10 @@ async def test_sail_chat_rejects_conflicting_tier_and_metadata_window_before_dis
 ) -> None:
     with pytest.raises(litellm.UnsupportedParamsError, match="select different completion windows") as error:
         await litellm.acompletion(
-            model=MODEL, messages=MESSAGES, service_tier="balanced", metadata={"completion_window": "flex"}
+            model=MODEL,
+            messages=MESSAGES,
+            service_tier="balanced",
+            metadata={"requester_metadata": {"completion_window": "flex"}},
         )
 
     assert error.value.status_code == 400
@@ -233,7 +254,10 @@ async def test_sail_chat_rejects_unknown_metadata_window_without_drop_params(
 ) -> None:
     with pytest.raises(litellm.UnsupportedParamsError, match=r"metadata\.completion_window") as error:
         await litellm.acompletion(
-            model=MODEL, messages=MESSAGES, metadata={"completion_window": "scale"}, drop_params=drop_params
+            model=MODEL,
+            messages=MESSAGES,
+            metadata={"requester_metadata": {"completion_window": "scale"}},
+            drop_params=drop_params,
         )
 
     assert error.value.status_code == 400
@@ -247,7 +271,7 @@ async def test_sail_chat_drops_unknown_metadata_window_when_requested(
     await litellm.acompletion(
         model=MODEL,
         messages=MESSAGES,
-        metadata={"completion_window": "scale"},
+        metadata={"requester_metadata": {"completion_window": "scale"}},
         drop_params=True,
         litellm_call_id=spend_capture.call_id,
     )
@@ -263,7 +287,7 @@ async def test_sail_chat_merges_extra_body_metadata_with_normalized_window(
     await litellm.acompletion(
         model=MODEL,
         messages=MESSAGES,
-        metadata={"completion_window": "flex"},
+        metadata={"requester_metadata": {"completion_window": "flex"}},
         extra_body={"metadata": {"trace": "t1"}, "foo": 1},
         litellm_call_id=spend_capture.call_id,
     )

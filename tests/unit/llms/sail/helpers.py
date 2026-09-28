@@ -104,6 +104,7 @@ class SpendCapture(CustomLogger):
         super().__init__()
         self.call_id = call_id
         self.costs: tuple[object, ...] = ()
+        self.optional_params: dict[str, object] | None = None
 
     async def async_log_success_event(
         self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
@@ -111,6 +112,8 @@ class SpendCapture(CustomLogger):
         if kwargs.get("litellm_call_id") == self.call_id:
             payload: Final = kwargs.get("standard_logging_object")
             self.costs = (*self.costs, payload.get("response_cost") if isinstance(payload, dict) else None)
+            optional_params: Final = kwargs.get("optional_params")
+            self.optional_params = optional_params if isinstance(optional_params, dict) else None
 
     async def settled_cost(self) -> object:
         await asyncio.sleep(0)
