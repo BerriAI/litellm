@@ -93,7 +93,7 @@ const aggregateByKey = (results: readonly DailyData[]): Map<string, LeakageAccum
 const aggregateByModel = (results: readonly DailyData[]): Map<string, LeakageAccumulator> => {
   const byModel = new Map<string, LeakageAccumulator>();
   for (const day of results) {
-    for (const [model, entry] of Object.entries(day.breakdown?.models ?? {})) {
+    for (const [model, entry] of Object.entries(day.breakdown?.model_groups ?? {})) {
       const acc = byModel.get(model) ?? emptyAccumulator();
       byModel.set(model, addMetrics(acc, entry.metrics, null, null));
     }

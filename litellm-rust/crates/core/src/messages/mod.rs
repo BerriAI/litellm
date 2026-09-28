@@ -1,48 +1,77 @@
-//! The Anthropic Messages call, the Rust equivalent of Python's
-//! `litellm.messages()`.
-//!
-//! [`route`] is the call as a machine a host drives, streaming or not. [`messages`] runs
-//! it in process for a caller that already holds the request and wants the message.
-
-mod error;
-pub mod types;
-pub use error::Error;
-mod client;
+use litellm_host::observation::ObservationSender;
 mod common_utils;
 mod handler;
 mod prepare;
 pub mod route;
+mod types;
+
+use litellm_auth::AuthServices;
+use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
 
-use litellm_secrets::source::EnvironmentSecrets;
-use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
-use route::{LocalMessagesHost, MessagesCall, MessagesOutput, messages_machine};
-use serde_json::Value;
+pub use crate::error::RouteError as Error;
+pub use types::{MessagesCall, MessagesResponse, MessagesShaping, messages_body};
 
-use crate::messages::types::MessagesRequest;
+#[derive(Clone)]
+pub struct MessagesRoute {
+    http: litellm_http::Client,
+    auth: Arc<AuthServices>,
+    secrets: Arc<dyn SecretSource>,
+}
 
-pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
-    let Value::Object(body) = request.body else {
-        return Err(Error::InvalidRequest(
-            "messages body must be an object".into(),
-        ));
-    };
-    let call = MessagesCall {
-        model: request.model.into(),
-        body,
-        api_key: request.api_key.map(Into::into),
-        api_base: request.api_base.map(Into::into),
-        custom_llm_provider: request.custom_llm_provider.map(Into::into),
-        extra_headers: request.extra_headers,
-        provider_specific_header: request.provider_specific_header,
-        timeout: request.timeout,
-        shaping: request.shaping,
-    };
-    let secrets = Arc::new(EnvironmentSecrets::python_compatible());
-    match litellm_host::run::run(messages_machine(secrets), &LocalMessagesHost::new(call)).await? {
-        MessagesOutput::Message(message) => Ok(*message),
-        MessagesOutput::Streamed => Err(Error::Unsupported(
-            "streamed responses need a streaming host",
-        )),
+impl MessagesRoute {
+    pub fn new(
+        http: litellm_http::Client,
+        auth: Arc<AuthServices>,
+        secrets: Arc<dyn SecretSource>,
+    ) -> Self {
+        Self {
+            http,
+            auth,
+            secrets,
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        call: MessagesCall,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        observers: Option<ObservationSender>,
+    ) -> Result<MessagesResponse, Error> {
+        litellm_host::lifecycle::observe_call(
+            observers.clone(),
+            self.run(call, interceptors, observers.as_ref()),
+        )
+        .await
+    }
+
+    #[tracing::instrument(name = "litellm.route", skip_all, fields(
+        route = "messages",
+        model = %call.body.model,
+        provider,
+        resolved_model,
+        stream = call.body.params.stream == Some(true),
+        outcome
+    ))]
+    async fn run(
+        &self,
+        call: MessagesCall,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        observers: Option<&ObservationSender>,
+    ) -> Result<MessagesResponse, Error> {
+        crate::diagnostic::call(async {
+            let request = prepare::prepare(call, self.secrets.as_ref()).await?;
+            crate::diagnostic::provider(&request.body.model, request.provider.as_str());
+            let execute: futures_util::future::BoxFuture<'_, Result<MessagesResponse, Error>> =
+                Box::pin(handler::execute(
+                    &self.http,
+                    &self.auth,
+                    request,
+                    interceptors,
+                    observers,
+                ));
+            execute.await
+        })
+        .await
     }
 }

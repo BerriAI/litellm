@@ -1,3 +1,4 @@
+import asyncio
 import base64
 import os
 from typing import Any, Final
@@ -10,6 +11,7 @@ import litellm
 from litellm._logging import verbose_logger
 from litellm.caching import InMemoryCache
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     _get_httpx_client,
     get_async_httpx_client,
     httpxSpecialProvider,
@@ -19,6 +21,9 @@ from litellm.rust_bridge.secret_manager import resolve_native_provider_reader, r
 
 from .base_secret_manager import BaseSecretManager, raise_if_unsafe_secret_name
 from .main import str_to_bool
+
+CYBERARK_POLICY_LOAD_ATTEMPTS: Final = 5
+CYBERARK_POLICY_LOAD_RETRY_DELAY_SECONDS: Final = 0.2
 
 
 class CyberArkSecretManager(BaseSecretManager):
@@ -30,6 +35,7 @@ class CyberArkSecretManager(BaseSecretManager):
         self.conjur_account = os.getenv("CYBERARK_ACCOUNT", "default")
         self.conjur_username = os.getenv("CYBERARK_USERNAME", "admin")
         self.conjur_api_key = os.getenv("CYBERARK_API_KEY", "")
+        self._policy_load_lock: Final = asyncio.Lock()
 
         # Optional config for certificate-based auth
         self.tls_cert_path = os.getenv("CYBERARK_CLIENT_CERT", "")
@@ -118,7 +124,7 @@ class CyberArkSecretManager(BaseSecretManager):
         token: Final = self._authenticate()
         return {"Authorization": f'Token token="{token}"'}
 
-    def _ensure_variable_exists(self, secret_name: str) -> None:
+    async def _ensure_variable_exists(self, secret_name: str, async_client: AsyncHTTPHandler) -> None:
         """
         Ensure a variable exists in CyberArk Conjur by creating a policy entry if needed.
 
@@ -134,27 +140,33 @@ class CyberArkSecretManager(BaseSecretManager):
         policy_yaml: Final = f"- !variable {quoted_name}\n"
 
         try:
-            client: Final = _get_httpx_client(params={"ssl_verify": self.ssl_verify})
-            resp: Final = client.client.post(
-                policy_url,
-                headers={
-                    **self._get_request_headers(),
-                    "Content-Type": "application/x-yaml",
-                },
-                content=policy_yaml,
-            )
-            resp.raise_for_status()
-            verbose_logger.debug("Created policy entry for variable: %s", secret_name)
-        except httpx.HTTPStatusError as e:
-            # Variable might already exist, which is fine
-            if e.response.status_code in [409, 422]:
-                verbose_logger.debug("Variable %s already exists or policy conflict (expected)", secret_name)
-            else:
-                verbose_logger.warning(
-                    "Could not ensure variable exists: %s - %s", e.response.status_code, e.response.text
-                )
+            async with self._policy_load_lock:
+                resp: Final = await self._load_variable_policy(async_client, policy_url, policy_yaml)
         except Exception as e:
             verbose_logger.warning("Error ensuring variable exists: %s", e)
+            return
+        if resp.is_success:
+            verbose_logger.debug("Created policy entry for variable: %s", secret_name)
+        elif resp.status_code == 422:
+            verbose_logger.debug("Variable %s policy was rejected as unprocessable", secret_name)
+        else:
+            verbose_logger.warning("Could not ensure variable exists: %s - %s", resp.status_code, resp.text)
+
+    async def _load_variable_policy(
+        self, async_client: AsyncHTTPHandler, policy_url: str, policy_yaml: str, attempt: int = 0
+    ) -> httpx.Response:
+        resp: Final = await async_client.client.post(
+            policy_url,
+            headers={
+                **self._get_request_headers(),
+                "Content-Type": "application/x-yaml",
+            },
+            content=policy_yaml,
+        )
+        if resp.status_code != 409 or attempt + 1 == CYBERARK_POLICY_LOAD_ATTEMPTS:
+            return resp
+        await asyncio.sleep(CYBERARK_POLICY_LOAD_RETRY_DELAY_SECONDS * (1 << attempt))
+        return await self._load_variable_policy(async_client, policy_url, policy_yaml, attempt + 1)
 
     def get_url(self, secret_name: str) -> str:
         """
@@ -303,7 +315,7 @@ class CyberArkSecretManager(BaseSecretManager):
 
         try:
             # Ensure the variable exists in the policy first
-            self._ensure_variable_exists(secret_name)
+            await self._ensure_variable_exists(secret_name, async_client)
 
             # Now set the secret value
             url: Final = self.get_url(secret_name)

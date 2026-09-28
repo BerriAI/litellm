@@ -1,7 +1,8 @@
+use litellm_secrets::source::Secrets;
 use std::time::Duration;
 
-use litellm_llms::base_llm::audio_transcription::transformation::{
-    BaseAudioTranscriptionConfig, RequestAuth,
+use litellm_llms::base_llm::{
+    audio_transcription::transformation::BaseAudioTranscriptionConfig, auth::ValidatedEnvironment,
 };
 use serde_json::{Map, Value};
 
@@ -23,9 +24,8 @@ pub struct ProviderAudioTranscriptionRequest {
     pub config: &'static dyn BaseAudioTranscriptionConfig,
     pub url: String,
     pub body: Value,
-    pub upstream_headers: Vec<(String, String)>,
-    pub auth: RequestAuth,
-    pub optional_params: Map<String, Value>,
+    pub environment: ValidatedEnvironment,
+    pub secrets: Secrets,
     pub timeout: Option<Duration>,
 }
 

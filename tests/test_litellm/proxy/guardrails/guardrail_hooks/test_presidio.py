@@ -4,10 +4,15 @@ Tests PII detection and masking for different message formats
 """
 
 import asyncio
+import copy
 import json
+import re
 from contextlib import asynccontextmanager
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+from aiohttp import web
+from aiohttp.test_utils import TestServer
 import pytest
 
 
@@ -2599,6 +2604,247 @@ async def test_apply_to_output_streaming_anthropic_first_frame_split_across_tran
     assert joined.count("event: message_start") == 1
 
 
+def _anthropic_stream_tail() -> list[bytes]:
+    return [
+        _anthropic_sse("content_block_stop", {"type": "content_block_stop", "index": 0}),
+        _anthropic_sse("message_delta", {"type": "message_delta", "delta": {"stop_reason": "end_turn"}, "usage": {}}),
+        _anthropic_sse("message_stop", {"type": "message_stop"}),
+    ]
+
+
+def _anthropic_stream_head() -> list[bytes]:
+    return [
+        _anthropic_sse(
+            "message_start",
+            {"type": "message_start", "message": {"id": "msg_1", "model": "claude", "content": [], "usage": {}}},
+        ),
+        _anthropic_sse(
+            "content_block_start",
+            {"type": "content_block_start", "index": 0, "content_block": {"type": "text", "text": ""}},
+        ),
+    ]
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_first_frame_split_inside_a_utf8_character_is_still_masked():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    delta = (
+        "event: content_block_delta\n"
+        + "data: "
+        + json.dumps(
+            {
+                "type": "content_block_delta",
+                "index": 0,
+                "delta": {"type": "text_delta", "text": "John Smith designed the café."},
+            },
+            ensure_ascii=False,
+        )
+        + "\n\n"
+    ).encode()
+    cut = delta.index("é".encode()) + 1
+    assert delta[cut - 1 : cut] == b"\xc3", delta
+    byte_chunks = [*_anthropic_stream_head(), delta[:cut], delta[cut:], *_anthropic_stream_tail()]
+
+    async def mock_stream():
+        yield b"".join(byte_chunks[:2]) + byte_chunks[2]
+        for b in byte_chunks[3:]:
+            yield b
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    joined = b"".join(collected).decode()
+    assert "John Smith" not in joined, joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<PERSON>"
+    assert joined.count("event: message_start") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_stream_led_by_sse_comment_keepalive_is_still_masked():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    byte_chunks = [
+        b": keepalive\n\n",
+        *_anthropic_stream_head(),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "John Smith"}},
+        ),
+        *_anthropic_stream_tail(),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    raw = b"".join(collected)
+    assert raw.startswith(b": keepalive\n\n"), raw[:200]
+    joined = raw.decode()
+    assert "John Smith" not in joined, joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<PERSON>"
+    assert joined.count("event: message_start") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_anthropic_stream_led_by_data_less_ping_event_is_still_masked():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    byte_chunks = [
+        b"event: ping\n\n",
+        *_anthropic_stream_head(),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "John Smith"}},
+        ),
+        *_anthropic_stream_tail(),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    raw = b"".join(collected)
+    assert raw.startswith(b"event: ping\n\n"), raw[:200]
+    joined = raw.decode()
+    assert "John Smith" not in joined, joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<PERSON>"
+    assert joined.count("event: message_start") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_leading_keepalive_is_forwarded_before_upstream_data_arrives():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    gate = asyncio.Event()
+    byte_chunks = [
+        *_anthropic_stream_head(),
+        _anthropic_sse(
+            "content_block_delta",
+            {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "John Smith"}},
+        ),
+        *_anthropic_stream_tail(),
+    ]
+
+    async def mock_stream():
+        yield b": keepalive\n\n"
+        await gate.wait()
+        for b in byte_chunks:
+            yield b
+
+    out = guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    )
+    assert await asyncio.wait_for(anext(out), 1) == b": keepalive\n\n"
+    assert not gate.is_set()
+
+    gate.set()
+    collected = [chunk async for chunk in out]
+
+    joined = b"".join(collected).decode()
+    assert "John Smith" not in joined, joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<PERSON>"
+    assert joined.count("event: message_start") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_leading_comments_over_the_frame_cap_are_still_masked():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+    keepalives = [b": keepalive\n\n" * 512] * 12  # ~72 KiB of complete comment frames, over the 64 KiB cap
+    byte_chunks = [
+        *keepalives[:-1],
+        keepalives[-1]
+        + b"".join(
+            [
+                *_anthropic_stream_head(),
+                _anthropic_sse(
+                    "content_block_delta",
+                    {"type": "content_block_delta", "index": 0, "delta": {"type": "text_delta", "text": "John Smith"}},
+                ),
+            ]
+        ),
+        *_anthropic_stream_tail(),
+    ]
+
+    async def mock_stream():
+        for b in byte_chunks:
+            yield b
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    joined = b"".join(collected).decode()
+    assert "John Smith" not in joined, joined
+    assert "".join(text for _, text in _anthropic_text_deltas(collected)) == "<PERSON>"
+    assert joined.count("event: message_start") == 1
+
+
+@pytest.mark.asyncio
+async def test_apply_to_output_streaming_comment_only_stream_is_forwarded_unchanged():
+    guardrail = _OPTIONAL_PresidioPIIMasking(
+        mock_testing=True,
+        apply_to_output=True,
+        mock_redacted_text={"text": "<PERSON>"},
+    )
+
+    async def mock_stream():
+        yield b": keepalive\n\n"
+
+    collected = []
+    async for chunk in guardrail.async_post_call_streaming_iterator_hook(
+        user_api_key_dict=UserAPIKeyAuth(api_key="test-key"),
+        response=mock_stream(),
+        request_data={},
+    ):
+        collected.append(chunk)
+
+    assert collected == [b": keepalive\n\n"]
+
+
 @pytest.mark.asyncio
 async def test_apply_to_output_streaming_gemini_first_frame_split_across_transport_chunks_streams_incrementally():
     guardrail = _OPTIONAL_PresidioPIIMasking(
@@ -3849,3 +4095,79 @@ async def test_chunk_fanout_bound_is_shared_across_concurrent_calls():
         )
     assert state["peak"] >= 2
     assert state["peak"] <= PRESIDIO_ANALYZE_CHUNK_CONCURRENCY
+
+
+_PERSON_NAME: Final = re.compile(r"\b[A-Z][a-z]+ [A-Z][a-z]+\b")
+
+
+def _person_spans(text: str) -> list[dict]:
+    return [
+        {"entity_type": "PERSON", "start": match.start(), "end": match.end(), "score": 0.85, "analysis_explanation": None}
+        for match in _PERSON_NAME.finditer(text)
+    ]
+
+
+def _redacted(text: str, spans: list[dict]) -> str:
+    starts = [0, *(span["end"] for span in spans)]
+    ends = [*(span["start"] for span in spans), len(text)]
+    return "<PERSON>".join(text[start:end] for start, end in zip(starts, ends))
+
+
+async def _fake_analyze(request: web.Request) -> web.Response:
+    payload = await request.json()
+    return web.json_response(_person_spans(payload["text"]))
+
+
+async def _fake_anonymize(request: web.Request) -> web.Response:
+    payload = await request.json()
+    spans = payload["analyzer_results"]
+    items = [{"entity_type": span["entity_type"], "operator": "replace"} for span in spans]
+    return web.json_response({"text": _redacted(payload["text"], spans), "items": items})
+
+
+def _fake_presidio_app() -> web.Application:
+    app = web.Application()
+    app.router.add_post("/analyze", _fake_analyze)
+    app.router.add_post("/anonymize", _fake_anonymize)
+    return app
+
+
+def _pii_turns() -> tuple[list[dict], list[dict]]:
+    turn_n = [
+        {"role": "system", "content": "You are terse."},
+        {"role": "user", "content": "My name is John Smith and my colleague is Alice Brown."},
+    ]
+    reply = {
+        "role": "assistant",
+        "content": "Noted.",
+        "thinking_blocks": [{"type": "thinking", "thinking": "Working it out.", "signature": "sig-1"}],
+    }
+    return turn_n, [*turn_n, reply, {"role": "user", "content": "Now compare against Bob Jones too."}]
+
+
+async def test_pii_masking_replays_a_byte_identical_prefix_across_turns(mock_user_api_key, mock_cache):
+    """Masking rewrites the history on every turn, so the rewrite of an earlier message
+    must not depend on the turns that came after it or the signed thinking blocks in
+    the history lose their binding. The analyzer and anonymizer are an in-process fake
+    handed to the guardrail through its api_base settings."""
+    async with TestServer(_fake_presidio_app()) as server:
+        guardrail = _OPTIONAL_PresidioPIIMasking(
+            presidio_analyzer_api_base=str(server.make_url("/")),
+            presidio_anonymizer_api_base=str(server.make_url("/")),
+            pii_entities_config={PiiEntityType.PERSON: PiiAction.MASK},
+        )
+        masked = [
+            await guardrail.async_pre_call_hook(
+                user_api_key_dict=mock_user_api_key,
+                cache=mock_cache,
+                data={"model": "claude-fable-5-1", "messages": copy.deepcopy(turn)},
+                call_type="completion",
+            )
+            for turn in _pii_turns()
+        ]
+        await guardrail._close_http_session()
+    earlier, later = (result["messages"] for result in masked)
+
+    assert json.dumps(later[: len(earlier)], sort_keys=True) == json.dumps(earlier, sort_keys=True)
+    assert earlier[1]["content"] == "My name is <PERSON> and my colleague is <PERSON>."
+    assert later[3]["content"] == "Now compare against <PERSON> too."
