@@ -5,7 +5,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 from fastapi import HTTPException
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 from litellm.models.organization import LiteLLM_OrganizationTable
@@ -125,14 +125,26 @@ def authorize_member_auto_router_team(
         raise HTTPException(status_code=403, detail="This team does not allow you to manage your own auto routers.")
 
 
-def validate_member_auto_router_config(config: Mapping[str, object]) -> RequestComplexityRouterConfig:
+def validate_member_auto_router_config(
+    config: Mapping[str, object], *, supplied_config: Mapping[str, object] | None = None
+) -> RequestComplexityRouterConfig:
     try:
         validated: Final = _MemberComplexityRouterConfig.model_validate(config)
         for entries in validated.tier_model_configs.values():
             for entry in entries:
                 _MemberRouterGenerationParams.model_validate(entry.litellm_params)
         if validated.jev_classifier_config is not None:
-            _MemberJevClassifierConfig.model_validate(validated.jev_classifier_config.model_dump())
+            supplied: Final = config if supplied_config is None else supplied_config
+            supplied_jev: Final = TypeAdapter(Mapping[str, object] | None).validate_python(
+                supplied.get("jev_classifier_config")
+            ) or MappingProxyType({})
+            _MemberJevClassifierConfig.model_validate(
+                {
+                    **validated.jev_classifier_config.model_dump(exclude={"api_key", "api_base"}),
+                    "api_key": supplied_jev.get("api_key"),
+                    "api_base": supplied_jev.get("api_base"),
+                }
+            )
         return validated
     except ValidationError as exc:
         location: Final = ".".join(str(part) for part in exc.errors()[0]["loc"])
@@ -347,7 +359,10 @@ async def authorize_member_auto_router_write(
     )
     if raw_config is None:
         raise HTTPException(status_code=400, detail="A complexity_router_config is required.")
-    config: Final = validate_member_auto_router_config(effective_config if effective_config is not None else raw_config)
+    config: Final = validate_member_auto_router_config(
+        effective_config if effective_config is not None else raw_config,
+        supplied_config=supplied_config if supplied_config is not None else MappingProxyType({}),
+    )
     stored_default: Final = existing.litellm_params.complexity_router_default_model if existing is not None else None
     default_model: Final = (
         params.complexity_router_default_model

@@ -7658,8 +7658,19 @@ class TestTeamMemberAutoRouterWrites:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("endpoint", ["patch", "legacy"])
     @pytest.mark.parametrize("can_use_nimble", [True, False])
-    async def test_member_partial_update_authorizes_the_persisted_classifier_provider(
-        self, endpoint: str, can_use_nimble: bool
+    @pytest.mark.parametrize(
+        ("stored_transport", "supplied_transport"),
+        [
+            ({}, {}),
+            ({"api_base": "http://nimble.internal"}, {}),
+            ({"api_base": "http://nimble.internal", "api_key": "synthetic-nimble-key"}, {}),
+            ({"api_base": "http://nimble.internal"}, {"api_base": "https://collector.invalid"}),
+            ({"api_key": "synthetic-nimble-key"}, {"api_key": "synthetic-member-key"}),
+        ],
+    )
+    async def test_member_partial_update_checks_saved_provider_and_submitted_transport(
+        self, endpoint: str, can_use_nimble: bool,
+        stored_transport: Mapping[str, str], supplied_transport: Mapping[str, str],
     ) -> None:
         from fastapi import HTTPException
 
@@ -7673,7 +7684,9 @@ class TestTeamMemberAutoRouterWrites:
                     "complexity_router_config": {
                         "classifier_type": "jev",
                         "tiers": {"SIMPLE": "allowed"},
-                        "jev_classifier_config": {"provider": "bespoke_nimble", "model": "nimble-latest"},
+                        "jev_classifier_config": {
+                            "provider": "bespoke_nimble", "model": "nimble-latest", **stored_transport,
+                        },
                     },
                 },
             }
@@ -7684,7 +7697,7 @@ class TestTeamMemberAutoRouterWrites:
                 complexity_router_config={
                     "classifier_type": "jev",
                     "tiers": {"SIMPLE": "allowed"},
-                    "jev_classifier_config": {"timeout_ms": 900},
+                    "jev_classifier_config": {"timeout_ms": 900, **supplied_transport},
                 }
             ),
             model_info=ModelInfo(id=row.model_id, team_id=team.team_id),
@@ -7692,6 +7705,11 @@ class TestTeamMemberAutoRouterWrites:
         actor: Final = UserAPIKeyAuth(user_id="owner", user_role=LitellmUserRoles.INTERNAL_USER, models=models)
         with self._environment(database, row):
             operation: Final = patch_model(row.model_id, request, actor) if endpoint == "patch" else update_model(request, actor)
+            if supplied_transport:
+                with pytest.raises((HTTPException, ProxyException), match="Invalid member auto-router configuration"):
+                    await operation
+                database.transaction.litellm_proxymodeltable.update.assert_not_awaited()
+                return
             if not can_use_nimble:
                 with pytest.raises((HTTPException, ProxyException)) as denied:
                     await operation
@@ -7705,7 +7723,7 @@ class TestTeamMemberAutoRouterWrites:
         params: Final = LiteLLM_Params.model_validate_json(written)
         config: Final = TypeAdapter(Mapping[str, object]).validate_python(params.complexity_router_config)
         assert config["jev_classifier_config"] == {
-            "provider": "bespoke_nimble", "model": "nimble-latest", "timeout_ms": 900
+            "provider": "bespoke_nimble", "model": "nimble-latest", "timeout_ms": 900, **stored_transport,
         }
 
     @pytest.mark.asyncio
