@@ -122,7 +122,57 @@ def targets_openai_api(api_base: object) -> bool:
 
 
 def _carries_cache_breakpoint(block: object) -> bool:
-    return isinstance(block, dict) and any(block.get(key) is not None for key in CACHE_BREAKPOINT_KEYS)
+    return any(_attribute_or_key(block, key) is not None for key in CACHE_BREAKPOINT_KEYS)
+
+
+def _attribute_or_key(value: object, key: str) -> object | None:
+    if hasattr(value, key):
+        return cast(object, getattr(value, key))
+    if isinstance(value, Mapping):
+        value_mapping: Final = cast(Mapping[str, object], value)
+        return value_mapping.get(key)
+    return None
+
+
+def _as_object_list(value: object | None) -> list[object] | None:
+    if not isinstance(value, list):
+        return None
+    return cast(list[object], value)
+
+
+def _as_object_iterable(value: object | None) -> Iterable[object] | None:
+    if not isinstance(value, Iterable):
+        return None
+    return cast(Iterable[object], value)
+
+
+def _has_server_tool_result(tool_call_id: str, results: Iterable[object] | None) -> bool:
+    return any(isinstance(result, dict) and result.get("tool_use_id") == tool_call_id for result in results or ())
+
+
+def _tool_call_cache_control_is_forwarded(tool_call: object, message: object) -> bool:
+    if _attribute_or_key(tool_call, "type") != "function" or not isinstance(
+        _attribute_or_key(tool_call, "cache_control"), dict
+    ):
+        return False
+
+    tool_call_id: Final = _attribute_or_key(tool_call, "id")
+    if not isinstance(tool_call_id, str) or not tool_call_id.startswith("srvtoolu_"):
+        return True
+
+    provider_specific_fields: Final = _attribute_or_key(message, "provider_specific_fields")
+    if not isinstance(provider_specific_fields, dict):
+        return True
+
+    provider_fields_mapping: Final = cast(Mapping[str, object], provider_specific_fields)
+    server_tool_result_keys: Final = ("web_search_results", "tool_results")
+    return not any(
+        _has_server_tool_result(
+            tool_call_id,
+            _as_object_iterable(provider_fields_mapping.get(result_key)),
+        )
+        for result_key in server_tool_result_keys
+    )
 
 
 def _tool_carries_cache_breakpoint(tool: object) -> bool:
@@ -471,13 +521,16 @@ class AnthropicCacheControlHook(CustomPromptManagement):
 
     @staticmethod
     def _count_cache_control_blocks(message: object) -> int:
-        if not isinstance(message, dict):
-            return 0
-        count = 1 if _carries_cache_breakpoint(message) else 0
-        content: Final = message.get("content")
-        if isinstance(content, list):
-            count += sum(1 for block in content if _carries_cache_breakpoint(block))
-        return count
+        message_count: Final = 1 if _carries_cache_breakpoint(message) else 0
+        content: Final = _as_object_list(_attribute_or_key(message, "content"))
+        content_count: Final = sum(1 for block in content if _carries_cache_breakpoint(block)) if content else 0
+        tool_calls: Final = _as_object_list(_attribute_or_key(message, "tool_calls"))
+        tool_call_count: Final = (
+            sum(1 for tool_call in tool_calls if _tool_call_cache_control_is_forwarded(tool_call, message))
+            if tool_calls
+            else 0
+        )
+        return message_count + content_count + tool_call_count
 
     @staticmethod
     def _message_has_cache_control(message: AllMessageValues) -> bool:

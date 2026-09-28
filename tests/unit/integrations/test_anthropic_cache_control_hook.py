@@ -4,7 +4,8 @@ import os
 import subprocess
 import sys
 import textwrap
-from typing import Final, List, Optional, Tuple
+from collections.abc import Mapping
+from typing import Final, List, Optional, Tuple, cast
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -16,7 +17,8 @@ from litellm.integrations.anthropic_cache_control_hook import (
     supports_openai_prompt_cache_breakpoint,
 )
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
+from litellm.types.utils import ChatCompletionMessageToolCall, Message
 
 
 @pytest.fixture(autouse=True)
@@ -1045,6 +1047,36 @@ def _count_cache_control(messages: List[AllMessageValues]) -> int:
     return count
 
 
+def _count_tool_call_cache_controls(message: AllMessageValues) -> int:
+    message_mapping: Final = cast(Mapping[str, object], message)
+    tool_calls: Final = message_mapping.get("tool_calls")
+    tool_call_values: Final = cast(list[object], tool_calls) if isinstance(tool_calls, list) else None
+    return (
+        sum(
+            1
+            for tool_call in tool_call_values
+            if isinstance(tool_call, dict) and isinstance(tool_call.get("cache_control"), dict)
+        )
+        if tool_call_values is not None
+        else 0
+    )
+
+
+def _marked_function_tool_calls() -> list[ChatCompletionAssistantToolCall]:
+    return cast(
+        list[ChatCompletionAssistantToolCall],
+        [
+            {
+                "id": f"call_{index}",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+                "cache_control": {"type": "ephemeral"},
+            }
+            for index in range(3)
+        ],
+    )
+
+
 def _build_injection_points():
     return [
         {
@@ -1058,6 +1090,116 @@ def _build_injection_points():
             "control": {"type": "ephemeral", "ttl": "5m"},
         },
     ]
+
+
+def test_cache_control_hook_counts_tool_call_cache_controls():
+    message: Final[AllMessageValues] = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": _marked_function_tool_calls(),
+    }
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 3
+
+
+def test_cache_control_hook_counts_only_tool_call_marks_forwarded_to_anthropic():
+    message: Final[AllMessageValues] = {
+        "role": "assistant",
+        "content": None,
+        "tool_calls": cast(
+            list[ChatCompletionAssistantToolCall],
+            [
+                {
+                    "id": "nested",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup",
+                        "arguments": "{}",
+                        "cache_control": {"type": "ephemeral"},
+                    },
+                },
+                {
+                    "id": "non_function",
+                    "type": "custom",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "id": "prompt_breakpoint",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "prompt_cache_breakpoint": {"type": "ephemeral"},
+                },
+                {
+                    "id": "srvtoolu_web_search",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "id": "srvtoolu_tool_result",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+                {
+                    "id": "srvtoolu_unmatched",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "cache_control": {"type": "ephemeral"},
+                },
+            ],
+        ),
+        "provider_specific_fields": {
+            "web_search_results": [{"tool_use_id": "srvtoolu_web_search"}],
+            "tool_results": [{"tool_use_id": "srvtoolu_tool_result"}],
+        },
+    }
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 1
+
+
+def test_cache_control_hook_caps_customer_tool_call_marks_before_injection():
+    hook = AnthropicCacheControlHook()
+    messages: Final[list[AllMessageValues]] = [
+        {"role": "system", "content": "Follow the tool instructions."},
+        {
+            "role": "user",
+            "content": [{"type": "text", "text": "Look up three values.", "cache_control": {"type": "ephemeral"}}],
+        },
+        {"role": "assistant", "content": None, "tool_calls": _marked_function_tool_calls()},
+        {"role": "tool", "tool_call_id": "call_0", "content": "first"},
+        {"role": "tool", "tool_call_id": "call_1", "content": "second"},
+        {"role": "tool", "tool_call_id": "call_2", "content": "third"},
+        {"role": "user", "content": "Summarize the values."},
+    ]
+
+    _, processed, _ = hook.get_chat_completion_prompt(
+        model="bedrock/us.anthropic.claude-opus-4-6-v1:0",
+        messages=messages,
+        non_default_params={"cache_control_injection_points": _build_injection_points()},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    forwarded_mark_count: Final = _count_cache_control(processed) + sum(
+        _count_tool_call_cache_controls(message) for message in processed
+    )
+    assert forwarded_mark_count <= 4
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(processed) == forwarded_mark_count
+
+
+def test_cache_control_hook_counts_pydantic_message_tool_call_marks():
+    tool_call: Final = ChatCompletionMessageToolCall(
+        id="call_1",
+        type="function",
+        function={"name": "lookup", "arguments": "{}"},
+        cache_control={"type": "ephemeral"},
+    )
+    message: Final = Message(role="assistant", content=None, tool_calls=[tool_call])
+
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(cast(list[AllMessageValues], [message])) == 1
 
 
 def test_cache_control_hook_caps_at_four_blocks_with_client_cache_control():
