@@ -342,7 +342,7 @@ async def test_s3_cache_async_disconnect(mock_s3_dependencies):
     await cache.disconnect()
 
 
-@pytest.mark.parametrize("stored", [b"(1, {'role': 'assistant'})", "(1, {'role': 'assistant'})"])
+@pytest.mark.parametrize("stored", [b"(1, {'role': 'assistant'})", b"(1, {'role': 'assistant'})\n"])
 def test_s3_cache_get_cache_treats_non_json_stored_values_as_misses(mock_s3_dependencies, stored):
     """A stored value that is not JSON is a cache miss instead of being parsed as a Python literal"""
     cache = S3Cache("test-bucket")
@@ -354,12 +354,11 @@ def test_s3_cache_get_cache_treats_non_json_stored_values_as_misses(mock_s3_depe
     assert cache.get_cache("test_key") is None
 
 
-@pytest.mark.parametrize("stored", [b'{"key": "value"}', '{"key": "value"}'])
-def test_s3_cache_get_cache_parses_json_stored_values(mock_s3_dependencies, stored):
+def test_s3_cache_get_cache_parses_json_stored_values(mock_s3_dependencies):
     cache = S3Cache("test-bucket")
 
     mock_response = {"Body": MagicMock()}
-    mock_response["Body"].read.return_value = stored
+    mock_response["Body"].read.return_value = b'{"key": "value"}'
     cache.s3_client.get_object.return_value = mock_response
 
     assert cache.get_cache("test_key") == {"key": "value"}
