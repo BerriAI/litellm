@@ -115,6 +115,42 @@ async def test_access_groups_cap_agent_servers_without_granting_new_ones(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "directory_groups,directory_servers,expected",
+    [
+        (None, (), ["slack"]),
+        ((), (), []),
+        (("directory",), ("slack", "linear"), ["slack"]),
+        (("directory",), ("linear",), []),
+    ],
+)
+async def test_directory_and_manual_groups_independently_cap_mcp_access(
+    monkeypatch: pytest.MonkeyPatch,
+    directory_groups: tuple[str, ...] | None,
+    directory_servers: tuple[str, ...],
+    expected: list[str],
+) -> None:
+    from litellm.models.access_group import LiteLLM_AccessGroupTable
+
+    manual: Final = LiteLLM_AccessGroupTable(
+        access_group_id="manual", access_group_name="Manual", access_mcp_server_ids=["slack"]
+    )
+    directory: Final = LiteLLM_AccessGroupTable(
+        access_group_id="directory", access_group_name="Directory", access_mcp_server_ids=list(directory_servers)
+    )
+    lookup: Final = AsyncMock(side_effect=[manual, directory] if directory_groups else [manual])
+    monkeypatch.setattr(auth_checks, "get_access_object", lookup)
+    auth: Final = actor(None)
+    assert auth.managed_agent_policy is not None
+    auth.managed_agent_policy = auth.managed_agent_policy.model_copy(
+        update={"access_group_ids": ["manual"], "directory_access_group_ids": directory_groups}
+    )
+    assert await MCPRequestHandler.get_allowed_mcp_servers(auth) == expected
+    assert lookup.await_count == (2 if directory_groups else 1)
+    assert all(call.kwargs["check_db_only"] for call in lookup.await_args_list)
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("change", ["tools", "servers", "disabled", "outage"])
 async def test_delegated_mcp_revokes_warm_human_policy_before_tool_execution(
     monkeypatch: pytest.MonkeyPatch, change: str
