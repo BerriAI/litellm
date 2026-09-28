@@ -3419,7 +3419,7 @@ workflows:
           name: integration-<< matrix.suite >>
           matrix:
             parameters:
-              suite: [management, accounting, database, providers, mcp, sdk, cost, browser]
+              suite: [management, accounting, database, providers, mcp, sdk, cost, security, browser]
       - integration_contracts:
           name: integration-extensions
           suite: extensions
