@@ -142,7 +142,7 @@ def _prune_oauth_metadata_cache(now: float | None = None) -> None:
     # Drop locks whose cache entry has been evicted and that nobody holds or
     # waits on; the rest stay so in-flight callers continue to coalesce.
     for cache_key in list(_OAUTH_METADATA_FETCH_LOCKS):
-        if cache_key in _OAUTH_METADATA_CACHE or cache_key in _OAUTH_METADATA_FETCHERS:
+        if cache_key in _OAUTH_METADATA_CACHE or not _oauth_metadata_lock_idle(cache_key):
             continue
         _OAUTH_METADATA_FETCH_LOCKS.pop(cache_key, None)
 
@@ -152,6 +152,13 @@ def _prune_oauth_metadata_cache(now: float | None = None) -> None:
 
 def _oauth_metadata_fetch_in_flight(server_id: str) -> bool:
     return any(cache_key[0] == server_id for cache_key in _OAUTH_METADATA_FETCHERS)
+
+
+def _oauth_metadata_lock_idle(cache_key: tuple[str, str]) -> bool:
+    if cache_key in _OAUTH_METADATA_FETCHERS:
+        return False
+    lock: Final = _OAUTH_METADATA_FETCH_LOCKS.get(cache_key)
+    return lock is None or not lock.locked()
 
 
 @asynccontextmanager
@@ -177,7 +184,7 @@ def invalidate_oauth_metadata_cache(server_id: str) -> None:
     for cache_key in [key for key in _OAUTH_METADATA_CACHE if key[0] == server_id]:
         del _OAUTH_METADATA_CACHE[cache_key]
     for cache_key in [key for key in _OAUTH_METADATA_FETCH_LOCKS if key[0] == server_id]:
-        if cache_key in _OAUTH_METADATA_FETCHERS:
+        if not _oauth_metadata_lock_idle(cache_key):
             continue
         _OAUTH_METADATA_FETCH_LOCKS.pop(cache_key, None)
 
