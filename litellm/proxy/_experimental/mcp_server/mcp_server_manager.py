@@ -6799,15 +6799,13 @@ class MCPServerManager:
                 return server
         return None
 
-    @staticmethod
-    def _is_public_mcp_server(server: MCPServer, public_ids: Container[str]) -> bool:
-        return server.server_id in public_ids or (
-            not litellm.public_mcp_hub_strict_whitelist and server.available_on_public_internet
-        )
-
-    def is_mcp_server_public(self, server_id: str) -> bool:
+    def is_mcp_server_public(self, server_id: str, *, public_ids: Container[str] | None = None) -> bool:
         server: Final = self.registry.get(server_id) or self.config_mcp_servers.get(server_id)
-        return server is not None and self._is_public_mcp_server(server, litellm.public_mcp_servers or ())
+        published_ids: Final = (litellm.public_mcp_servers or ()) if public_ids is None else public_ids
+        return server is not None and (
+            server_id in published_ids
+            or (not litellm.public_mcp_hub_strict_whitelist and server.available_on_public_internet)
+        )
 
     def get_public_mcp_servers(self) -> list[MCPServer]:
         """
@@ -6827,7 +6825,11 @@ class MCPServerManager:
         removed in a future release.
         """
         public_ids: Final = frozenset(litellm.public_mcp_servers or ())
-        return [server for server in self.get_registry().values() if self._is_public_mcp_server(server, public_ids)]
+        return [
+            server
+            for server in self.get_registry().values()
+            if self.is_mcp_server_public(server.server_id, public_ids=public_ids)
+        ]
 
     def expand_permission_list(self, identifiers: list[str]) -> list[str]:
         """
