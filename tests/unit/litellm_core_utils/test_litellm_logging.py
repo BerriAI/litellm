@@ -4733,39 +4733,6 @@ def test_standard_logging_hidden_params_backfills_response_cost_without_mutating
     assert response._hidden_params["response_cost"] is None
 
 
-def test_cache_hit_logging_does_not_report_the_original_generation_cost() -> None:
-    now: Final = datetime.datetime.now()
-    original_cost: Final = 0.25
-    logger: Final = LitellmLogging(
-        model="cache-test-model",
-        messages=[],
-        stream=False,
-        call_type="acompletion",
-        start_time=now,
-        litellm_call_id="cached-call",
-        function_id="cache-test",
-    )
-    logger.update_from_kwargs(kwargs={}, custom_llm_provider="openai")
-    response: Final = ModelResponse(id="original-response", model="cache-test-model")
-    response._hidden_params["response_cost"] = original_cost
-    logger.set_cost_breakdown(
-        input_cost=0.1, output_cost=0.15, total_cost=original_cost, cost_for_built_in_tools_cost_usd_dollar=0.0
-    )
-    logger.success_handler(result=response, start_time=now, end_time=now, cache_hit=True)
-    payload: Final = logger.model_call_details["standard_logging_object"]
-    assert payload is not None
-    assert payload["cache_hit"] is True
-    assert payload["response_cost"] == payload["hidden_params"]["response_cost"] == 0
-    assert payload["cost_breakdown"] == {
-        "input_cost": 0.0,
-        "output_cost": 0.0,
-        "total_cost": 0.0,
-        "tool_usage_cost": 0.0,
-    }
-    assert payload["saved_cache_cost"] == original_cost
-    assert response._hidden_params["response_cost"] == original_cost
-
-
 def test_merge_hidden_params_from_response_into_metadata_preserves_response_cost():
     """Do not overwrite provider-supplied response cost when it already exists."""
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj

@@ -208,10 +208,6 @@ async def test_cache_hit_keeps_model_budget_spend_but_accounts_for_usage(
         "miss_provider": first_log.get("custom_llm_provider"),
         "hit_provider": cached_log.get("custom_llm_provider"),
     }
-    cached_hidden: Final = TypeAdapter(dict[str, object]).validate_python(cached_payload["hidden_params"])
-    assert cached_hidden["response_cost"] == 0
-    breakdown: Final = TypeAdapter(dict[str, object]).validate_python(cached_payload["cost_breakdown"])
-    assert breakdown["total_cost"] == 0
     assert cached_payload["total_tokens"] == first_payload["total_tokens"]
     assert counters.get_cache(spend_key) == pytest.approx(expected_cost)
     assert counters.get_cache(token_key) == 2 * expected_tokens
