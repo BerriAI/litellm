@@ -721,6 +721,46 @@ def test_get_healthy_deployments(model_list):
     )
     assert len(deployments) > 0
 
+@pytest.mark.asyncio
+async def test_get_healthy_deployments_by_deployment_id():
+    """Routing by model_info.id must still return that deployment as healthy."""
+    from unittest.mock import AsyncMock, patch
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "chat",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "sk-test"},
+                "model_info": {"id": "deploy-1"},
+            }
+        ]
+    )
+
+    with patch(
+        "litellm.router._get_cooldown_deployments",
+        return_value=[],
+    ), patch(
+        "litellm.router._async_get_cooldown_deployments",
+        new_callable=AsyncMock,
+        return_value=[],
+    ):
+        sync_healthy, sync_all = router._get_healthy_deployments(
+            model="deploy-1", parent_otel_span=None
+        )
+        async_healthy, async_all = await router._async_get_healthy_deployments(
+            model="deploy-1", parent_otel_span=None
+        )
+
+    assert len(sync_healthy) == 1
+    assert sync_healthy[0]["model_info"]["id"] == "deploy-1"
+    assert isinstance(sync_all, list) and len(sync_all) == 1
+
+    assert len(async_healthy) == 1
+    assert async_healthy[0]["model_info"]["id"] == "deploy-1"
+    assert isinstance(async_all, list) and len(async_all) == 1
+
+
+
 
 @pytest.mark.parametrize("sync_mode", [True, False])
 @pytest.mark.asyncio
