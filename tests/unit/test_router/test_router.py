@@ -14013,6 +14013,136 @@ async def test_anthropic_messages_default_wildcard_fallback_still_buffers_lifecy
     assert [chunk async for chunk in wrapped] == [_anthropic_messages_content_chunk("hi")]
 
 
+def _anthropic_messages_two_order_primary_model_list() -> list:
+    return [
+        {
+            "model_name": "primary",
+            "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test", "order": 1},
+        },
+        {
+            "model_name": "primary",
+            "litellm_params": {"model": "bedrock/anthropic.claude-sonnet-4-5", "order": 2},
+        },
+        {
+            "model_name": "fallback",
+            "litellm_params": {"model": "bedrock/anthropic.claude-sonnet-4-5"},
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    "router_kwargs,request_kwargs,expected",
+    [
+        pytest.param({"fallbacks": None}, {"model": "primary"}, False, id="no-fallbacks"),
+        pytest.param({"fallbacks": [{"primary": ["fallback"]}]}, {"model": "primary"}, True, id="group-fallback"),
+        pytest.param({"fallbacks": [{"other": ["fallback"]}]}, {"model": "primary"}, False, id="unrelated-group"),
+        pytest.param(
+            {"fallbacks": [{"*": ["fallback"]}]},
+            {"model": "primary", "fallbacks": None},
+            False,
+            id="wildcard-overridden-by-request-none",
+        ),
+        pytest.param({"fallbacks": [{"*": ["fallback"]}]}, {"model": "primary"}, True, id="wildcard"),
+        pytest.param({"fallbacks": None}, {"model": "primary", "fallbacks": [{"model": "fallback"}]}, True, id="request-dict-fallback"),
+        pytest.param({"fallbacks": None}, {"model": "primary", "fallbacks": ["fallback"]}, True, id="request-list-fallback"),
+        pytest.param(
+            {"fallbacks": [{"primary": ["fallback"]}]},
+            {"model": "primary", "disable_fallbacks": True},
+            False,
+            id="disable-fallbacks",
+        ),
+        pytest.param(
+            {"fallbacks": None, "content_policy_fallbacks": [{"primary": ["fallback"]}]},
+            {"model": "primary"},
+            True,
+            id="content-policy-fallback",
+        ),
+        pytest.param({"fallbacks": None, "enable_weighted_failover": True}, {"model": "primary"}, True, id="weighted-failover"),
+    ],
+)
+def test_anthropic_messages_stream_can_fall_back_direct_call(router_kwargs, request_kwargs, expected):
+    router = _anthropic_messages_make_router(**router_kwargs)
+    assert router._anthropic_messages_stream_can_fall_back("primary", request_kwargs) is expected
+
+
+@pytest.mark.parametrize(
+    "orders,expected",
+    [
+        pytest.param([1, 2], True, id="distinct-orders-can-fall-back"),
+        pytest.param([1, 1], False, id="same-order-cannot-fall-back"),
+    ],
+)
+def test_anthropic_messages_stream_can_fall_back_order_levels(orders, expected):
+    router = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test", "order": order},
+            }
+            for order in orders
+        ],
+        fallbacks=None,
+    )
+    assert router._anthropic_messages_stream_can_fall_back("primary", {"model": "primary"}) is expected
+
+
+def test_anthropic_messages_order_levels_direct_call():
+    router = Router(
+        model_list=[
+            {
+                "model_name": "primary",
+                "litellm_params": {"model": "anthropic/claude-sonnet-4-5", "api_key": "sk-test", "order": order},
+            }
+            for order in (2, 1, None)
+        ],
+        fallbacks=None,
+    )
+    assert router._anthropic_messages_order_levels("primary", {"model": "primary"}) == (1, 2)
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_order_fallback_still_buffers_lifecycle_frames():
+    """Two order levels in one group are a real fallback target for the
+    dispatcher, so lifecycle frames stay buffered until content commits."""
+    router = Router(model_list=_anthropic_messages_two_order_primary_model_list(), fallbacks=None)
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source(), initial_kwargs={"model": "primary"})
+
+    pending = asyncio.ensure_future(wrapped.__anext__())
+    await asyncio.sleep(0.2)
+    assert not pending.done()
+    content_released.set()
+    assert await asyncio.wait_for(pending, timeout=1) == _anthropic_messages_message_start_chunk()
+    assert [chunk async for chunk in wrapped] == [_anthropic_messages_content_chunk("hi")]
+
+
+@pytest.mark.asyncio
+async def test_anthropic_messages_request_fallbacks_none_forwards_message_start_live():
+    """A per-request fallbacks=None override disables the router's wildcard
+    fallback, so lifecycle frames reach the client live before content."""
+    router = _anthropic_messages_make_router(fallbacks=[{"*": ["fallback"]}])
+    content_released = asyncio.Event()
+
+    async def source():
+        yield _anthropic_messages_message_start_chunk()
+        await content_released.wait()
+        yield _anthropic_messages_content_chunk("hi")
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(
+        response=source(), initial_kwargs={"model": "primary", "fallbacks": None}
+    )
+
+    assert await asyncio.wait_for(wrapped.__anext__(), timeout=1) == _anthropic_messages_message_start_chunk()
+    content_released.set()
+    assert [chunk async for chunk in wrapped] == [_anthropic_messages_content_chunk("hi")]
+
+
 @pytest.mark.asyncio
 async def test_anthropic_messages_leading_ping_keepalive_is_forwarded_live():
     """A `ping` that no lifecycle frame precedes is how a hold-back turn keeps

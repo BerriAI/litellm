@@ -8417,25 +8417,6 @@ class Router:
         )
         return False
 
-    def _generic_fallback_available(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
-        """
-        Whether the generic fallback chain could still take over for this request: fallbacks are
-        enabled for the request and either a "*" default fallback is configured or the fallbacks
-        lookup (tier first, then the requested group) resolves to a target not yet attempted.
-        """
-        if fallbacks_disabled_for_request(kwargs):
-            return False
-        if self._has_default_fallbacks():
-            return True
-        fallbacks: Final = kwargs.get("fallbacks", self.fallbacks)
-        if fallbacks is None:
-            return False
-        resolved, _ = get_fallback_model_group_for_lookup_groups(
-            fallbacks=fallbacks,
-            lookup_groups=fallback_lookup_groups(kwargs, model_group),
-        )
-        return has_unattempted_fallback_target(resolved, kwargs)
-
     def _refusal_fallback_available(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
         """
         Whether a safeguard refusal can actually be recovered by the dispatcher. A configured
@@ -8448,17 +8429,62 @@ class Router:
         content_policy_fallbacks: Final = kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks)
         if content_policy_fallbacks is not None:
             return self._has_content_policy_fallback(model_group, kwargs)
-        return self._generic_fallback_available(model_group, kwargs)
+        if self._has_default_fallbacks():
+            return True
+        fallbacks: Final = kwargs.get("fallbacks", self.fallbacks)
+        if fallbacks is None:
+            return False
+        resolved, _ = get_fallback_model_group_for_lookup_groups(
+            fallbacks=fallbacks,
+            lookup_groups=fallback_lookup_groups(kwargs, model_group),
+        )
+        return has_unattempted_fallback_target(resolved, kwargs)
+
+    def _anthropic_messages_order_levels(self, model_group: str, kwargs: Mapping[str, Any]) -> tuple[int, ...]:
+        """
+        The distinct deployment order levels the fallback dispatcher would see for this request,
+        computed the same way: the tier a pre-routing hook selected wins over the requested group.
+        """
+        request_team_id: Final[str | None] = (kwargs.get("metadata", {}) or {}).get("user_api_key_team_id")
+        order_model_group: Final = get_pre_routing_selection(kwargs) or model_group
+        all_deployments: Final = self.get_model_list(model_name=order_model_group, team_id=request_team_id) or ()
+        return tuple(
+            sorted(
+                {
+                    litellm.utils._get_deployment_order(d)
+                    for d in all_deployments
+                    if litellm.utils._get_deployment_order(d) is not None
+                }
+            )
+        )
 
     def _anthropic_messages_stream_can_fall_back(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
         """
-        Whether any fallback (generic or safeguard-refusal) could still take over an
-        anthropic_messages stream, which is the only case where holding lifecycle frames
-        back from the client buys a clean retry.
+        Whether async_function_with_fallbacks_common_utils could still route a
+        MidStreamFallbackError somewhere for this request (order levels, weighted
+        failover, content-policy or generic fallbacks), which is the only case where
+        holding lifecycle frames back from the client buys a clean retry. Errs toward
+        True whenever a dispatcher path might reach a fallback.
         """
-        return self._generic_fallback_available(model_group, kwargs) or self._refusal_fallback_available(
-            model_group, kwargs
+        if fallbacks_disabled_for_request(kwargs):
+            return False
+        if self.enable_weighted_failover:
+            return True
+        if len(self._anthropic_messages_order_levels(model_group, kwargs)) > 1:
+            return True
+        content_policy_fallbacks: Final = kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks)
+        if content_policy_fallbacks is not None and self._has_content_policy_fallback(model_group, kwargs):
+            return True
+        fallbacks: Final = kwargs.get("fallbacks", self.fallbacks)
+        if not fallbacks:
+            return False
+        if _check_non_standard_fallback_format(fallbacks=fallbacks):
+            return True
+        resolved, _ = get_fallback_model_group_for_lookup_groups(
+            fallbacks=fallbacks,
+            lookup_groups=fallback_lookup_groups(kwargs, model_group),
         )
+        return has_unattempted_fallback_target(resolved, kwargs)
 
     def _should_raise_content_policy_error(self, model: str, response: ModelResponse, kwargs: dict) -> bool:
         """
