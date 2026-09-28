@@ -136,6 +136,45 @@ async def test_sail_chat_forwards_only_caller_metadata_from_proxy_shape(
     assert body["metadata"] == caller
 
 
+@pytest.mark.asyncio
+async def test_openai_completion_does_not_forward_metadata(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "enable_preview_features", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"completion_window": "flex", "trace": "t"},
+        api_key="sk-test",
+    )
+
+    assert route.called
+    body: Final = json.loads(route.calls.last.request.content)
+    assert "metadata" not in body
+
+
 @pytest.mark.parametrize(
     ("service_tier", "caller_window"),
     [pytest.param("flex", "flex"), pytest.param("priority", "asap"), pytest.param("auto", "flex")],
