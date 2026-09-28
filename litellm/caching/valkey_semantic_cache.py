@@ -16,6 +16,7 @@ RedisSemanticCache since those are backend agnostic.
 
 import asyncio
 import hashlib
+import json
 import os
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -267,7 +268,7 @@ class ValkeySemanticCache(RedisSemanticCache):
             self._ensure_index_sync(len(embedding))
 
             doc_key: Final = self._doc_key(key)
-            self.sync_client.hset(doc_key, mapping=self._doc_mapping(key, prompt, str(value), embedding))
+            self.sync_client.hset(doc_key, mapping=self._doc_mapping(key, prompt, json.dumps(value), embedding))
             ttl: Final = self._get_ttl(**kwargs)
             if ttl is not None:
                 self.sync_client.expire(doc_key, ttl)
@@ -306,7 +307,7 @@ class ValkeySemanticCache(RedisSemanticCache):
             await self._ensure_index_async(len(embedding))
 
             doc_key: Final = self._doc_key(key)
-            await self.async_client.hset(doc_key, mapping=self._doc_mapping(key, prompt, str(value), embedding))
+            await self.async_client.hset(doc_key, mapping=self._doc_mapping(key, prompt, json.dumps(value), embedding))
             ttl: Final = self._get_ttl(**kwargs)
             if ttl is not None:
                 await self.async_client.expire(doc_key, ttl)

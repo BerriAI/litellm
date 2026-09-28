@@ -417,7 +417,7 @@ class RedisSemanticCache(BaseCache):
                 print_verbose("No prompt provided for semantic caching")
                 return
 
-            value_str = str(value)
+            value_str = json.dumps(value)
 
             prompt_embedding: Final = self._get_embedding(prompt, metadata=kwargs.get("metadata"))
 
@@ -562,7 +562,7 @@ class RedisSemanticCache(BaseCache):
                 print_verbose("No prompt provided for semantic caching")
                 return
 
-            value_str: Final = str(value)
+            value_str: Final = json.dumps(value)
 
             # Generate embedding for the value (response) to cache
             prompt_embedding: Final = await self._get_async_embedding(prompt, metadata=kwargs.get("metadata"))
