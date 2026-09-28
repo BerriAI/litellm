@@ -23,6 +23,7 @@ from litellm.proxy._types import (
 from litellm.proxy.management_helpers.audit_logs import (
     create_audit_log_for_update,
     is_audit_logging_enabled,
+    track_audit_task,
 )
 from litellm.repositories.user_repository import UserRepository
 
@@ -63,15 +64,17 @@ class UserManagementEventHooks:
             user_row: Final = await UserRepository(prisma_client).find_by_id(response.user_id)
             if user_row is None:
                 raise Exception(f"no user row found for user_id={response.user_id}")
-            asyncio.create_task(
-                UserManagementEventHooks.create_internal_user_audit_log(
-                    user_id=user_row.user_id,
-                    action="created",
-                    litellm_changed_by=user_api_key_dict.user_id,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_proxy_admin_name=litellm_proxy_admin_name,
-                    before_value=None,
-                    after_value=user_row.model_dump_json(exclude_none=True),
+            track_audit_task(
+                asyncio.create_task(
+                    UserManagementEventHooks.create_internal_user_audit_log(
+                        user_id=user_row.user_id,
+                        action="created",
+                        litellm_changed_by=user_api_key_dict.user_id,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        before_value=None,
+                        after_value=user_row.model_dump_json(exclude_none=True),
+                    )
                 )
             )
         except Exception as e:

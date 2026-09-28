@@ -7317,6 +7317,7 @@ async def block_key(
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
         is_audit_logging_enabled,
+        track_audit_task,
     )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -7363,31 +7364,33 @@ async def block_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
-    if is_audit_logging_enabled():
-        asyncio.create_task(
-            create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=get_audit_log_changed_by(
-                        litellm_changed_by=litellm_changed_by,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
-                    ),
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.KEY_TABLE_NAME,
-                    object_id=hashed_token,
-                    action="blocked",
-                    updated_values="{}",
-                    before_value=existing_record.model_dump_json(),
-                )
-            )
-        )
-
     record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
         where={"token": hashed_token},
         data=with_settings_updated_at({"blocked": True}),
     )
+
+    if is_audit_logging_enabled():
+        track_audit_task(
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=hashed_token,
+                        action="blocked",
+                        updated_values="{}",
+                        before_value=existing_record.model_dump_json(),
+                    )
+                )
+            )
+        )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
     await _delete_cache_key_object(
@@ -7431,6 +7434,7 @@ async def unblock_key(
     from litellm.proxy.management_helpers.audit_logs import (
         get_audit_log_changed_by,
         is_audit_logging_enabled,
+        track_audit_task,
     )
     from litellm.proxy.proxy_server import (
         create_audit_log_for_update,
@@ -7477,31 +7481,33 @@ async def unblock_key(
             code=status.HTTP_404_NOT_FOUND,
         )
 
-    if is_audit_logging_enabled():
-        asyncio.create_task(
-            create_audit_log_for_update(
-                request_data=LiteLLM_AuditLogs(
-                    id=str(uuid.uuid4()),
-                    updated_at=datetime.now(timezone.utc),
-                    changed_by=get_audit_log_changed_by(
-                        litellm_changed_by=litellm_changed_by,
-                        user_api_key_dict=user_api_key_dict,
-                        litellm_proxy_admin_name=litellm_proxy_admin_name,
-                    ),
-                    changed_by_api_key=user_api_key_dict.api_key,
-                    table_name=LitellmTableNames.KEY_TABLE_NAME,
-                    object_id=hashed_token,
-                    action="unblocked",
-                    updated_values="{}",
-                    before_value=existing_record.model_dump_json(),
-                )
-            )
-        )
-
     record: Final = await _prisma_table(VerificationTokenRepository(prisma_client)).update(
         where={"token": hashed_token},
         data=with_settings_updated_at({"blocked": False}),
     )
+
+    if is_audit_logging_enabled():
+        track_audit_task(
+            asyncio.create_task(
+                create_audit_log_for_update(
+                    request_data=LiteLLM_AuditLogs(
+                        id=str(uuid.uuid4()),
+                        updated_at=datetime.now(timezone.utc),
+                        changed_by=get_audit_log_changed_by(
+                            litellm_changed_by=litellm_changed_by,
+                            user_api_key_dict=user_api_key_dict,
+                            litellm_proxy_admin_name=litellm_proxy_admin_name,
+                        ),
+                        changed_by_api_key=user_api_key_dict.api_key,
+                        table_name=LitellmTableNames.KEY_TABLE_NAME,
+                        object_id=hashed_token,
+                        action="unblocked",
+                        updated_values="{}",
+                        before_value=existing_record.model_dump_json(),
+                    )
+                )
+            )
+        )
 
     ## UPDATE KEY CACHE - invalidate so next read re-fetches from DB
     await _delete_cache_key_object(
