@@ -14870,7 +14870,8 @@
         "supports_forced_tool_use": false,
         "thinking_always_on": true,
         "prompt_cache_min_tokens": 512,
-        "source": "https://platform.claude.com/docs/en/about-claude/pricing"
+        "source": "https://platform.claude.com/docs/en/models/sonnet-5-5/overview",
+        "supports_web_search": true
     },
     "claude-sonnet-4-6": {
         "supports_anthropic_compaction": true,
