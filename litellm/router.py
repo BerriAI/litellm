@@ -1092,19 +1092,12 @@ class Router:
         self._routing_groups_input: list[RoutingGroup | dict] | None = routing_groups
 
         ## SETTING FALLBACKS ##
-        ### validate if it's set + in correct format
         _fallbacks = fallbacks or litellm.fallbacks
-
-        self.validate_fallbacks(fallback_param=_fallbacks)
-        ### set fallbacks
-        self.fallbacks = _fallbacks
-
-        if default_fallbacks is not None or litellm.default_fallbacks is not None:
-            _fallbacks = default_fallbacks or litellm.default_fallbacks
-            if self.fallbacks is not None:
-                self.fallbacks.append({"*": _fallbacks})
-            else:
-                self.fallbacks = [{"*": _fallbacks}]
+        self.default_fallbacks = list(
+            default_fallbacks if default_fallbacks is not None else (litellm.default_fallbacks or [])
+        )
+        self._materialized_default_fallback: dict[str, list[str]] | None = None
+        self._set_fallbacks(_fallbacks)
 
         self.context_window_fallbacks = context_window_fallbacks or litellm.context_window_fallbacks
 
@@ -12085,6 +12078,20 @@ class Router:
         ]
         return _settings_to_return
 
+    def _set_fallbacks(self, fallbacks: list | None) -> None:
+        """Build the effective fallbacks without changing the caller's list.
+
+        Track only the wildcard we add ourselves, so an explicit wildcard
+        remains authoritative when default_fallbacks changes at runtime.
+        """
+        self.validate_fallbacks(fallback_param=fallbacks)
+        effective = [fallback for fallback in (fallbacks or []) if fallback is not self._materialized_default_fallback]
+        self._materialized_default_fallback = None
+        if self.default_fallbacks and not any("*" in fallback for fallback in effective):
+            self._materialized_default_fallback = {"*": list(self.default_fallbacks)}
+            effective.append(self._materialized_default_fallback)
+        self.fallbacks = effective if effective or fallbacks is not None else None
+
     def update_settings(self, **kwargs):
         """
         Update the router settings.
@@ -12105,6 +12112,10 @@ class Router:
                 if var in _int_settings:
                     _casted_value = int(kwargs[var])
                     setattr(self, var, _casted_value)
+                elif var == "fallbacks":
+                    self._set_fallbacks(kwargs[var])
+                elif var == "default_fallbacks":
+                    self.default_fallbacks = list(kwargs[var] or [])
                 elif var == "routing_groups":
                     rebuild_routing_groups = True
                 elif var == "optional_pre_call_checks":
@@ -12141,6 +12152,9 @@ class Router:
                     setattr(self, var, value)
             else:
                 verbose_router_logger.debug("Setting %s is not allowed", var)
+
+        if "default_fallbacks" in kwargs:
+            self._set_fallbacks(self.fallbacks)
 
         if routing_args_updated:
             self._apply_updated_routing_strategy_args()
