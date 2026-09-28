@@ -1,18 +1,16 @@
 use std::ops::ControlFlow;
 
-use crate::PythonHostCalls;
-use litellm_host::call::HostedCompletion;
-use litellm_host::event::WireRequest;
-use litellm_host::event::{FailureOrigin, Timing, epoch_seconds};
-use litellm_host::machine::{HostFailure, Machine, MachineStep};
-use litellm_host::protocol::HookRequest;
-use litellm_host::protocol::StreamDelivery;
-use litellm_host::protocol::{HostRequest, Protocol, Reply};
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use litellm_host::call::HostedCompletion;
+use litellm_host::event::{FailureOrigin, Timing, WireRequest, epoch_seconds};
+use litellm_host::machine::{HostFailure, Machine, MachineStep};
+use litellm_host::protocol::{HookRequest, HostRequest, Protocol, Reply, StreamDelivery};
+
+use crate::PythonHostCalls;
 use crate::handle::{Execution, ExecutionBody, ExecutionStep};
 use crate::hooks::{HookEvent, HookResume, HookStep, Preflight, PythonCallHooks};
 use crate::native::{NativeMachine, NativePoll};

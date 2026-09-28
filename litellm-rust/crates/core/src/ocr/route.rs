@@ -35,9 +35,9 @@ pub type OcrMachine = HostedMachine<Ocr>;
 
 fn caller_token_provider(services: HostServices<Ocr>) -> TokenProviderHandle {
     TokenProviderHandle::from_callback(move || {
-        let services = services.clone();
+        let host_services = services.clone();
         async move {
-            services
+            host_services
                 .call(OcrOp::AcquireAzureAdToken)
                 .await
                 .map_err(|error| {
