@@ -1,6 +1,7 @@
 from collections.abc import Mapping
 from typing import Final
 
+from litellm.litellm_core_utils.core_helpers import normalize_drop_params
 from litellm.llms.openai_like.messages.transformation import (
     JSONProviderAnthropicMessagesConfig,
 )
@@ -20,7 +21,7 @@ class SailAnthropicMessagesConfig(JSONProviderAnthropicMessagesConfig):
         normalized: Final = params_with_completion_window(
             anthropic_messages_optional_request_params,
             model=model,
-            drop_params=bool(litellm_params.get("drop_params")),
+            drop_params=normalize_drop_params(litellm_params.get("drop_params")) is True,
         )
         metadata: Final = normalized.get("metadata")
         parent_params: Final = (

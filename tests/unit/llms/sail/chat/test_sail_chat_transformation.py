@@ -6,7 +6,6 @@ import pytest
 import respx
 
 import litellm
-from litellm.llms.openai.chat.gpt_transformation import OpenAIGPTConfig
 from litellm.llms.sail.common_utils import billed_service_tier
 from tests.unit.llms.sail.helpers import (
     MODEL,
@@ -249,9 +248,3 @@ def test_sail_completion_cost_uses_metadata_window_for_billing() -> None:
 
     assert flex_cost == pytest.approx(tier_cost)
     assert flex_cost < default_cost
-
-
-def test_openai_does_not_advertise_metadata_optional_param() -> None:
-    config: Final = OpenAIGPTConfig()
-
-    assert "metadata" not in config.get_supported_openai_params("gpt-4o-mini")

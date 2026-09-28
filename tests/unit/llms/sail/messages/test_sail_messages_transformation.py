@@ -56,6 +56,35 @@ async def test_sail_messages_rejects_conflicting_window_before_dispatch(
     assert not messages_route.called
 
 
+@pytest.mark.parametrize("drop_params", ["false", True])
+@pytest.mark.asyncio
+async def test_sail_messages_handles_unknown_window_drop_params(
+    sail_env: None, messages_route: respx.Route, drop_params: bool | str
+) -> None:
+    if drop_params == "false":
+        with pytest.raises(litellm.UnsupportedParamsError, match=r"metadata\.completion_window"):
+            await litellm.anthropic_messages(
+                model=MODEL,
+                messages=MESSAGES,
+                max_tokens=16,
+                metadata={"completion_window": "unknown"},
+                drop_params=drop_params,
+            )
+        assert not messages_route.called
+        return
+
+    await litellm.anthropic_messages(
+        model=MODEL,
+        messages=MESSAGES,
+        max_tokens=16,
+        metadata={"completion_window": "unknown"},
+        drop_params=drop_params,
+    )
+
+    body: Final = sent_body(messages_route)
+    assert "completion_window" not in body["metadata"]
+
+
 def test_sail_messages_logging_optional_params_bill_selected_window() -> None:
     logging_optional_params: Final = {"metadata": {"completion_window": "flex"}, "service_tier": "balanced"}
 
