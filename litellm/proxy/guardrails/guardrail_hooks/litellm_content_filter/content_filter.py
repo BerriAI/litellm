@@ -1260,10 +1260,21 @@ class ContentFilterGuardrail(CustomGuardrail):
             return None
 
         text_lower: Final = text.lower()
+        import re
         for keyword, (action, description) in self.blocked_words.items():
-            if keyword in text_lower:
-                verbose_proxy_logger.debug("Blocked word '%s' found with action %s", keyword, action)
-                return (keyword, action, description)
+            # Use word boundaries for word-character keywords to prevent false positives
+            # (e.g., "alternative" matching "alter")
+            # Punctuation-only keywords (e.g., "=", ">") use substring matching
+            if _is_word_char_pattern(keyword):
+                pattern = r"\b" + re.escape(keyword) + r"\b"
+                if re.search(pattern, text_lower):
+                    verbose_proxy_logger.debug("Blocked word '%s' found with action %s", keyword, action)
+                    return (keyword, action, description)
+            else:
+                # Punctuation-only: use substring matching
+                if keyword in text_lower:
+                    verbose_proxy_logger.debug("Blocked word '%s' found with action %s", keyword, action)
+                    return (keyword, action, description)
         return None
 
     def _handle_conditional_match(

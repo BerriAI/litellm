@@ -35,9 +35,9 @@ class TestWordCharPatternHelper:
 
     def test_mixed_words(self):
         """Words with punctuation mixed in have word characters."""
-        # These should still be treated as word patterns for boundary purposes
-        # since they contain word characters
-        assert _is_word_char_pattern("drop") is False  # Backslash is not word char
+        # 'drop' is all word characters (letters), so it should be True
+        assert _is_word_char_pattern("drop") is True
+        # '--' is punctuation-only, so it should be False
         assert _is_word_char_pattern("--") is False  # Dashes
 
     def test_empty_string(self):
