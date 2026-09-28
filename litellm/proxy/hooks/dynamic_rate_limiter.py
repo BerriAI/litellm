@@ -8,6 +8,8 @@ from collections.abc import Callable
 from datetime import datetime
 from typing import Final
 
+from fastapi import HTTPException
+
 import litellm
 from litellm import ModelResponse, Router
 from litellm._logging import verbose_proxy_logger
@@ -177,7 +179,10 @@ class _PROXY_DynamicRateLimitHandler(CustomLogger):
             verbose_proxy_logger.exception(
                 "litellm.proxy.hooks.dynamic_rate_limiter.py::check_available_usage: Exception occurred - %s", e
             )
-            return None, None, None, None, None
+            raise HTTPException(
+                status_code=503,
+                detail="Dynamic rate limiter usage is unavailable; request rejected.",
+            ) from e
 
     async def async_pre_call_hook(
         self,
