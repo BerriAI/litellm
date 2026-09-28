@@ -1,3 +1,4 @@
+from litellm.proxy._experimental.mcp_server import operations as mcp_operations
 """
 VERIA-7 regression: OpenAPI-backed (local-registry) MCP tools must run
 through `pre_call_tool_check` before dispatch, the same as managed
@@ -8,6 +9,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from mcp.types import CallToolResult
 
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
@@ -45,26 +47,26 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
     fake_tool.name = "list_pets"
 
     pre_call = AsyncMock(return_value={})
-    handle_local = AsyncMock(return_value=[])
+    handle_local = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
 
     with (
         patch.object(
-            mcp_module.global_mcp_server_manager,
+            mcp_operations.global_mcp_server_manager,
             "_get_mcp_server_from_tool_name",
             return_value=fake_server,
         ),
         patch.object(
-            mcp_module.global_mcp_server_manager,
+            mcp_operations.global_mcp_server_manager,
             "pre_call_tool_check",
             new=pre_call,
         ),
         patch.object(
-            mcp_module.global_mcp_tool_registry,
+            mcp_operations.global_mcp_tool_registry,
             "get_tool",
             return_value=fake_tool,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+            "litellm.proxy._experimental.mcp_server.operations._handle_local_mcp_tool",
             new=handle_local,
         ),
         patch(
@@ -72,7 +74,7 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
             return_value=True,
         ),
     ):
-        await mcp_module.execute_mcp_tool(
+        await mcp_operations.execute_mcp_tool(
             name="list_pets",
             arguments={"limit": 10},
             allowed_mcp_servers=[fake_server],
@@ -92,7 +94,7 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
     assert pre_call_kwargs["guardrail_context"] == {"metadata": {"guardrails": ("block-all",)}}
     assert pre_call_kwargs["name"] == "list_pets"
     assert pre_call_kwargs["server"] is fake_server
-    assert pre_call_kwargs["user_api_key_auth"] is user
+    assert pre_call_kwargs["user_api_key_auth"] == user
     # `proxy_logging_obj` must be sourced from the canonical proxy_server
     # module (same as the managed path) — passing None would crash the
     # downstream `_create_mcp_request_object_from_kwargs` call with
@@ -130,26 +132,26 @@ async def test_openapi_local_tool_blocked_when_pre_call_check_raises():
     pre_call = AsyncMock(
         side_effect=HTTPException(status_code=403, detail="not allowed")
     )
-    handle_local = AsyncMock(return_value=[])
+    handle_local = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
 
     with (
         patch.object(
-            mcp_module.global_mcp_server_manager,
+            mcp_operations.global_mcp_server_manager,
             "_get_mcp_server_from_tool_name",
             return_value=fake_server,
         ),
         patch.object(
-            mcp_module.global_mcp_server_manager,
+            mcp_operations.global_mcp_server_manager,
             "pre_call_tool_check",
             new=pre_call,
         ),
         patch.object(
-            mcp_module.global_mcp_tool_registry,
+            mcp_operations.global_mcp_tool_registry,
             "get_tool",
             return_value=fake_tool,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+            "litellm.proxy._experimental.mcp_server.operations._handle_local_mcp_tool",
             new=handle_local,
         ),
         patch(
@@ -158,7 +160,7 @@ async def test_openapi_local_tool_blocked_when_pre_call_check_raises():
         ),
     ):
         with pytest.raises(HTTPException) as exc:
-            await mcp_module.execute_mcp_tool(
+            await mcp_operations.execute_mcp_tool(
                 name="delete_pet",
                 arguments={},
                 allowed_mcp_servers=[fake_server],
@@ -190,29 +192,29 @@ async def test_openapi_local_tool_denied_when_server_not_resolvable():
     fake_tool.name = "list_pets"
 
     pre_call = AsyncMock(return_value={})
-    handle_local = AsyncMock(return_value=[])
+    handle_local = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
     resolve_auth = MagicMock()
 
     # `_get_mcp_server_from_tool_name` returns None — no server context.
     with (
-        patch.object(mcp_module, "_resolve_openapi_tool_auth", new=resolve_auth),
+        patch.object(mcp_operations, "_resolve_openapi_tool_auth", new=resolve_auth),
         patch.object(
-            mcp_module.global_mcp_server_manager,
+            mcp_operations.global_mcp_server_manager,
             "_get_mcp_server_from_tool_name",
             return_value=None,
         ),
         patch.object(
-            mcp_module.global_mcp_server_manager,
+            mcp_operations.global_mcp_server_manager,
             "pre_call_tool_check",
             new=pre_call,
         ),
         patch.object(
-            mcp_module.global_mcp_tool_registry,
+            mcp_operations.global_mcp_tool_registry,
             "get_tool",
             return_value=fake_tool,
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+            "litellm.proxy._experimental.mcp_server.operations._handle_local_mcp_tool",
             new=handle_local,
         ),
         patch(
@@ -221,7 +223,7 @@ async def test_openapi_local_tool_denied_when_server_not_resolvable():
         ),
     ):
         with pytest.raises(HTTPException) as exc:
-            await mcp_module.execute_mcp_tool(
+            await mcp_operations.execute_mcp_tool(
                 name="list_pets",
                 arguments={},
                 allowed_mcp_servers=[],
@@ -274,33 +276,33 @@ async def test_openapi_local_tool_injects_resolved_oauth_token():
     fake_tool.name = "get_values"
     captured: dict = {}
 
-    async def handle_local(_name, _arguments):
+    async def handle_local(_name, _arguments, _wire_compat):
         captured["resolved"] = _request_resolved_auth_headers.get()
-        return []
+        return CallToolResult(content=[], is_error=False)
 
     with (
         patch.object(
-            mcp_module.global_mcp_server_manager,
+            mcp_operations.global_mcp_server_manager,
             "_get_mcp_server_from_tool_name",
             return_value=oauth_server,
         ),
         patch.object(
-            mcp_module.global_mcp_server_manager,
+            mcp_operations.global_mcp_server_manager,
             "pre_call_tool_check",
             new=AsyncMock(return_value={}),
         ),
         patch.object(
-            mcp_module.global_mcp_tool_registry,
+            mcp_operations.global_mcp_tool_registry,
             "get_tool",
             return_value=fake_tool,
         ),
         patch.object(
-            mcp_module.global_mcp_server_manager._cred_provider,
+            mcp_operations.global_mcp_server_manager._cred_provider,
             "resolve_credentials",
             new=AsyncMock(return_value=Ok(StaticHeaderAuth("Bearer stored-user-token"))),
         ),
         patch(
-            "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+            "litellm.proxy._experimental.mcp_server.operations._handle_local_mcp_tool",
             new=handle_local,
         ),
         patch(
@@ -308,7 +310,7 @@ async def test_openapi_local_tool_injects_resolved_oauth_token():
             return_value=True,
         ),
     ):
-        await mcp_module.execute_mcp_tool(
+        await mcp_operations.execute_mcp_tool(
             name="get_values",
             arguments={},
             allowed_mcp_servers=[oauth_server],
@@ -417,7 +419,7 @@ async def test_legacy_local_tool_fallback_refuses_unentitled_caller(legacy_local
     )
 
     with pytest.raises(HTTPException) as exc:
-        await mcp_module.execute_mcp_tool(
+        await mcp_operations.execute_mcp_tool(
             name=f"{LEGACY_SERVER_NAME}-{LEGACY_TOOL}",
             arguments={},
             allowed_mcp_servers=[server],
@@ -451,7 +453,7 @@ async def test_legacy_local_tool_fallback_still_dispatches_entitled_caller(
     server, executed = legacy_local_tool
     user = _caller_entitled_to([LEGACY_TOOL])
 
-    result = await mcp_module.execute_mcp_tool(
+    result = await mcp_operations.execute_mcp_tool(
         name=f"{LEGACY_SERVER_NAME}-{LEGACY_TOOL}",
         arguments={},
         allowed_mcp_servers=[server],
@@ -481,7 +483,7 @@ async def test_legacy_local_tool_fallback_fails_closed_on_empty_prefix(
     _server, executed = legacy_local_tool
 
     with pytest.raises(HTTPException) as exc:
-        await mcp_module.execute_mcp_tool(
+        await mcp_operations.execute_mcp_tool(
             name=f"-{LEGACY_TOOL}",
             arguments={},
             allowed_mcp_servers=[],
@@ -523,7 +525,7 @@ async def test_legacy_local_tool_fallback_fails_closed_when_prefix_names_no_serv
         return_value=True,
     ):
         with pytest.raises(HTTPException) as exc:
-            await mcp_module.execute_mcp_tool(
+            await mcp_operations.execute_mcp_tool(
                 name=f"{LEGACY_SERVER_NAME}-{LEGACY_TOOL}",
                 arguments={},
                 allowed_mcp_servers=[other_server],
@@ -546,7 +548,7 @@ async def test_unknown_tool_name_still_reports_not_found():
     from litellm.proxy._experimental.mcp_server import server as mcp_module
 
     with pytest.raises(HTTPException) as exc:
-        await mcp_module.execute_mcp_tool(
+        await mcp_operations.execute_mcp_tool(
             name="tool_no_registry_knows",
             arguments={},
             allowed_mcp_servers=[],
@@ -602,15 +604,15 @@ async def test_per_server_auth_header_reaches_both_openapi_dispatch_arms(dispatc
         captured["resolver_credential"] = kwargs["mcp_auth_header"]
         return None, kwargs["forwarded_headers"]
 
-    async def capture_local(_name, _arguments):
+    async def capture_local(_name, _arguments, _wire_compat):
         captured["injected"] = _request_auth_header.get()
-        return []
+        return CallToolResult(content=[], is_error=False)
 
-    async def capture_openapi_handler(_server, _name, _arguments):
+    async def capture_openapi_handler(_server, _name, _arguments, _wire_compat):
         captured["injected"] = _request_auth_header.get()
-        return []
+        return CallToolResult(content=[], is_error=False)
 
-    manager = mcp_module.global_mcp_server_manager
+    manager = mcp_operations.global_mcp_server_manager
     with (
         patch.object(manager, "resolve_openapi_upstream_auth", new=fake_resolver),
         patch.object(manager, "pre_call_tool_check", new=AsyncMock(return_value={})),
@@ -620,9 +622,9 @@ async def test_per_server_auth_header_reaches_both_openapi_dispatch_arms(dispatc
             fake_tool.name = "list_reports"
             with (
                 patch.object(manager, "_get_mcp_server_from_tool_name", return_value=server),
-                patch.object(mcp_module.global_mcp_tool_registry, "get_tool", return_value=fake_tool),
+                patch.object(mcp_operations.global_mcp_tool_registry, "get_tool", return_value=fake_tool),
                 patch(
-                    "litellm.proxy._experimental.mcp_server.server._handle_local_mcp_tool",
+                    "litellm.proxy._experimental.mcp_server.operations._handle_local_mcp_tool",
                     new=capture_local,
                 ),
                 patch(
@@ -630,7 +632,7 @@ async def test_per_server_auth_header_reaches_both_openapi_dispatch_arms(dispatc
                     return_value=True,
                 ),
             ):
-                await mcp_module.execute_mcp_tool(
+                await mcp_operations.execute_mcp_tool(
                     name="list_reports",
                     arguments={},
                     allowed_mcp_servers=[server],
@@ -702,11 +704,11 @@ async def test_local_dispatch_reports_the_outcome_instead_of_success(failure: st
     user = UserAPIKeyAuth(api_key="sk-user", user_id="alice", user_role=LitellmUserRoles.INTERNAL_USER.value)
 
     with (
-        patch.object(mcp_module.global_mcp_server_manager, "_get_mcp_server_from_tool_name", return_value=server),
-        patch.object(mcp_module.global_mcp_server_manager, "pre_call_tool_check", new=AsyncMock(return_value={})),
-        patch.object(mcp_module.global_mcp_tool_registry, "get_tool", return_value=fake_tool),
+        patch.object(mcp_operations.global_mcp_server_manager, "_get_mcp_server_from_tool_name", return_value=server),
+        patch.object(mcp_operations.global_mcp_server_manager, "pre_call_tool_check", new=AsyncMock(return_value={})),
+        patch.object(mcp_operations.global_mcp_tool_registry, "get_tool", return_value=fake_tool),
         patch.object(
-            mcp_module.global_mcp_server_manager,
+            mcp_operations.global_mcp_server_manager,
             "resolve_openapi_upstream_auth",
             new=AsyncMock(return_value=(None, None)),
         ),
@@ -715,7 +717,7 @@ async def test_local_dispatch_reports_the_outcome_instead_of_success(failure: st
             return_value=True,
         ),
     ):
-        call = mcp_module.execute_mcp_tool(
+        call = mcp_operations.execute_mcp_tool(
             name="list_reports",
             arguments={},
             allowed_mcp_servers=[server],

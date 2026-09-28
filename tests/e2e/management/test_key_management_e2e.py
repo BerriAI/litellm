@@ -96,8 +96,8 @@ def _spend_until_budget_blocks(client: ManagementClient, key: str) -> None:
     for _ in range(40):
         outcome = client.chat_status(key, SPEND_MODEL, f"spend {unique_marker()}")
         if _is_budget_block(outcome):
-            assert outcome.status_code == 429, (
-                f"budget refusal must be 429, got {outcome.status_code}: {outcome.body[:200]}"
+            assert outcome.status_code == 422, (
+                f"budget refusal must be 422, got {outcome.status_code}: {outcome.body[:200]}"
             )
             return
         assert outcome.ok, f"paid call failed before the budget tripped ({outcome.status_code}): {outcome.body[:300]}"

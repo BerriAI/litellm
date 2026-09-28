@@ -2,7 +2,11 @@ from typing import Final, cast
 from urllib.parse import urlparse
 
 import litellm
-from litellm.constants import PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO, REPLICATE_MODEL_NAME_WITH_ID_LENGTH
+from litellm.constants import (
+    NADIR_DEFAULT_API_BASE,
+    PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
+    REPLICATE_MODEL_NAME_WITH_ID_LENGTH,
+)
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
 )
@@ -139,6 +143,18 @@ def declared_authenticating_provider(model: str | None, custom_llm_provider: str
     return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
 
 
+def inferred_provider(model: str | None) -> str | None:
+    if not model:
+        return None
+    declared: Final = declared_authenticating_provider(model)
+    if declared is not None:
+        return declared
+    try:
+        return get_llm_provider(model=model)[1]
+    except Exception:  # noqa: BLE001  # get_llm_provider raises for an unknown name, which then has no provider
+        return None
+
+
 def get_llm_provider(
     model: str,
     custom_llm_provider: str | None = None,
@@ -265,6 +281,11 @@ def get_llm_provider(
                     elif endpoint == "https://api.cerebras.ai/v1":
                         custom_llm_provider = "cerebras"
                         dynamic_api_key = get_secret_str("CEREBRAS_API_KEY")
+                    elif endpoint == NADIR_DEFAULT_API_BASE:
+                        custom_llm_provider = "nadir"  # rebind-ok: mirrors sibling endpoint branches
+                        dynamic_api_key = (
+                            get_secret_str("NADIR_API_KEY") if api_base.lower().startswith("https://") else None
+                        )
                     elif endpoint == "https://inference.baseten.co/v1":
                         custom_llm_provider = "baseten"
                         dynamic_api_key = get_secret_str("BASETEN_API_KEY")
@@ -362,6 +383,9 @@ def get_llm_provider(
                     elif endpoint == "https://ai-gateway.vercel.sh/v1":
                         custom_llm_provider = "vercel_ai_gateway"
                         dynamic_api_key = get_secret_str("VERCEL_AI_GATEWAY_API_KEY")
+                    elif endpoint == "https://api.edenai.run/v3":
+                        custom_llm_provider = "edenai"  # rebind-ok: api_base detection resolves the provider in place
+                        dynamic_api_key = get_secret_str("EDENAI_API_KEY")
                     elif endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
@@ -634,6 +658,13 @@ def _get_openai_compatible_provider_info(
     elif custom_llm_provider == "cerebras":
         api_base = api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"
         dynamic_api_key = api_key or get_secret_str("CEREBRAS_API_KEY")
+    elif custom_llm_provider == "nadir":
+        default_nadir_base: Final = get_secret_str("NADIR_API_BASE") or NADIR_DEFAULT_API_BASE
+        caller_base: Final = api_base
+        api_base = api_base or default_nadir_base  # rebind-ok: mirrors sibling provider branches
+        trusted_base: Final = caller_base is None or caller_base.rstrip("/") == default_nadir_base.rstrip("/")
+        env_key: Final = get_secret_str("NADIR_API_KEY") if trusted_base else None
+        dynamic_api_key = api_key or env_key  # rebind-ok: mirrors sibling provider branches
     elif custom_llm_provider == "baseten":
         # Use BasetenConfig to determine the appropriate API base URL
         if api_base is None:
@@ -853,6 +884,11 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.VercelAIGatewayConfig()._get_openai_compatible_provider_info(api_base, api_key)
+    elif custom_llm_provider == "edenai":
+        api_base = litellm.EdenAIChatConfig.get_api_base(api_base)  # rebind-ok: chain resolves in place
+        dynamic_api_key = litellm.EdenAIChatConfig.get_api_key(api_key)  # rebind-ok: chain resolves in place
+    elif custom_llm_provider == "fal_ai":
+        dynamic_api_key = litellm.FalAIChatConfig.get_api_key(api_key)  # rebind-ok: chain resolves in place
     elif custom_llm_provider == "aiml":
         (
             api_base,

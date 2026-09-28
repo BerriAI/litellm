@@ -1,8 +1,13 @@
+mod host;
+
+use pyo3::types::{PyDict, PyTuple};
+
+use crate::errors::RustBridgeDeclined;
+use crate::logger::{run_async, run_sync};
 use litellm_core::chat_completions::{
-    Error, chat_completions as run_chat_completions, chat_completions_decline_reason,
-    types::ChatCompletionsRequest,
+    ChatCompletionsRoute, Error, chat_completions_decline_reason, types::ChatCompletionsRequest,
 };
-use litellm_host_python::{from_py_argument, run_async, run_sync};
+use litellm_host_python::from_py_argument;
 use litellm_types::utils::ChatCompletionsResponse;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
@@ -16,6 +21,8 @@ use crate::{
 };
 
 async fn execute(
+    http: Result<litellm_http::Client, litellm_http::Error>,
+    secrets: std::sync::Arc<dyn litellm_secrets::source::SecretSource>,
     messages: Vec<Value>,
     optional_params: Map<String, Value>,
     options: RouteOptions,
@@ -28,17 +35,21 @@ async fn execute(
         extra_headers,
         timeout,
     } = options;
-    run_chat_completions(ChatCompletionsRequest {
-        model: &model,
-        messages: Value::Array(messages),
-        optional_params,
-        api_key: api_key.as_deref(),
-        api_base: api_base.as_deref(),
-        custom_llm_provider: custom_llm_provider.as_deref(),
-        extra_headers,
-        timeout,
-    })
-    .await
+    ChatCompletionsRoute::new(http?, crate::http::resources().auth.clone(), secrets)
+        .execute(
+            ChatCompletionsRequest {
+                model: &model,
+                messages: Value::Array(messages),
+                optional_params,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                timeout,
+            },
+            &(),
+        )
+        .await
 }
 
 #[pyfunction]
@@ -83,9 +94,17 @@ pub(crate) fn chat_completions(
         extra_headers,
         timeout: optional_timeout(timeout_seconds),
     };
+    let http = crate::http::provider_client(py, &PyDict::new(py), false)?;
+    let secrets = crate::secrets::source(py)?;
     run_sync(
         py,
-        execute(messages, optional_params.unwrap_or_default(), options),
+        execute(
+            http,
+            secrets,
+            messages,
+            optional_params.unwrap_or_default(),
+            options,
+        ),
         chat_completions_error_to_pyerr,
     )
 }
@@ -115,11 +134,103 @@ pub(crate) fn achat_completions<'py>(
         extra_headers,
         timeout: optional_timeout(timeout_seconds),
     };
+    let http = crate::http::provider_client(py, &PyDict::new(py), true)?;
+    let secrets = crate::secrets::source(py)?;
     run_async(
         py,
-        execute(messages, optional_params.unwrap_or_default(), options),
+        execute(
+            http,
+            secrets,
+            messages,
+            optional_params.unwrap_or_default(),
+            options,
+        ),
         chat_completions_error_to_pyerr,
     )
+}
+
+fn run_public(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+    asynchronous: bool,
+) -> PyResult<Py<PyAny>> {
+    use super::inference::InferenceHost;
+    use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
+    let host = InferenceHost::new(
+        request.clone().unbind(),
+        "litellm.rust_bridge.chat_completions.route_host",
+    );
+    if let Some(reason) = py
+        .import("litellm.rust_bridge.chat_completions.route_host")?
+        .getattr("decline_reason")?
+        .call1((&request,))?
+        .extract::<Option<String>>()?
+    {
+        return Err(RustBridgeDeclined::new_err(reason));
+    }
+    let admission = host::project(&host, py, &kwargs)?;
+    if let Some(reason) = chat_completions_decline_reason(
+        &admission.model,
+        admission.custom_llm_provider.as_deref(),
+        admission.messages,
+        &admission.optional_params,
+    ) {
+        return Err(RustBridgeDeclined::new_err(reason));
+    }
+    if admission
+        .optional_params
+        .get("stream")
+        .is_some_and(|value| value == &serde_json::Value::Bool(true))
+    {
+        return Err(RustBridgeDeclined::new_err(
+            "native Python chat_completions streaming",
+        ));
+    }
+    let route = ChatCompletionsRoute::new(
+        crate::http::provider_client(py, &kwargs, asynchronous)?
+            .map_err(crate::http::client_error)?,
+        crate::http::resources().auth.clone(),
+        crate::secrets::source(py)?,
+    );
+    run_legacy_call(
+        py,
+        LegacySurface {
+            call_type: if asynchronous {
+                "acompletion"
+            } else {
+                "completion"
+            },
+            input_description: "Chat completions",
+            stream: None,
+        },
+        PublicCall::capture(&request, &args, &kwargs)?,
+        move |request| crate::logger::LoggedMachine::new(route.machine(request)),
+        host::ChatCompletionsPythonHost(host),
+        crate::preflight::sdk_preflight,
+        asynchronous,
+    )
+}
+
+#[pyfunction]
+pub(crate) fn completion(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    run_public(py, request, args, kwargs, false)
+}
+
+#[pyfunction]
+pub(crate) fn acompletion(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    run_public(py, request, args, kwargs, true)
 }
 
 #[cfg(test)]

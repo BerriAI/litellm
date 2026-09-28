@@ -1,6 +1,8 @@
+import { useResetTeamMemberBudget } from "@/app/(dashboard)/hooks/teams/useResetTeamMemberBudget";
 import { useResetTeamMemberSpend } from "@/app/(dashboard)/hooks/teams/useResetTeamMemberSpend";
 import { useUISettings } from "@/app/(dashboard)/hooks/uiSettings/useUISettings";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { SimpleTooltip } from "@/components/ui/tooltip";
@@ -13,7 +15,15 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import { isProxyAdminRole, isUserTeamAdminForSingleTeam } from "@/utils/roles";
 import { CircleHelp } from "lucide-react";
 import { useState, type ComponentProps } from "react";
-import { TeamData, TeamMembership } from "./TeamInfo";
+import { TeamData, TeamMemberBudgetSource, TeamMembership } from "./TeamInfo";
+
+const BUDGET_SOURCE_LABELS: Record<Exclude<TeamMemberBudgetSource, "none">, string> = {
+  team_default: "Team default",
+  custom: "Custom",
+};
+
+const formatBudget = (value: number | null): string =>
+  value === null ? "Unlimited" : `$${formatNumberWithCommas(value, 2)}`;
 
 export const seedMemberBudgetFields = (
   record: Member,
@@ -37,6 +47,7 @@ interface TeamMemberTabProps {
   setIsEditMemberModalVisible: (visible: boolean) => void;
   setIsAddMemberModalVisible: (visible: boolean) => void;
   onMemberSpendReset: () => void;
+  onMemberBudgetReset: () => void;
 }
 
 export default function TeamMemberTab({
@@ -47,9 +58,13 @@ export default function TeamMemberTab({
   setIsEditMemberModalVisible,
   setIsAddMemberModalVisible,
   onMemberSpendReset,
+  onMemberBudgetReset,
 }: TeamMemberTabProps) {
   const [memberToResetSpend, setMemberToResetSpend] = useState<Member | null>(null);
+  const [memberToResetBudget, setMemberToResetBudget] = useState<Member | null>(null);
   const { mutate: resetMemberSpend, isPending: isResettingSpend } = useResetTeamMemberSpend();
+  const { mutate: resetMemberBudget, isPending: isResettingBudget } = useResetTeamMemberBudget();
+  const teamDefaultBudget = teamData.team_info.team_member_budget_table?.max_budget ?? null;
 
   const formatNumber = (value: number | null): string => {
     if (value === null || value === undefined) return "0";
@@ -82,10 +97,16 @@ export default function TeamMemberTab({
     return membership?.total_spend ?? 0;
   };
 
+  const getUserBudgetSource = (userId: string | null): TeamMemberBudgetSource => {
+    if (!userId) return "none";
+    const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
+    return membership?.budget_source ?? "none";
+  };
+
   const getUserBudget = (userId: string | null): number | null => {
     if (!userId) return null;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return membership?.litellm_budget_table?.max_budget ?? null;
+    return membership?.litellm_budget_table?.max_budget ?? teamDefaultBudget;
   };
 
   // Helper function to get rate limits for a user
@@ -182,12 +203,40 @@ export default function TeamMemberTab({
       render: (record: Member) => <MoneyCell value={getUserTotalSpend(record.user_id)} decimals={2} />,
     },
     {
-      title: "Team Member Budget (USD)",
+      title: (
+        <span className="flex items-center gap-1">
+          Team Member Budget (USD)
+          <SimpleTooltip content="Team default follows the team's member budget, so changing it in team settings updates this member too. Custom is set on this member only and ignores later team changes.">
+            <CircleHelp className="size-4" aria-label="Team member budget information" />
+          </SimpleTooltip>
+        </span>
+      ),
       key: "budget",
       sortValue: (record: Member) => getUserBudget(record.user_id),
-      render: (record: Member) => (
-        <MoneyCell value={getUserBudget(record.user_id)} decimals={2} emptyText="Unlimited" showZero />
-      ),
+      render: (record: Member) => {
+        const source = getUserBudgetSource(record.user_id);
+        return (
+          <span className="flex items-center gap-2">
+            <MoneyCell value={getUserBudget(record.user_id)} decimals={2} emptyText="Unlimited" showZero />
+            {source !== "none" && (
+              <Badge variant={source === "custom" ? "outline" : "secondary"} data-testid="member-budget-source">
+                {BUDGET_SOURCE_LABELS[source]}
+              </Badge>
+            )}
+            {source === "custom" && canEditTeam && (
+              <Button
+                variant="link"
+                size="xs"
+                className="h-auto p-0"
+                data-testid="reset-member-budget"
+                onClick={() => setMemberToResetBudget(record)}
+              >
+                Use team default
+              </Button>
+            )}
+          </span>
+        );
+      },
     },
     {
       title: "Budget Reset",
@@ -218,6 +267,21 @@ export default function TeamMemberTab({
           toast.success("Team member spend reset to $0");
           setMemberToResetSpend(null);
           onMemberSpendReset();
+        },
+        onError: (error) => toast.fromError(parseErrorMessage(error)),
+      },
+    );
+  };
+
+  const handleResetBudget = () => {
+    if (!memberToResetBudget?.user_id) return;
+    resetMemberBudget(
+      { teamId: teamData.team_id, userId: memberToResetBudget.user_id },
+      {
+        onSuccess: () => {
+          toast.success("Team member budget reset to the team default");
+          setMemberToResetBudget(null);
+          onMemberBudgetReset();
         },
         onError: (error) => toast.fromError(parseErrorMessage(error)),
       },
@@ -269,6 +333,30 @@ export default function TeamMemberTab({
             </Button>
             <Button variant="destructive" onClick={handleResetSpend} disabled={isResettingSpend}>
               Reset
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={memberToResetBudget !== null} onOpenChange={(open) => !open && setMemberToResetBudget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reset Team Member Budget</DialogTitle>
+          </DialogHeader>
+          <p>
+            Remove the custom budget for{" "}
+            <strong>{memberToResetBudget?.user_email || memberToResetBudget?.user_id}</strong> and put them back on the
+            team default of <strong>{formatBudget(teamDefaultBudget)}</strong>?
+          </p>
+          <p className="text-sm text-muted-foreground">
+            Custom budget: <strong>{formatBudget(getUserBudget(memberToResetBudget?.user_id ?? null))}</strong>. Their
+            spend is kept. Future changes to the team&apos;s member budget will apply to them again.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setMemberToResetBudget(null)}>
+              Cancel
+            </Button>
+            <Button onClick={handleResetBudget} disabled={isResettingBudget}>
+              Use team default
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -83,13 +83,16 @@ describe("autoRouterRows", () => {
     expect(row.targets).toEqual(["gpt-4o-mini", "anthropic-sonnet-4-6"]);
   });
 
-  it("labels a router using the LLM classifier", () => {
+  it.each([
+    ["llm", "LLM Classifier"],
+    ["jev", "JEV Classifier"],
+  ])("labels a router using the %s classifier", (classifierType, label) => {
     const row = toAutoRouterRow(
       {
         ...complexityDeployment,
         litellm_params: {
           ...complexityDeployment.litellm_params,
-          complexity_router_config: { tiers: {}, classifier_type: "llm", adaptive: true },
+          complexity_router_config: { tiers: {}, classifier_type: classifierType, adaptive: true },
         },
       },
       0,
@@ -97,7 +100,7 @@ describe("autoRouterRows", () => {
       null,
     );
 
-    expect(row.typeLabel).toBe("LLM Classifier");
+    expect(row.typeLabel).toBe(label);
   });
 
   it("treats a deployment carrying complexity_router_config as complexity even off the canonical model string", () => {

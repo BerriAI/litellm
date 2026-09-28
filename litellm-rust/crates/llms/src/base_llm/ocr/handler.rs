@@ -1,9 +1,11 @@
+use std::sync::Arc;
+
 use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
-use litellm_auth_gcp::VertexAuth;
+use litellm_auth::AuthServices;
 use litellm_host::event::WireRequest;
 use litellm_http::{
-    ClientVariant, HttpClientConfig, HttpClientPool,
+    Client, ClientVariant, HttpClientConfig, HttpClientPool,
     media::{MediaFetcher, UrlPolicy},
     outbound::{OutboundRequest, RequestSigner},
     transport,
@@ -13,29 +15,30 @@ use serde_json::Value;
 
 use crate::base_llm::ocr::{
     error::Error,
-    settings::{OcrSettings, Secrets},
+    settings::OcrSettings,
     transformation::{
         BaseOcrConfig, DecodedOcrResponse, LiteLLMOcrResponse, OcrDocument, OcrResponseContext,
         PreparedOcrRequest, decode_request_value, decode_response,
     },
 };
+use litellm_secrets::source::SecretSource;
 
 /// The route's view of one call, handed to provider code that has to reach the
 /// caller's hooks mid-flight (guardrails on the outgoing body, raw response events).
 pub trait CallHooks<E>: Send + Sync {
-    fn before_send(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, E>>;
+    fn before_provider_request(&self, wire: WireRequest) -> BoxFuture<'_, Result<WireRequest, E>>;
 
     fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), E>>;
 }
 
 #[derive(Clone)]
 pub struct OcrClient {
-    provider_http: reqwest::Client,
-    polling_http: reqwest::Client,
+    provider_http: Client,
+    polling_http: Client,
     document_fetcher: MediaFetcher,
-    vertex_auth: VertexAuth,
+    auth: Arc<AuthServices>,
     settings: OcrSettings,
-    secrets: Secrets,
+    secrets: Arc<dyn SecretSource>,
 }
 
 impl OcrClient {
@@ -43,25 +46,25 @@ impl OcrClient {
         pool: &HttpClientPool,
         config: &HttpClientConfig,
         url_policy: UrlPolicy,
-        vertex_auth: VertexAuth,
+        auth: Arc<AuthServices>,
         settings: OcrSettings,
-        secrets: Secrets,
+        secrets: Arc<dyn SecretSource>,
     ) -> Result<Self, litellm_http::Error> {
         Ok(Self {
             provider_http: pool.client(config, ClientVariant::Provider)?,
             polling_http: pool.client(config, ClientVariant::NoRedirect)?,
             document_fetcher: MediaFetcher::new(pool, config, url_policy)?,
-            vertex_auth,
+            auth,
             settings,
             secrets,
         })
     }
 
-    pub fn provider_http(&self) -> &reqwest::Client {
+    pub fn provider_http(&self) -> &Client {
         &self.provider_http
     }
 
-    pub fn polling_http(&self) -> &reqwest::Client {
+    pub fn polling_http(&self) -> &Client {
         &self.polling_http
     }
 
@@ -69,30 +72,31 @@ impl OcrClient {
         &self.document_fetcher
     }
 
-    pub fn vertex_auth(&self) -> &VertexAuth {
-        &self.vertex_auth
+    pub fn auth(&self) -> &AuthServices {
+        &self.auth
     }
 
     pub fn settings(&self) -> &OcrSettings {
         &self.settings
     }
 
-    pub fn secrets(&self) -> &Secrets {
+    pub fn secret_source(&self) -> &Arc<dyn SecretSource> {
         &self.secrets
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn for_test(provider_http: reqwest::Client, document_http: reqwest::Client) -> Self {
+    pub fn for_test(provider_http: Client, no_redirect_http: Client) -> Self {
         Self {
+            secrets: Arc::new(
+                litellm_secrets::source::EnvironmentSecrets::python_compatible(
+                    provider_http.clone(),
+                ),
+            ),
             provider_http,
-            polling_http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .build()
-                .expect("test polling client builds"),
-            document_fetcher: MediaFetcher::for_test(document_http),
-            vertex_auth: VertexAuth::default(),
+            polling_http: no_redirect_http.clone(),
+            document_fetcher: MediaFetcher::for_test(no_redirect_http),
+            auth: Arc::new(AuthServices::default()),
             settings: OcrSettings::default(),
-            secrets: std::sync::Arc::new(litellm_core_utils::settings::ProcessEnvironment),
         }
     }
 
@@ -102,7 +106,7 @@ impl OcrClient {
     }
 
     #[cfg(any(test, feature = "test-support"))]
-    pub fn with_secrets(self, secrets: Secrets) -> Self {
+    pub fn with_secrets(self, secrets: Arc<dyn SecretSource>) -> Self {
         Self { secrets, ..self }
     }
 }
@@ -222,7 +226,7 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     )?;
     config.validate_request_body(&composed)?;
     let changed = hooks
-        .before_send(wire_request(url, headers, composed))
+        .before_provider_request(wire_request(url, headers, composed))
         .await?;
     if !changed.body.is_object() {
         return Err(Error::RequestField {
@@ -274,7 +278,9 @@ pub async fn guardrail_document(
     let body = serde_json::to_value(&request.document).map_err(|_| Error::RequestField {
         path: "document".into(),
     })?;
-    let changed = hooks.before_send(wire_request(url, headers, body)).await?;
+    let changed = hooks
+        .before_provider_request(wire_request(url, headers, body))
+        .await?;
     let document = decode_request_value(changed.body, "guardrail.document")?;
     Ok((document, changed.headers))
 }
@@ -300,6 +306,7 @@ mod tests {
 
     use super::*;
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn request_timeout_has_an_http_408_status() {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -308,7 +315,7 @@ mod tests {
             let _connection = listener.accept().await.unwrap();
             tokio::time::sleep(Duration::from_secs(1)).await;
         });
-        let error = reqwest::Client::new()
+        let error = litellm_http::Client::plain_for_test()
             .get(format!("http://{address}"))
             .timeout(Duration::from_millis(10))
             .send()

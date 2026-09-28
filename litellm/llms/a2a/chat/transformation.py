@@ -23,9 +23,8 @@ from ..common_utils import (
 from .streaming_iterator import A2AModelResponseIterator
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 _REGISTRY_PARAMS_KEPT_OUT_OF_OPTIONAL_PARAMS: Final = (
@@ -49,7 +48,7 @@ def _registry_api_key(agent_litellm_params: Mapping[str, object]) -> str | None:
     return configured_api_key if isinstance(configured_api_key, str) else None
 
 
-def _registry_headers(agent_litellm_params: Mapping[str, object]) -> dict[str, Any] | None:
+def _registry_headers(agent_litellm_params: Mapping[str, object]) -> dict[str, object] | None:
     stored_headers: Final = agent_litellm_params.get("headers")
     if not isinstance(stored_headers, Mapping):
         return None
@@ -292,7 +291,7 @@ class A2AConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

@@ -50,6 +50,7 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     """Represents a LiteLLM_MCPServerTable record"""
 
     server_id: str
+    is_config: bool = Field(default=False, description="Whether this server is defined in config and is read-only.")
     server_name: str | None = None
     alias: str | None = None
     description: str | None = None
@@ -72,9 +73,9 @@ class LiteLLM_MCPServerTable(LiteLLMPydanticObjectBase):
     mcp_info: MCPInfo | None = None
     static_headers: dict[str, str] | None = None
     env_vars: list[MCPEnvVar] | None = None
-    status: Literal["healthy", "unhealthy", "unknown"] | None = Field(
+    status: Literal["healthy", "reachable", "unhealthy", "unknown"] | None = Field(
         default="unknown",
-        description="Health status: 'healthy', 'unhealthy', 'unknown'",
+        description="Health status: 'healthy', 'unhealthy', 'unknown', or 'reachable' (requires include_reachability=true; authentication and tools unchecked)",
     )
     last_health_check: datetime | None = None
     health_check_error: str | None = None

@@ -15,6 +15,9 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 if TYPE_CHECKING:
     from litellm.integrations.custom_guardrail import CustomGuardrail
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.pass_through.guardrail_translation.handler import (
+        PassThroughEndpointHandler,
+    )
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
 
@@ -28,7 +31,7 @@ def _is_converse_endpoint(endpoint: str) -> bool:
     return bool(parts) and parts[-1] in _CONVERSE_ACTIONS
 
 
-def _generic_passthrough_handler() -> BaseTranslation:
+def _generic_passthrough_handler() -> "PassThroughEndpointHandler":
     """
     Fallback for non-Converse Bedrock routes (e.g. invoke). The generic
     handler scans the full request/response payload so blocking guardrails

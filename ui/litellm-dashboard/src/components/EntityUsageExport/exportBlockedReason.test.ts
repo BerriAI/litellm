@@ -39,6 +39,10 @@ describe("getExportBlockedReason", () => {
     expect(reason).toMatch(/100 highest-spend keys of 3000/);
     expect(reason).toMatch(/USAGE_TOP_API_KEYS_LIMIT/);
   });
+
+  it("does not block on truncation when a server export will cover every key", () => {
+    expect(getExportBlockedReason(state({ apiKeyTruncation: null }))).toBeUndefined();
+  });
 });
 
 describe("getApiKeyTruncation", () => {
