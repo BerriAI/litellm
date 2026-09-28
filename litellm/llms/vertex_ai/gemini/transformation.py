@@ -1079,10 +1079,29 @@ def _gemini_convert_messages_with_history(
 _LITELLM_INTERNAL_EXTRA_BODY_KEYS: Final[frozenset] = frozenset({"cache", "tags"})
 
 
+def _apply_false_include_thoughts(data: RequestBody, extra_body: dict[str, object]) -> None:
+    """Turn off returned thoughts on an existing thinkingConfig.
+
+    LiteLLM 1.91 proxy clients put include_thoughts in extra_body. That dict
+    is merged after mapping, so a raw key would not change
+    thinkingConfig.includeThoughts. Only False is applied, onto the same
+    dict, so thinkingLevel and thinkingBudget stay. True leaves none/disable
+    suppression in place. The key is always removed so it is not sent raw.
+    """
+    include_thoughts: object = extra_body.pop("include_thoughts", None)
+    if include_thoughts is not False:
+        return
+    generation_config = data.get("generationConfig")
+    if generation_config is None or "thinkingConfig" not in generation_config:
+        return
+    generation_config["thinkingConfig"]["includeThoughts"] = False
+
+
 def _pop_and_merge_extra_body(data: RequestBody, optional_params: dict) -> None:
     """Pop extra_body from optional_params and shallow-merge into data, deep-merging dict values."""
     extra_body: Final[dict | None] = optional_params.pop("extra_body", None)
     if extra_body is not None:
+        _apply_false_include_thoughts(data, cast(dict[str, object], extra_body))
         data_dict: Final[dict] = data
         for k, v in extra_body.items():
             if k in _LITELLM_INTERNAL_EXTRA_BODY_KEYS:

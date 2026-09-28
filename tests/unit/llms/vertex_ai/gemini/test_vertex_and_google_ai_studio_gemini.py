@@ -15,6 +15,7 @@ from litellm.llms.anthropic.pass_through.messages import handler as anthropic_me
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
+from litellm.llms.vertex_ai.gemini.transformation import _transform_request_body
 from litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini import (
     VertexGeminiConfig,
 )
@@ -6487,3 +6488,62 @@ def test_map_openai_params_include_thoughts_budget_path():
     )
     assert optional_params["thinkingConfig"]["includeThoughts"] is False
     assert "thinkingBudget" in optional_params["thinkingConfig"]
+
+
+def test_transform_request_body_extra_body_include_thoughts_false():
+    """1.91 proxy clients put include_thoughts in extra_body after mapping.
+
+    The outbound body must keep the mapped thinking level or budget and set
+    includeThoughts false. A true value must not turn thoughts back on for
+    none/disable, and the raw key must not be sent to Gemini.
+    """
+    cases = (
+        ("gemini-3.6-flash", "thinkingLevel"),
+        ("gemini-2.5-flash", "thinkingBudget"),
+    )
+    for model, effort_key in cases:
+        mapped = VertexGeminiConfig().map_openai_params(
+            non_default_params={"reasoning_effort": "low"},
+            optional_params={},
+            model=model,
+            drop_params=False,
+        )
+        original_effort = mapped["thinkingConfig"][effort_key]
+        assert mapped["thinkingConfig"]["includeThoughts"] is True
+        result = _transform_request_body(
+            messages=[{"role": "user", "content": "Hi"}],
+            model=model,
+            optional_params={
+                **mapped,
+                "extra_body": {"include_thoughts": False},
+            },
+            custom_llm_provider="gemini",
+            litellm_params={},
+            cached_content=None,
+        )
+        thinking = result["generationConfig"]["thinkingConfig"]
+        assert thinking[effort_key] == original_effort
+        assert thinking["includeThoughts"] is False
+        assert "include_thoughts" not in result
+
+    mapped_none = VertexGeminiConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "none"},
+        optional_params={},
+        model="gemini-3.6-flash",
+        drop_params=False,
+    )
+    assert mapped_none["thinkingConfig"]["includeThoughts"] is False
+    result_none = _transform_request_body(
+        messages=[{"role": "user", "content": "Hi"}],
+        model="gemini-3.6-flash",
+        optional_params={
+            **mapped_none,
+            "extra_body": {"include_thoughts": True},
+        },
+        custom_llm_provider="gemini",
+        litellm_params={},
+        cached_content=None,
+    )
+    assert result_none["generationConfig"]["thinkingConfig"]["includeThoughts"] is False
+    assert result_none["generationConfig"]["thinkingConfig"]["thinkingLevel"] == "minimal"
+    assert "include_thoughts" not in result_none
