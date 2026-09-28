@@ -72,7 +72,9 @@ class LLMClientCache(InMemoryCache):
         key = self.update_cache_key_with_event_loop(key)
         self.evicted_client_closer.reap()
 
-        return super().get_cache(key, **kwargs)
+        # SDK/httpx clients are live resources. Returning a deepcopy would
+        # detach the caller from the client tracked by the eviction closer.
+        return super()._get_cache_value(key=key, copy_value=False)
 
     async def async_get_cache(self, key, **kwargs):
         key = self.update_cache_key_with_event_loop(key)

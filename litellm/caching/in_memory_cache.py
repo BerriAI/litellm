@@ -8,6 +8,7 @@ Has 4 methods:
     - async_get_cache
 """
 
+import copy
 import heapq
 import json
 import sys
@@ -208,7 +209,25 @@ class InMemoryCache(BaseCache):
             return True
         return False
 
-    def get_cache(self, key, **kwargs):
+    @staticmethod
+    def _copy_cached_value(value: Any) -> Any:
+        """Return a read-isolated value without making the cache brittle.
+
+        In-memory cache entries can contain Pydantic models and mutable
+        containers. Live resources such as SDK clients are deliberately left
+        alone; attempting to deepcopy them can create partially initialized
+        transports before failing. A failed deepcopy should not turn a cache
+        hit into a request failure, so retain the existing value as a last
+        resort.
+        """
+        if not isinstance(value, (dict, list, set, tuple, frozenset, bytearray, BaseModel)):
+            return value
+        try:
+            return copy.deepcopy(value)
+        except Exception:  # noqa: BLE001 - cache reads must tolerate non-copyable values
+            return value
+
+    def _get_cache_value(self, key, *, copy_value: bool) -> Any:
         if key in self.cache_dict:
             if self.evict_element_if_expired(key):
                 return None
@@ -217,8 +236,11 @@ class InMemoryCache(BaseCache):
                 cached_response = json.loads(original_cached_response)
             except Exception:
                 cached_response = original_cached_response
-            return cached_response
+            return self._copy_cached_value(cached_response) if copy_value else cached_response
         return None
+
+    def get_cache(self, key, **kwargs):
+        return self._get_cache_value(key=key, copy_value=True)
 
     def batch_get_cache(self, keys: list, **kwargs):
         return_val: Final = []

@@ -3,14 +3,13 @@ import json
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
-from unittest.mock import MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
 import respx
 from fastapi.testclient import TestClient
-
-from unittest.mock import AsyncMock
+from pydantic import BaseModel
 
 from litellm.caching.in_memory_cache import InMemoryCache
 
@@ -43,6 +42,41 @@ async def test_async_increment_delegates_to_locked_sync_path():
     assert await cache.async_increment("counter", 2) == 2
     assert await cache.async_increment("counter", 3) == 5
     assert cache.get_cache("counter") == 5
+
+
+def test_in_memory_cache_returns_read_isolated_mutable_values():
+    cache = InMemoryCache()
+    cache.set_cache("user", {"spend": 1.0, "metadata": {"region": "us"}})
+
+    cached = cache.get_cache("user")
+    assert cached == {"spend": 1.0, "metadata": {"region": "us"}}
+    assert cached is not cache.cache_dict["user"]
+
+    cached["spend"] = 50
+    cached["metadata"]["region"] = "eu"
+
+    assert cache.get_cache("user") == {"spend": 1.0, "metadata": {"region": "us"}}
+
+
+def test_in_memory_cache_returns_read_isolated_pydantic_models():
+    class CachedBudget(BaseModel):
+        spend: float
+        metadata: dict[str, str]
+
+    cache = InMemoryCache()
+    cache.set_cache("budget", CachedBudget(spend=1.0, metadata={"region": "us"}))
+
+    cached = cache.get_cache("budget")
+    assert isinstance(cached, CachedBudget)
+    assert cached is not cache.cache_dict["budget"]
+
+    cached.spend = 50
+    cached.metadata["region"] = "eu"
+
+    stored = cache.get_cache("budget")
+    assert isinstance(stored, CachedBudget)
+    assert stored.spend == 1.0
+    assert stored.metadata == {"region": "us"}
 
 
 def test_in_memory_openai_obj_cache():
