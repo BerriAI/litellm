@@ -651,3 +651,55 @@ def test_update_response_metadata_prices_per_second_deployment_from_its_stamped_
 
     assert result._response_ms == pytest.approx(2000)
     assert result._hidden_params["response_cost"] == pytest.approx((0.02 + 0.04) * 2)
+
+
+def test_update_response_metadata_stamps_zero_response_cost_for_cache_hit_result(monkeypatch):
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    deployment_id: Final = "cache-hit-deployment-response-metadata"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+                "litellm_provider": "openai",
+                "mode": "chat",
+            }
+        }
+    )
+    start_time: Final = datetime.datetime(2026, 9, 28, 12, 0, 0)
+    logging_obj: Final = Logging(
+        model="gpt-5.4-nano",
+        messages=[{"role": "user", "content": "Hello"}],
+        stream=False,
+        call_type="completion",
+        start_time=start_time,
+        litellm_call_id="cache-hit-response-metadata",
+        function_id="f",
+    )
+    logging_obj.update_environment_variables(
+        model="gpt-5.4-nano",
+        litellm_params={
+            "metadata": {"model_info": {"id": deployment_id}},
+        },
+        optional_params={},
+        custom_llm_provider="openai",
+    )
+    result: Final = ModelResponse(
+        model="gpt-5.4-nano",
+        usage=Usage(prompt_tokens=11, completion_tokens=7, total_tokens=18),
+    )
+    result._hidden_params = {"cache_hit": True, "cache_key": "lit8679-cache-key"}
+
+    update_response_metadata(
+        result=result,
+        logging_obj=logging_obj,
+        model="gpt-5.4-nano",
+        kwargs={"model_info": {"id": deployment_id}},
+        start_time=start_time,
+        end_time=start_time + datetime.timedelta(seconds=2),
+    )
+
+    assert result._hidden_params["response_cost"] == 0.0
+    assert logging_obj.cost_breakdown is None
