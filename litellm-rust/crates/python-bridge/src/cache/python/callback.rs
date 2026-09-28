@@ -5,16 +5,16 @@ use pyo3::{
     types::{PyDict, PyList, PyTuple},
 };
 
-use super::future::ready_none;
+use crate::cache::future::ready_none;
 
-pub(super) struct PythonCallback(Py<PyAny>);
+pub(in crate::cache) struct PythonCallback(Py<PyAny>);
 
 impl PythonCallback {
-    pub(super) fn new(object: Py<PyAny>) -> Self {
+    pub(in crate::cache) fn new(object: Py<PyAny>) -> Self {
         Self(object)
     }
 
-    pub(super) fn lookup<'py>(
+    pub(in crate::cache) fn lookup<'py>(
         &self,
         py: Python<'py>,
         kwargs: Option<&Bound<'py, PyDict>>,
@@ -24,7 +24,7 @@ impl PythonCallback {
             .call_method("get_cache", (), Some(callback_kwargs(kwargs)?))
     }
 
-    pub(super) fn async_lookup<'py>(
+    pub(in crate::cache) fn async_lookup<'py>(
         &self,
         py: Python<'py>,
         kwargs: Option<&Bound<'py, PyDict>>,
@@ -34,7 +34,7 @@ impl PythonCallback {
             .call_method("async_get_cache", (), Some(callback_kwargs(kwargs)?))
     }
 
-    pub(super) fn store(
+    pub(in crate::cache) fn store(
         &self,
         py: Python<'_>,
         response: &Bound<'_, PyAny>,
@@ -46,7 +46,7 @@ impl PythonCallback {
             .map(|_| ())
     }
 
-    pub(super) fn async_store<'py>(
+    pub(in crate::cache) fn async_store<'py>(
         &self,
         py: Python<'py>,
         response: &Bound<'py, PyAny>,
@@ -59,7 +59,7 @@ impl PythonCallback {
         )
     }
 
-    pub(super) fn lookup_batch<'py>(
+    pub(in crate::cache) fn lookup_batch<'py>(
         &self,
         py: Python<'py>,
         requests: &Bound<'py, PyAny>,
@@ -76,7 +76,7 @@ impl PythonCallback {
         Ok(results.into_any())
     }
 
-    pub(super) fn async_lookup_batch<'py>(
+    pub(in crate::cache) fn async_lookup_batch<'py>(
         &self,
         py: Python<'py>,
         requests: &Bound<'py, PyAny>,
@@ -94,7 +94,7 @@ impl PythonCallback {
             .call_method1("gather", PyTuple::new(py, awaitables)?)
     }
 
-    pub(super) fn async_store_batch<'py>(
+    pub(in crate::cache) fn async_store_batch<'py>(
         &self,
         py: Python<'py>,
         result: Option<&Bound<'py, PyAny>>,
@@ -110,7 +110,10 @@ impl PythonCallback {
         )
     }
 
-    pub(super) fn async_flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    pub(in crate::cache) fn async_flush<'py>(
+        &self,
+        py: Python<'py>,
+    ) -> PyResult<Bound<'py, PyAny>> {
         let object = self.0.bind(py);
         let backend = match object.getattr_opt("cache")? {
             Some(backend) if !backend.is_none() => backend,
@@ -123,11 +126,11 @@ impl PythonCallback {
         ready_none(py)
     }
 
-    pub(super) fn ping<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
+    pub(in crate::cache) fn ping<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.0.bind(py).call_method0("ping")
     }
 
-    pub(super) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+    pub(in crate::cache) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.0)
     }
 }

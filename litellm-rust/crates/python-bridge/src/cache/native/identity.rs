@@ -6,7 +6,7 @@ use litellm_cache_redis::RedisTopology;
 /// observe on the Python object, captured once so facade projection and native construction
 /// compare plain data instead of reaching into each backend type.
 #[derive(Clone, Debug, PartialEq)]
-pub(super) enum BackendIdentity {
+pub(in crate::cache) enum BackendIdentity {
     Memory {
         capacity: usize,
         max_entry_bytes: Option<usize>,
@@ -55,7 +55,7 @@ pub(super) enum BackendIdentity {
 const TYPES: &str = "facade and native backend types must match";
 
 impl BackendIdentity {
-    pub(super) fn kind(&self) -> &'static str {
+    pub(in crate::cache) fn kind(&self) -> &'static str {
         match self {
             Self::Memory { .. } => "memory",
             Self::Redis { .. } => "redis",
@@ -70,7 +70,7 @@ impl BackendIdentity {
     }
 
     /// The `LiteLLMCacheType` value a facade of this backend carries in `Cache.type`.
-    pub(super) fn cache_type(&self) -> &'static str {
+    pub(in crate::cache) fn cache_type(&self) -> &'static str {
         match self {
             Self::Memory { .. } => "local",
             Self::Redis { .. } => "redis",
@@ -86,7 +86,7 @@ impl BackendIdentity {
 
     /// The first difference between the facade's configuration (`self`) and the native
     /// backend (`native`), in the order Python users see the attributes.
-    pub(super) fn mismatch(&self, native: &Self) -> Option<&'static str> {
+    pub(in crate::cache) fn mismatch(&self, native: &Self) -> Option<&'static str> {
         let mut differences: Vec<(bool, &'static str)> = Vec::new();
         let mut differs = |condition: bool, message: &'static str| {
             differences.push((condition, message));

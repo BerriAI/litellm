@@ -1,4 +1,7 @@
-use crate::cache::hosted::{CacheCall, Cached, PythonCache, Selection};
+use crate::cache::{
+    Selection,
+    python::{CacheCall, Cached, PythonCache},
+};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;
@@ -235,10 +238,9 @@ impl PythonBinding for MessagesPythonHost {
         py: Python<'_>,
         arguments: &Bound<'_, PyDict>,
     ) -> Result<(MessagesCall, Selection), InvokeError<Error>> {
-        let selection = self
-            .cache
-            .configure(py, arguments, "anthropic_messages")
-            .map_err(InvokeError::Python)?;
+        let selection =
+            crate::cache::configure(&mut self.cache, py, arguments, "anthropic_messages")
+                .map_err(InvokeError::Python)?;
         self.projection(py, arguments)
             .map_err(|error| InvokeError::Python(self.map_failure(py, error)))?
             .map_err(InvokeError::Native)

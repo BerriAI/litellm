@@ -37,7 +37,7 @@ fn run_messages(
             Ok(litellm_host::call::hosted_call(
                 request,
                 None,
-                move |(call, selection): (_, crate::cache::hosted::Selection),
+                move |(call, selection): (_, crate::cache::Selection),
                       services,
                       interceptors,
                       observers| async move {

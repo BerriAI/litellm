@@ -9,9 +9,9 @@ use pyo3::{
 use serde_json::Value;
 
 use super::{
+    backend::NativeResponseCache,
     config::{CacheConfigProjection, NativeCacheConfig},
     identity::BackendIdentity,
-    native::NativeResponseCache,
 };
 
 struct ClassGuard {
@@ -83,7 +83,7 @@ const VALKEY_POOL: RedisPoolAttributes = STANDALONE_POOL;
 /// `Cache._native_cache` holds the runtime `Cache.__init__` resolved.
 const INSTANCE_STATE: &[&str] = &["_native_cache"];
 
-pub(super) struct FacadeGuard {
+pub(in crate::cache) struct FacadeGuard {
     outer: ObjectGuard,
     backend: ObjectGuard,
     disk_store: Option<DiskStoreGuard>,
@@ -353,7 +353,7 @@ impl ConnectionGuard {
 }
 
 impl FacadeGuard {
-    pub(super) fn capture(
+    pub(in crate::cache) fn capture(
         py: Python<'_>,
         facade: &Bound<'_, PyAny>,
         service: &NativeResponseCache,
@@ -471,7 +471,11 @@ impl FacadeGuard {
         })
     }
 
-    pub(super) fn matches(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<bool> {
+    pub(in crate::cache) fn matches(
+        &self,
+        py: Python<'_>,
+        facade: &Bound<'_, PyAny>,
+    ) -> PyResult<bool> {
         if !self.outer.matches(py, facade)? {
             return Ok(false);
         }
@@ -487,7 +491,7 @@ impl FacadeGuard {
         self.connection.matches(py, &backend)
     }
 
-    pub(super) fn traverse(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
+    pub(in crate::cache) fn traverse(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
         self.outer.traverse(&visit)?;
         self.backend.traverse(&visit)?;
         if let Some(guard) = &self.disk_store {

@@ -1,3 +1,4 @@
+use crate::cache::cache_error;
 use std::{sync::Arc, time::Duration};
 
 use litellm_cache::{DeleteCache, DisconnectCache, PingCache};
@@ -98,7 +99,7 @@ impl NativeCacheHandle {
                     ResponseCacheCodec,
                 )
             })
-            .map_err(super::cache_error)?
+            .map_err(cache_error)?
             .with_namespace(Some(namespace.clone())),
         );
         let backend = Arc::new(ResponseCache::new(storage.clone()).with_config(
@@ -118,7 +119,7 @@ impl NativeCacheHandle {
         self.check_process()?;
         let request = request(key, None)?;
         let value = release_gil(py, || self.backend.lookup(&request, super::request::now()))
-            .map_err(super::cache_error)?;
+            .map_err(cache_error)?;
         to_py(py, &value)
     }
 
@@ -136,7 +137,7 @@ impl NativeCacheHandle {
         release_gil(py, || {
             self.backend.store(&request, value, super::request::now())
         })
-        .map_err(super::cache_error)
+        .map_err(cache_error)
     }
 
     fn async_get<'py>(&self, py: Python<'py>, key: String) -> PyResult<Bound<'py, PyAny>> {
@@ -146,7 +147,7 @@ impl NativeCacheHandle {
         crate::logger::run_async(
             py,
             async move { backend.async_lookup(&request, super::request::now()).await },
-            super::cache_error,
+            cache_error,
         )
     }
 
@@ -169,7 +170,7 @@ impl NativeCacheHandle {
                     .async_store(&request, value, super::request::now())
                     .await
             },
-            super::cache_error,
+            cache_error,
         )
     }
 
@@ -194,28 +195,20 @@ impl NativeCacheHandle {
                     .async_store_batch(entries, super::request::now())
                     .await
             },
-            super::cache_error,
+            cache_error,
         )
     }
 
     fn flush(&self, py: Python<'_>) -> PyResult<Py<PyAny>> {
         self.check_process()?;
         let backend = self.backend.clone();
-        crate::logger::run_sync(
-            py,
-            async move { backend.async_flush().await },
-            super::cache_error,
-        )
+        crate::logger::run_sync(py, async move { backend.async_flush().await }, cache_error)
     }
 
     fn async_flush<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
         self.check_process()?;
         let backend = self.backend.clone();
-        crate::logger::run_async(
-            py,
-            async move { backend.async_flush().await },
-            super::cache_error,
-        )
+        crate::logger::run_async(py, async move { backend.async_flush().await }, cache_error)
     }
 
     fn ping<'py>(&self, py: Python<'py>) -> PyResult<Bound<'py, PyAny>> {
@@ -229,7 +222,7 @@ impl NativeCacheHandle {
                     Storage::Redis(cache) => cache.ping().await,
                 }
             },
-            super::cache_error,
+            cache_error,
         )
     }
 
@@ -244,7 +237,7 @@ impl NativeCacheHandle {
                     Storage::Redis(cache) => cache.disconnect().await,
                 }
             },
-            super::cache_error,
+            cache_error,
         )
     }
 
@@ -262,7 +255,7 @@ impl NativeCacheHandle {
                 }
                 Ok(())
             },
-            super::cache_error,
+            cache_error,
         )
     }
 }
@@ -274,27 +267,7 @@ fn duration(seconds: f64) -> PyResult<Duration> {
         .ok_or_else(|| PyValueError::new_err("cache durations must be finite and positive"))
 }
 
-pub(super) fn selected_cache<'py>(
-    py: Python<'py>,
-    kwargs: &Bound<'py, PyDict>,
-    call_type: &str,
-) -> PyResult<Option<Bound<'py, PyAny>>> {
-    let configured = py.import("litellm")?.getattr("cache")?;
-    if configured.is_none()
-        || kwargs
-            .get_item("caching")?
-            .is_some_and(|value| value.is(pyo3::types::PyBool::new(py, false)))
-    {
-        return Ok(None);
-    }
-    let supported = configured.getattr("supported_call_types")?;
-    if supported.is_none() || !supported.contains(call_type)? {
-        return Ok(None);
-    }
-    Ok(Some(configured))
-}
-
-pub(super) fn native_handle<'py>(
+pub(in crate::cache) fn native_handle<'py>(
     configured: &Bound<'py, PyAny>,
 ) -> PyResult<Option<Bound<'py, PyAny>>> {
     Ok(configured
@@ -305,41 +278,14 @@ pub(super) fn native_handle<'py>(
         .filter(|handle| handle.is_instance_of::<NativeCacheHandle>()))
 }
 
-pub(crate) fn admit(py: Python<'_>, kwargs: &Bound<'_, PyDict>, call_type: &str) -> PyResult<()> {
-    if let Some(configured) = selected_cache(py, kwargs, call_type)?
-        && native_handle(&configured)?.is_none()
-    {
-        return Err(crate::errors::RustBridgeDeclined::new_err(
-            "the configured cache requires Python inference",
-        ));
-    }
-    Ok(())
-}
-
-pub(crate) fn configured(
-    py: Python<'_>,
+pub(in crate::cache) fn configured(
+    configured: &Bound<'_, PyAny>,
     kwargs: &Bound<'_, PyDict>,
-    call_type: &str,
 ) -> PyResult<(
     Option<Arc<dyn ResponseCacheService>>,
     litellm_cache_response::CacheOptions,
 )> {
-    let Some(configured) = selected_cache(py, kwargs, call_type)? else {
-        return Ok((
-            None,
-            litellm_cache_response::CacheOptions::new(litellm_cache_response::CacheScope::Shared),
-        ));
-    };
-    if !configured
-        .call_method("should_use_cache", (), Some(kwargs))?
-        .extract::<bool>()?
-    {
-        return Ok((
-            None,
-            litellm_cache_response::CacheOptions::new(litellm_cache_response::CacheScope::Shared),
-        ));
-    }
-    let handle = native_handle(&configured)?.ok_or_else(|| {
+    let handle = native_handle(configured)?.ok_or_else(|| {
         pyo3::exceptions::PyRuntimeError::new_err(
             "the configured cache changed to a Python cache after native admission",
         )
