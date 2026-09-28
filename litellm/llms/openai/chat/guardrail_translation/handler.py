@@ -17,7 +17,7 @@ This pattern can be replicated for other message formats (e.g., Anthropic).
 import json
 import time
 import uuid
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Union, cast
 
@@ -269,7 +269,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     def _extract_inputs(
         self,
-        message: dict[str, Any],
+        message: Mapping[str, object],
         msg_idx: int,
         texts_to_check: list[str],
         images_to_check: list[str],
@@ -330,7 +330,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
     async def _apply_guardrail_responses_to_input_texts(
         self,
-        messages: list[dict[str, Any]],
+        messages: list[dict[str, object]],
         responses: list[str],
         task_mappings: list[tuple[int, int | None]],
     ) -> None:
@@ -355,12 +355,12 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             elif isinstance(content, list) and content_idx_optional is not None:
                 # Replace specific text item in list content
-                messages[msg_idx]["content"][content_idx_optional]["text"] = guardrail_response
+                content[content_idx_optional]["text"] = guardrail_response
 
     async def _apply_guardrail_responses_to_input_tool_calls(
         self,
-        messages: list[dict[str, Any]],
-        tool_calls: list[dict[str, Any]],
+        messages: Sequence[Mapping[str, object]],
+        tool_calls: Sequence[Mapping[str, object]],
         task_mappings: list[tuple[int, int]],
     ) -> None:
         """
@@ -412,7 +412,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
         texts_to_check: Final[list[str]] = []
         images_to_check: Final[list[str]] = []
-        tool_calls_to_check: Final[list[dict[str, Any]]] = []
+        tool_calls_to_check: Final[list[dict[str, object]]] = []
         text_task_mappings: Final[list[tuple[int, int | None]]] = []
         tool_call_task_mappings: Final[list[tuple[int, int]]] = []
         # text_task_mappings: Track (choice_index, content_index) for each text
@@ -461,8 +461,8 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
 
             guardrailed_texts: Final = guardrailed_inputs.get("texts", [])
             returned_tool_calls: Final = guardrailed_inputs.get("tool_calls")
-            guardrailed_tool_calls: Final[list[dict[str, Any]]] = (
-                cast(list[dict[str, Any]], returned_tool_calls)
+            guardrailed_tool_calls: Final[list[dict[str, object]]] = (
+                cast(list[dict[str, object]], returned_tool_calls)
                 if isinstance(returned_tool_calls, list) and len(returned_tool_calls) == len(tool_calls_to_check)
                 else tool_calls_to_check
             )
@@ -939,7 +939,7 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         choice_idx: int,
         texts_to_check: list[str],
         images_to_check: list[str],
-        tool_calls_to_check: list[dict[str, Any]],
+        tool_calls_to_check: list[dict[str, object]],
         text_task_mappings: list[tuple[int, int | None]],
         tool_call_task_mappings: list[tuple[int, int]],
     ) -> None:
@@ -1169,10 +1169,22 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
             choice.index for response in responses_so_far for choice in response.choices
         )
         fragments_by_tool_call: Final = self._function_tool_call_fragments(responses_so_far)
-        if len(stream_choice_indices) != 1 or len(fragments_by_tool_call) != len(post_guardrail_tool_calls):
+        if len(stream_choice_indices) != 1:
             from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
 
-            raise UndeliverableStreamRewrite(guardrail_name)
+            raise UndeliverableStreamRewrite(
+                guardrail_name,
+                f"the stream carries {len(stream_choice_indices)} choices and tool-call rewrites are only written "
+                "back on single-choice streams",
+            )
+        if len(fragments_by_tool_call) != len(post_guardrail_tool_calls):
+            from litellm.proxy.policy_engine.pipeline_executor import UndeliverableStreamRewrite
+
+            raise UndeliverableStreamRewrite(
+                guardrail_name,
+                f"the guardrail returned {len(post_guardrail_tool_calls)} tool calls for a stream that carried "
+                f"{len(fragments_by_tool_call)}",
+            )
         for before, (name, arguments), fragments in zip(
             pre_guardrail_tool_calls, post_guardrail_tool_calls, fragments_by_tool_call
         ):

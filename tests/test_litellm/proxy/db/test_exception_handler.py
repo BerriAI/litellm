@@ -677,13 +677,28 @@ def test_is_deadlock_error_excludes_non_deadlocks(error):
         (RawQueryError(data={"user_facing_error": {"error_code": "P2010", "meta": {"message": "m"}}}), None),
         (RawQueryError(data={"user_facing_error": {"error_code": "P2010", "meta": {"code": 42, "message": "m"}}}), None),
         (prisma_errors.DataError(data={"user_facing_error": {"meta": None}}), None),
+        (
+            prisma_errors.DataError(
+                data={
+                    "user_facing_error": {
+                        "is_panic": False,
+                        "message": "Error occurred during query execution:\nConnectorError(ConnectorError { "
+                        'user_facing_error: None, kind: QueryError(PostgresError { code: "23514", '
+                        'message: "new row violates check constraint", severity: "ERROR" }) })',
+                        "batch_request_idx": 0,
+                    }
+                }
+            ),
+            "23514",
+        ),
         (PrismaError("db error"), None),
         (httpx.ReadTimeout("no reply"), None),
     ],
 )
 def test_postgres_sqlstate_reads_the_code_prisma_attached_to_the_failed_statement(error: Exception, sqlstate: str | None):
-    """Only a prisma data error carrying Postgres's own error code yields a SQLSTATE; a
-    codeless or malformed payload, an engine-level error, and a transport error yield None."""
+    """Only a prisma data error carrying Postgres's own error code yields a SQLSTATE, whether in ``meta``
+    or, for a batched statement, only in the message; a codeless or malformed payload, an engine-level
+    error, and a transport error yield None."""
     assert PrismaDBExceptionHandler.postgres_sqlstate(error) == sqlstate
 
 
@@ -759,3 +774,18 @@ def test_connection_error_answers_when_prisma_is_mocked_after_import():
     with patch.dict(sys.modules, {"prisma": MagicMock()}):
         assert PrismaDBExceptionHandler.is_database_connection_error(Exception("x")) is False
         assert PrismaDBExceptionHandler.is_database_connection_error(httpx.ConnectError("refused")) is True
+
+
+def test_db_lookup_deadline_is_a_connection_and_unavailability_error_but_never_a_transport_error():
+    """A lookup that hit its deadline fails the request as a 503 and counts as a
+    DB outage for ``allow_requests_on_db_unavailable``, but it must not be read
+    as a broken transport: that would send every parked request into
+    ``attempt_db_reconnect`` and turn a slow database into a reconnect storm."""
+    from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
+
+    deadline: Final = DBLookupDeadlineExceeded("key", 10.0)
+
+    assert PrismaDBExceptionHandler.is_database_connection_error(deadline) is True
+    assert PrismaDBExceptionHandler.is_database_service_unavailable_error(deadline) is True
+    assert PrismaDBExceptionHandler.is_database_transport_error(deadline) is False
+    assert "temporarily unreachable" in PrismaDBExceptionHandler.database_unavailable_message(deadline)

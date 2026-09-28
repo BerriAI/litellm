@@ -1595,6 +1595,32 @@ export const claimOnboardingToken = async (
   }
 };
 
+/**
+ * Revokes the UI session key server-side (POST /session/logout). Best-effort
+ * with a short timeout: logout must still complete locally when the server is
+ * unreachable, so callers swallow rejections.
+ */
+export const sessionLogoutCall = async (accessToken: string): Promise<{ message: string }> => {
+  return await apiClient.post(`/session/logout`, {
+    accessToken,
+    signal: AbortSignal.timeout(3000),
+  });
+};
+
+export const changePasswordCall = async (
+  accessToken: string,
+  currentPassword: string,
+  newPassword: string,
+): Promise<{ user_id: string; message: string }> => {
+  return await apiClient.post(`/user/password/change`, {
+    accessToken,
+    body: {
+      current_password: currentPassword,
+      new_password: newPassword,
+    },
+  });
+};
+
 export const regenerateKeyCall = async (accessToken: string, keyToRegenerate: string, formData: any) => {
   try {
     const url = proxyBaseUrl
@@ -1969,6 +1995,7 @@ export const userFilterUICall = async (accessToken: string, params: URLSearchPar
         user_email: params.get("user_email") || undefined,
         user_id: params.get("user_id") || undefined,
         team_id: params.get("team_id") || undefined,
+        search: params.get("search") || undefined,
       },
     });
   } catch (error) {
@@ -1989,6 +2016,7 @@ interface UiSpendLogsParams {
   end_user?: string;
   status_filter?: string;
   cache_hit_filter?: string;
+  span_type?: string;
   /** Filter by model name (e.g. "gpt-4") */
   model?: string;
   /** Filter by model ID (litellm model deployment id) */
@@ -2326,7 +2354,8 @@ export const testModelGroupConnection = async (
 
 export interface AutoRouterRoutingTestRequest {
   prompt: string;
-  complexity_router_config: ComplexityRouterConfigPayload;
+  complexity_router_config: ComplexityRouterConfigPayload | Record<string, unknown>;
+  saved_model_id?: string;
   default_model?: string;
   router_name?: string;
   team_id?: string;
@@ -4853,6 +4882,7 @@ export const fetchMCPServerHealth = async (accessToken: string, serverIds?: stri
     return await apiClient.get(`/v1/mcp/server/health`, {
       accessToken,
       query: {
+        include_reachability: true,
         server_ids: serverIds && serverIds.length > 0 ? serverIds : undefined,
       },
     });
@@ -6158,6 +6188,16 @@ export const getAgentInfo = async (accessToken: string, agentId: string) => {
   }
 };
 
+export type AgentKillSwitchResult = components["schemas"]["AgentKillSwitchResult"];
+
+export const triggerAgentKillSwitchCall = async (
+  accessToken: string,
+  agentId: string,
+): Promise<AgentKillSwitchResult> =>
+  await apiClient.post<AgentKillSwitchResult>(`/v1/agents/${encodeURIComponent(agentId)}/kill_switch`, {
+    accessToken,
+  });
+
 export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}/info` : `/guardrails/${guardrailId}/info`;
@@ -6196,6 +6236,8 @@ export const patchAgentCall = async (
     rpm_limit?: number | null;
     session_tpm_limit?: number | null;
     session_rpm_limit?: number | null;
+    access_group_ids?: string[];
+    kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
   },
 ) => {
   try {
@@ -7875,6 +7917,10 @@ export const storeMCPUserEnvVars = async (
     accessToken,
     body: { values },
   });
+};
+
+export const clearMCPUserEnvVars = async (accessToken: string, serverId: string): Promise<MCPUserEnvVarsStatus> => {
+  return apiClient.delete<MCPUserEnvVarsStatus>(`/v1/mcp/server/${serverId}/user-env-vars`, { accessToken });
 };
 
 export const listMCPUserEnvVarStatus = async (accessToken: string): Promise<MCPUserEnvVarsStatus[]> => {

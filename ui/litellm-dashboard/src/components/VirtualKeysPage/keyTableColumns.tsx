@@ -4,7 +4,7 @@ import { Info } from "lucide-react";
 import { ColumnDef } from "@tanstack/react-table";
 
 import { DataTableMultiSortHeader, DataTableSortHeader, type DataTableSortField } from "@/components/shared/DataTable";
-import { inheritedBudgetGates } from "@/components/shared/InheritedBudgetHint";
+import { inheritedBudgetGates, keyOwnerBudgetSource } from "@/components/shared/InheritedBudgetHint";
 import { HoverCard, HoverCardContent, HoverCardTrigger } from "@/components/ui/hover-card";
 import { Skeleton } from "@/components/ui/skeleton";
 import {
@@ -86,12 +86,14 @@ interface KeyTableColumnsDeps {
   allTeams: Team[];
   organizations: Organization[];
   onSelectKey: (key: KeyResponse) => void;
+  applyUserBudgetToTeamKeys: boolean;
 }
 
 export const getKeyTableColumns = ({
   allTeams,
   organizations,
   onSelectKey,
+  applyUserBudgetToTeamKeys,
 }: KeyTableColumnsDeps): ColumnDef<KeyResponse>[] => [
   {
     id: "key_alias",
@@ -277,7 +279,11 @@ export const getKeyTableColumns = ({
         <SpendBudgetCell
           spend={row.original.spend}
           maxBudget={row.original.max_budget}
-          inheritedGates={row.original.max_budget == null ? inheritedBudgetGates(team, organization) : []}
+          inheritedGates={
+            row.original.max_budget == null
+              ? inheritedBudgetGates(team, organization, keyOwnerBudgetSource(row.original, applyUserBudgetToTeamKeys))
+              : []
+          }
         />
       );
     },
@@ -289,7 +295,7 @@ export const getKeyTableColumns = ({
     header: () => (
       <InfoHeader
         label="Lifetime Spend"
-        tooltip="Cumulative spend across every budget period. Budget resets do not touch this value. Keys created before this field existed only count spend from then on."
+        tooltip="Cumulative spend across every budget period. Budget resets do not touch this value. Lifetime tracking started with LiteLLM v1.103.0 on September 19, 2026, so keys created earlier only count spend since that upgrade."
       />
     ),
     size: 130,

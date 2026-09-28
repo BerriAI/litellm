@@ -24,7 +24,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.guardrails import GuardrailEventHooks
-from litellm.types.llms.openai import AllMessageValues
+from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolCallChunk
 from litellm.types.proxy.guardrails.guardrail_hooks.base import (
     GuardrailConfigModel,
 )
@@ -36,7 +36,7 @@ from litellm.types.proxy.guardrails.guardrail_hooks.singulr import (
     ToolCall,
     ToolCallFunction,
 )
-from litellm.types.utils import CallTypes, GenericGuardrailAPIInputs
+from litellm.types.utils import CallTypes, ChatCompletionMessageToolCall, GenericGuardrailAPIInputs
 
 _DEFAULT_API_BASE: Final = "http://localhost:8003"
 _GUARD_ENDPOINT: Final = "/api/v1/ai-gateway/litellm-v2"
@@ -339,7 +339,7 @@ class SingulrGuardrail(CustomGuardrail):
         return inputs
 
     @staticmethod
-    def _build_tool_call(tool_call: Mapping[str, Any]) -> "ToolCall | None":
+    def _build_tool_call(tool_call: ChatCompletionToolCallChunk | ChatCompletionMessageToolCall) -> "ToolCall | None":
         tool_call_id: Final = tool_call.get("id")
         fun: Final = tool_call.get("function")
         if not tool_call_id or not fun:

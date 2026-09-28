@@ -67,7 +67,9 @@ def _truncate_base64_in_string(value: str) -> str:
     return _DATA_URI_RE.sub(_base64_data_uri_replacer, value)
 
 
-def _truncate_base64_in_value(value: Any) -> Any:
+def _truncate_base64_in_value(
+    value: str | dict[str, object] | list[object] | None,
+) -> str | dict[str, object] | list[object] | None:
     """Iteratively truncate base64 data URIs in a JSON-like value (str/list/dict).
 
     Uses an explicit stack instead of recursion to satisfy the project's

@@ -46,6 +46,7 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import _delete_cache_key_object
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import evict_and_broadcast
 from litellm.proxy.common_utils.http_parsing_utils import _safe_get_request_headers
 from litellm.proxy.management_endpoints.internal_user_endpoints import new_user
 from litellm.proxy.management_endpoints.scim.scim_transformations import (
@@ -581,7 +582,6 @@ async def _users_named_by_member_value(
     subject: Final = value.strip()
     email: Final[_CaseInsensitiveMatch] = {"equals": subject, "mode": "insensitive"}
     rows: Final = await _table(UserRepository(prisma_client)).find_many(
-        # mutable-ok: the Prisma serializer requires concrete dicts and a concrete list
         where={"OR": [{"sso_user_id": subject}, {"user_email": email}]},
         take=take,
     )
@@ -1804,6 +1804,9 @@ async def update_user(
             where={"user_id": user_id},
             data=update_data,
         )
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
 
         if client_set_active:
             new_active: Final = _scim_active_value(metadata)
@@ -1866,6 +1869,10 @@ async def delete_user(
 
         # Delete user
         await _table(UserRepository(prisma_client)).delete(where={"user_id": user_id})
+
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
 
         return Response(status_code=204)
     except Exception as e:
@@ -2375,6 +2382,9 @@ async def patch_user(
             where={"user_id": user_id},
             data=update_data,
         )
+        from litellm.proxy.proxy_server import user_api_key_cache
+
+        await evict_and_broadcast(cache_keys=(user_id,), user_api_key_cache=user_api_key_cache)
 
         if new_active is not None and new_active != (True if prev_active is None else prev_active):
             await _set_user_keys_blocked(user_id=user_id, blocked=not new_active)

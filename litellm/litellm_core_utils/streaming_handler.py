@@ -1329,7 +1329,7 @@ class CustomStreamWrapper:
                 "is_finished": chunk_finish_reason is not None,
                 "finish_reason": chunk_finish_reason,
                 "original_chunk": cached_chunk,
-                "tool_calls": (getattr(cached_choice.delta, "tool_calls", None) if cached_choice is not None else None),
+                "tool_calls": cached_choice.delta.tool_calls if cached_choice is not None else None,
             }
 
             completion_obj["content"] = response_obj["text"]
@@ -1504,8 +1504,11 @@ class CustomStreamWrapper:
 
                 self.tool_call = True
 
-            if hasattr(chunk, "usage") and chunk.usage is not None:
-                model_response.usage = chunk.usage
+            chunk_usage: Final = getattr(chunk, "usage", None)
+            if isinstance(chunk_usage, Usage):
+                model_response.usage = chunk_usage
+            elif isinstance(chunk_usage, BaseModel):
+                model_response.usage = Usage(**chunk_usage.model_dump())
 
             ## RETURN ARG
             result: Final = self.return_processed_chunk_logic(

@@ -6,7 +6,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, NoReturn, cast
 
 import httpx
-from pydantic import ValidationError
+from pydantic import BaseModel, ValidationError
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -31,13 +31,17 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
     async_inline_remote_media,
     inline_remote_image_urls,
 )
+from litellm.litellm_core_utils.prompt_templates.mid_conversation_system import (
+    place_mid_conversation_system,
+    split_leading_system_run,
+)
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
 from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
     ANTHROPIC_HOSTED_TOOLS,
-    AllAnthropicMessageValues,
+    AllAnthropicPassThroughMessageValues,
     AllAnthropicToolsValues,
     AnthropicCodeExecutionTool,
     AnthropicComputerTool,
@@ -87,6 +91,7 @@ from litellm.utils import (
     get_max_tokens,
     has_tool_call_blocks,
     last_assistant_with_tool_calls_has_no_thinking_blocks,
+    supports_mid_conversation_system,
     supports_reasoning,
     token_counter,
 )
@@ -96,13 +101,13 @@ from ..common_utils import (
     AnthropicModelInfo,
     eager_input_streaming_flag,
     process_anthropic_headers,
+    requires_native_compaction_beta,
     strip_advisor_blocks_from_messages,
 )
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
     LoggingClass = LiteLLMLoggingObj
 else:
@@ -151,7 +156,7 @@ class _AnthropicToolResultBlock(TypedDict, total=False):
     content: ReadOnly[object]
 
 
-_ENUM_TYPE_CHECKS: Final[Mapping[str, Callable[[object], bool]]] = MappingProxyType(
+_ENUM_TYPE_CHECKS: Final[Mapping[object, Callable[[object], bool]]] = MappingProxyType(
     {
         "null": lambda v: v is None,
         "boolean": lambda v: isinstance(v, bool),
@@ -164,7 +169,7 @@ _ENUM_TYPE_CHECKS: Final[Mapping[str, Callable[[object], bool]]] = MappingProxyT
 )
 
 
-def _enum_conflicts_with_declared_type(schema: Mapping[str, Any]) -> bool:
+def _enum_conflicts_with_declared_type(schema: Mapping[str, object]) -> bool:
     """Whether ``schema``'s ``enum`` cannot match its declared ``type``."""
     enum_values: Final = schema.get("enum")
     declared_type: Final = schema.get("type")
@@ -659,7 +664,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
         return result
 
-    def get_json_schema_from_pydantic_object(self, response_format: Any | dict | None) -> dict | None:
+    def get_json_schema_from_pydantic_object(self, response_format: type[BaseModel] | dict | None) -> dict | None:
         return type_to_response_format_param(
             response_format, ref_template="/$defs/{model}"
         )  # Relevant issue: https://github.com/BerriAI/litellm/issues/7755
@@ -1072,7 +1077,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     @staticmethod
     def _sanitize_tool_names_in_request(
-        optional_params: dict[str, Any],
+        optional_params: dict[str, object],
     ) -> tuple[dict[str, str], dict[str, str]]:
         """Sanitize ``optional_params['tools']`` and ``optional_params['tool_choice']``
         in place so every name matches Anthropic's ``^[a-zA-Z0-9_-]{1,128}$``.
@@ -1119,7 +1124,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         #    so a caller reusing the same tool list/dicts across requests
         #    doesn't see its inputs permanently rewritten (which would also
         #    drop the original key from `forward` on the next request).
-        new_tools: Final[list[Any]] = []
+        new_tools: Final[list[object]] = []
         for t in tools:
             if (
                 isinstance(t, dict)
@@ -1442,7 +1447,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
                 entry_type = entry.get("type")
                 if entry_type == "compaction":
-                    anthropic_edit: dict[str, Any] = {"type": "compact_20260112"}
+                    anthropic_edit: dict[str, object] = {"type": "compact_20260112"}
                     compact_threshold = entry.get("compact_threshold")
                     # Rewrite to 'trigger' with correct nesting if threshold exists
                     if compact_threshold is not None and isinstance(compact_threshold, (int, float)):
@@ -1743,10 +1748,13 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
 
     def add_code_execution_tool(
         self,
-        messages: list[AllAnthropicMessageValues],
+        messages: list[AllAnthropicPassThroughMessageValues],
         tools: list[AllAnthropicToolsValues | dict],
     ) -> list[AllAnthropicToolsValues | dict]:
-        """if 'container_upload' in messages, add code_execution tool"""
+        """if 'container_upload' in messages, add code_execution tool
+
+        Takes the pass-through union because the translator emits ``role: "system"``
+        in ``messages`` for models that accept it; only ``content`` is read here."""
         add_code_execution_tool = False
         for message in messages:
             message_content = message.get("content", None)
@@ -1771,7 +1779,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             )
         return tools
 
-    def _ensure_beta_header(self, headers: dict, beta_value: str) -> None:
+    def _ensure_beta_header(self, headers: dict[str, str], beta_value: str) -> None:
         """
         Ensure a beta header value is present in the anthropic-beta header.
         Merges with existing values instead of overriding them.
@@ -1780,13 +1788,17 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             headers: Dictionary of headers to update
             beta_value: The beta header value to add
         """
-        existing_beta: Final = headers.get("anthropic-beta")
-        if existing_beta is None:
-            headers["anthropic-beta"] = beta_value
-            return
-        existing_values: Final = [beta.strip() for beta in existing_beta.split(",")]
-        if beta_value not in existing_values:
-            headers["anthropic-beta"] = f"{existing_beta}, {beta_value}"
+        existing_values: Final = tuple(
+            beta.strip()
+            for key, value in headers.items()
+            if key.lower() == "anthropic-beta"
+            for beta in value.split(",")
+            if beta.strip()
+        )
+        for key in tuple(headers):
+            if key.lower() == "anthropic-beta":
+                headers.pop(key)
+        headers["anthropic-beta"] = ", ".join(dict.fromkeys((*existing_values, beta_value)))
 
     def _ensure_context_management_beta_header(self, headers: dict, context_management: object) -> None:
         """
@@ -1824,7 +1836,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 ANTHROPIC_BETA_HEADER_VALUES.CONTEXT_MANAGEMENT_2025_06_27.value,
             )
 
-    def update_headers_with_optional_anthropic_beta(self, headers: dict, optional_params: dict) -> dict:
+    def update_headers_with_optional_anthropic_beta(
+        self, headers: dict, optional_params: dict, messages: Sequence[object] = ()
+    ) -> dict:
         """Update headers with optional anthropic beta."""
 
         # Skip adding beta headers for Vertex requests
@@ -1832,6 +1846,9 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         is_vertex_request: Final = optional_params.get("is_vertex_request", False)
         if is_vertex_request:
             return headers
+
+        if requires_native_compaction_beta(self._resolved_provider, optional_params, messages):
+            self._ensure_beta_header(headers, ANTHROPIC_BETA_HEADER_VALUES.COMPACT_2026_09_04.value)
 
         _tools: Final = optional_params.get("tools", [])
         for tool in _tools:
@@ -1929,8 +1946,6 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
             custom_llm_provider=self._resolved_provider,
         )
 
-        headers = self.update_headers_with_optional_anthropic_beta(headers=headers, optional_params=optional_params)
-
         # === Tool-name sanitization (single chokepoint) ===
         # Anthropic enforces ^[a-zA-Z0-9_-]{1,128}$ on every tool name. We
         # sanitize *here* -- not in map_openai_params -- because:
@@ -1959,16 +1974,27 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         if _name_reverse_map and isinstance(litellm_params, dict):
             litellm_params[ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY] = _name_reverse_map
 
-        # Separate system prompt from rest of message
-        anthropic_system_message_list: Final = self.translate_system_message(messages=messages)
+        # Only the leading system run becomes the top-level system prompt. A later
+        # system message stays in the conversation: hoisting it rewrites the cached
+        # prefix and re-bills the whole history at cache-write pricing (#36559).
+        leading_system_run, later_messages = split_leading_system_run(messages)
+        anthropic_system_message_list: Final = self.translate_system_message(
+            messages=list(leading_system_run)  # mutable-ok: translate_system_message pops from the list it is given
+        )
         # Handling anthropic API Prompt Caching
         if len(anthropic_system_message_list) > 0:
             optional_params["system"] = anthropic_system_message_list
+        conversation: Final = place_mid_conversation_system(
+            later_messages,
+            supports_mid_conversation_system=supports_mid_conversation_system(
+                model=model, custom_llm_provider=self.custom_llm_provider
+            ),
+        )
         # Format rest of message according to anthropic guidelines
         try:
             anthropic_messages = anthropic_messages_pt(
                 model=model,
-                messages=messages,
+                messages=list(conversation),  # mutable-ok: anthropic_messages_pt rewrites entries in place
                 llm_provider=self._resolved_provider,
             )
         except Exception as e:
@@ -1976,6 +2002,10 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
                 status_code=400,
                 message=f"{e}\nReceived Messages={messages}",
             )  # don't use verbose_logger.exception, if exception is raised
+
+        self.update_headers_with_optional_anthropic_beta(
+            headers=headers, optional_params=optional_params, messages=anthropic_messages
+        )
 
         ## Auto-strip advisor blocks from history if advisor tool is absent.
         ## Prevents Anthropic 400: advisor_tool_result in history requires advisor tool.
@@ -2442,9 +2472,11 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         code_by_id: Final[dict[str, str]] = {}
         for tc in tool_calls:
             try:
-                args = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                args: object = json.loads(tc.get("function", {}).get("arguments", "{}"))
+                if not isinstance(args, Mapping):
+                    continue
                 call_id = tc.get("id")
-                command = args.get("command", "")
+                command: object = args.get("command", "")
                 if isinstance(call_id, str):
                     code_by_id[call_id] = command if isinstance(command, str) else ""
             except Exception:
@@ -2514,8 +2546,8 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         tool_results: Sequence[_AnthropicToolResultBlock] | None,
         compaction_blocks: Sequence[object] | None,
         tool_calls: list[ChatCompletionToolCallChunk],
-    ) -> dict[str, Any]:
-        provider_specific_fields: Final[dict[str, Any]] = {
+    ) -> dict[str, object]:
+        provider_specific_fields: Final[dict[str, object]] = {
             "citations": citations,
             "thinking_blocks": thinking_blocks,
         }
@@ -2686,7 +2718,7 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

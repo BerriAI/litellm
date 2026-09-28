@@ -7,6 +7,7 @@ use litellm_core_utils::{
     settings::ProcessEnvironment,
 };
 use litellm_http::outbound::{OutboundRequest, RequestSigner};
+use litellm_secrets::source::Secrets;
 use serde::{
     Deserialize, Serialize,
     de::{DeserializeOwned, IntoDeserializer},
@@ -17,7 +18,7 @@ use serde_with::serde_as;
 use crate::base_llm::ocr::{
     error::Error,
     handler::{CallHooks, OcrClient, read_response_bytes, transform_request_body},
-    settings::{OcrSettings, Secrets},
+    settings::OcrSettings,
 };
 
 pub const OCR_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;
@@ -435,6 +436,8 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
     fn get_api_key_env_var(&self) -> Option<&'static str> {
         None
     }
+
+    fn secret_names(&self) -> Vec<&'static str>;
 
     fn resolve_connection_params(&self, inputs: OcrCredentialInputs) -> ResolvedOcrCredentials {
         ResolvedOcrCredentials {

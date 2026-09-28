@@ -6,7 +6,7 @@ import json
 import os
 from collections.abc import AsyncIterator, Callable, Iterable, Iterator, Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, Union, cast, get_args
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, TypeVar, Union, cast
 
 from openai.types.chat import ChatCompletion
 from openai.types.responses import Response
@@ -38,7 +38,6 @@ from litellm.responses.sse_output_recovery import (
 )
 from litellm.responses.utils import ResponsesAPIRequestUtils, normalize_responses_api_stream_options
 from litellm.types.llms.openai import (
-    REASONING_EFFORT,
     ChatCompletionAnnotation,
     ChatCompletionReasoningItem,
     ChatCompletionToolCallChunk,
@@ -52,7 +51,7 @@ from litellm.types.llms.openai import (
 from litellm.types.utils import GenericStreamingChunk, ModelResponseStream
 
 if TYPE_CHECKING:
-    from openai.types.responses import ResponseInputImageParam
+    from openai.types.responses import ResponseInputImageParam, ResponseOutputItem
     from openai.types.responses.response_text_config_param import (
         ResponseTextConfigParam as ResponseText,
     )
@@ -192,9 +191,10 @@ def _as_chat_reasoning_items(
 ) -> list[ChatCompletionReasoningItem] | None:
     if not reasoning_items:
         return None
-    # cast-ok: _BuiltReasoningItem is the structural shape ChatCompletionReasoningItem
-    # describes, and TypedDict invariance is what stops the two from unifying here.
     return cast(list[ChatCompletionReasoningItem], list(reasoning_items))
+
+
+_ToolChoiceT = TypeVar("_ToolChoiceT")
 
 
 def _map_incomplete_reason_to_finish_reason(incomplete_reason: str | None) -> Literal["length", "content_filter"]:
@@ -291,7 +291,9 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
     def __init__(self):
         pass
 
-    def _normalize_tool_choice_for_responses_api(self, tool_choice: Any) -> Any:
+    def _normalize_tool_choice_for_responses_api(
+        self, tool_choice: _ToolChoiceT
+    ) -> _ToolChoiceT | ToolChoiceFunctionParam | ToolChoiceCustomParam | Literal["auto", "none", "required"]:
         """Chat tool_choice nests the name under function/custom; Responses API expects top-level name."""
         if not isinstance(tool_choice, dict):
             return tool_choice
@@ -497,7 +499,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                 responses_api_request["max_output_tokens"] = value
             elif key == "tools" and value is not None:
                 responses_api_request["tools"] = self._convert_tools_to_responses_format(
-                    cast(list[dict[str, Any]], value)
+                    cast(list[dict[str, object]], value)
                 )
             elif key == "response_format":
                 text_format = self._transform_response_format_to_text_format(value)
@@ -828,7 +830,7 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
         response_output: Final = response_payload.get("output")
         if not isinstance(response_output, list) or len(response_output) == 0:
             return None
-        return cast(list[dict[str, Any]], response_output)
+        return cast(list[dict[str, object]], response_output)
 
     @classmethod
     def _recover_output_items_from_raw_sse(cls, raw_sse: str | None) -> list[dict[str, object]]:
@@ -911,10 +913,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         output_items = raw_response.output
         if len(output_items) == 0:
-            recovered_output_items: Final = self._recover_output_items_from_logging(logging_obj)
+            recovered_output_items: Final[list[ResponseOutputItem | dict[str, object]]] = [
+                *self._recover_output_items_from_logging(logging_obj)
+            ]
             if recovered_output_items:
-                output_items = cast(Any, recovered_output_items)
-                raw_response.output = cast(Any, recovered_output_items)
+                output_items = recovered_output_items
+                raw_response.output = recovered_output_items
                 verbose_logger.warning(
                     "Recovered empty Responses API output from raw SSE for model=%s",
                     model,
@@ -1110,12 +1114,14 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             verbose_logger.debug("Chat provider: Other content type -> %s", result)
             return result
 
-    def _convert_tools_to_responses_format(self, tools: list[dict[str, Any]]) -> list["ALL_RESPONSES_API_TOOL_PARAMS"]:
+    def _convert_tools_to_responses_format(
+        self, tools: list[dict[str, object]]
+    ) -> list["ALL_RESPONSES_API_TOOL_PARAMS"]:
         """Convert chat completion tools to responses API tools format"""
         responses_tools: Final[list[ALL_RESPONSES_API_TOOL_PARAMS]] = []
         for tool in tools:
             # convert function tool from chat completion to responses API format
-            if tool.get("type") == "function":
+            if tool.get("type") == "function" and isinstance(tool.get("function"), dict):
                 function_tool = cast(ChatCompletionToolParamFunctionChunk, tool.get("function"))
                 responses_tools.append(
                     FunctionToolParam(
@@ -1126,12 +1132,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
                         description=function_tool.get("description"),
                     )
                 )
-            elif tool.get("type") == "custom" and isinstance(tool.get("custom"), dict):
+            elif tool.get("type") == "custom" and isinstance(custom_payload := tool.get("custom"), dict):
                 from litellm.litellm_core_utils.prompt_templates.common_utils import (
                     convert_custom_tool_format_to_responses_shape,
                 )
 
-                custom_payload = tool["custom"]
                 flat_custom = CustomToolParam(type="custom", name=custom_payload.get("name", ""))
                 if custom_payload.get("description") is not None:
                     flat_custom["description"] = custom_payload["description"]
@@ -1172,10 +1177,12 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
 
         return optional_params
 
-    def _map_reasoning_effort(self, reasoning_effort: str | Reasoning) -> Reasoning | None:
+    def _map_reasoning_effort(self, reasoning_effort: object) -> Reasoning:
         # If dict is passed, convert it directly to Reasoning object
         if isinstance(reasoning_effort, dict):
-            return Reasoning(**reasoning_effort)
+            return Reasoning(
+                **cast(Reasoning, reasoning_effort)  # cast-ok: dict is forwarded verbatim to the provider
+            )
 
         # Check if auto-summary is enabled via flag or environment variable
         # Priority: litellm.reasoning_auto_summary flag > LITELLM_REASONING_AUTO_SUMMARY env var
@@ -1183,13 +1190,11 @@ class LiteLLMResponsesTransformationHandler(CompletionTransformationBridge):
             litellm.reasoning_auto_summary or os.getenv("LITELLM_REASONING_AUTO_SUMMARY", "false").lower() == "true"
         )
 
-        if reasoning_effort in get_args(REASONING_EFFORT):
-            return (
-                Reasoning(effort=reasoning_effort, summary="detailed")
-                if auto_summary_enabled
-                else Reasoning(effort=reasoning_effort)
-            )
-        return None
+        return (
+            Reasoning(effort=reasoning_effort, summary="detailed")
+            if auto_summary_enabled
+            else Reasoning(effort=reasoning_effort)
+        )
 
     def _add_web_search_tool(
         self,
@@ -1363,7 +1368,7 @@ class OpenAiResponsesToChatCompletionStreamIterator(BaseModelResponseIterator):
         if tool_call_index_map is None:
             return output_index
         if output_index not in tool_call_index_map:
-            tool_call_index_map[output_index] = len(tool_call_index_map)  # mutable-ok: per-stream accumulator state
+            tool_call_index_map[output_index] = len(tool_call_index_map)
         return tool_call_index_map[output_index]
 
     @staticmethod

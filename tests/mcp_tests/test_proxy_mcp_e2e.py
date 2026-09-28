@@ -54,6 +54,7 @@ def _clear_proxy_database_env() -> typing.Iterator[None]:
     # the LITELLM_MASTER_KEY env var, overriding whatever initialize() set from
     # the config file. We must set it here so the lifespan doesn't reset it to None.
     mp.setenv("LITELLM_MASTER_KEY", "sk-1234")
+    mp.setenv("LITELLM_DANGEROUSLY_PERMIT_WEAK_OR_UNSET_MASTER_KEY", "true")
     try:
         yield
     finally:
