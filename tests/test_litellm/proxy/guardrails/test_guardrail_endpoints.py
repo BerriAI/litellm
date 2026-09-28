@@ -1,15 +1,11 @@
 import json
-import os
-import sys
+import time
 from datetime import datetime
 from typing import Dict, List, Optional
 from unittest.mock import AsyncMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 from fastapi import HTTPException
 
@@ -18,6 +14,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
     PatchGuardrailRequest,
     RegisterGuardrailRequest,
+    TestCustomCodeGuardrailRequest,
     UpdateGuardrailRequest,
     apply_guardrail,
     approve_guardrail_submission,
@@ -25,12 +22,16 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     delete_guardrail,
     get_guardrail_info,
     get_guardrail_submission,
+    get_guardrail_ui_settings,
     list_guardrail_submissions,
     list_guardrails_v2,
     patch_guardrail,
     register_guardrail,
     reject_guardrail_submission,
     update_guardrail,
+)
+from litellm.proxy.guardrails.guardrail_endpoints import (
+    test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -91,12 +92,8 @@ def mock_prisma_client(mocker):
     # Create async mocks for the database methods
     mock_client.db = mocker.Mock()
     mock_client.db.litellm_guardrailstable = mocker.Mock()
-    mock_client.db.litellm_guardrailstable.find_many = AsyncMock(
-        return_value=[MOCK_DB_GUARDRAIL]
-    )
-    mock_client.db.litellm_guardrailstable.find_unique = AsyncMock(
-        return_value=MOCK_DB_GUARDRAIL
-    )
+    mock_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[MOCK_DB_GUARDRAIL])
+    mock_client.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=MOCK_DB_GUARDRAIL)
     return mock_client
 
 
@@ -108,7 +105,7 @@ def mock_in_memory_handler(mocker):
     mock_handler.get_guardrail_by_id.return_value = MOCK_CONFIG_GUARDRAIL
     mock_handler.get_source.return_value = "config"
     mock_handler.initialize_guardrail = mocker.Mock()
-    mock_handler.update_in_memory_guardrail = mocker.Mock()
+    mock_handler.sync_guardrail_from_db = mocker.Mock()
     mock_handler.delete_in_memory_guardrail = mocker.Mock()
     mock_handler.reconcile_db_guardrails = mocker.Mock(return_value=[])
     return mock_handler
@@ -122,17 +119,13 @@ def mock_guardrail_registry(mocker):
         return_value={**MOCK_DB_GUARDRAIL, "guardrail_id": "new-test-guardrail-id"}
     )
     mock_registry.delete_guardrail_from_db = AsyncMock(return_value=MOCK_DB_GUARDRAIL)
-    mock_registry.get_guardrail_by_id_from_db = AsyncMock(
-        return_value=MOCK_DB_GUARDRAIL
-    )
+    mock_registry.get_guardrail_by_id_from_db = AsyncMock(return_value=MOCK_DB_GUARDRAIL)
     mock_registry.update_guardrail_in_db = AsyncMock(return_value=MOCK_DB_GUARDRAIL)
     return mock_registry
 
 
 @pytest.mark.asyncio
-async def test_list_guardrails_v2_with_db_and_config(
-    mocker, mock_prisma_client, mock_in_memory_handler
-):
+async def test_list_guardrails_v2_with_db_and_config(mocker, mock_prisma_client, mock_in_memory_handler):
     """Test listing guardrails from both DB and config"""
     # Mock the prisma client
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
@@ -148,17 +141,13 @@ async def test_list_guardrails_v2_with_db_and_config(
     assert len(response.guardrails) == 2
 
     # Check DB guardrail
-    db_guardrail = next(
-        g for g in response.guardrails if g.guardrail_id == "test-db-guardrail"
-    )
+    db_guardrail = next(g for g in response.guardrails if g.guardrail_id == "test-db-guardrail")
     assert db_guardrail.guardrail_name == "Test DB Guardrail"
     assert db_guardrail.guardrail_definition_location == "db"
     assert isinstance(db_guardrail.litellm_params, BaseLitellmParams)
 
     # Check config guardrail
-    config_guardrail = next(
-        g for g in response.guardrails if g.guardrail_id == "test-config-guardrail"
-    )
+    config_guardrail = next(g for g in response.guardrails if g.guardrail_id == "test-config-guardrail")
     assert config_guardrail.guardrail_name == "Test Config Guardrail"
     assert config_guardrail.guardrail_definition_location == "config"
     assert isinstance(config_guardrail.litellm_params, BaseLitellmParams)
@@ -200,9 +189,7 @@ async def test_list_guardrails_v2_skips_stale_db_backed_in_memory_entries(mocker
 
 
 @pytest.mark.asyncio
-async def test_get_guardrail_info_404s_stale_db_backed_entry(
-    mocker, mock_prisma_client, mock_in_memory_handler
-):
+async def test_get_guardrail_info_404s_stale_db_backed_entry(mocker, mock_prisma_client, mock_in_memory_handler):
     """
     Stale DB-backed entry (in-memory but not in DB) must 404 instead of being
     returned as if it were a config-loaded guardrail.
@@ -212,9 +199,7 @@ async def test_get_guardrail_info_404s_stale_db_backed_entry(
         "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
         mock_in_memory_handler,
     )
-    mock_prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(
-        return_value=None
-    )
+    mock_prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
     # In-memory still has it, but it's tagged as 'db' (stale, awaiting reconcile)
     mock_in_memory_handler.get_source.return_value = "db"
 
@@ -245,9 +230,7 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_db_guardrails(mocker):
     mock_prisma_client = mocker.Mock()
     mock_prisma_client.db = mocker.Mock()
     mock_prisma_client.db.litellm_guardrailstable = mocker.Mock()
-    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
-        return_value=[db_guardrail_with_secrets]
-    )
+    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[db_guardrail_with_secrets])
 
     mock_in_memory_handler = mocker.Mock()
     mock_in_memory_handler.list_in_memory_guardrails.return_value = []
@@ -267,11 +250,7 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_db_guardrails(mocker):
     if isinstance(litellm_params, dict):
         params = litellm_params
     else:
-        params = (
-            litellm_params.model_dump()
-            if hasattr(litellm_params, "model_dump")
-            else dict(litellm_params)
-        )
+        params = litellm_params.model_dump() if hasattr(litellm_params, "model_dump") else dict(litellm_params)
 
     # Sensitive keys (containing "key", "secret", "token", etc.) should be masked
     assert params["api_key"] != "sk-1234567890abcdef"
@@ -303,9 +282,7 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_config_guardrails(mock
     mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[])
 
     mock_in_memory_handler = mocker.Mock()
-    mock_in_memory_handler.list_in_memory_guardrails.return_value = [
-        config_guardrail_with_secrets
-    ]
+    mock_in_memory_handler.list_in_memory_guardrails.return_value = [config_guardrail_with_secrets]
 
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch(
@@ -322,11 +299,7 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_config_guardrails(mock
     if isinstance(litellm_params, dict):
         params = litellm_params
     else:
-        params = (
-            litellm_params.model_dump()
-            if hasattr(litellm_params, "model_dump")
-            else dict(litellm_params)
-        )
+        params = litellm_params.model_dump() if hasattr(litellm_params, "model_dump") else dict(litellm_params)
 
     # Sensitive keys should be masked
     assert params["api_key"] != "my-secret-bedrock-key"
@@ -336,6 +309,99 @@ async def test_list_guardrails_v2_masks_sensitive_data_in_config_guardrails(mock
     # Non-sensitive keys should remain unchanged
     assert params["guardrail"] == "bedrock"
     assert params["mode"] == "during_call"
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_admin_viewer_sees_guardrails_of_teams_they_are_not_in(
+    mocker,
+):
+    """
+    proxy_admin_viewer reads the same unscoped list as proxy_admin: a team-owned
+    guardrail must surface even though the viewer belongs to no teams.
+    """
+    other_team_guardrail = {
+        "guardrail_id": "other-team-guardrail",
+        "guardrail_name": "Other Team Guardrail",
+        "litellm_params": {"guardrail": "bedrock", "mode": "pre_call"},
+        "guardrail_info": {"description": "owned by a team the viewer is not in"},
+        "team_id": "team-viewer-is-not-in",
+        "created_at": datetime.now(),
+        "updated_at": datetime.now(),
+    }
+
+    mock_prisma_client = mocker.Mock()
+    mock_prisma_client.db = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[other_team_guardrail])
+
+    mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.list_in_memory_guardrails.return_value = []
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+    mock_get_user_team_ids = mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
+        AsyncMock(return_value=[]),
+    )
+
+    viewer_auth = UserAPIKeyAuth(user_id="viewer-1", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+    response = await list_guardrails_v2(user_api_key_dict=viewer_auth)
+
+    assert [g.guardrail_id for g in response.guardrails] == ["other-team-guardrail"]
+    mock_get_user_team_ids.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_masks_sensitive_data_for_admin_viewer(mocker):
+    """
+    Read parity for proxy_admin_viewer must not also hand out unmasked secrets.
+    The guardrail is team-owned so it only reaches the viewer via the admin path.
+    """
+    other_team_guardrail_with_secrets = {
+        "guardrail_id": "other-team-secret-guardrail",
+        "guardrail_name": "Other Team Guardrail with Secrets",
+        "litellm_params": {
+            "guardrail": "azure/text_moderations",
+            "mode": "pre_call",
+            "api_key": "sk-viewer-must-not-see-this",
+        },
+        "guardrail_info": {},
+        "team_id": "team-viewer-is-not-in",
+        "created_at": datetime.now(),
+        "updated_at": datetime.now(),
+    }
+
+    mock_prisma_client = mocker.Mock()
+    mock_prisma_client.db = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable = mocker.Mock()
+    mock_prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[other_team_guardrail_with_secrets]
+    )
+
+    mock_in_memory_handler = mocker.Mock()
+    mock_in_memory_handler.list_in_memory_guardrails.return_value = []
+
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
+        AsyncMock(return_value=[]),
+    )
+
+    viewer_auth = UserAPIKeyAuth(user_id="viewer-1", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+    response = await list_guardrails_v2(user_api_key_dict=viewer_auth)
+
+    guardrail = next(g for g in response.guardrails if g.guardrail_id == "other-team-secret-guardrail")
+    params = guardrail.litellm_params.model_dump()
+    assert params["api_key"] != "sk-viewer-must-not-see-this"
+    assert "****" in str(params["api_key"])
+    assert params["guardrail"] == "azure/text_moderations"
 
 
 @pytest.mark.asyncio
@@ -352,9 +418,7 @@ async def test_get_guardrail_info_from_db(mocker, mock_prisma_client):
 
 
 @pytest.mark.asyncio
-async def test_get_guardrail_info_from_config(
-    mocker, mock_prisma_client, mock_in_memory_handler
-):
+async def test_get_guardrail_info_from_config(mocker, mock_prisma_client, mock_in_memory_handler):
     """Test getting guardrail info from config when not found in DB"""
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch(
@@ -363,9 +427,7 @@ async def test_get_guardrail_info_from_config(
     )
 
     # Mock DB to return None
-    mock_prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(
-        return_value=None
-    )
+    mock_prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
 
     response = await get_guardrail_info("test-config-guardrail")
 
@@ -376,9 +438,7 @@ async def test_get_guardrail_info_from_config(
 
 
 @pytest.mark.asyncio
-async def test_get_guardrail_info_not_found(
-    mocker, mock_prisma_client, mock_in_memory_handler
-):
+async def test_get_guardrail_info_not_found(mocker, mock_prisma_client, mock_in_memory_handler):
     """Test getting guardrail info when not found in either DB or config"""
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     mocker.patch(
@@ -387,9 +447,7 @@ async def test_get_guardrail_info_not_found(
     )
 
     # Mock both DB and in-memory handler to return None
-    mock_prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(
-        return_value=None
-    )
+    mock_prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
     mock_in_memory_handler.get_guardrail_by_id.return_value = None
 
     with pytest.raises(HTTPException) as exc_info:
@@ -397,6 +455,106 @@ async def test_get_guardrail_info_not_found(
 
     assert exc_info.value.status_code == 404
     assert "not found" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_without_prisma_returns_config_guardrails(mocker, mock_in_memory_handler):
+    """
+    A proxy without a DB must still list config-defined guardrails instead of
+    raising 500 'Prisma client not initialized'.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response = await list_guardrails_v2(user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert len(response.guardrails) == 1
+    config_guardrail = response.guardrails[0]
+    assert config_guardrail.guardrail_id == "test-config-guardrail"
+    assert config_guardrail.guardrail_name == "Test Config Guardrail"
+    assert config_guardrail.guardrail_definition_location == "config"
+
+
+@pytest.mark.asyncio
+async def test_list_guardrails_v2_without_prisma_non_admin_sees_unrestricted_config_guardrails(
+    mocker, mock_in_memory_handler
+):
+    """
+    A non-admin caller on a no-DB proxy must see config guardrails that carry
+    no team_id restriction; the team lookup must not blow up without a DB.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    non_admin_auth = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="internal-user-1")
+    response = await list_guardrails_v2(user_api_key_dict=non_admin_auth)
+
+    assert [g.guardrail_id for g in response.guardrails] == ["test-config-guardrail"]
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_without_prisma_returns_config_guardrail(mocker, mock_in_memory_handler):
+    """
+    The info endpoint must serve config-defined guardrails from the in-memory
+    registry when no DB is attached instead of raising 500.
+    """
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+
+    response = await get_guardrail_info("test-config-guardrail")
+
+    assert response.guardrail_id == "test-config-guardrail"
+    assert response.guardrail_name == "Test Config Guardrail"
+    assert response.guardrail_definition_location == "config"
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_info_without_prisma_404s_unknown_id(mocker, mock_in_memory_handler):
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", None)
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+    mock_in_memory_handler.get_guardrail_by_id.return_value = None
+
+    with pytest.raises(HTTPException) as exc_info:
+        await get_guardrail_info("non-existent-guardrail")
+
+    assert exc_info.value.status_code == 404
+
+
+def test_get_guardrails_list_response_includes_guardrail_id():
+    """
+    The v1 list response is the UI's fallback when v2 fails; without ids every
+    row click requests /guardrails/undefined/info.
+    """
+    from litellm.proxy.guardrails.guardrail_endpoints import (
+        _get_guardrails_list_response,
+    )
+
+    response = _get_guardrails_list_response(
+        [
+            {
+                "guardrail_id": "stable-config-id",
+                "guardrail_name": "tooling",
+                "litellm_params": {
+                    "guardrail": "litellm_content_filter",
+                    "mode": "pre_call",
+                },
+            }
+        ]
+    )
+
+    assert response.guardrails[0].guardrail_id == "stable-config-id"
 
 
 def test_get_provider_specific_params():
@@ -423,10 +581,7 @@ def test_get_provider_specific_params():
     assert "optional_params" in fields
 
     # Check the structure of a simple field
-    assert (
-        fields["api_key"]["description"]
-        == "API key for the Azure Content Safety Prompt Shield guardrail"
-    )
+    assert fields["api_key"]["description"] == "API key for the Azure Content Safety Prompt Shield guardrail"
     assert fields["api_key"]["required"] == False
     assert fields["api_key"]["type"] == "string"  # Should be string, not None
 
@@ -450,17 +605,72 @@ def test_get_provider_specific_params():
         == "Severity threshold for the Azure Content Safety Text Moderation guardrail across all categories"
     )
     assert nested_fields["severity_threshold"]["required"] == False
-    assert (
-        nested_fields["severity_threshold"]["type"] == "number"
-    )  # Should be number, not None
+    assert nested_fields["severity_threshold"]["type"] == "number"  # Should be number, not None
 
     # Check other field types
     assert nested_fields["categories"]["type"] == "multiselect"
     assert nested_fields["blocklistNames"]["type"] == "array"
     assert nested_fields["haltOnBlocklistHit"]["type"] == "boolean"
-    assert (
-        nested_fields["outputType"]["type"] == "select"
-    )  # Literal type should be select
+    assert nested_fields["outputType"]["type"] == "select"  # Literal type should be select
+
+
+@pytest.mark.asyncio
+async def test_provider_specific_params_includes_embedding_toggle():
+    from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_params
+
+    provider_params = await get_provider_specific_params()
+
+    for provider in ("aim", "cato_networks"):
+        field = provider_params[provider]["inspect_embeddings"]
+        assert field["type"] == "bool"
+        assert field["default_value"] is False
+
+
+@pytest.mark.asyncio
+async def test_provider_specific_params_exposes_bedrock_streaming_flags():
+    from litellm.proxy.guardrails.guardrail_endpoints import get_provider_specific_params
+
+    provider_params = await get_provider_specific_params()
+
+    bedrock = provider_params["bedrock"]
+    assert "guardrailIdentifier" in bedrock
+    assert "guardrailVersion" in bedrock
+    assert bedrock["streaming_buffer_release_on_scan"]["type"] == "boolean"
+    assert bedrock["streaming_buffer_release_on_scan"]["default_value"] is False
+    assert bedrock["streaming_buffer_until_moderated"]["default_value"] is True
+    assert bedrock["streaming_end_of_stream_only"]["type"] == "boolean"
+    assert bedrock["streaming_sampling_rate"]["type"] == "number"
+
+
+@pytest.mark.asyncio
+async def test_provider_specific_params_includes_hide_secrets():
+    """hide-secrets lives in the enterprise package so it is not in
+    guardrail_class_registry; the endpoint must still advertise it or the
+    Add Guardrail UI dropdown never offers it (LIT-3548)."""
+    from litellm.proxy.guardrails.guardrail_endpoints import (
+        get_provider_specific_params,
+    )
+
+    provider_params = await get_provider_specific_params()
+
+    assert "hide-secrets" in provider_params
+    # populateGuardrailProviders() in the dashboard only lists providers whose
+    # entry carries a ui_friendly_name.
+    assert provider_params["hide-secrets"]["ui_friendly_name"] == "Hide Secrets"
+    assert provider_params["hide-secrets"]["detect_secrets_config"]["required"] is False
+
+
+@pytest.mark.asyncio
+async def test_add_guardrail_settings_restricts_hide_secrets_to_pre_call():
+    """hide-secrets only implements async_pre_call_hook, so offering the other
+    modes in the UI would create configs that boot clean and never run."""
+    from litellm.proxy.guardrails.guardrail_endpoints import (
+        get_guardrail_ui_settings,
+    )
+
+    settings = await get_guardrail_ui_settings()
+
+    assert settings.supported_modes_by_provider["hide-secrets"] == ["pre_call"]
 
 
 def test_optional_params_not_returned_when_not_overridden():
@@ -503,17 +713,11 @@ def test_optional_params_returned_when_properly_overridden():
 
     # Create specific optional params model
     class SpecificOptionalParams(BaseModel):
-        threshold: Optional[float] = Field(
-            default=0.5, description="Detection threshold"
-        )
-        categories: Optional[List[str]] = Field(
-            default=None, description="Categories to check"
-        )
+        threshold: Optional[float] = Field(default=0.5, description="Detection threshold")
+        categories: Optional[List[str]] = Field(default=None, description="Categories to check")
 
     # Create a config model that DOES override optional_params with a specific type
-    class TestGuardrailConfigWithOptionalParams(
-        GuardrailConfigModel[SpecificOptionalParams]
-    ):
+    class TestGuardrailConfigWithOptionalParams(GuardrailConfigModel[SpecificOptionalParams]):
         api_key: Optional[str] = Field(
             default=None,
             description="Test API key",
@@ -540,9 +744,7 @@ async def test_bedrock_guardrail_prepare_request_with_api_key():
     )
 
     # Setup guardrail hook
-    guardrail_hook = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail-id", guardrailVersion="1"
-    )
+    guardrail_hook = BedrockGuardrail(guardrailIdentifier="test-guardrail-id", guardrailVersion="1")
     mock_credentials = Mock()
     test_data = {"source": "INPUT", "content": [{"text": {"text": "test content"}}]}
 
@@ -564,7 +766,7 @@ async def test_bedrock_guardrail_prepare_request_with_api_key():
 
 
 @pytest.mark.asyncio
-async def test_bedrock_guardrail_prepare_request_without_api_key():
+async def test_bedrock_guardrail_prepare_request_without_api_key(monkeypatch):
     """Test _prepare_request method falls back to SigV4 when no api_key is provided"""
     from unittest.mock import Mock, patch
 
@@ -573,27 +775,19 @@ async def test_bedrock_guardrail_prepare_request_without_api_key():
     )
 
     # Setup guardrail hook
-    guardrail_hook = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail-id", guardrailVersion="1"
-    )
+    guardrail_hook = BedrockGuardrail(guardrailIdentifier="test-guardrail-id", guardrailVersion="1")
 
     # Mock credentials
     mock_credentials = Mock()
 
     # Test data without api_key
     test_data = {"source": "INPUT", "content": [{"text": {"text": "test content"}}]}
+    monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
 
     with (
-        patch(
-            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.get_secret_str"
-        ) as mock_get_secret,
         patch("botocore.auth.SigV4Auth") as mock_sigv4_auth,
         patch("botocore.awsrequest.AWSRequest") as mock_aws_request,
     ):
-
-        # Mock no AWS_BEARER_TOKEN_BEDROCK
-        mock_get_secret.return_value = None
-
         # Mock SigV4Auth
         mock_sigv4_instance = Mock()
         mock_sigv4_auth.return_value = mock_sigv4_instance
@@ -612,14 +806,12 @@ async def test_bedrock_guardrail_prepare_request_without_api_key():
         )
 
         # Verify SigV4 auth was used
-        mock_sigv4_auth.assert_called_once_with(
-            mock_credentials, "bedrock", "us-east-1"
-        )
+        mock_sigv4_auth.assert_called_once_with(mock_credentials, "bedrock", "us-east-1")
         mock_sigv4_instance.add_auth.assert_called_once()
 
 
 @pytest.mark.asyncio
-async def test_bedrock_guardrail_prepare_request_with_bearer_token_env():
+async def test_bedrock_guardrail_prepare_request_with_bearer_token_env(monkeypatch):
     """Test _prepare_request method uses Bearer token from environment when available"""
     from unittest.mock import Mock, patch
 
@@ -628,24 +820,16 @@ async def test_bedrock_guardrail_prepare_request_with_bearer_token_env():
     )
 
     # Setup guardrail hook
-    guardrail_hook = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail-id", guardrailVersion="1"
-    )
+    guardrail_hook = BedrockGuardrail(guardrailIdentifier="test-guardrail-id", guardrailVersion="1")
 
     # Mock credentials
     mock_credentials = Mock()
 
     # Test data without api_key
     test_data = {"source": "INPUT", "content": [{"text": {"text": "test content"}}]}
+    monkeypatch.setenv("AWS_BEARER_TOKEN_BEDROCK", "env-bearer-token-456")
 
-    with (
-        patch(
-            "litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails.get_secret_str"
-        ) as mock_get_secret,
-        patch("botocore.awsrequest.AWSRequest") as mock_aws_request,
-    ):
-
-        mock_get_secret.return_value = "env-bearer-token-456"
+    with patch("botocore.awsrequest.AWSRequest") as mock_aws_request:
         mock_request_instance = Mock()
         mock_request_instance.prepare.return_value = Mock()
         mock_aws_request.return_value = mock_request_instance
@@ -673,9 +857,7 @@ async def test_bedrock_guardrail_make_api_request_passes_api_key():
         BedrockGuardrail,
     )
 
-    guardrail_hook = BedrockGuardrail(
-        guardrailIdentifier="test-guardrail-id", guardrailVersion="1"
-    )
+    guardrail_hook = BedrockGuardrail(guardrailIdentifier="test-guardrail-id", guardrailVersion="1")
 
     guardrail_hook.async_handler = Mock()
     mock_response = Mock()
@@ -685,22 +867,15 @@ async def test_bedrock_guardrail_make_api_request_passes_api_key():
     test_request_data = {"api_key": "test-api-key-789"}
 
     with (
-        patch.object(
-            guardrail_hook.async_handler, "post", AsyncMock(return_value=mock_response)
-        ),
+        patch.object(guardrail_hook.async_handler, "post", AsyncMock(return_value=mock_response)),
         patch.object(guardrail_hook, "_load_credentials") as mock_load_creds,
         patch.object(guardrail_hook, "convert_to_bedrock_format") as mock_convert,
-        patch.object(
-            guardrail_hook, "get_guardrail_dynamic_request_body_params"
-        ) as mock_get_params,
-        patch.object(
-            guardrail_hook, "add_standard_logging_guardrail_information_to_request_data"
-        ),
+        patch.object(guardrail_hook, "get_guardrail_dynamic_request_body_params") as mock_get_params,
+        patch.object(guardrail_hook, "add_standard_logging_guardrail_information_to_request_data"),
         patch("botocore.awsrequest.AWSRequest") as mock_aws_request,
     ):
-
         mock_load_creds.return_value = (Mock(), "us-east-1")
-        mock_convert.return_value = {"source": "INPUT", "content": []}
+        mock_convert.return_value = {"source": "INPUT", "content": [{"text": {"text": "test"}}]}
         mock_get_params.return_value = {}
 
         mock_request_instance = Mock()
@@ -710,7 +885,7 @@ async def test_bedrock_guardrail_make_api_request_passes_api_key():
             "Content-Type": "application/json",
             "Authorization": "Bearer test-api-key-789",
         }
-        mock_request_instance.prepare.return_value = Mock()
+        mock_request_instance.prepare.return_value = Mock(headers=mock_request_instance.headers)
         mock_aws_request.return_value = mock_request_instance
 
         await guardrail_hook.make_bedrock_api_request(
@@ -768,12 +943,8 @@ async def test_create_guardrail_endpoint(
 
     elif scenario == "success_sync_fails":
         mock_prisma_client = mocker.Mock()
-        mock_in_memory_handler.initialize_guardrail.side_effect = Exception(
-            "Sync failed"
-        )
-        mock_logger = mocker.patch(
-            "litellm.proxy.guardrails.guardrail_endpoints.verbose_proxy_logger"
-        )
+        mock_in_memory_handler.initialize_guardrail.side_effect = Exception("Sync failed")
+        mock_logger = mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.verbose_proxy_logger")
 
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
         mocker.patch(
@@ -787,9 +958,7 @@ async def test_create_guardrail_endpoint(
 
     elif scenario == "database_failure":
         mock_prisma_client = mocker.Mock()
-        mock_guardrail_registry.add_guardrail_to_db.side_effect = Exception(
-            "Database error"
-        )
+        mock_guardrail_registry.add_guardrail_to_db.side_effect = Exception("Database error")
 
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
         mocker.patch(
@@ -803,9 +972,7 @@ async def test_create_guardrail_endpoint(
     # Run the test
     if expected_exception:
         with pytest.raises(expected_exception) as exc_info:
-            await create_guardrail(
-                MOCK_CREATE_REQUEST, user_api_key_dict=MOCK_ADMIN_USER
-            )
+            await create_guardrail(MOCK_CREATE_REQUEST, user_api_key_dict=MOCK_ADMIN_USER)
 
         if scenario == "database_failure":
             assert "Database error" in str(exc_info.value.detail)
@@ -813,9 +980,7 @@ async def test_create_guardrail_endpoint(
             assert "Prisma client not initialized" in str(exc_info.value.detail)
 
     else:
-        result = await create_guardrail(
-            MOCK_CREATE_REQUEST, user_api_key_dict=MOCK_ADMIN_USER
-        )
+        result = await create_guardrail(MOCK_CREATE_REQUEST, user_api_key_dict=MOCK_ADMIN_USER)
 
         assert result["guardrail_id"] == expected_result
         assert result["guardrail_name"] == "Test DB Guardrail"
@@ -829,22 +994,22 @@ async def test_create_guardrail_endpoint(
         if scenario == "success_sync_fails":
             assert mock_logger is not None
             mock_logger.warning.assert_called_once()
-            assert "Failed to initialize guardrail" in str(
-                mock_logger.warning.call_args
-            )
+            assert "Failed to initialize guardrail" in str(mock_logger.warning.call_args)
 
 
 @pytest.mark.parametrize(
     "scenario,expected_result,expected_exception",
     [
         ("success_with_sync", "test-db-guardrail", None),
-        ("success_sync_fails", "test-db-guardrail", None),
+        ("success_sync_fails_unexpected_error", "test-db-guardrail", None),
+        ("sync_fails_invalid_config", None, HTTPException),
         ("database_failure", None, HTTPException),
         ("no_prisma_client", None, HTTPException),
     ],
     ids=[
         "success_with_immediate_sync",
-        "success_but_sync_fails",
+        "success_but_sync_fails_with_unexpected_error",
+        "sync_rejects_invalid_config",
         "database_error",
         "missing_prisma_client",
     ],
@@ -864,6 +1029,7 @@ async def test_update_guardrail_endpoint(
     mock_logger = None
     if scenario == "success_with_sync":
         mock_prisma_client = mocker.Mock()
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock()
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
         mocker.patch(
             "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY",
@@ -874,14 +1040,13 @@ async def test_update_guardrail_endpoint(
             mock_in_memory_handler,
         )
 
-    elif scenario == "success_sync_fails":
+    elif scenario == "success_sync_fails_unexpected_error":
+        # A non-ValueError/TypeError failure is not a config-rejection signal,
+        # so it keeps the pre-existing swallow-and-warn behavior rather than
+        # rolling back the DB write.
         mock_prisma_client = mocker.Mock()
-        mock_in_memory_handler.update_in_memory_guardrail.side_effect = Exception(
-            "Sync failed"
-        )
-        mock_logger = mocker.patch(
-            "litellm.proxy.guardrails.guardrail_endpoints.verbose_proxy_logger"
-        )
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(side_effect=Exception("Sync failed"))
+        mock_logger = mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.verbose_proxy_logger")
 
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
         mocker.patch(
@@ -889,15 +1054,32 @@ async def test_update_guardrail_endpoint(
             mock_guardrail_registry,
         )
         mocker.patch(
+            "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+            mock_in_memory_handler,
+        )
+
+    elif scenario == "sync_fails_invalid_config":
+        # Regression for the PUT half of the fix: a TypeError from the sync (the
+        # in-place update_in_memory_guardrail raised exactly this on every PUT)
+        # must roll back the DB write and surface a 422, not persist the
+        # rejected config with a 200.
+        mock_prisma_client = mocker.Mock()
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(
+            side_effect=TypeError("vars() argument must have __dict__ attribute")
+        )
+        mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)  # test-quality-ok: reused pattern
+        mocker.patch(  # test-quality-ok: reused pattern
+            "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY",
+            mock_guardrail_registry,
+        )
+        mocker.patch(  # test-quality-ok: reused pattern
             "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
             mock_in_memory_handler,
         )
 
     elif scenario == "database_failure":
         mock_prisma_client = mocker.Mock()
-        mock_guardrail_registry.update_guardrail_in_db.side_effect = Exception(
-            "Database error"
-        )
+        mock_guardrail_registry.update_guardrail_in_db.side_effect = Exception("Database error")
 
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
         mocker.patch(
@@ -921,11 +1103,16 @@ async def test_update_guardrail_endpoint(
             assert "Database error" in str(exc_info.value.detail)
         elif scenario == "no_prisma_client":
             assert "Prisma client not initialized" in str(exc_info.value.detail)
+        elif scenario == "sync_fails_invalid_config":
+            assert exc_info.value.status_code == 422
+            assert "update rejected" in str(exc_info.value.detail)
+            # Rolled back: update_guardrail_in_db is called once for the
+            # rejected write and once more to restore the previous config.
+            assert mock_guardrail_registry.update_guardrail_in_db.call_count == 2
+            assert mock_guardrail_registry.update_guardrail_in_db.call_args.kwargs["guardrail"] == MOCK_DB_GUARDRAIL
 
     else:
-        result = await update_guardrail(
-            "test-guardrail-id", MOCK_UPDATE_REQUEST, user_api_key_dict=MOCK_ADMIN_USER
-        )
+        result = await update_guardrail("test-guardrail-id", MOCK_UPDATE_REQUEST, user_api_key_dict=MOCK_ADMIN_USER)
 
         assert result["guardrail_id"] == expected_result
         assert result["guardrail_name"] == "Test DB Guardrail"
@@ -936,11 +1123,9 @@ async def test_update_guardrail_endpoint(
             prisma_client=mocker.ANY,
         )
 
-        mock_in_memory_handler.update_in_memory_guardrail.assert_called_once_with(
-            guardrail_id="test-guardrail-id", guardrail=mocker.ANY
-        )
+        mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(guardrail=mocker.ANY)
 
-        if scenario == "success_sync_fails":
+        if scenario == "success_sync_fails_unexpected_error":
             assert mock_logger is not None
             mock_logger.warning.assert_called_once()
             assert "Failed to update" in str(mock_logger.warning.call_args)
@@ -950,13 +1135,15 @@ async def test_update_guardrail_endpoint(
     "scenario,expected_result,expected_exception",
     [
         ("success_with_sync", "test-db-guardrail", None),
-        ("success_sync_fails", "test-db-guardrail", None),
+        ("success_sync_fails_unexpected_error", "test-db-guardrail", None),
+        ("sync_fails_invalid_config", None, HTTPException),
         ("database_failure", None, HTTPException),
         ("no_prisma_client", None, HTTPException),
     ],
     ids=[
         "success_with_immediate_sync",
-        "success_but_sync_fails",
+        "success_but_sync_fails_with_unexpected_error",
+        "sync_rejects_invalid_config",
         "database_error",
         "missing_prisma_client",
     ],
@@ -987,14 +1174,13 @@ async def test_patch_guardrail_endpoint(
             mock_in_memory_handler,
         )
 
-    elif scenario == "success_sync_fails":
+    elif scenario == "success_sync_fails_unexpected_error":
+        # A non-ValueError/TypeError failure (e.g. a transient bug) is not a
+        # config-rejection signal, so it keeps the pre-existing swallow-and-warn
+        # behavior rather than rolling back the DB write.
         mock_prisma_client = mocker.Mock()
-        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(
-            side_effect=Exception("Sync failed")
-        )
-        mock_logger = mocker.patch(
-            "litellm.proxy.guardrails.guardrail_endpoints.verbose_proxy_logger"
-        )
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(side_effect=Exception("Sync failed"))
+        mock_logger = mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.verbose_proxy_logger")
 
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
         mocker.patch(
@@ -1006,11 +1192,28 @@ async def test_patch_guardrail_endpoint(
             mock_in_memory_handler,
         )
 
+    elif scenario == "sync_fails_invalid_config":
+        # Maintainer finding on BerriAI/litellm#34940: a ValueError from
+        # sync_guardrail_from_db (e.g. an invalid on_flagged combination) must
+        # roll back the DB write and surface a 422, not persist the rejected
+        # config with a 200.
+        mock_prisma_client = mocker.Mock()
+        mock_in_memory_handler.sync_guardrail_from_db = mocker.Mock(
+            side_effect=ValueError("on_flagged='inject_system_message' requires payload=True and breakdown=True")
+        )
+        mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)  # test-quality-ok: reused pattern
+        mocker.patch(  # test-quality-ok: reused pattern
+            "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY",
+            mock_guardrail_registry,
+        )
+        mocker.patch(  # test-quality-ok: reused pattern
+            "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+            mock_in_memory_handler,
+        )
+
     elif scenario == "database_failure":
         mock_prisma_client = mocker.Mock()
-        mock_guardrail_registry.update_guardrail_in_db.side_effect = Exception(
-            "Database error"
-        )
+        mock_guardrail_registry.update_guardrail_in_db.side_effect = Exception("Database error")
 
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
         mocker.patch(
@@ -1034,25 +1237,43 @@ async def test_patch_guardrail_endpoint(
             assert "Database error" in str(exc_info.value.detail)
         elif scenario == "no_prisma_client":
             assert "Prisma client not initialized" in str(exc_info.value.detail)
+        elif scenario == "sync_fails_invalid_config":
+            assert exc_info.value.status_code == 422
+            assert "update rejected" in str(exc_info.value.detail)
+            # Rolled back: update_guardrail_in_db is called once for the
+            # rejected write and once more to restore the previous config.
+            assert mock_guardrail_registry.update_guardrail_in_db.call_count == 2
 
     else:
-        result = await patch_guardrail(
-            "test-guardrail-id", MOCK_PATCH_REQUEST, user_api_key_dict=MOCK_ADMIN_USER
-        )
+        result = await patch_guardrail("test-guardrail-id", MOCK_PATCH_REQUEST, user_api_key_dict=MOCK_ADMIN_USER)
 
         assert result["guardrail_id"] == expected_result
         assert result["guardrail_name"] == "Test DB Guardrail"
 
         mock_guardrail_registry.update_guardrail_in_db.assert_called_once()
 
-        mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(
-            guardrail=mocker.ANY
-        )
+        mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(guardrail=mocker.ANY)
 
-        if scenario == "success_sync_fails":
+        if scenario == "success_sync_fails_unexpected_error":
             assert mock_logger is not None
             mock_logger.warning.assert_called_once()
             assert "Failed to update" in str(mock_logger.warning.call_args)
+
+
+@pytest.mark.asyncio
+async def test_patch_guardrail_rejects_mcp_only_on_violation_with_422(mocker, mock_guardrail_registry):
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())  # test-quality-ok: endpoint has no DI seam
+    mocker.patch(  # test-quality-ok: endpoint has no DI seam
+        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry
+    )
+    request = PatchGuardrailRequest(litellm_params=BaseLitellmParams(on_violation="block"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await patch_guardrail("test-guardrail-id", request, user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert exc_info.value.status_code == 422
+    assert "only supported by guardrail='mcp_security'" in str(exc_info.value.detail)
+    mock_guardrail_registry.update_guardrail_in_db.assert_not_called()
 
 
 @pytest.mark.parametrize(
@@ -1090,12 +1311,8 @@ async def test_delete_guardrail_endpoint(
         )
 
     elif scenario == "success_sync_fails":
-        mock_in_memory_handler.delete_in_memory_guardrail.side_effect = Exception(
-            "Sync failed"
-        )
-        mock_logger = mocker.patch(
-            "litellm.proxy.guardrails.guardrail_endpoints.verbose_proxy_logger"
-        )
+        mock_in_memory_handler.delete_in_memory_guardrail.side_effect = Exception("Sync failed")
+        mock_logger = mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.verbose_proxy_logger")
         mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
         mocker.patch(
             "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY",
@@ -1108,13 +1325,9 @@ async def test_delete_guardrail_endpoint(
 
     if expected_exception:
         with pytest.raises(expected_exception):
-            await delete_guardrail(
-                guardrail_id=expected_result, user_api_key_dict=MOCK_ADMIN_USER
-            )
+            await delete_guardrail(guardrail_id=expected_result, user_api_key_dict=MOCK_ADMIN_USER)
     else:
-        result = await delete_guardrail(
-            guardrail_id=expected_result, user_api_key_dict=MOCK_ADMIN_USER
-        )
+        result = await delete_guardrail(guardrail_id=expected_result, user_api_key_dict=MOCK_ADMIN_USER)
 
         assert result == MOCK_DB_GUARDRAIL
 
@@ -1125,9 +1338,7 @@ async def test_delete_guardrail_endpoint(
             guardrail_id=expected_result, prisma_client=mock_prisma_client
         )
 
-        mock_in_memory_handler.delete_in_memory_guardrail.assert_called_once_with(
-            guardrail_id=expected_result
-        )
+        mock_in_memory_handler.delete_in_memory_guardrail.assert_called_once_with(guardrail_id=expected_result)
 
         if scenario == "success_sync_fails":
             assert mock_logger is not None
@@ -1145,9 +1356,7 @@ async def test_apply_guardrail_not_found(mocker):
     # Mock the GUARDRAIL_REGISTRY to return None (guardrail not found)
     mock_registry = mocker.Mock()
     mock_registry.get_initialized_guardrail_callback.return_value = None
-    mocker.patch(
-        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry
-    )
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
 
     mock_proxy_logging = mocker.Mock()
     mock_proxy_logging.post_call_failure_hook = AsyncMock()
@@ -1157,9 +1366,7 @@ async def test_apply_guardrail_not_found(mocker):
     mocker.patch("litellm.proxy.proxy_server.version", "test")
 
     # Create request
-    request = ApplyGuardrailRequest(
-        guardrail_name="non-existent-guardrail", text="Test input text"
-    )
+    request = ApplyGuardrailRequest(guardrail_name="non-existent-guardrail", text="Test input text")
 
     # Mock user auth
     mock_user_auth = UserAPIKeyAuth()
@@ -1193,9 +1400,7 @@ async def test_apply_guardrail_execution_error(mocker):
     # Mock the GUARDRAIL_REGISTRY
     mock_registry = mocker.Mock()
     mock_registry.get_initialized_guardrail_callback.return_value = mock_guardrail
-    mocker.patch(
-        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry
-    )
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
 
     mock_logging_obj = mocker.Mock()
     mock_logging_obj.async_failure_handler = AsyncMock()
@@ -1217,9 +1422,7 @@ async def test_apply_guardrail_execution_error(mocker):
     mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor")
 
     # Create request
-    request = ApplyGuardrailRequest(
-        guardrail_name="test-guardrail", text="Test input text with forbidden content"
-    )
+    request = ApplyGuardrailRequest(guardrail_name="test-guardrail", text="Test input text with forbidden content")
 
     # Mock user auth
     mock_user_auth = UserAPIKeyAuth()
@@ -1243,9 +1446,7 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
 
     mock_registry = mocker.Mock()
     mock_registry.get_initialized_guardrail_callback.return_value = mock_guardrail
-    mocker.patch(
-        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry
-    )
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
 
     mock_logging_obj = mocker.Mock()
     mock_logging_obj.async_success_handler = AsyncMock()
@@ -1266,13 +1467,9 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
     mocker.patch("litellm.proxy.proxy_server.version", "test")
     mock_executor = mocker.Mock()
-    mocker.patch(
-        "litellm.litellm_core_utils.thread_pool_executor.executor", mock_executor
-    )
+    mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor", mock_executor)
 
-    request = ApplyGuardrailRequest(
-        guardrail_name="test-guardrail", text="hello@example.com"
-    )
+    request = ApplyGuardrailRequest(guardrail_name="test-guardrail", text="hello@example.com")
     response = await apply_guardrail(
         fastapi_request=mocker.Mock(),
         request=request,
@@ -1290,6 +1487,134 @@ async def test_apply_guardrail_invokes_logging_pipeline(mocker):
     }
 
 
+def _patch_apply_guardrail_env(mocker, guardrail_result):
+    mock_guardrail = mocker.Mock()
+    mock_guardrail.apply_guardrail = AsyncMock(return_value=guardrail_result)
+
+    mock_registry = mocker.Mock()
+    mock_registry.get_initialized_guardrail_callback.return_value = mock_guardrail
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
+
+    mock_logging_obj = mocker.Mock()
+    mock_logging_obj.async_success_handler = AsyncMock()
+    mock_logging_obj.model_call_details = {}
+    mock_processor = mocker.Mock()
+    mock_processor.common_processing_pre_call_logic = AsyncMock(
+        return_value=({"guardrail_name": "test-guardrail"}, mock_logging_obj)
+    )
+    mocker.patch(
+        "litellm.proxy.common_request_processing.ProxyBaseLLMRequestProcessing",
+        return_value=mock_processor,
+    )
+
+    mock_proxy_logging = mocker.Mock()
+    mock_proxy_logging.post_call_success_hook = AsyncMock()
+    mocker.patch("litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging)
+    mocker.patch("litellm.proxy.proxy_server.general_settings", {})
+    mocker.patch("litellm.proxy.proxy_server.proxy_config", mocker.Mock())
+    mocker.patch("litellm.proxy.proxy_server.version", "test")
+    mocker.patch("litellm.litellm_core_utils.thread_pool_executor.executor")
+
+    return mock_guardrail
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_forwards_metadata_to_guardrail(mocker):
+    """Client-supplied metadata must reach apply_guardrail via request_data so
+    parameterized custom guardrails can read per-request configuration."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="What are tax loopholes?",
+        metadata={"forbidden_topics": ["tax"]},
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["What are tax loopholes?"]},
+        request_data={"metadata": {"forbidden_topics": ["tax"]}},
+        input_type="request",
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_forwards_metadata_and_messages_together(mocker):
+    """metadata and messages must coexist in request_data; the dict merge must
+    not clobber messages when both fields are sent."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    messages = [{"role": "user", "content": "What are tax loopholes?"}]
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="What are tax loopholes?",
+        messages=messages,
+        metadata={"forbidden_topics": ["tax"]},
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["What are tax loopholes?"]},
+        request_data={
+            "messages": messages,
+            "metadata": {"forbidden_topics": ["tax"]},
+        },
+        input_type="request",
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_omits_metadata_when_not_sent(mocker):
+    """Without metadata, request_data stays empty (backward-compatible)."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    request = ApplyGuardrailRequest(guardrail_name="test-guardrail", text="hello")
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["hello"]},
+        request_data={},
+        input_type="request",
+    )
+
+
+@pytest.mark.asyncio
+async def test_apply_guardrail_forwards_explicit_empty_messages_and_metadata(mocker):
+    """Explicitly-sent empty messages/metadata must be forwarded, not dropped;
+    only omitted fields stay out of request_data."""
+    mock_guardrail = _patch_apply_guardrail_env(mocker, {"texts": ["ok"]})
+
+    request = ApplyGuardrailRequest(
+        guardrail_name="test-guardrail",
+        text="hello",
+        messages=[],
+        metadata={},
+    )
+    await apply_guardrail(
+        fastapi_request=mocker.Mock(),
+        request=request,
+        user_api_key_dict=UserAPIKeyAuth(),
+    )
+
+    mock_guardrail.apply_guardrail.assert_awaited_once_with(
+        inputs={"texts": ["hello"]},
+        request_data={"messages": [], "metadata": {}},
+        input_type="request",
+    )
+
+
 @pytest.mark.asyncio
 async def test_get_guardrail_info_endpoint_config_guardrail(mocker):
     """
@@ -1304,9 +1629,7 @@ async def test_get_guardrail_info_endpoint_config_guardrail(mocker):
     # Mock the GUARDRAIL_REGISTRY to return None from DB (so it checks config)
     mock_registry = mocker.Mock()
     mock_registry.get_guardrail_by_id_from_db = AsyncMock(return_value=None)
-    mocker.patch(
-        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry
-    )
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
 
     # Mock IN_MEMORY_GUARDRAIL_HANDLER at its source to return config guardrail
     mock_in_memory_handler = mocker.Mock()
@@ -1346,12 +1669,8 @@ async def test_get_guardrail_info_endpoint_db_guardrail(mocker):
 
     # Mock the GUARDRAIL_REGISTRY to return a guardrail from DB
     mock_registry = mocker.Mock()
-    mock_registry.get_guardrail_by_id_from_db = AsyncMock(
-        return_value=MOCK_DB_GUARDRAIL
-    )
-    mocker.patch(
-        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry
-    )
+    mock_registry.get_guardrail_by_id_from_db = AsyncMock(return_value=MOCK_DB_GUARDRAIL)
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_registry)
 
     # Mock IN_MEMORY_GUARDRAIL_HANDLER to return None
     mock_in_memory_handler = mocker.Mock()
@@ -1510,9 +1829,7 @@ async def test_register_guardrail_non_admin_cross_team_allowed(mocker):
         team_id="team-beta",
         litellm_params=MOCK_REGISTER_REQUEST.litellm_params,
     )
-    user = UserAPIKeyAuth(
-        user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER, team_id="team-alpha"
-    )
+    user = UserAPIKeyAuth(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER, team_id="team-alpha")
 
     result = await register_guardrail(req, user)
 
@@ -1532,9 +1849,7 @@ async def test_register_guardrail_non_admin_cross_team_forbidden(mocker):
         team_id="team-other",
         litellm_params=MOCK_REGISTER_REQUEST.litellm_params,
     )
-    user = UserAPIKeyAuth(
-        user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER, team_id="team-alpha"
-    )
+    user = UserAPIKeyAuth(user_id="u1", user_role=LitellmUserRoles.INTERNAL_USER, team_id="team-alpha")
 
     with pytest.raises(HTTPException) as exc_info:
         await register_guardrail(req, user)
@@ -1716,9 +2031,7 @@ async def test_list_guardrail_submissions_team_id_filter(mocker):
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
-    result = await list_guardrail_submissions(
-        user_api_key_dict=user, team_id="team-abc"
-    )
+    result = await list_guardrail_submissions(user_api_key_dict=user, team_id="team-abc")
 
     assert len(result.submissions) == 1
     assert result.submissions[0].guardrail_id == "team-1"
@@ -1799,6 +2112,37 @@ async def test_get_guardrail_submission_non_admin_other_team_forbidden(mocker):
 
 
 @pytest.mark.asyncio
+async def test_get_guardrail_submission_admin_viewer_other_team_allowed(mocker):
+    """proxy_admin_viewer reads any team's submission without the membership check."""
+    mock_prisma = mocker.Mock()
+    row = mocker.Mock(
+        guardrail_id="sub-1",
+        guardrail_name="team-guard",
+        status="pending_review",
+        team_id="team-other",
+        litellm_params={},
+        guardrail_info={},
+        submitted_at=None,
+        reviewed_at=None,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    mock_get_user_team_ids = mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints._get_user_team_ids",
+        AsyncMock(return_value=[]),
+    )
+    user = UserAPIKeyAuth(user_id="viewer-1", user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY)
+
+    result = await get_guardrail_submission("sub-1", user)
+
+    assert result.guardrail_id == "sub-1"
+    assert result.team_id == "team-other"
+    mock_get_user_team_ids.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_approve_guardrail_submission_success(mocker):
     """Approve sets status to active and initializes guardrail in memory."""
     mock_prisma = mocker.Mock()
@@ -1869,9 +2213,7 @@ async def test_reject_guardrail_submission_success(mocker):
 async def test_reject_guardrail_submission_not_pending(mocker):
     """Reject returns 400 when status is not pending_review (e.g. already active)."""
     mock_prisma = mocker.Mock()
-    row = mocker.Mock(
-        guardrail_id="already-active", guardrail_name="g", status="active"
-    )
+    row = mocker.Mock(guardrail_id="already-active", guardrail_name="g", status="active")
     mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
@@ -1903,9 +2245,7 @@ async def test_reject_guardrail_submission_not_pending(mocker):
         "no_hostname",
     ],
 )
-async def test_register_guardrail_rejects_bad_api_base(
-    mocker, api_base, expected_detail
-):
+async def test_register_guardrail_rejects_bad_api_base(mocker, api_base, expected_detail):
     """Register returns 400 when api_base has invalid scheme or missing hostname."""
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
     req = RegisterGuardrailRequest(
@@ -1973,9 +2313,7 @@ async def test_approve_guardrail_init_failure_returns_warning(mocker):
     mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
 
     mock_handler = mocker.Mock()
-    mock_handler.initialize_guardrail = mocker.Mock(
-        side_effect=Exception("missing dependency")
-    )
+    mock_handler.initialize_guardrail = mocker.Mock(side_effect=Exception("missing dependency"))
     mocker.patch(
         "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
         mock_handler,
@@ -2071,11 +2409,264 @@ async def test_list_submissions_summary_counts_unaffected_by_filters(mocker):
     user = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 
     # Filter to only pending, but summary should still show both
-    result = await list_guardrail_submissions(
-        status="pending_review", user_api_key_dict=user
-    )
+    result = await list_guardrail_submissions(status="pending_review", user_api_key_dict=user)
 
     assert len(result.submissions) == 1  # filtered
     assert result.summary.total == 2  # unfiltered
     assert result.summary.pending_review == 1
     assert result.summary.active == 1
+
+
+@pytest.mark.asyncio
+async def test_get_guardrail_ui_settings_returns_per_provider_supported_modes():
+    """
+    Regression test for LIT-4226. The Admin UI used to render `pre_mcp_call` as a
+    selectable mode for every guardrail because the settings endpoint returned a
+    single global `supported_modes` list. The proxy then rejected the save because
+    Content Filter and Tool Permission do not accept `pre_mcp_call`. The endpoint
+    must now return per-provider modes so the UI can filter its dropdown.
+    """
+    result = await get_guardrail_ui_settings()
+
+    modes_by_provider = result.supported_modes_by_provider
+
+    # Content Filter now supports pre_mcp_call (LIT-4226 feature half) but not
+    # during_mcp_call; Tool Permission still supports neither, and the settings
+    # endpoint must reflect both so the UI shows exactly the savable modes.
+    assert "pre_mcp_call" in modes_by_provider["litellm_content_filter"]
+    assert "during_mcp_call" not in modes_by_provider["litellm_content_filter"]
+    assert modes_by_provider["tool_permission"] == ["pre_call", "post_call"]
+
+    # MCP-capable guardrails must still advertise the MCP hooks so users who
+    # picked one of them can actually configure pre_mcp_call / during_mcp_call.
+    for provider in ("bedrock", "panw_prisma_airs", "cisco_ai_defense", "custom_code", "pillar"):
+        assert "pre_mcp_call" in modes_by_provider[provider], provider
+        assert "during_mcp_call" in modes_by_provider[provider], provider
+
+    # The union list stays exhaustive for legacy clients that ignore the
+    # per-provider map; it must cover every declared GuardrailEventHooks value.
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    assert set(result.supported_modes) == {m.value for m in GuardrailEventHooks}
+
+
+@pytest.mark.asyncio
+async def test_ui_settings_map_matches_runtime_supported_event_hooks():
+    """
+    Regression guard against the two-copy-of-the-list drift risk. The map the
+    UI reads must agree with what CustomGuardrail._validate_event_hook accepts
+    at save time, otherwise the bug in LIT-4226 comes back one classname at a
+    time as future guardrails drift.
+    """
+    from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
+
+    result = await get_guardrail_ui_settings()
+
+    for provider, guardrail_class in guardrail_class_registry.items():
+        declared = guardrail_class.get_supported_event_hooks()
+        if declared is None:
+            assert provider not in result.supported_modes_by_provider, (
+                f"{provider} returned None from classmethod but appears in map"
+            )
+            continue
+
+        assert provider in result.supported_modes_by_provider, provider
+        assert result.supported_modes_by_provider[provider] == [hook.value for hook in declared], provider
+
+
+def test_content_filter_runtime_rejects_unsupported_mcp_hook():
+    """
+    Locks the runtime side of the LIT-4226 contract: the ContentFilterGuardrail
+    validator must reject a hook missing from its supported list at
+    construction. pre_mcp_call is supported since the LIT-4226 feature half, so
+    during_mcp_call is the unsupported example now. If someone widens the
+    UI classmethod but forgets to widen the runtime supported_event_hooks (or
+    vice versa), the two-lists-must-agree test above catches the drift and this
+    test catches the specific bug the ticket reported.
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    with pytest.raises(ValueError, match="not in the supported event hooks"):
+        ContentFilterGuardrail(
+            guardrail_name="lit4226-runtime-check",
+            event_hook=GuardrailEventHooks.during_mcp_call,
+        )
+
+
+def test_model_armor_runtime_supported_event_hooks_match_classmethod():
+    """
+    Regression for the drift Round 2 caught: the ModelArmorGuardrail classmethod
+    declared its supported hooks for the UI, but __init__ did not seed the
+    runtime instance's `supported_event_hooks` from that classmethod, so the
+    runtime validator accepted any hook (including nonsense like logging_only)
+    while the UI hid them. Ensures the two sides agree at instantiation time.
+    """
+    from litellm.proxy.guardrails.guardrail_hooks.model_armor.model_armor import (
+        ModelArmorGuardrail,
+    )
+
+    instance = ModelArmorGuardrail(
+        guardrail_name="lit4226-model-armor-drift",
+        template_id="t",
+        project_id="p",
+    )
+    assert instance.supported_event_hooks == ModelArmorGuardrail.get_supported_event_hooks()
+
+
+def test_strict_guardrail_modes_flag_controls_raise_vs_warn(monkeypatch, caplog):
+    """
+    Escape hatch for the boot-time behavior change. Deployments upgrading from
+    a build where a guardrail previously silently no-op'd on an unsupported
+    mode should be able to set LITELLM_STRICT_GUARDRAIL_MODES=false and boot
+    with a warning instead of a hard failure while they fix their config.
+    """
+    import logging
+
+    from litellm.proxy.guardrails.guardrail_hooks.litellm_content_filter.content_filter import (
+        ContentFilterGuardrail,
+    )
+    from litellm.types.guardrails import GuardrailEventHooks
+
+    monkeypatch.delenv("LITELLM_STRICT_GUARDRAIL_MODES", raising=False)
+    with pytest.raises(ValueError, match="not in the supported event hooks"):
+        ContentFilterGuardrail(
+            guardrail_name="lit4226-strict-default",
+            event_hook=GuardrailEventHooks.during_mcp_call,
+        )
+
+    monkeypatch.setenv("LITELLM_STRICT_GUARDRAIL_MODES", "false")
+    with caplog.at_level(logging.WARNING):
+        instance = ContentFilterGuardrail(
+            guardrail_name="lit4226-strict-off",
+            event_hook=GuardrailEventHooks.during_mcp_call,
+        )
+    assert instance is not None
+    assert any("not in the supported event hooks" in rec.message for rec in caplog.records)
+
+
+def test_field_type_inference_handles_pep604_unions():
+    from litellm.proxy.guardrails.guardrail_endpoints import (
+        _get_field_type_from_annotation,
+        _unwrap_optional_type,
+    )
+
+    assert _get_field_type_from_annotation(Optional[int]) == "number"
+    assert _get_field_type_from_annotation(int | None) == "number"
+    assert _get_field_type_from_annotation(list[str] | None) == "array"
+    assert _get_field_type_from_annotation(bool | None) == "boolean"
+    assert _unwrap_optional_type(str | None) is str
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(20)
+async def test_test_custom_code_endpoint_returns_a_timeout_for_an_infinite_loop():
+    """The endpoint used to join the worker thread after its timeout fired, so an infinite
+    loop hung the request forever."""
+    request = TestCustomCodeGuardrailRequest(
+        custom_code="def apply_guardrail(inputs, request_data, input_type):\n    n = 0\n    while True:\n        n += 1\n",
+        test_input={"texts": ["x"]},
+    )
+    started = time.monotonic()
+
+    response = await run_custom_code_test_endpoint(request=request, user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert response.success is False
+    assert response.error_type == "execution"
+    assert response.error is not None
+    assert response.error.startswith("Execution timeout: code took longer than 5 seconds")
+    assert time.monotonic() - started < 8.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.timeout(20)
+async def test_test_custom_code_endpoint_reports_a_module_level_infinite_loop_as_a_timeout():
+    """Module-level code that outran the load deadline was reported as a compile failure, as if the
+    source were invalid."""
+    request = TestCustomCodeGuardrailRequest(
+        custom_code=(
+            "n = 0\nwhile True:\n    n += 1\n\n"
+            "def apply_guardrail(inputs, request_data, input_type):\n    return allow()\n"
+        ),
+        test_input={"texts": ["x"]},
+    )
+    started = time.monotonic()
+
+    response = await run_custom_code_test_endpoint(request=request, user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert response.success is False
+    assert response.error_type == "execution"
+    assert response.error is not None
+    assert response.error.startswith("Execution timeout: code took longer than 5 seconds")
+    assert time.monotonic() - started < 8.0
+
+
+@pytest.mark.asyncio
+async def test_test_custom_code_endpoint_awaits_an_async_guardrail():
+    request = TestCustomCodeGuardrailRequest(
+        custom_code=(
+            'async def apply_guardrail(inputs, request_data, input_type):\n    return block("async said no")\n'
+        ),
+        test_input={"texts": ["x"]},
+    )
+
+    response = await run_custom_code_test_endpoint(request=request, user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert response.success is True
+    assert response.result is not None
+    assert response.result["action"] == "block"
+    assert response.result["reason"] == "async said no"
+
+
+@pytest.mark.asyncio
+async def test_test_custom_code_endpoint_returns_a_sync_guardrails_result():
+    request = TestCustomCodeGuardrailRequest(
+        custom_code='def apply_guardrail(inputs, request_data, input_type):\n    return block("sync said no")\n',
+        test_input={"texts": ["x"]},
+    )
+
+    response = await run_custom_code_test_endpoint(request=request, user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert response.success is True
+    assert response.result is not None
+    assert response.result["action"] == "block"
+    assert response.result["reason"] == "sync said no"
+
+
+@pytest.mark.asyncio
+async def test_add_guardrail_rolls_back_a_custom_code_guardrail_that_fails_to_compile(mocker, mock_guardrail_registry):
+    stored = {
+        "guardrail_id": "custom-code-broken",
+        "guardrail_name": "custom-code-broken",
+        "litellm_params": {"guardrail": "custom_code", "mode": "pre_call", "custom_code": "x = 1\n"},
+        "guardrail_info": {},
+    }
+    mock_guardrail_registry.add_guardrail_to_db = AsyncMock(return_value=stored)
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry)
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
+    delete_row = mocker.patch("litellm.proxy.guardrails.guardrail_endpoints._delete_guardrail_row", AsyncMock())
+
+    with pytest.raises(HTTPException) as exc_info:
+        await create_guardrail(CreateGuardrailRequest(guardrail=stored), user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert exc_info.value.status_code == 400
+    assert "apply_guardrail" in exc_info.value.detail
+    delete_row.assert_awaited_once_with(mocker.ANY, where={"guardrail_id": "custom-code-broken"})
+
+
+@pytest.mark.asyncio
+async def test_test_custom_code_endpoint_reports_a_system_exit_as_an_execution_error():
+    request = TestCustomCodeGuardrailRequest(
+        custom_code="def apply_guardrail(inputs, request_data, input_type):\n    raise SystemExit('bye')\n",
+        test_input={"texts": ["x"]},
+    )
+    started = time.monotonic()
+
+    response = await run_custom_code_test_endpoint(request=request, user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert response.success is False
+    assert response.error == "Execution error: SystemExit: bye"
+    assert response.error_type == "execution"
+    assert time.monotonic() - started < 2.0

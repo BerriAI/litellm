@@ -4,7 +4,7 @@
 ### [BETA] this is in Beta. And might change.
 
 import traceback
-from typing import Literal, Optional
+from typing import Final, Literal
 
 from fastapi import HTTPException
 
@@ -17,7 +17,7 @@ from litellm.proxy._types import UserAPIKeyAuth
 
 class _PROXY_BatchRedisRequests(CustomLogger):
     # Class variables or attributes
-    in_memory_cache: Optional[InMemoryCache] = None
+    in_memory_cache: InMemoryCache | None = None
 
     def __init__(self):
         if litellm.cache is not None:
@@ -26,9 +26,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             )  # map the litellm 'get_cache' function to our custom function
 
     def print_verbose(self, print_statement, debug_level: Literal["INFO", "DEBUG"] = "DEBUG"):
-        if debug_level == "DEBUG":
-            verbose_proxy_logger.debug(print_statement)
-        elif debug_level == "INFO":
+        if debug_level == "DEBUG" or debug_level == "INFO":
             verbose_proxy_logger.debug(print_statement)
         if litellm.set_verbose is True:
             print(print_statement)  # noqa: T201
@@ -48,14 +46,14 @@ class _PROXY_BatchRedisRequests(CustomLogger):
 
             If no, then get relevant cache from redis
             """
-            api_key = user_api_key_dict.api_key
+            api_key: Final = user_api_key_dict.api_key
 
-            cache_key_name = f"litellm:{api_key}:{call_type}"
+            cache_key_name: Final = f"litellm:{api_key}:{call_type}"
             self.in_memory_cache = cache.in_memory_cache
 
             key_value_dict = {}
             in_memory_cache_exists = False
-            for key in cache.in_memory_cache.cache_dict.keys():
+            for key in cache.in_memory_cache.cache_dict:
                 if isinstance(key, str) and key.startswith(cache_key_name):
                     in_memory_cache_exists = True
 
@@ -86,7 +84,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             raise e
         except Exception as e:
             verbose_proxy_logger.error(
-                "litellm.proxy.hooks.batch_redis_get.py::async_pre_call_hook(): Exception occured - {}".format(str(e))
+                "litellm.proxy.hooks.batch_redis_get.py::async_pre_call_hook(): Exception occured - %s", e
             )
             verbose_proxy_logger.debug(traceback.format_exc())
 
@@ -100,7 +98,7 @@ class _PROXY_BatchRedisRequests(CustomLogger):
             - return redis cache request
         """
         try:  # never block execution
-            cache_key: Optional[str] = None
+            cache_key: str | None = None
             if "cache_key" in kwargs:
                 cache_key = kwargs["cache_key"]
             elif litellm.cache is not None:
@@ -109,8 +107,8 @@ class _PROXY_BatchRedisRequests(CustomLogger):
                 )  # returns "<cache_key_name>:<hash>" - we pass redis_namespace in async_pre_call_hook. Done to avoid rewriting the async_set_cache logic
 
             if cache_key is not None and self.in_memory_cache is not None and litellm.cache is not None:
-                cache_control_args = kwargs.get("cache", {})
-                max_age = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
+                cache_control_args: Final = kwargs.get("cache", {})
+                max_age: Final = cache_control_args.get("s-max-age", cache_control_args.get("s-maxage", float("inf")))
                 cached_result = self.in_memory_cache.get_cache(cache_key, *args, **kwargs)
                 if cached_result is None:
                     cached_result = await litellm.cache.cache.async_get_cache(cache_key, *args, **kwargs)

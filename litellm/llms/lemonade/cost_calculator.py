@@ -5,7 +5,7 @@ Since Lemonade is a local/self-hosted service, all costs default to 0.
 This prevents cost calculation errors when using models not in model_prices_and_context_window.json
 """
 
-from typing import Tuple
+from typing import Final
 
 from litellm.types.utils import Usage
 
@@ -13,7 +13,7 @@ from litellm.types.utils import Usage
 def cost_per_token(
     model: str,
     usage: Usage,
-) -> Tuple[float, float]:
+) -> tuple[float, float]:
     """
     Calculate cost per token for Lemonade models.
 
@@ -30,7 +30,7 @@ def cost_per_token(
         Tuple of (prompt_cost, completion_cost) - always (0.0, 0.0) for Lemonade
     """
     # Lemonade is self-hosted/local, so cost is always 0
-    prompt_cost = 0.0
-    completion_cost = 0.0
+    prompt_cost: Final = 0.0
+    completion_cost: Final = 0.0
 
     return prompt_cost, completion_cost

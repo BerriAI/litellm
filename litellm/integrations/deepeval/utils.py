@@ -1,4 +1,6 @@
 from datetime import datetime, timezone
+from typing import Final
+
 from litellm.integrations.deepeval.types import Environment
 
 
@@ -8,5 +10,5 @@ def to_zod_compatible_iso(dt: datetime) -> str:
 
 def validate_environment(environment: str):
     if environment not in [env.value for env in Environment]:
-        valid_values = ", ".join(f'"{env.value}"' for env in Environment)
+        valid_values: Final = ", ".join(f'"{env.value}"' for env in Environment)
         raise ValueError(f"Invalid environment: {environment}. Please use one of the following instead: {valid_values}")

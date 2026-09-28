@@ -1,6 +1,6 @@
 # Experimental MCP Server Change Guidelines
 
-Read @../../../../CLAUDE.md and @CLAUDE.md before changing this package.
+Read @../../../../AGENTS.md before changing this package.
 
 This directory owns the proxy-hosted MCP server implementation. Keep changes
 inside the module that owns the behavior, and only reach outside this package
@@ -14,13 +14,13 @@ Respect the current package boundaries:
 ```text
 litellm/proxy/_experimental/mcp_server/
   AGENTS.md
-  CLAUDE.md
   server.py                  # ASGI/MCP route handling, sessions, tool calls   [PR7: 7-arm only — move BYOK/OAuth pre-fetch into resolver]
   mcp_server_manager.py      # upstream server registry, clients, tool routing  [PR7: _create_mcp_client swaps resolve_mcp_auth -> resolve_credentials]
   auth/
     user_api_key_auth_mcp.py # LiteLLM admission auth and MCP request headers
     token_exchange.py        # OAuth token exchange handling                    [unchanged; V1TokenExchangeAdapter delegates here]
     litellm_auth_handler.py  # authenticated-user adapter for MCP sessions
+  client_allowlist.py        # gateway-level client application allowlist (mcp_allowed_clients); leaf module, no litellm.proxy imports
   outbound_credentials/      # NEW — typed upstream-credential resolution (resolve_credentials + arms)
     __init__.py              # public surface: resolve_credentials, the configs, CredError
     result.py                # Ok | Error union (pure stdlib)
@@ -41,6 +41,7 @@ litellm/proxy/_experimental/mcp_server/
   sampling_handler.py        # MCP sampling to LiteLLM completion flow
   elicitation_handler.py     # MCP elicitation relay flow
   semantic_tool_filter.py    # semantic filtering of available MCP tools
+  tool_search.py             # opt-in virtual tools (mcp_tool_search + mcp_tool_call) for large catalogs
   guardrail_translation/
     handler.py               # MCP guardrail result translation
   sse_transport.py           # SSE transport implementation
@@ -66,9 +67,10 @@ module materially harder to understand.
   auth, SSE, streamable HTTP, and stdio as separate flows. Do not collapse them
   behind a single generic branch unless tests prove every mode still behaves
   correctly.
-- Be especially careful with `available_on_public_internet: false` combined with
-  `delegate_auth_to_upstream: true`. The local `CLAUDE.md` explains the anonymous
-  upstream PKCE path that must remain intentional.
+- Be especially careful with legacy `delegate_auth_to_upstream: true`. `auth_type: oauth2`
+  with `delegate_auth_to_upstream: true` is deprecated: LiteLLM admission is required
+  for matching MCP routes. Use `auth_type: oauth_delegate` for client-forwarded OAuth.
+  OAuth discovery endpoints stay public so clients can start the RFC 9728 flow.
 - Keep database-backed fields in sync across migrations, typed models under
   `litellm/types/mcp.py` or `litellm/types/mcp_server/`, config loading, this
   package, and dashboard state when the field is user-visible.
@@ -79,6 +81,11 @@ module materially harder to understand.
   encryption need focused tests for both allowed and rejected paths.
 - Avoid adding comments to new code unless they explain non-obvious security or
   protocol behavior. Prefer clear names and small functions.
+- The virtual tool path (`tool_search.py`, gated by `mcp_tool_search_enabled`)
+  must mirror the normal tool flow: IP filtering, server allowlist, per-key tool
+  permissions, no-accessible-server rejection, per-request auth headers, server
+  scope, error to `isError` conversion, and spend logging. Reuse `_list_mcp_tools`
+  and `execute_mcp_tool` rather than reimplementing any of these checks.
 
 ## Tests
 

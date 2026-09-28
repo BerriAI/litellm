@@ -1,5 +1,5 @@
 import types
-from typing import Optional
+from typing import Final
 
 import litellm
 
@@ -20,23 +20,23 @@ class AmazonAnthropicConfig(AmazonInvokeConfig):
     - `anthropic_version` (string) version of anthropic for bedrock - e.g. "bedrock-2023-05-31"
     """
 
-    max_tokens_to_sample: Optional[int] = litellm.max_tokens
-    stop_sequences: Optional[list] = None
-    temperature: Optional[float] = None
-    top_k: Optional[int] = None
-    top_p: Optional[int] = None
-    anthropic_version: Optional[str] = None
+    max_tokens_to_sample: int | None = litellm.max_tokens
+    stop_sequences: list | None = None
+    temperature: float | None = None
+    top_k: int | None = None
+    top_p: int | None = None
+    anthropic_version: str | None = None
 
     def __init__(
         self,
-        max_tokens_to_sample: Optional[int] = None,
-        stop_sequences: Optional[list] = None,
-        temperature: Optional[float] = None,
-        top_k: Optional[int] = None,
-        top_p: Optional[int] = None,
-        anthropic_version: Optional[str] = None,
+        max_tokens_to_sample: int | None = None,
+        stop_sequences: list | None = None,
+        temperature: float | None = None,
+        top_k: int | None = None,
+        top_p: int | None = None,
+        anthropic_version: str | None = None,
     ) -> None:
-        locals_ = locals().copy()
+        locals_: Final = locals().copy()
         for key, value in locals_.items():
             if key != "self" and value is not None:
                 setattr(self.__class__, key, value)

@@ -3,7 +3,6 @@ Types for Vertex Embeddings Requests
 """
 
 from enum import Enum
-from typing import Dict, List, Optional, Union
 
 from typing_extensions import TypedDict
 
@@ -21,14 +20,14 @@ class TaskType(str, Enum):
 
 class TextEmbeddingInput(TypedDict, total=False):
     content: str
-    task_type: Optional[TaskType]
-    title: Optional[str]
+    task_type: TaskType | None
+    title: str | None
 
 
 class TextEmbeddingBGEInput(TypedDict, total=False):
     prompt: str
-    task_type: Optional[TaskType]
-    title: Optional[str]
+    task_type: TaskType | None
+    title: str | None
 
 
 # Fine-tuned models require a different input format
@@ -38,25 +37,21 @@ class TextEmbeddingFineTunedInput(TypedDict, total=False):
 
 
 class TextEmbeddingFineTunedParameters(TypedDict, total=False):
-    max_new_tokens: Optional[int]
-    temperature: Optional[float]
-    top_p: Optional[float]
-    top_k: Optional[int]
+    max_new_tokens: int | None
+    temperature: float | None
+    top_p: float | None
+    top_k: int | None
 
 
 class EmbeddingParameters(TypedDict, total=False):
-    auto_truncate: Optional[bool]
-    output_dimensionality: Optional[int]
+    auto_truncate: bool | None
+    output_dimensionality: int | None
 
 
 class VertexEmbeddingRequest(TypedDict, total=False):
-    instances: Union[
-        List[TextEmbeddingInput],
-        List[TextEmbeddingBGEInput],
-        List[TextEmbeddingFineTunedInput],
-    ]
-    parameters: Optional[Union[EmbeddingParameters, TextEmbeddingFineTunedParameters]]
-    labels: Optional[Dict[str, str]]
+    instances: list[TextEmbeddingInput] | list[TextEmbeddingBGEInput] | list[TextEmbeddingFineTunedInput]
+    parameters: EmbeddingParameters | TextEmbeddingFineTunedParameters | None
+    labels: dict[str, str] | None
 
 
 # Example usage:

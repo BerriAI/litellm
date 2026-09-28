@@ -1,16 +1,32 @@
 import React from "react";
-import { Form, Button, Tooltip, Typography, Modal } from "antd";
-import { TextInput } from "@tremor/react";
+import { z } from "zod/v4";
+import { Field, FieldGroup, FieldLabel } from "@/components/ui/field";
+import { FormField } from "@/components/shared/form/FormField";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
+import { useZodForm } from "@/lib/forms/useZodForm";
 import { CredentialItem } from "../networking";
-const { Title, Link } = Typography;
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
 interface ReuseCredentialsModalProps {
   isVisible: boolean;
   onCancel: () => void;
-  onAddCredential: (values: any) => void;
+  onAddCredential: (values: Record<string, unknown>) => void;
   existingCredential: CredentialItem | null;
   setIsCredentialModalOpen: (isVisible: boolean) => void;
 }
+
+const reuseCredentialsSchema = z.object({
+  credential_name: z.string().min(1, "Credential name is required"),
+});
+
+type ReuseCredentialsFormValues = z.infer<typeof reuseCredentialsSchema>;
+
+const storedValuesOf = (existingCredential: CredentialItem | null): Record<string, unknown> => {
+  const values: unknown = existingCredential?.credential_values;
+  return typeof values === "object" && values !== null ? (values as Record<string, unknown>) : {};
+};
 
 const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
   isVisible,
@@ -19,66 +35,78 @@ const ReuseCredentialsModal: React.FC<ReuseCredentialsModalProps> = ({
   existingCredential,
   setIsCredentialModalOpen,
 }) => {
-  const [form] = Form.useForm();
+  const fieldIdPrefix = React.useId();
+  const storedValues = storedValuesOf(existingCredential);
+  const form = useZodForm(reuseCredentialsSchema, {
+    defaultValues: { credential_name: existingCredential?.credential_name ?? "" },
+  });
 
-  console.log(`existingCredential in add credentials tab: ${JSON.stringify(existingCredential)}`);
-
-  const handleSubmit = (values: any) => {
-    onAddCredential(values);
-    form.resetFields();
+  const handleSubmit = (values: ReuseCredentialsFormValues) => {
+    onAddCredential({ ...storedValues, ...values });
+    form.reset();
     setIsCredentialModalOpen(false);
   };
 
+  const handleCancel = () => {
+    onCancel();
+    form.reset();
+  };
+
   return (
-    <Modal
-      title="Reuse Credentials"
-      open={isVisible}
-      onCancel={() => {
-        onCancel();
-        form.resetFields();
-      }}
-      footer={null}
-      width={600}
-    >
-      <Form form={form} onFinish={handleSubmit} layout="vertical">
-        {/* Credential Name */}
-        <Form.Item
-          label="Credential Name:"
-          name="credential_name"
-          rules={[{ required: true, message: "Credential name is required" }]}
-          initialValue={existingCredential?.credential_name}
-        >
-          <TextInput placeholder="Enter a friendly name for these credentials" />
-        </Form.Item>
+    <Dialog open={isVisible} onOpenChange={(open) => !open && handleCancel()}>
+      <DialogContent className="max-h-[calc(100dvh-2rem)] overflow-y-auto sm:max-w-[600px]">
+        <DialogHeader>
+          <DialogTitle>Reuse Credentials</DialogTitle>
+        </DialogHeader>
+        <TooltipProvider>
+          <form onSubmit={form.handleSubmit(handleSubmit)} noValidate>
+            <FieldGroup>
+              <FormField control={form.control} name="credential_name" label="Credential Name:">
+                {({ ref, ...field }) => (
+                  <Input {...field} ref={ref} placeholder="Enter a friendly name for these credentials" />
+                )}
+              </FormField>
 
-        {/* Display Credential Values of existingCredential, don't allow user to edit. Credential values is a dictionary */}
-        {Object.entries(existingCredential?.credential_values || {}).map(([key, value]) => (
-          <Form.Item key={key} label={key} name={key} initialValue={value}>
-            <TextInput placeholder={`Enter ${key}`} disabled={true} />
-          </Form.Item>
-        ))}
+              {Object.entries(storedValues).map(([key, value]) => (
+                <Field key={key}>
+                  <FieldLabel htmlFor={`${fieldIdPrefix}-${key}`}>{key}</FieldLabel>
+                  <Input
+                    id={`${fieldIdPrefix}-${key}`}
+                    value={String(value)}
+                    placeholder={`Enter ${key}`}
+                    disabled
+                    readOnly
+                  />
+                </Field>
+              ))}
 
-        {/* Modal Footer */}
-        <div className="flex justify-between items-center">
-          <Tooltip title="Get help on our github">
-            <Link href="https://github.com/BerriAI/litellm/issues">Need Help?</Link>
-          </Tooltip>
+              <div className="flex items-center justify-between">
+                <Tooltip>
+                  <TooltipTrigger
+                    render={
+                      <a
+                        href="https://github.com/BerriAI/litellm/issues"
+                        className="text-sm text-primary underline-offset-4 hover:underline"
+                      >
+                        Need Help?
+                      </a>
+                    }
+                  />
+                  <TooltipContent>Get help on our github</TooltipContent>
+                </Tooltip>
 
-          <div>
-            <Button
-              onClick={() => {
-                onCancel();
-                form.resetFields();
-              }}
-              style={{ marginRight: 10 }}
-            >
-              Cancel
-            </Button>
-            <Button htmlType="submit">Reuse Credentials</Button>
-          </div>
-        </div>
-      </Form>
-    </Modal>
+                <div className="flex gap-2.5">
+                  <Button type="button" variant="outline" onClick={handleCancel}>
+                    Cancel
+                  </Button>
+                  <Button type="submit">Reuse Credentials</Button>
+                </div>
+              </div>
+            </FieldGroup>
+          </form>
+        </TooltipProvider>
+      </DialogContent>
+    </Dialog>
   );
 };
 

@@ -29,9 +29,7 @@ class KeyNotFoundError(IdentityResolutionError, ProxyException):
     def __init__(self, hashed_token: str) -> None:
         ProxyException.__init__(
             self,
-            message="Authentication Error, Invalid proxy server token passed. key={}, not found in db. Create key via `/key/generate` call.".format(
-                hashed_token
-            ),
+            message=f"Authentication Error, Invalid proxy server token passed. key={hashed_token}, not found in db. Create key via `/key/generate` call.",
             type=ProxyErrorTypes.token_not_found_in_db,
             param="key",
             code=status.HTTP_401_UNAUTHORIZED,

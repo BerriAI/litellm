@@ -1,15 +1,28 @@
 import { formatNumberWithCommas } from "@/utils/dataUtils";
-import type { DateRangePickerValue } from "@tremor/react";
+import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import Papa from "papaparse";
-import type { EntityBreakdown, EntitySpendData, EntityType, ExportMetadata, ExportScope } from "./types";
+import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
+import type {
+  EntityBreakdown,
+  EntitySpendData,
+  EntityType,
+  ExportFormat,
+  ExportMetadata,
+  ExportScope,
+  ServerExport,
+} from "./types";
 
-// Resolve display name for an entity. For teams the teamAliasMap provides
-// a human-readable alias; for every other entity type the entity key itself
-// (tag name, org id, customer id, …) is already the correct label.
-const resolveEntityDisplay = (entity: string, teamAliasMap: Record<string, string>): { id: string; alias: string } => ({
-  id: entity,
-  alias: teamAliasMap[entity] || entity,
-});
+const resolveEntityDisplay = (
+  entity: string,
+  teamAliasMap: Record<string, string>,
+  entityMetadata?: Record<string, any>,
+): { id: string; alias: string } => {
+  const alias =
+    [teamAliasMap[entity], entityMetadata?.team_alias, entityMetadata?.user_email, entityMetadata?.user_alias].find(
+      Boolean,
+    ) ?? entity;
+  return { id: entity, alias };
+};
 
 // Mirrors backend SpendMetrics fields (litellm/types/activity_tracking.py).
 // If the backend adds a field, add it here too.
@@ -68,7 +81,7 @@ export const getEntityBreakdown = (
 
   spendData.results.forEach((day) => {
     Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
-      const { id, alias } = resolveEntityDisplay(entity, teamAliasMap);
+      const { id, alias } = resolveEntityDisplay(entity, teamAliasMap, data.metadata);
 
       if (!entitySpend[entity]) {
         entitySpend[entity] = {
@@ -104,29 +117,42 @@ export const getEntityBreakdown = (
   return Object.values(entitySpend).sort((a, b) => b.metrics.spend - a.metrics.spend);
 };
 
+// total_flat_cost defaults to 0 on every entity response, so only a non-zero value
+// means a PTU-configured team actually accrued flat cost worth exporting.
+const hasFlatCost = (spendData: EntitySpendData): boolean => (spendData.metadata.total_flat_cost ?? 0) > 0;
+
 export const generateDailyData = (
   spendData: EntitySpendData,
   entityLabel: string,
   teamAliasMap: Record<string, string> = {},
 ): any[] => {
   const dailyBreakdown: any[] = [];
+  const includeFlatCost = hasFlatCost(spendData);
 
   spendData.results.forEach((day) => {
     Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
-      const { id, alias } = resolveEntityDisplay(entity, teamAliasMap);
+      const { id, alias } = resolveEntityDisplay(entity, teamAliasMap, data.metadata);
 
-      dailyBreakdown.push({
+      const row: Record<string, any> = {
         Date: day.date,
         [entityLabel]: alias,
         [`${entityLabel} ID`]: id,
         "Spend ($)": formatNumberWithCommas(data.metrics.spend, 4),
-        Requests: data.metrics.api_requests,
-        "Successful Requests": data.metrics.successful_requests,
-        "Failed Requests": data.metrics.failed_requests,
-        "Total Tokens": data.metrics.total_tokens,
-        "Prompt Tokens": data.metrics.prompt_tokens || 0,
-        "Completion Tokens": data.metrics.completion_tokens || 0,
-      });
+      };
+      if (includeFlatCost) {
+        const flatCost = data.metrics.flat_cost || 0;
+        row["Flat Cost ($)"] = formatNumberWithCommas(flatCost, 4);
+        row["Total Cost ($)"] = formatNumberWithCommas((data.metrics.spend || 0) + flatCost, 4);
+      }
+      row.Requests = data.metrics.api_requests;
+      row["Successful Requests"] = data.metrics.successful_requests;
+      row["Failed Requests"] = data.metrics.failed_requests;
+      row["Total Tokens"] = data.metrics.total_tokens;
+      row["Prompt Tokens"] = data.metrics.prompt_tokens || 0;
+      row["Completion Tokens"] = data.metrics.completion_tokens || 0;
+      row["Cache Read Input Tokens"] = data.metrics.cache_read_input_tokens || 0;
+      row["Cache Creation Input Tokens"] = data.metrics.cache_creation_input_tokens || 0;
+      dailyBreakdown.push(row);
     });
   });
 
@@ -146,6 +172,8 @@ export const generateDailyWithKeysData = (
       entityAlias: string;
       keyId: string;
       keyAlias: string | null;
+      userId: string | null;
+      userEmail: string | null;
       metrics: {
         spend: number;
         api_requests: number;
@@ -154,18 +182,20 @@ export const generateDailyWithKeysData = (
         total_tokens: number;
         prompt_tokens: number;
         completion_tokens: number;
+        cache_read_input_tokens: number;
+        cache_creation_input_tokens: number;
       };
     };
   } = {};
 
   spendData.results.forEach((day) => {
     Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
-      const { id: entityId, alias: entityAlias } = resolveEntityDisplay(entity, teamAliasMap);
+      const { id: entityId, alias: entityAlias } = resolveEntityDisplay(entity, teamAliasMap, data.metadata);
       const apiKeyBreakdown = data.api_key_breakdown || {};
 
       // Iterate through each API key in the breakdown
       Object.entries(apiKeyBreakdown).forEach(([keyId, keyData]: [string, any]) => {
-        const keyAlias = keyData?.metadata?.key_alias || null;
+        const keyAlias = keyActivityLabel(keyData?.metadata, "") || null;
 
         // Create unique key for aggregation: Date_EntityID_KeyID
         const uniqueKey = `${day.date}_${entityId}_${keyId}`;
@@ -178,6 +208,8 @@ export const generateDailyWithKeysData = (
             entityAlias,
             keyId,
             keyAlias,
+            userId: keyData?.metadata?.user_id || null,
+            userEmail: keyData?.metadata?.user_email || null,
             metrics: {
               spend: keyData.metrics?.spend || 0,
               api_requests: keyData.metrics?.api_requests || 0,
@@ -186,6 +218,8 @@ export const generateDailyWithKeysData = (
               total_tokens: keyData.metrics?.total_tokens || 0,
               prompt_tokens: keyData.metrics?.prompt_tokens || 0,
               completion_tokens: keyData.metrics?.completion_tokens || 0,
+              cache_read_input_tokens: keyData.metrics?.cache_read_input_tokens || 0,
+              cache_creation_input_tokens: keyData.metrics?.cache_creation_input_tokens || 0,
             },
           };
         } else {
@@ -197,6 +231,9 @@ export const generateDailyWithKeysData = (
           aggregatedData[uniqueKey].metrics.total_tokens += keyData.metrics?.total_tokens || 0;
           aggregatedData[uniqueKey].metrics.prompt_tokens += keyData.metrics?.prompt_tokens || 0;
           aggregatedData[uniqueKey].metrics.completion_tokens += keyData.metrics?.completion_tokens || 0;
+          aggregatedData[uniqueKey].metrics.cache_read_input_tokens += keyData.metrics?.cache_read_input_tokens || 0;
+          aggregatedData[uniqueKey].metrics.cache_creation_input_tokens +=
+            keyData.metrics?.cache_creation_input_tokens || 0;
         }
       });
     });
@@ -209,6 +246,7 @@ export const generateDailyWithKeysData = (
     [`${entityLabel} ID`]: item.entityId,
     "Key Alias": item.keyAlias || "-",
     "Key ID": item.keyId,
+    ...(entityLabel === "User" ? {} : { "User ID": item.userId || "-", "User Email": item.userEmail || "-" }),
     "Spend ($)": formatNumberWithCommas(item.metrics.spend, 4),
     Requests: item.metrics.api_requests,
     "Successful Requests": item.metrics.successful_requests,
@@ -216,9 +254,76 @@ export const generateDailyWithKeysData = (
     "Total Tokens": item.metrics.total_tokens,
     "Prompt Tokens": item.metrics.prompt_tokens,
     "Completion Tokens": item.metrics.completion_tokens,
+    "Cache Read Input Tokens": item.metrics.cache_read_input_tokens,
+    "Cache Creation Input Tokens": item.metrics.cache_creation_input_tokens,
   }));
 
   return dailyKeyBreakdown.sort((a, b) => new Date(a.Date).getTime() - new Date(b.Date).getTime());
+};
+
+export const generateDailyWithUsersData = (
+  spendData: EntitySpendData,
+  entityLabel: string,
+  teamAliasMap: Record<string, string> = {},
+): any[] => {
+  const aggregatedData: {
+    [key: string]: {
+      Date: string;
+      entityId: string;
+      entityAlias: string;
+      userId: string;
+      userEmail: string | null;
+      keyIds: Set<string>;
+      metrics: Record<(typeof METRIC_KEYS)[number], number>;
+    };
+  } = {};
+
+  spendData.results.forEach((day) => {
+    Object.entries(resolveEntities(day.breakdown)).forEach(([entity, data]: [string, any]) => {
+      const { id: entityId, alias: entityAlias } = resolveEntityDisplay(entity, teamAliasMap, data.metadata);
+      Object.entries(data.api_key_breakdown || {}).forEach(([keyId, keyData]: [string, any]) => {
+        const userId = keyData?.metadata?.user_id || "Unassigned";
+        const uniqueKey = JSON.stringify([day.date, entityId, userId]);
+        if (!aggregatedData[uniqueKey]) {
+          aggregatedData[uniqueKey] = {
+            Date: day.date,
+            entityId,
+            entityAlias,
+            userId,
+            userEmail: null,
+            keyIds: new Set(),
+            metrics: Object.fromEntries(METRIC_KEYS.map((k) => [k, 0])) as Record<(typeof METRIC_KEYS)[number], number>,
+          };
+        }
+        const bucket = aggregatedData[uniqueKey];
+        bucket.userEmail = bucket.userEmail || keyData?.metadata?.user_email || null;
+        bucket.keyIds.add(keyId);
+        for (const k of METRIC_KEYS) {
+          bucket.metrics[k] += keyData?.metrics?.[k] || 0;
+        }
+      });
+    });
+  });
+
+  return Object.values(aggregatedData)
+    .map((item) => ({
+      Date: item.Date,
+      [entityLabel]: item.entityAlias,
+      [`${entityLabel} ID`]: item.entityId,
+      "User ID": item.userId,
+      "User Email": item.userEmail || "-",
+      Keys: item.keyIds.size,
+      "Spend ($)": formatNumberWithCommas(item.metrics.spend, 4),
+      Requests: item.metrics.api_requests,
+      "Successful Requests": item.metrics.successful_requests,
+      "Failed Requests": item.metrics.failed_requests,
+      "Total Tokens": item.metrics.total_tokens,
+      "Prompt Tokens": item.metrics.prompt_tokens,
+      "Completion Tokens": item.metrics.completion_tokens,
+      "Cache Read Input Tokens": item.metrics.cache_read_input_tokens,
+      "Cache Creation Input Tokens": item.metrics.cache_creation_input_tokens,
+    }))
+    .sort((a, b) => new Date(a.Date).getTime() - new Date(b.Date).getTime());
 };
 
 export const generateDailyWithModelsData = (
@@ -230,11 +335,13 @@ export const generateDailyWithModelsData = (
 
   spendData.results.forEach((day) => {
     const dailyEntityModels: { [key: string]: { [key: string]: any } } = {};
+    const dailyEntityMetadata: { [key: string]: Record<string, any> | undefined } = {};
 
     Object.entries(resolveEntities(day.breakdown)).forEach(([entity, entityData]: [string, any]) => {
       if (!dailyEntityModels[entity]) {
         dailyEntityModels[entity] = {};
       }
+      dailyEntityMetadata[entity] = entityData.metadata;
 
       Object.entries(day.breakdown.models || {}).forEach(([model, modelData]: [string, any]) => {
         const entityApiKeys = entityData.api_key_breakdown || {};
@@ -251,6 +358,10 @@ export const generateDailyWithModelsData = (
               successful: 0,
               failed: 0,
               tokens: 0,
+              promptTokens: 0,
+              completionTokens: 0,
+              cacheReadInputTokens: 0,
+              cacheCreationInputTokens: 0,
             };
           }
           dailyEntityModels[entity][model].spend += keyMetrics.spend || 0;
@@ -258,15 +369,19 @@ export const generateDailyWithModelsData = (
           dailyEntityModels[entity][model].successful += keyMetrics.successful_requests || 0;
           dailyEntityModels[entity][model].failed += keyMetrics.failed_requests || 0;
           dailyEntityModels[entity][model].tokens += keyMetrics.total_tokens || 0;
+          dailyEntityModels[entity][model].promptTokens += keyMetrics.prompt_tokens || 0;
+          dailyEntityModels[entity][model].completionTokens += keyMetrics.completion_tokens || 0;
+          dailyEntityModels[entity][model].cacheReadInputTokens += keyMetrics.cache_read_input_tokens || 0;
+          dailyEntityModels[entity][model].cacheCreationInputTokens += keyMetrics.cache_creation_input_tokens || 0;
         });
       });
     });
 
     Object.entries(dailyEntityModels).forEach(([entity, models]) => {
-      const { id, alias } = resolveEntityDisplay(entity, teamAliasMap);
+      const { id, alias } = resolveEntityDisplay(entity, teamAliasMap, dailyEntityMetadata[entity]);
 
       Object.entries(models).forEach(([model, metrics]: [string, any]) => {
-        dailyModelBreakdown.push({
+        const row = {
           Date: day.date,
           [entityLabel]: alias,
           [`${entityLabel} ID`]: id,
@@ -276,7 +391,12 @@ export const generateDailyWithModelsData = (
           Successful: metrics.successful,
           Failed: metrics.failed,
           "Total Tokens": metrics.tokens,
-        });
+          "Prompt Tokens": metrics.promptTokens,
+          "Completion Tokens": metrics.completionTokens,
+          "Cache Read Input Tokens": metrics.cacheReadInputTokens,
+          "Cache Creation Input Tokens": metrics.cacheCreationInputTokens,
+        };
+        dailyModelBreakdown.push(row);
       });
     });
   });
@@ -297,6 +417,8 @@ export const generateExportData = (
       return generateDailyWithKeysData(spendData, entityLabel, teamAliasMap);
     case "daily_with_models":
       return generateDailyWithModelsData(spendData, entityLabel, teamAliasMap);
+    case "daily_with_users":
+      return generateDailyWithUsersData(spendData, entityLabel, teamAliasMap);
     default:
       return generateDailyData(spendData, entityLabel, teamAliasMap);
   }
@@ -308,23 +430,53 @@ export const generateMetadata = (
   selectedFilters: string[],
   exportScope: ExportScope,
   spendData: EntitySpendData,
-): ExportMetadata => ({
-  export_date: new Date().toISOString(),
-  entity_type: entityType,
-  date_range: {
-    from: dateRange.from?.toISOString(),
-    to: dateRange.to?.toISOString(),
-  },
-  filters_applied: selectedFilters.length > 0 ? selectedFilters : "None",
-  export_scope: exportScope,
-  summary: {
+): ExportMetadata => {
+  const summary: ExportMetadata["summary"] = {
     total_spend: spendData.metadata.total_spend,
     total_requests: spendData.metadata.total_api_requests,
     successful_requests: spendData.metadata.total_successful_requests,
     failed_requests: spendData.metadata.total_failed_requests,
     total_tokens: spendData.metadata.total_tokens,
-  },
-});
+  };
+  if (hasFlatCost(spendData)) {
+    const flatCost = spendData.metadata.total_flat_cost ?? 0;
+    summary.total_flat_cost = flatCost;
+    summary.total_cost = spendData.metadata.total_spend + flatCost;
+  }
+  return {
+    export_date: new Date().toISOString(),
+    entity_type: entityType,
+    date_range: {
+      from: dateRange.from?.toISOString(),
+      to: dateRange.to?.toISOString(),
+    },
+    filters_applied: selectedFilters.length > 0 ? selectedFilters : "None",
+    export_scope: exportScope,
+    summary,
+  };
+};
+
+export const downloadBlob = (blob: Blob, fileName: string): void => {
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+};
+
+export const handleServerExport = async (
+  serverExport: ServerExport,
+  exportScope: ExportScope,
+  entityType: EntityType,
+  format: ExportFormat,
+): Promise<void> => {
+  const blob = await serverExport(exportScope, format);
+  const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.${format}`;
+  downloadBlob(blob, fileName);
+};
 
 export const handleExportCSV = (
   spendData: EntitySpendData,
@@ -336,15 +488,8 @@ export const handleExportCSV = (
   const data = generateExportData(spendData, exportScope, entityLabel, teamAliasMap);
   const csv = Papa.unparse(data);
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
   const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.csv`;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  window.URL.revokeObjectURL(url);
+  downloadBlob(blob, fileName);
 };
 
 export const handleExportJSON = (
@@ -364,13 +509,6 @@ export const handleExportJSON = (
   };
   const jsonString = JSON.stringify(exportObject, null, 2);
   const blob = new Blob([jsonString], { type: "application/json" });
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
   const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.json`;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  window.URL.revokeObjectURL(url);
+  downloadBlob(blob, fileName);
 };

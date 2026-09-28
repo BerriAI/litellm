@@ -1,24 +1,25 @@
 import os
 import time
+from collections.abc import Mapping
 from datetime import datetime as dt
 from enum import Enum
-from typing import Any, Dict, List, Literal, Optional, Set, Union
+from typing import Any, Final, Literal, Optional, Union
 
 from pydantic import BaseModel, Field
-from typing_extensions import TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.types.utils import LiteLLMPydanticObjectBase
 
-DEFAULT_DIGEST_INTERVAL = 86400  # 24 hours in seconds
+DEFAULT_DIGEST_INTERVAL: Final = 86400  # 24 hours in seconds
 
-SLACK_ALERTING_THRESHOLD_5_PERCENT = 0.05
-SLACK_ALERTING_THRESHOLD_15_PERCENT = 0.15
-MAX_OLDEST_HANGING_REQUESTS_TO_CHECK = 20
-HANGING_ALERT_BUFFER_TIME_SECONDS = 60
+SLACK_ALERTING_THRESHOLD_5_PERCENT: Final = 0.05
+SLACK_ALERTING_THRESHOLD_15_PERCENT: Final = 0.15
+MAX_OLDEST_HANGING_REQUESTS_TO_CHECK: Final = 20
+HANGING_ALERT_BUFFER_TIME_SECONDS: Final = 60
 
 
 class BaseOutageModel(TypedDict):
-    alerts: List[int]
+    alerts: list[int]
     minor_alert_sent: bool
     major_alert_sent: bool
     last_updated_at: float
@@ -30,12 +31,12 @@ class OutageModel(BaseOutageModel):
 
 class ProviderRegionOutageModel(BaseOutageModel):
     provider_region_id: str
-    deployment_ids: Set[str]
+    deployment_ids: set[str]  # mutable-ok: outage state accumulates ids via .add() and round-trips the cache as a list
 
 
 # we use this for the email header, please send a test email if you change this. verify it looks good on email
-LITELLM_LOGO_URL = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
-LITELLM_SUPPORT_CONTACT = "support@berri.ai"
+LITELLM_LOGO_URL: Final = "https://litellm-listing.s3.amazonaws.com/litellm_logo.png"
+LITELLM_SUPPORT_CONTACT: Final = "support@berri.ai"
 
 
 class SlackAlertingArgsEnum(Enum):
@@ -91,6 +92,40 @@ class SlackAlertingArgs(LiteLLMPydanticObjectBase):
         default=False,
         description="If true, the alerting payload will be printed to the console.",
     )
+    daily_spend_per_user_threshold: float | None = Field(
+        default=None,
+        gt=0,
+        allow_inf_nan=False,
+        description="Alert when a user's spend for the current day (UTC) crosses this USD amount. Off by default.",
+    )
+    monthly_spend_per_user_threshold: float | None = Field(
+        default=None,
+        gt=0,
+        allow_inf_nan=False,
+        description="Alert when a user's spend for the current calendar month (UTC) crosses this USD amount. Off by default.",
+    )
+    spend_anomaly_multiplier: float = Field(
+        default=3.0,
+        gt=0,
+        allow_inf_nan=False,
+        description="Flag a user's spend as anomalous when today's spend exceeds this multiple of their trailing daily average.",
+    )
+    spend_anomaly_baseline_days: int = Field(
+        default=7,
+        ge=1,
+        description="Number of trailing days used to compute a user's daily average spend for anomaly detection.",
+    )
+    spend_anomaly_min_spend: float = Field(
+        default=10.0,
+        gt=0,
+        allow_inf_nan=False,
+        description="Minimum spend (USD) a user must reach today before an anomaly alert can fire. Reduces false positives.",
+    )
+    user_spend_check_interval: int = Field(
+        default=3600,
+        ge=60,
+        description="How often (in seconds) to check per-user spend thresholds and anomalies. Default is hourly.",
+    )
 
 
 class DeploymentMetrics(LiteLLMPydanticObjectBase):
@@ -106,7 +141,7 @@ class DeploymentMetrics(LiteLLMPydanticObjectBase):
     failed_request: bool
     """did it fail the request?"""
 
-    latency_per_output_token: Optional[float]
+    latency_per_output_token: float | None
     """latency/output token of deployment"""
 
     updated_at: dt
@@ -121,6 +156,7 @@ class SlackAlertingCacheKeys(Enum):
     failed_requests_key = "failed_requests_daily_metrics"
     latency_key = "latency_daily_metrics"
     report_sent_key = "daily_metrics_report_sent"
+    deprecation_alert_sent_key = "model_deprecation_alert_sent"
 
 
 class AlertType(str, Enum):
@@ -137,6 +173,8 @@ class AlertType(str, Enum):
     budget_alerts = "budget_alerts"
     spend_reports = "spend_reports"
     failed_tracking_spend = "failed_tracking_spend"
+    user_spend_thresholds = "user_spend_thresholds"
+    user_spend_anomalies = "user_spend_anomalies"
 
     # Database alerts
     db_exceptions = "db_exceptions"
@@ -147,6 +185,7 @@ class AlertType(str, Enum):
     # Deployment alerts
     cooldown_deployment = "cooldown_deployment"
     new_model_added = "new_model_added"
+    model_deprecation_warnings = "model_deprecation_warnings"
 
     # Outage alerts
     outage_alerts = "outage_alerts"
@@ -171,7 +210,7 @@ class AlertType(str, Enum):
     internal_user_deleted = "internal_user_deleted"
 
 
-DEFAULT_ALERT_TYPES: List[AlertType] = [
+DEFAULT_ALERT_TYPES: Final[list[AlertType]] = [
     # LLM related alerts
     AlertType.llm_exceptions,
     AlertType.llm_too_slow,
@@ -180,6 +219,7 @@ DEFAULT_ALERT_TYPES: List[AlertType] = [
     AlertType.budget_alerts,
     AlertType.spend_reports,
     AlertType.failed_tracking_spend,
+    AlertType.user_spend_thresholds,
     # Database alerts
     AlertType.db_exceptions,
     # Report alerts
@@ -187,6 +227,7 @@ DEFAULT_ALERT_TYPES: List[AlertType] = [
     # Deployment alerts
     AlertType.cooldown_deployment,
     AlertType.new_model_added,
+    AlertType.model_deprecation_warnings,
     # Outage alerts
     AlertType.outage_alerts,
     AlertType.region_outage_alerts,
@@ -195,13 +236,25 @@ DEFAULT_ALERT_TYPES: List[AlertType] = [
 ]
 
 
+class AlertText(TypedDict):
+    text: ReadOnly[str]
+
+
+class AlertQueueItem(TypedDict):
+    url: ReadOnly[str]
+    headers: ReadOnly[Mapping[str, str]]
+    payload: ReadOnly[AlertText]
+    alert_type: ReadOnly[AlertType | str]
+    format: NotRequired[ReadOnly[str]]
+
+
 class HangingRequestData(BaseModel):
     request_id: str
     model: str
-    api_base: Optional[str] = None
-    key_alias: Optional[str] = None
-    team_alias: Optional[str] = None
-    alerting_metadata: Optional[dict] = None
+    api_base: str | None = None
+    key_alias: str | None = None
+    team_alias: str | None = None
+    alerting_metadata: dict | None = None
     created_at: float = Field(default_factory=time.time)
     alerted: bool = False
 
@@ -230,4 +283,4 @@ class DigestEntry(TypedDict):
     count: int
     start_time: dt
     last_time: dt
-    webhook_url: Union[str, List[str]]
+    webhook_url: str | list[str]

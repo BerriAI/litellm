@@ -7,12 +7,12 @@ import { CollapsibleMessage } from "./CollapsibleMessage";
 describe("CollapsibleMessage", () => {
   it("should return null when content is empty", () => {
     const { container } = render(<CollapsibleMessage label="SYSTEM" content="" />);
-    expect(container.innerHTML).toBe("");
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should return null when content is undefined", () => {
     const { container } = render(<CollapsibleMessage label="SYSTEM" />);
-    expect(container.innerHTML).toBe("");
+    expect(container).toBeEmptyDOMElement();
   });
 
   it("should render the label and char count", () => {
@@ -36,5 +36,19 @@ describe("CollapsibleMessage", () => {
     // Click the header to expand - should still show content
     await user.click(screen.getByText("SYSTEM"));
     expect(screen.getByText("Toggle me")).toBeInTheDocument();
+  });
+
+  it("should expand with Enter and collapse with Space from the keyboard", async () => {
+    const user = userEvent.setup();
+    render(<CollapsibleMessage label="SYSTEM" content="Toggle me" defaultExpanded={false} />);
+
+    expect(screen.getByText("Toggle me")).not.toBeVisible();
+
+    await user.tab();
+    await user.keyboard("{Enter}");
+    expect(screen.getByText("Toggle me")).toBeVisible();
+
+    await user.keyboard(" ");
+    expect(screen.getByText("Toggle me")).not.toBeVisible();
   });
 });

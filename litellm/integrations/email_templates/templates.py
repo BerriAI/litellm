@@ -2,7 +2,9 @@
 Email Templates used by the LiteLLM Email Service in slack_alerting.py
 """
 
-KEY_CREATED_EMAIL_TEMPLATE = """
+from typing import Final
+
+KEY_CREATED_EMAIL_TEMPLATE: Final = """
                     <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
 
                     <p> Hi {recipient_email}, <br/>
@@ -45,14 +47,14 @@ KEY_CREATED_EMAIL_TEMPLATE = """
 """
 
 
-USER_INVITED_EMAIL_TEMPLATE = """
+USER_INVITED_EMAIL_TEMPLATE: Final = """
                     <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
 
                     <p> Hi {recipient_email}, <br/>
 
                     You were invited to use OpenAI Proxy API for team {team_name}  <br /> <br />
 
-                    <a href="{base_url}" style="display: inline-block; padding: 10px 20px; background-color: #87ceeb; color: #fff; text-decoration: none; border-radius: 20px;">Get Started here</a> <br /> <br />
+                    <a href="{base_url}" style="display: inline-block; padding: 10px 20px; background-color: #87ceeb; color: #fff; text-decoration: none; border-radius: 20px;">Accept Invitation</a> <br /> <br />
 
                     
                     If you have any questions, please send an email to {email_support_contact} <br /> <br />
@@ -61,7 +63,7 @@ USER_INVITED_EMAIL_TEMPLATE = """
                     The LiteLLM team <br />
 """
 
-SOFT_BUDGET_ALERT_EMAIL_TEMPLATE = """
+SOFT_BUDGET_ALERT_EMAIL_TEMPLATE: Final = """
                     <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
 
                     <p> Hi {recipient_email}, <br/>
@@ -81,11 +83,10 @@ SOFT_BUDGET_ALERT_EMAIL_TEMPLATE = """
 
                     If you have any questions, please send an email to {email_support_contact} <br /> <br />
 
-                    Best, <br />
-                    The LiteLLM team <br />
+                    {email_footer}
 """
 
-TEAM_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE = """
+TEAM_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE: Final = """
                     <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
 
                     <p> Hi {team_alias} team member, <br/>
@@ -105,11 +106,10 @@ TEAM_SOFT_BUDGET_ALERT_EMAIL_TEMPLATE = """
 
                     If you have any questions, please send an email to {email_support_contact} <br /> <br />
 
-                    Best, <br />
-                    The LiteLLM team <br />
+                    {email_footer}
 """
 
-MAX_BUDGET_ALERT_EMAIL_TEMPLATE = """
+MAX_BUDGET_ALERT_EMAIL_TEMPLATE: Final = """
                     <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
 
                     <p> Hi {recipient_email}, <br/>
@@ -129,6 +129,27 @@ MAX_BUDGET_ALERT_EMAIL_TEMPLATE = """
 
                     If you have any questions, please send an email to {email_support_contact} <br /> <br />
 
-                    Best, <br />
-                    The LiteLLM team <br />
+                    {email_footer}
+"""
+
+TEAM_MEMBER_MAX_BUDGET_ALERT_EMAIL_TEMPLATE: Final = """
+                    <img src="{email_logo_url}" alt="LiteLLM Logo" width="150" height="50" />
+
+                    <p> Hi, <br/>
+
+                    Team member <b>{member}</b> has reached <b>{percentage}% of their team member budget</b> in team <b>{team_alias}</b>. <br /> <br />
+
+                    <b>Current Spend:</b> {spend} <br />
+                    <b>Team Member Budget:</b> {max_budget} <br />
+                    <b>Alert Threshold:</b> {alert_threshold} ({percentage}%) <br />
+
+                    <p style="color: #dc2626; font-weight: 500;">
+                    Warning: Once this member reaches their team member budget of {max_budget}, their requests in this team will be rejected.
+                    </p>
+
+                    You can view usage and manage team member budgets in the <a href="{base_url}">LiteLLM Dashboard</a>. <br /> <br />
+
+                    If you have any questions, please send an email to {email_support_contact} <br /> <br />
+
+                    {email_footer}
 """

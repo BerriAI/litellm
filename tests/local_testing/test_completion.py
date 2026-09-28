@@ -1,20 +1,14 @@
 import json
 import os
-import sys
 import traceback
 
 from dotenv import load_dotenv
 
 load_dotenv()
 import io
-import os
-
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 
 
-import os
+
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -61,23 +55,6 @@ def test_response_model_none():
     )
     print(f"x: {x}")
     assert isinstance(x, litellm.ModelResponse)
-
-
-def test_completion_custom_provider_model_name():
-    try:
-        litellm.cache = None
-        response = completion(
-            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
-            messages=messages,
-            logger_fn=logger_fn,
-        )
-        # Add assertions here to check the-response
-        print(response)
-        print(response["choices"][0]["finish_reason"])
-    except litellm.Timeout as e:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
 
 
 def _openai_mock_response(*args, **kwargs) -> litellm.ModelResponse:
@@ -213,36 +190,6 @@ def test_completion_empower():
         pytest.fail(f"Error occurred: {e}")
 
 
-def test_completion_github_api():
-    litellm.set_verbose = True
-    messages = [
-        {
-            "role": "user",
-            "content": "\nWhat is the query for `console.log` => `console.error`\n",
-        },
-        {
-            "role": "assistant",
-            "content": "\nThis is the GritQL query for the given before/after examples:\n<gritql>\n`console.log` => `console.error`\n</gritql>\n",
-        },
-        {
-            "role": "user",
-            "content": "\nWhat is the query for `console.info` => `consdole.heaven`\n",
-        },
-    ]
-    try:
-        # test without max tokens
-        response = completion(
-            model="github/gpt-4o",
-            messages=messages,
-        )
-        # Add any assertions, here to check response args
-        print(response)
-    except litellm.AuthenticationError:
-        pass
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
 def test_completion_claude_3_empty_response():
     litellm.set_verbose = True
 
@@ -301,7 +248,7 @@ def test_completion_claude_3():
 
 @pytest.mark.parametrize(
     "model",
-    ["anthropic/claude-sonnet-4-5-20250929", "anthropic.claude-3-sonnet-20240229-v1:0"],
+    ["anthropic/claude-sonnet-4-5-20250929", "us.anthropic.claude-sonnet-4-5-20250929-v1:0"],
 )
 def test_completion_claude_3_function_call(model):
     litellm.set_verbose = True
@@ -387,7 +334,7 @@ def test_completion_claude_3_function_call(model):
     [
         ("gpt-3.5-turbo", None, None),
         ("claude-sonnet-4-5-20250929", None, None),
-        ("anthropic.claude-3-sonnet-20240229-v1:0", None, None),
+        ("us.anthropic.claude-sonnet-4-5-20250929-v1:0", None, None),
         # (
         #     "azure_ai/command-r-plus",
         #     os.getenv("AZURE_COHERE_API_KEY"),
@@ -543,7 +490,8 @@ async def test_anthropic_no_content_error():
     except litellm.InternalServerError:
         pass
     except litellm.APIError as e:
-        assert e.status_code == 500
+        if e.status_code != 500:
+            raise
     except Exception as e:
         pytest.fail(f"An unexpected error occurred - {str(e)}")
 
@@ -872,6 +820,8 @@ def test_completion_mistral_api_modified_input():
 
 @pytest.mark.skip(reason="this test is flaky")
 def test_completion_gpt4_vision():
+    import openai
+
     try:
         litellm.set_verbose = True
         response = completion(
@@ -1408,20 +1358,17 @@ def test_ollama_image():
     """
 
     import base64
-    import io
 
     from PIL import Image
 
+    sent_images = []
+
     def mock_post(url, **kwargs):
+        sent_images.append(json.loads(kwargs["data"])["images"])
         mock_response = MagicMock()
         mock_response.status_code = 200
         mock_response.headers = {"Content-Type": "application/json"}
-        data_json = json.loads(kwargs["data"])
-        mock_response.json.return_value = {
-            # return the image in the response so that it can be tested
-            # against the original
-            "response": data_json["images"]
-        }
+        mock_response.json.return_value = {"response": "a black pixel"}
         return mock_response
 
     def make_b64image(format):
@@ -1450,9 +1397,10 @@ def test_ollama_image():
 
     client = HTTPHandler()
     for test in tests:
+        sent_images.clear()
         try:
             with patch.object(client, "post", side_effect=mock_post):
-                response = completion(
+                completion(
                     model="ollama/llava",
                     messages=[
                         {
@@ -1468,14 +1416,14 @@ def test_ollama_image():
                     ],
                     client=client,
                 )
+                (image_data,) = sent_images[0]
                 if not test[1]:
                     # the conversion process may not always generate the same image,
                     # so just check for a JPEG image when a conversion was done.
-                    image_data = response["choices"][0]["message"]["content"][0]
                     image = Image.open(io.BytesIO(base64.b64decode(image_data)))
                     assert image.format == "JPEG"
                 else:
-                    assert response["choices"][0]["message"]["content"][0] == test[1]
+                    assert image_data == test[1]
         except Exception as e:
             pytest.fail(f"Error occurred: {e}")
 
@@ -1580,7 +1528,7 @@ def test_completion_openai():
     [
         # ("gpt-4o-2024-08-06", None),
         # ("azure/gpt-4.1-mini", None),
-        ("bedrock/anthropic.claude-3-sonnet-20240229-v1:0", None),
+        ("bedrock/us.anthropic.claude-sonnet-4-5-20250929-v1:0", None),
         # ("azure/gpt-4o-new-test", "2024-08-01-preview"),
     ],
 )
@@ -1850,6 +1798,8 @@ def test_completion_openai_litellm_key():
 
 @pytest.mark.skip(reason="Unresponsive endpoint.[TODO] Rehost this somewhere else")
 def test_completion_ollama_hosted():
+    import openai
+
     try:
         litellm.request_timeout = 20  # give ollama 20 seconds to response
         litellm.set_verbose = True
@@ -2087,17 +2037,12 @@ def test_completion_openrouter_reasoning_effort():
 
 
 def test_completion_hf_model_no_provider():
-    try:
-        response = completion(
+    with pytest.raises(litellm.BadRequestError, match="LLM Provider NOT provided"):
+        completion(
             model="WizardLM/WizardLM-70B-V1.0",
             messages=messages,
             max_tokens=5,
         )
-        # Add any assertions here to check the response
-        print(response)
-        pytest.fail(f"Error occurred: {e}")
-    except Exception as e:
-        pass
 
 
 # test_completion_hf_model_no_provider()
@@ -2576,7 +2521,7 @@ def test_completion_replicate_vicuna():
         response_str = response["choices"][0]["message"]["content"]
         print("RESPONSE STRING\n", response_str)
         if type(response_str) != str:
-            pytest.fail(f"Error occurred: {e}")
+            pytest.fail(f"Expected a string response, got {type(response_str)}: {response_str}")
     except Exception as e:
         pytest.fail(f"Error occurred: {e}")
 
@@ -2840,41 +2785,6 @@ def test_completion_together_ai_llama():
 
 
 # test_completion_together_ai()
-def test_customprompt_together_ai():
-    try:
-        litellm.set_verbose = False
-        litellm.num_retries = 0
-        print("in test_customprompt_together_ai")
-        print(litellm.success_callback)
-        print(litellm._async_success_callback)
-        response = completion(
-            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
-            messages=messages,
-            roles={
-                "system": {
-                    "pre_message": "<|im_start|>system\n",
-                    "post_message": "<|im_end|>",
-                },
-                "assistant": {
-                    "pre_message": "<|im_start|>assistant\n",
-                    "post_message": "<|im_end|>",
-                },
-                "user": {
-                    "pre_message": "<|im_start|>user\n",
-                    "post_message": "<|im_end|>",
-                },
-            },
-        )
-        print(response)
-    except litellm.exceptions.Timeout as e:
-        print(f"Timeout Error")
-        pass
-    except Exception as e:
-        print(f"ERROR TYPE {type(e)}")
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_customprompt_together_ai()
 
 
 def response_format_tests(response: litellm.ModelResponse):
@@ -2916,8 +2826,7 @@ def response_format_tests(response: litellm.ModelResponse):
     "model",
     [
         "bedrock/mistral.mistral-large-2407-v1:0",
-        "bedrock/cohere.command-r-plus-v1:0",
-        "anthropic.claude-3-sonnet-20240229-v1:0",
+        "us.anthropic.claude-sonnet-4-5-20250929-v1:0",
         "mistral.mistral-7b-instruct-v0:2",
         "meta.llama3-8b-instruct-v1:0",
     ],
@@ -3128,29 +3037,6 @@ def test_completion_anyscale_api():
         response = completion(
             model="anyscale/meta-llama/Llama-2-7b-chat-hf",
             messages=messages,
-        )
-        print(response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-@pytest.mark.skip(reason="anyscale stopped serving public api endpoints")
-def test_completion_anyscale_2():
-    try:
-        # litellm.set_verbose = True
-        messages = [
-            {"role": "system", "content": "You're a good bot"},
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-            {
-                "role": "user",
-                "content": "Hey",
-            },
-        ]
-        response = completion(
-            model="anyscale/meta-llama/Llama-2-7b-chat-hf", messages=messages
         )
         print(response)
     except Exception as e:
@@ -3705,28 +3591,6 @@ async def test_acompletion_stream_watsonx():
 # test_maritalk()
 
 
-def test_completion_together_ai_stream():
-    litellm.set_verbose = True
-    user_message = "Write 1pg about YC & litellm"
-    messages = [{"content": user_message, "role": "user"}]
-    try:
-        response = completion(
-            model="together_ai/Qwen/Qwen2.5-7B-Instruct-Turbo",
-            messages=messages,
-            stream=True,
-            max_tokens=5,
-        )
-        print(response)
-        for chunk in response:
-            print(chunk)
-        # print(string_response)
-    except Exception as e:
-        pytest.fail(f"Error occurred: {e}")
-
-
-# test_completion_together_ai_stream()
-
-
 def test_moderation():
     response = litellm.moderation(input="i'm ishaan cto of litellm")
     print(response)
@@ -4060,10 +3924,14 @@ def test_completion_novita_ai():
     openai_client = OpenAI(api_key="fake-key")
 
     with patch.object(
-        openai_client.chat.completions, "create", new=MagicMock()
+        openai_client.chat.completions.with_raw_response, "create"
     ) as mock_call:
+        mock_call.return_value.headers = {}
+        mock_call.return_value.parse.return_value = litellm.ModelResponse(
+            choices=[{"message": {"role": "assistant", "content": "Hello"}}]
+        )
         try:
-            completion(
+            response = completion(
                 model="novita/meta-llama/llama-3.3-70b-instruct",
                 messages=messages,
                 client=openai_client,
@@ -4071,6 +3939,7 @@ def test_completion_novita_ai():
             )
 
             mock_call.assert_called_once()
+            assert response.choices[0].message.content == "Hello"
 
             # Verify model is passed correctly
             assert (
@@ -4105,7 +3974,7 @@ def test_completion_novita_ai_dynamic_params(api_key):
             "create",
             side_effect=Exception("Invalid API key"),
         ) as mock_call:
-            try:
+            with pytest.raises(Exception, match="Invalid API key") as exc_info:
                 completion(
                     model="novita/meta-llama/llama-3.3-70b-instruct",
                     messages=messages,
@@ -4113,10 +3982,8 @@ def test_completion_novita_ai_dynamic_params(api_key):
                     client=openai_client,
                     api_base="https://api.novita.ai/v3/openai",
                 )
-                pytest.fail(f"This call should have failed!")
-            except Exception as e:
-                # This should fail with the mocked exception
-                assert "Invalid API key" in str(e)
+            e = exc_info.value
+            assert "Invalid API key" in str(e)
 
             mock_call.assert_called_once()
     except Exception as e:

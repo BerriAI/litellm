@@ -3,18 +3,13 @@ from fastapi.testclient import TestClient
 from fastapi import Request, Header
 from unittest.mock import patch, MagicMock, AsyncMock
 
-import sys
 import os
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import litellm
 from litellm.proxy.proxy_server import app
 from litellm.proxy.utils import PrismaClient, ProxyLogging
 from litellm.proxy.management_endpoints.ui_sso import auth_callback
 from litellm.proxy._types import LitellmUserRoles
-import os
 import jwt
 import time
 from litellm.caching.caching import DualCache

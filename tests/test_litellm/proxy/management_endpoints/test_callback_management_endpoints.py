@@ -1,13 +1,11 @@
 import json
 import os
-import sys
 from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from fastapi.testclient import TestClient
 
-sys.path.insert(0, os.path.abspath("../../../.."))  #
 
 from typing import cast
 
@@ -83,35 +81,29 @@ class TestCallbackManagementEndpoints:
         # Setup test client
         client = TestClient(app)
 
-        # Initialize Langfuse logger and add to callbacks
-        with patch("litellm.integrations.langfuse.langfuse.Langfuse") as mock_langfuse:
-            # Mock the Langfuse client initialization
-            mock_langfuse_client = MagicMock()
-            mock_langfuse.return_value = mock_langfuse_client
+        # Add string representation to callback lists (this is how the system typically works)
+        litellm.success_callback.append("langfuse")
+        litellm._async_success_callback.append("langfuse")
 
-            # Add string representation to callback lists (this is how the system typically works)
-            litellm.success_callback.append("langfuse")
-            litellm._async_success_callback.append("langfuse")
+        # Make request to list callbacks endpoint
+        response = client.get(
+            "/callbacks/list", headers={"Authorization": "Bearer sk-1234"}
+        )
 
-            # Make request to list callbacks endpoint
-            response = client.get(
-                "/callbacks/list", headers={"Authorization": "Bearer sk-1234"}
-            )
+        # Verify response
+        assert response.status_code == 200
 
-            # Verify response
-            assert response.status_code == 200
+        response_data = response.json()
 
-            response_data = response.json()
+        # Verify langfuse appears in success callbacks
+        assert "langfuse" in response_data["success"]
+        assert response_data["failure"] == []
+        assert response_data["success_and_failure"] == []
 
-            # Verify langfuse appears in success callbacks
-            assert "langfuse" in response_data["success"]
-            assert response_data["failure"] == []
-            assert response_data["success_and_failure"] == []
-
-            # Verify the response structure is correct
-            assert isinstance(response_data["success"], list)
-            assert isinstance(response_data["failure"], list)
-            assert isinstance(response_data["success_and_failure"], list)
+        # Verify the response structure is correct
+        assert isinstance(response_data["success"], list)
+        assert isinstance(response_data["failure"], list)
+        assert isinstance(response_data["success_and_failure"], list)
 
     def test_alist_callbacks_with_datadog_logger(self):
         """Test /callbacks/list endpoint with DataDog logger configuration"""
@@ -266,3 +258,162 @@ class TestCallbackManagementEndpoints:
         assert galileo_config["displayName"] == "Galileo"
         assert "GALILEO_API_KEY" in galileo_config["dynamic_params"]
         assert "GALILEO_PROJECT_ID" in galileo_config["dynamic_params"]
+
+
+class TestNewRelicCallbackConfig:
+    def test_newrelic_entry_supports_team_logging_with_dynamic_params(self):
+        client = TestClient(app)
+        response = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-1234"})
+        assert response.status_code == 200
+        newrelic = next(
+            (config for config in response.json() if config.get("id") == "newrelic"),
+            None,
+        )
+        assert newrelic is not None
+        assert newrelic["supports_key_team_logging"] is True
+        params = newrelic["dynamic_params"]
+        assert params["newrelic_api_key"]["type"] == "password"
+        assert "newrelic_region" in params
+        # The operator-only agent env flag must not appear as a team-configurable
+        # field: it is not a StandardCallbackDynamicParams key and would be rejected.
+        assert "NEW_RELIC_AI_MONITORING_RECORD_CONTENT_ENABLED" not in params
+
+
+class TestLangfuseOtelCallbackConfig:
+    def test_span_scope_is_a_select_over_exactly_the_scopes_the_validator_accepts(self):
+        from litellm.types.utils import OTEL_SPAN_SCOPES
+
+        client = TestClient(app)
+        response = client.get("/callbacks/configs", headers={"Authorization": "Bearer sk-1234"})
+        assert response.status_code == 200
+        langfuse_otel = next(config for config in response.json() if config.get("id") == "langfuse_otel")
+        scope = langfuse_otel["dynamic_params"]["langfuse_span_scope"]
+        assert scope["type"] == "select"
+        assert frozenset(scope["options"]) == OTEL_SPAN_SCOPES
+        assert scope["required"] is False
+
+
+class TestNewRelicTeamCallbackValidation:
+    def _data(self, callback_vars):
+        from litellm.proxy._types import AddTeamCallback
+
+        return AddTeamCallback(callback_name="newrelic", callback_type="success", callback_vars=callback_vars)
+
+    def test_rejects_when_otel_v2_off(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _validate_team_callback
+
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(self._data({"newrelic_api_key": "k"}))
+            assert "LITELLM_OTEL_V2" in str(exc.value.detail)
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_rejects_unknown_region_and_region_without_key(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _validate_team_callback
+
+        monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+        is_otel_v2_enabled.cache_clear()
+        try:
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(self._data({"newrelic_api_key": "k", "newrelic_region": "mars"}))
+            assert "Unknown newrelic_region" in str(exc.value.detail)
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(self._data({"newrelic_region": "eu"}))
+            assert "requires newrelic_api_key" in str(exc.value.detail)
+            _validate_team_callback(self._data({"newrelic_api_key": "k", "newrelic_region": "EU"}))
+            # A JSON-null key is str()-coerced to "None" upstream; it must not
+            # slip past the region-requires-key guard.
+            with pytest.raises(HTTPException) as exc:
+                _validate_team_callback(self._data({"newrelic_api_key": None, "newrelic_region": "eu"}))
+            assert "requires newrelic_api_key" in str(exc.value.detail)
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_ignores_other_callbacks_and_bare_newrelic(self, monkeypatch):
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy._types import AddTeamCallback
+        from litellm.proxy.management_endpoints.team_callback_endpoints import _validate_team_callback
+
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        try:
+            assert _validate_team_callback(self._data({})) is None
+            assert (
+                _validate_team_callback(
+                    AddTeamCallback(
+                        callback_name="langfuse",
+                        callback_type="success",
+                        callback_vars={"langfuse_public_key": "pk", "langfuse_secret_key": "sk"},
+                    )
+                )
+                is None
+            )
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+
+class TestNewRelicKeyLoggingValidation:
+    """Key-level logging is written through key metadata, not /team/callback."""
+
+    def _metadata(self, callback_vars):
+        return {"logging": [{"callback_name": "newrelic", "callback_type": "success", "callback_vars": callback_vars}]}
+
+    def test_rejects_same_configs_as_team_endpoint(self, monkeypatch):
+        from fastapi import HTTPException
+
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            raise_on_invalid_key_logging_config,
+        )
+
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        try:
+            with pytest.raises(HTTPException) as exc:
+                raise_on_invalid_key_logging_config(self._metadata({"newrelic_api_key": "k"}))
+            assert "LITELLM_OTEL_V2" in str(exc.value.detail)
+
+            monkeypatch.setenv("LITELLM_OTEL_V2", "true")
+            is_otel_v2_enabled.cache_clear()
+            with pytest.raises(HTTPException) as exc:
+                raise_on_invalid_key_logging_config(
+                    self._metadata({"newrelic_api_key": "k", "newrelic_region": "mars"})
+                )
+            assert "Unknown newrelic_region" in str(exc.value.detail)
+            with pytest.raises(HTTPException) as exc:
+                raise_on_invalid_key_logging_config(self._metadata({"newrelic_region": "eu"}))
+            assert "requires newrelic_api_key" in str(exc.value.detail)
+            raise_on_invalid_key_logging_config(self._metadata({"newrelic_api_key": "k", "newrelic_region": "EU"}))
+        finally:
+            is_otel_v2_enabled.cache_clear()
+
+    def test_ignores_metadata_without_newrelic_logging(self, monkeypatch):
+        from litellm.integrations.otel.model.config import is_otel_v2_enabled
+        from litellm.proxy.management_endpoints.key_management_endpoints import (
+            raise_on_invalid_key_logging_config,
+        )
+
+        monkeypatch.delenv("LITELLM_OTEL_V2", raising=False)
+        is_otel_v2_enabled.cache_clear()
+        try:
+            assert raise_on_invalid_key_logging_config(None) is None
+            assert raise_on_invalid_key_logging_config({"logging": "not-a-list"}) is None
+            assert raise_on_invalid_key_logging_config({"tags": ["a"]}) is None
+            assert raise_on_invalid_key_logging_config(self._metadata({})) is None
+            assert (
+                raise_on_invalid_key_logging_config(
+                    {"logging": [{"callback_name": "langfuse", "callback_vars": {"langfuse_public_key": "pk"}}]}
+                )
+                is None
+            )
+        finally:
+            is_otel_v2_enabled.cache_clear()

@@ -2,7 +2,9 @@
 
 from .exception_mapping_utils import (
     ANTHROPIC_ERROR_TYPE_MAP,
+    AnthropicErrorSseFrame,
     AnthropicExceptionMapping,
+    anthropic_error_sse_frame,
 )
 from .exceptions import (
     AnthropicErrorDetail,
@@ -11,9 +13,11 @@ from .exceptions import (
 )
 
 __all__ = [
-    "AnthropicErrorType",
+    "ANTHROPIC_ERROR_TYPE_MAP",
     "AnthropicErrorDetail",
     "AnthropicErrorResponse",
-    "ANTHROPIC_ERROR_TYPE_MAP",
+    "AnthropicErrorSseFrame",
+    "AnthropicErrorType",
     "AnthropicExceptionMapping",
+    "anthropic_error_sse_frame",
 ]

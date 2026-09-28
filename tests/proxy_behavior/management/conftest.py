@@ -13,7 +13,7 @@ from prisma import Json
 
 from litellm.proxy.utils import hash_token
 
-MASTER_KEY = "sk-1234"
+MASTER_KEY = "sk-proxy-behavior-master-key"
 SCRATCH_PREFIX = "scratch-"
 
 
@@ -31,7 +31,7 @@ def _write_minimal_proxy_config() -> str:
     return f.name
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="package")
 async def proxy_app():
     from litellm.proxy import proxy_server
     from litellm.proxy.proxy_server import (
@@ -67,7 +67,7 @@ async def proxy_app():
         yield app
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="package")
 async def proxy_client(proxy_app) -> AsyncIterator[httpx.AsyncClient]:
     transport = httpx.ASGITransport(app=proxy_app)
     async with httpx.AsyncClient(
@@ -76,7 +76,7 @@ async def proxy_client(proxy_app) -> AsyncIterator[httpx.AsyncClient]:
         yield client
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="package")
 async def prisma(proxy_app):
     from litellm.proxy import proxy_server
 
@@ -84,7 +84,7 @@ async def prisma(proxy_app):
     return proxy_server.prisma_client
 
 
-@pytest_asyncio.fixture(scope="session")
+@pytest_asyncio.fixture(scope="package")
 async def world(prisma):
     from .actors import seed_world
 
@@ -192,6 +192,33 @@ async def create_scratch_team(
         data["metadata"] = Json(metadata)
     await prisma.db.litellm_teamtable.create(data=data)
     return team_id
+
+
+async def create_scratch_user(
+    prisma,
+    scratch_prefix: str,
+    *,
+    suffix: str,
+    user_email: Optional[str] = None,
+) -> str:
+    """Raw-seed a scratch-tagged user row with no key; returns its user_id.
+
+    The passive counterpart to create_scratch_actor: a user that requests are
+    made *about* rather than *by*, so it needs no verification token. The
+    user_id matches Scratch.tag(suffix), so the teardown reclaims it.
+
+    A member named by user_id must already exist for a non-proxy-admin caller
+    — `_validate_member_user_id_provisioning` 403s a user_id with no user row
+    — so an authz matrix targeting a member has to seed one, or every
+    non-proxy-admin row 403s on provisioning and the permission gate under
+    test goes unexercised.
+    """
+    user_id = f"{scratch_prefix}-{suffix}"
+    data: Dict[str, Any] = {"user_id": user_id, "user_role": "internal_user"}
+    if user_email is not None:
+        data["user_email"] = user_email
+    await prisma.db.litellm_usertable.create(data=data)
+    return user_id
 
 
 async def create_scratch_org(
@@ -331,8 +358,16 @@ async def scratch(prisma):
         await prisma.db.litellm_teamtable.delete_many(
             where={"team_id": {"startswith": handle.prefix}}
         )
+        # Inviting a member by user_email allocates the user_id server-side
+        # (a uuid), so a scratch-prefixed email is the only handle on that
+        # row — sweep both, matching the token sweep above.
         await prisma.db.litellm_usertable.delete_many(
-            where={"user_id": {"startswith": handle.prefix}}
+            where={
+                "OR": [
+                    {"user_id": {"startswith": handle.prefix}},
+                    {"user_email": {"startswith": handle.prefix}},
+                ]
+            }
         )
         # F1+F3 seed scratch orgs via create_scratch_org; the world seeder is
         # the only other writer of LiteLLM_OrganizationTable and uses the

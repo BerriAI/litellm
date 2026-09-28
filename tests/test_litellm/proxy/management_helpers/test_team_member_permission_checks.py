@@ -1,14 +1,14 @@
-import os
-import sys
 from unittest.mock import MagicMock
 
 import pytest
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
-from litellm.proxy._types import KeyManagementRoutes, Member, ProxyException
+from litellm.proxy._types import (
+    KeyManagementRoutes,
+    Member,
+    ProxyException,
+    UserAPIKeyAuth,
+)
 from litellm.proxy.management_helpers.team_member_permission_checks import (
     BASELINE_TEAM_MEMBER_PERMISSIONS,
     TeamMemberPermissionChecks,
@@ -26,22 +26,16 @@ class TestGetPermissionsForTeamMember:
     def test_none_permissions_returns_defaults(self):
         """When team_member_permissions is None, return DEFAULT_TEAM_MEMBER_PERMISSIONS."""
         team = _make_team_table(None)
-        member = MagicMock(spec=Member)
 
-        result = TeamMemberPermissionChecks.get_permissions_for_team_member(
-            team_member_object=member, team_table=team
-        )
+        result = TeamMemberPermissionChecks.get_permissions_for_team_member(team_table=team)
 
         assert set(result) == set(BASELINE_TEAM_MEMBER_PERMISSIONS)
 
     def test_empty_list_includes_baseline(self):
         """When team_member_permissions is [], baseline permissions are still included."""
         team = _make_team_table([])
-        member = MagicMock(spec=Member)
 
-        result = TeamMemberPermissionChecks.get_permissions_for_team_member(
-            team_member_object=member, team_table=team
-        )
+        result = TeamMemberPermissionChecks.get_permissions_for_team_member(team_table=team)
 
         assert KeyManagementRoutes.KEY_INFO in result
         assert KeyManagementRoutes.KEY_HEALTH in result
@@ -49,11 +43,8 @@ class TestGetPermissionsForTeamMember:
     def test_explicit_permissions_include_baseline(self):
         """When explicit permissions are set, baseline is always included."""
         team = _make_team_table(["/key/generate", "/key/delete"])
-        member = MagicMock(spec=Member)
 
-        result = TeamMemberPermissionChecks.get_permissions_for_team_member(
-            team_member_object=member, team_table=team
-        )
+        result = TeamMemberPermissionChecks.get_permissions_for_team_member(team_table=team)
 
         assert KeyManagementRoutes.KEY_GENERATE in result
         assert KeyManagementRoutes.KEY_DELETE in result
@@ -63,11 +54,8 @@ class TestGetPermissionsForTeamMember:
     def test_explicit_permissions_with_baseline_no_duplicates(self):
         """When explicit permissions already include baseline, no duplicates."""
         team = _make_team_table(["/key/info", "/key/generate"])
-        member = MagicMock(spec=Member)
 
-        result = TeamMemberPermissionChecks.get_permissions_for_team_member(
-            team_member_object=member, team_table=team
-        )
+        result = TeamMemberPermissionChecks.get_permissions_for_team_member(team_table=team)
 
         # Using set ensures no duplicates from the implementation
         assert KeyManagementRoutes.KEY_INFO in result
@@ -314,12 +302,45 @@ class TestEnforceMemberCanAssignAccessGroups:
             access_group_ids=["ag-1"],
         )
 
-    def test_personal_key_out_of_scope(self):
-        """Personal (non-team) keys are not gated by team-member permissions."""
+    def test_personal_key_non_admin_denied(self):
+        """A non-admin cannot self-grant access_group_ids on a personal (no
+        team) key. The access_group_id grants model access at use-time
+        without any team-membership cross-check, so the assignment is the
+        authorization boundary."""
+        from fastapi import HTTPException
+
+        with pytest.raises(HTTPException) as exc:
+            TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+                user_api_key_dict=self._user(),
+                team_table=None,
+                access_group_ids=["ag-private"],
+            )
+        assert exc.value.status_code == 403
+        assert "ag-private" in str(exc.value.detail)
+
+    def test_personal_key_proxy_admin_can_assign(self):
+        """Proxy admins bypass the personal-key gate and may assign access
+        groups on personal keys."""
+        from litellm.proxy._types import LitellmUserRoles
+
+        TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+            user_api_key_dict=self._user(role=LitellmUserRoles.PROXY_ADMIN.value),
+            team_table=None,
+            access_group_ids=["ag-private"],
+        )
+
+    def test_personal_key_empty_access_groups_passes(self):
+        """An empty / absent access_group_ids list must not be rejected even
+        on a personal key — the gate only fires when the field is non-empty."""
         TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
             user_api_key_dict=self._user(),
             team_table=None,
-            access_group_ids=["ag-1"],
+            access_group_ids=None,
+        )
+        TeamMemberPermissionChecks.enforce_member_can_assign_access_groups(
+            user_api_key_dict=self._user(),
+            team_table=None,
+            access_group_ids=[],
         )
 
     def test_team_admin_bypasses(self, monkeypatch):
@@ -374,3 +395,148 @@ class TestEnforceMemberCanAssignAccessGroups:
             team_table=self._team(["/key/generate", self.AG_PERMISSION]),
             access_group_ids=["ag-1"],
         )
+
+
+class TestDoesTeamMemberHavePermissionsForEndpoint:
+    def _team(self, team_member_permissions, team_id="team-a"):
+        team = MagicMock()
+        team.team_id = team_id
+        team.team_member_permissions = team_member_permissions
+        return team
+
+    def test_none_role_returns_false(self):
+        """A caller with no team membership is denied."""
+        result = TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+            team_member_role=None,
+            team_table=self._team(["/key/update"]),
+            route=KeyManagementRoutes.KEY_UPDATE.value,
+        )
+        assert result is False
+
+    def test_admin_role_always_allowed(self):
+        """Team admins bypass the member permission list."""
+        result = TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+            team_member_role="admin",
+            team_table=self._team([]),
+            route=KeyManagementRoutes.KEY_UPDATE.value,
+        )
+        assert result is True
+
+    def test_user_role_with_permission_allowed(self):
+        result = TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+            team_member_role="user",
+            team_table=self._team(["/key/update"]),
+            route=KeyManagementRoutes.KEY_UPDATE.value,
+        )
+        assert result is True
+
+    def test_user_role_without_permission_raises(self):
+        with pytest.raises(ProxyException) as exc:
+            TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint(
+                team_member_role="user",
+                team_table=self._team(["/key/generate"]),
+                route=KeyManagementRoutes.KEY_UPDATE.value,
+            )
+        assert str(exc.value.code) == "401"
+        assert exc.value.type == "team_member_permission_error"
+
+
+class TestCanTeamMemberExecuteKeyManagementEndpointServiceAccount:
+    def _service_account_token(self, team_id: str) -> UserAPIKeyAuth:
+        return UserAPIKeyAuth(
+            api_key="sk-test",
+            user_id=None,
+            team_id=team_id,
+            metadata={"service_account_id": "sa-1"},
+        )
+
+    @pytest.mark.asyncio
+    async def test_service_account_same_team_with_permission(self, monkeypatch):
+        """A service account key can manage keys in its own team when the
+        team grants the route via team_member_permissions."""
+        from litellm.proxy.management_helpers import (
+            team_member_permission_checks as module,
+        )
+
+        async def _mock_get_team_object(**kwargs):
+            team = MagicMock()
+            team.team_id = "team-a"
+            team.members_with_roles = []
+            team.team_member_permissions = ["/key/update"]
+            return team
+
+        monkeypatch.setattr(module, "get_team_object", _mock_get_team_object)
+
+        existing_key_row = MagicMock()
+        existing_key_row.team_id = "team-a"
+
+        result = await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+            user_api_key_dict=self._service_account_token(team_id="team-a"),
+            route=KeyManagementRoutes.KEY_UPDATE,
+            prisma_client=MagicMock(),
+            user_api_key_cache=MagicMock(),
+            existing_key_row=existing_key_row,
+        )
+        assert result is None
+
+    @pytest.mark.asyncio
+    async def test_service_account_same_team_without_permission(self, monkeypatch):
+        """A service account key is denied when the team's
+        team_member_permissions does not include the route."""
+        from litellm.proxy.management_helpers import (
+            team_member_permission_checks as module,
+        )
+
+        async def _mock_get_team_object(**kwargs):
+            team = MagicMock()
+            team.team_id = "team-a"
+            team.members_with_roles = []
+            team.team_member_permissions = ["/key/generate"]
+            return team
+
+        monkeypatch.setattr(module, "get_team_object", _mock_get_team_object)
+
+        existing_key_row = MagicMock()
+        existing_key_row.team_id = "team-a"
+
+        with pytest.raises(ProxyException) as exc:
+            await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+                user_api_key_dict=self._service_account_token(team_id="team-a"),
+                route=KeyManagementRoutes.KEY_UPDATE,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                existing_key_row=existing_key_row,
+            )
+        assert str(exc.value.code) == "401"
+        assert exc.value.type == "team_member_permission_error"
+
+    @pytest.mark.asyncio
+    async def test_service_account_different_team_denied(self, monkeypatch):
+        """A service account key cannot manage keys in another team, even if
+        that team grants the route to its members."""
+        from litellm.proxy.management_helpers import (
+            team_member_permission_checks as module,
+        )
+
+        async def _mock_get_team_object(**kwargs):
+            team = MagicMock()
+            team.team_id = "team-b"
+            team.members_with_roles = []
+            team.team_member_permissions = ["/key/update"]
+            return team
+
+        monkeypatch.setattr(module, "get_team_object", _mock_get_team_object)
+
+        existing_key_row = MagicMock()
+        existing_key_row.team_id = "team-b"
+
+        with pytest.raises(ProxyException) as exc:
+            await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
+                user_api_key_dict=self._service_account_token(team_id="team-a"),
+                route=KeyManagementRoutes.KEY_UPDATE,
+                prisma_client=MagicMock(),
+                user_api_key_cache=MagicMock(),
+                existing_key_row=existing_key_row,
+            )
+        assert str(exc.value.code) == "401"
+        assert exc.value.type == "team_member_permission_error"

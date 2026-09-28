@@ -1,4 +1,4 @@
-from typing import List, Optional, Union
+from typing import Final
 
 import httpx
 
@@ -29,12 +29,12 @@ class CloudflareError(BaseLLMException):
 class CloudflareChatConfig(OpenAIGPTConfig):
     def get_complete_url(
         self,
-        api_base: Optional[str],
-        api_key: Optional[str],
+        api_base: str | None,
+        api_key: str | None,
         model: str,
         optional_params: dict,
         litellm_params: dict,
-        stream: Optional[bool] = None,
+        stream: bool | None = None,
     ) -> str:
         return super().get_complete_url(
             api_base=self._resolve_api_base(api_base),
@@ -46,15 +46,15 @@ class CloudflareChatConfig(OpenAIGPTConfig):
         )
 
     @staticmethod
-    def _resolve_api_base(api_base: Optional[str]) -> str:
+    def _resolve_api_base(api_base: str | None) -> str:
         if not api_base:
-            account_id = normalize_nonempty_secret_str(get_secret_str("CLOUDFLARE_ACCOUNT_ID"))
+            account_id: Final = normalize_nonempty_secret_str(get_secret_str("CLOUDFLARE_ACCOUNT_ID"))
             if account_id is None:
                 raise ValueError(
                     "Missing CLOUDFLARE_ACCOUNT_ID - set CLOUDFLARE_ACCOUNT_ID in the environment or pass api_base explicitly"
                 )
             return f"https://api.cloudflare.com/client/v4/accounts/{account_id}/ai/v1"
-        trimmed = api_base.rstrip("/")
+        trimmed: Final = api_base.rstrip("/")
         if trimmed.endswith("/ai/run"):
             verbose_logger.warning(
                 "Cloudflare api_base ending in '/ai/run' is the legacy Workers AI path and no longer serves OpenAI-compatible requests; rewriting to the '/ai/v1' endpoint"
@@ -66,11 +66,11 @@ class CloudflareChatConfig(OpenAIGPTConfig):
         self,
         headers: dict,
         model: str,
-        messages: List[AllMessageValues],
+        messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        api_key: Optional[str] = None,
-        api_base: Optional[str] = None,
+        api_key: str | None = None,
+        api_base: str | None = None,
     ) -> dict:
         if api_key is None:
             raise ValueError(
@@ -86,9 +86,7 @@ class CloudflareChatConfig(OpenAIGPTConfig):
             api_base=api_base,
         )
 
-    def get_error_class(
-        self, error_message: str, status_code: int, headers: Union[dict, httpx.Headers]
-    ) -> BaseLLMException:
+    def get_error_class(self, error_message: str, status_code: int, headers: dict | httpx.Headers) -> BaseLLMException:
         return CloudflareError(
             status_code=status_code,
             message=error_message,

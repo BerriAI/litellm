@@ -1,12 +1,8 @@
-import os
-import sys
 
+import time
 import pytest
 import requests
 
-sys.path.insert(
-    0, os.path.abspath("../../..")
-)  # Adds the parent directory to the system path
 
 
 import responses
@@ -177,3 +173,17 @@ def test_client_initialization_without_api_key(base_url):
 
     assert client._api_key is None
     assert client.model_groups._api_key is None
+
+
+def test_info_gives_up_at_the_timeout_instead_of_hanging(hanging_server):
+    """
+    A proxy that accepts the connection but never answers used to pin the caller's
+    process forever, since the request carried no timeout at all.
+    """
+    client = ModelGroupsManagementClient(base_url=hanging_server, api_key="sk-test", timeout=1)
+
+    started = time.monotonic()
+    with pytest.raises(requests.exceptions.Timeout):
+        client.info()
+
+    assert time.monotonic() - started < 10
