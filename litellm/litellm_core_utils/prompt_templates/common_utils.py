@@ -2384,19 +2384,15 @@ def parse_tool_call_arguments(
     try:
         parsed = json.loads(arguments)
         if isinstance(parsed, str):
-            # Double-encoded JSON: json.dumps applied twice by the caller (common
-            # in agent frameworks that serialise tool arguments through a store).
-            # Anthropic's tool_use.input must be an object, not a string, so
-            # unwrap one extra layer and warn so callers can fix the root cause.
-            verbose_logger.warning(
-                "Tool call arguments for tool '%s' (%s) decoded to a string "
-                "instead of an object — double-encoded JSON detected. "
-                "Attempting second decode.",
-                tool_name or "<unknown>",
-                context or "unknown context",
-            )
             try:
-                parsed = json.loads(parsed)
+                _second_decode = json.loads(parsed)
+                if isinstance(_second_decode, dict):
+                    verbose_logger.warning(
+                        "Tool call arguments for tool '%s' (%s) were double-encoded",
+                        tool_name or "<unknown>",
+                        context or "unknown context",
+                    )
+                    parsed = _second_decode
             except json.JSONDecodeError:
                 pass
         return parsed
