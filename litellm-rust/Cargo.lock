@@ -3538,6 +3538,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "litellm-gateway-management"
+version = "0.1.0"
+dependencies = [
+ "base64 0.22.1",
+ "litellm-auth-types",
+ "litellm-gateway-auth",
+ "rand 0.8.7",
+ "rstest",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-host"
 version = "0.1.0"
 dependencies = [
