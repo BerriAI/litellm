@@ -39,7 +39,7 @@ else:
 class _RouterOwnedStream:
     """Keep per-request router callbacks until the stream ends or is closed."""
 
-    def __init__(self, stream: AsyncIterator[object], router: LitellmRouter):
+    def __init__(self, stream: AsyncIterator[object], router: LitellmRouter) -> None:
         self._stream = stream
         self._router = router
         self._discarded = False
