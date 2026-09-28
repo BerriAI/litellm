@@ -1218,7 +1218,7 @@ def test_v3_initializer_reads_api_version_from_config():
 
 @pytest.mark.asyncio
 async def test_v3_request_phase_relays_the_provider_body_and_nothing_else():
-    g = _make_guardrail(api_key=V3_KEY, source="Yum Gateway")
+    g = _make_guardrail(api_key=V3_KEY, source="Acme Gateway")
     g.async_handler.post.return_value = _v3_mock(V3_GATEWAY_ALLOW)
     data = _v3_request_data()
     inputs = {
