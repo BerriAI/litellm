@@ -127,23 +127,22 @@ def _carries_cache_breakpoint(block: object) -> bool:
 
 def _attribute_or_key(value: object, key: str) -> object | None:
     if hasattr(value, key):
-        return cast(object, getattr(value, key))
+        return getattr(value, key)
     if isinstance(value, Mapping):
-        value_mapping: Final = cast(Mapping[str, object], value)
-        return value_mapping.get(key)
+        return value.get(key)
     return None
 
 
 def _as_object_list(value: object | None) -> list[object] | None:
     if not isinstance(value, list):
         return None
-    return cast(list[object], value)
+    return _validated_object_list(value)
 
 
 def _as_object_iterable(value: object | None) -> Iterable[object] | None:
     if not isinstance(value, Iterable):
         return None
-    return cast(Iterable[object], value)
+    return value
 
 
 def _has_server_tool_result(tool_call_id: str, results: Iterable[object] | None) -> bool:
@@ -164,12 +163,11 @@ def _tool_call_cache_control_is_forwarded(tool_call: object, message: object) ->
     if not isinstance(provider_specific_fields, dict):
         return True
 
-    provider_fields_mapping: Final = cast(Mapping[str, object], provider_specific_fields)
     server_tool_result_keys: Final = ("web_search_results", "tool_results")
     return not any(
         _has_server_tool_result(
             tool_call_id,
-            _as_object_iterable(provider_fields_mapping.get(result_key)),
+            _as_object_iterable(provider_specific_fields.get(result_key)),
         )
         for result_key in server_tool_result_keys
     )
