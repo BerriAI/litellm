@@ -1069,29 +1069,19 @@ class TestProviderWiring:
         assert kinds(published).count("TenantFanOutSpanProcessor") == 1
         assert "TenantFanOutSpanProcessor" not in kinds(other)
 
-    def test_excluded_services_come_from_the_otel_callback_config_only(self):
-        """A preset builds its config env-only, so unioning ``excluded_services``
-        across loggers reintroduces the env value ``callback_settings.otel``
-        overrode. The fan-out must take the set from the ``otel`` config alone."""
-        otel = OpenTelemetryV2(
-            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")], excluded_services=["postgres"]),
-            callback_name="otel",
-        )
-        preset = OpenTelemetryV2(
-            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")], excluded_services=["redis"]),
-            callback_name="langfuse_otel",
-        )
-
-        publish_global_otel_v2_provider([preset], lambda _p: None, registered=otel)
-
-        fan_out = next(
+    @staticmethod
+    def _fan_out_of(logger: OpenTelemetryV2) -> TenantFanOutSpanProcessor:
+        return next(
             processor
-            for processor in otel._tracer_provider._active_span_processor._span_processors
+            for processor in logger._tracer_provider._active_span_processor._span_processors
             if isinstance(processor, TenantFanOutSpanProcessor)
         )
-        assert fan_out._excluded_db_systems == frozenset({"postgresql"})
 
-    def test_excluded_services_fall_back_to_the_published_logger_without_an_otel_callback(self):
+    def test_callback_settings_excluded_services_win_over_the_published_preset_env_config(self, monkeypatch):
+        """A preset builds its config env-only, so the fan-out must read
+        ``callback_settings.otel.excluded_services`` itself rather than the
+        published logger's config, or the env value would win."""
+        monkeypatch.setattr(litellm, "callback_settings", {"otel": {"excluded_services": ["postgres"]}}, raising=False)
         preset = OpenTelemetryV2(
             config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")], excluded_services=["redis"]),
             callback_name="langfuse_otel",
@@ -1099,25 +1089,30 @@ class TestProviderWiring:
 
         publish_global_otel_v2_provider([], lambda _p: None, registered=preset)
 
-        fan_out = next(
-            processor
-            for processor in preset._tracer_provider._active_span_processor._span_processors
-            if isinstance(processor, TenantFanOutSpanProcessor)
-        )
-        assert fan_out._excluded_db_systems == frozenset({"redis"})
+        assert self._fan_out_of(preset)._excluded_db_systems == frozenset({"postgresql"})
 
-    def test_otel_callback_builds_its_own_logger_after_a_preset(self, monkeypatch):
-        """With ``callbacks: [langfuse_otel, otel]`` the otel branch reused any
-        V2 logger, so ``callback_settings.otel`` (excluded_services) was dropped
-        onto the preset's env-only config."""
-        from litellm.integrations.otel.logger import _excluded_db_systems
+    def test_excluded_services_fall_back_to_the_published_logger_config_without_callback_settings(self, monkeypatch):
+        monkeypatch.setattr(litellm, "callback_settings", {"otel": {"exporter": "in_memory"}}, raising=False)
+        preset = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")], excluded_services=["redis"]),
+            callback_name="langfuse_otel",
+        )
+
+        publish_global_otel_v2_provider([], lambda _p: None, registered=preset)
+
+        assert self._fan_out_of(preset)._excluded_db_systems == frozenset({"redis"})
+
+    def test_otel_after_a_preset_reuses_it_and_still_takes_callback_settings_exclusions(self, monkeypatch):
+        """``callbacks: [langfuse_otel, otel]`` keeps one v2 logger, exactly as
+        before ``excluded_services`` existed, and the exclusion still comes from
+        ``callback_settings.otel`` rather than the preset's env-only config."""
         from litellm.litellm_core_utils import litellm_logging as logging_module
 
         logging_module._in_memory_loggers.clear()
         monkeypatch.setenv("LITELLM_OTEL_V2", "true")
         monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk")
         monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk")
-        monkeypatch.delenv("LITELLM_OTEL_EXCLUDED_SERVICES", raising=False)
+        monkeypatch.setenv("LITELLM_OTEL_EXCLUDED_SERVICES", "redis")
         is_otel_v2_enabled.cache_clear()
         monkeypatch.setattr(litellm, "callback_settings", {"otel": {"excluded_services": ["postgres"]}}, raising=False)
         try:
@@ -1133,13 +1128,12 @@ class TestProviderWiring:
             preset = init("langfuse_otel")
             otel_cb = init("otel")
 
-            assert otel_cb is not None and otel_cb is not preset
-            v2_names = {
-                cb.callback_name for cb in logging_module._in_memory_loggers if isinstance(cb, OpenTelemetryV2)
-            }
-            assert {"langfuse_otel", "otel"} <= v2_names, v2_names
-            resolved = _excluded_db_systems(logging_module._in_memory_loggers, otel_cb)
-            assert resolved == frozenset({"postgresql"}), resolved
+            assert isinstance(preset, OpenTelemetryV2)
+            assert otel_cb is preset
+            v2_loggers = [cb for cb in logging_module._in_memory_loggers if isinstance(cb, OpenTelemetryV2)]
+            assert v2_loggers == [preset], v2_loggers
+            publish_global_otel_v2_provider(logging_module._in_memory_loggers, lambda _p: None, registered=preset)
+            assert self._fan_out_of(preset)._excluded_db_systems == frozenset({"postgresql"})
         finally:
             logging_module._in_memory_loggers.clear()
             is_otel_v2_enabled.cache_clear()

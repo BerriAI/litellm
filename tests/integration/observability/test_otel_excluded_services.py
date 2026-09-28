@@ -211,6 +211,27 @@ def test_excluded_services_drops_db_spans_at_tenant_only(
         assert not any("batch_write_to_db" in name for name in names), f"spend writer reached tenant: {names}"
 
 
+@pytest.mark.timeout(180)
+def test_without_excluded_services_the_tenant_still_gets_redis_and_postgres_spans(
+    gateway: Gateway,
+    audit_sinks: SpanSinks,
+    otel_audit_config: AuditConfigWriter,
+    langfuse_vars: dict[str, JsonValue],
+    tmp_path: Path,
+) -> None:
+    config: Final = _config_with(tmp_path, otel_audit_config, extra=_guardrail_block)
+    with owned_proxy(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config, workers=2) as candidate:
+        tenant_start, _ = recorded_spans(audit_sinks.tenant)
+        traffic: Final = _drive(candidate, langfuse_vars)
+        _await_db_span(audit_sinks.tenant, None, "batch_write_to_db", seconds=60, since=tenant_start)
+        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
+        _await_db_span(audit_sinks.tenant, tenant_trace, "redis", seconds=60)
+        _assert_core_spans_present(_trace_spans(audit_sinks.tenant, tenant_trace, seconds=15))
+        _, all_tenant = recorded_spans(audit_sinks.tenant, tenant_start)
+        systems: Final = _db_systems(all_tenant)
+        assert {"redis", "postgresql"} <= systems, f"datastore spans missing at tenant: {systems}"
+
+
 def test_env_excluded_services_drops_only_redis(
     gateway: Gateway,
     audit_sinks: SpanSinks,

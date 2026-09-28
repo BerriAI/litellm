@@ -1178,9 +1178,8 @@ def attach_tenant_fan_out(
     so exactly one fan-out lands. ``configs`` name the operator's own exporters, one
     config per v2 logger since each keeps its own provider and still writes its
     account, so an additive destination pointing at any of them is delivered once
-    rather than twice. ``excluded_db_systems`` comes from the ``otel`` callback's
-    config alone (see ``_excluded_db_systems``); unioning it across every logger's
-    config would reintroduce the env value that ``callback_settings.otel`` overrode.
+    rather than twice. ``excluded_db_systems`` only filters what the fan-out
+    delivers, never the operator's own exporters.
     """
     with _FAN_OUT_ATTACH_LOCK:
         if any(isinstance(processor, TenantFanOutSpanProcessor) for processor in _attached_processors(provider)):

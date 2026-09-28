@@ -905,26 +905,24 @@ def publish_global_otel_v2_provider(
     attach_tenant_fan_out(
         logger.tracer_provider,
         *_v2_configs(in_memory_loggers, logger),
-        excluded_db_systems=_excluded_db_systems(in_memory_loggers, logger),
+        excluded_db_systems=_excluded_db_systems(logger),
     )
     set_global_provider(logger.tracer_provider)
     _published_v2_provider = logger.tracer_provider  # rebind-ok: startup records the one provider carrying the fan-out
     return logger
 
 
-def _excluded_db_systems(in_memory_loggers: Sequence[object], logger: "OpenTelemetryV2") -> frozenset[str]:
+def _excluded_db_systems(logger: "OpenTelemetryV2") -> frozenset[str]:
     """The datastore services withheld from tenant destinations.
 
-    Proxy-wide the set lives on exactly one config: the ``otel`` callback's, the
-    only one ``callback_settings.otel`` writes. A preset (langfuse_otel, …) builds
-    its config env-only, so reading ``excluded_services`` off every logger and
-    unioning them reintroduces the ``LITELLM_OTEL_EXCLUDED_SERVICES`` value that
-    ``callback_settings.otel`` already overrode on the ``otel`` config. Falls back
-    to ``logger`` when no ``otel`` callback exists.
+    ``callback_settings.otel.excluded_services`` wins over the env var whichever
+    logger got published: with ``callbacks: [langfuse_otel, otel]`` the ``otel``
+    callback folds into the preset, whose config is env-only.
     """
-    loggers: Final = tuple(cb for cb in in_memory_loggers if isinstance(cb, OpenTelemetryV2))
-    owner: Final = next((cb for cb in (logger, *loggers) if cb.callback_name == "otel"), logger)
-    return owner.config.excluded_services
+    configured: Final = litellm.callback_settings.get("otel", {}).get("excluded_services")
+    if configured is None:
+        return logger.config.excluded_services
+    return OpenTelemetryV2Config(excluded_services=configured).excluded_services
 
 
 def _v2_configs(in_memory_loggers: Sequence[object], logger: "OpenTelemetryV2") -> tuple[OpenTelemetryV2Config, ...]:
@@ -986,12 +984,10 @@ def fan_out_provider() -> ApiTracerProvider:
         return published
     logger: Final = _registered_v2_logger()
     if logger is not None:
-        from litellm.litellm_core_utils.litellm_logging import _in_memory_loggers
-
         attach_tenant_fan_out(
             logger.tracer_provider,
             logger.config,
-            excluded_db_systems=_excluded_db_systems(_in_memory_loggers, logger),
+            excluded_db_systems=_excluded_db_systems(logger),
         )
         return logger.tracer_provider
     return get_tracer_provider()

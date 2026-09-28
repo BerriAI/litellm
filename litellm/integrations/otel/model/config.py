@@ -1,6 +1,5 @@
 """Typed configuration for the OpenTelemetry instrumentation."""
 
-from collections.abc import Mapping
 from enum import Enum
 from functools import lru_cache
 from typing import Annotated, Any, Final
@@ -374,15 +373,3 @@ def _db_system_for_excluded_service(service: str) -> str | None:
             "excluded_services: %r is not a datastore service; ignored. Allowed: postgres, redis", service
         )
     return resolved
-
-
-def validate_otel_v2_callback_settings(settings: object) -> None:
-    """Parse ``callback_settings.otel`` so a malformed block fails proxy boot.
-
-    Logger construction is lazy and swallows init errors, so without this a bad
-    value in the shared settings only surfaces as a dropped callback at request
-    time.
-    """
-    if not is_otel_v2_enabled() or not isinstance(settings, Mapping):
-        return
-    OpenTelemetryV2Config(**settings)
