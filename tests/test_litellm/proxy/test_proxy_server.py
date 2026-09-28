@@ -936,6 +936,89 @@ async def test_periodic_reload_job_scheduled_without_store_model_in_db(monkeypat
 
 
 @pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_registers_cleanup_when_retention_lives_only_in_the_db(monkeypatch):
+    """With no config file, the startup DB sync rebinds general_settings to a store holding the
+    retention period; the cleanup job must be registered from that live value, not the stale
+    empty dict the caller passed in."""
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db.litellm_config.find_first = AsyncMock(return_value=None)
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+    mock_proxy_config = _mock_scheduled_proxy_config()
+    db_settings = proxy_server_module.ProxyConfig().settings
+    db_settings.apply_db_row("general_settings", {"maximum_daily_tag_spend_retention_period": "30d"})
+
+    async def sync_from_db(*args: object, **kwargs: object) -> None:
+        proxy_server_module._bind_general_settings_store(db_settings)
+
+    mock_proxy_config.add_deployment.side_effect = sync_from_db
+    scheduler = AsyncIOScheduler()
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", mock_proxy_config),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.general_settings", {}),
+            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings={},
+                prisma_client=mock_prisma_client,
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=5,
+                proxy_logging_obj=mock_proxy_logging,
+            )
+            assert scheduler.get_job("spend_log_cleanup_job") is not None, "DB-only retention was not scheduled at boot"
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
+async def test_initialize_scheduled_jobs_does_not_fall_back_to_the_interval_for_a_non_string_cron(monkeypatch):
+    """A truthy non-string cron is invalid, so startup must log it and register no cleanup job
+    rather than silently pruning on the default interval the admin never configured."""
+    monkeypatch.delenv("DISABLE_PRISMA_SCHEMA_UPDATE", raising=False)
+    monkeypatch.delenv("STORE_MODEL_IN_DB", raising=False)
+    from apscheduler.schedulers.asyncio import AsyncIOScheduler
+
+    from litellm.proxy.proxy_server import ProxyStartupEvent
+    from litellm.proxy.utils import ProxyLogging
+
+    mock_prisma_client = MagicMock()
+    mock_proxy_logging = MagicMock(spec=ProxyLogging)
+    mock_proxy_logging.slack_alerting_instance = MagicMock()
+    mock_proxy_logging.db_spend_update_writer = MagicMock()
+    settings = {"maximum_daily_tag_spend_retention_period": "30d", "maximum_spend_logs_cleanup_cron": 5}
+    scheduler = AsyncIOScheduler()
+    try:
+        with (
+            patch("litellm.proxy.proxy_server.proxy_config", _mock_scheduled_proxy_config()),
+            patch("litellm.proxy.proxy_server.store_model_in_db", False),
+            patch("litellm.proxy.proxy_server.general_settings", settings),
+            patch("litellm.proxy.proxy_server.AsyncIOScheduler", return_value=scheduler),
+        ):
+            await ProxyStartupEvent.initialize_scheduled_background_jobs(
+                general_settings=settings,
+                prisma_client=mock_prisma_client,
+                proxy_budget_rescheduler_min_time=1,
+                proxy_budget_rescheduler_max_time=2,
+                proxy_batch_write_at=5,
+                proxy_logging_obj=mock_proxy_logging,
+            )
+            assert scheduler.get_job("spend_log_cleanup_job") is None, "invalid cron fell back to the interval"
+    finally:
+        scheduler.shutdown(wait=False)
+
+
+@pytest.mark.asyncio
 async def test_initialize_scheduled_jobs_uses_configured_config_reload_interval(monkeypatch):
     """
     The DB config-reload job (add_deployment) that keeps multi-pod
@@ -11861,6 +11944,23 @@ def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_n
     assert getattr(litellm, field_name) == db_value
 
 
+@pytest.mark.parametrize("worker_value, db_value", [(True, False), (False, True)])
+def test_log_auth_failure_key_identity_follows_db_config_reload(monkeypatch, worker_value, db_value):
+    """A /config/update that flips `log_auth_failure_key_identity` lands on the DB row; every
+    worker must take that value on its next config reload, so turning the PII suffix off stops
+    it without a restart."""
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(litellm, "log_auth_failure_key_identity", worker_value)
+
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(
+        pc._prepared_db_settings_values("litellm_settings", {"log_auth_failure_key_identity": db_value})
+    )
+
+    assert litellm.log_auth_failure_key_identity is db_value
+
+
 @pytest.mark.asyncio
 async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(monkeypatch: pytest.MonkeyPatch):
     """A DB-only litellm_settings row that pairs success_callback: ["datadog"] with
@@ -11895,6 +11995,100 @@ async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(mon
     assert len(datadog_loggers) == 1
     assert datadog_loggers[0].turn_off_message_logging is True
     assert litellm.turn_off_message_logging is True
+
+
+def _reset_runtime_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils import litellm_logging
+
+    for list_name in ("success_callback", "_async_success_callback", "failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, list_name, [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    monkeypatch.setenv("HUMANLOOP_API_KEY", "test-key")
+
+
+def _runtime_callback_names() -> frozenset[str]:
+    manager = litellm.logging_callback_manager
+    return frozenset(manager._get_callback_string(callback) for callback in manager._get_all_callbacks())
+
+
+@pytest.mark.parametrize("setting_key", ["success_callback", "failure_callback", "callbacks"])
+@pytest.mark.parametrize("callback_name", ["langfuse_otel", "helicone"])
+def test_db_config_sync_unregisters_a_callback_the_stored_config_no_longer_lists(
+    monkeypatch: pytest.MonkeyPatch, setting_key: str, callback_name: str
+):
+    import litellm.proxy.proxy_server as ps
+
+    _reset_runtime_callbacks(monkeypatch)
+    pc = ps.ProxyConfig()
+
+    for _ in range(2):
+        pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: [callback_name]}})
+    assert callback_name in _runtime_callback_names()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: []}})
+    assert callback_name not in _runtime_callback_names()
+
+
+def test_db_config_sync_keeps_callbacks_it_did_not_register(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as ps
+    from litellm.utils import _add_custom_logger_callback_to_specific_event
+
+    _reset_runtime_callbacks(monkeypatch)
+    _add_custom_logger_callback_to_specific_event("langfuse_otel", "success")
+    litellm.logging_callback_manager.add_litellm_success_callback("helicone")
+    pc = ps.ProxyConfig()
+
+    pc._add_callbacks_from_db_config(
+        {"litellm_settings": {"success_callback": ["langfuse_otel", "helicone", "humanloop", "supabase"]}}
+    )
+    assert {"humanloop", "supabase"} <= _runtime_callback_names()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
+    remaining: Final = _runtime_callback_names()
+    assert {"langfuse_otel", "helicone"} <= remaining
+    assert not {"humanloop", "supabase"} & remaining
+
+
+def test_db_config_sync_restores_a_code_callback_it_replaced(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as ps
+
+    _reset_runtime_callbacks(monkeypatch)
+    litellm.logging_callback_manager.add_litellm_success_callback("langfuse_otel")
+    pc = ps.ProxyConfig()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": ["langfuse_otel"]}})
+    assert "langfuse_otel" not in litellm.success_callback
+    assert "langfuse_otel" in _runtime_callback_names()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
+    assert litellm.success_callback == ["langfuse_otel"]
+
+
+@pytest.mark.asyncio
+async def test_failed_config_load_keeps_callbacks_the_stored_config_registered(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as ps
+
+    _reset_runtime_callbacks(monkeypatch)
+    pc = ps.ProxyConfig()
+    monkeypatch.setattr(ps, "proxy_config", pc)
+    monkeypatch.setattr(ps, "llm_router", None)
+    monkeypatch.setattr(ps, "master_key", "sk-1234")
+    monkeypatch.setattr(
+        pc, "get_config", AsyncMock(return_value={"litellm_settings": {"success_callback": ["helicone"]}})
+    )
+    await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
+    assert "helicone" in _runtime_callback_names()
+
+    monkeypatch.setattr(pc, "get_config", AsyncMock(side_effect=TimeoutError("config read timed out")))
+    await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
+    assert "helicone" in _runtime_callback_names()
+
+    monkeypatch.setattr(pc, "get_config", AsyncMock(return_value={"litellm_settings": {"success_callback": []}}))
+    await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
+    assert "helicone" not in _runtime_callback_names()
 
 
 @pytest.mark.parametrize(

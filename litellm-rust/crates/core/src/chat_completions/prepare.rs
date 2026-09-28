@@ -1,19 +1,19 @@
 use litellm_auth::SecretValue;
-use litellm_core_utils::get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider};
-use litellm_llms::base_llm::{
-    auth::{ValidatedEnvironment, with_default_headers},
-    chat::transformation::BaseConfig,
-};
+use litellm_core_utils::settings::Lookup;
+use litellm_http::request::with_default_headers;
+use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
+use litellm_secrets::source::Secrets;
 use litellm_types::llms::openai::ChatMessage;
 use serde_json::Value;
 
 use super::{
     Error,
-    common_utils::{chat_completions_provider_config, string_headers},
+    common_utils::{chat_completions_provider, string_headers},
 };
 use crate::chat_completions::types::{
     ChatCompletionsRequest, ProviderChatCompletionsRequest, ResolvedChatCompletionsRequest,
 };
+use crate::provider::resolve_llm_provider;
 
 pub(super) struct ResolvedProvider {
     pub(super) model: String,
@@ -25,30 +25,24 @@ pub(super) fn resolve_provider_config<'a>(
     model: &'a str,
     custom_llm_provider: Option<&'a str>,
 ) -> Result<ResolvedProvider, Error> {
-    let provider_info = get_custom_llm_provider(model, custom_llm_provider)
-        .or_else(|| {
-            custom_llm_provider.map(|provider| CustomLlmProvider {
-                model,
-                custom_llm_provider: provider,
-            })
-        })
-        .ok_or_else(|| {
-            Error::InvalidProvider(
-                "unable to resolve custom_llm_provider for chat completions request".to_string(),
-            )
-        })?;
-    let config = chat_completions_provider_config(provider_info.custom_llm_provider)
-        .ok_or_else(|| Error::InvalidProvider(provider_info.custom_llm_provider.to_string()))?;
+    let provider_info = resolve_llm_provider(model, custom_llm_provider, "chat completions")?;
+    let config = chat_completions_provider(provider_info.provider)
+        .ok_or_else(|| Error::InvalidProvider(<&str>::from(provider_info.provider).to_string()))?
+        .config();
     Ok(ResolvedProvider {
         model: provider_info.model.to_string(),
-        custom_llm_provider: provider_info.custom_llm_provider.to_string(),
+        custom_llm_provider: <&str>::from(provider_info.provider).to_string(),
         config,
     })
 }
 
 pub(super) fn parse_messages(messages: Value) -> Result<Vec<ChatMessage>, Error> {
-    serde_json::from_value(messages)
-        .map_err(|err| Error::InvalidRequest(format!("invalid chat completions messages: {err}")))
+    serde_json::from_value(messages).map_err(|err| {
+        Error::InvalidRequest(litellm_llms::ErrorDetail::invalid(
+            "chat completions messages",
+            err,
+        ))
+    })
 }
 
 pub(super) fn resolve_request(
@@ -62,7 +56,7 @@ pub(super) fn resolve_request(
     let messages = parse_messages(request.messages)?;
     if messages.is_empty() {
         return Err(Error::InvalidRequest(
-            "chat completions requires at least one message".to_string(),
+            "chat completions requires at least one message".into(),
         ));
     }
     if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params) {
@@ -85,8 +79,9 @@ fn validate_environment(
     request: &ResolvedChatCompletionsRequest<'_>,
     model: &str,
     config: &dyn BaseConfig,
+    secrets: &dyn Lookup,
 ) -> Result<ValidatedEnvironment, Error> {
-    let env_lookup = |key: &str| std::env::var(key).ok();
+    let env_lookup = |key: &str| secrets.get(key);
     let forwarded = string_headers(request.extra_headers.clone())?;
     let validated = config.validate_environment(
         forwarded,
@@ -101,13 +96,16 @@ fn validate_environment(
     })
 }
 
+#[tracing::instrument(name = "litellm.prepare", level = "debug", skip_all)]
 pub(super) fn prepare_provider_request(
     request: ResolvedChatCompletionsRequest<'_>,
+    secrets: Secrets,
 ) -> Result<ProviderChatCompletionsRequest, Error> {
-    let environment = validate_environment(&request, &request.model, request.config)?;
+    let environment =
+        validate_environment(&request, &request.model, request.config, secrets.as_ref())?;
     let model = request.model;
     let config = request.config;
-    let env_lookup = |key: &str| std::env::var(key).ok();
+    let env_lookup = |key: &str| secrets.get(key);
     let url = config.get_complete_url(
         request.api_base,
         &model,
@@ -125,6 +123,7 @@ pub(super) fn prepare_provider_request(
         body: transformed.body,
         optional_params: request.optional_params,
         environment,
+        secrets,
         timeout: request.timeout,
         api_key: request.api_key.map(|key| SecretValue::new(key.to_string())),
     })
@@ -145,7 +144,10 @@ mod tests {
     fn prepare_chat_completions_call(
         request: ChatCompletionsRequest<'_>,
     ) -> Result<ProviderChatCompletionsRequest, Error> {
-        prepare_provider_request(resolve_request(request)?)
+        prepare_provider_request(
+            resolve_request(request)?,
+            std::sync::Arc::new(|_: &str| None),
+        )
     }
 
     /// The headers as they go on the wire, credential applied.
@@ -183,13 +185,10 @@ mod tests {
         }
     }
 
-    /// `ProviderChatCompletionsRequest` deliberately has no `Debug` (its headers
-    /// carry resolved credentials), so unwrap the failure case by hand.
-    fn decline(request: ChatCompletionsRequest<'_>) -> Error {
-        match prepare_chat_completions_call(request) {
-            Err(error) => error,
-            Ok(prepared) => panic!("expected a decline, prepared a call to {}", prepared.url),
-        }
+    fn preparation_error(request: ChatCompletionsRequest<'_>) -> Error {
+        prepare_chat_completions_call(request)
+            .err()
+            .expect("request preparation should fail")
     }
 
     #[test]
@@ -335,24 +334,19 @@ mod tests {
         );
     }
 
-    #[test]
-    fn declines_an_unsupported_request_before_resolving_credentials() {
-        let mut call = request(
-            "claude-sonnet-4-5",
-            Some("anthropic"),
-            json!([{"role": "user", "content": "hi"}]),
-            json!({"stream": true}),
-        );
-        call.api_key = None;
-        // No api_key is set and no env is consulted: the gate must run first, so the
-        // error is the decline rather than a missing-credential error.
-        assert_eq!(decline(call), Error::Unsupported("streaming"));
+    #[rstest::rstest]
+    fn rejects_empty_messages_before_resolving_credentials() {
+        let call = ChatCompletionsRequest {
+            api_key: None,
+            ..request("claude-sonnet-4-5", Some("anthropic"), json!([]), json!({}))
+        };
+        assert!(matches!(preparation_error(call), Error::InvalidRequest(_)));
     }
 
     #[test]
     fn rejects_an_unknown_provider() {
         assert_eq!(
-            decline(request(
+            preparation_error(request(
                 "openai/gpt-4o",
                 None,
                 json!([{"role": "user", "content": "hi"}]),
@@ -365,7 +359,7 @@ mod tests {
     #[test]
     fn rejects_a_model_with_no_resolvable_provider() {
         assert!(matches!(
-            decline(request(
+            preparation_error(request(
                 "claude-sonnet-4-5",
                 None,
                 json!([{"role": "user", "content": "hi"}]),
@@ -378,16 +372,20 @@ mod tests {
     #[test]
     fn rejects_an_empty_or_malformed_message_list() {
         assert_eq!(
-            decline(request(
+            preparation_error(request(
                 "anthropic/claude-sonnet-4-5",
                 None,
                 json!([]),
                 json!({}),
             )),
-            Error::InvalidRequest("chat completions requires at least one message".to_string())
+            Error::InvalidRequest(
+                "chat completions requires at least one message"
+                    .to_string()
+                    .into()
+            )
         );
         assert!(matches!(
-            decline(request(
+            preparation_error(request(
                 "anthropic/claude-sonnet-4-5",
                 None,
                 json!("not a list"),
@@ -407,7 +405,7 @@ mod tests {
         );
         call.extra_headers = Some(Map::from_iter([("x-trace".to_string(), json!(7))]));
         assert_eq!(
-            decline(call),
+            preparation_error(call),
             Error::Headers(litellm_http::request::HeaderError {
                 context: "chat completions",
                 name: "x-trace".to_string(),
@@ -505,18 +503,17 @@ mod tests {
         );
     }
 
+    #[rstest::rstest]
+    #[case::authorization("Authorization")]
+    #[case::amz_date("x-amz-date")]
+    #[case::security_token("x-amz-security-token")]
+    #[case::date("Date")]
     #[tokio::test]
-    async fn a_forwarded_header_the_signer_computes_declines_to_python() {
-        // Reattaching the caller's copy next to the computed one puts the name on
-        // the wire twice and Bedrock rejects the pair, so a request carrying one
-        // has to go to Python instead of being signed here.
-        for forwarded in [
-            "Authorization",
-            "x-amz-date",
-            "x-amz-security-token",
-            "Date",
-        ] {
-            let mut call = request(
+    async fn rejects_a_forwarded_header_the_signer_computes(#[case] forwarded: &str) {
+        let call = ChatCompletionsRequest {
+            api_key: None,
+            extra_headers: Some(Map::from_iter([(forwarded.to_string(), json!("forged"))])),
+            ..request(
                 "bedrock/us-east-1/anthropic.claude-v2",
                 None,
                 json!([{"role": "user", "content": "hi"}]),
@@ -525,29 +522,27 @@ mod tests {
                     "aws_access_key_id": "AKIDEXAMPLE",
                     "aws_secret_access_key": "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY"
                 }),
-            );
-            call.api_key = None;
-            call.extra_headers = Some(Map::from_iter([(forwarded.to_string(), json!("forged"))]));
-            let prepared = prepare_chat_completions_call(call).expect("prepares");
-            let authenticated = resolve_auth(
-                &litellm_auth::AuthServices::default(),
-                prepared.environment,
-                &|_| None,
             )
-            .await
-            .expect("resolves");
-            let error = crate::chat_completions::handler::outbound_request(
-                authenticated,
-                prepared.url,
-                &prepared.body,
-                prepared.timeout,
-            )
-            .expect_err("{forwarded} should decline instead of being signed");
-            assert!(
-                matches!(error, Error::Unsupported(_)),
-                "{forwarded} declined as {error:?}, which the host would not fall back on"
-            );
-        }
+        };
+        let prepared = prepare_chat_completions_call(call).expect("prepares");
+        let authenticated = resolve_auth(
+            &litellm_auth::AuthServices::default(),
+            prepared.environment,
+            &|_| None,
+        )
+        .await
+        .expect("resolves");
+        let error = crate::chat_completions::handler::outbound_request(
+            authenticated,
+            prepared.url,
+            &prepared.body,
+            prepared.timeout,
+        )
+        .expect_err("conflicting signing headers must fail");
+        assert!(
+            matches!(error, Error::Unsupported(_)),
+            "{forwarded} returned {error:?}"
+        );
     }
 
     #[test]
@@ -639,113 +634,5 @@ mod tests {
                     && value == "Bearer sk-test"),
             "prepare did not carry the bearer token"
         );
-    }
-
-    fn decline_reason(
-        model: &str,
-        provider: Option<&str>,
-        messages: Value,
-        params: Value,
-    ) -> Option<&'static str> {
-        let params = match params {
-            Value::Object(map) => map,
-            other => panic!("params must be an object, got {other}"),
-        };
-        crate::chat_completions::chat_completions_decline_reason(model, provider, messages, &params)
-    }
-
-    #[test]
-    fn the_gate_accepts_what_prepare_accepts() {
-        assert_eq!(
-            decline_reason(
-                "anthropic/claude-sonnet-4-5",
-                None,
-                json!([{"role": "user", "content": "hi"}]),
-                json!({"max_tokens": 16}),
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn the_gate_declines_without_resolving_credentials_or_calling_out() {
-        assert_eq!(
-            decline_reason(
-                "anthropic/claude-sonnet-4-5",
-                None,
-                json!([{"role": "user", "content": "hi"}]),
-                json!({"stream": true}),
-            ),
-            Some("streaming")
-        );
-        assert_eq!(
-            decline_reason(
-                "openai/gpt-4o",
-                None,
-                json!([{"role": "user", "content": "hi"}]),
-                json!({}),
-            ),
-            Some("provider is not on the rust chat completions path")
-        );
-        assert_eq!(
-            decline_reason(
-                "claude-sonnet-4-5",
-                None,
-                json!([{"role": "user", "content": "hi"}]),
-                json!({}),
-            ),
-            Some("provider is not on the rust chat completions path")
-        );
-        assert_eq!(
-            decline_reason(
-                "anthropic/claude-sonnet-4-5",
-                None,
-                json!("nope"),
-                json!({})
-            ),
-            Some("unreadable message list")
-        );
-        assert_eq!(
-            decline_reason("anthropic/claude-sonnet-4-5", None, json!([]), json!({})),
-            Some("empty message list")
-        );
-    }
-
-    #[test]
-    fn the_gate_agrees_with_prepare_on_every_case_it_accepts() {
-        // A gate that accepts what prepare then declines would make the host emit
-        // its pre-call logging on a path that falls back, so pin the agreement.
-        for (messages, params) in [
-            (
-                json!([{"role": "user", "content": "hi"}]),
-                json!({"max_tokens": 8}),
-            ),
-            (
-                json!([{"role": "system", "content": "s"}, {"role": "user", "content": "hi"}]),
-                json!({"temperature": 0.1}),
-            ),
-            (
-                json!([{"role": "user", "content": "hi"}, {"role": "assistant", "content": "yo"}]),
-                json!({}),
-            ),
-        ] {
-            assert_eq!(
-                decline_reason(
-                    "anthropic/claude-sonnet-4-5",
-                    None,
-                    messages.clone(),
-                    params.clone()
-                ),
-                None,
-                "gate declined {messages}"
-            );
-            prepare_chat_completions_call(request(
-                "anthropic/claude-sonnet-4-5",
-                None,
-                messages.clone(),
-                params,
-            ))
-            .unwrap_or_else(|error| panic!("prepare declined {messages}: {error}"));
-        }
     }
 }

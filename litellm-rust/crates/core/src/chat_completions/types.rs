@@ -1,3 +1,4 @@
+use litellm_secrets::source::Secrets;
 use std::time::Duration;
 
 use litellm_auth::SecretValue;
@@ -20,6 +21,32 @@ pub struct ChatCompletionsRequest<'a> {
     pub custom_llm_provider: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,
     pub timeout: Option<Duration>,
+}
+
+pub struct ChatCompletionsCall {
+    pub model: String,
+    pub messages: Value,
+    pub optional_params: Map<String, Value>,
+    pub api_key: Option<String>,
+    pub api_base: Option<String>,
+    pub custom_llm_provider: Option<String>,
+    pub extra_headers: Option<Map<String, Value>>,
+    pub timeout: Option<Duration>,
+}
+
+impl From<ChatCompletionsRequest<'_>> for ChatCompletionsCall {
+    fn from(request: ChatCompletionsRequest<'_>) -> Self {
+        Self {
+            model: request.model.into(),
+            messages: request.messages,
+            optional_params: request.optional_params,
+            api_key: request.api_key.map(str::to_owned),
+            api_base: request.api_base.map(str::to_owned),
+            custom_llm_provider: request.custom_llm_provider.map(str::to_owned),
+            extra_headers: request.extra_headers,
+            timeout: request.timeout,
+        }
+    }
 }
 
 pub struct ResolvedChatCompletionsRequest<'a> {
@@ -46,6 +73,7 @@ pub struct ProviderChatCompletionsRequest {
     /// The forwarded and default headers plus how the call authenticates; the credential
     /// itself is applied when the request is sent.
     pub environment: ValidatedEnvironment,
+    pub secrets: Secrets,
     pub timeout: Option<Duration>,
     pub api_key: Option<SecretValue>,
 }
