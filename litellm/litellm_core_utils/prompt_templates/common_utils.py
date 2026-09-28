@@ -1,4 +1,4 @@
-﻿"""
+"""
 Common utility functions used for translating messages across providers
 """
 
