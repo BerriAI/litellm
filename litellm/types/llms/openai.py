@@ -140,9 +140,10 @@ class HttpxBinaryResponseContent(_HttpxBinaryResponseContent, Generic[_ResponseT
 
     def _num_bytes(self) -> int:
         try:
-            return len(self.response.content)
+            content: Final = self.response.content
         except RuntimeError:
             return self.response.num_bytes_downloaded
+        return len(content)
 
     def set_response_cost(self, response_cost: float | None) -> None:
         if response_cost is None:
