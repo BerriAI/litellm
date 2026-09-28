@@ -44,6 +44,25 @@ class ComplexityRouterConfigValidationResponse(BaseModel):
     error: str | None = None
 
 
+class AutoRouterAvailabilityRequest(BaseModel):
+    team_id: str | None = None
+    saved_model_id: str | None = None
+    complexity_router_config: Mapping[str, object] | None = None
+
+
+class AutoRouterAllowance(BaseModel):
+    key: str
+    limit: int | None
+    remaining: int | None
+    used_by_this_router: bool = False
+    available: bool = True
+
+
+class AutoRouterAvailabilityResponse(BaseModel):
+    allowances: tuple[AutoRouterAllowance, ...]
+    error: str | None = None
+
+
 class AutoRouterRoutingTestRequest(BaseModel):
     """A single request to classify against a complexity-router config that need not be saved yet.
 
@@ -71,6 +90,11 @@ class AutoRouterRoutingTestRequest(BaseModel):
     )
     complexity_router_config: RequestComplexityRouterConfig = Field(
         description="The complexity router config to route against, in the shape /model/new accepts",
+    )
+    saved_model_id: str | None = Field(
+        default=None,
+        min_length=1,
+        description="Test this saved deployment's server-side configuration instead of the supplied config and default model",
     )
     default_model: str | None = Field(
         default=None,
@@ -132,7 +156,7 @@ class AutoRouterRoutingTestRequest(BaseModel):
         the serving path.
         """
         return MappingProxyType(
-            {  # mutable-ok: MappingProxyType needs a dict to wrap
+            {
                 key: value
                 for key, value in (("messages", self.messages), ("system", self.system), ("tools", self.tools))
                 if value is not None

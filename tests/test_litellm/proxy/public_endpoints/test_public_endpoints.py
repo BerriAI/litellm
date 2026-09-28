@@ -1,3 +1,4 @@
+import json
 import re
 from datetime import datetime, timezone
 from typing import Final
@@ -337,6 +338,25 @@ def test_cognition_provider_fields():
 
     assert fields_by_key["api_base"]["field_type"] == "text"
     assert fields_by_key["api_base"]["required"] is False
+
+
+def test_qwen_mainland_provider_fields_carry_the_qianwen_brand():
+    app_instance = FastAPI()
+    app_instance.include_router(router)
+    test_client = TestClient(app_instance)
+
+    providers = test_client.get("/public/providers/fields").json()
+
+    mainland = next(p for p in providers if p["litellm_provider"] == "qwen_ai_platform")
+    international = next(p for p in providers if p["litellm_provider"] == "qwencloud")
+
+    assert mainland["provider_display_name"] == "Qianwen AI Platform"
+    assert international["provider_display_name"] == "QwenCloud"
+
+    mainland_fields = {f["key"]: f for f in mainland["credential_fields"]}
+    assert mainland_fields["api_key"]["label"] == "Qianwen AI Platform API Key"
+    assert "Qianwen AI Platform" in mainland_fields["api_base"]["tooltip"]
+    assert "Qwen AI Platform" not in json.dumps(mainland)
 
 
 def test_chatgpt_provider_fields():
@@ -1066,43 +1086,73 @@ def test_clean_display_name_passthrough_when_no_suffix():
     assert _clean_display_name("") == ""
 
 
-def test_public_mcp_hub_returns_only_whitelisted_servers():
-    """Regression: /public/mcp_hub must gate strictly on
-    litellm.public_mcp_servers, mirroring /public/model_hub and
-    /public/agent_hub. Servers with available_on_public_internet=True that
-    are not on the whitelist must not leak."""
+@pytest.mark.parametrize(
+    "strict,explicit,expected_listed",
+    ((True, True, True), (True, False, False), (False, True, True), (False, False, True)),
+)
+@pytest.mark.parametrize("stored_public", (None, False, True))
+def test_public_mcp_hub_derives_publication_metadata_without_mutating_registry(
+    strict: bool,
+    explicit: bool,
+    expected_listed: bool,
+    stored_public: bool | None,
+) -> None:
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
     from litellm.proxy._types import MCPTransport
 
-    app = FastAPI()
+    app: Final = FastAPI()
     app.include_router(router)
-    app.dependency_overrides[user_api_key_auth] = lambda: MagicMock()
-    client = TestClient(app)
+    client: Final = TestClient(app)
 
-    listed = MCPServer(
+    server: Final = MCPServer(
         server_id="listed",
         name="listed",
         server_name="listed",
         transport=MCPTransport.http,
         available_on_public_internet=True,
+        mcp_info=(
+            {
+                "is_public": stored_public,
+                "is_public_explicit": not explicit,
+                "description": "Preserve custom metadata",
+            }
+            if stored_public is not None
+            else None
+        ),
     )
-
-    mock_manager = MagicMock()
-    mock_manager.get_public_mcp_servers.return_value = [listed]
+    unlisted: Final = MCPServer(
+        server_id="unlisted",
+        name="unlisted",
+        transport=MCPTransport.http,
+        available_on_public_internet=False,
+        mcp_info={"is_public": True, "is_public_explicit": True},
+    )
+    manager: Final = MCPServerManager()
+    manager.config_mcp_servers = {server.server_id: server}
+    manager.registry = {unlisted.server_id: unlisted}
+    original_registry: Final = {key: value.model_dump() for key, value in manager.get_registry().items()}
 
     with (
-        patch("litellm.public_mcp_servers", ["listed"]),
+        patch("litellm.public_mcp_servers", [server.server_id] if explicit else []),
+        patch("litellm.public_mcp_hub_strict_whitelist", strict),
         patch(
             "litellm.proxy._experimental.mcp_server.mcp_server_manager.global_mcp_server_manager",
-            mock_manager,
+            manager,
         ),
     ):
-        response = client.get("/public/mcp_hub")
+        response: Final = client.get("/public/mcp_hub")
 
     assert response.status_code == 200
-    data = response.json()
-    assert [item["server_id"] for item in data] == ["listed"]
-    app.dependency_overrides.clear()
+    data: Final = response.json()
+    assert [item["server_id"] for item in data] == ([server.server_id] if expected_listed else [])
+    if expected_listed:
+        assert data[0]["mcp_info"] == {
+            **({"description": "Preserve custom metadata"} if stored_public is not None else {}),
+            "is_public": True,
+            "is_public_explicit": explicit,
+        }
+    assert {key: value.model_dump() for key, value in manager.get_registry().items()} == original_registry
 
 
 def test_public_mcp_hub_returns_empty_when_whitelist_unset():
@@ -1198,13 +1248,13 @@ def test_get_autorouter_presets_local_mode_serves_bundled_catalog(
     assert "anthropic_family" in payload
     assert payload["1m_context"]["complexity_router_config"]["classifier_type"] == "heuristic_v2"
     assert payload["1m_context"]["complexity_router_config"]["tiers"] == {
-        "SIMPLE": ["gpt-5.6-luna"],
+        "SIMPLE": ["gpt-6-luna"],
         "MEDIUM": ["gpt-5.6-terra"],
-        "COMPLEX": ["gpt-5.6-sol"],
-        "REASONING": ["claude-opus-5"],
+        "COMPLEX": ["gpt-6-sol"],
+        "REASONING": ["claude-opus-5-5"],
     }
     assert payload["1m_context"]["complexity_router_config"]["tier_model_configs"] == {
-        "REASONING": [{"model_name": "claude-opus-5", "litellm_params": {"reasoning_effort": "high"}}]
+        "REASONING": [{"model_name": "claude-opus-5-5", "litellm_params": {"reasoning_effort": "high"}}]
     }
     for preset in payload.values():
         assert isinstance(preset["label"], str)

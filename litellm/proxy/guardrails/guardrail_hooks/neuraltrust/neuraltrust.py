@@ -162,7 +162,7 @@ def _inputs_with_messages(
     original_tool_calls: Final = inputs.get("tool_calls")
     if extracted is not None and original_tool_calls is not None and len(extracted) != len(original_tool_calls):
         raise HTTPException(status_code=400, detail=TRANSFORM_MISSING)
-    merged: Final[GenericGuardrailAPIInputs] = {  # mutable-ok: GenericGuardrailAPIInputs is a TypedDict
+    merged: Final[GenericGuardrailAPIInputs] = {
         **inputs,
         "structured_messages": list(messages),  # mutable-ok: GenericGuardrailAPIInputs.structured_messages is a list
     }
@@ -294,7 +294,7 @@ class NeuralTrustGuardrail(CustomGuardrail):
         texts: Final = inputs.get("texts")
         if input_type == "request" or self.streaming_transform_mode != "incremental_diff" or not texts:
             return inputs
-        held: Final[GenericGuardrailAPIInputs] = {  # mutable-ok: GenericGuardrailAPIInputs is a TypedDict
+        held: Final[GenericGuardrailAPIInputs] = {
             **inputs,
             "stream_holdback_chars": [len(text) for text in texts],  # mutable-ok: the field is a list
         }
