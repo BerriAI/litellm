@@ -1091,6 +1091,20 @@ class TestProviderWiring:
 
         assert self._fan_out_of(preset)._excluded_db_systems == frozenset({"postgresql"})
 
+    def test_callback_settings_excluded_services_apply_even_when_other_otel_env_vars_are_malformed(self, monkeypatch):
+        """Reading the setting must not rebuild the whole settings model, or an unrelated bad env
+        value the operator overrode in config would stop publication before the fan-out is attached"""
+        preset = OpenTelemetryV2(
+            config=OpenTelemetryV2Config(exporters=[ExporterSpec(kind="in_memory")]),
+            callback_name="langfuse_otel",
+        )
+        monkeypatch.setenv("LITELLM_OTEL_LEGACY_COMPAT", "not-a-bool")
+        monkeypatch.setattr(litellm, "callback_settings", {"otel": {"excluded_services": ["postgres"]}}, raising=False)
+
+        publish_global_otel_v2_provider([], lambda _p: None, registered=preset)
+
+        assert self._fan_out_of(preset)._excluded_db_systems == frozenset({"postgresql"})
+
     def test_excluded_services_fall_back_to_the_published_logger_config_without_callback_settings(self, monkeypatch):
         monkeypatch.setattr(litellm, "callback_settings", {"otel": {"exporter": "in_memory"}}, raising=False)
         preset = OpenTelemetryV2(

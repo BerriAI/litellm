@@ -29,7 +29,7 @@ from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.otel.emitter import SpanEmitter, stamp_error
 from litellm.integrations.otel.mappers import resolve_mappers
 from litellm.integrations.otel.model.baggage import promoted_baggage
-from litellm.integrations.otel.model.config import OpenTelemetryV2Config
+from litellm.integrations.otel.model.config import OpenTelemetryV2Config, excluded_db_systems_from
 from litellm.integrations.otel.model.metadata import (
     LLMCallEvent,
     RequestIdentity,
@@ -922,7 +922,7 @@ def _excluded_db_systems(logger: "OpenTelemetryV2") -> frozenset[str]:
     configured: Final = litellm.callback_settings.get("otel", {}).get("excluded_services")
     if configured is None:
         return logger.config.excluded_services
-    return OpenTelemetryV2Config(excluded_services=configured).excluded_services
+    return excluded_db_systems_from(configured)
 
 
 def _v2_configs(in_memory_loggers: Sequence[object], logger: "OpenTelemetryV2") -> tuple[OpenTelemetryV2Config, ...]:

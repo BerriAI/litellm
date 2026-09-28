@@ -4,7 +4,7 @@ from enum import Enum
 from functools import lru_cache
 from typing import Annotated, Any, Final
 
-from pydantic import AliasChoices, BaseModel, Field, field_validator, model_validator
+from pydantic import AliasChoices, BaseModel, Field, TypeAdapter, field_validator, model_validator
 from pydantic_settings import BaseSettings, NoDecode, SettingsConfigDict
 
 from litellm._logging import verbose_logger
@@ -350,6 +350,16 @@ class OpenTelemetryV2Config(BaseSettings):
     @classmethod
     def from_env(cls) -> "OpenTelemetryV2Config":
         return cls()
+
+
+_EXCLUDED_SERVICES_INPUT: Final = TypeAdapter(str | list[str])
+
+
+def excluded_db_systems_from(value: object) -> frozenset[str]:
+    """Normalize a raw ``excluded_services`` value without building a settings model that rereads the env"""
+    parsed: Final = _EXCLUDED_SERVICES_INPUT.validate_python(value)
+    names: Final = [item.strip() for item in parsed.split(",") if item.strip()] if isinstance(parsed, str) else parsed
+    return _normalize_excluded_services(frozenset(names))
 
 
 def _normalize_excluded_services(services: frozenset[str]) -> frozenset[str]:
