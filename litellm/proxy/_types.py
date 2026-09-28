@@ -500,6 +500,7 @@ class LiteLLMRoutes(enum.Enum):
         "/vllm",
         "/mistral",
         "/typesafe",
+        "/laya",
         "/openrouter",
         "/milvus",
         "/gigachat",
