@@ -371,7 +371,7 @@ def get_openai_credentials(
         or "https://api.openai.com/v1"
     )
     resolved_organization = organization or litellm.organization or os.getenv("OPENAI_ORGANIZATION", None) or None
-    resolved_project = project or os.getenv("OPENAI_PROJECT", None) or None
+    resolved_project: Final = project or os.getenv("OPENAI_PROJECT", None) or None
     resolved_api_key: Final = api_key or litellm.api_key or litellm.openai_key or os.getenv("OPENAI_API_KEY")
     return OpenAICredentials(
         api_base=resolved_api_base,

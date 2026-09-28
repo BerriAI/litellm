@@ -79,3 +79,35 @@ def get_custom_llm_provider_from_request_headers(request: Request) -> str | None
     if "custom-llm-provider" in request.headers:
         return request.headers["custom-llm-provider"]
     return None
+
+
+def apply_openai_project_to_data(
+    data: dict,
+    request: Request,
+    general_settings: dict | None = None,
+) -> None:
+    """
+    Resolve the OpenAI `project` for a files/batches request and store it in `data`.
+
+    A caller can ask for a project with the `OpenAI-Project` header or a `project`
+    field in the request body / multipart form. The proxy holds one OpenAI credential
+    that reaches every project under it, so a caller-supplied project is a credential
+    selector: it is only forwarded when the admin opted in with
+    `general_settings: forward_openai_project: true`, mirroring `forward_openai_org_id`.
+    Without the opt-in both inputs are dropped and the deployment credential or the
+    server-side `OPENAI_PROJECT` keeps control.
+
+    Every files/batches handler calls this once so a file or batch created in a project
+    can still be retrieved, listed, cancelled or deleted through the proxy afterwards.
+    """
+    if not isinstance(general_settings, dict) or general_settings.get("forward_openai_project") is not True:
+        data.pop("project", None)
+        return
+    header_project: Final[str | None] = request.headers.get("OpenAI-Project")
+    body_value: Final[object] = data.get("project")
+    body_project: Final[str | None] = body_value if isinstance(body_value, str) else None
+    resolved_project: Final[str | None] = header_project or body_project or None
+    if resolved_project is None:
+        data.pop("project", None)
+        return
+    data["project"] = resolved_project
