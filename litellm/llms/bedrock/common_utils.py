@@ -1029,6 +1029,8 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
 
 
 def bedrock_chat_request_needs_native_responses(model: str, request_params: Mapping[str, object]) -> bool:
+    if request_params.get("functions"):
+        return False
     if _bedrock_request_has_non_tool_converse_trigger(model, request_params):
         return False
     model_cost: Final = cast(  # cast-ok: model price rows use string keys
@@ -1036,6 +1038,8 @@ def bedrock_chat_request_needs_native_responses(model: str, request_params: Mapp
     )
     if not bedrock_supports_openai_responses(model, model_cost):
         return False
+    if request_params.get("web_search_options") is not None and _bedrock_price_map_flag(model, "supports_web_search"):
+        return True
     reasoning_effort: Final = request_params.get("reasoning_effort")
     if reasoning_effort is not None and peek_reasoning_summary_aliases(request_params) is not None:
         return True

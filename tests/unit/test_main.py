@@ -1540,6 +1540,25 @@ def test_bedrock_runtime_qwen_tools_with_reasoning_stay_on_chat(local_cost_map: 
     assert model_info.get("mode") != "responses"
 
 
+def test_bedrock_runtime_legacy_functions_with_reasoning_summary_stay_on_chat(local_cost_map: None) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    request_params: Final = {
+        "functions": [{"name": "get_capital", "parameters": {"type": "object"}}],
+        "reasoning_effort": "medium",
+        "reasoningSummary": "auto",
+    }
+    model_info, model = responses_api_bridge_check(
+        model="us.openai.gpt-5.6-sol",
+        custom_llm_provider="bedrock",
+        reasoning_effort="medium",
+        request_params=request_params,
+    )
+
+    assert model == "us.openai.gpt-5.6-sol"
+    assert model_info.get("mode") != "responses"
+
+
 def test_bedrock_mantle_gpt56_plain_request_stays_on_chat(local_cost_map: None) -> None:
     from litellm.main import responses_api_bridge_check
 
@@ -1581,6 +1600,55 @@ def test_bedrock_mantle_gpt56_cyber_plain_request_uses_responses(local_cost_map:
 
     assert model == "openai.gpt-5.6-cyber"
     assert model_info.get("mode") == "responses"
+
+
+def test_bedrock_mantle_legacy_functions_with_reasoning_summary_stay_on_chat(local_cost_map: None) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    request_params: Final = {
+        "functions": [{"name": "get_capital", "parameters": {"type": "object"}}],
+        "reasoning_effort": "medium",
+        "reasoningSummary": "auto",
+    }
+    model_info, model = responses_api_bridge_check(
+        model="openai.gpt-5.6-sol",
+        custom_llm_provider="bedrock_mantle",
+        reasoning_effort="medium",
+        request_params=request_params,
+    )
+
+    assert model == "openai.gpt-5.6-sol"
+    assert model_info.get("mode") != "responses"
+
+
+def test_bedrock_mantle_gpt56_web_search_bridges_to_responses(local_cost_map: None) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    request_params: Final = {"web_search_options": {}}
+    model_info, model = responses_api_bridge_check(
+        model="openai.gpt-5.6-sol",
+        custom_llm_provider="bedrock_mantle",
+        web_search_options={},
+        request_params=request_params,
+    )
+
+    assert model == "openai.gpt-5.6-sol"
+    assert model_info.get("mode") == "responses"
+
+
+def test_bedrock_mantle_gpt6_web_search_without_metadata_stays_on_chat(local_cost_map: None) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    request_params: Final = {"web_search_options": {}}
+    model_info, model = responses_api_bridge_check(
+        model="openai.gpt-6-luna",
+        custom_llm_provider="bedrock_mantle",
+        web_search_options={},
+        request_params=request_params,
+    )
+
+    assert model == "openai.gpt-6-luna"
+    assert model_info.get("mode") != "responses"
 
 
 def test_bedrock_mantle_reasoning_summary_alias_bridges_to_responses(local_cost_map: None) -> None:

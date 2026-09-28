@@ -119,6 +119,7 @@ from litellm.llms.base_llm.base_model_iterator import (
 )
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
+    _bedrock_price_map_flag,
     bedrock_chat_completions_serves_tools_with_reasoning,
     bedrock_chat_request_needs_native_responses_for_request,
     bedrock_reasoning_effort_is_active,
@@ -1178,23 +1179,37 @@ def responses_api_bridge_check(
         mantle_request_params: Final = (
             filter_additional_drop_params(request_params, additional_drop_params)
             if request_params is not None
-            else MappingProxyType({"tools": tools, "reasoning_effort": reasoning_effort})
+            else MappingProxyType(
+                {
+                    "tools": tools,
+                    "reasoning_effort": reasoning_effort,
+                    "web_search_options": web_search_options,
+                }
+            )
         )
         mantle_reasoning_effort: Final = mantle_request_params.get("reasoning_effort")
         mantle_reasoning_summary: Final = (
             peek_reasoning_summary_aliases(mantle_request_params) if request_params is not None else None
         )
-        mantle_needs_native_responses: Final = (
-            has_function_tool(mantle_request_params.get("tools"))
-            and not bedrock_chat_completions_serves_tools_with_reasoning(model, "bedrock_mantle")
-            and bedrock_reasoning_effort_is_active(
-                model,
-                mantle_reasoning_effort,
-                "bedrock_mantle",
+        mantle_has_legacy_functions: Final = bool(mantle_request_params.get("functions"))
+        mantle_needs_native_responses: Final = not mantle_has_legacy_functions and (
+            (
+                has_function_tool(mantle_request_params.get("tools"))
+                and not bedrock_chat_completions_serves_tools_with_reasoning(model, "bedrock_mantle")
+                and bedrock_reasoning_effort_is_active(
+                    model,
+                    mantle_reasoning_effort,
+                    "bedrock_mantle",
+                )
             )
-        ) or (
-            mantle_reasoning_effort is not None
-            and (mantle_reasoning_summary is not None or reasoning_summary is not None)
+            or (
+                mantle_request_params.get("web_search_options") is not None
+                and _bedrock_price_map_flag(model, "supports_web_search", "bedrock_mantle")
+            )
+            or (
+                mantle_reasoning_effort is not None
+                and (mantle_reasoning_summary is not None or reasoning_summary is not None)
+            )
         )
         mantle_model_cost: Final = cast(  # cast-ok: model price rows use string keys
             Mapping[str, object], litellm.model_cost

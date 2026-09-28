@@ -484,6 +484,18 @@ def test_reasoning_summary_alias_bridges_to_responses(local_cost_map: None) -> N
     assert bedrock_chat_request_needs_native_responses(model, request_params) is True
 
 
+def test_legacy_functions_with_reasoning_summary_stay_on_converse(local_cost_map: None) -> None:
+    model: Final = "us.openai.gpt-5.6-sol"
+    request_params: Final = {
+        "functions": [GET_WEATHER_TOOL["function"]],
+        "reasoning_effort": "medium",
+        "reasoningSummary": "auto",
+    }
+
+    assert BedrockModelInfo.get_bedrock_route(model, request_params) == "converse"
+    assert bedrock_chat_request_needs_native_responses(model, request_params) is False
+
+
 @pytest.mark.parametrize("reasoning_effort", ["low", "high", None])
 def test_gpt_oss_tools_with_any_reasoning_effort_stay_on_chat_completions(local_cost_map, reasoning_effort):
     params = {"tools": [GET_WEATHER_TOOL], "reasoning_effort": reasoning_effort}
