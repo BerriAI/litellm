@@ -1285,7 +1285,7 @@ def test_boundary_key_rejects_non_dict_like_inputs():
 
 
 # ---------------------------------------------------------------------------
-# Fail-fast when originating deployment is unavailable and no boundary peer
+# Degraded dispatch when the originating deployment is unavailable and no boundary peer
 # ---------------------------------------------------------------------------
 
 
@@ -1323,14 +1323,13 @@ def _make_router_mock_with_cooldown(
 
 
 @pytest.mark.asyncio
-async def test_affinity_raises_service_unavailable_when_origin_cooled_for_non_429():
+async def test_affinity_strips_and_dispatches_when_origin_cooled_for_non_429():
     """
     Originating deployment is in the router config, in cooldown for a non-429
     cause (e.g. a 500), and no boundary peer is configured. The check must
-    surface this as a 503 (transient, but not rate-limit-specific) rather than
-    dispatching to a non-peer deployment.
+    degrade: strip the encrypted reasoning and dispatch to the healthy pool
+    rather than failing the request.
     """
-    from litellm.exceptions import ServiceUnavailableError
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
@@ -1366,32 +1365,36 @@ async def test_affinity_raises_service_unavailable_when_origin_cooled_for_non_42
         }
     ]
     request_kwargs = {
-        "input": [{"id": encoded_id, "type": "reasoning"}],
+        "input": [
+            {
+                "id": encoded_id,
+                "type": "reasoning",
+                "encrypted_content": ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id(
+                    "gAAAAA-blob", "deployment-a-cooled"
+                ),
+            }
+        ],
     }
 
-    with pytest.raises(ServiceUnavailableError) as excinfo:
-        await check.async_filter_deployments(
-            model="gpt-5.4",
-            healthy_deployments=healthy_only_b,
-            messages=None,
-            request_kwargs=request_kwargs,
-        )
+    result = await check.async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=healthy_only_b,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
 
-    # Public error message intentionally omits the originating model_id to
-    # avoid an authenticated-caller probing oracle.
-    assert "deployment-a-cooled" not in str(excinfo.value)
-    assert excinfo.value.status_code == 503
+    assert result is healthy_only_b
+    assert not any(isinstance(item, dict) and item.get("encrypted_content") for item in request_kwargs["input"])
 
 
 @pytest.mark.asyncio
-async def test_affinity_raises_rate_limit_with_retry_after_when_origin_cooled_for_429():
+async def test_affinity_strips_and_dispatches_when_origin_cooled_for_429():
     """
-    Originating deployment is in cooldown specifically because of a 429.
-    The check must surface this as a 429 RateLimitError with a Retry-After
-    header derived from the cooldown's remaining window, so OpenAI-compatible
-    clients respect the backoff instead of giving up on a 503.
+    Originating deployment is in cooldown specifically because of a 429 and no
+    boundary peer is configured. The check degrades the same way: strip the
+    encrypted reasoning and dispatch to the healthy pool rather than surfacing
+    a rate-limit error to the caller.
     """
-    from litellm.exceptions import RateLimitError
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
@@ -1431,29 +1434,23 @@ async def test_affinity_raises_rate_limit_with_retry_after_when_origin_cooled_fo
         "input": [{"id": encoded_id, "type": "reasoning"}],
     }
 
-    with pytest.raises(RateLimitError) as excinfo:
-        await check.async_filter_deployments(
-            model="gpt-5.4",
-            healthy_deployments=healthy_only_b,
-            messages=None,
-            request_kwargs=request_kwargs,
-        )
+    result = await check.async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=healthy_only_b,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
 
-    assert "deployment-a-cooled-429" not in str(excinfo.value)
-    assert excinfo.value.status_code == 429
-    retry_after = excinfo.value.response.headers.get("retry-after")
-    assert retry_after is not None
-    assert 1 <= int(retry_after) <= 60
+    assert result is healthy_only_b
 
 
 @pytest.mark.asyncio
-async def test_affinity_raises_service_unavailable_when_origin_filtered_without_cooldown_entry():
+async def test_affinity_strips_and_dispatches_when_origin_filtered_without_cooldown_entry():
     """
     Originating deployment is configured but absent from healthy_deployments
-    with no active cooldown entry. Surface as 503 (we cannot prove the cause
-    was rate-limiting) rather than guessing 429.
+    with no active cooldown entry and no boundary peer. The check degrades:
+    strip the encrypted reasoning and dispatch to the healthy pool.
     """
-    from litellm.exceptions import ServiceUnavailableError
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
@@ -1480,15 +1477,72 @@ async def test_affinity_raises_service_unavailable_when_origin_filtered_without_
         "input": [{"id": encoded_id, "type": "reasoning"}],
     }
 
-    with pytest.raises(ServiceUnavailableError) as excinfo:
-        await check.async_filter_deployments(
-            model="gpt-5.4",
-            healthy_deployments=healthy_only_b,
-            messages=None,
-            request_kwargs=request_kwargs,
-        )
+    result = await check.async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=healthy_only_b,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
 
-    assert excinfo.value.status_code == 503
+    assert result is healthy_only_b
+
+
+@pytest.mark.asyncio
+async def test_affinity_serves_sibling_when_candidate_origin_has_no_boundary_peer():
+    """
+    Regression for the multi-region group where every deployment has a distinct
+    api_base: the origin is still a routed-group candidate but absent from
+    healthy_deployments, and no (api_base, api_key) peer exists. The turn must
+    degrade on a sibling with its encrypted reasoning stripped, not fail.
+    """
+    from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
+        EncryptedContentAffinityCheck,
+    )
+
+    originating = _make_originating_mock("https://region-a.example.com/v1", "shared-key")
+    mock_router = _make_router_mock_with_cooldown(
+        originating, cooldown_entries=[], routed_group_model_ids=["region-a", "region-b", "region-c"]
+    )
+    check = EncryptedContentAffinityCheck(router=mock_router)
+    wrapped = ResponsesAPIRequestUtils._wrap_encrypted_content_with_model_id("gAAAAA-blob", "region-a")
+    siblings = [
+        {
+            "model_info": {"id": "region-b"},
+            "model_name": "gpt-5.4",
+            "litellm_params": {"api_base": "https://region-b.example.com/v1", "api_key": "shared-key"},
+        },
+        {
+            "model_info": {"id": "region-c"},
+            "model_name": "gpt-5.4",
+            "litellm_params": {"api_base": "https://region-c.example.com/v1", "api_key": "shared-key"},
+        },
+    ]
+    request_kwargs = {
+        "litellm_metadata": {},
+        "input": [
+            {"role": "user", "content": "why is the sky blue?"},
+            {
+                "type": "reasoning",
+                "id": ResponsesAPIRequestUtils._build_encrypted_item_id("region-a", "rs_test"),
+                "encrypted_content": wrapped,
+                "summary": [{"type": "summary_text", "text": "scattering"}],
+            },
+            {"role": "user", "content": "and sunsets?"},
+        ],
+    }
+
+    result = await check.async_filter_deployments(
+        model="gpt-5.4",
+        healthy_deployments=siblings,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
+
+    assert result is siblings
+    assert request_kwargs["input"][1] == {
+        "type": "reasoning",
+        "summary": [{"type": "summary_text", "text": "scattering"}],
+    }
 
 
 @pytest.mark.asyncio
@@ -1981,15 +2035,14 @@ async def test_affinity_strips_encrypted_reasoning_when_routed_to_another_model_
 
 
 @pytest.mark.asyncio
-async def test_affinity_fails_fast_within_the_origins_own_group():
+async def test_affinity_degrades_within_the_origins_own_group():
     """
-    Negative class for the tier-change discriminator: the routed group IS the
-    origin's group (a same-group cooldown, not a tier change), so even with a
-    healthy non-origin sibling that cannot decrypt the content, the request
-    still fails fast and the encrypted reasoning is left intact rather than
-    stripped. Preserves the LIT-3051 cooldown contract.
+    The routed group IS the origin's group (a same-group cooldown), and the
+    healthy sibling sits on a different encryption boundary, so it cannot
+    decrypt the replayed reasoning. The check still degrades instead of
+    failing: the encrypted reasoning is stripped and the request dispatches
+    to the sibling.
     """
-    from litellm.exceptions import ServiceUnavailableError
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
@@ -2014,29 +2067,26 @@ async def test_affinity_fails_fast_within_the_origins_own_group():
     ]
     request_kwargs = _cross_group_request_kwargs()
 
-    with pytest.raises(ServiceUnavailableError):
-        await check.async_filter_deployments(
-            model="gpt-reasoning-tier",
-            healthy_deployments=sibling_pool,
-            messages=None,
-            request_kwargs=request_kwargs,
-        )
+    result = await check.async_filter_deployments(
+        model="gpt-reasoning-tier",
+        healthy_deployments=sibling_pool,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
 
-    assert request_kwargs["input"][1].get("encrypted_content")
+    assert result is sibling_pool
+    assert not request_kwargs["input"][1].get("encrypted_content")
 
 
 @pytest.mark.asyncio
-async def test_affinity_does_not_strip_when_group_is_spelled_differently_but_same_by_id():
+async def test_affinity_strips_when_group_is_spelled_differently_but_same_by_id():
     """
-    The discriminator must key on deployment-id membership, not on the model-group
-    name string. Here the origin's configured group is spelled ``openai/gpt-5.4-mini``
-    while the routed group is the canonical ``gpt-5.4-mini``: same group, different
-    spelling. A name compare (``originating.model_name != model``) would read this as
-    a tier change and strip the reasoning it did not have to. Because the origin's id
-    is a member of the routed group, this is a same-group cooldown instead: the request
-    fails fast and the encrypted reasoning is left intact.
+    The origin's configured group is spelled ``openai/gpt-5.4-mini`` while the
+    routed group is the canonical ``gpt-5.4-mini``: same group, different
+    spelling, with the origin a member but currently unavailable. There is no
+    boundary peer, so the check degrades: strip the encrypted reasoning and
+    dispatch to the sibling pool.
     """
-    from litellm.exceptions import ServiceUnavailableError
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
@@ -2071,28 +2121,24 @@ async def test_affinity_does_not_strip_when_group_is_spelled_differently_but_sam
         ],
     }
 
-    with pytest.raises(ServiceUnavailableError):
-        await check.async_filter_deployments(
-            model="gpt-5.4-mini",
-            healthy_deployments=sibling_pool,
-            messages=None,
-            request_kwargs=request_kwargs,
-        )
+    result = await check.async_filter_deployments(
+        model="gpt-5.4-mini",
+        healthy_deployments=sibling_pool,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
 
-    assert request_kwargs["input"][1].get("encrypted_content")
+    assert result is sibling_pool
+    assert not request_kwargs["input"][1].get("encrypted_content")
 
 
 @pytest.mark.asyncio
-async def test_affinity_honors_router_candidate_ids_for_team_and_pattern_routes():
+async def test_affinity_strips_for_team_and_pattern_routes():
     """
-    The exact `model_name` index does not include team-public or pattern routes, so a
-    same-group cooldown reached only through one of those would be misread as a tier change
-    and stripped. The check asks the router for the candidate ids it resolves for the route
-    (`get_candidate_model_ids_for_route`), which covers those paths, rather than the bare
-    index. Here that set marks the origin as a candidate, so the request fails fast with its
-    reasoning intact, and the routed group and team are passed through to the router.
+    Team-public or pattern routes resolve the same routed group as the origin's,
+    so an unavailable origin there also degrades rather than failing: the
+    encrypted reasoning is stripped and the request dispatches to the sibling.
     """
-    from litellm.exceptions import ServiceUnavailableError
     from litellm.router_utils.pre_call_checks.encrypted_content_affinity_check import (
         EncryptedContentAffinityCheck,
     )
@@ -2127,13 +2173,12 @@ async def test_affinity_honors_router_candidate_ids_for_team_and_pattern_routes(
         ],
     }
 
-    with pytest.raises(ServiceUnavailableError):
-        await check.async_filter_deployments(
-            model="team-public-model",
-            healthy_deployments=sibling_pool,
-            messages=None,
-            request_kwargs=request_kwargs,
-        )
+    result = await check.async_filter_deployments(
+        model="team-public-model",
+        healthy_deployments=sibling_pool,
+        messages=None,
+        request_kwargs=request_kwargs,
+    )
 
-    assert request_kwargs["input"][1].get("encrypted_content")
-    mock_router.get_candidate_model_ids_for_route.assert_called_once_with(model="team-public-model", team_id="teamA")
+    assert result is sibling_pool
+    assert not request_kwargs["input"][1].get("encrypted_content")
