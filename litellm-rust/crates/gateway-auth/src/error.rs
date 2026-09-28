@@ -4,6 +4,16 @@ use axum::{
 };
 
 #[derive(Debug, thiserror::Error)]
+pub enum KeyError {
+    #[error("missing or invalid virtual key")]
+    Invalid,
+    #[error("virtual key has expired")]
+    Expired,
+    #[error("virtual key lookup unavailable")]
+    Lookup(#[source] Box<dyn std::error::Error + Send + Sync>),
+}
+
+#[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error("operation is not permitted")]
     Forbidden,
