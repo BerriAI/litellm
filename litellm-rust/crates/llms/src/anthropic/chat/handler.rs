@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+use litellm_types::messages::streaming::{
+    MessagesContentBlock, MessagesContentBlockDelta, MessagesStreamEvent, MessagesStreamUsage,
+};
 use litellm_types::{
     llms::openai::{ChatCompletionThinkingBlock, ChatCompletionToolCallChunk},
     utils::{ChatCompletionChunk, ChatCompletionsUsage},
@@ -7,11 +10,8 @@ use litellm_types::{
 use serde_json::Value;
 
 use crate::{
-    anthropic::experimental_pass_through::messages::streaming_iterator::{
-        AnthropicContentBlock, AnthropicContentBlockDelta, AnthropicMessagesStreamEvent,
-        AnthropicStreamUsage,
-    },
-    base_llm::{base_model_iterator::StreamTransformer, chat::transformation::Error},
+    Error,
+    base_llm::{base_model_iterator::StreamTransformer, chat::streaming::StreamShape},
 };
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -35,10 +35,10 @@ pub enum AnthropicContentBlockType {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnthropicContentBlockDeltaEvent {
     pub index: u64,
-    pub delta: AnthropicContentBlockDelta,
+    pub delta: MessagesContentBlockDelta,
 }
 
-pub struct AnthropicChatCompletionsStreamTransformer {
+pub struct ModelResponseIterator {
     pub content_blocks: Vec<AnthropicContentBlockDeltaEvent>,
     pub tool_index: i64,
     pub json_mode: bool,
@@ -61,12 +61,8 @@ pub struct AnthropicChatCompletionsStreamTransformer {
     pub container_id: Option<String>,
 }
 
-impl AnthropicChatCompletionsStreamTransformer {
-    pub fn new(
-        _json_mode: bool,
-        _speed: Option<String>,
-        _tool_name_reverse_map: HashMap<String, String>,
-    ) -> Self {
+impl ModelResponseIterator {
+    pub fn new(_shape: StreamShape) -> Self {
         todo!()
     }
 
@@ -74,14 +70,14 @@ impl AnthropicChatCompletionsStreamTransformer {
         todo!()
     }
 
-    pub fn handle_usage(&mut self, _usage: AnthropicStreamUsage) -> ChatCompletionsUsage {
+    pub fn handle_usage(&mut self, _usage: MessagesStreamUsage) -> ChatCompletionsUsage {
         todo!()
     }
 
     pub fn handle_content_block_delta(
         &mut self,
         _index: u64,
-        _delta: AnthropicContentBlockDelta,
+        _delta: MessagesContentBlockDelta,
     ) -> (
         String,
         Option<ChatCompletionToolCallChunk>,
@@ -95,7 +91,7 @@ impl AnthropicChatCompletionsStreamTransformer {
     pub fn handle_content_block_start(
         &mut self,
         _index: u64,
-        _content_block: AnthropicContentBlock,
+        _content_block: MessagesContentBlock,
     ) -> Result<ChatCompletionChunk, Error> {
         todo!()
     }
@@ -118,7 +114,7 @@ impl AnthropicChatCompletionsStreamTransformer {
 
     pub fn handle_redacted_thinking_content(
         &mut self,
-        _content_block: &AnthropicContentBlock,
+        _content_block: &MessagesContentBlock,
     ) -> Vec<ChatCompletionThinkingBlock> {
         todo!()
     }
@@ -137,21 +133,21 @@ impl AnthropicChatCompletionsStreamTransformer {
 
     pub fn handle_message_delta(
         &mut self,
-        _event: AnthropicMessagesStreamEvent,
+        _event: MessagesStreamEvent,
     ) -> (Option<String>, Option<ChatCompletionsUsage>, Option<Value>) {
         todo!()
     }
 
     pub fn chunk_parser(
         &mut self,
-        _event: AnthropicMessagesStreamEvent,
+        _event: MessagesStreamEvent,
     ) -> Result<ChatCompletionChunk, Error> {
         todo!()
     }
 }
 
-impl StreamTransformer for AnthropicChatCompletionsStreamTransformer {
-    type Input = AnthropicMessagesStreamEvent;
+impl StreamTransformer for ModelResponseIterator {
+    type Input = MessagesStreamEvent;
     type Output = ChatCompletionChunk;
     type Error = Error;
 

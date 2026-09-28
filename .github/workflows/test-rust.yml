@@ -14,7 +14,6 @@ on:
       - "litellm/ocr/**"
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
-      - "tests/test_litellm/ocr/**"
       - "tests/test_litellm/conftest.py"
       - "Makefile"
       - ".cargo/**"
@@ -24,13 +23,11 @@ on:
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
-      - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
+      - "tests/unit/rust_bridge/native_route_wheel_test.py"
       - ".github/workflows/test-rust.yml"
   pull_request:
     branches:
       - main
-      - litellm_internal_staging
-      - litellm_oss_staging
       - "litellm_**"
     paths:
       - "litellm-rust/**"
@@ -44,7 +41,6 @@ on:
       - "litellm/ocr/**"
       - "litellm/llms/base_llm/ocr/**"
       - "litellm/llms/custom_httpx/llm_http_handler.py"
-      - "tests/test_litellm/ocr/**"
       - "tests/test_litellm/conftest.py"
       - "Makefile"
       - ".cargo/**"
@@ -54,7 +50,7 @@ on:
       - ".github/actions/setup-uv-with-retries/**"
       - ".github/scripts/smoke_test_native_wheel.py"
       - ".github/scripts/verify_linux_native_wheel.py"
-      - "tests/test_litellm/rust_bridge/native_route_wheel_test.py"
+      - "tests/unit/rust_bridge/native_route_wheel_test.py"
       - ".github/workflows/test-rust.yml"
 
 permissions:
@@ -173,7 +169,7 @@ jobs:
         env:
           RELEASE_WHEEL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - run: python tests/test_litellm/rust_bridge/native_route_wheel_test.py dist/*.whl
+      - run: python tests/unit/rust_bridge/native_route_wheel_test.py dist/*.whl
 
       - name: Run pytest tests/test_litellm_rust with the compiled extension
         run: make test-rust-extension

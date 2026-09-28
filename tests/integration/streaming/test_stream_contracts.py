@@ -261,6 +261,87 @@ def test_messages_stream_completes_through_trailing_empty_choices_usage_chunk(ga
     )
 
 
+def reasoning_first_stream(identity: str) -> tuple[bytes, ...]:
+    usage: Final = {
+        "id": identity,
+        "object": "chat.completion.chunk",
+        "created": 1,
+        "model": "gpt-4o-mini",
+        "choices": [],
+        "usage": {"prompt_tokens": 11, "completion_tokens": 6, "total_tokens": 17},
+    }
+    return (
+        frame(identity, {"role": "assistant", "content": None, "reasoning_content": "Let me "}),
+        frame(identity, {"content": None, "reasoning_content": "think."}),
+        frame(identity, {"content": "Hello "}),
+        frame(identity, {"content": "there"}),
+        frame(identity, {}, finish="stop"),
+        b"data: " + json.dumps(usage).encode() + b"\n\n",
+        b"data: [DONE]\n\n",
+    )
+
+
+@pytest.mark.covers("streaming.messages_bridge.reasoning_content_only_chunks_open_a_thinking_block_first")
+def test_messages_stream_opens_thinking_block_at_index_zero_for_reasoning_content_only_chunks(
+    gateway: Gateway,
+) -> None:
+    identity: Final = "messages-reasoning-first-" + uuid.uuid4().hex
+    with (
+        wire_server(
+            lambda request: Reply(content_type="text/event-stream", chunks=reasoning_first_stream(identity))
+        ) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = scenario.model(model="hosted_vllm/reasoning-model", api_base=wire.url + "/v1")
+        with gateway.client.stream(
+            "POST",
+            "/v1/messages",
+            json={
+                "model": model,
+                "max_tokens": 64,
+                "stream": True,
+                "messages": [{"role": "user", "content": identity}],
+            },
+            headers={"Authorization": f"Bearer {gateway.key}"},
+        ) as response:
+            text: Final = response.read().decode()
+    assert response.status_code == 200, text
+    assert response.headers["content-type"].startswith("text/event-stream"), text
+    events: Final = tuple(json.loads(line) for line in sse_data_lines(text))
+    blocks: Final = tuple(
+        (event["index"], event.get("content_block") or event["delta"])
+        for event in events
+        if event["type"] in ("content_block_start", "content_block_delta")
+    )
+    assert blocks == (
+        (0, {"type": "thinking", "thinking": "", "signature": ""}),
+        (0, {"type": "thinking_delta", "thinking": "Let me "}),
+        (0, {"type": "thinking_delta", "thinking": "think."}),
+        (1, {"type": "text", "text": ""}),
+        (1, {"type": "text_delta", "text": "Hello "}),
+        (1, {"type": "text_delta", "text": "there"}),
+    ), text
+    assert tuple(event["type"] for event in events) == (
+        "message_start",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_delta",
+        "content_block_stop",
+        "content_block_start",
+        "content_block_delta",
+        "content_block_delta",
+        "content_block_stop",
+        "message_delta",
+        "message_stop",
+    ), text
+    message_delta: Final = next(event for event in events if event["type"] == "message_delta")
+    assert message_delta["usage"] == {"input_tokens": 11, "output_tokens": 6}, text
+    requests: Final = wire.drain()
+    assert len(requests) == 1
+    outbound: Final = json.loads(requests[0].body)
+    assert outbound["stream"] is True and outbound["messages"] == [{"role": "user", "content": identity}], outbound
+
+
 @pytest.mark.covers("other.streaming.responses_bridge.empty_choices_chunks_complete_stream")
 def test_responses_stream_completes_through_empty_choices_metadata_and_usage_chunks(gateway: Gateway) -> None:
     identity: Final = "responses-empty-choices-" + uuid.uuid4().hex
@@ -445,9 +526,7 @@ def test_primary_stream_with_empty_first_chunk_then_disconnect_falls_back_and_bi
                 abort_after=2,
             )
         ) as primary,
-        wire_server(
-            lambda request: Reply(content_type="text/event-stream", chunks=text_stream(identity))
-        ) as fallback,
+        wire_server(lambda request: Reply(content_type="text/event-stream", chunks=text_stream(identity))) as fallback,
     ):
         config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
         config["model_list"] = [

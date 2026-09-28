@@ -468,9 +468,7 @@ async def fal_ai_proxy_route(
     endpoint_func: Final = create_pass_through_route(
         endpoint=endpoint,
         target=str(updated_url),
-        custom_headers={
-            "Authorization": f"Key {fal_ai_api_key}"
-        },  # mutable-ok: pass-through request headers require a mutable mapping
+        custom_headers={"Authorization": f"Key {fal_ai_api_key}"},
         custom_llm_provider="fal_ai",
         is_streaming_request=False,
     )
@@ -3801,13 +3799,9 @@ async def gigachat_proxy_route(
     raw_model: Final = request_body.get("model")
     model: Final = raw_model if isinstance(raw_model, str) else None
     if model:
-        is_router_model = is_passthrough_request_using_router_model(
-            request_body, llm_router
-        )  # rebind-ok: conditionally set to True
+        is_router_model = is_passthrough_request_using_router_model(request_body, llm_router)
     elif any(word in endpoint for word in ("completions", "embeddings")):
-        raise HTTPException(
-            status_code=400, detail={"error": "Model is required in request body"}
-        )  # mutable-ok: HTTPException detail dict
+        raise HTTPException(status_code=400, detail={"error": "Model is required in request body"})
 
     # If router model, use dedicated router passthrough handler
     # This uses the same common processing path as non-router models
@@ -3908,9 +3902,7 @@ async def handle_gigachat_passthrough_router_model(
 
     is_streaming: Final = request_body.get("stream", False)  # pyright: ignore[reportUnknownVariableType]  # request_body is dict[Unknown, Unknown]
 
-    data: dict[str, Any] = await _read_request_body(
-        request=request
-    )  # mutable-ok: mutated in place by proxy pipeline; pyright: ignore[reportExplicitAny]  # Any needed for proxy pipeline
+    data: Final[dict[str, object]] = await _read_request_body(request=request)
     if user_api_key_dict is not None:
         auth_metadata: Final = {
             metadata_key: value

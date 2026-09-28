@@ -9,6 +9,7 @@ vi.mock("@/components/networking", () => ({
   getAgentInfo: vi.fn(),
   getAgentCreateMetadata: vi.fn(),
   patchAgentCall: vi.fn(),
+  triggerAgentKillSwitchCall: vi.fn(),
 }));
 
 vi.mock("@/app/(dashboard)/hooks/keys/useKeys", () => ({
@@ -75,9 +76,11 @@ const agent = {
 
 describe("AgentInfoView settings", () => {
   beforeEach(() => {
+    vi.restoreAllMocks();
     vi.mocked(networking.getAgentInfo).mockReset().mockResolvedValue(agent);
     vi.mocked(networking.getAgentCreateMetadata).mockReset().mockResolvedValue([]);
     vi.mocked(networking.patchAgentCall).mockReset().mockResolvedValue({});
+    vi.mocked(networking.triggerAgentKillSwitchCall).mockReset();
   });
 
   it("submits the edited agent when Save Changes is pressed", async () => {
@@ -157,5 +160,30 @@ describe("AgentInfoView settings", () => {
 
     expect(await screen.findByText("Access Groups")).toBeInTheDocument();
     expect(screen.getByText("None")).toBeInTheDocument();
+  });
+
+  it("renders the kill switch Danger Zone for admins with the configured webhook", async () => {
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...agent,
+      kill_switch: { url: "https://ops.example.com/kill", method: "DELETE" },
+    });
+    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={true} />);
+
+    const dangerZone = await screen.findByRole("region", { name: "Danger Zone" });
+    expect(dangerZone).toHaveTextContent("DELETE https://ops.example.com/kill");
+    expect(screen.getByRole("button", { name: "Fire Kill Switch" })).toBeInTheDocument();
+    expect(screen.queryByText("Kill Switch")).not.toBeInTheDocument();
+  });
+
+  it("hides the Danger Zone from non-admins", async () => {
+    vi.mocked(networking.getAgentInfo).mockResolvedValue({
+      ...agent,
+      kill_switch: { url: "https://ops.example.com/kill", method: "POST" },
+    });
+    render(<AgentInfoView agentId="agent-1" onClose={vi.fn()} accessToken="sk-test" isAdmin={false} />);
+
+    expect(await screen.findByRole("heading", { name: "support-agent" })).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Danger Zone" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Fire Kill Switch" })).not.toBeInTheDocument();
   });
 });

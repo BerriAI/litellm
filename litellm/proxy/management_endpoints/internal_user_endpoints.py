@@ -28,6 +28,7 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.constants import USAGE_TOP_API_KEYS_LIMIT
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import (
@@ -87,11 +88,13 @@ from litellm.repositories.verification_token_repository import (
     VerificationTokenRepository,
 )
 from litellm.types.proxy.management_endpoints.common_daily_activity import (
+    DailySpendMetadata,
     SpendAnalyticsPaginatedResponse,
 )
 from litellm.types.proxy.management_endpoints.internal_user_endpoints import (
     BulkUpdateUserRequest,
     BulkUpdateUserResponse,
+    KeyActivitySearchWhere,
     UserListResponse,
     UserSearchWhere,
     UserUpdateResult,
@@ -2991,6 +2994,27 @@ async def get_user_daily_activity(
         )
 
 
+def _resolve_user_daily_activity_entity_id(
+    user_api_key_dict: UserAPIKeyAuth,
+    user_id: str | None,
+) -> str | None:
+    is_admin: Final = _user_has_admin_view(user_api_key_dict)
+
+    if is_admin:
+        return user_id
+
+    caller_user_id: Final = require_caller_user_id_for_non_admin(user_api_key_dict)
+    effective_user_id: Final = user_id if user_id is not None else caller_user_id
+    if effective_user_id != caller_user_id:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail={  # mutable-ok: FastAPI detail payload shape
+                "error": "Non-admin users can only view their own spend data."
+            },
+        )
+    return effective_user_id
+
+
 @router.get(
     "/user/daily/activity/aggregated",
     tags=["Budget & Spend Tracking", "Internal User management"],
@@ -3057,20 +3081,7 @@ async def get_user_daily_activity_aggregated(
         )
 
     try:
-        is_admin: Final = _user_has_admin_view(user_api_key_dict)
-
-        if is_admin:
-            entity_id = user_id  # None means global view, otherwise filter by user
-        else:
-            caller_user_id: Final = require_caller_user_id_for_non_admin(user_api_key_dict)
-            if user_id is None:
-                user_id = caller_user_id
-            if user_id != caller_user_id:
-                raise HTTPException(
-                    status_code=status.HTTP_403_FORBIDDEN,
-                    detail={"error": "Non-admin users can only view their own spend data."},
-                )
-            entity_id = user_id
+        entity_id: Final = _resolve_user_daily_activity_entity_id(user_api_key_dict, user_id)
 
         return await get_daily_activity_aggregated(
             prisma_client=prisma_client,
@@ -3093,4 +3104,118 @@ async def get_user_daily_activity_aggregated(
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail={"error": f"Failed to fetch analytics: {e}"},
+        )
+
+
+@router.get(
+    "/user/daily/activity/aggregated/search",
+    tags=["Budget & Spend Tracking", "Internal User management"],  # mutable-ok: FastAPI route tags shape
+    dependencies=[Depends(user_api_key_auth)],  # mutable-ok: FastAPI route dependencies shape
+    response_model=SpendAnalyticsPaginatedResponse,
+)
+@management_endpoint_wrapper
+async def search_user_daily_activity_keys(
+    search: str = fastapi.Query(
+        ...,
+        min_length=1,
+        description="Matches keys whose hash equals the value, or whose key alias or user ID contains it (case-insensitive)",
+    ),
+    start_date: str | None = fastapi.Query(
+        default=None,
+        description="Start date in YYYY-MM-DD format",
+    ),
+    end_date: str | None = fastapi.Query(
+        default=None,
+        description="End date in YYYY-MM-DD format",
+    ),
+    user_id: str | None = fastapi.Query(
+        default=None,
+        description="Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id.",
+    ),
+    timezone: int | None = fastapi.Query(
+        default=None,
+        description="Timezone offset in minutes from UTC (e.g., 480 for PST). "
+        "Matches JavaScript's Date.getTimezoneOffset() convention.",
+    ),
+    include_current_utc_day: bool = fastapi.Query(
+        default=False,
+        description="When the range ends on the caller's current local day, extend it to "
+        "today's UTC bucket so spend written after the caller's local midnight (in UTC "
+        "terms) is included. Requires the timezone parameter. Historical ranges are "
+        "never extended.",
+    ),
+    user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),  # noqa: B008  # FastAPI dependency injection
+) -> SpendAnalyticsPaginatedResponse:
+    """
+    Search verification tokens by exact token hash or by a case-insensitive substring of
+    the key alias or owning user ID, then return the aggregated daily activity for the
+    matches. Lets the Usage page surface keys that fell outside the top-spend subset
+    the aggregated endpoint loads.
+    """
+    from litellm.proxy.proxy_server import prisma_client
+
+    if prisma_client is None:
+        raise HTTPException(
+            status_code=500,
+            detail={  # mutable-ok: FastAPI detail payload shape
+                "error": CommonProxyErrors.db_not_connected_error.value
+            },
+        )
+
+    if start_date is None or end_date is None:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail={"error": "Please provide start_date and end_date"},  # mutable-ok: FastAPI detail payload shape
+        )
+
+    try:
+        entity_id: Final = _resolve_user_daily_activity_entity_id(user_api_key_dict, user_id)
+
+        search_or: Final = (
+            {"token": search},  # mutable-ok: prisma serializes where clauses, keep plain dicts
+            {"key_alias": {"contains": search, "mode": "insensitive"}},  # mutable-ok: prisma where clause leaf
+            {"user_id": {"contains": search, "mode": "insensitive"}},  # mutable-ok: prisma where clause leaf
+        )
+        where: Final[KeyActivitySearchWhere] = (
+            {"OR": search_or}  # mutable-ok: prisma where clause root
+            if entity_id is None
+            else {"user_id": entity_id, "OR": search_or}  # mutable-ok: prisma where clause root
+        )
+        matched_keys: Final = await VerificationTokenRepository(prisma_client).table.find_many(
+            where=where,
+            take=USAGE_TOP_API_KEYS_LIMIT,
+            order={"spend": "desc"},  # mutable-ok: prisma serializes order, keep it a plain dict
+        )
+        tokens: Final = [key.token for key in matched_keys]  # mutable-ok: api_key filter union expects a list
+
+        if not tokens:
+            return SpendAnalyticsPaginatedResponse(
+                results=[],  # mutable-ok: response model field shape
+                metadata=DailySpendMetadata(
+                    api_key_limit=USAGE_TOP_API_KEYS_LIMIT,
+                    total_api_keys=0,
+                ),
+            )
+
+        return await get_daily_activity_aggregated(
+            prisma_client=prisma_client,
+            table_name="litellm_dailyuserspend",
+            entity_id_field="user_id",
+            entity_id=entity_id,
+            entity_metadata_field=None,
+            start_date=start_date,
+            end_date=end_date,
+            model=None,
+            api_key=tokens,
+            timezone_offset_minutes=timezone,
+            include_current_utc_day=include_current_utc_day,
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        verbose_proxy_logger.exception("/user/daily/activity/aggregated/search: Exception occured - %s", e)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail={"error": f"Failed to fetch analytics: {e}"},  # mutable-ok: FastAPI detail payload shape
         )

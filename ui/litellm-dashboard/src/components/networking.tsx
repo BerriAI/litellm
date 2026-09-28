@@ -1467,6 +1467,31 @@ export const teamDailyActivityAggregatedCall = async (
   }
 };
 
+export const teamDailyActivityKeySearchCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  ...options: [search: string, teamIds?: string[] | null]
+) => {
+  const [search, teamIds = null] = options;
+  try {
+    return await apiClient.get(`/team/daily/activity/aggregated/search`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        search,
+        team_ids: teamIds && teamIds.length > 0 ? teamIds.join(",") : undefined,
+        exclude_team_ids: "litellm-dashboard",
+      },
+    });
+  } catch (error) {
+    console.error("Failed to search team daily activity keys:", error);
+    throw error;
+  }
+};
+
 export type TeamUserSpendResponse = components["schemas"]["TeamUserSpendResponse"];
 
 export const teamSpendByUserCall = async (
@@ -2552,6 +2577,36 @@ export const userDailyActivityAggregatedCall = async (
     });
   } catch (error) {
     console.error("Failed to fetch aggregated user daily activity:", error);
+    throw error;
+  }
+};
+
+export const userDailyActivityKeySearchCall = async (
+  accessToken: string,
+  startTime: Date,
+  endTime: Date,
+  ...options: [search: string, userId?: string | null]
+) => {
+  const [search, userId = null] = options;
+  try {
+    const formatDate = (date: Date) => {
+      const year = date.getFullYear();
+      const month = String(date.getMonth() + 1).padStart(2, "0");
+      const day = String(date.getDate()).padStart(2, "0");
+      return `${year}-${month}-${day}`;
+    };
+    return await apiClient.get(`/user/daily/activity/aggregated/search`, {
+      accessToken,
+      query: {
+        start_date: formatDate(startTime),
+        end_date: formatDate(endTime),
+        timezone: new Date().getTimezoneOffset().toString(),
+        search,
+        user_id: userId || undefined,
+      },
+    });
+  } catch (error) {
+    console.error("Failed to search user daily activity keys:", error);
     throw error;
   }
 };
@@ -4882,6 +4937,7 @@ export const fetchMCPServerHealth = async (accessToken: string, serverIds?: stri
     return await apiClient.get(`/v1/mcp/server/health`, {
       accessToken,
       query: {
+        include_reachability: true,
         server_ids: serverIds && serverIds.length > 0 ? serverIds : undefined,
       },
     });
@@ -6187,6 +6243,16 @@ export const getAgentInfo = async (accessToken: string, agentId: string) => {
   }
 };
 
+export type AgentKillSwitchResult = components["schemas"]["AgentKillSwitchResult"];
+
+export const triggerAgentKillSwitchCall = async (
+  accessToken: string,
+  agentId: string,
+): Promise<AgentKillSwitchResult> =>
+  await apiClient.post<AgentKillSwitchResult>(`/v1/agents/${encodeURIComponent(agentId)}/kill_switch`, {
+    accessToken,
+  });
+
 export const getGuardrailInfo = async (accessToken: string, guardrailId: string) => {
   try {
     const url = proxyBaseUrl ? `${proxyBaseUrl}/guardrails/${guardrailId}/info` : `/guardrails/${guardrailId}/info`;
@@ -6226,6 +6292,7 @@ export const patchAgentCall = async (
     session_tpm_limit?: number | null;
     session_rpm_limit?: number | null;
     access_group_ids?: string[];
+    kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
   },
 ) => {
   try {
@@ -7905,6 +7972,10 @@ export const storeMCPUserEnvVars = async (
     accessToken,
     body: { values },
   });
+};
+
+export const clearMCPUserEnvVars = async (accessToken: string, serverId: string): Promise<MCPUserEnvVarsStatus> => {
+  return apiClient.delete<MCPUserEnvVarsStatus>(`/v1/mcp/server/${serverId}/user-env-vars`, { accessToken });
 };
 
 export const listMCPUserEnvVarStatus = async (accessToken: string): Promise<MCPUserEnvVarsStatus[]> => {

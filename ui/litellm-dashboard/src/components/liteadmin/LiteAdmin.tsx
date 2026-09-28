@@ -4,6 +4,7 @@ import { useRef, useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { RotateCcw, Sparkles, X } from "lucide-react";
 import useAuthorized from "@/app/(dashboard)/hooks/useAuthorized";
+import { useDisableLiteAdmin } from "@/app/(dashboard)/hooks/useDisableLiteAdmin";
 import { useProxySettingsQuery } from "@/app/(dashboard)/hooks/proxySettings/useProxySettings";
 import { ChatComposer } from "@/app/(dashboard)/playground/components/chat_ui/ChatComposer";
 import { EndpointType, isModeCompatibleWithEndpoint } from "@/components/chat_ui/mode_endpoint_mapping";
@@ -34,9 +35,10 @@ type ManagementSession = Omit<LiteAdminSession, "inferenceBaseUrl">;
 
 export default function LiteAdmin() {
   const auth = useAuthorized();
+  const [disabled] = useDisableLiteAdmin(auth.userId);
   const sessionReady = !auth.isLoading && auth.isAuthorized;
   const writableAdmin = !auth.isViewOnly && isProxyAdminRole(auth.userRole);
-  const allowed = sessionReady && writableAdmin;
+  const allowed = sessionReady && writableAdmin && !disabled;
   if (!allowed || !auth.token || !auth.accessToken) return null;
   const session = { token: auth.token, accessToken: auth.accessToken, managementBaseUrl: getProxyBaseUrl() };
   return (
