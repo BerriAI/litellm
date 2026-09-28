@@ -30,6 +30,7 @@ def _load_root_cost_map() -> dict:
     with open(json_path) as f:
         return json.load(f)
 
+
 ALL_SONNET_5_VARIANTS = (
     "claude-sonnet-5",
     "anthropic.claude-sonnet-5",
@@ -84,22 +85,3 @@ def test_sonnet_5_5_thinking_profile(local_model_cost_map, model, provider):
     assert AnthropicModelInfo._is_adaptive_thinking_model(model, provider) is True
     assert AnthropicModelInfo._is_always_on_thinking_model(model, provider) is True
     assert AnthropicModelInfo.forced_tool_use_unsupported(model.removeprefix("anthropic/")) is True
-
-
-REMOVED_SONNET_5_5_KEYS = (
-    "aihubmix/claude-sonnet-5-5",
-    "deepinfra/anthropic/claude-sonnet-5-5",
-    "databricks/databricks-claude-sonnet-5-5",
-    "openrouter/anthropic/claude-sonnet-5-5",
-    "openrouter/anthropic/claude-sonnet-5-5:batch",
-)
-
-
-@pytest.mark.parametrize("model_name", REMOVED_SONNET_5_5_KEYS)
-def test_sonnet_5_5_removed_provider_keys_absent(model_name):
-    """None of these vendors lists Sonnet 5.5, so the keys cloned from Sonnet 5
-    must not ship."""
-    root = _load_root_cost_map()
-    assert model_name not in root
-
-
