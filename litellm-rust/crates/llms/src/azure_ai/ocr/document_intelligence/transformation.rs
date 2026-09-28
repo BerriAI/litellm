@@ -2,7 +2,7 @@ use std::{collections::BTreeSet, time::Duration};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use litellm_auth::{InputSource, Sourced};
-use litellm_auth_azure::AzureAuthInputs;
+use litellm_auth_azure::{AzureAuthInputs, SECRET_NAMES as AZURE_AUTH_SECRET_NAMES};
 use litellm_core_utils::{
     call_arguments::CallArguments,
     serde_compat::{FiniteF64, LaxI64},
@@ -141,6 +141,17 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         Some(AZURE_DI_API_KEY_ENV)
     }
 
+    fn secret_names(&self) -> Vec<&'static str> {
+        [
+            [AZURE_DI_API_KEY_ENV, AZURE_DI_ENDPOINT_ENV].as_slice(),
+            AZURE_AUTH_SECRET_NAMES,
+        ]
+        .into_iter()
+        .flatten()
+        .copied()
+        .collect()
+    }
+
     fn resolve_connection_params(&self, inputs: OcrCredentialInputs) -> ResolvedOcrCredentials {
         ResolvedOcrCredentials {
             api_key: inputs.api_key.and_then(|key| {
@@ -172,12 +183,15 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
     async fn validate_environment(
         &self,
         request: &PreparedOcrRequest,
-        _client: &OcrClient,
+        client: &OcrClient,
     ) -> Result<Self::Environment, Error> {
         let config = crate::azure_ai::ocr::common_utils::azure_auth_inputs(request)?;
-        self.resolve_headers(&request.connection, &config, &|name: &str| {
-            request.connection.secret(name)
-        })
+        self.resolve_headers(
+            &client.auth().azure,
+            &request.connection,
+            &config,
+            &|name: &str| request.connection.secret(name),
+        )
         .await
     }
 
@@ -439,7 +453,7 @@ fn pixel_dimension(value: f64, scale: f64, field: &'static str) -> Result<i64, E
 }
 
 async fn read_operation_response(
-    http_client: &reqwest::Client,
+    http_client: &litellm_http::Client,
     response: reqwest::Response,
     original_url: &str,
     headers: &[(String, String)],
@@ -478,7 +492,7 @@ async fn read_operation_response(
 }
 
 async fn poll_operation(
-    http_client: &reqwest::Client,
+    http_client: &litellm_http::Client,
     url: Url,
     headers: &[(String, String)],
     connection: &OcrConnection,
@@ -550,6 +564,14 @@ async fn poll_operation(
 }
 
 impl AzureDocumentIntelligenceOcrConfig {
+    pub fn analyze_path(model: &str) -> Result<[String; 3], Error> {
+        Ok([
+            "documentintelligence".into(),
+            "documentModels".into(),
+            format!("{}:analyze", model_id(model)?),
+        ])
+    }
+
     fn build_ocr_url(
         &self,
         endpoint: &str,
@@ -557,9 +579,9 @@ impl AzureDocumentIntelligenceOcrConfig {
         params: &DocumentIntelligenceParams,
         api_version: &str,
     ) -> Result<String, Error> {
-        let model = format!("{}:analyze", model_id(model)?);
+        let path = Self::analyze_path(model)?;
         ApiUrl::parse(endpoint)
-            .and_then(|url| url.complete_path(&["documentintelligence", "documentModels", &model]))
+            .and_then(|url| url.complete_path(&path.each_ref().map(String::as_str)))
             .map(|url| {
                 url.append_query_pairs(
                     [("api-version", api_version)]
@@ -581,6 +603,7 @@ impl AzureDocumentIntelligenceOcrConfig {
 
     async fn resolve_headers(
         &self,
+        auth: &litellm_auth_azure::AzureAuthService,
         connection: &OcrConnection,
         config: &AzureAuthInputs,
         env_lookup: &(dyn Fn(&str) -> Option<String> + Sync),
@@ -616,7 +639,7 @@ impl AzureDocumentIntelligenceOcrConfig {
                     .collect(),
             );
         }
-        let token = super::super::common_utils::resolve_entra(config, env_lookup)
+        let token = super::super::common_utils::resolve_entra(auth, config, env_lookup)
             .await?
             .ok_or(Error::MissingAzureDocumentIntelligenceCredentials)?;
         super::super::common_utils::validate_destination(connection, token.source())?;
@@ -790,9 +813,12 @@ mod tests {
         };
 
         let error = AzureDocumentIntelligenceOcrConfig
-            .resolve_headers(&connection, &Default::default(), &|name| {
-                (name == AZURE_DI_API_KEY_ENV).then(|| "environment-key".into())
-            })
+            .resolve_headers(
+                &Default::default(),
+                &connection,
+                &Default::default(),
+                &|name| (name == AZURE_DI_API_KEY_ENV).then(|| "environment-key".into()),
+            )
             .await
             .unwrap_err();
 
@@ -814,7 +840,12 @@ mod tests {
         };
 
         let headers = AzureDocumentIntelligenceOcrConfig
-            .resolve_headers(&connection, &Default::default(), &|_| None)
+            .resolve_headers(
+                &Default::default(),
+                &connection,
+                &Default::default(),
+                &|_| None,
+            )
             .await
             .unwrap();
 

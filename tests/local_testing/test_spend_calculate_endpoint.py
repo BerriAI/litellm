@@ -38,7 +38,7 @@ async def test_spend_calc_model_on_router_messages():
             {
                 "model_name": "special-llama-model",
                 "litellm_params": {
-                    "model": "groq/llama-3.1-8b-instant",
+                    "model": "groq/openai/gpt-oss-20b",
                 },
             }
         ]
@@ -81,7 +81,7 @@ async def test_spend_calc_using_response():
                     }
                 ],
                 "created": "1677652288",
-                "model": "groq/llama-3.1-8b-instant",
+                "model": "groq/openai/gpt-oss-20b",
                 "object": "chat.completion",
                 "system_fingerprint": "fp_873a560973",
                 "usage": {

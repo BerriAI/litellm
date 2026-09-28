@@ -366,9 +366,7 @@ class NewRelicMetricsLogger(CustomBatchLogger):
         error to keep the client-error path (drop) distinct from 5xx (retry)."""
         payload: Final = build_metric_payload(records=batch, window_start=window_start, now=time.time())
         try:
-            status = (
-                await self.async_send_compressed_data(payload)
-            ).status_code  # rebind-ok: reassigned from the raised HTTPStatusError below
+            status = (await self.async_send_compressed_data(payload)).status_code
         except HTTPStatusError as e:
             status = e.response.status_code
         except Exception as e:  # noqa: BLE001  # transport/network failure re-queues the batch

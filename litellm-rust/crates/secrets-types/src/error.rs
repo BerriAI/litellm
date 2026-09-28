@@ -6,4 +6,8 @@ pub enum Error {
     CurrentSecretMissing,
     #[error("new secret could not be verified")]
     NewSecretMissing,
+    #[error("new secret does not match the replacement")]
+    NewSecretMismatch,
+    #[error("secret manager received an incompatible operation context")]
+    InvalidOperationContext,
 }

@@ -268,12 +268,10 @@ def test_request_maps_reasoning_effort_to_thinking(config):
 
 
 def test_passthrough_disables_anthropic_beta_filtering(config):
-    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
-        AnthropicMessagesConfig,
-    )
+    from litellm.llms.azure_ai.anthropic.messages_transformation import AzureAnthropicMessagesConfig
 
     assert config.should_filter_anthropic_beta_headers() is False
-    assert AnthropicMessagesConfig().should_filter_anthropic_beta_headers() is True
+    assert AzureAnthropicMessagesConfig().should_filter_anthropic_beta_headers() is True
 
 
 def test_anthropic_beta_survives_provider_filter_on_passthrough_path(config):
@@ -398,7 +396,7 @@ def test_request_defaults_missing_cache_control_type_and_drops_non_dict(config):
 def test_native_anthropic_config_keeps_cache_control_ttl():
     """Anthropic itself accepts ttl, so the normalization must stay scoped to
     the OpenAI-like passthrough and never reach the native Anthropic path."""
-    from litellm.llms.anthropic.experimental_pass_through.messages.transformation import (
+    from litellm.llms.anthropic.pass_through.messages.transformation import (
         AnthropicMessagesConfig,
     )
 

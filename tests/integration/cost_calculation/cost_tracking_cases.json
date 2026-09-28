@@ -1,5 +1,82 @@
 {
   "cost_map": {
+    "dashscope/qwen4-max": {
+      "litellm_provider": "dashscope",
+      "mode": "chat",
+      "max_input_tokens": 252000,
+      "max_output_tokens": 65536,
+      "tiered_pricing": [
+        {
+          "range": [
+            0,
+            32000
+          ],
+          "input_cost_per_token": 1.3e-06,
+          "output_cost_per_token": 6.5e-06
+        },
+        {
+          "range": [
+            32000,
+            128000
+          ],
+          "input_cost_per_token": 2.6e-06,
+          "output_cost_per_token": 1.3e-05
+        },
+        {
+          "range": [
+            128000,
+            252000
+          ],
+          "input_cost_per_token": 3.1e-06,
+          "output_cost_per_token": 1.55e-05
+        }
+      ]
+    },
+    "gemini/gemini-3.8-flash-lite": {
+      "litellm_provider": "gemini",
+      "mode": "chat",
+      "input_cost_per_token": 1.1e-07,
+      "output_cost_per_token": 4.4e-07,
+      "input_cost_per_token_above_128k_tokens": 2.2e-07,
+      "output_cost_per_token_above_128k_tokens": 8.8e-07
+    },
+    "openrouter/anthropic/claude-sonnet-5": {
+      "litellm_provider": "openrouter",
+      "mode": "chat",
+      "input_cost_per_token": 3.2e-06,
+      "output_cost_per_token": 1.6e-05
+    },
+    "perplexity/sonar-next": {
+      "litellm_provider": "perplexity",
+      "mode": "chat",
+      "input_cost_per_token": 1.13e-06,
+      "output_cost_per_token": 1.05e-06,
+      "search_context_cost_per_query": {
+        "search_context_size_low": 0.005,
+        "search_context_size_medium": 0.008,
+        "search_context_size_high": 0.012
+      }
+    },
+    "deepseek/deepseek-v4-chat": {
+      "litellm_provider": "deepseek",
+      "mode": "chat",
+      "input_cost_per_token": 2.9e-07,
+      "output_cost_per_token": 4.3e-07,
+      "cache_read_input_token_cost": 2.9e-08,
+      "cache_creation_input_token_cost": 0.0
+    },
+    "xai/grok-5": {
+      "litellm_provider": "xai",
+      "mode": "chat",
+      "input_cost_per_token": 1.35e-06,
+      "output_cost_per_token": 2.7e-06,
+      "cache_read_input_token_cost": 2.1e-07,
+      "search_context_cost_per_query": {
+        "search_context_size_low": 0.005,
+        "search_context_size_medium": 0.005,
+        "search_context_size_high": 0.005
+      }
+    },
     "gpt-5.6": {
       "cache_read_input_token_cost": 1.75e-07,
       "input_cost_per_audio_token": 4e-05,
@@ -165,6 +242,7 @@
     "claude-sonnet-5": {
       "cache_creation_input_token_cost": 3.75e-06,
       "cache_creation_input_token_cost_above_1hr": 6e-06,
+      "cache_creation_input_token_cost_above_1hr_above_200k_tokens": 1.2e-05,
       "cache_creation_input_token_cost_above_200k_tokens": 7.5e-06,
       "cache_read_input_token_cost": 3e-07,
       "cache_read_input_token_cost_above_200k_tokens": 6e-07,
@@ -408,6 +486,263 @@
       "mode": "chat",
       "output_cost_per_token": 3.6e-06,
       "supports_function_calling": true
+    },
+    "whisper-next": {
+      "litellm_provider": "openai",
+      "mode": "audio_transcription",
+      "input_cost_per_second": 0.0001
+    },
+    "whisper-verbose-next": {
+      "litellm_provider": "openai",
+      "mode": "audio_transcription",
+      "input_cost_per_second": 0.0002
+    },
+    "gpt-4o-transcribe-next": {
+      "litellm_provider": "openai",
+      "mode": "audio_transcription",
+      "input_cost_per_token": 2.11e-06,
+      "output_cost_per_token": 3.11e-06,
+      "input_cost_per_audio_token": 1e-05
+    },
+    "nova-next": {
+      "litellm_provider": "deepgram",
+      "mode": "audio_transcription",
+      "input_cost_per_second": 0.0003
+    },
+    "azure/whisper-next": {
+      "litellm_provider": "azure",
+      "mode": "audio_transcription",
+      "input_cost_per_second": 0.00011
+    },
+    "tts-next": {
+      "litellm_provider": "openai",
+      "mode": "audio_speech",
+      "input_cost_per_character": 1e-05
+    },
+    "tts-next-hd": {
+      "litellm_provider": "openai",
+      "mode": "audio_speech",
+      "input_cost_per_character": 2e-05
+    },
+    "azure/tts-next": {
+      "litellm_provider": "azure",
+      "mode": "audio_speech",
+      "input_cost_per_character": 1.1e-05
+    },
+    "gpt-image-next": {
+      "litellm_provider": "openai",
+      "mode": "image_generation",
+      "input_cost_per_token": 1.71e-06,
+      "output_cost_per_token": 4.3e-06,
+      "input_cost_per_image_token": 2.2e-06,
+      "output_cost_per_image_token": 5.1e-06
+    },
+    "1024-x-1024/dall-e-3-next": {
+      "litellm_provider": "openai",
+      "mode": "image_generation",
+      "input_cost_per_image": 0.04
+    },
+    "hd/1024-x-1024/dall-e-3-next": {
+      "litellm_provider": "openai",
+      "mode": "image_generation",
+      "input_cost_per_image": 0.08
+    },
+    "1792-x-1024/dall-e-3-next": {
+      "litellm_provider": "openai",
+      "mode": "image_generation",
+      "input_cost_per_image": 0.06
+    },
+    "low/1024-x-1024/gpt-image-next": {
+      "litellm_provider": "openai",
+      "mode": "image_generation",
+      "input_cost_per_token": 1.7e-06,
+      "output_cost_per_token": 4.3e-06,
+      "input_cost_per_image_token": 2.2e-06,
+      "output_cost_per_image_token": 5.1e-06
+    },
+    "1024-x-1024/imagen-next": {
+      "litellm_provider": "vertex_ai-image-models",
+      "mode": "image_generation",
+      "output_cost_per_image": 0.05
+    },
+    "amazon.nova-canvas-next": {
+      "litellm_provider": "bedrock",
+      "mode": "image_generation",
+      "output_cost_per_image": 0.045
+    },
+    "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0": {
+      "litellm_provider": "bedrock",
+      "mode": "chat",
+      "input_cost_per_token": 1.19e-06,
+      "output_cost_per_token": 5.01e-06
+    },
+    "eu.anthropic.claude-sonnet-5-v1:0": {
+      "litellm_provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_token": 3.4e-06,
+      "output_cost_per_token": 1.7e-05
+    },
+    "amazon.nova-2-pro-preview-20251202-v1:0": {
+      "litellm_provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_token": 2.1875e-06,
+      "output_cost_per_token": 1.75e-05
+    },
+    "mistral.mistral-large-3-675b-instruct": {
+      "litellm_provider": "bedrock_converse",
+      "mode": "chat",
+      "input_cost_per_token": 5.1e-07,
+      "output_cost_per_token": 1.51e-06
+    },
+    "azure_ai/gpt-5.4-mini-2026-03-17": {
+      "litellm_provider": "azure_ai",
+      "mode": "chat",
+      "input_cost_per_token": 7.5e-07,
+      "output_cost_per_token": 4.5e-06
+    },
+    "groq/qwen/qwen3.8-27b": {
+      "litellm_provider": "groq",
+      "mode": "chat",
+      "input_cost_per_token": 8e-07,
+      "output_cost_per_token": 4e-06
+    },
+    "cohere_chat/v2/command-a-03-2025": {
+      "litellm_provider": "cohere_chat",
+      "mode": "chat",
+      "input_cost_per_token": 2.51e-06,
+      "output_cost_per_token": 1.001e-05
+    },
+    "mistral/mistral-medium-2604": {
+      "litellm_provider": "mistral",
+      "mode": "chat",
+      "input_cost_per_token": 1.51e-06,
+      "output_cost_per_token": 7.51e-06
+    },
+    "text-embedding-3-large": {
+      "litellm_provider": "openai",
+      "mode": "embedding",
+      "input_cost_per_token": 1.3e-07
+    },
+    "gpt-5.4": {
+      "litellm_provider": "openai",
+      "mode": "chat",
+      "input_cost_per_token": 2.5e-06,
+      "output_cost_per_token": 1.5e-05,
+      "cache_read_input_token_cost": 2.5e-07,
+      "input_cost_per_token_batches": 1.25e-06,
+      "output_cost_per_token_batches": 7.5e-06
+    },
+    "gpt-realtime-mini-2025-12-15": {
+      "litellm_provider": "openai",
+      "mode": "realtime",
+      "input_cost_per_token": 6.0e-07,
+      "output_cost_per_token": 2.4e-06,
+      "input_cost_per_audio_token": 1.0e-05,
+      "cache_read_input_token_cost": 6.0e-08,
+      "cache_read_input_audio_token_cost": 3.0e-07,
+      "output_cost_per_audio_token": 2.0e-05
+    },
+    "gpt-realtime-2.1": {
+      "litellm_provider": "openai",
+      "mode": "realtime",
+      "input_cost_per_token": 4.0e-06,
+      "input_cost_per_audio_token": 3.2e-05,
+      "cache_read_input_token_cost": 4.0e-07,
+      "cache_read_input_audio_token_cost": 4.0e-07,
+      "output_cost_per_token": 2.4e-05,
+      "output_cost_per_audio_token": 6.4e-05
+    },
+    "text-embedding-4-small": {
+      "input_cost_per_token": 1.01e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "openai",
+      "mode": "embedding"
+    },
+    "text-embedding-3-large-next": {
+      "input_cost_per_token": 1.02e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "openai",
+      "mode": "embedding"
+    },
+    "azure/text-embedding-4-large": {
+      "input_cost_per_token": 1.03e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "azure",
+      "mode": "embedding"
+    },
+    "embed-v5": {
+      "input_cost_per_token": 1.04e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "cohere",
+      "mode": "embedding"
+    },
+    "amazon.titan-embed-text-v2:0": {
+      "input_cost_per_token": 1.05e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "bedrock",
+      "mode": "embedding"
+    },
+    "cohere.embed-english-v4": {
+      "input_cost_per_token": 1.06e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "bedrock",
+      "mode": "embedding"
+    },
+    "text-embedding-006": {
+      "input_cost_per_token": 1.07e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "vertex_ai-embedding-models",
+      "mode": "embedding"
+    },
+    "gemini/gemini-embedding-002": {
+      "input_cost_per_token": 1.08e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "gemini",
+      "mode": "embedding"
+    },
+    "together_ai/together-embed-v1": {
+      "input_cost_per_token": 1.09e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "together_ai",
+      "mode": "embedding"
+    },
+    "fireworks_ai/fireworks-embed-v1": {
+      "input_cost_per_token": 1.1e-06,
+      "output_cost_per_token": 0,
+      "litellm_provider": "fireworks_ai",
+      "mode": "embedding"
+    },
+    "rerank-v4": {
+      "input_cost_per_token": 1.11e-06,
+      "output_cost_per_token": 0,
+      "input_cost_per_query": 0.0021,
+      "litellm_provider": "cohere",
+      "mode": "rerank"
+    },
+    "cohere.rerank-v4:0": {
+      "input_cost_per_token": 1.12e-06,
+      "output_cost_per_token": 0,
+      "input_cost_per_query": 0.0022,
+      "litellm_provider": "bedrock",
+      "mode": "rerank"
+    },
+    "gpt-3.5-turbo-instruct-next": {
+      "input_cost_per_token": 1.14e-06,
+      "output_cost_per_token": 2.14e-06,
+      "litellm_provider": "text-completion-openai",
+      "mode": "completion"
+    },
+    "omni-moderation-next": {
+      "input_cost_per_token": null,
+      "output_cost_per_token": 0,
+      "litellm_provider": "openai",
+      "mode": "moderation"
+    },
+    "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo": {
+      "input_cost_per_token": 1.16e-06,
+      "output_cost_per_token": 2.16e-06,
+      "litellm_provider": "together_ai",
+      "mode": "completion"
     }
   },
   "cases": [
@@ -534,7 +869,8 @@
         "input_cost": 0.00616704,
         "output_cost": 0.00627,
         "prompt_tokens": 12928,
-        "completion_tokens": 380
+        "completion_tokens": 380,
+        "cache_read_cost": 0.00405504
       }
     },
     {
@@ -605,7 +941,8 @@
         "input_cost": 0.0397056,
         "output_cost": 0.005775,
         "prompt_tokens": 9728,
-        "completion_tokens": 350
+        "completion_tokens": 350,
+        "cache_creation_cost": 0.038016
       }
     },
     {
@@ -681,7 +1018,8 @@
         "input_cost": 0.0574464,
         "output_cost": 0.005775,
         "prompt_tokens": 9728,
-        "completion_tokens": 350
+        "completion_tokens": 350,
+        "cache_creation_cost": 0.0557568
       }
     },
     {
@@ -3417,7 +3755,8 @@
         "input_cost": 0.002232,
         "output_cost": 0.065484,
         "prompt_tokens": 1240,
-        "completion_tokens": 4040
+        "completion_tokens": 4040,
+        "reasoning_cost": 0.05742
       }
     },
     {
@@ -3638,7 +3977,8 @@
         "input_cost": 0.003312,
         "output_cost": 0.0059328,
         "prompt_tokens": 1840,
-        "completion_tokens": 412
+        "completion_tokens": 412,
+        "tool_usage_cost": 0.0125
       }
     },
     {
@@ -4494,7 +4834,8 @@
         "input_cost": 0.0018688,
         "output_cost": 0.0019,
         "prompt_tokens": 12928,
-        "completion_tokens": 380
+        "completion_tokens": 380,
+        "cache_read_cost": 0.0012288
       }
     },
     {
@@ -6710,7 +7051,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "msg_$REQUEST_ID",
+          "id": "msg_$UNIQUE_ID",
           "type": "message",
           "role": "assistant",
           "model": "claude-sonnet-5",
@@ -6732,7 +7073,8 @@
         "input_cost": 0.00552,
         "output_cost": 0.00618,
         "prompt_tokens": 1840,
-        "completion_tokens": 412
+        "completion_tokens": 412,
+        "rollups": true
       }
     },
     {
@@ -7393,7 +7735,9 @@
         "recount": {
           "input_cost_per_token": 3e-06,
           "output_cost_per_token": 1.5e-05
-        }
+        },
+        "prompt_tokens": 47,
+        "completion_tokens": 10
       }
     },
     {
@@ -7467,7 +7811,7 @@
         "content_type": "text/event-stream",
         "frames": [
           "event: message_start\ndata: {\"type\": \"message_start\", \"message\": {\"id\": \"msg_$REQUEST_ID\", \"type\": \"message\", \"role\": \"assistant\", \"model\": \"claude-sonnet-5\", \"content\": [], \"stop_reason\": null}}",
-          "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"tool_use\", \"id\": \"toolu_$REQUEST_ID\", \"name\": \"get_weather\", \"input\": {}}}",
+          "event: content_block_start\ndata: {\"type\": \"content_block_start\", \"index\": 0, \"content_block\": {\"type\": \"tool_use\", \"id\": \"call_fixture_0001\", \"name\": \"get_weather\", \"input\": {}}}",
           "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"{\\\"city\\\": \\\"Berlin\\\", \\\"days\\\": 7, \\\"units\\\": \\\"metric\\\", \\\"notes\\\": \\\"filler filler filler filler fil\"}}",
           "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"ler filler filler filler filler filler filler filler filler filler filler filler filler fi\"}}",
           "event: content_block_delta\ndata: {\"type\": \"content_block_delta\", \"index\": 0, \"delta\": {\"type\": \"input_json_delta\", \"partial_json\": \"ller filler filler filler filler filler filler filler filler filler filler filler filler \\\"}\"}}",
@@ -7480,7 +7824,8 @@
         "recount": {
           "input_cost_per_token": 3e-06,
           "output_cost_per_token": 1.5e-05
-        }
+        },
+        "min_completion_tokens": 60
       }
     },
     {
@@ -7537,7 +7882,9 @@
         "recount": {
           "input_cost_per_token": 3e-06,
           "output_cost_per_token": 1.5e-05
-        }
+        },
+        "prompt_tokens": 301,
+        "completion_tokens": 9
       }
     },
     {
@@ -8011,6 +8358,7 @@
         "spend": 0.0012456,
         "input_cost": 0.0010176,
         "output_cost": 0.000228,
+        "cache_read_cost": 0.0009216,
         "prompt_tokens": 12928,
         "completion_tokens": 380
       }
@@ -12566,7 +12914,9 @@
         "recount": {
           "input_cost_per_token": 5.2e-07,
           "output_cost_per_token": 3.12e-06
-        }
+        },
+        "prompt_tokens": 48,
+        "completion_tokens": 12
       }
     },
     {
@@ -12646,7 +12996,8 @@
         "recount": {
           "input_cost_per_token": 5.2e-07,
           "output_cost_per_token": 3.12e-06
-        }
+        },
+        "min_completion_tokens": 60
       }
     },
     {
@@ -12698,7 +13049,9 @@
         "recount": {
           "input_cost_per_token": 5.2e-07,
           "output_cost_per_token": 3.12e-06
-        }
+        },
+        "prompt_tokens": 302,
+        "completion_tokens": 10
       }
     },
     {
@@ -16955,7 +17308,8 @@
         "input_cost": 0.00276,
         "output_cost": 0.004944,
         "prompt_tokens": 1840,
-        "completion_tokens": 412
+        "completion_tokens": 412,
+        "tool_usage_cost": 0.0025
       }
     },
     {
@@ -20517,7 +20871,7 @@
       "response": {
         "content_type": "application/json",
         "body": {
-          "id": "chatcmpl-$REQUEST_ID",
+          "id": "chatcmpl-$UNIQUE_ID",
           "object": "chat.completion",
           "created": 1789788262,
           "model": "gpt-5.6",
@@ -20543,7 +20897,8 @@
         "input_cost": 0.00322,
         "output_cost": 0.005768,
         "prompt_tokens": 1840,
-        "completion_tokens": 412
+        "completion_tokens": 412,
+        "rollups": true
       }
     },
     {
@@ -21298,7 +21653,9 @@
         "recount": {
           "input_cost_per_token": 1.75e-06,
           "output_cost_per_token": 1.4e-05
-        }
+        },
+        "prompt_tokens": 49,
+        "completion_tokens": 12
       }
     },
     {
@@ -21372,7 +21729,7 @@
         "content_type": "text/event-stream",
         "frames": [
           "data: {\"id\": \"chatcmpl-$REQUEST_ID\", \"object\": \"chat.completion.chunk\", \"created\": 1789788263, \"model\": \"gpt-5.6\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\"}, \"finish_reason\": null}], \"usage\": null}",
-          "data: {\"id\": \"chatcmpl-$REQUEST_ID\", \"object\": \"chat.completion.chunk\", \"created\": 1789788263, \"model\": \"gpt-5.6\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"tool_calls\": [{\"index\": 0, \"id\": \"call_$REQUEST_ID\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"\"}}]}, \"finish_reason\": null}], \"usage\": null}",
+          "data: {\"id\": \"chatcmpl-$REQUEST_ID\", \"object\": \"chat.completion.chunk\", \"created\": 1789788263, \"model\": \"gpt-5.6\", \"choices\": [{\"index\": 0, \"delta\": {\"role\": \"assistant\", \"tool_calls\": [{\"index\": 0, \"id\": \"call_fixture_0001\", \"type\": \"function\", \"function\": {\"name\": \"get_weather\", \"arguments\": \"\"}}]}, \"finish_reason\": null}], \"usage\": null}",
           "data: {\"id\": \"chatcmpl-$REQUEST_ID\", \"object\": \"chat.completion.chunk\", \"created\": 1789788263, \"model\": \"gpt-5.6\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"{\\\"city\\\": \\\"Berlin\\\", \\\"days\\\": 7, \\\"units\\\": \\\"metric\\\", \\\"notes\\\": \\\"filler filler filler filler fil\"}}]}, \"finish_reason\": null}], \"usage\": null}",
           "data: {\"id\": \"chatcmpl-$REQUEST_ID\", \"object\": \"chat.completion.chunk\", \"created\": 1789788263, \"model\": \"gpt-5.6\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"ler filler filler filler filler filler filler filler filler filler filler filler filler fi\"}}]}, \"finish_reason\": null}], \"usage\": null}",
           "data: {\"id\": \"chatcmpl-$REQUEST_ID\", \"object\": \"chat.completion.chunk\", \"created\": 1789788263, \"model\": \"gpt-5.6\", \"choices\": [{\"index\": 0, \"delta\": {\"tool_calls\": [{\"index\": 0, \"function\": {\"arguments\": \"ller filler filler filler filler filler filler filler filler filler filler filler filler \\\"}\"}}]}, \"finish_reason\": null}], \"usage\": null}",
@@ -21384,7 +21741,8 @@
         "recount": {
           "input_cost_per_token": 1.75e-06,
           "output_cost_per_token": 1.4e-05
-        }
+        },
+        "min_completion_tokens": 60
       }
     },
     {
@@ -21439,7 +21797,9 @@
         "recount": {
           "input_cost_per_token": 1.75e-06,
           "output_cost_per_token": 1.4e-05
-        }
+        },
+        "prompt_tokens": 302,
+        "completion_tokens": 11
       }
     },
     {
@@ -21795,6 +22155,122 @@
         "output_cost": 0.042568,
         "prompt_tokens": 8314,
         "completion_tokens": 1592
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_native_json",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "responses native fixture",
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "status": "completed",
+          "created_at": 1700000000,
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 11,
+            "output_tokens": 7,
+            "total_tokens": 18,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.00011725,
+        "input_cost": 1.925e-05,
+        "output_cost": 9.8e-05,
+        "prompt_tokens": 11,
+        "completion_tokens": 7
+      }
+    },
+    {
+      "name": "gpt-5.6-upstream_500_zero_spend",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "scripted upstream failure 500"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "status": 500,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure",
+            "type": "server_error",
+            "code": "500"
+          }
+        }
+      },
+      "expected": {
+        "failure": {
+          "status": 500
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-upstream_429_zero_spend",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "scripted upstream failure 429"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "status": 429,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure",
+            "type": "rate_limit_error",
+            "code": "429"
+          }
+        }
+      },
+      "expected": {
+        "failure": {
+          "status": 429
+        }
       }
     },
     {
@@ -25652,6 +26128,5061 @@
         "output_cost": 0.01133,
         "prompt_tokens": 11056,
         "completion_tokens": 412
+      }
+    },
+    {
+      "name": "whisper-next-transcriptions-per-second",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "whisper-next",
+      "endpoint": "/v1/audio/transcriptions",
+      "upload": {
+        "kind": "wav",
+        "seconds": 3.5
+      },
+      "request": {
+        "language": "en",
+        "response_format": "json"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "text": "hello"
+        }
+      },
+      "expected": {
+        "spend": 0.00035,
+        "input_cost": 0.00035,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "whisper-verbose-next-transcriptions-duration",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "whisper-verbose-next",
+      "endpoint": "/v1/audio/transcriptions",
+      "upload": {
+        "kind": "wav",
+        "seconds": 3.5
+      },
+      "request": {
+        "response_format": "verbose_json"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "text": "hello",
+          "duration": 12.25
+        }
+      },
+      "expected": {
+        "spend": 0.00245,
+        "input_cost": 0.00245,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "gpt-4o-transcribe-next-transcriptions-tokens",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-4o-transcribe-next",
+      "endpoint": "/v1/audio/transcriptions",
+      "upload": {
+        "kind": "wav",
+        "seconds": 1.0
+      },
+      "request": {
+        "response_format": "json"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "text": "hello",
+          "usage": {
+            "type": "tokens",
+            "input_tokens": 10,
+            "output_tokens": 2,
+            "total_tokens": 12,
+            "input_token_details": {
+              "text_tokens": 2,
+              "audio_tokens": 8
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 9.044e-05,
+        "input_cost": 8.422e-05,
+        "output_cost": 6.22e-06,
+        "prompt_tokens": 10,
+        "completion_tokens": 2
+      }
+    },
+    {
+      "name": "nova-next-transcriptions-per-second",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "nova-next",
+      "endpoint": "/v1/audio/transcriptions",
+      "upload": {
+        "kind": "wav",
+        "seconds": 4.0
+      },
+      "request": {},
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "results": {
+            "channels": [
+              {
+                "alternatives": [
+                  {
+                    "transcript": "hello",
+                    "confidence": 0.9
+                  }
+                ]
+              }
+            ]
+          },
+          "metadata": {
+            "duration": 4.0,
+            "channels": 1
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0012,
+        "input_cost": 0.0012,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "azure-whisper-next-transcriptions-deployment",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "azure/whisper-next",
+      "endpoint": "/v1/audio/transcriptions",
+      "deployment": {
+        "model": "azure/cc-whisper-deployment",
+        "base_model": "azure/whisper-next"
+      },
+      "upload": {
+        "kind": "wav",
+        "seconds": 3.5
+      },
+      "request": {
+        "response_format": "json"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "text": "hello"
+        }
+      },
+      "expected": {
+        "spend": 0.000385,
+        "input_cost": 0.000385,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "tts-next-speech-per-character",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "tts-next",
+      "endpoint": "/v1/audio/speech",
+      "request": {
+        "input": "hello world",
+        "voice": "alloy",
+        "response_format": "mp3"
+      },
+      "response": {
+        "content_type": "audio/mpeg",
+        "length": 2048
+      },
+      "expected": {
+        "spend": 0.0001,
+        "input_cost": 0.0001,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "tts-next-hd-speech-per-character",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "tts-next-hd",
+      "endpoint": "/v1/audio/speech",
+      "request": {
+        "input": "hello world",
+        "voice": "alloy",
+        "response_format": "mp3"
+      },
+      "response": {
+        "content_type": "audio/mpeg",
+        "length": 2048
+      },
+      "expected": {
+        "spend": 0.0002,
+        "input_cost": 0.0002,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "azure-tts-next-speech-deployment",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "azure/tts-next",
+      "endpoint": "/v1/audio/speech",
+      "deployment": {
+        "model": "azure/cc-tts-deployment",
+        "base_model": "azure/tts-next"
+      },
+      "request": {
+        "input": "hello world",
+        "voice": "alloy",
+        "response_format": "mp3"
+      },
+      "response": {
+        "content_type": "audio/mpeg",
+        "length": 2048
+      },
+      "expected": {
+        "spend": 0.00011,
+        "input_cost": 0.00011,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "dall-e-3-next-images-standard",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "1024-x-1024/dall-e-3-next",
+      "endpoint": "/v1/images/generations",
+      "deployment": {
+        "model": "openai/dall-e-3-next"
+      },
+      "request": {
+        "prompt": "a deterministic square",
+        "size": "1024x1024",
+        "quality": "standard",
+        "n": 1
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "created": 1700000000,
+          "data": [
+            {
+              "url": "https://x/1.png"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.04,
+        "input_cost": 0.04,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "breakdown_persisted": false
+      }
+    },
+    {
+      "name": "dall-e-3-next-images-hd",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "hd/1024-x-1024/dall-e-3-next",
+      "endpoint": "/v1/images/generations",
+      "deployment": {
+        "model": "openai/dall-e-3-next"
+      },
+      "request": {
+        "prompt": "a deterministic square",
+        "size": "1024x1024",
+        "quality": "hd",
+        "n": 1
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "created": 1700000001,
+          "data": [
+            {
+              "url": "https://x/1.png"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.08,
+        "input_cost": 0.08,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "breakdown_persisted": false
+      }
+    },
+    {
+      "name": "dall-e-3-next-images-wide",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "1792-x-1024/dall-e-3-next",
+      "endpoint": "/v1/images/generations",
+      "deployment": {
+        "model": "openai/dall-e-3-next"
+      },
+      "request": {
+        "prompt": "a deterministic wide image",
+        "size": "1792x1024",
+        "quality": "standard",
+        "n": 1
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "created": 1700000002,
+          "data": [
+            {
+              "url": "https://x/1.png"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.06,
+        "input_cost": 0.06,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "breakdown_persisted": false
+      }
+    },
+    {
+      "name": "dall-e-3-next-images-two",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "1024-x-1024/dall-e-3-next",
+      "endpoint": "/v1/images/generations",
+      "deployment": {
+        "model": "openai/dall-e-3-next"
+      },
+      "request": {
+        "prompt": "two deterministic squares",
+        "size": "1024x1024",
+        "quality": "standard",
+        "n": 2
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "created": 1700000003,
+          "data": [
+            {
+              "url": "https://x/1.png"
+            },
+            {
+              "url": "https://x/2.png"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.08,
+        "input_cost": 0.08,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "breakdown_persisted": false
+      }
+    },
+    {
+      "name": "gpt-image-next-images-low",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-image-next",
+      "endpoint": "/v1/images/generations",
+      "deployment": {
+        "model": "openai/gpt-image-next"
+      },
+      "request": {
+        "prompt": "a deterministic generated image",
+        "size": "1024x1024",
+        "quality": "low",
+        "n": 1
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "created": 1700000004,
+          "data": [
+            {
+              "b64_json": "AA=="
+            }
+          ],
+          "usage": {
+            "total_tokens": 30,
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "input_tokens_details": {
+              "text_tokens": 10,
+              "image_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0001191,
+        "input_cost": 1.71e-05,
+        "output_cost": 0.000102,
+        "prompt_tokens": 10,
+        "completion_tokens": 20,
+        "breakdown_persisted": false
+      }
+    },
+    {
+      "name": "imagen-next-images-one",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "1024-x-1024/imagen-next",
+      "endpoint": "/v1/images/generations",
+      "request": {
+        "prompt": "a deterministic vertex image",
+        "sampleCount": 1
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "predictions": [
+            {
+              "bytesBase64Encoded": "AA==",
+              "mimeType": "image/png"
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.05,
+        "input_cost": 0.05,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "breakdown_persisted": false
+      }
+    },
+    {
+      "name": "amazon-nova-canvas-next-images-one",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "amazon.nova-canvas-next",
+      "endpoint": "/v1/images/generations",
+      "deployment": {
+        "model": "amazon.nova-canvas-next"
+      },
+      "request": {
+        "prompt": "a deterministic bedrock image"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "images": [
+            "AA=="
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.045,
+        "input_cost": 0.045,
+        "output_cost": 0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "breakdown_persisted": false
+      }
+    },
+    {
+      "name": "gpt-image-next-images-edit",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "low/1024-x-1024/gpt-image-next",
+      "endpoint": "/v1/images/edits",
+      "deployment": {
+        "model": "openai/gpt-image-next"
+      },
+      "upload": {
+        "kind": "png"
+      },
+      "request": {
+        "prompt": "edit this deterministic image",
+        "size": "1024x1024",
+        "quality": "low",
+        "n": 1
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "created": 1700000005,
+          "data": [
+            {
+              "b64_json": "AA=="
+            }
+          ],
+          "usage": {
+            "total_tokens": 30,
+            "input_tokens": 10,
+            "output_tokens": 20,
+            "input_tokens_details": {
+              "text_tokens": 10,
+              "image_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.000119,
+        "input_cost": 1.7e-05,
+        "output_cost": 0.000102,
+        "prompt_tokens": 10,
+        "completion_tokens": 20,
+        "breakdown_persisted": false
+      }
+    },
+    {
+      "name": "text-embeddings-4-small-single",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "text-embedding-4-small",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "one embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 0
+            }
+          ],
+          "model": "text-embedding-4-small",
+          "usage": {
+            "prompt_tokens": 7,
+            "total_tokens": 7
+          }
+        }
+      },
+      "expected": {
+        "spend": 7.07e-06,
+        "input_cost": 7.07e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 7,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "text-embeddings-4-small-batch",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "text-embedding-4-small",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": [
+          "one",
+          "two",
+          "three"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 0
+            },
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 1
+            },
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 2
+            }
+          ],
+          "model": "text-embedding-4-small",
+          "usage": {
+            "prompt_tokens": 21,
+            "total_tokens": 21
+          }
+        }
+      },
+      "expected": {
+        "spend": 2.1210000000000002e-05,
+        "input_cost": 2.1210000000000002e-05,
+        "output_cost": 0.0,
+        "prompt_tokens": 21,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "text-embeddings-4-small-token-array",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "text-embedding-4-small",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": [
+          1,
+          2,
+          3,
+          4
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 0
+            }
+          ],
+          "model": "text-embedding-4-small",
+          "usage": {
+            "prompt_tokens": 9,
+            "total_tokens": 9
+          }
+        }
+      },
+      "expected": {
+        "spend": 9.090000000000001e-06,
+        "input_cost": 9.090000000000001e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 9,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "text-embeddings-3-large-dimensions",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "text-embedding-3-large-next",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "large embedding",
+        "dimensions": 3
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 0
+            }
+          ],
+          "model": "text-embedding-3-large-next",
+          "usage": {
+            "prompt_tokens": 8,
+            "total_tokens": 8
+          }
+        }
+      },
+      "expected": {
+        "spend": 8.16e-06,
+        "input_cost": 8.16e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 8,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "azure-text-embeddings-4-large-deployment",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "azure/text-embedding-4-large",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "azure embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 0
+            }
+          ],
+          "model": "azure/text-embedding-4-large",
+          "usage": {
+            "prompt_tokens": 8,
+            "total_tokens": 8
+          }
+        }
+      },
+      "expected": {
+        "spend": 8.24e-06,
+        "input_cost": 8.24e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 8,
+        "completion_tokens": 0
+      },
+      "deployment": {
+        "model": "azure/cc-pinned-embedding-deployment",
+        "base_model": "azure/text-embedding-4-large"
+      }
+    },
+    {
+      "name": "cohere-embeddings-v5",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "embed-v5",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "cohere embedding",
+        "input_type": "search_query"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "emb-1",
+          "embeddings": {
+            "float": [
+              [
+                0.1,
+                0.2,
+                0.3
+              ]
+            ]
+          },
+          "meta": {
+            "billed_units": {
+              "input_tokens": 11
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 1.144e-05,
+        "input_cost": 1.144e-05,
+        "output_cost": 0.0,
+        "prompt_tokens": 11,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "bedrock-embeddings-titan-v2",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "amazon.titan-embed-text-v2:0",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "titan embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "embedding": [
+            0.1,
+            0.2,
+            0.3
+          ],
+          "inputTextTokenCount": 10
+        }
+      },
+      "expected": {
+        "spend": 1.05e-05,
+        "input_cost": 1.05e-05,
+        "output_cost": 0.0,
+        "prompt_tokens": 10,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "bedrock-cohere-embeddings-v4",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "cohere.embed-english-v4",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "bedrock cohere embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "embeddings": [
+            [
+              0.1,
+              0.2,
+              0.3
+            ]
+          ],
+          "id": "emb-bedrock-cohere-1",
+          "response_type": "embeddings_floats",
+          "texts": [
+            "bedrock cohere embedding"
+          ]
+        }
+      },
+      "expected": {
+        "spend": 5.3e-06,
+        "input_cost": 5.3e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 5,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "vertex-embeddings-text-006",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "text-embedding-006",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "vertex embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "predictions": [
+            {
+              "embeddings": {
+                "values": [
+                  0.1,
+                  0.2,
+                  0.3
+                ],
+                "statistics": {
+                  "token_count": 7,
+                  "truncated": false
+                }
+              }
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 7.4899999999999994e-06,
+        "input_cost": 7.4899999999999994e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 7,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "gemini-embeddings-002",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-embedding-002",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "gemini embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "embeddings": [
+            {
+              "values": [
+                0.1,
+                0.2,
+                0.3
+              ]
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 7,
+            "totalTokenCount": 7
+          }
+        }
+      },
+      "expected": {
+        "spend": 3.24e-06,
+        "input_cost": 3.24e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 3,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "together-embeddings-v1",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "together_ai/together-embed-v1",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "together embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 0
+            }
+          ],
+          "model": "together-embed-v1",
+          "usage": {
+            "prompt_tokens": 7,
+            "total_tokens": 7
+          }
+        }
+      },
+      "expected": {
+        "spend": 7.63e-06,
+        "input_cost": 7.63e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 7,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "fireworks-embeddings-v1",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "fireworks_ai/fireworks-embed-v1",
+      "endpoint": "/v1/embeddings",
+      "request": {
+        "model": "$MODEL",
+        "input": "fireworks embedding"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "object": "list",
+          "data": [
+            {
+              "object": "embedding",
+              "embedding": [
+                0.1,
+                0.2,
+                0.3
+              ],
+              "index": 0
+            }
+          ],
+          "model": "fireworks-embed-v1",
+          "usage": {
+            "prompt_tokens": 7,
+            "total_tokens": 7
+          }
+        }
+      },
+      "expected": {
+        "spend": 7.7e-06,
+        "input_cost": 7.7e-06,
+        "output_cost": 0.0,
+        "prompt_tokens": 7,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "cohere-rerank-v4-one",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "rerank-v4",
+      "endpoint": "/v1/rerank",
+      "request": {
+        "model": "$MODEL",
+        "query": "rank this",
+        "documents": [
+          "a",
+          "b"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "rr-$REQUEST_ID",
+          "results": [
+            {
+              "index": 0,
+              "relevance_score": 0.9
+            }
+          ],
+          "meta": {
+            "api_version": {
+              "version": "2"
+            },
+            "billed_units": {
+              "search_units": 1
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0021,
+        "input_cost": 0.0021,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "cohere-rerank-v4-three",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "rerank-v4",
+      "endpoint": "/v1/rerank",
+      "request": {
+        "model": "$MODEL",
+        "query": "rank this",
+        "documents": [
+          "a long document",
+          "another long document",
+          "third long document"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "rr-three-$REQUEST_ID",
+          "results": [
+            {
+              "index": 0,
+              "relevance_score": 0.9
+            }
+          ],
+          "meta": {
+            "api_version": {
+              "version": "2"
+            },
+            "billed_units": {
+              "search_units": 3
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0063,
+        "input_cost": 0.0063,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "cohere-rerank-v4-total-tokens-fallback",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "rerank-v4",
+      "endpoint": "/v1/rerank",
+      "request": {
+        "model": "$MODEL",
+        "query": "rank this",
+        "documents": [
+          "fallback a",
+          "fallback b"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "rr-fallback-$REQUEST_ID",
+          "results": [
+            {
+              "index": 0,
+              "relevance_score": 0.8
+            }
+          ],
+          "meta": {
+            "billed_units": {
+              "total_tokens": 99
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "bedrock-cohere-rerank-v4",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "cohere.rerank-v4:0",
+      "endpoint": "/v1/rerank",
+      "request": {
+        "model": "$MODEL",
+        "query": "rank this",
+        "documents": [
+          "a",
+          "b"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "results": [
+            {
+              "index": 0,
+              "relevanceScore": 0.9
+            }
+          ],
+          "response_id": "rr-3",
+          "token_count": 1
+        }
+      },
+      "expected": {
+        "spend": 0.0022,
+        "input_cost": 0.0022,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "text-completions-openai-basic",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-3.5-turbo-instruct-next",
+      "endpoint": "/v1/completions",
+      "request": {
+        "model": "$MODEL",
+        "prompt": "complete this"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "cmpl-basic-$REQUEST_ID",
+          "object": "text_completion",
+          "choices": [
+            {
+              "text": "done",
+              "index": 0,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 9,
+            "completion_tokens": 4,
+            "total_tokens": 13
+          }
+        }
+      },
+      "expected": {
+        "spend": 1.882e-05,
+        "input_cost": 1.026e-05,
+        "output_cost": 8.56e-06,
+        "prompt_tokens": 9,
+        "completion_tokens": 4
+      }
+    },
+    {
+      "name": "text-completions-openai-stream-usage",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-3.5-turbo-instruct-next",
+      "endpoint": "/v1/completions",
+      "request": {
+        "model": "$MODEL",
+        "prompt": "complete this",
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "data: {\"id\": \"cmpl-$REQUEST_ID\", \"object\": \"text_completion\", \"created\": 1789789000, \"model\": \"gpt-3.5-turbo-instruct-next\", \"choices\": [{\"text\": \"done\", \"index\": 0, \"finish_reason\": null}], \"usage\": null}",
+          "data: {\"id\": \"cmpl-$REQUEST_ID\", \"object\": \"text_completion\", \"created\": 1789789000, \"model\": \"gpt-3.5-turbo-instruct-next\", \"choices\": [], \"usage\": {\"prompt_tokens\": 9, \"completion_tokens\": 4, \"total_tokens\": 13}}",
+          "data: [DONE]"
+        ]
+      },
+      "expected": {
+        "spend": 1.882e-05,
+        "input_cost": 1.026e-05,
+        "output_cost": 8.56e-06,
+        "prompt_tokens": 9,
+        "completion_tokens": 4
+      }
+    },
+    {
+      "name": "text-completions-openai-n-best",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-3.5-turbo-instruct-next",
+      "endpoint": "/v1/completions",
+      "request": {
+        "model": "$MODEL",
+        "prompt": "complete this twice",
+        "n": 2
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "cmpl-n-best-$REQUEST_ID",
+          "object": "text_completion",
+          "choices": [
+            {
+              "text": "done",
+              "index": 0,
+              "finish_reason": "stop"
+            },
+            {
+              "text": "also done",
+              "index": 1,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 9,
+            "completion_tokens": 8,
+            "total_tokens": 17
+          }
+        }
+      },
+      "expected": {
+        "spend": 2.738e-05,
+        "input_cost": 1.026e-05,
+        "output_cost": 1.712e-05,
+        "prompt_tokens": 9,
+        "completion_tokens": 8
+      }
+    },
+    {
+      "name": "together-completions-v1",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "together_ai/meta-llama/Llama-3.3-70B-Instruct-Turbo",
+      "endpoint": "/v1/completions",
+      "request": {
+        "model": "$MODEL",
+        "prompt": "together complete"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "cmpl-together-$REQUEST_ID",
+          "object": "text_completion",
+          "choices": [
+            {
+              "text": "done",
+              "index": 0,
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 9,
+            "completion_tokens": 4,
+            "total_tokens": 13
+          }
+        }
+      },
+      "expected": {
+        "spend": 1.908e-05,
+        "input_cost": 1.0439999999999998e-05,
+        "output_cost": 8.64e-06,
+        "prompt_tokens": 9,
+        "completion_tokens": 4
+      }
+    },
+    {
+      "name": "omni-moderations-next-single",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "omni-moderation-next",
+      "endpoint": "/v1/moderations",
+      "request": {
+        "model": "$MODEL",
+        "input": "safe text"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "modr-single-$REQUEST_ID",
+          "model": "omni-moderation-next",
+          "results": [
+            {
+              "flagged": false,
+              "categories": {},
+              "category_scores": {}
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "omni-moderations-next-list",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "omni-moderation-next",
+      "endpoint": "/v1/moderations",
+      "request": {
+        "model": "$MODEL",
+        "input": [
+          "safe text",
+          "more safe text"
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "modr-list-$REQUEST_ID",
+          "model": "omni-moderation-next",
+          "results": [
+            {
+              "flagged": false,
+              "categories": {},
+              "category_scores": {}
+            },
+            {
+              "flagged": false,
+              "categories": {},
+              "category_scores": {}
+            }
+          ]
+        }
+      },
+      "expected": {
+        "spend": 0.0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_cache_read",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "summarize this text"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 12928,
+            "output_tokens": 380,
+            "total_tokens": 13308,
+            "input_tokens_details": {
+              "cached_tokens": 12288
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0085904,
+        "input_cost": 0.0032704,
+        "output_cost": 0.00532,
+        "prompt_tokens": 12928,
+        "completion_tokens": 380,
+        "cache_read_cost": 0.0021504
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_reasoning",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "reason about this text"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "reasoning",
+              "id": "rs_$REQUEST_ID",
+              "status": "completed",
+              "summary": []
+            },
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1240,
+            "output_tokens": 4040,
+            "total_tokens": 5280,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 3480
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.06569,
+        "input_cost": 0.00217,
+        "output_cost": 0.06352,
+        "prompt_tokens": 1240,
+        "completion_tokens": 4040,
+        "reasoning_cost": 0.05568
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_stream",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "stream this text",
+        "stream": true
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_$REQUEST_ID\",\"object\":\"response\",\"created_at\":1700000000,\"status\":\"in_progress\",\"model\":\"gpt-5.6\",\"output\":[{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}]}],\"usage\":null}}",
+          "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}",
+          "event: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"content_part\",\"text\":\"\"}}",
+          "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"delta\":\"scripted \"}",
+          "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"delta\":\"response\"}",
+          "event: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"text\":\"scripted response\"}",
+          "event: response.content_part.done\ndata: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}}",
+          "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}]}}",
+          "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_$REQUEST_ID\",\"object\":\"response\",\"created_at\":1700000000,\"status\":\"completed\",\"model\":\"gpt-5.6\",\"output\":[{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":1840,\"output_tokens\":412,\"total_tokens\":2252,\"input_tokens_details\":{\"cached_tokens\":0},\"output_tokens_details\":{\"reasoning_tokens\":0}}}}"
+        ]
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_stream_cache_read",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "stream cached text",
+        "stream": true
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "event: response.created\ndata: {\"type\":\"response.created\",\"response\":{\"id\":\"resp_$REQUEST_ID\",\"object\":\"response\",\"created_at\":1700000000,\"status\":\"in_progress\",\"model\":\"gpt-5.6\",\"output\":[{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}]}],\"usage\":null}}",
+          "event: response.output_item.added\ndata: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"in_progress\",\"role\":\"assistant\",\"content\":[]}}",
+          "event: response.content_part.added\ndata: {\"type\":\"response.content_part.added\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"content_part\",\"text\":\"\"}}",
+          "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"delta\":\"scripted \"}",
+          "event: response.output_text.delta\ndata: {\"type\":\"response.output_text.delta\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"delta\":\"response\"}",
+          "event: response.output_text.done\ndata: {\"type\":\"response.output_text.done\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"text\":\"scripted response\"}",
+          "event: response.content_part.done\ndata: {\"type\":\"response.content_part.done\",\"item_id\":\"msg_$REQUEST_ID\",\"output_index\":0,\"content_index\":0,\"part\":{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}}",
+          "event: response.output_item.done\ndata: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}]}}",
+          "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"id\":\"resp_$REQUEST_ID\",\"object\":\"response\",\"created_at\":1700000000,\"status\":\"completed\",\"model\":\"gpt-5.6\",\"output\":[{\"type\":\"message\",\"id\":\"msg_$REQUEST_ID\",\"status\":\"completed\",\"role\":\"assistant\",\"content\":[{\"type\":\"output_text\",\"text\":\"scripted response\",\"annotations\":[]}]}],\"usage\":{\"input_tokens\":12928,\"output_tokens\":380,\"total_tokens\":13308,\"input_tokens_details\":{\"cached_tokens\":12288},\"output_tokens_details\":{\"reasoning_tokens\":0}}}}"
+        ]
+      },
+      "expected": {
+        "spend": 0.0085904,
+        "input_cost": 0.0032704,
+        "output_cost": 0.00532,
+        "prompt_tokens": 12928,
+        "completion_tokens": 380,
+        "cache_read_cost": 0.0021504
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_incomplete",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "truncate this text",
+        "max_output_tokens": 100
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "incomplete",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 100,
+            "total_tokens": 1940,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          },
+          "incomplete_details": {
+            "reason": "max_output_tokens"
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.00462,
+        "input_cost": 0.00322,
+        "output_cost": 0.0014,
+        "prompt_tokens": 1840,
+        "completion_tokens": 100
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_previous_response_id",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "continue this text",
+        "previous_response_id": "$PRIOR_RESPONSE_ID"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "total_tokens": 2252,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_web_search_medium",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "search this text",
+        "tools": [
+          {
+            "type": "web_search_preview",
+            "search_context_size": "medium"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "web_search_call",
+              "id": "ws_$REQUEST_ID",
+              "status": "completed",
+              "action": {
+                "type": "search",
+                "query": "scripted query"
+              }
+            },
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "total_tokens": 2252,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.021488,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "tool_usage_cost": 0.0125
+      }
+    },
+    {
+      "name": "gpt-5.3-codex-responses_file_search",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.3-codex",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "search files",
+        "tools": [
+          {
+            "type": "file_search",
+            "vector_store_ids": [
+              "vs_scripted"
+            ]
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.3-codex",
+          "output": [
+            {
+              "type": "file_search_call",
+              "id": "fs_$REQUEST_ID",
+              "status": "completed",
+              "queries": [
+                "scripted query"
+              ],
+              "results": []
+            },
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "total_tokens": 2252,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.010204,
+        "input_cost": 0.00276,
+        "output_cost": 0.004944,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "tool_usage_cost": 0.0025
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_service_tier_flex",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "flex text",
+        "service_tier": "flex"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "total_tokens": 2252,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "service_tier": "flex"
+          },
+          "service_tier": "flex"
+        }
+      },
+      "expected": {
+        "spend": 0.004494,
+        "input_cost": 0.00161,
+        "output_cost": 0.002884,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_service_tier_priority",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "priority text",
+        "service_tier": "priority"
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "resp_$REQUEST_ID",
+          "object": "response",
+          "created_at": 1700000000,
+          "status": "completed",
+          "model": "gpt-5.6",
+          "output": [
+            {
+              "type": "message",
+              "id": "msg_$REQUEST_ID",
+              "status": "completed",
+              "role": "assistant",
+              "content": [
+                {
+                  "type": "output_text",
+                  "text": "scripted response",
+                  "annotations": []
+                }
+              ]
+            }
+          ],
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "total_tokens": 2252,
+            "input_tokens_details": {
+              "cached_tokens": 0
+            },
+            "output_tokens_details": {
+              "reasoning_tokens": 0
+            },
+            "service_tier": "priority"
+          },
+          "service_tier": "priority"
+        }
+      },
+      "expected": {
+        "spend": 0.017976,
+        "input_cost": 0.00644,
+        "output_cost": 0.011536,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_input_text",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0117,
+        "input_cost": 0.00552,
+        "output_cost": 0.00618,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_cache_read",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "cached text",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 640,
+            "output_tokens": 380,
+            "cache_read_input_tokens": 12288
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0113064,
+        "input_cost": 0.0056064,
+        "output_cost": 0.0057,
+        "prompt_tokens": 12928,
+        "completion_tokens": 380,
+        "cache_read_cost": 0.0036864
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_cache_write_5m",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 350,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "cache this text",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 512,
+            "output_tokens": 350,
+            "cache_creation_input_tokens": 9216,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 9216,
+              "ephemeral_1h_input_tokens": 0
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.041346,
+        "input_cost": 0.036096,
+        "output_cost": 0.00525,
+        "prompt_tokens": 9728,
+        "completion_tokens": 350,
+        "cache_creation_cost": 0.03456
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_cache_write_1h",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 350,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "cache this text for an hour",
+                "cache_control": {
+                  "type": "ephemeral",
+                  "ttl": "1h"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 512,
+            "output_tokens": 350,
+            "cache_creation_input_tokens": 9216,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 2048,
+              "ephemeral_1h_input_tokens": 7168
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.057474,
+        "input_cost": 0.052224,
+        "output_cost": 0.00525,
+        "prompt_tokens": 9728,
+        "completion_tokens": 350,
+        "cache_creation_cost": 0.050688
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_web_search",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ],
+        "tools": [
+          {
+            "type": "web_search_20250305",
+            "name": "web_search"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "server_tool_use",
+              "id": "srv_$REQUEST_ID",
+              "name": "web_search",
+              "input": {
+                "query": "scripted query"
+              }
+            },
+            {
+              "type": "web_search_tool_result",
+              "tool_use_id": "srv_$REQUEST_ID",
+              "content": [
+                {
+                  "type": "web_search_result",
+                  "title": "scripted result",
+                  "url": "https://scripted.example"
+                }
+              ]
+            },
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412,
+            "server_tool_use": {
+              "web_search_requests": 2
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0317,
+        "input_cost": 0.00552,
+        "output_cost": 0.00618,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "tool_usage_cost": 0.02
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_stream",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ],
+        "stream": true
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_$REQUEST_ID\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":1840}}}",
+          "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}",
+          "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"scripted \"}}",
+          "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"response\"}}",
+          "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}",
+          "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":412}}",
+          "event: message_stop\ndata: {\"type\":\"message_stop\"}"
+        ]
+      },
+      "expected": {
+        "spend": 0.0117,
+        "input_cost": 0.00552,
+        "output_cost": 0.00618,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_stream_cache_read",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 380,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ],
+        "stream": true
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"id\":\"msg_$REQUEST_ID\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"claude-sonnet-5\",\"content\":[],\"stop_reason\":null,\"stop_sequence\":null,\"usage\":{\"input_tokens\":640,\"cache_read_input_tokens\":12288}}}",
+          "event: content_block_start\ndata: {\"type\":\"content_block_start\",\"index\":0,\"content_block\":{\"type\":\"text\",\"text\":\"\"}}",
+          "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"scripted \"}}",
+          "event: content_block_delta\ndata: {\"type\":\"content_block_delta\",\"index\":0,\"delta\":{\"type\":\"text_delta\",\"text\":\"response\"}}",
+          "event: content_block_stop\ndata: {\"type\":\"content_block_stop\",\"index\":0}",
+          "event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":380}}",
+          "event: message_stop\ndata: {\"type\":\"message_stop\"}"
+        ]
+      },
+      "expected": {
+        "spend": 0.0113064,
+        "input_cost": 0.0056064,
+        "output_cost": 0.0057,
+        "prompt_tokens": 12928,
+        "completion_tokens": 380,
+        "cache_read_cost": 0.0036864
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_tiered_input_above_200k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 620,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 210000,
+            "output_tokens": 620
+          }
+        }
+      },
+      "expected": {
+        "spend": 1.27395,
+        "input_cost": 1.26,
+        "output_cost": 0.01395,
+        "prompt_tokens": 210000,
+        "completion_tokens": 620
+      }
+    },
+    {
+      "name": "claude-haiku-4-5-messages_input_text",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-haiku-4-5",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-haiku-4-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0039,
+        "input_cost": 0.00184,
+        "output_cost": 0.00206,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "us.anthropic.claude-opus-5-v1:0-messages_input_text",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "us.anthropic.claude-opus-5-v1:0",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "scripted response"
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 1840,
+            "outputTokens": 412
+          },
+          "metrics": {
+            "latencyMs": 42
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.02145,
+        "input_cost": 0.01012,
+        "output_cost": 0.01133,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "anthropic.claude-sonnet-5-v1:0-messages_cache_read",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "anthropic.claude-sonnet-5-v1:0",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "scripted response"
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 640,
+            "outputTokens": 380,
+            "totalTokens": 13308,
+            "cacheReadInputTokens": 12288
+          },
+          "metrics": {
+            "latencyMs": 42
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.01243704,
+        "input_cost": 0.00616704,
+        "output_cost": 0.00627,
+        "prompt_tokens": 12928,
+        "completion_tokens": 380,
+        "cache_read_cost": 0.00405504
+      }
+    },
+    {
+      "name": "gemini-3.1-pro-passthrough-generate_content_priced_via_gemini_key",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-3.1-pro",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "5fdf6b7dd9b9 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "scripted answer 5fdf6b7dd9b9"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 1840,
+            "candidatesTokenCount": 412,
+            "totalTokenCount": 2252,
+            "promptTokensDetails": [
+              {
+                "modality": "TEXT",
+                "tokenCount": 1840
+              }
+            ]
+          },
+          "modelVersion": "gemini-3.1-pro"
+        }
+      },
+      "expected": {
+        "spend": 0.008624,
+        "input_cost": 0.00368,
+        "output_cost": 0.004944,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "breakdown_persisted": false,
+        "cost_header": false
+      },
+      "endpoint": "/gemini/v1beta/models/$MODEL:generateContent"
+    },
+    {
+      "name": "gemini-3.1-pro-passthrough-stream_generate_content_priced_via_vertex_key",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "gemini-3.1-pro",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "52b6a80ff038 summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "data: {\"candidates\": [{\"content\": {\"parts\": [{\"text\": \"scripted answer 52b6a80ff038\"}], \"role\": \"model\"}, \"finishReason\": \"STOP\", \"index\": 0}], \"modelVersion\": \"gemini-3.1-pro\"}",
+          "data: {\"candidates\": [], \"usageMetadata\": {\"promptTokenCount\": 1840, \"candidatesTokenCount\": 412, \"totalTokenCount\": 2252, \"promptTokensDetails\": [{\"modality\": \"TEXT\", \"tokenCount\": 1840}]}, \"modelVersion\": \"gemini-3.1-pro\"}"
+        ]
+      },
+      "expected": {
+        "spend": 0.0090552,
+        "input_cost": 0.003864,
+        "output_cost": 0.0051912,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "breakdown_persisted": false,
+        "cost_header": false
+      },
+      "endpoint": "/gemini/v1beta/models/$MODEL:streamGenerateContent?alt=sse"
+    },
+    {
+      "name": "claude-sonnet-5-passthrough-messages",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/anthropic/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": "summarize the attached material in one line"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0117,
+        "input_cost": 0.00552,
+        "output_cost": 0.00618,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "breakdown_persisted": false,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "claude-sonnet-5-passthrough-messages_cache_read",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "endpoint": "/anthropic/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "max_tokens": 412,
+        "messages": [
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "cached text",
+                "cache_control": {
+                  "type": "ephemeral"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 640,
+            "output_tokens": 380,
+            "cache_read_input_tokens": 12288
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0113064,
+        "input_cost": 0.0056064,
+        "output_cost": 0.0057,
+        "prompt_tokens": 12928,
+        "completion_tokens": 380,
+        "cache_read_cost": 0.0036864,
+        "breakdown_persisted": false,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "anthropic.claude-sonnet-5-v1:0-passthrough-converse",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "anthropic.claude-sonnet-5-v1:0",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "9aad4de0556c summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "scripted answer 9aad4de0556c"
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 1840,
+            "outputTokens": 412,
+            "totalTokens": 2252
+          },
+          "metrics": {
+            "latencyMs": 42
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.01287,
+        "input_cost": 0.006072,
+        "output_cost": 0.006798,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "cost_header": false
+      },
+      "endpoint": "/bedrock/model/$MODEL/converse"
+    },
+    {
+      "name": "anthropic.claude-sonnet-5-v1:0-passthrough-converse_stream",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "anthropic.claude-sonnet-5-v1:0",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "a9257967d38a summarize the attached material in one line and name the city weather"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/vnd.amazon.eventstream",
+        "events": [
+          {
+            "event_type": "messageStart",
+            "payload": {
+              "role": "assistant"
+            }
+          },
+          {
+            "event_type": "contentBlockDelta",
+            "payload": {
+              "delta": {
+                "text": "scripted answer a9257967d38a"
+              },
+              "contentBlockIndex": 0
+            }
+          },
+          {
+            "event_type": "contentBlockStop",
+            "payload": {
+              "contentBlockIndex": 0
+            }
+          },
+          {
+            "event_type": "messageStop",
+            "payload": {
+              "stopReason": "end_turn"
+            }
+          },
+          {
+            "event_type": "metadata",
+            "payload": {
+              "usage": {
+                "inputTokens": 1840,
+                "outputTokens": 412,
+                "totalTokens": 2252
+              },
+              "metrics": {
+                "latencyMs": 42
+              }
+            }
+          }
+        ]
+      },
+      "expected": {
+        "spend": 0.01287,
+        "input_cost": 0.006072,
+        "output_cost": 0.006798,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "cost_header": false
+      },
+      "endpoint": "/bedrock/model/$MODEL/converse-stream"
+    },
+    {
+      "name": "dashscope-qwen4-max-tiered_input",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "dashscope/qwen4-max",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "tiered input"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "qwen4-max",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "ok"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.00507,
+        "input_cost": 0.002392,
+        "output_cost": 0.002678,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "dashscope-qwen4-max-tiered_boundary_stays_lower_tier",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "dashscope/qwen4-max",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "tier boundary"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "qwen4-max",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "ok"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 32000,
+            "completion_tokens": 412,
+            "total_tokens": 32412
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.044278,
+        "input_cost": 0.0416,
+        "output_cost": 0.002678,
+        "prompt_tokens": 32000,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "dashscope-qwen4-max-tiered_second_tier",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "dashscope/qwen4-max",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "tier two"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "qwen4-max",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "ok"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 40000,
+            "completion_tokens": 412,
+            "total_tokens": 40412
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.109356,
+        "input_cost": 0.104,
+        "output_cost": 0.005356,
+        "prompt_tokens": 40000,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "dashscope-qwen4-max-tiered_above_top_range",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "dashscope/qwen4-max",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "top tier"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "qwen4-max",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "ok"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 300000,
+            "completion_tokens": 412,
+            "total_tokens": 300412
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.936386,
+        "input_cost": 0.93,
+        "output_cost": 0.006386,
+        "prompt_tokens": 300000,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gemini-gemini-3.8-flash-lite-input_below_128k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-3.8-flash-lite",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "base pricing"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "ok"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 1840,
+            "candidatesTokenCount": 412,
+            "totalTokenCount": 2252
+          },
+          "modelVersion": "gemini-3.8-flash-lite"
+        }
+      },
+      "expected": {
+        "spend": 0.00038368,
+        "input_cost": 0.0002024,
+        "output_cost": 0.00018128,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gemini-gemini-3.8-flash-lite-input_above_128k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gemini/gemini-3.8-flash-lite",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "above threshold"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "candidates": [
+            {
+              "content": {
+                "parts": [
+                  {
+                    "text": "ok"
+                  }
+                ],
+                "role": "model"
+              },
+              "finishReason": "STOP",
+              "index": 0
+            }
+          ],
+          "usageMetadata": {
+            "promptTokenCount": 130000,
+            "candidatesTokenCount": 412,
+            "totalTokenCount": 130412
+          },
+          "modelVersion": "gemini-3.8-flash-lite"
+        }
+      },
+      "expected": {
+        "spend": 0.02896256,
+        "input_cost": 0.0286,
+        "output_cost": 0.00036256,
+        "prompt_tokens": 130000,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "claude-sonnet-5-cache_creation_1h_above_200k",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "claude-sonnet-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "one hour cache"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "claude-sonnet-5",
+          "content": [
+            {
+              "type": "text",
+              "text": "ok"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "usage": {
+            "input_tokens": 150000,
+            "cache_creation_input_tokens": 60000,
+            "cache_creation": {
+              "ephemeral_5m_input_tokens": 0,
+              "ephemeral_1h_input_tokens": 60000
+            },
+            "cache_read_input_tokens": 0,
+            "output_tokens": 412
+          }
+        }
+      },
+      "expected": {
+        "spend": 1.62927,
+        "input_cost": 1.62,
+        "output_cost": 0.00927,
+        "cache_creation_cost": 0.72,
+        "prompt_tokens": 210000,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "openrouter-anthropic-claude-sonnet-5-provider_reported_cost",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "openrouter/anthropic/claude-sonnet-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "reported cost"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "anthropic/claude-sonnet-5",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "ok"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252,
+            "cost": 0.0421
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0421,
+        "input_cost": 0.0,
+        "output_cost": 0.0421,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "breakdown_persisted": false
+      }
+    },
+    {
+      "name": "openrouter-anthropic-claude-sonnet-5-token_priced",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "openrouter/anthropic/claude-sonnet-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "token pricing"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "anthropic/claude-sonnet-5",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "ok"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.01248,
+        "input_cost": 0.005888,
+        "output_cost": 0.006592,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "perplexity-sonar-next-no_search",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "perplexity/sonar-next",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "no search"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "sonar-next",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "ok"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {"spend": 0.0025118, "input_cost": 0.0020792, "output_cost": 0.0004326, "prompt_tokens": 1840, "completion_tokens": 412}
+    },
+    {
+      "name": "deepseek-deepseek-v4-chat-prompt_cache_hit",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "deepseek/deepseek-v4-chat",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "cache hit"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "deepseek-v4-chat",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "ok"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252,
+            "prompt_cache_hit_tokens": 1200,
+            "prompt_cache_miss_tokens": 640,
+            "prompt_tokens_details": {
+              "cached_tokens": 1200
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.00039756,
+        "input_cost": 0.0002204,
+        "output_cost": 0.00017716,
+        "cache_read_cost": 3.48e-05,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "deepseek-deepseek-v4-chat-no_cache_fields_bills_zero_cache",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "deepseek/deepseek-v4-chat",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "no cache"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "deepseek-v4-chat",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "ok"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.00071076,
+        "input_cost": 0.0005336,
+        "output_cost": 0.00017716,
+        "cache_read_cost": 0.0,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "xai-grok-5-reasoning_folded_into_completion",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "xai/grok-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "reasoning"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "grok-5",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "ok"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2552,
+            "completion_tokens_details": {
+              "reasoning_tokens": 300
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0044064,
+        "input_cost": 0.002484,
+        "output_cost": 0.0019224,
+        "prompt_tokens": 1840,
+        "completion_tokens": 712
+      }
+    },
+    {
+      "name": "xai-grok-5-live_search",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "xai/grok-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "live search"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "grok-5",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "ok"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252,
+            "server_side_tool_usage_details": {
+              "web_search_calls": 2
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0135964,
+        "input_cost": 0.002484,
+        "output_cost": 0.0011124,
+        "tool_usage_cost": 0.01,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "xai-grok-5-provider_reported_cost",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "xai/grok-5",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "reported xai cost"
+          }
+        ],
+        "stream": false,
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "grok-5",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "ok"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252,
+            "cost": 0.0421
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0421,
+        "input_cost": 0.0,
+        "output_cost": 0.0421,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "bedrock-invoke-haiku-json",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "bedrock-invoke-haiku-json"
+          }
+        ],
+        "stream": false,
+        "max_tokens": 412
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "msg_$REQUEST_ID",
+          "type": "message",
+          "role": "assistant",
+          "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
+          "content": [
+            {
+              "type": "text",
+              "text": "scripted response"
+            }
+          ],
+          "stop_reason": "end_turn",
+          "stop_sequence": null,
+          "usage": {
+            "input_tokens": 1840,
+            "output_tokens": 412
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.00425372,
+        "input_cost": 0.0021896,
+        "output_cost": 0.00206412,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "bedrock-invoke-haiku-stream",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "bedrock/invoke/anthropic.claude-haiku-4-5-20251001-v1:0",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "bedrock-invoke-haiku-stream"
+          }
+        ],
+        "stream": true,
+        "max_tokens": 412
+      },
+      "response": {
+        "content_type": "application/vnd.amazon.eventstream",
+        "framing": "invoke",
+        "events": [
+          {
+            "event_type": "message_start",
+            "payload": {
+              "type": "message_start",
+              "message": {
+                "id": "msg_$REQUEST_ID",
+                "type": "message",
+                "role": "assistant",
+                "model": "anthropic.claude-haiku-4-5-20251001-v1:0",
+                "content": [],
+                "stop_reason": null,
+                "stop_sequence": null,
+                "usage": {
+                  "input_tokens": 1840,
+                  "output_tokens": 0
+                }
+              }
+            }
+          },
+          {
+            "event_type": "content_block_delta",
+            "payload": {
+              "type": "content_block_delta",
+              "index": 0,
+              "delta": {
+                "type": "text_delta",
+                "text": "scripted response"
+              }
+            }
+          },
+          {
+            "event_type": "message_delta",
+            "payload": {
+              "type": "message_delta",
+              "delta": {
+                "stop_reason": "end_turn"
+              },
+              "usage": {
+                "output_tokens": 412
+              }
+            }
+          },
+          {
+            "event_type": "message_stop",
+            "payload": {
+              "type": "message_stop"
+            }
+          }
+        ]
+      },
+      "expected": {
+        "spend": 0.00425372,
+        "input_cost": 0.0021896,
+        "output_cost": 0.00206412,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "bedrock-converse-profile-base-model",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "anthropic.claude-sonnet-5-v1:0",
+      "deployment": {
+        "model": "bedrock/converse/arn:aws:bedrock:us-east-1:123456789012:application-inference-profile/abc123",
+        "base_model": "anthropic.claude-sonnet-5-v1:0"
+      },
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "bedrock-converse-profile-base-model"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "scripted response"
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 1840,
+            "outputTokens": 412,
+            "totalTokens": 2252
+          },
+          "metrics": {
+            "latencyMs": 1
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.01287,
+        "input_cost": 0.006072,
+        "output_cost": 0.006798,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "bedrock-converse-eu-regional-key",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "eu.anthropic.claude-sonnet-5-v1:0",
+      "deployment": {
+        "model": "bedrock/converse/eu.anthropic.claude-sonnet-5-v1:0"
+      },
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "bedrock-converse-eu-regional-key"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "scripted response"
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 1840,
+            "outputTokens": 412,
+            "totalTokens": 2252
+          },
+          "metrics": {
+            "latencyMs": 1
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.01326,
+        "input_cost": 0.006256,
+        "output_cost": 0.007004,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "bedrock-converse-apac-bare-fallback",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "anthropic.claude-sonnet-5-v1:0",
+      "deployment": {
+        "model": "bedrock/converse/apac.anthropic.claude-sonnet-5-v1:0"
+      },
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "bedrock-converse-apac-bare-fallback"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "scripted response"
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 1840,
+            "outputTokens": 412,
+            "totalTokens": 2252
+          },
+          "metrics": {
+            "latencyMs": 1
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.01287,
+        "input_cost": 0.006072,
+        "output_cost": 0.006798,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "bedrock-converse-nova-2-pro",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "amazon.nova-2-pro-preview-20251202-v1:0",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "bedrock-converse-nova-2-pro"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "output": {
+            "message": {
+              "role": "assistant",
+              "content": [
+                {
+                  "text": "scripted response"
+                }
+              ]
+            }
+          },
+          "stopReason": "end_turn",
+          "usage": {
+            "inputTokens": 1840,
+            "outputTokens": 412,
+            "totalTokens": 2252
+          },
+          "metrics": {
+            "latencyMs": 1
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.011235,
+        "input_cost": 0.004025,
+        "output_cost": 0.00721,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "bedrock-converse-mistral-large-3-stream",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "mistral.mistral-large-3-675b-instruct",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "system",
+            "content": [
+              {
+                "type": "text",
+                "text": "You are a deterministic pricing-harness assistant. Keep answers to a single short line."
+              }
+            ]
+          },
+          {
+            "role": "user",
+            "content": [
+              {
+                "type": "text",
+                "text": "bedrock-converse-mistral-large-3-stream"
+              }
+            ]
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        },
+        "allowed_openai_params": []
+      },
+      "response": {
+        "content_type": "application/vnd.amazon.eventstream",
+        "events": [
+          {
+            "event_type": "messageStart",
+            "payload": {
+              "role": "assistant"
+            }
+          },
+          {
+            "event_type": "contentBlockDelta",
+            "payload": {
+              "delta": {
+                "text": "scripted response"
+              },
+              "contentBlockIndex": 0
+            }
+          },
+          {
+            "event_type": "contentBlockStop",
+            "payload": {
+              "contentBlockIndex": 0
+            }
+          },
+          {
+            "event_type": "messageStop",
+            "payload": {
+              "stopReason": "end_turn"
+            }
+          },
+          {
+            "event_type": "metadata",
+            "payload": {
+              "usage": {
+                "inputTokens": 1840,
+                "outputTokens": 412,
+                "totalTokens": 2252
+              },
+              "metrics": {
+                "latencyMs": 1
+              }
+            }
+          }
+        ]
+      },
+      "expected": {
+        "spend": 0.00156052,
+        "input_cost": 0.0009384,
+        "output_cost": 0.00062212,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "azure-ai-gpt-5.4-mini-latest",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "azure_ai/gpt-5.4-mini-2026-03-17",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "azure-ai-gpt-5.4-mini-latest"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "$MODEL",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "scripted response"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          },
+          "service_tier": "default"
+        }
+      },
+      "expected": {
+        "spend": 0.003234,
+        "input_cost": 0.00138,
+        "output_cost": 0.001854,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "azure-ai-gpt-5.4-mini-latest-stream",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "azure_ai/gpt-5.4-mini-2026-03-17",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "azure-ai-gpt-5.4-mini-latest-stream"
+          }
+        ],
+        "stream": true
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"$MODEL\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\n",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"$MODEL\",\"choices\":[],\"usage\":{\"prompt_tokens\":1840,\"completion_tokens\":412,\"total_tokens\":2252}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      },
+      "expected": {
+        "spend": 0.003234,
+        "input_cost": 0.00138,
+        "output_cost": 0.001854,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "azure-pinned-gpt-5.4-mini-stream",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "azure/gpt-5.4-mini",
+      "deployment": {
+        "model": "azure/cc-pinned-deployment",
+        "base_model": "azure/gpt-5.4-mini"
+      },
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "azure-pinned-gpt-5.4-mini-stream"
+          }
+        ],
+        "stream": true
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"$MODEL\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\n",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"$MODEL\",\"choices\":[],\"usage\":{\"prompt_tokens\":1840,\"completion_tokens\":412,\"total_tokens\":2252}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      },
+      "expected": {
+        "spend": 0.00184896,
+        "input_cost": 0.0006624,
+        "output_cost": 0.00118656,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "groq-qwen-3.8-json",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "groq/qwen/qwen3.8-27b",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "groq-qwen-3.8-json"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "$MODEL",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "scripted response"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          },
+          "service_tier": "default",
+          "x_groq": {
+            "usage": {
+              "prompt_tokens": 1840,
+              "completion_tokens": 412,
+              "total_tokens": 2252
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.00312,
+        "input_cost": 0.001472,
+        "output_cost": 0.001648,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "groq-qwen-3.8-stream_x_groq_recount",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "groq/qwen/qwen3.8-27b",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "groq-qwen-3.8-stream_x_groq_recount"
+          }
+        ],
+        "stream": true
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"$MODEL\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\",\"content\":\"ok\"},\"finish_reason\":null}]}\n\n",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1,\"model\":\"$MODEL\",\"choices\":[],\"x_groq\":{\"usage\":{\"prompt_tokens\":1840,\"completion_tokens\":412,\"total_tokens\":2252}}}\n\n",
+          "data: [DONE]\n\n"
+        ]
+      },
+      "expected": {
+        "recount": {
+          "input_cost_per_token": 8e-07,
+          "output_cost_per_token": 4e-06
+        }
+      }
+    },
+    {
+      "name": "cohere-command-a-v2-tokens",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "cohere_chat/v2/command-a-03-2025",
+      "deployment": {
+        "model": "cohere_chat/v2/command-a-03-2025"
+      },
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "cohere-command-a-v2-tokens"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "$REQUEST_ID",
+          "message": {
+            "role": "assistant",
+            "content": [
+              {
+                "type": "text",
+                "text": "scripted response"
+              }
+            ]
+          },
+          "finish_reason": "COMPLETE",
+          "usage": {
+            "tokens": {
+              "input_tokens": 1840,
+              "output_tokens": 412,
+              "total_tokens": 2252
+            },
+            "billed_units": {
+              "input_tokens": 1800,
+              "output_tokens": 400
+            }
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.00874252,
+        "input_cost": 0.0046184,
+        "output_cost": 0.00412412,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "mistral-medium-2604-json",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "mistral/mistral-medium-2604",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "mistral-medium-2604-json"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "$MODEL",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "scripted response"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          },
+          "service_tier": "default"
+        }
+      },
+      "expected": {
+        "spend": 0.00587252,
+        "input_cost": 0.0027784,
+        "output_cost": 0.00309412,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "openai-deployment-pricing-override",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "deployment": {
+        "model": "openai/cc-custom-model",
+        "input_cost_per_token": 7e-06,
+        "output_cost_per_token": 2.1e-05
+      },
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "openai-deployment-pricing-override"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "model": "$MODEL",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "scripted response"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          },
+          "service_tier": "default"
+        }
+      },
+      "expected": {
+        "spend": 0.021532,
+        "input_cost": 0.01288,
+        "output_cost": 0.008652,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-upstream_400_zero_spend",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "status": 400,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure 400",
+            "type": "server_error",
+            "code": "400"
+          }
+        }
+      },
+      "expected": {
+        "failure": {
+          "status": 400
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-upstream_401_zero_spend",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "status": 401,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure 401",
+            "type": "server_error",
+            "code": "401"
+          }
+        }
+      },
+      "expected": {
+        "failure": {
+          "status": 401
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-upstream_500_stream_request_zero_spend",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": true
+      },
+      "response": {
+        "content_type": "application/json",
+        "status": 500,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure 500",
+            "type": "server_error",
+            "code": "500"
+          }
+        }
+      },
+      "expected": {
+        "failure": {
+          "status": 500
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-responses_upstream_500_zero_spend",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/responses",
+      "request": {
+        "model": "$MODEL",
+        "input": "proxy behaviour probe",
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "status": 500,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure 500",
+            "type": "server_error",
+            "code": "500"
+          }
+        }
+      },
+      "expected": {
+        "failure": {
+          "status": 500
+        }
+      }
+    },
+    {
+      "name": "claude-sonnet-5-messages_upstream_500_zero_spend",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "endpoint": "/v1/messages",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ]
+      },
+      "response": {
+        "content_type": "application/json",
+        "status": 500,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure 500",
+            "type": "server_error",
+            "code": "500"
+          }
+        }
+      },
+      "expected": {
+        "failure": {
+          "status": 500
+        }
+      }
+    },
+    {
+      "name": "gpt-5.6-fallback_billed_to_answering_deployment",
+      "covers": "quota_management.spend_tracking.routing.fallback_billing",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "created": 1789788262,
+          "model": "gpt-5.6",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "scripted answer"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "fallback_from": {
+        "content_type": "application/json",
+        "status": 500,
+        "body": {
+          "error": {
+            "message": "scripted upstream failure 500",
+            "type": "server_error",
+            "code": "500"
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-n_2_choices",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "created": 1789788262,
+          "model": "gpt-5.6",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "scripted answer"
+              },
+              "finish_reason": "stop"
+            },
+            {
+              "index": 1,
+              "message": {
+                "role": "assistant",
+                "content": "second choice"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-finish_reason_length",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "created": 1789788262,
+          "model": "gpt-5.6",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "truncated"
+              },
+              "finish_reason": "length"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-stream_usage_in_empty_choices_chunk",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"scripted answer\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[],\"usage\":{\"prompt_tokens\":1840,\"completion_tokens\":412,\"total_tokens\":2252}}",
+          "data: [DONE]"
+        ]
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-5.6-stream_usage_in_last_delta_chunk",
+      "covers": "quota_management.spend_tracking.scripted_wire.logs_cost",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"role\":\"assistant\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"scripted answer\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":1840,\"completion_tokens\":412,\"total_tokens\":2252}}",
+          "data: [DONE]"
+        ]
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-5.6-unknown_model_response_model_unknown",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "deployment": {
+        "model": "openai/not-in-any-map-xyz"
+      },
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "created": 1789788262,
+          "model": "not-in-any-map-xyz",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "scripted answer"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-5.6-unknown_model_response_model_known",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "gpt-5.6",
+      "deployment": {
+        "model": "openai/not-in-any-map-xyz"
+      },
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "created": 1789788262,
+          "model": "gpt-5.6",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "scripted answer"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.008988,
+        "input_cost": 0.00322,
+        "output_cost": 0.005768,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-chat_request_to_embedding_entry",
+      "covers": "quota_management.spend_tracking.cost_matrix.logs_cost",
+      "model": "text-embedding-3-large",
+      "deployment": {
+        "model": "openai/text-embedding-3-large"
+      },
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": false
+      },
+      "response": {
+        "content_type": "application/json",
+        "body": {
+          "id": "chatcmpl-$REQUEST_ID",
+          "object": "chat.completion",
+          "created": 1789788262,
+          "model": "text-embedding-3-large",
+          "choices": [
+            {
+              "index": 0,
+              "message": {
+                "role": "assistant",
+                "content": "scripted answer"
+              },
+              "finish_reason": "stop"
+            }
+          ],
+          "usage": {
+            "prompt_tokens": 1840,
+            "completion_tokens": 412,
+            "total_tokens": 2252
+          }
+        }
+      },
+      "expected": {
+        "spend": 0.0002392,
+        "input_cost": 0.0002392,
+        "output_cost": 0.0,
+        "prompt_tokens": 1840,
+        "completion_tokens": 412
+      }
+    },
+    {
+      "name": "gpt-5.6-client_disconnect_mid_stream",
+      "covers": "quota_management.spend_tracking.scripted_wire.client_disconnect",
+      "model": "gpt-5.6",
+      "request": {
+        "model": "$MODEL",
+        "messages": [
+          {
+            "role": "user",
+            "content": "proxy behaviour probe"
+          }
+        ],
+        "stream": true,
+        "stream_options": {
+          "include_usage": true
+        }
+      },
+      "response": {
+        "content_type": "text/event-stream",
+        "frames": [
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-0\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-1\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-2\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-3\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-4\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-5\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-6\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-7\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-8\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-9\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-10\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-11\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-12\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-13\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-14\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-15\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-16\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-17\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-18\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: {\"id\":\"chatcmpl-$REQUEST_ID\",\"object\":\"chat.completion.chunk\",\"created\":1789788263,\"model\":\"gpt-5.6\",\"choices\":[{\"index\":0,\"delta\":{\"content\":\"frame-19\"},\"finish_reason\":null}],\"usage\":null}",
+          "data: [DONE]"
+        ],
+        "frame_delay_ms": 200
+      },
+      "disconnect_after_frames": 3,
+      "expected": {
+        "recount": {
+          "input_cost_per_token": 1.75e-06,
+          "output_cost_per_token": 1.4e-05
+        },
+        "prompt_tokens": 10,
+        "min_completion_tokens": 9,
+        "max_completion_tokens": 30
+      }
+    }
+  ],
+  "batch_cases": [
+    {
+      "name": "gpt-5.6-batch-halved_rates_when_map_has_no_batch_keys",
+      "covers": "quota_management.spend_tracking.batch_costs.fallback_rates",
+      "model": "gpt-5.6",
+      "litellm_model": "openai/gpt-5.6",
+      "output_lines": [
+        {
+          "status_code": 200,
+          "prompt_tokens": 100,
+          "completion_tokens": 50
+        },
+        {
+          "status_code": 200,
+          "prompt_tokens": 120,
+          "completion_tokens": 30
+        },
+        {
+          "status_code": 400
+        }
+      ],
+      "expected": {
+        "spend": 0.0007525,
+        "input_cost": 0.0001925,
+        "output_cost": 0.00056,
+        "prompt_tokens": 220,
+        "completion_tokens": 80,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-5.6-batch-cached_input_halved",
+      "covers": "quota_management.spend_tracking.batch_costs.cached_input",
+      "model": "gpt-5.6",
+      "litellm_model": "openai/gpt-5.6",
+      "output_lines": [
+        {
+          "status_code": 200,
+          "prompt_tokens": 100,
+          "completion_tokens": 10,
+          "cached_tokens": 40
+        }
+      ],
+      "expected": {
+        "spend": 0.000126,
+        "input_cost": 0.000056,
+        "output_cost": 0.00007,
+        "prompt_tokens": 100,
+        "completion_tokens": 10,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-5.4-batch-explicit_batch_rates_bill_cached_at_batch_input_rate",
+      "covers": "quota_management.spend_tracking.batch_costs.explicit_rates",
+      "model": "gpt-5.4",
+      "litellm_model": "openai/gpt-5.4",
+      "output_lines": [
+        {
+          "status_code": 200,
+          "prompt_tokens": 100,
+          "completion_tokens": 50,
+          "cached_tokens": 40
+        },
+        {
+          "status_code": 200,
+          "prompt_tokens": 120,
+          "completion_tokens": 30
+        }
+      ],
+      "expected": {
+        "spend": 0.000875,
+        "input_cost": 0.000275,
+        "output_cost": 0.0006,
+        "prompt_tokens": 220,
+        "completion_tokens": 80,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-5.6-batch-all_requests_failed_zero_spend",
+      "covers": "quota_management.spend_tracking.batch_costs.failed_requests",
+      "model": "gpt-5.6",
+      "litellm_model": "openai/gpt-5.6",
+      "output_lines": [
+        {
+          "status_code": 400
+        },
+        {
+          "status_code": 400
+        }
+      ],
+      "expected": {
+        "spend": 0.0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "cost_header": false
+      }
+    }
+  ],
+  "realtime_cases": [
+    {
+      "name": "gpt-realtime-mini-2025-12-15-realtime-single_turn_text_audio_cached",
+      "covers": "quota_management.spend_tracking.realtime_costs.single_turn",
+      "model": "gpt-realtime-mini-2025-12-15",
+      "litellm_model": "openai/gpt-realtime-mini-2025-12-15",
+      "turns": [
+        {
+          "input_tokens": 150,
+          "output_tokens": 100,
+          "input_text_tokens": 70,
+          "input_audio_tokens": 80,
+          "input_cached_tokens": 20,
+          "output_text_tokens": 40,
+          "output_audio_tokens": 60
+        }
+      ],
+      "expected": {
+        "spend": 0.0021272,
+        "input_cost": 0.0008312,
+        "output_cost": 0.001296,
+        "prompt_tokens": 150,
+        "completion_tokens": 100,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-realtime-mini-2025-12-15-realtime-two_turns_summed_into_one_row",
+      "covers": "quota_management.spend_tracking.realtime_costs.multiple_turns",
+      "model": "gpt-realtime-mini-2025-12-15",
+      "litellm_model": "openai/gpt-realtime-mini-2025-12-15",
+      "turns": [
+        {
+          "input_tokens": 150,
+          "output_tokens": 100,
+          "input_text_tokens": 70,
+          "input_audio_tokens": 80,
+          "input_cached_tokens": 20,
+          "output_text_tokens": 40,
+          "output_audio_tokens": 60
+        },
+        {
+          "input_tokens": 100,
+          "output_tokens": 50,
+          "input_text_tokens": 100,
+          "input_audio_tokens": 0,
+          "input_cached_tokens": 0,
+          "output_text_tokens": 50,
+          "output_audio_tokens": 0
+        }
+      ],
+      "expected": {
+        "spend": 0.0023072,
+        "input_cost": 0.0008912,
+        "output_cost": 0.001416,
+        "prompt_tokens": 250,
+        "completion_tokens": 150,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-realtime-mini-2025-12-15-realtime-priced_from_session_created_model",
+      "covers": "quota_management.spend_tracking.realtime_costs.session_model",
+      "model": "gpt-realtime-mini-2025-12-15",
+      "litellm_model": "openai/gpt-realtime-mini-2025-12-15",
+      "session_model": "gpt-realtime-2.1",
+      "turns": [
+        {
+          "input_tokens": 150,
+          "output_tokens": 100,
+          "input_text_tokens": 70,
+          "input_audio_tokens": 80,
+          "input_cached_tokens": 20,
+          "output_text_tokens": 40,
+          "output_audio_tokens": 60
+        }
+      ],
+      "expected": {
+        "spend": 0.007568,
+        "input_cost": 0.002768,
+        "output_cost": 0.0048,
+        "prompt_tokens": 150,
+        "completion_tokens": 100,
+        "cost_header": false
+      }
+    },
+    {
+      "name": "gpt-realtime-mini-2025-12-15-realtime-session_without_turns_zero_spend",
+      "covers": "quota_management.spend_tracking.realtime_costs.session_without_turns",
+      "model": "gpt-realtime-mini-2025-12-15",
+      "litellm_model": "openai/gpt-realtime-mini-2025-12-15",
+      "turns": [],
+      "expected": {
+        "spend": 0.0,
+        "input_cost": 0.0,
+        "output_cost": 0.0,
+        "prompt_tokens": 0,
+        "completion_tokens": 0,
+        "breakdown_persisted": false,
+        "cost_header": false
       }
     }
   ]

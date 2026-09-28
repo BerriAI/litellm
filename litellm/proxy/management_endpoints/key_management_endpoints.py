@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any, Final, Literal, Optional, Protocol, TypeV
 import fastapi
 import yaml
 from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request, status
+from pydantic import TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
 
 import litellm
@@ -85,6 +86,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.hooks.key_management_event_hooks import KeyManagementEventHooks
 from litellm.proxy.hooks.model_max_budget_limiter import build_model_max_budget_usage
 from litellm.proxy.management_endpoints.common_utils import (
+    _check_disable_global_guardrails_caller_permission,
     _check_passthrough_routes_caller_permission,
     _is_user_org_admin_for_team,
     _is_user_team_admin,
@@ -98,6 +100,11 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     _add_model_to_db,
 )
 from litellm.proxy.management_endpoints.router_weights import validate_router_settings_weights
+from litellm.proxy.management_endpoints.team_admin_field_permissions import (
+    team_admin_key_edit_verdict,
+    team_admin_key_request_or_raise,
+    team_admin_may_edit_member_key_budgets,
+)
 from litellm.proxy.management_helpers.access_group_key_sync import (
     sync_key_access_group_membership,
     sync_key_regeneration_access_group_membership,
@@ -108,6 +115,7 @@ from litellm.proxy.management_helpers.object_permission_utils import (
     _set_object_permission,
     attach_object_permission_to_dict,
     handle_update_object_permission_common,
+    invalidate_cached_object_permissions,
     validate_key_mcp_servers_against_team,
     validate_key_search_tools_against_team,
     validate_key_vector_stores_against_team,
@@ -118,9 +126,6 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
-from litellm.proxy.ui_crud_endpoints.proxy_setting_endpoints import (
-    get_ui_settings_cached,
-)
 from litellm.proxy.utils import (
     PrismaClient,
     ProxyLogging,
@@ -454,7 +459,7 @@ def _regenerate_request_as_update_request(key: str, data: RegenerateKeyRequest) 
     )
     if not changed_fields:
         return None
-    return UpdateKeyRequest(key=key, **changed_fields)
+    return UpdateKeyRequest.model_validate(MappingProxyType({"key": key, **changed_fields}))
 
 
 class _LegacyDumpable(Protocol):
@@ -487,8 +492,10 @@ async def _check_custom_key_allowed(custom_key_value: str | None) -> None:
     if custom_key_value is None:
         return
 
-    ui_settings: Final = await get_ui_settings_cached()
-    if ui_settings.get("disable_custom_api_keys", False) is True:
+    from litellm.proxy.config_resolvers.settings_rules import coerce_bool
+    from litellm.proxy.proxy_server import general_settings
+
+    if coerce_bool(general_settings.get("disable_custom_api_keys", False)) is True:
         verbose_proxy_logger.warning("Custom API key rejected: disable_custom_api_keys is enabled")
         raise HTTPException(
             status_code=403,
@@ -1224,6 +1231,7 @@ async def _common_key_generation_helper(
     # default_key_generate_params injected.
     _requested_max_budget: Final = data.max_budget
     _requested_team_id: Final = data.team_id
+    _requested_metadata: Final = data.metadata  # pyright: ignore[reportUnknownMemberType]  # request models declare `metadata` as bare dict
 
     # check if user set default key/generate params on config.yaml
     if litellm.default_key_generate_params is not None:
@@ -1257,11 +1265,9 @@ async def _common_key_generation_helper(
 
     # Delegated-authority ceiling (GHSA-q775-qw9r-2r4g): a non-admin caller
     # cannot grant a key a higher budget than their own authority.
-    is_ui_session_team_key = user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID and _requested_team_id is not None
-    # Session tokens (lite login) carry max_budget=None to avoid a per-session
-    # LLM spend cap, but that None must not be read as "unlimited delegation
-    # authority". A personal key (no team) has no team-budget enforcement at
-    # request time, so a session token cannot delegate any budget for one.
+    # UI session personal keys are capped by user_max_budget when it is available.
+    is_ui_session_token: Final = user_api_key_dict.team_id == UI_SESSION_TOKEN_TEAM_ID
+    is_ui_session_team_key = is_ui_session_token and _requested_team_id is not None
     if (
         user_api_key_dict.is_session_token
         and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
@@ -1279,7 +1285,9 @@ async def _common_key_generation_helper(
             },
         )
     delegation_ceiling: Final = (
-        user_api_key_dict.max_budget
+        user_api_key_dict.user_max_budget
+        if is_ui_session_token and user_api_key_dict.user_max_budget is not None
+        else user_api_key_dict.max_budget
         if user_api_key_dict.max_budget is not None
         else (team_table.max_budget if user_api_key_dict.is_session_token and team_table is not None else None)
     )
@@ -1310,6 +1318,11 @@ async def _common_key_generation_helper(
     _check_permissions_caller_permission(
         data=data,
         user_api_key_dict=user_api_key_dict,
+    )
+    _check_disable_global_guardrails_caller_permission(
+        data.disable_global_guardrails,
+        _requested_metadata,
+        user_api_key_dict,
     )
 
     # APPLY ENTERPRISE KEY MANAGEMENT PARAMS
@@ -1966,7 +1979,7 @@ async def generate_key_fn(
     - metadata: Optional[dict] - Metadata for key, store information for key. Example metadata = {"team": "core-infra", "app": "app2", "email": "ishaan@berri.ai" }
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
-    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key. Proxy admin only.
     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
     - permissions: Optional[dict] - key-specific permissions. Currently just used for turning off pii masking (if connected). Example - {"pii": false}
@@ -2729,6 +2742,13 @@ async def _process_single_key_update(
             prisma_client=prisma_client,
         )
 
+    _check_disable_global_guardrails_caller_permission(
+        update_key_request.disable_global_guardrails,
+        update_key_request.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        user_api_key_dict,
+        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+    )
+
     enforce_batch_enqueued_token_limit_is_admin_only(
         data=update_key_request,
         existing_metadata=existing_key_row.metadata,
@@ -2840,7 +2860,14 @@ async def _process_single_key_update(
         await prisma_client.update_data(token=key_request.key, data=_data),
     )
 
-    # Delete cache
+    # Permission row first: a key-object miss between the two evictions would re-cache stale grants
+    await invalidate_cached_object_permissions(
+        object_permission_ids=(
+            existing_key_row.object_permission_id,
+            non_default_values.get("object_permission_id"),
+        ),
+        user_api_key_cache=user_api_key_cache,
+    )
     await _delete_cache_key_object(
         hashed_token=_hash_token_if_needed(key_request.key),
         user_api_key_cache=user_api_key_cache,
@@ -2987,6 +3014,55 @@ async def _validate_end_user_budget_id_change(
         raise HTTPException(status_code=400, detail=missing_detail)
 
 
+_GENERAL_SETTINGS: Final = TypeAdapter(dict[str, object])
+
+
+def _general_settings() -> Mapping[str, object]:
+    from litellm.proxy.proxy_server import (
+        general_settings,  # pyright: ignore[reportUnknownVariableType]  # untyped module-level dict in proxy_server
+    )
+
+    return _GENERAL_SETTINGS.validate_python(general_settings)
+
+
+async def _acting_as_team_admin_for_key_update(
+    data: UpdateKeyRequest,
+    existing_key_row: LiteLLM_VerificationToken,
+    user_api_key_dict: UserAPIKeyAuth,
+    checked_prisma_client: PrismaClient,
+    user_api_key_cache: UserApiKeyCache,
+    is_proxy_admin: bool,
+) -> bool:
+    """Whether the caller acts as a team admin on another member's team key.
+
+    Raises 403 when the caller administers the key's team but the request edits fields
+    outside the member_key_budgets permission (or that permission is disabled).
+    """
+    if (
+        is_proxy_admin
+        or existing_key_row.team_id is None
+        or existing_key_row.user_id is None
+        or existing_key_row.user_id == user_api_key_dict.user_id
+    ):
+        return False
+    team_for_grant: Final = await get_team_object(
+        team_id=existing_key_row.team_id,
+        prisma_client=checked_prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        check_db_only=True,
+    )
+    if not _is_user_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_for_grant):
+        return False
+    team_admin_key_request_or_raise(
+        team_admin_key_edit_verdict(
+            data=data,
+            existing=existing_key_row,
+            enabled=team_admin_may_edit_member_key_budgets(_general_settings()),
+        )
+    )
+    return True
+
+
 async def _validate_update_key_data(
     data: UpdateKeyRequest,
     existing_key_row: LiteLLM_VerificationToken,
@@ -3018,6 +3094,12 @@ async def _validate_update_key_data(
         data=data,
         user_api_key_dict=user_api_key_dict,
     )
+    _check_disable_global_guardrails_caller_permission(
+        data.disable_global_guardrails,
+        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        user_api_key_dict,
+        existing_metadata=existing_key_row.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+    )
 
     _validate_caller_can_change_key_ownership(
         data=data,
@@ -3031,10 +3113,19 @@ async def _validate_update_key_data(
         )
     is_project_change: Final = "project_id" in data.model_fields_set and data.project_id != existing_key_row.project_id
 
+    acting_as_team_admin: Final = await _acting_as_team_admin_for_key_update(
+        data=data,
+        existing_key_row=existing_key_row,
+        user_api_key_dict=user_api_key_dict,
+        checked_prisma_client=checked_prisma_client,
+        user_api_key_cache=user_api_key_cache,
+        is_proxy_admin=_is_proxy_admin,
+    )
+
     common_key_access_checks(
         user_api_key_dict=user_api_key_dict,
         data=data,
-        user_id=existing_key_row.user_id,
+        user_id=user_api_key_dict.user_id if acting_as_team_admin else existing_key_row.user_id,
         llm_router=llm_router,
         premium_user=premium_user,
     )
@@ -3321,7 +3412,7 @@ async def update_key_fn(
     - send_invite_email: Optional[bool] - Send invite email to user_id
     - guardrails: Optional[List[str]] - List of active guardrails for the key
     - policies: Optional[List[str]] - List of policy names to apply to the key. Policies define guardrails, conditions, and inheritance rules.
-    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key.
+    - disable_global_guardrails: Optional[bool] - Whether to disable global guardrails for the key. Proxy admin only.
     - throttle_on_budget_exceeded: Optional[bool] - When the key exceeds its max_budget, throttle its tpm/rpm to the global budget_exceeded_throttle_percentage instead of blocking the key entirely.
     - enable_prompt_caching: Optional[bool] - Auto-inject prompt caching breakpoints (Anthropic cache_control markers) on requests made with this key. Supported Claude models on Anthropic, Bedrock, Vertex AI, and Azure AI only.
     - prompts: Optional[List[str]] - List of prompts that the key is allowed to use.
@@ -3456,6 +3547,13 @@ async def update_key_fn(
 
         # Delete - key from cache, since it's been updated!
         # key updated - a new model could have been added to this key. it should not block requests after this is done
+        await invalidate_cached_object_permissions(
+            object_permission_ids=(
+                existing_key_row.object_permission_id,
+                non_default_values.get("object_permission_id"),
+            ),
+            user_api_key_cache=user_api_key_cache,
+        )
         await _delete_cache_key_object(
             hashed_token=_hash_token_if_needed(key),
             user_api_key_cache=user_api_key_cache,
@@ -5570,6 +5668,13 @@ async def _execute_virtual_key_regeneration(
     updated_token_dict["key"] = new_token
     updated_token_dict["token_id"] = updated_token_dict.pop("token")
 
+    await invalidate_cached_object_permissions(
+        object_permission_ids=(
+            key_in_db.object_permission_id,
+            non_default_values.get("object_permission_id"),
+        ),
+        user_api_key_cache=user_api_key_cache,
+    )
     if hashed_api_key or key:
         await _delete_cache_key_object(
             hashed_token=_hash_token_if_needed(key),
@@ -5599,6 +5704,21 @@ async def _execute_virtual_key_regeneration(
         )
     )
     return response
+
+
+def _check_regenerate_guardrail_opt_out(
+    data: RegenerateKeyRequest | None,
+    existing_metadata: Mapping[str, object] | None,
+    user_api_key_dict: UserAPIKeyAuth,
+) -> None:
+    if data is None:
+        return
+    _check_disable_global_guardrails_caller_permission(
+        data.disable_global_guardrails,
+        data.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # request models declare `metadata` as bare dict
+        user_api_key_dict,
+        existing_metadata=existing_metadata,
+    )
 
 
 @router.post(
@@ -5783,6 +5903,12 @@ async def regenerate_key_fn(
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail={"error": f"Key {key} not found."},
             )
+
+        _check_regenerate_guardrail_opt_out(
+            data,
+            _key_in_db.metadata,  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # LiteLLM_VerificationToken.metadata is a bare dict
+            user_api_key_dict,
+        )
 
         # check if user has permission to regenerate key
         await TeamMemberPermissionChecks.can_team_member_execute_key_management_endpoint(
@@ -7591,25 +7717,47 @@ async def test_key_logging(
 
 
 _KEY_ALIAS_PATTERN: Final = re.compile(r"^[a-zA-Z0-9][a-zA-Z0-9_\-/\.@]{0,253}[a-zA-Z0-9]$")
+_KEY_ALIAS_PATTERN_MESSAGE: Final = (
+    "Invalid key_alias format. Must be 2-255 characters, start/end with alphanumeric, and only contain a-zA-Z0-9_-/.@."
+)
+_KEY_ALIAS_MAX_LENGTH: Final = 255
+
+
+def parse_key_alias_pattern(value: object) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str):
+        raise ValueError(
+            f"Invalid regex set for litellm_settings.key_alias_pattern - value={value!r}: must be a string"
+        )
+    try:
+        re.compile(value)
+    except re.error as e:
+        raise ValueError(f"Invalid regex set for litellm_settings.key_alias_pattern - value={value}: {e}") from e
+    return value
+
+
+def _key_alias_rule() -> tuple[re.Pattern[str], str] | None:
+    if litellm.key_alias_pattern is not None:
+        return (
+            re.compile(litellm.key_alias_pattern),
+            f"Invalid key_alias format. Must be at most {_KEY_ALIAS_MAX_LENGTH} characters and match the configured"
+            f" key_alias_pattern: {litellm.key_alias_pattern}",
+        )
+    if litellm.enable_key_alias_format_validation:
+        return (_KEY_ALIAS_PATTERN, _KEY_ALIAS_PATTERN_MESSAGE)
+    return None
 
 
 def _validate_key_alias_format(key_alias: str | None) -> None:
     """
     Validate the format of the key_alias.
 
-    A baseline validation always runs, regardless of
-    ``litellm.enable_key_alias_format_validation``.
-
-    The remaining charset/length rules are gated behind
-    ``litellm.enable_key_alias_format_validation`` (default **False**). When disabled,
-    only the baseline validation above is performed, so existing workflows are not
-    broken.
-
-    Rules (when enabled):
-    - None is OK (no alias).
-    - Otherwise must be 2–255 chars
-    - start/end with alphanumeric
-    - only allow a-zA-Z0-9_-/.@
+    Path traversal and control characters are always rejected. The alias then has to
+    stay within ``_KEY_ALIAS_MAX_LENGTH`` and fully match ``litellm.key_alias_pattern``
+    when one is configured, else the built-in pattern when
+    ``litellm.enable_key_alias_format_validation`` is on, else nothing more is checked
+    so existing workflows are not broken.
     """
     if key_alias is None:
         return
@@ -7624,12 +7772,14 @@ def _validate_key_alias_format(key_alias: str | None) -> None:
             code=400,
         )
 
-    if not litellm.enable_key_alias_format_validation:
+    rule: Final = _key_alias_rule()
+    if rule is None:
         return
 
-    if not _KEY_ALIAS_PATTERN.match(key_alias):
+    pattern, message = rule
+    if len(key_alias) > _KEY_ALIAS_MAX_LENGTH or pattern.fullmatch(key_alias) is None:
         raise ProxyException(
-            message="Invalid key_alias format. Must be 2-255 characters, start/end with alphanumeric, and only contain a-zA-Z0-9_-/.@.",
+            message=message,
             type=ProxyErrorTypes.bad_request_error,
             param="key_alias",
             code=400,

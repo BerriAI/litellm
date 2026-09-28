@@ -67,14 +67,16 @@ export const useScopedDailyActivityRange = (
     args: [accessToken, startTime, endTime, userId, true, apiKey],
     enabled: !!accessToken && !!startTime && !!endTime,
   };
-  const { data, loading, isFetchingMore, progress, cancelled, failed, cancel } =
+  const { data, loading, isFetchingMore, progress, cancelled, failed, coversRange, cancel } =
     usePaginatedDailyActivity(activityQueryOptions);
+  const readUnavailable = failed || cancelled;
+  const waitingForRange = activityQueryOptions.enabled && !coversRange && !readUnavailable;
 
   return {
     dateValue,
     onDateChange,
     results: data.results as DailyData[],
-    loading,
+    loading: loading || waitingForRange,
     isFetchingMore,
     progress,
     cancelled,

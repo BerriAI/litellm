@@ -50,6 +50,7 @@ from litellm.proxy._types import (
     ProxyException,
     UserAPIKeyAuth,
 )
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.openai_files_endpoints.common_utils import (
     BATCH_CREATE_HIDDEN_PARAM,
     FILE_LIST_CONTINUATION_CHUNK_SIZE,
@@ -359,7 +360,7 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
 
         from prisma import Json
 
-        api_key = user_api_key_dict.api_key or None
+        api_key = LiteLLMProxyRequestSetup.get_logged_api_key(user_api_key_dict) or None
         attribution_columns = (
             {
                 **({"api_key": api_key} if api_key is not None else {}),
@@ -481,10 +482,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         if self.prisma_client is None:
             return
-        managed_object = (
-            await self.prisma_client.db.litellm_managedobjecttable.find_first(
-                where={"OR": [{"unified_object_id": object_id}, {"model_object_id": object_id}]}
-            )
+        managed_object = await _managed_object_table(self.prisma_client).find_first(
+            where={"OR": [{"unified_object_id": object_id}, {"model_object_id": object_id}]}
         )
         if managed_object is None:
             return
@@ -509,10 +508,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         """
         if self.prisma_client is None:
             return
-        managed_file = (
-            await self.prisma_client.db.litellm_managedfiletable.find_first(
-                where={"OR": [{"unified_file_id": file_id}, {"flat_model_file_ids": {"has": file_id}}]}
-            )
+        managed_file = await _managed_file_table(self.prisma_client).find_first(
+            where={"OR": [{"unified_file_id": file_id}, {"flat_model_file_ids": {"has": file_id}}]}
         )
         if managed_file is None:
             return
@@ -535,8 +532,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
         provider_file_ids = tuple(
             file_id
             for file_id in (
-                getattr(response, "output_file_id", None),
-                getattr(response, "error_file_id", None),
+                response.output_file_id,
+                response.error_file_id,
             )
             if file_id and not _is_base64_encoded_unified_file_id(file_id)
         )
@@ -544,10 +541,8 @@ class _PROXY_LiteLLMManagedFiles(CustomLogger, BaseFileEndpoints):
             return
         if self.prisma_client is None:
             return
-        batch_row = (
-            await self.prisma_client.db.litellm_managedobjecttable.find_first(
-                where={"unified_object_id": response.id}
-            )
+        batch_row = await _managed_object_table(self.prisma_client).find_first(
+            where={"unified_object_id": response.id}
         )
         if batch_row is None or (
             batch_row.created_by is None and batch_row.team_id is None

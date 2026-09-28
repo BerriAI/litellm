@@ -372,9 +372,7 @@ from collections import defaultdict
 
 
 def _handle_invalid_parallel_tool_calls(
-    tool_calls: list[
-        ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
-    ],  # mutable-ok: patched in place via slice assignment
+    tool_calls: list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall],
 ):
     """
     Handle hallucinated parallel tool call from openai - https://community.openai.com/t/model-tries-to-call-unknown-function-multi-tool-use-parallel/490653

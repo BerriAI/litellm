@@ -17,16 +17,13 @@ body can still arrive, released once the caller is done with the response.
 
 Nothing here re-tests the shapes ``_handler_may_close_client`` covers -- a
 borrowed ``handler.client``, a caller-supplied client, an evicted-but-held
-client. Those are pinned in ``tests/test_litellm/llms/custom_httpx/
+client. Those are pinned in ``tests/unit/llms/custom_httpx/
 test_http_handler.py``. What is uncovered there is the in-flight response, so no
 test here may keep the client in a local: that inflates the very refcount under
 test, and the test then passes on a broken handler. They hold weak references
 instead, which the refcount does not count.
 
-These live here rather than under ``tests/test_litellm/`` because they need a
-real connection pool: a mocked transport goes on yielding chunks after its
-client is closed, so the very teardown under test is what a mock cannot
-reproduce. The server is a hermetic, credential-free ``ThreadingHTTPServer`` on
+The server is a hermetic, credential-free ``ThreadingHTTPServer`` on
 an ephemeral loopback port, and needs no network access beyond it.
 
 Related: https://github.com/BerriAI/litellm/issues/24929

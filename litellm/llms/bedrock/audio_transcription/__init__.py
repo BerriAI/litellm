@@ -1,11 +1,11 @@
 import base64
-from typing import Final, NoReturn
+from typing import Final
 
 import httpx
 
 from litellm.litellm_core_utils.audio_utils.utils import process_audio_file
 from litellm.rust_bridge import runtime
-from litellm.rust_bridge.catalog import Context, Route
+from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.timeouts import timeout_to_seconds
 from litellm.rust_bridge.transcription.native import (
     NATIVE_ATRANSCRIPTION,
@@ -14,14 +14,6 @@ from litellm.rust_bridge.transcription.native import (
     RustTranscription,
 )
 from litellm.types.utils import FileTypes, TranscriptionResponse
-
-
-def _no_python_implementation() -> NoReturn:
-    raise NotImplementedError("Bedrock audio transcription is implemented in Rust only")
-
-
-async def _no_async_python_implementation() -> NoReturn:
-    _no_python_implementation()
 
 
 class BedrockAudioTranscriptionRustDispatch:
@@ -74,10 +66,10 @@ class BedrockAudioTranscriptionRustDispatch:
             )
 
         return runtime.run(
-            Context(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
+            RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
             binding=NATIVE_TRANSCRIPTION,
             native=native,
-            python=_no_python_implementation,
+            python=runtime.NO_PYTHON,
         )
 
     async def async_audio_transcriptions(
@@ -107,8 +99,8 @@ class BedrockAudioTranscriptionRustDispatch:
             )
 
         return await runtime.arun(
-            Context(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
+            RouteContext(Route.TRANSCRIPTION, provider=custom_llm_provider, model=model),
             binding=NATIVE_ATRANSCRIPTION,
             native=native,
-            python=_no_async_python_implementation,
+            python=runtime.NO_PYTHON,
         )
