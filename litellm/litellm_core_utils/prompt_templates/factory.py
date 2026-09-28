@@ -2488,13 +2488,18 @@ def anthropic_messages_pt(
                             for content in user_content[user_content_start:]
                         )
                     ):
-                        user_content[-1] = copy.copy(user_content[-1])
-                        add_cache_control_to_content(
-                            anthropic_content_element=cast(  # cast-ok: copied TypedDict is a dict
-                                dict[str, object], user_content[-1]
+                        user_content = [  # mutable-ok: Anthropic message content requires a list; build a fresh one
+                            *user_content[:-1],
+                            cast(  # cast-ok: helper preserves the copied content block type
+                                AnthropicMessagesUserMessageValues,
+                                add_cache_control_to_content(
+                                    anthropic_content_element=cast(  # cast-ok: copied TypedDict is a dict
+                                        dict[str, object], copy.copy(user_content[-1])
+                                    ),
+                                    original_content_element=user_message_types_block,
+                                ),
                             ),
-                            original_content_element=user_message_types_block,
-                        )
+                        ]
                 elif isinstance(user_message_types_block["content"], str):
                     _anthropic_content_text_element: AnthropicMessagesTextParam = {
                         "type": "text",
@@ -2798,13 +2803,18 @@ def anthropic_messages_pt(
                     for content in assistant_content[assistant_content_start:]
                 )
             ):
-                assistant_content[-1] = copy.copy(assistant_content[-1])
-                add_cache_control_to_content(
-                    anthropic_content_element=cast(  # cast-ok: copied TypedDict is a dict
-                        dict[str, object], assistant_content[-1]
+                assistant_content = [  # mutable-ok: Anthropic message content requires a list; build a fresh one
+                    *assistant_content[:-1],
+                    cast(  # cast-ok: helper preserves the copied content block type
+                        AnthropicMessagesAssistantMessageValues,
+                        add_cache_control_to_content(
+                            anthropic_content_element=cast(  # cast-ok: copied TypedDict is a dict
+                                dict[str, object], copy.copy(assistant_content[-1])
+                            ),
+                            original_content_element=assistant_content_block,
+                        ),
                     ),
-                    original_content_element=assistant_content_block,
-                )
+                ]
 
             msg_i += 1
 
