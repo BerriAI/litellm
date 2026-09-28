@@ -9,8 +9,10 @@ from __future__ import annotations
 
 import base64
 import gzip
+import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Final
 
 import pytest
@@ -65,6 +67,14 @@ def test_find_canary_fails_loudly_past_its_decode_budget() -> None:
         find_canary(bomb, (marker,), budget_bytes=1024 * 1024)
     assert find_canary(gzip.compress(b"\0" * 1024) + marker.value.encode(), (marker,), budget_bytes=1024 * 1024)
     assert DECODE_BUDGET_BYTES >= 256 * 1024 * 1024
+
+
+def test_rig_with_an_overridden_master_key_resolves_the_config_deployment(tmp_path: Path) -> None:
+    master_key: Final = f"sk-canary-override-{uuid.uuid4().hex}"
+    with canary_rig(tmp_path, environment={"LITELLM_MASTER_KEY": master_key}) as overridden:
+        assert overridden.proxy.key == master_key
+        assert overridden.model_id
+        assert overridden.proxy.request("GET", "/model/info", key=overridden.owned.gateway.key).status_code == 401
 
 
 def test_route_allowances_match_only_their_exact_route_and_caller() -> None:
