@@ -1,5 +1,4 @@
 import warnings
-
 import pytest
 from pydantic import ValidationError
 
@@ -612,15 +611,35 @@ class TestSAPTransformationIntegration:
             assert translation["input"]["config"]["source_language"] == "en-US"
             assert translation["input"]["config"]["target_language"] == "de-DE"
             assert translation["output"]["config"]["target_language"] == "fr-FR"
-            assert config["config"]["modules"][1]["prompt_templating"]["model"]["name"] == "gpt-5"
-            assert config["config"]["modules"][0]["prompt_templating"]["model"]["name"] == "gpt-4o"
-            assert config["config"]["modules"][0]["prompt_templating"]["model"]["params"] == {}
+
             assert (
-                config["config"]["modules"][1]["prompt_templating"]["prompt"]["template"][0]["content"]
+                config["config"]["modules"][1]["prompt_templating"]["model"]["name"]
+                == "gpt-5"
+            )
+            assert (
+                config["config"]["modules"][0]["prompt_templating"]["model"]["name"]
+                == "gpt-4o"
+            )
+            assert (
+                config["config"]["modules"][0]["prompt_templating"]["model"]["params"]
+                == {}
+            )
+            assert (
+                config["config"]["modules"][1]["prompt_templating"]["prompt"][
+                    "template"
+                ][0]["content"]
                 == "Hello world!"
             )
-            assert config["config"]["modules"][0]["prompt_templating"]["prompt"]["template"][0]["content"] == "Hello."
-            assert config["config"]["modules"][1]["translation"]["input"]["type"] == "sap_document_translation"
+            assert (
+                config["config"]["modules"][0]["prompt_templating"]["prompt"][
+                    "template"
+                ][0]["content"]
+                == "Hello."
+            )
+            assert (
+                config["config"]["modules"][1]["translation"]["input"]["type"]
+                == "sap_document_translation"
+            )
 
 
 class TestCacheControl:

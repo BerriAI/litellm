@@ -25,7 +25,7 @@ from typing_extensions import ReadOnly, TypedDict, assert_never
 
 from litellm._logging import verbose_proxy_logger
 from litellm.llms.anthropic.chat.transformation import AnthropicConfig
-from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+from litellm.llms.anthropic.pass_through.adapters.transformation import (
     LiteLLMAnthropicMessagesAdapter,
     is_provider_native_tool_dict,
 )
@@ -365,7 +365,7 @@ class AnthropicMessagesHandler(BaseTranslation):
     def _standalone_block_chunks(self, exc: "ModifyResponseException") -> list[bytes]:
         import uuid
 
-        from litellm.llms.anthropic.experimental_pass_through.messages.fake_stream_iterator import (
+        from litellm.llms.anthropic.pass_through.messages.fake_stream_iterator import (
             FakeAnthropicMessagesStreamIterator,
         )
         from litellm.llms.base_llm.guardrail_translation.utils import (
@@ -685,7 +685,7 @@ class AnthropicMessagesHandler(BaseTranslation):
 
         return data
 
-    def _hoisted_top_level_system_message(self, data: dict) -> AllMessageValues | None:
+    def _hoisted_top_level_system_message(self, data: Mapping[str, object]) -> AllMessageValues | None:
         """Return the system message produced by translating the top-level prompt."""
         system: Final = data.get("system")
         if not system:

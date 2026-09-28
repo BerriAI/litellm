@@ -6,6 +6,7 @@ mod errors;
 mod http;
 mod logger;
 mod marshal;
+mod preflight;
 mod python_settings;
 mod routes;
 mod secrets;
@@ -27,14 +28,14 @@ mod _native {
     use crate::routes::audio_transcription::{atranscription, transcription};
     #[pymodule_export]
     use crate::routes::chat_completions::{
-        achat_completions, acompletion, chat_completions, chat_completions_decline, completion,
+        achat_completions, acompletion, chat_completions, completion,
     };
     #[pymodule_export]
     use crate::routes::embeddings::{aembedding, embedding};
     #[pymodule_export]
     use crate::routes::messages::{amessages, messages};
     #[pymodule_export]
-    use crate::routes::ocr::{aocr, ocr};
+    use crate::routes::ocr::{aocr, ocr, ocr_health_check_document, ocr_passthrough_response};
     #[pymodule_export]
     use crate::routes::responses::{ResponsesWebSocketConnection, aresponses, responses};
     #[pymodule_export]
@@ -85,13 +86,14 @@ mod tests {
                 "ProcessReservedForForking",
                 "ocr",
                 "aocr",
+                "ocr_health_check_document",
+                "ocr_passthrough_response",
                 "embedding",
                 "aembedding",
                 "transcription",
                 "atranscription",
                 "messages",
                 "amessages",
-                "chat_completions_decline",
                 "chat_completions",
                 "achat_completions",
                 "completion",

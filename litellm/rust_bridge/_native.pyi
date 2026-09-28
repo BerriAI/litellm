@@ -46,6 +46,8 @@ def aocr(
     args: tuple[object, ...],
     kwargs: dict[str, object],
 ) -> Coroutine[object, object, OCRResponse]: ...
+def ocr_health_check_document(model: str, custom_llm_provider: str | None) -> dict[str, object]: ...
+def ocr_passthrough_response(model: str, endpoint: str, body: bytes) -> dict[str, object] | None: ...
 def embedding(
     request: LiteLLMEmbeddingRequest,
     args: tuple[object, ...],
@@ -106,12 +108,6 @@ def amessages(
     args: tuple[object, ...],
     kwargs: dict[str, object],
 ) -> Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator[bytes]]: ...
-def chat_completions_decline(
-    model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object] | None = None,
-    custom_llm_provider: str | None = None,
-) -> str | None: ...
 def chat_completions(
     model: str,
     messages: Sequence[object],
@@ -411,12 +407,13 @@ __all__ = [
     "aresponses",
     "atranscription",
     "chat_completions",
-    "chat_completions_decline",
     "completion",
     "embedding",
     "gil_stats",
     "messages",
     "ocr",
+    "ocr_health_check_document",
+    "ocr_passthrough_response",
     "process_state_started",
     "reserve_process_for_forking",
     "responses",

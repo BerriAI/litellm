@@ -486,7 +486,7 @@ class BaselineAccountingStore:
     async def _pages(
         self, db: SupportsRawQueries, scope: str, after_revision: int, withdraw_from: float | None = None
     ) -> AsyncIterator[tuple[_StoredRecord, ...]]:
-        cursor: float | None = None
+        cursor: float | None = None  # rebind-ok: keyset pagination advances after each complete timestamp group
         while page := _RECORDS.validate_python(
             tuple(await db.query_raw(_READ_PAGE, scope, after_revision, cursor, _PAGE_TIMESTAMPS, withdraw_from))
         ):
@@ -627,7 +627,7 @@ async def flush_baseline_accounting(client: PrismaClient) -> None:
         more_queued: Final = bool(client.baseline_accounting_transactions)
     try:
         remaining: Final = await asyncio.wait_for(_flush_records(store, batch), timeout=5)
-    except (Exception, asyncio.CancelledError) as error:  # noqa: BLE001  # unknown acknowledgements can be replayed safely
+    except (Exception, asyncio.CancelledError) as error:
         async with client.baseline_accounting_lock:
             client.baseline_accounting_transactions.extend(batch)
         if isinstance(error, asyncio.CancelledError):

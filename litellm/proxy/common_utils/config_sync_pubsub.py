@@ -82,20 +82,11 @@ def config_sync_channel(redis_cache: "RedisCache") -> str:
     return f"{redis_cache.namespace}:{CONFIG_SYNC_CHANNEL}"
 
 
-def _raw_async_client(redis_cache: "RedisCache") -> object:
-    return cast(  # cast-ok: redis-py generics leave the client type partially unknown
-        object,
-        redis_cache.init_async_client(),  # pyright: ignore[reportUnknownMemberType]  # redis generics
+def _pubsub_capable_client(redis_cache: "RedisCache") -> _ConfigSyncPubSubClient:
+    return cast(  # cast-ok: protocol view of the pub/sub-capable async redis client
+        _ConfigSyncPubSubClient,
+        redis_cache.init_pubsub_client(),  # pyright: ignore[reportUnknownMemberType]  # redis generics
     )
-
-
-def _pubsub_capable_client(redis_cache: "RedisCache") -> _ConfigSyncPubSubClient | None:
-    from redis.asyncio import Redis
-
-    client: Final = _raw_async_client(redis_cache)
-    if isinstance(client, Redis):
-        return cast(_ConfigSyncPubSubClient, client)  # cast-ok: protocol view of the standalone redis client
-    return None
 
 
 @dataclass(frozen=True, slots=True)
@@ -112,12 +103,6 @@ async def publish_config_change(redis_cache: "RedisCache | None", object_type: s
         return
     try:
         client: Final = _pubsub_capable_client(redis_cache)
-        if client is None:
-            verbose_proxy_logger.debug(
-                "config sync publish for %s skipped: cluster redis client has no pub/sub support",
-                object_type,
-            )
-            return
         await client.publish(config_sync_channel(redis_cache), _config_change_message_json(object_type))
     except Exception as e:  # noqa: BLE001  # best-effort publish; writes must never fail on redis errors
         verbose_proxy_logger.warning("config sync publish for %s failed: %s", object_type, e)
@@ -238,12 +223,6 @@ class ConfigSyncSubscriber:
         while True:
             try:
                 client = _pubsub_capable_client(self._redis_cache)
-                if client is None:
-                    verbose_proxy_logger.warning(
-                        "config sync subscriber disabled: cluster redis client has no pub/sub support; "
-                        "interval polling remains the only sync mechanism"
-                    )
-                    return
                 pubsub = client.pubsub()
                 try:
                     await pubsub.subscribe(config_sync_channel(self._redis_cache))
