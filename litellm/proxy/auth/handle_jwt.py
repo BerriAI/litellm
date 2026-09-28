@@ -2755,18 +2755,25 @@ class JWTAuthManager:
             if granting_team is not None and granting_team != team_id:
                 if not JWTAuthManager._is_team_route_allowed(route, request_method, handler):
                     raise HTTPException(403, "The granting team is not allowed to access this route")
-                team_id = granting_team
-                team_object = await get_team_object(
-                    team_id=team_id,
-                    prisma_client=prisma_client,
-                    user_api_key_cache=user_api_key_cache,
-                    parent_otel_span=parent_otel_span,
-                    proxy_logging_obj=proxy_logging_obj,
-                    check_db_only=True,
-                )
 
-        if team_id and not JWTAuthManager._team_has_passthrough_route_access(
-            team_object=team_object,
+        selected_team_id: Final = (
+            (granting_team if granting_team is not None else team_id) if managed is not None else team_id
+        )
+        selected_team_object: Final = (
+            await get_team_object(
+                team_id=selected_team_id,
+                prisma_client=prisma_client,
+                user_api_key_cache=user_api_key_cache,
+                parent_otel_span=parent_otel_span,
+                proxy_logging_obj=proxy_logging_obj,
+                check_db_only=True,
+            )
+            if selected_team_id != team_id
+            else team_object
+        )
+
+        if selected_team_id and not JWTAuthManager._team_has_passthrough_route_access(
+            team_object=selected_team_object,
             route=route,
             request_method=request_method,
             team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
@@ -2788,7 +2795,7 @@ class JWTAuthManager:
             user_email=user_email,
             org_id=org_id,
             end_user_id=end_user_id,
-            team_id=team_id,
+            team_id=selected_team_id,
             valid_user_email=valid_user_email,
             jwt_handler=handler,
             prisma_client=prisma_client,
@@ -2813,7 +2820,7 @@ class JWTAuthManager:
             )
 
         # If JWT did not resolve team_id, attempt a team fallback.
-        if team_id is None and db_team_fallback:
+        if selected_team_id is None and db_team_fallback:
             (
                 team_id,
                 team_object,
@@ -2842,7 +2849,7 @@ class JWTAuthManager:
                 team_allowed_routes=handler.litellm_jwtauth.team_allowed_routes,
             ):
                 JWTAuthManager._raise_team_passthrough_route_denial(route=route)
-        elif team_id is None:
+        elif selected_team_id is None:
             (
                 team_id,
                 team_object,
@@ -2856,7 +2863,7 @@ class JWTAuthManager:
                 proxy_logging_obj=proxy_logging_obj,
                 team_id_upsert=team_id_upsert,
             )
-        elif provisional_header_team is not None and team_id == provisional_header_team.team_id:
+        elif provisional_header_team is not None and selected_team_id == provisional_header_team.team_id:
             JWTAuthManager._validate_header_team_in_db_membership(
                 team_id=team_id,
                 user_object=user_object,
@@ -2875,17 +2882,20 @@ class JWTAuthManager:
                     ),
                 )
 
+        authorized_team_id: Final = selected_team_id if selected_team_id is not None else team_id
+        authorized_team_object: Final = selected_team_object if selected_team_id is not None else team_object
+
         ## MAP USER TO TEAMS
         if provisioning is not None and managed is None:
             await JWTAuthManager.map_user_to_teams(
                 user_object=user_object,
-                team_object=team_object,
+                team_object=authorized_team_object,
             )
 
         # Validate that a valid rbac id is returned for spend tracking
         JWTAuthManager.validate_object_id(
             user_id=user_id,
-            team_id=team_id,
+            team_id=authorized_team_id,
             enforce_rbac=bool(general_settings.get("enforce_rbac", False)),
             is_proxy_admin=False,
         )
@@ -2897,8 +2907,8 @@ class JWTAuthManager:
 
         return JWTAuthBuilderResult(
             is_proxy_admin=is_proxy_admin,
-            team_id=team_id,
-            team_object=team_object,
+            team_id=authorized_team_id,
+            team_object=authorized_team_object,
             user_id=user_id,
             user_email=(user_object.user_email if user_object is not None and user_object.user_email else user_email),
             user_object=user_object,
