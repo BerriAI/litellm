@@ -18038,6 +18038,7 @@ _GENERAL_SETTINGS_CONFIG_LIST_FIELD_TYPES: Final[Mapping[str, str]] = MappingPro
         "apply_user_budget_to_team_keys": "Boolean",
         "user_api_key_cache_max_size": "Integer",
         "transcribe_media_buckets": "List",
+        "model_list_return_wildcard_routes": "Boolean",
     }
 )
 

@@ -3169,3 +3169,36 @@ async def test_model_list_leaves_out_wildcard_routes_unless_enabled(
 
     assert "gpt-4o" in listed, listed
     assert "openai/*" not in listed, listed
+
+
+@pytest.mark.asyncio
+async def test_model_list_return_wildcard_routes_is_an_admin_ui_toggle(openai_wildcard_router, monkeypatch):
+    stored_general_settings: Final = {"model_list_return_wildcard_routes": True}
+    config_table: Final = MagicMock()
+    config_table.find_first = AsyncMock(
+        side_effect=lambda where: (
+            MagicMock(param_value=stored_general_settings) if where["param_name"] == "general_settings" else None
+        )
+    )
+    ui_prisma_client: Final = MagicMock()
+    ui_prisma_client.db.litellm_config = config_table
+    monkeypatch.setattr(litellm.proxy.proxy_server, "general_settings", {})
+    monkeypatch.setattr(litellm.proxy.proxy_server, "proxy_config", ProxyConfig())
+    await litellm.proxy.proxy_server.proxy_config._update_general_settings(stored_general_settings)
+
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", ui_prisma_client)
+    ui_fields: Final = {
+        field.field_name: field
+        for field in await litellm.proxy.proxy_server.get_config_list(
+            config_type="general_settings",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+    }
+    monkeypatch.setattr(litellm.proxy.proxy_server, "prisma_client", None)
+    response: Final = await litellm.proxy.proxy_server.model_list(
+        user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.INTERNAL_USER)
+    )
+
+    toggle: Final = ui_fields["model_list_return_wildcard_routes"]
+    assert (toggle.field_type, toggle.field_value, toggle.stored_in_db) == ("Boolean", True, True)
+    assert "openai/*" in [model["id"] for model in response["data"]]
