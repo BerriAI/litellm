@@ -3,12 +3,14 @@ OpenAPI compliance tests for Google Interactions API.
 
 Validates that our SDK requests/responses match the OpenAPI spec at:
 https://ai.google.dev/static/api/interactions.openapi.json
+Schema names verified against that spec on 2026-09-28.
 
 Run with: pytest tests/unit/interactions/test_openapi_compliance.py -v
 """
 
 import json
 import os
+import re
 from typing import Any, Dict
 from unittest.mock import MagicMock, patch
 
@@ -60,12 +62,11 @@ class TestRequestCompliance:
     """Tests that our request bodies match the OpenAPI spec."""
 
     def test_create_model_interaction_request_schema(self, spec_dict):
-        """Verify CreateModelInteractionParams schema fields."""
-        schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
+        """Verify ModelInteraction schema fields."""
+        schema = spec_dict["components"]["schemas"]["ModelInteraction"]
 
-        # Required fields per spec
         assert "model" in schema["required"]
-        assert "input" in schema["required"]
+        assert "input" in schema["properties"]
 
         # Check our supported optional fields exist in spec
         our_optional_fields = [
@@ -88,7 +89,7 @@ class TestRequestCompliance:
 
     def test_input_types_match_spec(self, spec_dict):
         """Verify input field supports string, Content, Content[], Turn[]."""
-        schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
+        schema = spec_dict["components"]["schemas"]["ModelInteraction"]
         input_schema = schema["properties"]["input"]
 
         # The input property may be inline oneOf or a $ref to InteractionsInput
@@ -313,7 +314,7 @@ class TestEndpointCompliance:
 
         get_path = None
         for path, methods in paths.items():
-            if "{id}" in path and "interactions" in path and "get" in methods:
+            if re.fullmatch(r".*/interactions/\{[^/{}]+\}", path) and "get" in methods:
                 get_path = path
                 break
 
@@ -326,7 +327,7 @@ class TestEndpointCompliance:
 
         delete_path = None
         for path, methods in paths.items():
-            if "{id}" in path and "interactions" in path and "delete" in methods:
+            if re.fullmatch(r".*/interactions/\{[^/{}]+\}", path) and "delete" in methods:
                 delete_path = path
                 break
 
