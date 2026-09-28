@@ -60,13 +60,22 @@ jobs:
             echo "complete=true" >> "$GITHUB_OUTPUT"
           elif [ "${REF_NAME}" = "main" ]; then
             version="$(python3 .github/scripts/read_rc_version.py | cut -d= -f2)"
-            if git ls-remote --exit-code --heads origin "rc/${version}" > /dev/null; then
-              IFS=. read -r major minor _ <<< "${version}"
-              version="${major}.$((minor + 1)).0"
-            fi
+            status=0
+            git ls-remote --exit-code --heads origin "rc/${version}" > /dev/null || status=$?
+            case "${status}" in
+              0)
+                IFS=. read -r major minor _ <<< "${version}"
+                version="${major}.$((minor + 1)).0"
+                ;;
+              2) ;;
+              *)
+                echo "::error::could not check whether rc/${version} exists (git ls-remote exit ${status})"
+                exit 1
+                ;;
+            esac
             echo "version=${version}" >> "$GITHUB_OUTPUT"
             echo "sync_base=${sync_base}" >> "$GITHUB_OUTPUT"
-            echo "stage=main" >> "$GITHUB_OUTPUT"
+            echo "main=true" >> "$GITHUB_OUTPUT"
           else
             echo "version=${REF_NAME#rc/}" >> "$GITHUB_OUTPUT"
             echo "sync_base=${sync_base}" >> "$GITHUB_OUTPUT"
@@ -84,13 +93,31 @@ jobs:
           base_ref: ${{ steps.plan.outputs.sync_base }}
           cli_version: v0.18.0
 
+      - name: Keep the main stage unless the rc branch was cut during this run
+        id: main_stage
+        if: steps.plan.outputs.main == 'true'
+        env:
+          VERSION: ${{ steps.plan.outputs.version }}
+        run: |
+          set -euo pipefail
+          status=0
+          git ls-remote --exit-code --heads origin "rc/${VERSION}" > /dev/null || status=$?
+          case "${status}" in
+            0) echo "::notice::rc/${VERSION} was cut during this run; leaving the release in its rc stage" ;;
+            2) echo "stage=main" >> "$GITHUB_OUTPUT" ;;
+            *)
+              echo "::error::could not check whether rc/${VERSION} exists (git ls-remote exit ${status})"
+              exit 1
+              ;;
+          esac
+
       - name: Move the release to its stage
-        if: steps.plan.outputs.stage != ''
+        if: steps.plan.outputs.stage != '' || steps.main_stage.outputs.stage != ''
         uses: linear/linear-release-action@d4af10092984f9bc6d5efa075b242bdf01333463 # v0.18.0
         with:
           access_key: ${{ secrets.LINEAR_API_KEY }}
           command: update
-          stage: ${{ steps.plan.outputs.stage }}
+          stage: ${{ steps.plan.outputs.stage || steps.main_stage.outputs.stage }}
           version: ${{ steps.plan.outputs.version }}
           cli_version: v0.18.0
 
