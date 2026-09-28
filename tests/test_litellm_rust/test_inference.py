@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Coroutine, Mapping
 from typing import Final, Literal, TypeAlias
 
 import pytest
-from pydantic import JsonValue, TypeAdapter
+from pydantic import TypeAdapter
 
 import litellm
 from litellm import RateLimitError
@@ -16,7 +16,14 @@ from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import ModelResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
-from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE, request_body
+from tests.test_litellm_rust.support.requests import (
+    MESSAGES,
+    MESSAGES_MODEL,
+    MESSAGES_RESPONSE,
+    RESPONSES_MODEL,
+    RESPONSES_RESPONSE,
+    request_body,
+)
 
 pytestmark = pytest.mark.requires_rust_extension
 Route: TypeAlias = Literal["chat", "responses"]
@@ -27,24 +34,6 @@ NativeResult: TypeAlias = (
     | Coroutine[object, object, ModelResponse]
     | Coroutine[object, object, ResponsesAPIResponse]
 )
-RESPONSES_MODEL: Final = "openai/gpt-6-sol"
-RESPONSES_RESPONSE: Final[dict[str, JsonValue]] = {
-    "id": "resp_native",
-    "object": "response",
-    "created_at": 1,
-    "model": RESPONSES_MODEL.removeprefix("openai/"),
-    "status": "completed",
-    "output": [
-        {
-            "type": "message",
-            "id": "msg_native",
-            "role": "assistant",
-            "status": "completed",
-            "content": [{"type": "output_text", "text": "native response", "annotations": []}],
-        }
-    ],
-    "usage": {"input_tokens": 5, "output_tokens": 4, "total_tokens": 9},
-}
 
 
 @pytest.fixture(params=("chat", "responses"))

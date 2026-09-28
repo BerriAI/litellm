@@ -16,18 +16,19 @@ from litellm.rust_bridge.configuration import (  # pyright: ignore[reportPrivate
     _CONFIGURATION,
     _parse_env_bool,
 )
+from tests.test_litellm_rust.support.callback_contract import callback_server as callback_server
 from tests.test_litellm_rust.support.callback_recorder import drain_logging
 from tests.test_litellm_rust.support.isolation import isolated_callback_registries, rebound
 from tests.test_litellm_rust.support.recording_server import RecordingServer, recording_service
 
 
 @pytest_asyncio.fixture(autouse=True, loop_scope="function")
-async def isolate_ocr_test_state() -> AsyncIterator[None]:
+async def isolate_native_test_state() -> AsyncIterator[None]:
     with ExitStack() as stack:
         stack.enter_context(isolated_callback_registries())
         stack.enter_context(rebound(litellm, "cache", None))  # test-quality-ok: isolate process-global cache
         stack.enter_context(rebound(_CONFIGURATION, "override", None))
-        executor: Final = ThreadPoolExecutor(thread_name_prefix="rust-ocr-test-logging")
+        executor: Final = ThreadPoolExecutor(thread_name_prefix="rust-test-logging")
         stack.enter_context(rebound(litellm_logging, "executor", executor))
         stack.enter_context(rebound(utils, "executor", executor))
         stack.enter_context(rebound(thread_pool_executor, "executor", executor))

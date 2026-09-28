@@ -179,7 +179,12 @@ impl LegacyLogging {
         logger.sync_success_for_async_call(py, &self.response, &self.start, &self.end)
     }
 
-    fn stream_success(&self, py: Python<'_>, stream: &DeliveredStream) -> PyResult<()> {
+    fn stream_success(
+        &self,
+        py: Python<'_>,
+        stream: &DeliveredStream,
+        detached: bool,
+    ) -> PyResult<()> {
         let logger = self.logger()?;
         let billing = self.surface.stream.ok_or_else(missing_state)?;
         let billed = Streaming::Success.call(
@@ -196,6 +201,7 @@ impl LegacyLogging {
                 &self.start,
                 &self.end,
                 &stream.first_chunk,
+                detached,
             ),
         );
         match billed {
@@ -329,13 +335,14 @@ impl PythonCallHooks for LegacyLogging {
         )?;
         self.logger = Some(result.logger()?);
         self.call.set_kwargs(result.kwargs()?);
+        let prepared = self.prepare(py)?;
         if self.runs_deployment_hooks() {
             return Ok(HookStep::Await(
                 DeploymentHooks::before_call(py, self.call.kwargs(), self.surface.call_type)?,
                 Self::resume_begin,
             ));
         }
-        self.prepare(py)
+        Ok(prepared)
     }
 
     fn before_provider_request(
@@ -424,11 +431,15 @@ impl PythonCallHooks for LegacyLogging {
                 )?;
                 Ok(HookStep::Ready(()))
             }
-            HookEvent::Succeeded { timing, response } => {
+            HookEvent::Succeeded {
+                timing,
+                response,
+                detached,
+            } => {
                 self.end = Some(datetime(py, timing.end_time)?);
                 self.response = Some(response.clone_ref(py));
                 match &self.stream {
-                    Some(stream) => self.stream_success(py, stream)?,
+                    Some(stream) => self.stream_success(py, stream, detached)?,
                     None => self.dispatch_success(py)?,
                 }
                 Ok(HookStep::Ready(()))
@@ -1495,6 +1506,7 @@ mod terminal_tests {
                 HookEvent::Succeeded {
                     timing: TIMING,
                     response: &response,
+                    detached: false,
                 },
             )
             .unwrap()

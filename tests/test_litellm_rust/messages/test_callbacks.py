@@ -1,7 +1,18 @@
+import json
 from collections.abc import AsyncIterator, Iterator
 from typing import Final
 
 import pytest
+
+from tests.test_litellm_rust.support.stream_callback_contract import (
+    TestStreamCallbackContract as TestStreamCallbackContract,
+)
+
+from tests.test_litellm_rust.support.callback_contract import (
+    CallbackRoute,
+    TestCallbackContract as TestCallbackContract,
+)
+from tests.test_litellm_rust.support.callback_routes import messages_contract
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger
@@ -239,3 +250,114 @@ async def test_native_messages_stream_success_log_carries_usage_rebuilt_from_the
     assert usage.completion_tokens == MESSAGES_EVENTS[4][1]["usage"]["output_tokens"]
     assert usage.prompt_tokens == MESSAGES_RESPONSE["usage"]["input_tokens"]
     assert success[0].response.choices[0].message.content == "Hello from native Messages"
+
+
+@pytest.fixture
+def callback_route() -> CallbackRoute:
+    return messages_contract()
+
+
+@pytest.fixture
+def callback_stream_response() -> ResponseSpec:
+    return STREAM
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "engine",
+    (
+        "python",
+        pytest.param(
+            "rust",
+            marks=pytest.mark.xfail(
+                strict=True, raises=AssertionError, reason="Messages native dispatch omits async_pre_request_hook"
+            ),
+        ),
+    ),
+)
+async def test_messages_request_hook_changes_provider_request(
+    messages_server: RecordingServer, callback_route: CallbackRoute, engine: str
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
+
+    class Edit(CustomLogger):
+        async def async_pre_request_hook(
+            self, model: str, messages: object, kwargs: dict[str, object]
+        ) -> dict[str, object]:
+            return {**kwargs, "stop_sequences": ["callback-stop"]}
+
+    litellm.callbacks.append(Edit())
+    if engine == "python":
+        await anthropic_messages(**arguments(messages_server))
+    else:
+        await callback_route.invoke(messages_server)
+    assert messages_server.requests[0].body.get("stop_sequences") == ["callback-stop"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "engine",
+    (
+        "python",
+        pytest.param(
+            "rust",
+            marks=pytest.mark.xfail(
+                strict=True, raises=AssertionError, reason="Messages native dispatch omits agentic completion hooks"
+            ),
+        ),
+    ),
+)
+async def test_messages_agentic_hook_replaces_public_response(
+    messages_server: RecordingServer, callback_route: CallbackRoute, engine: str
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
+
+    class Complete(CustomLogger):
+        async def async_should_run_agentic_loop(self, **kwargs: object) -> tuple[bool, dict[str, object]]:
+            return True, {"tool_calls": [{"name": "callback_tool", "input": {}}]}
+
+        async def async_run_agentic_loop(self, **kwargs: object) -> object:
+            return callback_route.replace(kwargs["response"], "completed by agentic hook")
+
+    litellm.callbacks.append(Complete())
+    response: Final = (
+        await anthropic_messages(**arguments(messages_server))
+        if engine == "python"
+        else await callback_route.invoke(messages_server)
+    )
+    assert callback_route.text(response) == "completed by agentic hook"
+    assert len(messages_server.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "engine",
+    (
+        "python",
+        pytest.param(
+            "rust",
+            marks=pytest.mark.xfail(
+                strict=True,
+                raises=AssertionError,
+                reason="Messages native pre_call uses a label and credential instead of the Python input contract",
+            ),
+        ),
+    ),
+)
+async def test_messages_pre_api_input_describes_the_request_without_credentials(
+    messages_server: RecordingServer, callback_route: CallbackRoute, engine: str
+) -> None:
+    from litellm.llms.anthropic.pass_through.messages.handler import anthropic_messages
+
+    recorder: Final = RecordingLogger()
+    if engine == "python":
+        await anthropic_messages(**arguments(messages_server, callbacks=[recorder]))
+    else:
+        await callback_route.invoke(messages_server, callbacks=[recorder])
+    details: Final = recorder.wait_for("log_pre_api_call")[0].kwargs
+    assert isinstance(details, dict)
+    assert details.get("api_key") == ""
+    request_input: Final = details["input"]
+    assert isinstance(request_input, list) and len(request_input) == 1
+    assert request_input[0]["role"] == "user"
+    assert json.loads(request_input[0]["content"]) == messages_server.requests[0].body

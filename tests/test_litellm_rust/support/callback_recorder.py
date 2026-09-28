@@ -84,6 +84,11 @@ class RecordingLogger(CustomLogger):
     def log_pre_api_call(self, model, messages, kwargs):
         self._record("log_pre_api_call", kwargs)
 
+    def log_post_api_call(
+        self, kwargs: dict[str, object], response_obj: object, start_time: object, end_time: object
+    ) -> None:
+        self._record("log_post_api_call", kwargs, response_obj)
+
     def log_success_event(self, kwargs, response_obj, start_time, end_time):
         self._record("log_success_event", kwargs, response_obj)
 
