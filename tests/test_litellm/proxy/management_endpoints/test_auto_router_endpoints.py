@@ -2558,7 +2558,8 @@ async def test_jev_test_routing_authorizes_paid_evaluation_before_contacting_typ
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "case", ["allowed", "credential-free", "missing", "blocked", "key", "budget", "team", "not-router"]
+    "case",
+    ["allowed", "credential-free", "member", "member-unsaved", "missing", "blocked", "key", "budget", "team", "not-router"],
 )
 async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch: pytest.MonkeyPatch, case: str) -> None:
     router: Final = RecordingRouter("SIMPLE")
@@ -2579,15 +2580,19 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
                 "model_info": {
                     "id": "saved-jev-id",
                     "blocked": case == "blocked",
-                    "team_id": "owner-team" if case == "team" else None,
+                    "team_id": (
+                        "owner-team" if case == "team" else "member-preview-team" if case == "member" else None
+                    ),
                 },
             }
         )
     )
     monkeypatch.setattr(proxy_server, "llm_router", router)
     actor: Final = (
-        _configure_member_preview(monkeypatch)
-        if case == "team"
+        _configure_member_preview(
+            monkeypatch, models=[*(TIERS[name][0] for name in TIERS), "saved-jev", "typesafe/jev-latest"]
+        )
+        if case in ("team", "member", "member-unsaved")
         else UserAPIKeyAuth(
             user_role=LitellmUserRoles.PROXY_ADMIN,
             api_key="sk-probe",
@@ -2600,8 +2605,10 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
     request: Final = _request_from(
         {
             "prompt": "what is 2+2",
-            "saved_model_id": "missing-id" if case == "missing" else "saved-jev-id",
-            "team_id": "member-preview-team" if case == "team" else None,
+            "saved_model_id": (
+                None if case == "member-unsaved" else "missing-id" if case == "missing" else "saved-jev-id"
+            ),
+            "team_id": "member-preview-team" if case in ("team", "member", "member-unsaved") else None,
         },
         classifier_type="jev",
         jev_classifier_config=(
@@ -2629,10 +2636,12 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
             )
         )
         operation: Final = preview_auto_router_routing(request, actor, ROUTING_HTTP_REQUEST)
-        if case in ("missing", "blocked", "team", "not-router"):
+        if case in ("missing", "blocked", "team", "not-router", "member-unsaved"):
             with pytest.raises(HTTPException) as denied:
                 await operation
-            assert denied.value.status_code == {"missing": 404, "blocked": 404, "team": 403, "not-router": 400}[case]
+            assert denied.value.status_code == {
+                "missing": 404, "blocked": 404, "team": 403, "not-router": 400, "member-unsaved": 400,
+            }[case]
         elif case in ("key", "budget"):
             with pytest.raises(ProxyException) as forbidden:
                 await operation
@@ -2645,7 +2654,7 @@ async def test_saved_jev_probe_uses_authorized_server_configuration(monkeypatch:
             assert result.routed_model == "cheap-model"
             assert evaluation.calls.last.request.headers["authorization"] == f"Bearer {stored_key}"
             assert stored_key not in result.model_dump_json()
-        assert evaluation.call_count == (1 if case in ("allowed", "credential-free") else 0)
+        assert evaluation.call_count == (1 if case in ("allowed", "credential-free", "member") else 0)
         assert router.recorded_calls == []
         await handler.client.aclose()
 
@@ -3167,13 +3176,15 @@ async def test_validate_config_gates_like_the_write_it_rehearses(monkeypatch: py
     assert not_their_team.value.status_code == 403
 
 
-def _configure_member_preview(monkeypatch: pytest.MonkeyPatch, *, allowed: bool = True) -> UserAPIKeyAuth:
+def _configure_member_preview(
+    monkeypatch: pytest.MonkeyPatch, *, allowed: bool = True, models: Sequence[str] | None = None,
+) -> UserAPIKeyAuth:
     from litellm.proxy import proxy_server
     from litellm.proxy._types import UI_TEAM_ID, LiteLLM_TeamTable
 
     team: Final = LiteLLM_TeamTable(
         team_id="member-preview-team",
-        models=list(TIERS[name][0] for name in TIERS),
+        models=list(models) if models is not None else list(TIERS[name][0] for name in TIERS),
         members_with_roles=[{"role": "user", "user_id": "preview-member"}],
         team_member_permissions=["/auto_router/manage"] if allowed else [],
     )

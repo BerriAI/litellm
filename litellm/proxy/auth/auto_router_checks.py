@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from types import MappingProxyType
 from typing import TYPE_CHECKING, Final
 
 from pydantic import TypeAdapter, ValidationError
@@ -86,7 +87,7 @@ async def authorize_member_auto_router_inference(
     if raw_config is None:
         raise HTTPException(status_code=403, detail="The member auto-router configuration is invalid")
     default_model: Final = params.get("complexity_router_default_model")
-    config: Final = validate_member_auto_router_config(raw_config)
+    config: Final = validate_member_auto_router_config(raw_config, supplied_config=MappingProxyType({}))
     membership: Final = (
         await get_team_membership(
             user_id=actor.user_id,

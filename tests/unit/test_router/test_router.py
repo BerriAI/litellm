@@ -17978,7 +17978,9 @@ class TestMemberAutoRouterInference:
         monkeypatch.setattr(proxy_server, "prisma_client", self.database)
 
     @staticmethod
-    def _marker(*, member: bool = True, classifier: bool = False) -> dict[str, object]:
+    def _marker(
+        *, member: bool = True, classifier: bool = False, jev: Mapping[str, object] | None = None,
+    ) -> dict[str, object]:
         target: Final = "permitted-model" if member else "restricted-model"
         return {
             "model_name": "model_name_router-team_member-router",
@@ -17987,6 +17989,7 @@ class TestMemberAutoRouterInference:
                 "complexity_router_config": {
                     "tiers": dict.fromkeys(("SIMPLE", "MEDIUM", "COMPLEX", "REASONING"), target), "adaptive": False,
                     **({"classifier_type": "llm", "classifier_llm_config": {"model": target}} if classifier else {}),
+                    **({"classifier_type": "jev", "jev_classifier_config": jev} if jev is not None else {}),
                 },
                 "tags": ["member" if member else "admin"], "timeout": 13.0 if member else 29.0,
             },
@@ -18025,6 +18028,34 @@ class TestMemberAutoRouterInference:
         )
         assert response is not None
         return response
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("api_key", (None, "synthetic-saved-nimble-key"))
+    @pytest.mark.parametrize("allowed", (True, False))
+    async def test_saved_nimble_transport_keeps_runtime_provider_authorization(
+        self, api_key: str | None, allowed: bool, respx_mock: respx.MockRouter, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        evaluation: Final = respx_mock.post("https://saved-nimble.test/v1/systemone").respond(200, json={
+            "answers": {"tier": {"type": "choice", "choice": "SIMPLE", "confidence": 1, "probabilities": {"SIMPLE": 1}}},
+        })
+        models: Final = [*self.team.models, "bespoke_nimble/nimble-latest"]
+        self.database.db.litellm_teamtable.find_unique.return_value = self.team.model_copy(update={"models": models})
+        actor: Final = self.actor.model_copy(update={"models": models if allowed else self.actor.models})
+        router: Final = self._router(self._marker(jev={
+            "provider": "bespoke_nimble", "model": "nimble-latest",
+            "api_base": "https://saved-nimble.test", "api_key": api_key,
+        }))
+        if not allowed:
+            with pytest.raises(ProxyException, match="bespoke_nimble/nimble-latest"):
+                await self._route(router, self._request(actor=actor))
+            assert evaluation.call_count == 0
+            return
+        response: Final = await self._route(router, self._request(actor=actor))
+        assert response.model == "permitted-model"
+        assert response.routing_decision is not None and response.routing_decision["cause"] == "jev_classifier"
+        assert evaluation.call_count == 1
+        assert evaluation.calls.last.request.headers.get("authorization") == (f"Bearer {api_key}" if api_key else None)
 
     @pytest.mark.asyncio
     @pytest.mark.parametrize("metadata_name", ("metadata", "litellm_metadata"))

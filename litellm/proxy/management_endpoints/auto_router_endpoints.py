@@ -269,12 +269,13 @@ async def _authorize_member_dry_run_config(
     default_model: str | None,
     user_api_key_dict: UserAPIKeyAuth,
     team: LiteLLM_TeamTable,
+    supplied_config: Mapping[str, object] | None = None,
 ) -> UserAPIKeyAuth:
     from litellm.proxy.proxy_server import llm_router, prisma_client
 
     if prisma_client is None or llm_router is None:
         raise HTTPException(status_code=503, detail="Cannot verify auto-router model access")
-    validated: Final = validate_member_auto_router_config(config)
+    validated: Final = validate_member_auto_router_config(config, supplied_config=supplied_config)
     scoped_actor: Final = user_api_key_dict.model_copy(
         update=MappingProxyType({"team_id": team.team_id, "team_models": team.models, "org_id": team.organization_id})
     )
@@ -544,6 +545,7 @@ async def preview_auto_router_routing(
             default_model=resolved.default_model,
             user_api_key_dict=user_api_key_dict,
             team=member_team,
+            supplied_config=MappingProxyType({}) if resolved.saved_model_id is not None else None,
         )
         if member_team is not None
         else user_api_key_dict
