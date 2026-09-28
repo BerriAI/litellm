@@ -67,7 +67,7 @@ def _make_caller_user(
 
 
 def _patch_org_admin_deps(get_user_return):
-    """Context manager that patches the lazy imports inside is_org_admin_for_team."""
+    """Context manager that patches the lazy imports inside PrismaOrgRoles.is_org_admin."""
     return (
         patch(
             "litellm.proxy.auth.auth_checks.get_user_object",

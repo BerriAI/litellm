@@ -3377,30 +3377,25 @@ async def test_validate_key_team_change_with_member_permissions():
             "litellm.proxy.management_endpoints.key_management_endpoints._get_user_in_team"
         ) as mock_get_user:
             with patch(
-                "litellm.proxy.management_endpoints.key_management_endpoints.is_team_admin"
-            ) as mock_is_admin:
-                with patch(
-                    "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint"
-                ) as mock_has_perms:
+                "litellm.proxy.management_endpoints.key_management_endpoints.TeamMemberPermissionChecks.does_team_member_have_permissions_for_endpoint"
+            ) as mock_has_perms:
+                mock_get_user.return_value = mock_member_object
+                mock_has_perms.return_value = True
 
-                    mock_get_user.return_value = mock_member_object
-                    mock_is_admin.return_value = False
-                    mock_has_perms.return_value = True
+                # This should not raise an exception due to member permissions
+                await validate_key_team_change(
+                    key=mock_key,
+                    team=mock_team,
+                    change_initiated_by=mock_change_initiator,
+                    llm_router=mock_router,
+                )
 
-                    # This should not raise an exception due to member permissions
-                    await validate_key_team_change(
-                        key=mock_key,
-                        team=mock_team,
-                        change_initiated_by=mock_change_initiator,
-                        llm_router=mock_router,
-                    )
-
-                    # Verify the permission check was called with correct parameters
-                    mock_has_perms.assert_called_once_with(
-                        team_member_role=mock_member_object.role,
-                        team_table=mock_team,
-                        route=KeyManagementRoutes.KEY_UPDATE.value,
-                    )
+                # Verify the permission check was called with correct parameters
+                mock_has_perms.assert_called_once_with(
+                    team_member_role=mock_member_object.role,
+                    team_table=mock_team,
+                    route=KeyManagementRoutes.KEY_UPDATE.value,
+                )
 
 
 @pytest.mark.asyncio
@@ -11127,7 +11122,7 @@ async def test_block_key_allowed_for_team_admin(monkeypatch):
         return team_obj
 
     monkeypatch.setattr(
-        "litellm.proxy.auth.auth_checks.get_team_object",
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
         mock_get_team_object,
     )
 
@@ -11316,7 +11311,7 @@ async def test_update_key_throttle_on_budget_exceeded_rejected_for_internal_user
     so it is a budget-enforcement change. A non-admin key owner (same setup that
     is allowed to change non-budget fields via the caller_is_creator shortcut)
     must NOT be able to self-opt-in to it; it has to route through the admin-only
-    require_key_access and return 403. Without treating the flag as a budget
+    _check_key_admin_access and return 403. Without treating the flag as a budget
     change this update would succeed, letting the owner bypass their own cap."""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         update_key_fn,
@@ -11468,7 +11463,7 @@ async def test_update_key_throttle_unchanged_allows_non_budget_edit_for_internal
 
 @pytest.mark.asyncio
 async def test_update_key_non_budget_rejects_cross_user_modification(monkeypatch):
-    """Regression: previously require_key_access was gated on
+    """Regression: previously _check_key_admin_access was gated on
     max_budget/spend changes only, so an internal user could rewrite any
     OTHER field (alias, models, tpm_limit, blocked, metadata, …) on any
     key they weren't admin of as long as they avoided budget/spend. This
@@ -11535,7 +11530,7 @@ async def test_update_key_non_budget_rejects_cross_user_modification(monkeypatch
 @pytest.mark.asyncio
 async def test_update_key_creator_reassigned_key_blocked(monkeypatch):
     """Regression: creator who no longer owns the key (user_id ≠ caller) must
-    not bypass require_key_access via the caller_is_creator shortcut."""
+    not bypass _check_key_admin_access via the caller_is_creator shortcut."""
     from litellm.proxy.management_endpoints.key_management_endpoints import (
         update_key_fn,
     )
@@ -11762,7 +11757,7 @@ async def test_update_key_team_member_cannot_change_budget(monkeypatch):
         return team_table
 
     monkeypatch.setattr(
-        "litellm.proxy.auth.auth_checks.get_team_object",
+        "litellm.proxy.management_endpoints.key_management_endpoints.get_team_object",
         mock_get_team_object,
     )
     monkeypatch.setattr(
@@ -12263,7 +12258,7 @@ class TestKeyOwnerPrivilegeEscalation:
             side_effect=HTTPException(status_code=403, detail="Not authorized")
         )
         with patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.require_key_access",
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
             mock_check,
         ):
             with pytest.raises(HTTPException) as exc_info:
@@ -12297,7 +12292,7 @@ class TestKeyOwnerPrivilegeEscalation:
             side_effect=HTTPException(status_code=403, detail="Not authorized")
         )
         with patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.require_key_access",
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
             mock_check,
         ):
             with pytest.raises(HTTPException):
@@ -12324,7 +12319,7 @@ class TestKeyOwnerPrivilegeEscalation:
             side_effect=HTTPException(status_code=403, detail="Not authorized")
         )
         with patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.require_key_access",
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
             mock_check,
         ):
             with pytest.raises(HTTPException):
@@ -12350,7 +12345,7 @@ class TestKeyOwnerPrivilegeEscalation:
 
         mock_check = AsyncMock()
         with patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.require_key_access",
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
             mock_check,
         ):
             await _validate_update_key_data(
@@ -12376,7 +12371,7 @@ class TestKeyOwnerPrivilegeEscalation:
             side_effect=HTTPException(status_code=403, detail="Not authorized")
         )
         with patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.require_key_access",
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
             mock_check,
         ):
             with pytest.raises(HTTPException):
@@ -12403,7 +12398,7 @@ class TestKeyOwnerPrivilegeEscalation:
             side_effect=HTTPException(status_code=403, detail="Not authorized")
         )
         with patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.require_key_access",
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
             mock_check,
         ):
             with pytest.raises(HTTPException):
@@ -12429,7 +12424,7 @@ class TestKeyOwnerPrivilegeEscalation:
 
         mock_check = AsyncMock()
         with patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.require_key_access",
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
             mock_check,
         ):
             await _validate_update_key_data(
@@ -12455,7 +12450,7 @@ class TestKeyOwnerPrivilegeEscalation:
 
         mock_check = AsyncMock()
         with patch(
-            "litellm.proxy.management_endpoints.key_management_endpoints.require_key_access",
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
             mock_check,
         ):
             await _validate_update_key_data(
@@ -20992,7 +20987,7 @@ class TestTeamAdminMemberKeyBudgetUpdate:
         )
         admin_check = AsyncMock(return_value=None)
         monkeypatch.setattr(
-            "litellm.proxy.management_endpoints.key_management_endpoints.require_key_access",
+            "litellm.proxy.management_endpoints.key_management_endpoints._check_key_admin_access",
             admin_check,
         )
         await _validate_update_key_data(

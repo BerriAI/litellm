@@ -60,11 +60,8 @@ from litellm.proxy._types import (
 from litellm.proxy._types import (  # noqa: F401  re-exported
     user_api_key_has_admin_view as _user_has_admin_view,
 )
-from litellm.proxy.auth.team_access import is_team_admin
-from litellm.proxy.auth.team_access import (  # noqa: F401  # litellm-enterprise 0.1.71 on PyPI imports this name; drop once the pin moves past it
-    is_team_admin as _is_user_team_admin,
-)
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
+from litellm.proxy.management.teams.access import is_team_admin
 from litellm.proxy.utils import _premium_user_check
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.utils import BudgetConfig
@@ -72,6 +69,9 @@ from litellm.types.utils import BudgetConfig
 if TYPE_CHECKING:
     from litellm.proxy._types import NewProjectRequest, UpdateProjectRequest
     from litellm.proxy.utils import PrismaClient, ProxyLogging
+
+# TODO: drop once the litellm-enterprise pin moves past 0.1.71, which imports this name
+_is_user_team_admin: Final = is_team_admin
 
 
 def validate_team_model_max_budget(

@@ -12,7 +12,7 @@ _RESET_TO = 2.0
 
 
 # POST /team/{team_id}/member/{user_id}/reset_spend. The handler gate is
-# require_team_access (proxy admin / team admin of this team / org admin of
+# TeamAccess.allows (proxy admin / team admin of this team / org admin of
 # the team's org) — the same gate /team/member_update uses, so this mirrors
 # that file's matrix exactly.
 _MATRIX = [

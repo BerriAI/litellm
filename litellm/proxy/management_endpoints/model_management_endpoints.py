@@ -56,7 +56,6 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.litellm_license import AUTO_ROUTER_LICENSE_REMEDY
-from litellm.proxy.auth.team_access import is_team_admin
 from litellm.proxy.auth.team_grants import team_model_aliases
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.config_sync_pubsub import (
@@ -69,6 +68,8 @@ from litellm.proxy.common_utils.encrypt_decrypt_utils import (
 )
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+from litellm.proxy.management.teams.access import TEAM_ADMIN_ONLY, is_team_admin
+from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.team_endpoints import (
     _refresh_cached_team,
     append_team_models,
@@ -2133,11 +2134,8 @@ class ModelManagementAuthChecks:
                 )
             team_obj: Final = LiteLLM_TeamTable.model_validate(team_obj_row.model_dump())
 
-            if (
-                member_operation is not None
-                and user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN
-                and not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team_obj)
-            ):
+            caller_is_admin: Final = await get_team_access().allows(user_api_key_dict, team_obj, TEAM_ADMIN_ONLY)
+            if member_operation is not None and not caller_is_admin:
                 from litellm.proxy.proxy_server import llm_router
 
                 if llm_router is None or (member_operation == "update" and incoming_model_params is None):

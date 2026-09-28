@@ -13,9 +13,9 @@ pytestmark = pytest.mark.asyncio(loop_scope="session")
 # POST /key/block + /key/unblock. PROXY_ADMIN bypasses. ORG_ADMIN-role callers
 # are stopped 401 by the management-route gate BEFORE the handler runs — the
 # body carries no organization_id, so the gate has no org context and falls
-# back to proxy-admin-only. The handler's own require_key_access org-admin
+# back to proxy-admin-only. The handler's own _check_key_admin_access org-admin
 # branch is therefore unreachable via these routes. INTERNAL_USER-role callers
-# do reach require_key_access: a team admin of the key's team passes (200);
+# do reach _check_key_admin_access: a team admin of the key's team passes (200);
 # everyone else (incl. a teamless "self" key with no team to admin) is 403.
 _SCENARIOS = [
     ("self/proxy_admin", Actor.PROXY_ADMIN, "self", 200),
@@ -146,7 +146,7 @@ async def test_key_block_unblock_missing_key_returns_404(
     route: str, actor: Actor, proxy_client, world
 ):
     """A well-formed but unseeded key is 404 — not 401/403 — for both the
-    PROXY_ADMIN existence check and the non-admin require_key_access path."""
+    PROXY_ADMIN existence check and the non-admin _check_key_admin_access path."""
     caller = world.keys[actor]
     missing = "sk-" + uuid.uuid4().hex
     resp = await proxy_client.post(

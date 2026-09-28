@@ -21,8 +21,8 @@ from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
 from litellm.proxy._types import *
 from litellm.proxy.auth.auth_checks import delete_cached_project_object
-from litellm.proxy.auth.team_access import is_team_admin
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.management.teams.access import is_team_admin
 from litellm.proxy.management_endpoints.common_utils import _set_object_metadata_field
 from litellm.proxy.management_endpoints.team_admin_field_permissions import team_admin_may_manage_projects
 from litellm.proxy.management_helpers.utils import (

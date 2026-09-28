@@ -4826,7 +4826,7 @@ async def _can_team_member_view_log(
     Returns True if the team exists and the user is either a team admin or
     a team member with the ``/spend/logs`` permission.
     """
-    from litellm.proxy.auth.team_access import is_team_admin
+    from litellm.proxy.management.teams.access import is_team_admin
     from litellm.proxy.management_endpoints.common_utils import _team_member_has_permission
 
     if team_id is None:
@@ -5054,7 +5054,7 @@ async def _get_permitted_team_ids_for_spend_logs(
     """
     # Imported here to avoid circular import: proxy_server imports this module.
     from litellm.proxy.auth.auth_checks import get_user_object
-    from litellm.proxy.auth.team_access import is_team_admin
+    from litellm.proxy.management.teams.access import is_team_admin
     from litellm.proxy.management_endpoints.common_utils import _team_member_has_permission
     from litellm.proxy.proxy_server import proxy_logging_obj, user_api_key_cache
 

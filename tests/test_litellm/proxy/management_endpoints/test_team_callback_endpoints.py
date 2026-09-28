@@ -7,6 +7,7 @@ redacted audit rows for callback mutations.
 """
 
 import json
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, Mock, patch
 
 import pytest
@@ -20,12 +21,21 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.proxy.common_utils.callback_config_validation import cross_entry_family_error
+from litellm.proxy.management.teams.access import TeamAccess
 from litellm.proxy.management_endpoints.team_callback_endpoints import (
     add_team_callbacks,
     delete_team_callback,
     disable_team_logging,
     get_team_callbacks,
 )
+
+
+class _NoOrgAdmins:
+    async def is_org_admin(self, user_id: str, organization_id: str) -> bool:
+        return False
+
+
+NO_ORG_ADMINS: Final = TeamAccess(org_roles=_NoOrgAdmins())
 
 
 def _team_row(
@@ -99,9 +109,8 @@ def patched_prisma():
     with (
         patch("litellm.proxy.proxy_server.prisma_client") as mock_client,
         patch(
-            "litellm.proxy.auth.team_access.is_org_admin_for_team",
-            new_callable=AsyncMock,
-            return_value=False,
+            "litellm.proxy.management_endpoints.team_callback_endpoints.get_team_access",
+            return_value=NO_ORG_ADMINS,
         ),
     ):
         mock_client.get_data = AsyncMock(return_value=_team_row())
@@ -1488,10 +1497,9 @@ async def test_unknown_team_is_indistinguishable_from_no_access(call_handler, un
     ):  # test-quality-ok: the handler imports prisma_client from proxy_server at call time, so there is no seam to inject through
         mock_client.get_data = AsyncMock(return_value=_team_row())
         mock_client.db.litellm_teamtable.update = AsyncMock()
-        with patch(  # test-quality-ok: require_team_access calls this module-level helper directly, so there is no seam to inject through
-            "litellm.proxy.auth.team_access.is_org_admin_for_team",
-            new_callable=AsyncMock,
-            return_value=False,
+        with patch(  # test-quality-ok: the handler builds its TeamAccess through this module-level provider, so it is the seam to inject through
+            "litellm.proxy.management_endpoints.team_callback_endpoints.get_team_access",
+            return_value=NO_ORG_ADMINS,
         ):
             with pytest.raises(HTTPException) as no_access:
                 await call_handler(unauthorized_caller)

@@ -1,6 +1,7 @@
 import asyncio
 import json
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import AbstractContextManager, asynccontextmanager, contextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from collections.abc import Sequence
@@ -39,7 +40,7 @@ from litellm.proxy._types import (
     UpdateTeamRequest,
     UserAPIKeyAuth,  # Import UserAPIKeyAuth
 )
-from litellm.proxy.auth.team_access import require_team_access
+from litellm.proxy.management.teams.access import TeamAccess
 from litellm.proxy.management_endpoints.team_endpoints import (
     _STRIP_DELETED_TEAM_FROM_USERS_SQL,
     GetTeamMemberPermissionsResponse,
@@ -103,13 +104,27 @@ def _team_admin_may_edit(*fields: str):
         yield
 
 
-def _not_org_admin():
-    """update_team asks whether the caller administers the team's org before it settles for team admin;
-    a MagicMock prisma cannot answer that lookup, so pin it to False."""
-    return patch(  # test-quality-ok: the org-admin lookup needs a real prisma client this file's MagicMock cannot provide
-        "litellm.proxy.auth.team_access.is_org_admin_for_team",
-        AsyncMock(return_value=False),
+@dataclass(frozen=True, slots=True)
+class OrgAdmins:
+    of: frozenset[tuple[str, str]]
+
+    async def is_org_admin(self, user_id: str, organization_id: str) -> bool:
+        return (user_id, organization_id) in self.of
+
+
+def _org_admins(*user_org_pairs: tuple[str, str]) -> AbstractContextManager[object]:
+    """Answer the team handlers' org-admin lookup from ``(user_id, organization_id)`` pairs instead of prisma."""
+    team_access: Final = TeamAccess(org_roles=OrgAdmins(of=frozenset(user_org_pairs)))
+    return patch(  # test-quality-ok: this file's MagicMock prisma cannot answer the org-admin lookup
+        "litellm.proxy.management_endpoints.team_endpoints.get_team_access",
+        lambda: team_access,
     )
+
+
+def _not_org_admin() -> AbstractContextManager[object]:
+    """update_team and team_info ask whether the caller administers the team's org before settling for team admin;
+    a MagicMock prisma cannot answer that lookup, so nobody is an org admin."""
+    return _org_admins()
 
 
 def _wire_team_create_tx(prisma_client):
@@ -1399,10 +1414,6 @@ async def test_validate_team_member_add_permissions_non_admin():
 
     with (
         patch(
-            "litellm.proxy.management_endpoints.team_endpoints.is_team_admin",
-            return_value=False,
-        ),
-        patch(
             "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
             return_value=False,
         ),
@@ -1441,10 +1452,6 @@ async def test_available_team_self_join_with_caller_user_id_allowed():
 
     with (
         patch(
-            "litellm.proxy.management_endpoints.team_endpoints.is_team_admin",
-            return_value=False,
-        ),
-        patch(
             "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
             return_value=True,
         ),
@@ -1471,10 +1478,6 @@ async def test_available_team_self_join_blocks_admin_role():
     team.organization_id = None
 
     with (
-        patch(
-            "litellm.proxy.management_endpoints.team_endpoints.is_team_admin",
-            return_value=False,
-        ),
         patch(
             "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
             return_value=True,
@@ -1507,10 +1510,6 @@ async def test_available_team_self_join_blocks_other_user_id():
 
     with (
         patch(
-            "litellm.proxy.management_endpoints.team_endpoints.is_team_admin",
-            return_value=False,
-        ),
-        patch(
             "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
             return_value=True,
         ),
@@ -1542,10 +1541,6 @@ async def test_available_team_self_join_blocks_when_caller_has_no_user_id():
     team.organization_id = None
 
     with (
-        patch(
-            "litellm.proxy.management_endpoints.team_endpoints.is_team_admin",
-            return_value=False,
-        ),
         patch(
             "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
             return_value=True,
@@ -1582,10 +1577,6 @@ async def test_available_team_self_join_blocks_email_only_member():
     )
 
     with (
-        patch(
-            "litellm.proxy.management_endpoints.team_endpoints.is_team_admin",
-            return_value=False,
-        ),
         patch(
             "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
             return_value=True,
@@ -1625,10 +1616,6 @@ async def test_available_team_self_join_blocks_admin_role_in_member_list():
     )
 
     with (
-        patch(
-            "litellm.proxy.management_endpoints.team_endpoints.is_team_admin",
-            return_value=False,
-        ),
         patch(
             "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
             return_value=True,
@@ -1677,10 +1664,6 @@ async def test_available_team_self_join_blocks_member_budget_controls(budget_con
 
     with (
         patch(
-            "litellm.proxy.management_endpoints.team_endpoints.is_team_admin",
-            return_value=False,
-        ),
-        patch(
             "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
             return_value=True,
         ),
@@ -1717,10 +1700,6 @@ async def test_available_team_self_join_allows_no_budget_controls():
     )
 
     with (
-        patch(
-            "litellm.proxy.management_endpoints.team_endpoints.is_team_admin",
-            return_value=False,
-        ),
         patch(
             "litellm.proxy.management_endpoints.team_endpoints._is_available_team",
             return_value=True,
@@ -1769,10 +1748,6 @@ async def test_update_team_member_permissions_blocks_non_admin_via_available_tea
             "litellm.proxy.management_endpoints.team_endpoints.get_team_object",
             new_callable=AsyncMock,
             return_value=existing_row,
-        ),
-        patch(
-            "litellm.proxy.management_endpoints.team_endpoints.is_team_admin",
-            return_value=False,
         ),
         patch(
             # Even with the available-team bypass mocked True, the endpoint
@@ -7198,7 +7173,7 @@ async def test_update_team_standalone_models_not_gated_by_user_limit(
     Test that /team/update for a standalone team does NOT gate the team's models
     by the caller's personal allowed models.
 
-    A team admin authorized via require_team_access() may set the team's models
+    A team admin authorized via TeamAccess.strongest_role() may set the team's models
     independently of their own personal model list on update.
 
     Scenario:
@@ -7326,10 +7301,7 @@ async def test_update_team_org_scoped_budget_bypasses_user_limit(
     mock_org.litellm_budget_table = mock_budget_table
 
     with (
-        patch(  # test-quality-ok: the org-admin lookup needs a real prisma client this file's MagicMock cannot provide
-            "litellm.proxy.auth.team_access.is_org_admin_for_team",
-            AsyncMock(return_value=True),
-        ),
+        _org_admins(("org-admin-update-budget-test", "test-org-update-budget")),
         patch("litellm.proxy.proxy_server.prisma_client") as mock_prisma,
         patch("litellm.proxy.proxy_server.user_api_key_cache") as mock_cache,
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
@@ -7716,7 +7688,7 @@ async def test_update_team_tpm_limit_not_gated_by_user_limit(
     Test that /team/update does NOT gate the team's tpm_limit by the caller's
     personal tpm_limit.
 
-    A team admin authorized via require_team_access() may raise the team's
+    A team admin authorized via TeamAccess.strongest_role() may raise the team's
     tpm_limit above their own personal tpm_limit on update.
 
     Scenario:
@@ -9390,10 +9362,6 @@ async def test_team_member_delete_persists_deleted_keys(monkeypatch):
         "litellm.proxy.proxy_server.prisma_client",
         mock_prisma_client,
     )
-    monkeypatch.setattr(
-        "litellm.proxy.management_endpoints.team_endpoints.is_team_admin",
-        lambda **kwargs: True,
-    )
 
     cache: Final = UserApiKeyCache()
     revoked_cache_keys: Final = (
@@ -9485,7 +9453,6 @@ async def test_team_member_delete_evicts_jwt_key_mapping_cache_of_the_keys_it_de
 
     monkeypatch.setattr("litellm.proxy.proxy_server.prisma_client", mock_prisma_client)
     monkeypatch.setattr("litellm.proxy.proxy_server.user_api_key_cache", cache)
-    monkeypatch.setattr("litellm.proxy.management_endpoints.team_endpoints.is_team_admin", lambda **kwargs: True)
 
     await team_member_delete(
         data=TeamMemberDeleteRequest(team_id="team-1", user_id="user-123"),
@@ -11035,44 +11002,10 @@ class TestResolveTeamAccessGroupResources:
 
 
 @pytest.mark.asyncio
-async def test_require_team_access_denies_unauthorized_user():
-    """
-    Test that require_team_access raises 403 when the caller is not a proxy admin,
-    not a team admin, and not an org admin for the team's organization.
-    """
-    team_obj = LiteLLM_TeamTable(
-        team_id="team-123",
-        team_alias="test-team",
-        members_with_roles=[
-            Member(role="admin", user_id="other_admin_user"),
-        ],
-        organization_id="org-456",
-    )
-
-    # Caller is an internal user with no admin role and not in the team
-    caller = UserAPIKeyAuth(
-        user_role=LitellmUserRoles.INTERNAL_USER,
-        user_id="unauthorized_user",
-    )
-
-    with patch(
-        "litellm.proxy.auth.team_access.is_org_admin_for_team",
-        new_callable=AsyncMock,
-        return_value=False,
-    ):
-        with pytest.raises(HTTPException) as exc_info:
-            await require_team_access(
-                team_obj=team_obj,
-                user_api_key_dict=caller,
-            )
-        assert exc_info.value.status_code == 403
-
-
-@pytest.mark.asyncio
 async def test_update_team_rejects_unauthorized_caller():
     """
     Test that /team/update returns 403 when the caller is not a proxy admin,
-    not a team admin, and not an org admin — exercising the require_team_access
+    not a team admin, and not an org admin — exercising the TeamAccess.strongest_role
     guard added to the update_team endpoint.
     """
     from unittest.mock import Mock
@@ -11093,11 +11026,7 @@ async def test_update_team_rejects_unauthorized_caller():
         patch("litellm.proxy.proxy_server.user_api_key_cache"),
         patch("litellm.proxy.proxy_server.proxy_logging_obj"),
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
-        patch(
-            "litellm.proxy.auth.team_access.is_org_admin_for_team",
-            new_callable=AsyncMock,
-            return_value=False,
-        ),
+        _not_org_admin(),
     ):
         mock_existing_team = MagicMock()
         mock_existing_team.model_dump.return_value = {
@@ -11566,20 +11495,17 @@ async def test_new_team_blocks_non_admin_passthrough_routes(mock_db_client):
 @pytest.mark.asyncio
 async def test_update_team_blocks_non_admin_passthrough_routes(mock_db_client):
     """Even a team manager (non-proxy-admin) cannot set pass-through routes via
-    /team/update — the gate runs after require_team_access."""
+    /team/update — the gate runs after TeamAccess.strongest_role."""
     from fastapi import Request
 
     from litellm.proxy._types import ProxyException, UpdateTeamRequest
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     existing = MagicMock()
-    existing.model_dump.return_value = {"team_id": "t1"}
+    existing.model_dump.return_value = {"team_id": "t1", "organization_id": "org-1"}
     mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
 
-    with patch(
-        "litellm.proxy.management_endpoints.team_endpoints.resolve_team_access",
-        AsyncMock(return_value="org_admin"),
-    ):
+    with _org_admins(("u-team-admin", "org-1")):
         with pytest.raises(ProxyException) as exc:
             await update_team(
                 data=UpdateTeamRequest(
@@ -11652,13 +11578,10 @@ async def test_update_team_blocks_non_admin_disable_global_guardrails(mock_db_cl
     from litellm.proxy.management_endpoints.team_endpoints import update_team
 
     existing = MagicMock()
-    existing.model_dump.return_value = {"team_id": "t1"}
+    existing.model_dump.return_value = {"team_id": "t1", "organization_id": "org-1"}
     mock_db_client.db.litellm_teamtable.find_unique = AsyncMock(return_value=existing)
 
-    with patch(
-        "litellm.proxy.management_endpoints.team_endpoints.resolve_team_access",
-        AsyncMock(return_value="org_admin"),
-    ):
+    with _org_admins(("u-team-admin", "org-1")):
         with pytest.raises(ProxyException) as exc:
             await update_team(
                 data=UpdateTeamRequest(team_id="t1", disable_global_guardrails=True),
@@ -14380,7 +14303,7 @@ def _wire_update_team(stack, existing_metadata):
 
 @pytest.mark.asyncio
 async def test_update_team_output_token_estimate_lowered_rejected_for_team_admin():
-    """End-to-end wiring: require_team_access admits a team admin, so the gate
+    """End-to-end wiring: TeamAccess.strongest_role admits a team admin, so the gate
     has to fire inside update_team itself."""
     import contextlib
     from unittest.mock import Mock
@@ -14472,7 +14395,7 @@ _TEAM_BATCH_LIMIT = "batch_enqueued_token_limit"
 
 @pytest.mark.asyncio
 async def test_update_team_batch_enqueued_token_limit_raised_rejected_for_team_admin():
-    """require_team_access admits a team admin, so the gate has to fire inside
+    """TeamAccess.strongest_role admits a team admin, so the gate has to fire inside
     update_team itself to keep the team's batch quota admin-owned."""
     import contextlib
     from unittest.mock import Mock
@@ -15256,7 +15179,6 @@ async def test_new_team_and_delete_team_both_drive_the_mirror(
         patch("litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"),
         patch("litellm.proxy.proxy_server.llm_router", None),
         patch("litellm.proxy.management_endpoints.team_endpoints._persist_deleted_team_records", new_callable=AsyncMock),
-        patch("litellm.proxy.management_endpoints.team_endpoints.require_team_access", new_callable=AsyncMock),
         patch(
             "litellm.proxy.management_endpoints.team_endpoints.sync_team_access_group_membership",
             new_callable=AsyncMock,
@@ -15506,7 +15428,7 @@ async def test_reset_team_member_spend_fn_forbidden_for_non_admin(monkeypatch):
 
 @pytest.mark.asyncio
 async def test_reset_team_member_spend_fn_team_admin_cannot_reset_own_spend(monkeypatch):
-    """require_team_access authorizes a team admin over their own team with no check that the
+    """TeamAccess.allows authorizes a team admin over their own team with no check that the
     target differs from the caller. Unchecked, that admin could target their own membership row
     and repeatedly zero it right before it crosses their per-member cap, consuming the shared
     team budget without the configured limit ever binding (Veria finding on PR #37971)."""
@@ -16216,12 +16138,7 @@ async def test_team_info_reports_parent_organization_models_only_to_team_manager
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: no seam on team_info
         patch.object(team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])),  # test-quality-ok: no seam on team_info
-        patch.object(  # test-quality-ok: no seam on team_info
-            team_endpoints, "is_org_admin_for_team", AsyncMock(return_value=False)
-        ),
-        patch(  # test-quality-ok: no seam on team_info
-            "litellm.proxy.auth.team_access.is_org_admin_for_team", AsyncMock(return_value=False)
-        ),
+        _not_org_admin(),
     ):
         response = await team_endpoints.team_info(
             http_request=MagicMock(spec=Request),
@@ -16716,12 +16633,7 @@ async def test_update_team_holds_a_team_admin_to_the_org_tpm_limit(disable_audit
         prisma = _wire_update_team(stack, {})
         prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=org_team)
         stack.enter_context(_team_admin_may_edit("tpm_limit"))
-        stack.enter_context(
-            patch(  # test-quality-ok: the org-admin lookup needs a real prisma client this file's MagicMock cannot provide
-                "litellm.proxy.auth.team_access.is_org_admin_for_team",
-                AsyncMock(return_value=False),
-            )
-        )
+        stack.enter_context(_not_org_admin())
         stack.enter_context(
             patch(  # test-quality-ok: update_team reads orgs through this module-level import; no seam to inject
                 "litellm.proxy.management_endpoints.team_endpoints.get_org_object",
@@ -16863,15 +16775,21 @@ async def test_update_team_org_admin_is_not_filtered_by_the_team_admin_field_lis
     """A caller who is both org admin and roster admin keeps unrestricted edits."""
     import contextlib
 
+    org_team = MagicMock()
+    org_team.metadata = {}
+    org_team.model_dump.return_value = {
+        "team_id": "test_team_id",
+        "team_alias": "test_team",
+        "organization_id": "org-1",
+        "metadata": {},
+        "members_with_roles": [{"user_id": "team-admin", "role": "admin"}],
+    }
+
     with contextlib.ExitStack() as stack:
         prisma = _wire_update_team(stack, {})
+        prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=org_team)
         stack.enter_context(_team_admin_may_edit())
-        stack.enter_context(
-            patch(  # test-quality-ok: the org-admin lookup needs a real prisma client this file's MagicMock cannot provide
-                "litellm.proxy.auth.team_access.is_org_admin_for_team",
-                AsyncMock(return_value=True),
-            )
-        )
+        stack.enter_context(_org_admins(("team-admin", "org-1")))
         result = await update_team(
             data=UpdateTeamRequest(team_id="test_team_id", team_alias="renamed"),
             http_request=_update_request_stub(),
@@ -16908,28 +16826,6 @@ async def test_update_team_unknown_team_is_403_for_non_proxy_admins_and_404_for_
     assert "do not have access to this team" in str(denied.value.message)
     assert "no-such-team" not in str(denied.value.message)
     assert str(missing.value.code) == "404"
-
-
-@pytest.mark.asyncio
-async def test_resolve_team_access_ranks_proxy_admin_then_org_admin_then_team_admin():
-    from litellm.proxy.auth.team_access import resolve_team_access
-
-    team = LiteLLM_TeamTable(
-        team_id="team-1",
-        organization_id="org-1",
-        members_with_roles=[Member(user_id="team-admin", role="admin")],
-    )
-    roster_admin = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="team-admin")
-    outsider = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="someone-else")
-    org_lookup = AsyncMock(return_value=False)
-
-    with patch("litellm.proxy.auth.team_access.is_org_admin_for_team", org_lookup):  # test-quality-ok: the org-admin lookup needs a real prisma client this file's MagicMock cannot provide
-        assert await resolve_team_access(team_obj=team, user_api_key_dict=_PROXY_ADMIN_CALLER) == "proxy_admin"
-        assert org_lookup.await_count == 0
-        assert await resolve_team_access(team_obj=team, user_api_key_dict=roster_admin) == "team_admin"
-        assert await resolve_team_access(team_obj=team, user_api_key_dict=outsider) is None
-        org_lookup.return_value = True
-        assert await resolve_team_access(team_obj=team, user_api_key_dict=roster_admin) == "org_admin"
 
 
 _ROSTER_ADMIN_CALLER = UserAPIKeyAuth(user_role=LitellmUserRoles.INTERNAL_USER, user_id="admin-1")
@@ -16980,12 +16876,7 @@ async def test_team_info_reports_what_the_caller_may_edit(caller, org_admin, ena
     with (
         patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),  # test-quality-ok: no seam on team_info
         patch.object(team_endpoints, "get_all_team_memberships", AsyncMock(return_value=[])),  # test-quality-ok: no seam on team_info
-        patch.object(  # test-quality-ok: the org-admin lookup needs a real prisma client this file's MagicMock cannot provide
-            team_endpoints, "is_org_admin_for_team", AsyncMock(return_value=org_admin)
-        ),
-        patch(  # test-quality-ok: the org-admin lookup needs a real prisma client this file's MagicMock cannot provide
-            "litellm.proxy.auth.team_access.is_org_admin_for_team", AsyncMock(return_value=org_admin)
-        ),
+        _org_admins(("admin-1", "org-1")) if org_admin else _not_org_admin(),
         _team_admin_may_edit(*enabled_fields),
     ):
         response = await team_endpoints.team_info(

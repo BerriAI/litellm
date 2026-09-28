@@ -17,14 +17,14 @@ from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.proxy._types import (
     LiteLLM_TeamTable,
     LitellmTableNames,
-    LitellmUserRoles,
     Member,
     UserAPIKeyAuth,
 )
 from litellm.proxy.auth.auth_checks import invalidate_team_member_spend_state
-from litellm.proxy.auth.team_access import is_org_admin_for_team, is_team_admin
 from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 from litellm.proxy.db.routing_prisma_wrapper import WriterPinnedClient
+from litellm.proxy.management.teams.access import TEAM_OR_ORG_ADMIN
+from litellm.proxy.management.teams.dependencies import get_team_access
 from litellm.proxy.management_endpoints.common_utils import (
     _upsert_budget_and_membership,  # pyright: ignore[reportPrivateUsage]  # the single-member write, shared so the two surfaces cannot drift
     member_budget_patch,
@@ -179,11 +179,7 @@ async def bulk_update_team_member_budgets(
     if team is None:
         raise _team_not_found(team_id)
 
-    if (
-        user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN.value
-        and not is_team_admin(user_api_key_dict=user_api_key_dict, team_obj=team)
-        and not await is_org_admin_for_team(user_api_key_dict=user_api_key_dict, team_obj=team)
-    ):
+    if not await get_team_access().allows(user_api_key_dict, team, TEAM_OR_ORG_ADMIN):
         raise _forbidden(
             "Call not allowed. User not proxy admin OR team admin OR org admin for this team. "
             f"route='/management/v1/teams/{team_id}/members/bulk_update'"

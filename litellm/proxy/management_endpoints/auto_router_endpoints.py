@@ -30,7 +30,6 @@ from litellm.proxy.auth.auth_checks import (
     _virtual_key_max_budget_check,
     can_key_call_resolved_model,
 )
-from litellm.proxy.auth.team_access import is_team_admin
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.db.autorouter_session_rollup import (
     AUTOROUTER_BENCHMARKS_SQL,
@@ -40,6 +39,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     LiteLLMProxyRequestSetup,
     refresh_proxy_server_request_body_snapshot,
 )
+from litellm.proxy.management.teams.access import is_team_admin
 from litellm.proxy.management_helpers.auto_router_permissions import (
     authorize_member_auto_router_dependencies,
     authorize_member_auto_router_team,
