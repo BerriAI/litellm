@@ -5,7 +5,6 @@ on:
     branches:
       - main
       - "rc/**"
-      - "litellm_/linear-release-cycle-sync-d5c69e"
   release:
     types: [published]
   workflow_call:
@@ -59,7 +58,7 @@ jobs:
             fi
             echo "version=${RELEASE_TAG#v}" >> "$GITHUB_OUTPUT"
             echo "complete=true" >> "$GITHUB_OUTPUT"
-          elif [ "${REF_NAME}" = "main" ] || [ "${REF_NAME}" = "litellm_/linear-release-cycle-sync-d5c69e" ]; then
+          elif [ "${REF_NAME}" = "main" ]; then
             version="$(python3 .github/scripts/read_rc_version.py | cut -d= -f2)"
             status=0
             git ls-remote --exit-code --heads origin "rc/${version}" > /dev/null || status=$?
@@ -93,7 +92,6 @@ jobs:
           version: ${{ steps.plan.outputs.version }}
           base_ref: ${{ steps.plan.outputs.sync_base }}
           cli_version: v0.18.0
-          dry_run: "true"
 
       - name: Keep the main stage unless the rc branch was cut during this run
         id: main_stage
@@ -122,7 +120,6 @@ jobs:
           stage: ${{ steps.plan.outputs.stage || steps.main_stage.outputs.stage }}
           version: ${{ steps.plan.outputs.version }}
           cli_version: v0.18.0
-          dry_run: "true"
 
       - name: Complete the release
         if: steps.plan.outputs.complete == 'true'
@@ -132,4 +129,3 @@ jobs:
           command: complete
           version: ${{ steps.plan.outputs.version }}
           cli_version: v0.18.0
-          dry_run: "true"
