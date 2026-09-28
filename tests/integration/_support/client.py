@@ -161,6 +161,31 @@ class Scenario:
         self.gateway.post("/budget/delete", {"id": identity})
         assert read_rows('SELECT budget_id FROM "LiteLLM_BudgetTable" WHERE budget_id = %s', (identity,)) == []
 
+    def organization(self, **fields: JsonValue) -> str:
+        created: Final = self.gateway.post(
+            "/organization/new", {"organization_alias": f"integration-{uuid.uuid4().hex}", **fields}
+        )
+        identity: Final = string_value(created["organization_id"])
+        self.cleanups.callback(self.delete_organization, identity, string_value(created["budget_id"]))
+        return identity
+
+    def delete_organization(self, identity: str, budget_id: str) -> None:
+        response: Final = self.gateway.request("DELETE", "/organization/delete", {"organization_ids": [identity]})
+        assert response.status_code == 200, response.text
+        assert (
+            read_rows('SELECT organization_id FROM "LiteLLM_OrganizationTable" WHERE organization_id = %s', (identity,))
+            == []
+        )
+        self.delete_budget(budget_id)
+
+    def org_member(self, organization_id: str, role: str) -> str:
+        user_id: Final = self.user(user_role="internal_user")
+        self.gateway.post(
+            "/organization/member_add",
+            {"organization_id": organization_id, "member": {"role": role, "user_id": user_id}},
+        )
+        return user_id
+
     def user(self, **fields: JsonValue) -> str:
         created: Final = self.gateway.post(
             "/user/new", {"user_id": f"integration-{uuid.uuid4().hex}", "auto_create_key": False, **fields}
