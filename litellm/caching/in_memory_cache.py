@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from collections.abc import Callable
+from copy import deepcopy
 from typing import TYPE_CHECKING, Any, Final
 
 if TYPE_CHECKING:
@@ -215,8 +216,12 @@ class InMemoryCache(BaseCache):
             original_cached_response: Final = self.cache_dict[key]
             try:
                 cached_response = json.loads(original_cached_response)
-            except Exception:
-                cached_response = original_cached_response
+            except (TypeError, ValueError):
+                # JSON strings already produce a new value. Isolate mutable data
+                # stored as Python objects without copying cached clients or handles.
+                if isinstance(original_cached_response, (dict, list, BaseModel)):
+                    return deepcopy(original_cached_response)
+                return original_cached_response
             return cached_response
         return None
 
