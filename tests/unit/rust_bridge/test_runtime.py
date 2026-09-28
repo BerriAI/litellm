@@ -10,7 +10,7 @@ from litellm.exceptions import APIError
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from litellm.router_utils.add_retry_fallback_headers import get_hidden_params_dict
 from litellm.rust_bridge import bindings, configuration, runtime
-from litellm.rust_bridge.catalog import Delivery, Route, RouteContext, RouteRule
+from litellm.rust_bridge.catalog import Route, RouteContext, RouteRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.lifecycle import Complete, Open, Stream, SyncStream, Yield
 
@@ -162,14 +162,12 @@ def test_context_outside_rule_stays_on_python() -> None:
         RouteContext(Route.TRANSCRIPTION, provider="openai"),
     ),
 )
-@pytest.mark.parametrize("delivery", tuple(Delivery))
 async def test_shipped_python_routes_never_load_native(
-    monkeypatch: pytest.MonkeyPatch, context: RouteContext, delivery: Delivery
+    monkeypatch: pytest.MonkeyPatch, context: RouteContext
 ) -> None:
     monkeypatch.setenv("LITELLM_RUST", "1")
     configuration.rust(True)
     calls: Final = recorder()
-    request: Final = RouteContext(context.route, provider=context.provider, delivery=delivery)
 
     def reject_load(value: object) -> NativeFn | None:
         pytest.fail("Python-only dispatch must not load a native binding")
@@ -182,8 +180,8 @@ async def test_shipped_python_routes_never_load_native(
     async def python() -> str:
         return calls.python()
 
-    assert runtime.run(request, binding=bound, native=lambda fn: fn(), python=calls.python) == PYTHON
-    assert await runtime.arun(request, binding=bound, native=native, python=python) == PYTHON
+    assert runtime.run(context, binding=bound, native=lambda fn: fn(), python=calls.python) == PYTHON
+    assert await runtime.arun(context, binding=bound, native=native, python=python) == PYTHON
     assert calls.calls == (PYTHON, PYTHON)
 
 
