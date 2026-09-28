@@ -23,8 +23,15 @@ from botocore.exceptions import (
     ProfileNotFound,
 )
 
+import litellm
+from litellm.litellm_core_utils.responses_api_utils import has_function_tool, peek_reasoning_summary_aliases
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
-from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
+from litellm.llms.bedrock.common_utils import (
+    AmazonBedrockGlobalConfig,
+    bedrock_chat_completions_serves_tools_with_reasoning,
+    bedrock_reasoning_effort_is_active,
+    bedrock_supports_web_search,
+)
 from litellm.secret_managers.main import get_secret_str
 
 BEDROCK_MANTLE_DEFAULT_REGION: Final = "us-east-1"
@@ -153,6 +160,35 @@ def mantle_supports_responses(model: str | None, model_cost: Mapping[str, object
             Sequence[object], supported_endpoints
         )
     ) or typed_entry.get("mode") == "responses"
+
+
+def mantle_chat_request_needs_native_responses(
+    model: str,
+    request_params: Mapping[str, object],
+    reasoning_summary: object | None,
+    *,
+    read_summary_aliases: bool = True,
+) -> bool:
+    if request_params.get("functions"):
+        return False
+    reasoning_effort: Final = request_params.get("reasoning_effort")
+    reasoning_summary_alias: Final = peek_reasoning_summary_aliases(request_params) if read_summary_aliases else None
+    needs_native_responses: Final = (
+        (
+            has_function_tool(request_params.get("tools"))
+            and not bedrock_chat_completions_serves_tools_with_reasoning(model, "bedrock_mantle")
+            and bedrock_reasoning_effort_is_active(model, reasoning_effort, "bedrock_mantle")
+        )
+        or (
+            request_params.get("web_search_options") is not None
+            and bedrock_supports_web_search(model, "bedrock_mantle")
+        )
+        or (reasoning_effort is not None and (reasoning_summary_alias is not None or reasoning_summary is not None))
+    )
+    model_cost: Final = cast(  # cast-ok: model price rows use string keys
+        Mapping[str, object], litellm.model_cost
+    )
+    return needs_native_responses and mantle_supports_responses(model, model_cost)
 
 
 def mantle_base_segment(model: str | None, model_cost: dict) -> str:

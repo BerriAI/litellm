@@ -119,12 +119,10 @@ from litellm.llms.base_llm.base_model_iterator import (
 )
 from litellm.llms.bedrock.common_utils import (
     BedrockModelInfo,
-    _bedrock_price_map_flag,
-    bedrock_chat_completions_serves_tools_with_reasoning,
     bedrock_chat_request_needs_native_responses_for_request,
-    bedrock_reasoning_effort_is_active,
     bedrock_route_for_request,
 )
+from litellm.llms.bedrock_mantle.common_utils import mantle_chat_request_needs_native_responses
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -1174,8 +1172,6 @@ def responses_api_bridge_check(
     ):
         model_info["mode"] = "responses"
     if custom_llm_provider == "bedrock_mantle" and model_info.get("mode") != "responses":
-        from litellm.llms.bedrock_mantle.common_utils import mantle_supports_responses
-
         mantle_request_params: Final = (
             filter_additional_drop_params(request_params, additional_drop_params)
             if request_params is not None
@@ -1187,34 +1183,12 @@ def responses_api_bridge_check(
                 }
             )
         )
-        mantle_reasoning_effort: Final = mantle_request_params.get("reasoning_effort")
-        mantle_reasoning_summary: Final = (
-            peek_reasoning_summary_aliases(mantle_request_params) if request_params is not None else None
-        )
-        mantle_has_legacy_functions: Final = bool(mantle_request_params.get("functions"))
-        mantle_needs_native_responses: Final = not mantle_has_legacy_functions and (
-            (
-                has_function_tool(mantle_request_params.get("tools"))
-                and not bedrock_chat_completions_serves_tools_with_reasoning(model, "bedrock_mantle")
-                and bedrock_reasoning_effort_is_active(
-                    model,
-                    mantle_reasoning_effort,
-                    "bedrock_mantle",
-                )
-            )
-            or (
-                mantle_request_params.get("web_search_options") is not None
-                and _bedrock_price_map_flag(model, "supports_web_search", "bedrock_mantle")
-            )
-            or (
-                mantle_reasoning_effort is not None
-                and (mantle_reasoning_summary is not None or reasoning_summary is not None)
-            )
-        )
-        mantle_model_cost: Final = cast(  # cast-ok: model price rows use string keys
-            Mapping[str, object], litellm.model_cost
-        )
-        if mantle_needs_native_responses and mantle_supports_responses(model, mantle_model_cost):
+        if mantle_chat_request_needs_native_responses(
+            model,
+            mantle_request_params,
+            reasoning_summary,
+            read_summary_aliases=request_params is not None,
+        ):
             model_info["mode"] = "responses"
     if (
         (custom_llm_provider in ("openai", "azure") or on_foundry_openai_endpoint)

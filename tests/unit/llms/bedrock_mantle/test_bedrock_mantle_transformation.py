@@ -872,6 +872,19 @@ def test_gemma_4_models_register_under_bedrock_mantle(local_cost_map, model_id):
     assert resolved_model == model_id
 
 
+def test_chat_only_safeguard_model_does_not_bridge_tools_to_responses(local_cost_map):
+    from litellm.llms.bedrock_mantle.common_utils import mantle_chat_request_needs_native_responses
+
+    assert not mantle_chat_request_needs_native_responses(
+        model="openai.gpt-oss-safeguard-120b",
+        request_params={
+            "tools": [{"type": "function", "function": {"name": "get_capital"}}],
+            "reasoning_effort": "medium",
+        },
+        reasoning_summary=None,
+    )
+
+
 @pytest.mark.asyncio
 async def test_mantle_signing_runs_off_the_event_loop():
     """Regression for issue #40165: Mantle signs with SigV4 through a composed BaseAWSLLM, so the
