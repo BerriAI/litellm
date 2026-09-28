@@ -9,11 +9,19 @@ Run with: pytest tests/unit/interactions/test_openapi_compliance.py -v
 
 import json
 import os
-from typing import Any, Dict
+import re
+from collections.abc import Mapping
+from typing import Any, Dict, Final
 from unittest.mock import MagicMock, patch
 
 import httpx
 import pytest
+from jsonschema import Draft202012Validator
+from pydantic import TypeAdapter
+
+from litellm.llms.gemini.interactions.transformation import GoogleAIStudioInteractionsConfig
+from litellm.types.interactions import InteractionInput
+from litellm.types.router import GenericLiteLLMParams
 from openapi_core import OpenAPI
 
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
@@ -56,61 +64,53 @@ def openapi_spec(spec_dict: Dict[str, Any]) -> OpenAPI:
     return OpenAPI.from_dict(spec_dict)
 
 
+@pytest.fixture(scope="module")
+def model_request_schema(spec_dict: Mapping[str, object]) -> Mapping[str, object]:
+    objects: Final = TypeAdapter(Mapping[str, Mapping[str, object]])
+    components: Final = TypeAdapter(Mapping[str, object]).validate_python(spec_dict["components"])
+    schemas: Final = objects.validate_python(components["schemas"])
+    paths: Final = objects.validate_python(spec_dict["paths"])
+    operation: Final = next(methods["post"] for path, methods in paths.items() if path.endswith("/interactions"))
+    post: Final = TypeAdapter(Mapping[str, object]).validate_python(operation)
+    body: Final = TypeAdapter(Mapping[str, object]).validate_python(post["requestBody"])
+    content: Final = objects.validate_python(body["content"])
+    schema: Final = TypeAdapter(Mapping[str, object]).validate_python(content["application/json"]["schema"])
+    variants: Final = TypeAdapter(tuple[Mapping[str, str], ...]).validate_python(schema["oneOf"])
+    return next(
+        schemas[variant["$ref"].rsplit("/", 1)[-1]]
+        for variant in variants
+        if "model" in TypeAdapter(Mapping[str, object]).validate_python(
+            schemas[variant["$ref"].rsplit("/", 1)[-1]]["properties"]
+        )
+    )
+
+
 class TestRequestCompliance:
-    """Tests that our request bodies match the OpenAPI spec."""
+    def test_create_model_interaction_request_schema(self, model_request_schema: Mapping[str, object]) -> None:
+        config: Final = GoogleAIStudioInteractionsConfig()
+        payload: Final = config.transform_request(
+            model="test-model", agent=None, input="test input", optional_params={"stream": True},
+            litellm_params=GenericLiteLLMParams(api_key="test-key"), headers={},
+        )
+        properties: Final = TypeAdapter(Mapping[str, object]).validate_python(model_request_schema["properties"])
+        assert payload == {"model": "test-model", "input": "test input", "stream": True}
+        assert payload.keys() <= properties.keys()
 
-    def test_create_model_interaction_request_schema(self, spec_dict):
-        """Verify CreateModelInteractionParams schema fields."""
-        schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
-
-        # Required fields per spec
-        assert "model" in schema["required"]
-        assert "input" in schema["required"]
-
-        # Check our supported optional fields exist in spec
-        our_optional_fields = [
-            "tools",
-            "system_instruction",
-            "generation_config",
-            "stream",
-            "store",
-            "background",
-            "response_modalities",
-            "response_format",
-            "response_mime_type",
-            "previous_interaction_id",
-        ]
-
-        spec_properties = schema["properties"]
-        for field in our_optional_fields:
-            assert field in spec_properties, f"Field '{field}' not in OpenAPI spec"
-            print(f"✓ Field '{field}' exists in spec")
-
-    def test_input_types_match_spec(self, spec_dict):
-        """Verify input field supports string, Content, Content[], Turn[]."""
-        schema = spec_dict["components"]["schemas"]["CreateModelInteractionParams"]
-        input_schema = schema["properties"]["input"]
-
-        # The input property may be inline oneOf or a $ref to InteractionsInput
-        if "$ref" in input_schema:
-            ref_name = input_schema["$ref"].split("/")[-1]
-            input_schema = spec_dict["components"]["schemas"][ref_name]
-
-        # Should be oneOf with multiple types
-        assert "oneOf" in input_schema
-
-        input_types = []
-        for option in input_schema["oneOf"]:
-            if option.get("type") == "string":
-                input_types.append("string")
-            elif option.get("type") == "array":
-                input_types.append("array")
-            elif "$ref" in option:
-                input_types.append(option["$ref"])
-
-        print(f"Input supports types: {input_types}")
-        assert "string" in input_types, "Input should support string"
-        assert "array" in input_types, "Input should support array"
+    @pytest.mark.parametrize("input_value", ["test input", [{"type": "text", "text": "test input"}]])
+    def test_input_types_match_spec(
+        self, spec_dict: Mapping[str, object], model_request_schema: Mapping[str, object],
+        input_value: InteractionInput,
+    ) -> None:
+        payload: Final = GoogleAIStudioInteractionsConfig().transform_request(
+            model="test-model", agent=None, input=input_value, optional_params={},
+            litellm_params=GenericLiteLLMParams(api_key="test-key"), headers={},
+        )
+        properties: Final = TypeAdapter(Mapping[str, Mapping[str, object]]).validate_python(
+            model_request_schema["properties"]
+        )
+        validator: Final = Draft202012Validator(spec_dict).evolve(schema=properties["input"])
+        assert not tuple(validator.iter_errors(payload["input"]))
+        assert payload["input"] == input_value
 
     def test_content_variants_are_identified_by_their_type_field(self, spec_dict):
         """Verify a Content part can be told apart by its `type`, however the spec spells that.
@@ -307,31 +307,24 @@ class TestEndpointCompliance:
         assert create_path is not None, "POST /interactions endpoint not found"
         print(f"✓ Create endpoint: POST {create_path}")
 
-    def test_get_endpoint_exists(self, spec_dict):
-        """Verify GET /interactions/{id} endpoint exists."""
-        paths = spec_dict["paths"]
-
-        get_path = None
-        for path, methods in paths.items():
-            if "{id}" in path and "interactions" in path and "get" in methods:
-                get_path = path
-                break
-
-        assert get_path is not None, "GET /interactions/{id} endpoint not found"
-        print(f"✓ Get endpoint: GET {get_path}")
-
-    def test_delete_endpoint_exists(self, spec_dict):
-        """Verify DELETE /interactions/{id} endpoint exists."""
-        paths = spec_dict["paths"]
-
-        delete_path = None
-        for path, methods in paths.items():
-            if "{id}" in path and "interactions" in path and "delete" in methods:
-                delete_path = path
-                break
-
-        assert delete_path is not None, "DELETE /interactions/{id} endpoint not found"
-        print(f"✓ Delete endpoint: DELETE {delete_path}")
+    @pytest.mark.parametrize("method", ["get", "delete"])
+    def test_interaction_item_url_matches_spec(self, spec_dict: Mapping[str, object], method: str) -> None:
+        config: Final = GoogleAIStudioInteractionsConfig()
+        transform: Final = (
+            config.transform_get_interaction_request if method == "get" else config.transform_delete_interaction_request
+        )
+        url, body = transform(
+            interaction_id="test-interaction", api_base="https://example.com",
+            litellm_params=GenericLiteLLMParams(api_key="test-key"), headers={},
+        )
+        path: Final = httpx.URL(url).path
+        paths: Final = TypeAdapter(Mapping[str, Mapping[str, object]]).validate_python(spec_dict["paths"])
+        assert any(
+            re.fullmatch(re.sub(r"\{[^}]+\}", "[^/]+", template), path) and method in operations
+            for template, operations in paths.items()
+        ), path
+        assert path.endswith("/test-interaction")
+        assert body == {}
 
 
 if __name__ == "__main__":

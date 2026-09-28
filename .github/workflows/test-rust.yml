@@ -169,7 +169,11 @@ jobs:
         env:
           RELEASE_WHEEL_COMMIT_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
 
-      - run: python tests/unit/rust_bridge/native_route_wheel_test.py dist/*.whl
+      - name: Test native routes from the installed wheel
+        run: |
+          wheel=(dist/*.whl)
+          uv run --isolated --no-project --with "${wheel[0]}" \
+            python tests/unit/rust_bridge/native_route_wheel_test.py "${wheel[0]}"
 
       - name: Run pytest tests/test_litellm_rust with the compiled extension
         run: make test-rust-extension
