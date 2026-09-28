@@ -3,7 +3,6 @@
 # Logging function -> log the exact model details + what's being sent | Non-Blocking
 import copy
 import datetime
-import inspect
 import json
 import os
 import re
@@ -75,6 +74,7 @@ from litellm.litellm_core_utils.core_helpers import (
     reconstruct_model_name,
     set_response_cost_in_hidden_params,
 )
+from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.internal_call_metadata import (
@@ -221,23 +221,6 @@ from .initialize_dynamic_callback_params import (
 )
 from .specialty_caches.dynamic_logging_cache import DynamicLoggingCache
 from .specialty_caches.service_trace_id_cache import in_memory_trace_id_cache
-
-
-@lru_cache(maxsize=1)
-def _warn_async_input_callbacks_skipped_for_sync_call() -> None:
-    verbose_logger.warning(
-        "Async input callbacks are skipped for synchronous LiteLLM calls. "
-        "Use an async API such as litellm.acompletion() to run them."
-    )
-
-
-async def run_async_input_callbacks(logging_obj: object) -> None:
-    """Run callbacks only for logging implementations that define the async API."""
-    callback_method = getattr(type(logging_obj), "async_input_callback", None)
-    if callback_method is None or not inspect.iscoroutinefunction(callback_method):
-        return
-    await callback_method(logging_obj)
-
 
 if TYPE_CHECKING:
     from mcp.types import CallToolResult, EmbeddedResource, ImageContent, TextContent
@@ -602,7 +585,6 @@ class Logging(LiteLLMLoggingBaseClass):
         log_raw_request_response: bool = False,
         supports_correlation_logging: bool = True,
         raw_request_only: bool = False,
-        is_async_call: bool | None = None,
     ):
         _input: Final[str | None] = messages  # save original value of messages
         if messages is not None:
@@ -623,9 +605,6 @@ class Logging(LiteLLMLoggingBaseClass):
         self.messages = copy.copy(messages) if messages is not None else None
         self.message_copy_duration_ms: float = (time.time() - _copy_start) * 1000
         self.callback_duration_ms: float = 0.0
-        self._is_async_call: bool = is_async_call if is_async_call is not None else str(call_type).startswith("a")
-        self._pre_call_sequence: int = 0
-        self._async_input_callback_sequence: int = 0
         self.stream = stream
         self.start_time = start_time  # log the call start time
         self.call_type = call_type
@@ -1368,7 +1347,6 @@ class Logging(LiteLLMLoggingBaseClass):
                 model=model,
                 additional_args=additional_args,
             )
-            self._pre_call_sequence += 1
 
             # User Logging -> if you pass in a custom logging function
             self._print_llm_call_debugging_log(
@@ -1468,7 +1446,11 @@ class Logging(LiteLLMLoggingBaseClass):
                             messages=self.messages,
                             kwargs=self.model_call_details,
                         )
-                    elif callable(callback) and customLogger is not None:  # custom logger functions
+                    elif (
+                        callable(callback)
+                        and customLogger is not None
+                        and not coroutine_checker.is_async_callable(callback)
+                    ):  # custom logger functions
                         customLogger.log_input_event(
                             model=self.model,
                             messages=self.messages,
@@ -1483,9 +1465,6 @@ class Logging(LiteLLMLoggingBaseClass):
                     )
                     if capture_exception:  # log this error to sentry for debugging
                         capture_exception(e)
-
-            if not self._is_async_call and litellm._async_input_callback:
-                _warn_async_input_callbacks_skipped_for_sync_call()
         except Exception as e:
             verbose_logger.exception("LiteLLM.LoggingError: [Non-Blocking] Exception occurred while logging %s", e)
             verbose_logger.error("LiteLLM.Logging: is sentry capture exception initialized %s", capture_exception)
@@ -1495,40 +1474,48 @@ class Logging(LiteLLMLoggingBaseClass):
         if self.raw_request_only:
             raise RawRequestCaptured()
 
-    async def async_input_callback(self) -> None:
-        """Run async input callbacks once for the latest provider request."""
-        sequence: Final = self._pre_call_sequence
-        if sequence == 0 or sequence <= self._async_input_callback_sequence:
-            return
-
-        callbacks: Final = tuple(litellm._async_input_callback)
+    async def async_pre_call(self) -> None:
+        """Run async input callbacks before an async provider attempt."""
+        input_callbacks: Final = (*litellm.input_callback, *(self.dynamic_input_callbacks or ()))
+        candidates: Final = (
+            *(
+                callback
+                for callback in litellm._async_input_callback
+                if isinstance(callback, CustomLogger) or callable(callback)
+            ),
+            *(
+                callback
+                for callback in input_callbacks
+                if isinstance(callback, CustomLogger)
+                or (callable(callback) and coroutine_checker.is_async_callable(callback))
+            ),
+        )
+        callbacks: Final = tuple(
+            callback
+            for index, callback in enumerate(candidates)
+            if not any(earlier is callback for earlier in candidates[:index])
+        )
+        request: Final = {
+            **self.model_call_details,
+            "model": self.model,
+            "messages": self.messages,
+            "log_event_type": "pre_api_call",
+        }
         for callback in callbacks:
             try:
                 if isinstance(callback, CustomLogger):
                     await callback.async_log_pre_api_call(
                         model=self.model,
                         messages=self.messages,
-                        kwargs=self.model_call_details,
+                        kwargs=request,
                     )
                 elif callable(callback):
-                    await callback(self.model_call_details)
-            except Exception as e:
+                    await callback(request)
+            except Exception as e:  # noqa: BLE001  # one broken logging callback must not stop the provider request
                 verbose_logger.exception(
-                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while running async input callback %s",
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while async pre-call logging %s",
                     e,
                 )
-
-        self._async_input_callback_sequence = sequence
-
-    async def async_pre_call(self, input, api_key, model=None, additional_args=None) -> None:
-        """Record a provider request and run its sync and async input callbacks."""
-        self.pre_call(
-            input=input,
-            api_key=api_key,
-            model=model,
-            additional_args=additional_args or {},
-        )
-        await self.async_input_callback()
 
     def _print_llm_call_debugging_log(
         self,

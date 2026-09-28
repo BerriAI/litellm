@@ -52,7 +52,7 @@ import litellm.litellm_core_utils
 
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
-from litellm._internal_context import is_internal_call
+from litellm._internal_context import is_internal_call, provider_call_scope
 from litellm._lazy_imports import (
     _get_default_encoding,
     _get_modified_max_tokens,
@@ -1023,7 +1023,8 @@ def function_setup(
             removed_async_items = []
             for index, callback in enumerate(litellm.input_callback):
                 if coroutine_checker.is_async_callable(callback):
-                    litellm.logging_callback_manager.add_litellm_input_callback(callback)
+                    if callback not in litellm._async_input_callback:
+                        litellm._async_input_callback.append(callback)
                     removed_async_items.append(index)
 
             # Pop the async items from input_callback in reverse order to avoid index issues
@@ -1281,7 +1282,6 @@ def function_setup(
             kwargs=kwargs,
             applied_guardrails=applied_guardrails,
             supports_correlation_logging=is_async_call,
-            is_async_call=is_async_call,
         )
 
         ## check if metadata is passed in
@@ -2079,7 +2079,20 @@ def client(original_function):
                 else kwargs
             )
             try:
-                result = await original_function(*args, **call_kwargs)
+                input_callbacks: Final = (
+                    *litellm.input_callback,
+                    *(getattr(logging_obj, "dynamic_input_callbacks", None) or ()),
+                )
+                CustomLogger: Final = _get_cached_custom_logger()
+                if litellm._async_input_callback or any(
+                    isinstance(callback, CustomLogger) or check_coroutine(callback) for callback in input_callbacks
+                ):
+                    with provider_call_scope(logging_obj) as nested_provider_call:
+                        if not nested_provider_call:
+                            await logging_obj.async_pre_call()
+                        result = await original_function(*args, **call_kwargs)
+                else:
+                    result = await original_function(*args, **call_kwargs)
             except Exception as deployment_error:
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
                 try:

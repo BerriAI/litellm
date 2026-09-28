@@ -755,11 +755,6 @@ class BaseLLMHTTPHandler:
                     if isinstance(provider_config, SignsRequestsWithAWS)
                     else asyncio.to_thread(sign_and_log, transformed)
                 )
-                from litellm.litellm_core_utils.litellm_logging import (
-                    run_async_input_callbacks,
-                )
-
-                await run_async_input_callbacks(logging_obj)
                 return await dispatch_async(*signed_request)
 
             return transform_then_dispatch()

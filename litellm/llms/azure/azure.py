@@ -16,12 +16,7 @@ from openai import (
 
 import litellm
 from litellm.constants import AZURE_OPERATION_POLLING_TIMEOUT, DEFAULT_MAX_RETRIES
-from litellm.litellm_core_utils.litellm_logging import (
-    Logging as LiteLLMLoggingObj,
-)
-from litellm.litellm_core_utils.litellm_logging import (
-    run_async_input_callbacks,
-)
+from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
 from litellm.litellm_core_utils.url_utils import SSRFError, assert_same_origin
 from litellm.llms.custom_httpx.http_handler import (
@@ -440,7 +435,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     "openai_sdk": True,
                 },
             )
-            await run_async_input_callbacks(logging_obj)
 
             headers, response = await self.make_azure_openai_chat_completion_request(
                 azure_client=azure_client,
@@ -623,7 +617,6 @@ class AzureChatCompletion(BaseAzureLLM, BaseLLM):
                     "complete_input_dict": data,
                 },
             )
-            await run_async_input_callbacks(logging_obj)
 
             headers, response = await self.make_azure_openai_chat_completion_request(
                 azure_client=azure_client,

@@ -21,7 +21,7 @@ import respx
 from jsonschema import validate
 
 import litellm
-from litellm._internal_context import is_internal_call
+from litellm._internal_context import is_internal_call, provider_call_scope
 from litellm._logging import (
     CorrelationContextFilter,
     JsonFormatter,
@@ -31,7 +31,7 @@ from litellm._logging import (
 )
 from litellm.caching.caching import Cache
 from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
-from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT
+from litellm.constants import DEFAULT_MOCK_RESPONSE_COMPLETION_TOKEN_COUNT, MAX_CALLBACKS
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
@@ -3332,8 +3332,10 @@ class TestCallbackAsyncSyncSeparation:
 
     @pytest.mark.asyncio
     async def test_async_input_callback_from_callbacks_is_not_registered_twice(self):
+        calls: Final[list[str]] = []
+
         async def my_async_cb(*args, **kwargs):
-            pass
+            calls.append("async")
 
         litellm.callbacks = [my_async_cb]
 
@@ -3341,6 +3343,7 @@ class TestCallbackAsyncSyncSeparation:
         await litellm.acompletion(model="openai/test-model", messages=[], mock_response="ok")
 
         assert litellm._async_input_callback == [my_async_cb]
+        assert calls == ["async", "async"]
 
     @pytest.mark.asyncio
     async def test_directly_appended_async_input_callback_is_moved_to_async_list(self):
@@ -3354,6 +3357,156 @@ class TestCallbackAsyncSyncSeparation:
         assert my_async_cb in litellm._async_input_callback
         assert my_async_cb not in litellm.input_callback
 
+    @pytest.mark.asyncio
+    async def test_async_input_callback_runs_before_executor_provider(self, monkeypatch: pytest.MonkeyPatch):
+        events: Final[list[str]] = []
+
+        async def callback(kwargs: Mapping[str, object]) -> None:
+            events.append("callback")
+
+        def completion(**kwargs: object) -> ModelResponse:
+            events.append("provider")
+            return ModelResponse(choices=[{"message": {"role": "assistant", "content": "ok"}}])
+
+        litellm.logging_callback_manager.add_litellm_input_callback(callback)
+        monkeypatch.setattr("litellm.main.completion", completion)
+
+        response = await litellm.acompletion(
+            model="openai/gpt-4o-mini",
+            messages=[{"role": "user", "content": "hello"}],
+        )
+
+        assert response.choices[0].message.content == "ok"
+        assert events == ["callback", "provider"]
+
+    @pytest.mark.asyncio
+    async def test_async_input_callback_supports_custom_logger(self):
+        calls: Final[list[tuple[object, object, object]]] = []
+
+        class AsyncInputLogger(CustomLogger):
+            async def async_log_pre_api_call(self, model, messages, kwargs):
+                calls.append((model, messages, kwargs["log_event_type"]))
+
+        litellm.logging_callback_manager.add_litellm_input_callback(AsyncInputLogger())
+
+        await litellm.acompletion(
+            model="openai/test-model",
+            messages=[{"role": "user", "content": "hello"}],
+            mock_response="ok",
+        )
+
+        assert calls == [
+            (
+                "openai/test-model",
+                [{"role": "user", "content": "hello"}],
+                "pre_api_call",
+            )
+        ]
+
+    @pytest.mark.asyncio
+    async def test_async_input_callback_failure_does_not_stop_provider(self):
+        events: Final[list[str]] = []
+
+        async def failing_callback(kwargs: Mapping[str, object]) -> None:
+            events.append("failing")
+            raise RuntimeError("callback failed")
+
+        async def following_callback(kwargs: Mapping[str, object]) -> None:
+            events.append("following")
+
+        litellm._async_input_callback = [failing_callback, following_callback]
+
+        response = await litellm.acompletion(
+            model="openai/test-model",
+            messages=[{"role": "user", "content": "hello"}],
+            mock_response="ok",
+        )
+
+        assert response.choices[0].message.content == "ok"
+        assert events == ["failing", "following"]
+
+    @pytest.mark.asyncio
+    async def test_async_input_callback_skips_cache_hit(self, monkeypatch: pytest.MonkeyPatch):
+        calls: Final[list[str]] = []
+
+        async def callback(kwargs: Mapping[str, object]) -> None:
+            calls.append("async")
+
+        litellm._async_input_callback = [callback]
+        monkeypatch.setattr(litellm, "cache", Cache(type="local"))
+        request: Final = {
+            "model": "openai/test-model",
+            "messages": [{"role": "user", "content": "hello"}],
+            "mock_response": "ok",
+            "caching": True,
+        }
+
+        await litellm.acompletion(**request)
+        await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+        await litellm.acompletion(**request)
+
+        assert calls == ["async"]
+
+    @pytest.mark.asyncio
+    async def test_async_input_callback_registered_in_both_lists_runs_once(self):
+        calls: Final[list[str]] = []
+
+        async def callback(kwargs: Mapping[str, object]) -> None:
+            calls.append("async")
+
+        logging_obj, kwargs = litellm.utils.function_setup(
+            original_function="acompletion",
+            rules_obj=litellm.utils.Rules(),
+            start_time=datetime.now(),
+            model="openai/test-model",
+            messages=[],
+            litellm_call_id="duplicate-async-input-callback",
+        )
+        litellm.input_callback = [callback]
+        litellm._async_input_callback = [callback]
+
+        await litellm.acompletion(**kwargs, litellm_logging_obj=logging_obj, mock_response="ok")
+
+        assert calls == ["async"]
+
+    @pytest.mark.asyncio
+    async def test_async_input_callback_runs_once_when_responses_bridges_to_acompletion(self):
+        calls: Final[list[object]] = []
+
+        async def callback(kwargs: Mapping[str, object]) -> None:
+            calls.append(kwargs["litellm_call_id"])
+
+        litellm._async_input_callback = [callback]
+
+        response = await litellm.aresponses(
+            model="openai/gpt-4o-mini",
+            input="hello",
+            use_chat_completions_api=True,
+            mock_response=ModelResponse(choices=[{"message": {"role": "assistant", "content": "bridged"}}]),
+        )
+
+        assert response.output[0].content[0].text == "bridged"
+        assert len(calls) == 1
+
+    def test_direct_async_input_migration_does_not_drop_callback_at_capacity(self):
+        async def callback(kwargs: Mapping[str, object]) -> None:
+            pass
+
+        litellm._async_input_callback = [AsyncMock() for _ in range(MAX_CALLBACKS)]
+        litellm.input_callback = [callback]
+
+        litellm.utils.function_setup(
+            original_function="acompletion",
+            rules_obj=litellm.utils.Rules(),
+            start_time=datetime.now(),
+            model="openai/test-model",
+            messages=[],
+            litellm_call_id="full-async-input-list",
+        )
+
+        assert callback in litellm._async_input_callback
+        assert callback not in litellm.input_callback
+
     def test_sync_input_callback_stays_in_sync_list(self):
         def my_sync_cb(*args, **kwargs):
             pass
@@ -3361,6 +3514,25 @@ class TestCallbackAsyncSyncSeparation:
         litellm.logging_callback_manager.add_litellm_input_callback(my_sync_cb)
         assert my_sync_cb in litellm.input_callback
         assert my_sync_cb not in litellm._async_input_callback
+
+
+@pytest.mark.asyncio
+async def test_provider_call_scope_only_deduplicates_nested_call_in_same_task():
+    logging_obj = object()
+
+    with provider_call_scope(logging_obj) as outer_call:
+        with provider_call_scope(logging_obj) as nested_call:
+            assert outer_call is False
+            assert nested_call is True
+
+        child_call = await asyncio.create_task(_provider_call_scope_value(logging_obj))
+
+    assert child_call is False
+
+
+async def _provider_call_scope_value(logging_obj: object) -> bool:
+    with provider_call_scope(logging_obj) as nested_provider_call:
+        return nested_provider_call
 
 
 class TestMetadataNoneHandling:
