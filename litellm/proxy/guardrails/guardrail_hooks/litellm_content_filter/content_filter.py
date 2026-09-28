@@ -2058,7 +2058,23 @@ class ContentFilterGuardrail(CustomGuardrail):
         cut_sentence: Final = (
             SENTENCE_TERMINATORS.split(head.lower())[-1] + SENTENCE_TERMINATORS.split(tail_lower, maxsplit=1)[0]
         )
-        return any(word in cut_sentence for word in plan.conditional_words)
+        # Use word boundary matching for single-word conditional words to match _check_conditional_categories behavior
+        for word in plan.conditional_words:
+            if " " in word:
+                # Multi-word phrase - use substring matching
+                if word in cut_sentence:
+                    return True
+            else:
+                # Single word - use word boundary matching
+                if _is_word_char_pattern(word):
+                    pattern = r"\b" + re.escape(word) + r"\b"
+                    if re.search(pattern, cut_sentence):
+                        return True
+                else:
+                    # Punctuation-only words use substring matching
+                    if word in cut_sentence:
+                        return True
+        return False
 
     def _trim_streamed_choice_buffer(
         self, state: _StreamedChoiceState, masked_text: str, plan: _StreamedScanPlan
