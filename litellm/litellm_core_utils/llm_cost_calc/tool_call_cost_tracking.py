@@ -250,9 +250,7 @@ class StandardBuiltInToolCostTracking:
 
     @staticmethod
     def _image_generation_tool_model(response_object: ResponsesAPIResponse) -> str:
-        tools: Final[list[object]] = cast(
-            list[object], getattr(response_object, "tools", None) or []
-        )  # cast-ok: tools entries may be dicts or pydantic objects
+        tools: Final[list[object]] = cast(list[object], getattr(response_object, "tools", None) or [])
         for tool in tools:
             if _output_item_field(tool, "type") != "image_generation":
                 continue
