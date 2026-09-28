@@ -1,7 +1,4 @@
-use crate::cache::{
-    Selection,
-    python::{CacheCall, Cached, PythonCache},
-};
+use crate::cache::{CacheCall, Cached, PythonCache, Selection};
 use litellm_host_python::{PythonHostCalls, PythonOwned};
 
 use bytes::Bytes;

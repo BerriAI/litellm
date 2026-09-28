@@ -1,8 +1,8 @@
-mod binding;
 mod callback;
+mod host;
 mod service;
 
-pub(crate) use binding::PythonCache;
 pub(super) use callback::PythonCallback;
+pub(crate) use host::PythonCache;
+pub(crate) use service::CacheCall;
 pub(super) use service::service;
-pub(crate) use service::{CacheCall, Cached};

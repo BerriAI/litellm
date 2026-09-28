@@ -6,4 +6,6 @@ pub(super) mod facade;
 mod identity;
 pub(super) mod request;
 mod semantic;
-pub(crate) mod v2;
+pub(super) mod v2;
+
+pub(crate) use v2::NativeCacheHandle;

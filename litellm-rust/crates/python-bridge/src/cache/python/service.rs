@@ -1,4 +1,3 @@
-use crate::cache::Selection;
 use std::{future::Future, pin::Pin, time::Duration};
 
 use litellm_cache::Error;
@@ -21,17 +20,6 @@ pub(crate) enum CacheCall {
         value: Value,
         reply: Reply<Result<(), Error>>,
     },
-}
-
-pub(crate) struct Cached<P>(std::marker::PhantomData<P>);
-
-impl<P: Protocol> Protocol for Cached<P> {
-    type Request = (P::Request, Selection);
-    type Response = P::Response;
-    type Error = P::Error;
-    type HostCall = CacheCall;
-    type Chunk = P::Chunk;
-    type StreamHead = P::StreamHead;
 }
 
 struct PythonCacheService<P: Protocol> {

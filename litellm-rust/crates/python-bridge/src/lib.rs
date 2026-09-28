@@ -57,7 +57,7 @@ mod _native {
         let dict = module.dict();
         dict.set_item(
             "NativeCacheHandle",
-            py.get_type::<crate::cache::native::v2::NativeCacheHandle>(),
+            py.get_type::<crate::cache::NativeCacheHandle>(),
         )?;
         dict.set_item("_ResponseCacheRuntime", py.get_type::<ResolvedCache>())?;
         dict.set_item(
