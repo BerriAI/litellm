@@ -3858,10 +3858,8 @@ async def create_pass_through_endpoints(
     ## Auto-generate ID if not provided
     # Exclude is_from_config as it's a response-only field (computed at read time)
     data_dict: Final = data.model_dump(exclude={"is_from_config"})
-    _reject_redacted_pass_through_headers(
-        cast("Mapping[str, object]", data.headers),
-        {},  # cast-ok: the model types headers as a bare dict
-    )
+    new_headers: Final = cast("Mapping[str, object]", data.headers)  # cast-ok: the model types headers as a bare dict
+    _reject_redacted_pass_through_headers(new_headers, {})
     if data_dict.get("id") is None:
         data_dict["id"] = str(uuid.uuid4())
 
