@@ -309,6 +309,7 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_check_batch_cost_jobs_polled",
     "litellm_check_batch_cost_jobs_processed_total",
     "litellm_check_batch_cost_errors_total",
+    "litellm_check_batch_cost_stale_expired_total",
     "litellm_check_batch_cost_last_run_timestamp",
     # MCP tool call metrics
     "litellm_mcp_tool_calls_total",
@@ -936,6 +937,8 @@ class PrometheusMetricLabels:
     ]
 
     litellm_check_batch_cost_errors_total: list[str] = []  # label: error_type (custom)
+
+    litellm_check_batch_cost_stale_expired_total: list[str] = []
 
     litellm_check_batch_cost_last_run_timestamp: list[str] = []
 
