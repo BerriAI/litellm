@@ -80,6 +80,7 @@ class RouterSettingsField(BaseModel):
 
 # Routing strategy descriptions
 ROUTING_STRATEGY_DESCRIPTIONS: Final[dict[str, str]] = {
+    "priority": "Routes group calls to the lowest-priority-number available model, with failover to higher numbers. Equal priorities share traffic. Direct member calls keep their existing policy.",
     "simple-shuffle": "Randomly picks a deployment from the list. Simple and fast.",
     "least-busy": "Routes to the deployment with the lowest number of ongoing requests.",
     "latency-based-routing": "Routes to the deployment with the lowest latency over a sliding window.",

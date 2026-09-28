@@ -110,6 +110,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     def supports_native_file_search(self) -> bool:
         return True
 
+    def supports_encrypted_agent_messages(self) -> bool:
+        return self.custom_llm_provider in (LlmProviders.OPENAI, LlmProviders.AZURE)
+
     @staticmethod
     def _is_gpt_5_model(model: str) -> bool:
         """Return True only for actual OpenAI GPT-5 models.
@@ -121,6 +124,10 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
         if len(parts) > 1 and parts[0] not in ("openai",):
             return False
         return is_gpt_reasoning_series_name(model)
+
+    @staticmethod
+    def _model_map_lookup_name(model: str) -> str:
+        return model
 
     @staticmethod
     def _supports_reasoning_effort_none(model: str) -> bool:
@@ -205,8 +212,9 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
     ) -> dict:
         """No mapping applied since inputs are in OpenAI spec already.
 
-        GPT-5 models have restrictions on temperature (only temperature=1
-        is accepted unless reasoning_effort='none' on models that support it).
+        GPT-5 models have restrictions on temperature and top_p (only temperature=1
+        is accepted, and top_p is rejected, unless reasoning.effort resolves to
+        'none' on models that support it).
         Apply the same validation used by the chat completions path.
         """
         params: Final = dict(response_api_optional_params)
@@ -231,13 +239,16 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                     status_code=400,
                 )
 
-        if self._is_gpt_5_model(model=model):
+        lookup_name: Final = self._model_map_lookup_name(model)
+        if self._is_gpt_5_model(model=lookup_name):
+            reasoning: Final = params.get("reasoning") or {}
+            effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
+            supports_none: Final = self._supports_reasoning_effort_none(model=lookup_name)
+            effort_is_none: Final = supports_none and self._effort_resolves_to_none(lookup_name, effort)
+
             temperature: Final = params.get("temperature")
             if temperature is not None and temperature != 1:
-                reasoning: Final = params.get("reasoning") or {}
-                effort: Final = reasoning.get("effort") if isinstance(reasoning, dict) else None
-                supports_none: Final = self._supports_reasoning_effort_none(model=model)
-                if supports_none and self._effort_resolves_to_none(model, effort):
+                if effort_is_none:
                     pass  # flexible temperature allowed
                 elif drop_params or litellm.drop_params:
                     params.pop("temperature", None)
@@ -248,6 +259,20 @@ class OpenAIResponsesAPIConfig(BaseResponsesAPIConfig):
                             "active. Only temperature=1 is supported unless reasoning.effort resolves "
                             "to 'none', either set explicitly on the request or declared as the "
                             "model's default_reasoning_effort. "
+                            "To drop unsupported params set `litellm.drop_params = True`"
+                        ),
+                        status_code=400,
+                    )
+
+            if "top_p" in params and not effort_is_none:
+                if drop_params or litellm.drop_params:
+                    params.pop("top_p", None)
+                else:
+                    raise litellm.UnsupportedParamsError(
+                        message=(
+                            f"{model} only supports top_p when reasoning.effort resolves to 'none', "
+                            "either set explicitly on the request or declared as the model's "
+                            "default_reasoning_effort. "
                             "To drop unsupported params set `litellm.drop_params = True`"
                         ),
                         status_code=400,

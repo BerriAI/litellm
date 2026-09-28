@@ -27,8 +27,13 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
   showExampleConfig = true,
 }) => {
   const [aliases, setAliases] = useState<AliasItem[]>([]);
-  const [newAlias, setNewAlias] = useState({ aliasName: "", targetModel: "" });
-  const [editingAlias, setEditingAlias] = useState<AliasItem | null>(null);
+  const [newAlias, setNewAlias] = useState<{ aliasName: string; targetModel: string | null }>({
+    aliasName: "",
+    targetModel: null,
+  });
+  const [editingAlias, setEditingAlias] = useState<
+    (Omit<AliasItem, "targetModel"> & { targetModel: string | null }) | null
+  >(null);
   const aliasNameId = useId();
 
   useEffect(() => {
@@ -61,7 +66,7 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
 
     const updatedAliases = [...aliases, newAliasObj];
     setAliases(updatedAliases);
-    setNewAlias({ aliasName: "", targetModel: "" });
+    setNewAlias({ aliasName: "", targetModel: null });
 
     // Convert array back to object format and notify parent
     const aliasObject: { [key: string]: string } = {};
@@ -94,7 +99,8 @@ const ModelAliasManager: React.FC<ModelAliasManagerProps> = ({
       return;
     }
 
-    const updatedAliases = aliases.map((alias) => (alias.id === editingAlias.id ? editingAlias : alias));
+    const savedAlias: AliasItem = { ...editingAlias, targetModel: editingAlias.targetModel };
+    const updatedAliases = aliases.map((alias) => (alias.id === savedAlias.id ? savedAlias : alias));
 
     setAliases(updatedAliases);
     setEditingAlias(null);

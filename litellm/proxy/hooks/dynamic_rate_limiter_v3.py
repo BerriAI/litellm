@@ -59,6 +59,10 @@ def _get_priority_settings() -> "PriorityReservationSettings":
     return settings
 
 
+def _is_latin1_encodable(value: object) -> bool:
+    return all(ord(char) < 256 for char in str(value))
+
+
 class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
     """
     Saturation-aware priority-based rate limiter using v3 infrastructure.
@@ -666,7 +670,13 @@ class _PROXY_DynamicRateLimitHandlerV3(CustomLogger):
             if response_has_hidden_params(response):
                 priority: Final = self._get_priority_from_user_api_key_dict(user_api_key_dict=user_api_key_dict)
                 additional_headers: Final = ensure_response_additional_headers(response)
-                additional_headers["x-litellm-priority"] = priority or "default"
+                priority_header: Final = priority or "default"
+                if _is_latin1_encodable(priority_header):
+                    additional_headers["x-litellm-priority"] = priority_header
+                else:
+                    verbose_proxy_logger.debug(
+                        "Skipping x-litellm-priority header: priority %r is not Latin-1 encodable", priority
+                    )
                 additional_headers["x-litellm-rate-limiter-version"] = "v3"
 
             return response

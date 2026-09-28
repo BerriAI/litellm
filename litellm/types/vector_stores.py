@@ -5,7 +5,7 @@ from enum import Enum
 from typing import Any, Literal
 
 from pydantic import BaseModel
-from typing_extensions import TypedDict
+from typing_extensions import ReadOnly, TypedDict
 
 
 class SupportedVectorStoreIntegrations(str, Enum):
@@ -43,6 +43,8 @@ class LiteLLM_ManagedVectorStore(TypedDict, total=False):
     # access control fields
     team_id: str | None
     user_id: str | None
+
+    is_config: ReadOnly[bool]
 
 
 class LiteLLM_ManagedVectorStoreListResponse(TypedDict, total=False):
@@ -94,6 +96,17 @@ class VectorStoreSearchResponse(TypedDict, total=False):
     object: Literal["vector_store.search_results.page"]  # Always "vector_store.search_results.page"
     search_query: str | None
     data: list[VectorStoreSearchResult] | None
+
+
+VectorStoreSearchFailureMode = Literal["annotate", "error"]
+
+
+class VectorStoreSearchFailure(TypedDict):
+    """A configured vector store whose search failed, as reported back to the API caller"""
+
+    vector_store_id: ReadOnly[str]
+    custom_llm_provider: ReadOnly[str | None]
+    error: ReadOnly[str]
 
 
 class VectorStoreSearchOptionalRequestParams(TypedDict, total=False):

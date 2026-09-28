@@ -17,8 +17,15 @@ from litellm.litellm_core_utils.cli_keyring import (
     SecretErased,
     SecretStored,
 )
-from litellm.litellm_core_utils.cli_token_utils import CliTokenRecord, save_cli_token
+from litellm.litellm_core_utils.cli_token_utils import (
+    CliTokenRecord,
+    CredentialNotRecorded,
+    CredentialNotSaved,
+    save_cli_token,
+)
 from litellm.proxy.client.cli import cli
+from litellm.proxy.client.cli.commands import claude_settings as claude_settings_module
+from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
 from litellm.proxy.client.cli.commands.auth import (
     get_stored_api_key,
     login,
@@ -26,8 +33,6 @@ from litellm.proxy.client.cli.commands.auth import (
     print_token,
     whoami,
 )
-from litellm.proxy.client.cli.commands import claude_settings as claude_settings_module
-from litellm.proxy.client.cli.commands.claude_settings import SettingsFileOwner
 
 
 @pytest.fixture
@@ -1394,7 +1399,9 @@ class TestLoginConfigClaude:
         monkeypatch.setattr(claude_settings_module, "CONFIGURE_STATE_PATH", tmp_path / "claude_configure_state.json")
         return backup_path
 
-    def _run_login(self, tmp_path, monkeypatch, args, base_url="https://test.example.com", *, config_dir_env=None):
+    def _run_login(
+        self, tmp_path, monkeypatch, args, base_url="https://test.example.com", *, config_dir_env=None, stored=None
+    ):
         settings_path = tmp_path / "claude" / "settings.json"
         backup_path = self._isolate_default_settings(tmp_path, monkeypatch)
         env = {"CLAUDE_CONFIG_DIR": str(settings_path.parent)} if config_dir_env is None else config_dir_env
@@ -1411,12 +1418,8 @@ class TestLoginConfigClaude:
             patch("webbrowser.open"),
             patch("requests.post", return_value=_mock_cli_sso_start_response()),
             patch("requests.get", return_value=poll_response),
-            patch("litellm.proxy.client.cli.commands.auth.save_cli_token"),
+            patch("litellm.proxy.client.cli.commands.auth.save_cli_token", return_value=stored or SecretStored()),
             patch("litellm.proxy.client.cli.interface.show_commands"),
-            patch(
-                "litellm.proxy.client.cli.commands.claude_settings.shutil.which",
-                return_value="/usr/local/bin/lite",
-            ),
         ):
             result = self.runner.invoke(login, args, obj={"base_url": base_url}, env=env)
         return result, settings_path, backup_path
@@ -1436,10 +1439,13 @@ class TestLoginConfigClaude:
         written = json.loads(settings_path.read_text())
         assert written["env"]["ANTHROPIC_BASE_URL"] == "https://test.example.com"
         assert written["env"]["ENABLE_TOOL_SEARCH"] == "true"
-        assert written["apiKeyHelper"] == "/usr/local/bin/lite --base-url https://test.example.com auth print-token"
+        # The minted key goes in as a static token: an apiKeyHelper would make Claude Code spawn `lite` (and
+        # its keychain probe) on every credential refresh, which is what this flag used to write.
+        assert written["env"]["ANTHROPIC_AUTH_TOKEN"] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt"
+        assert "apiKeyHelper" not in written
         assert f"Configured Claude Code: {settings_path} now routes through https://test.example.com." in result.output
-        assert "pins a proxy model for every tier" not in result.output
-        assert "the model Claude Code starts on" in result.output
+        assert "run `lite login --config-claude` again after it expires" in result.output
+        assert "the model Claude Code starts and resumes on" in result.output
 
     def test_flag_preserves_unrelated_settings_on_an_existing_file(self, tmp_path, monkeypatch):
         settings_path = tmp_path / "claude" / "settings.json"
@@ -1490,7 +1496,7 @@ class TestLoginConfigClaude:
 
         assert result.exit_code == 0, result.output
         written = json.loads(settings_path.read_text())
-        assert written["apiKeyHelper"] == "/usr/local/bin/lite --base-url https://test.example.com auth print-token"
+        assert written["env"]["ANTHROPIC_AUTH_TOKEN"] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt"
         assert f"Configured Claude Code: {settings_path} now routes through https://test.example.com." in result.output
 
     def test_flag_keeps_a_config_dir_receipt_apart_from_the_default_file_receipt(self, tmp_path, monkeypatch):
@@ -1502,6 +1508,42 @@ class TestLoginConfigClaude:
         receipts = list((tmp_path / "claude_configure_state").glob("*.json"))
         assert len(receipts) == 1
         assert json.loads(receipts[0].read_text())["file_existed"] is False
+
+    def test_a_second_login_replaces_the_key_and_unconfigure_still_restores_the_original(self, tmp_path, monkeypatch):
+        # The stored key expires daily, so the flag is re-run per login; the receipt must keep owning the
+        # slot across re-logins and hand back what was there before the first one.
+        from litellm.proxy.client.cli.commands.configure import unconfigure_claude
+
+        settings_path = tmp_path / "claude" / "settings.json"
+        settings_path.parent.mkdir(parents=True)
+        settings_path.write_text(json.dumps({"theme": "dark", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-theirs"}}))
+        self._run_login(tmp_path, monkeypatch, ["--config-claude"])
+        first = json.loads(settings_path.read_text())["env"]["ANTHROPIC_AUTH_TOKEN"]
+        self._run_login(tmp_path, monkeypatch, ["--config-claude"])
+        assert json.loads(settings_path.read_text())["env"]["ANTHROPIC_AUTH_TOKEN"] == first != "sk-theirs"
+
+        result = self.runner.invoke(unconfigure_claude, [], env={"CLAUDE_CONFIG_DIR": str(settings_path.parent)})
+        assert result.exit_code == 0, result.output
+        assert json.loads(settings_path.read_text()) == {"theme": "dark", "env": {"ANTHROPIC_AUTH_TOKEN": "sk-theirs"}}
+
+    @pytest.mark.parametrize(
+        "stored",
+        [CredentialNotSaved("read-only ~/.litellm"), CredentialNotRecorded()],
+        ids=["nothing-kept-it", "keychain-took-it-file-refused"],
+    )
+    def test_claude_code_is_configured_even_when_the_cli_could_not_keep_the_credential(
+        self, tmp_path, monkeypatch, stored
+    ):
+        # The key is in hand either way, and --config-claude asked for exactly that key to be written into
+        # settings.json; whether the CLI's own token file or keychain kept a copy is a separate outcome.
+        result, settings_path, _backup_path = self._run_login(tmp_path, monkeypatch, ["--config-claude"], stored=stored)
+
+        assert result.exit_code == 0, result.output
+        written = json.loads(settings_path.read_text())
+        assert written["env"]["ANTHROPIC_AUTH_TOKEN"] == "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.test.jwt"
+        assert f"Configured Claude Code: {settings_path}" in result.output
+        assert "even though the CLI itself could not keep it" in result.output
+        assert "You can now use the CLI without specifying --api-key" not in result.output
 
     def test_settings_failure_is_reported_without_claiming_login_failed(self, tmp_path, monkeypatch):
         settings_path = tmp_path / "claude" / "settings.json"

@@ -93,4 +93,5 @@ async def async_raise_no_deployment_exception(
         cooldown_time=_cooldown_time,
         enable_pre_call_checks=litellm_router_instance.enable_pre_call_checks,
         cooldown_list=cooldown_list_ids,
+        model_ids=model_ids,
     )
