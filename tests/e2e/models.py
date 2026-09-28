@@ -979,7 +979,7 @@ class SpendLogMetadata(BaseModel):
 
 class SpendLogRow(BaseModel):
     request_id: str | None = None
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
     model: str | None = None
     spend: float | None = None
     status: str | None = None
@@ -1007,7 +1007,7 @@ class SpendLogs(RootModel[list[SpendLogRow]]):
 
 class SpendLogsParams(BaseModel):
     request_id: str | None = None
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
 
     @model_validator(mode="after")
     def require_filter(self) -> SpendLogsParams:
@@ -1028,7 +1028,7 @@ class SpendLogsPageParams(BaseModel):
     end_date: str
     page: int
     page_size: int
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
 
 
 class SessionSpendLogsParams(BaseModel):
@@ -1229,25 +1229,25 @@ class LiteLLMParamsBody(BaseModel):
     backend's canonical rate."""
 
     model: str
-    api_key: str | None = None
+    api_key: str | None = Field(default=None, repr=False)
     litellm_credential_name: str | None = None
     api_base: str | None = None
     api_version: str | None = None
     realtime_protocol: str | None = None
     allowed_openai_params: list[str] | None = None
-    aws_access_key_id: str | None = None
-    aws_secret_access_key: str | None = None
+    aws_access_key_id: str | None = Field(default=None, repr=False)
+    aws_secret_access_key: str | None = Field(default=None, repr=False)
     aws_region_name: str | None = None
     aws_bedrock_runtime_endpoint: str | None = None
     vertex_project: str | None = None
     vertex_location: str | None = None
-    vertex_credentials: str | None = None
+    vertex_credentials: str | None = Field(default=None, repr=False)
     gcs_bucket_name: str | None = None
     bucket_name: str | None = None
     s3_bucket_name: str | None = None
     s3_region_name: str | None = None
-    s3_access_key_id: str | None = None
-    s3_secret_access_key: str | None = None
+    s3_access_key_id: str | None = Field(default=None, repr=False)
+    s3_secret_access_key: str | None = Field(default=None, repr=False)
     s3_encryption_key_id: str | None = None
     aws_batch_role_arn: str | None = None
     aws_role_name: str | None = None
@@ -1368,7 +1368,7 @@ class ConnectionTestResponse(BaseModel):
 
 class CredentialCreateBody(BaseModel):
     credential_name: str
-    credential_values: dict[str, str]
+    credential_values: dict[str, str] = Field(repr=False)
     credential_info: dict[str, str] = {}
 
 
