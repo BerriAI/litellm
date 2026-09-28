@@ -97,10 +97,14 @@ where
     };
     let terminal = match &outcome {
         Ok(completion) if detached(completion) => CallEvent::Cancelled { timing },
-        Ok(_) => CallEvent::Succeeded { timing },
+        Ok(_) => CallEvent::Succeeded {
+            timing,
+            response: (),
+        },
         Err(_) => CallEvent::Failed {
             timing,
             origin: FailureOrigin::Call,
+            error: (),
         },
     };
     if let Some(observers) = host.observers {

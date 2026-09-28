@@ -1,7 +1,8 @@
-use std::{convert::Infallible, num::NonZeroUsize};
+use std::{cell::Cell, convert::Infallible, num::NonZeroUsize, rc::Rc};
 
 use litellm_host::{
-    lifecycle::{CallEvent, observe_unary},
+    interceptors::RawResponse,
+    lifecycle::{CallEvent, ExecutionEvent, FailureOrigin, Timing, observe_unary},
     machine::{CallMachine, Machine, MachineFault, MachineStep},
     observation::observation_channel,
     protocol::Protocol,
@@ -22,6 +23,70 @@ impl Protocol for TestProtocol {
 #[fixture]
 fn capacity() -> NonZeroUsize {
     NonZeroUsize::new(2).unwrap()
+}
+
+#[rstest]
+#[case::success(false)]
+#[case::failure(true)]
+fn snapshots_do_not_retain_runtime_objects(capacity: NonZeroUsize, #[case] failed: bool) {
+    let payload = Rc::new(Cell::new(7));
+    let retained = Rc::downgrade(&payload);
+    let timing = Timing {
+        start_time: 11.0,
+        end_time: 19.0,
+    };
+    let event: CallEvent<Rc<Cell<u8>>, Rc<Cell<u8>>> = if failed {
+        CallEvent::Failed {
+            timing,
+            origin: FailureOrigin::Host,
+            error: payload,
+        }
+    } else {
+        CallEvent::Succeeded {
+            timing,
+            response: payload,
+        }
+    };
+    let (sender, mut receiver) = observation_channel(capacity);
+    sender.emit(event.snapshot());
+    match &event {
+        CallEvent::Succeeded { response, .. } => response.set(9),
+        CallEvent::Failed { error, .. } => error.set(9),
+        _ => unreachable!(),
+    }
+    assert_eq!(retained.upgrade().unwrap().get(), 9);
+    drop(event);
+    assert!(retained.upgrade().is_none());
+    let expected = if failed {
+        CallEvent::Failed {
+            timing,
+            origin: FailureOrigin::Host,
+            error: (),
+        }
+    } else {
+        CallEvent::Succeeded {
+            timing,
+            response: (),
+        }
+    };
+    assert_eq!(receiver.try_recv().unwrap(), expected);
+}
+
+#[rstest]
+fn provider_snapshots_own_the_response_body(capacity: NonZeroUsize) {
+    let mut raw = RawResponse {
+        body: "provider response".into(),
+    };
+    let event: CallEvent<(), (), &RawResponse> =
+        CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw: &raw });
+    let expected = raw.clone();
+    let (sender, mut receiver) = observation_channel(capacity);
+    sender.emit(event.snapshot());
+    raw.body.clear();
+    assert_eq!(
+        receiver.try_recv().unwrap(),
+        CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw: expected })
+    );
 }
 
 #[rstest]

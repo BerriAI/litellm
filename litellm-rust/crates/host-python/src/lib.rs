@@ -22,13 +22,13 @@ mod services;
 pub use argument::lookup;
 pub use binding::PythonBinding;
 pub use callable::wrap_failure;
-pub use driver::run_call;
+pub use driver::{CallOptions, run_call};
 pub use error::{InvokeError, missing_state};
 pub use file_reader::{FileContent, PythonFileReader, py_bytes};
 pub use fork_gate::RuntimeAlreadyStarted;
 pub use gil::{PythonContext, attach_blocking, release_count, release_gil};
 pub use handle::{Execution, ExecutionBody, ExecutionStep};
-pub use hooks::{HookEvent, HookResume, HookStep, Preflight, PythonCallHooks};
+pub use hooks::{HookResume, HookStep, Preflight, PythonCallEvent, PythonCallHooks, PythonRuntime};
 pub use marshal::{
     Pythonized, from_py, from_py_argument, json_loads, json_object_field, panic_to_pyerr, to_py,
 };

@@ -587,7 +587,7 @@ async fn generic_runner_success_keeps_the_start_time(observer: Arc<Observer>) {
     let events = observer.0.lock().unwrap();
     let [
         CallEvent::Started { start_time },
-        CallEvent::Succeeded { timing },
+        CallEvent::Succeeded { timing, .. },
     ] = events.as_slice()
     else {
         panic!("unexpected events {events:?}");

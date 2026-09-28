@@ -30,20 +30,20 @@ pub enum FailureOrigin {
     Host,
 }
 
-/// What an in-process host observes: the machine's own events between the driver's
-/// start and terminal ones.
 #[derive(Clone, Debug, PartialEq)]
-pub enum CallEvent {
+pub enum CallEvent<Response = (), Error = (), Raw = RawResponse> {
     Started {
         start_time: f64,
     },
-    Execution(ExecutionEvent),
+    Execution(ExecutionEvent<Raw>),
     Succeeded {
         timing: Timing,
+        response: Response,
     },
     Failed {
         timing: Timing,
         origin: FailureOrigin,
+        error: Error,
     },
     Cancelled {
         timing: Timing,
@@ -51,8 +51,33 @@ pub enum CallEvent {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ExecutionEvent {
-    ProviderResponseReceived { raw: RawResponse },
+pub enum ExecutionEvent<Raw = RawResponse> {
+    ProviderResponseReceived { raw: Raw },
+}
+
+impl<Response, Error, Raw: std::borrow::Borrow<RawResponse>> CallEvent<Response, Error, Raw> {
+    pub fn snapshot(&self) -> CallEvent {
+        match self {
+            Self::Started { start_time } => CallEvent::Started {
+                start_time: *start_time,
+            },
+            Self::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
+                CallEvent::Execution(ExecutionEvent::ProviderResponseReceived {
+                    raw: raw.borrow().clone(),
+                })
+            }
+            Self::Succeeded { timing, .. } => CallEvent::Succeeded {
+                timing: *timing,
+                response: (),
+            },
+            Self::Failed { timing, origin, .. } => CallEvent::Failed {
+                timing: *timing,
+                origin: *origin,
+                error: (),
+            },
+            Self::Cancelled { timing } => CallEvent::Cancelled { timing: *timing },
+        }
+    }
 }
 
 pub trait CallObserver: Send + Sync {
@@ -89,10 +114,12 @@ impl CallGuard {
                 CallEvent::Failed {
                     timing: self.timing(),
                     origin: FailureOrigin::Call,
+                    error: (),
                 }
             } else {
                 CallEvent::Succeeded {
                     timing: self.timing(),
+                    response: (),
                 }
             });
         }

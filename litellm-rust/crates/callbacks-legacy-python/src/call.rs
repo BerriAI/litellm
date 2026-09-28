@@ -4,7 +4,9 @@
 //! this crate holds them.
 
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
-use litellm_host_python::{Preflight, PythonBinding, PythonHostCalls, lookup, run_call};
+use litellm_host_python::{
+    CallOptions, Preflight, PythonBinding, PythonHostCalls, lookup, run_call,
+};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -74,22 +76,23 @@ pub fn run_legacy_call<H, M>(
     start: impl FnOnce(<H::Protocol as Protocol>::Request) -> M + Send + Sync + 'static,
     host: H,
     preflight: Preflight,
-    asynchronous: bool,
+    options: impl Into<CallOptions>,
 ) -> PyResult<Py<PyAny>>
 where
     H: PythonBinding + PythonHostCalls<H::Protocol> + 'static,
     M: Machine<Protocol = H::Protocol> + 'static,
     M::Complete: Into<HostedCompletion<<H::Protocol as Protocol>::Response>>,
 {
+    let options = options.into();
     let arguments = call.kwargs.clone_ref(py);
     run_call(
         py,
         start,
         host,
-        LegacyLogging::new(py, surface, call, asynchronous),
+        LegacyLogging::new(py, surface, call, options.asynchronous),
         preflight,
         arguments,
-        asynchronous,
+        options,
     )
 }
 

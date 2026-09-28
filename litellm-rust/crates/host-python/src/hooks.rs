@@ -1,8 +1,5 @@
 use crate::PythonOwned;
-use litellm_host::{
-    interceptors::{RawResponse, RequestContext, WireRequest},
-    lifecycle::{FailureOrigin, Timing},
-};
+use litellm_host::hooks::{CallHooks, HookRuntime, RuntimeCallEvent};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
@@ -21,62 +18,19 @@ pub enum HookStep<L, T> {
     Ready(T),
 }
 
-/// Events dispatched to call hooks: the driver's start, the machine's own events, and one
-/// terminal event carrying the public value the caller receives.
-pub enum HookEvent<'a> {
-    Started {
-        start_time: f64,
-    },
-    AfterProviderResponse(&'a RawResponse),
-    Succeeded {
-        timing: Timing,
-        response: &'a Py<PyAny>,
-    },
-    Failed {
-        timing: Timing,
-        origin: FailureOrigin,
-        error: &'a PyErr,
-    },
+pub struct PythonRuntime;
+
+impl HookRuntime for PythonRuntime {
+    type Context<'a> = Python<'a>;
+    type Arguments = Py<PyDict>;
+    type Response = Py<PyAny>;
+    type Chunk = Py<PyAny>;
+    type Error = PyErr;
+    type Step<H, T> = HookStep<H, T>;
 }
 
-/// Active Python hooks that can transform values or fail execution. The driver calls the steps in
-/// order: `prepare_arguments` before the machine starts, `before_provider_request` and `on_event` while it runs,
-/// `transform_response` and one terminal `on_event` after it completes. Whenever a step returns
-/// [`HookStep::Await`], the driver awaits it in the caller's task and continues the
-/// same step through its typed continuation.
-///
-/// A step that fails with an ordinary exception fails the call with that exception,
-/// except on a terminal event, where the hooks are expected to report and swallow their
-/// own errors. An exception that is not a `PyException`, such as a cancellation, ends
-/// the call without further dispatch.
-pub trait PythonCallHooks: Sized + PythonOwned {
-    fn prepare_arguments(
-        &mut self,
-        py: Python<'_>,
-        arguments: Py<PyDict>,
-        started_at: f64,
-    ) -> PyResult<HookStep<Self, Py<PyDict>>>;
+pub type PythonCallEvent<'a> = RuntimeCallEvent<'a, PythonRuntime>;
 
-    fn before_provider_request(
-        &mut self,
-        py: Python<'_>,
-        wire: Box<WireRequest>,
-        context: &RequestContext,
-    ) -> PyResult<HookStep<Self, Box<WireRequest>>>;
+pub trait PythonCallHooks: CallHooks<PythonRuntime> + PythonOwned {}
 
-    fn transform_response(
-        &mut self,
-        py: Python<'_>,
-        response: Py<PyAny>,
-        timing: Timing,
-    ) -> PyResult<HookStep<Self, Py<PyAny>>>;
-
-    fn on_event(&mut self, py: Python<'_>, event: HookEvent<'_>) -> PyResult<HookStep<Self, ()>>;
-
-    /// The call streams and its stream was handed to the caller. The caller is not
-    /// inside an await here, so this step and `on_stream_chunk` cannot suspend.
-    fn on_stream_open(&mut self, py: Python<'_>) -> PyResult<()>;
-
-    /// One chunk of an open stream is about to reach the caller.
-    fn on_stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()>;
-}
+impl<H: CallHooks<PythonRuntime> + PythonOwned> PythonCallHooks for H {}

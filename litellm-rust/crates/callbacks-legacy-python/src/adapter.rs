@@ -5,10 +5,10 @@
 use litellm_host_python::PythonOwned;
 
 use litellm_host::{
-    interceptors::{RequestContext, WireRequest},
+    interceptors::{RawResponse, RequestContext, WireRequest},
     lifecycle::{FailureOrigin, Timing, epoch_seconds},
 };
-use litellm_host_python::{HookEvent, HookStep, PythonCallHooks, from_py, missing_state, to_py};
+use litellm_host_python::{HookStep, from_py, missing_state, to_py};
 use pyo3::{
     exceptions::{PyBaseException, PyException},
     gc::{PyTraverseError, PyVisit},
@@ -310,8 +310,8 @@ impl LegacyLogging {
     }
 }
 
-impl PythonCallHooks for LegacyLogging {
-    fn prepare_arguments(
+impl LegacyLogging {
+    pub(crate) fn prepare_call(
         &mut self,
         py: Python<'_>,
         arguments: Py<PyDict>,
@@ -339,7 +339,7 @@ impl PythonCallHooks for LegacyLogging {
         self.prepare(py)
     }
 
-    fn before_provider_request(
+    pub(crate) fn pre_call(
         &mut self,
         py: Python<'_>,
         wire: Box<WireRequest>,
@@ -385,7 +385,7 @@ impl PythonCallHooks for LegacyLogging {
         })))
     }
 
-    fn transform_response(
+    pub(crate) fn transform_public_response(
         &mut self,
         py: Python<'_>,
         response: Py<PyAny>,
@@ -407,64 +407,69 @@ impl PythonCallHooks for LegacyLogging {
         self.finalize(py)
     }
 
-    fn on_event(&mut self, py: Python<'_>, event: HookEvent<'_>) -> PyResult<HookStep<Self, ()>> {
-        match event {
-            HookEvent::Started { .. } => Ok(HookStep::Ready(())),
-            HookEvent::AfterProviderResponse(raw) => {
-                let api_key = self
-                    .request
-                    .as_ref()
-                    .and_then(|request| request.context.api_key.as_ref())
-                    .map(|api_key| api_key.expose());
-                self.logger()?.post_call(
-                    py,
-                    &raw.body,
-                    api_key,
-                    self.request.as_ref().map(|request| &request.body),
-                    self.request.as_ref().map(|request| &request.headers),
-                )?;
-                Ok(HookStep::Ready(()))
-            }
-            HookEvent::Succeeded { timing, response } => {
-                self.end = Some(datetime(py, timing.end_time)?);
-                self.response = Some(response.clone_ref(py));
-                match &self.stream {
-                    Some(stream) => self.stream_success(py, stream)?,
-                    None => self.dispatch_success(py)?,
-                }
-                Ok(HookStep::Ready(()))
-            }
-            HookEvent::Failed {
-                timing,
-                origin,
-                error,
-            } => {
-                self.end = Some(datetime(py, timing.end_time)?);
-                self.error = Some(error.clone_ref(py).into_value(py));
-                if self.stream.is_some() {
-                    return self.stream_failure(py);
-                }
-                if origin == FailureOrigin::Call
-                    && self.logger.is_some()
-                    && self.runs_deployment_hooks()
-                {
-                    let error = self.error.as_ref().ok_or_else(missing_state)?;
-                    return Ok(HookStep::Await(
-                        DeploymentHooks::after_failure(
-                            py,
-                            self.call.kwargs(),
-                            error,
-                            self.surface.call_type,
-                        )?,
-                        Self::resume_deployment_failure,
-                    ));
-                }
-                self.dispatch_failure(py)
-            }
-        }
+    pub(crate) fn post_call(
+        &mut self,
+        py: Python<'_>,
+        raw: &RawResponse,
+    ) -> PyResult<HookStep<Self, ()>> {
+        let api_key = self
+            .request
+            .as_ref()
+            .and_then(|request| request.context.api_key.as_ref())
+            .map(|api_key| api_key.expose());
+        self.logger()?.post_call(
+            py,
+            &raw.body,
+            api_key,
+            self.request.as_ref().map(|request| &request.body),
+            self.request.as_ref().map(|request| &request.headers),
+        )?;
+        Ok(HookStep::Ready(()))
     }
 
-    fn on_stream_open(&mut self, py: Python<'_>) -> PyResult<()> {
+    pub(crate) fn succeeded(
+        &mut self,
+        py: Python<'_>,
+        timing: Timing,
+        response: &Py<PyAny>,
+    ) -> PyResult<HookStep<Self, ()>> {
+        self.end = Some(datetime(py, timing.end_time)?);
+        self.response = Some(response.clone_ref(py));
+        match &self.stream {
+            Some(stream) => self.stream_success(py, stream)?,
+            None => self.dispatch_success(py)?,
+        }
+        Ok(HookStep::Ready(()))
+    }
+
+    pub(crate) fn failed(
+        &mut self,
+        py: Python<'_>,
+        timing: Timing,
+        origin: FailureOrigin,
+        error: &PyErr,
+    ) -> PyResult<HookStep<Self, ()>> {
+        self.end = Some(datetime(py, timing.end_time)?);
+        self.error = Some(error.clone_ref(py).into_value(py));
+        if self.stream.is_some() {
+            return self.stream_failure(py);
+        }
+        if origin == FailureOrigin::Call && self.logger.is_some() && self.runs_deployment_hooks() {
+            let error = self.error.as_ref().ok_or_else(missing_state)?;
+            return Ok(HookStep::Await(
+                DeploymentHooks::after_failure(
+                    py,
+                    self.call.kwargs(),
+                    error,
+                    self.surface.call_type,
+                )?,
+                Self::resume_deployment_failure,
+            ));
+        }
+        self.dispatch_failure(py)
+    }
+
+    pub(crate) fn stream_opened(&mut self, py: Python<'_>) -> PyResult<()> {
         if self.surface.stream.is_none() {
             return Err(missing_state());
         }
@@ -476,7 +481,7 @@ impl PythonCallHooks for LegacyLogging {
         Ok(())
     }
 
-    fn on_stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()> {
+    pub(crate) fn stream_chunk(&mut self, py: Python<'_>, chunk: &Py<PyAny>) -> PyResult<()> {
         let stream = self.stream.as_mut().ok_or_else(missing_state)?;
         if stream.first_chunk.is_none() {
             stream.first_chunk = Some(datetime(py, epoch_seconds())?);
@@ -520,8 +525,9 @@ impl PythonOwned for LegacyLogging {
 mod deployment_hooks_tests {
     use std::ffi::CStr;
 
+    use litellm_host::hooks::CallHooks;
     use litellm_host::lifecycle::{FailureOrigin, Timing};
-    use litellm_host_python::{HookEvent, HookStep, PythonCallHooks};
+    use litellm_host_python::{HookStep, PythonCallEvent};
     use pyo3::exceptions::asyncio::CancelledError;
     use pyo3::prelude::*;
     use pyo3::types::PyDict;
@@ -776,7 +782,7 @@ assert finalized is replacement
             )
             .unwrap();
             let failure = PyErr::from_value(local(&locals, "failure"));
-            let failed = HookEvent::Failed {
+            let failed = PythonCallEvent::Failed {
                 timing: TIMING,
                 origin: FailureOrigin::Call,
                 error: &failure,
@@ -809,8 +815,10 @@ mod payload_tests {
     use std::ffi::CStr;
 
     use litellm_auth::SecretValue;
+    use litellm_host::hooks::CallHooks;
     use litellm_host::interceptors::{RawResponse, RequestContext, WireRequest};
-    use litellm_host_python::{HookEvent, HookStep, PythonCallHooks, PythonOwned, to_py};
+    use litellm_host::lifecycle::ExecutionEvent;
+    use litellm_host_python::{HookStep, PythonCallEvent, PythonOwned, to_py};
     use proptest::prelude::*;
     use pyo3::gc::{PyTraverseError, PyVisit};
     use pyo3::prelude::*;
@@ -930,7 +938,12 @@ check = lambda: None
         };
         assert!(matches!(
             logging
-                .on_event(py, HookEvent::AfterProviderResponse(&raw))
+                .on_event(
+                    py,
+                    PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived {
+                        raw: &raw
+                    })
+                )
                 .unwrap(),
             HookStep::Ready(())
         ));
@@ -1460,8 +1473,9 @@ def check():
 mod terminal_tests {
     use std::ffi::CStr;
 
+    use litellm_host::hooks::CallHooks;
     use litellm_host::lifecycle::{FailureOrigin, Timing};
-    use litellm_host_python::{HookEvent, HookStep, PythonCallHooks, PythonOwned};
+    use litellm_host_python::{HookStep, PythonCallEvent, PythonOwned};
     use pyo3::exceptions::PyRuntimeError;
     use pyo3::exceptions::asyncio::CancelledError;
     use pyo3::prelude::*;
@@ -1493,7 +1507,7 @@ mod terminal_tests {
         logging
             .on_event(
                 py,
-                HookEvent::Succeeded {
+                PythonCallEvent::Succeeded {
                     timing: TIMING,
                     response: &response,
                 },
@@ -1510,7 +1524,7 @@ mod terminal_tests {
         logging
             .on_event(
                 py,
-                HookEvent::Failed {
+                PythonCallEvent::Failed {
                     timing: TIMING,
                     origin: FailureOrigin::Host,
                     error: &failure,
@@ -1554,6 +1568,82 @@ mod terminal_tests {
                 c"
 assert all(value is response for name, value in logger.calls if name.endswith('_handler'))
 assert hasattr(logger, '_native_pending_logging') == getattr(logger, '_defer_async_logging', False)
+",
+            );
+        });
+    }
+
+    #[rstest]
+    fn dropped_observations_preserve_deferred_success_and_response_identity() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(
+                py,
+                c"response = object()\nlogger._defer_async_logging = True",
+            );
+            let mut logging = logged(py, &locals, true);
+            let response = local(&locals, "response").unbind();
+            let event = PythonCallEvent::Succeeded {
+                timing: TIMING,
+                response: &response,
+            };
+            let (sender, receiver) = litellm_host::observation::observation_channel(
+                std::num::NonZeroUsize::new(1).unwrap(),
+            );
+            drop(receiver);
+            sender.emit(event.snapshot());
+            assert!(matches!(
+                logging.on_event(py, event).unwrap(),
+                HookStep::Ready(())
+            ));
+            assert_eq!(sender.dropped_events(), 1);
+            run(py, &locals, c"
+assert logger.names() == ['sync_success_for_async_call'], logger.calls
+logger._native_pending_logging.release(True)
+logger._native_pending_logging.release(True)
+assert logger.names() == ['sync_success_for_async_call', 'async_success_handler', 'enqueued'], logger.calls
+assert logger.calls[0][1] is response
+assert logger.calls[1][1] is response
+");
+        });
+    }
+
+    #[rstest]
+    fn stream_bindings_deliver_collected_chunks_in_order_without_success_fan_out() {
+        Python::initialize();
+        Python::attach(|py| {
+            let locals = namespace(py, c"first = b'first'\nlast = b'last'\nresponse = None");
+            let mut logging = LegacyLogging {
+                surface: super::LegacySurface {
+                    call_type: "test",
+                    input_description: "test input",
+                    stream: Some(super::PassThroughStream {
+                        url_route: "/test",
+                        endpoint_type: "test",
+                    }),
+                },
+                ..logged(py, &locals, true)
+            };
+            logging.on_stream_open(py).unwrap();
+            logging
+                .on_stream_chunk(py, &local(&locals, "first").unbind())
+                .unwrap();
+            logging
+                .on_stream_chunk(py, &local(&locals, "last").unbind())
+                .unwrap();
+            assert!(matches!(
+                succeed(py, &locals, &mut logging),
+                HookStep::Ready(())
+            ));
+            run(
+                py,
+                &locals,
+                c"
+assert logger.names() == ['stream_opened', 'stream_success'], logger.calls
+chunks = logger.calls[1][1]
+assert len(chunks) == 2
+assert chunks[0] is first
+assert chunks[1] is last
 ",
             );
         });
