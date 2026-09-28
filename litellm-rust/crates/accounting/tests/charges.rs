@@ -133,3 +133,21 @@ fn terminal_outcomes_do_not_erase_incurred_charges(services: Cost, #[case] outco
     assert_eq!(terminal.charges(), charges);
     assert_eq!(terminal.usage(), &ReportedUsage::Known((10, 1)));
 }
+
+#[rstest]
+#[case::known(costs_for_unknown_work())]
+#[case::unknown(Charges::new(Cost::Unknown, Cost::Known(usd("1"))).unwrap())]
+fn unknown_provider_work_does_not_imply_free_generation(#[case] charges: Charges) {
+    let terminal = Terminal::<()>::new(
+        Outcome::Failed,
+        ProviderWork::Unknown,
+        ReportedUsage::Unknown,
+        charges,
+    )
+    .unwrap();
+    assert_eq!(terminal.charges(), charges);
+}
+
+fn costs_for_unknown_work() -> Charges {
+    Charges::new(Cost::Known(usd("3")), Cost::Known(usd("1"))).unwrap()
+}

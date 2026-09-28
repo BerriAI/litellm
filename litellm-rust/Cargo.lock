@@ -3824,9 +3824,11 @@ dependencies = [
  "base64 0.22.1",
  "bytes",
  "futures-util",
+ "litellm-accounting",
  "litellm-auth",
  "litellm-core",
  "litellm-gateway-auth",
+ "litellm-host",
  "litellm-host-http",
  "litellm-http",
  "litellm-llms",
@@ -3834,10 +3836,13 @@ dependencies = [
  "litellm-secrets",
  "litellm-types",
  "rstest",
+ "rusty-money",
  "serde_json",
  "thiserror 2.0.19",
  "tokio",
+ "tokio-util",
  "tower",
+ "tracing",
  "wiremock",
 ]
 
@@ -3914,6 +3919,7 @@ dependencies = [
  "litellm-coroutine",
  "rstest",
  "serde_json",
+ "thiserror 2.0.19",
  "tokio",
 ]
 
@@ -7235,6 +7241,7 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
+ "futures-util",
  "pin-project-lite",
  "tokio",
 ]

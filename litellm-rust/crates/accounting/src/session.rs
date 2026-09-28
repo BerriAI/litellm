@@ -119,6 +119,7 @@ impl<E> From<ApplyResult<E>> for EffectState<E> {
     }
 }
 
+#[derive(Clone)]
 pub struct Progress<E> {
     effects: [EffectState<E>; 3],
 }
@@ -244,24 +245,43 @@ impl<R, U, E> Session<R, U, E> {
         &mut self,
         backend: &mut B,
     ) -> Result<SettlementStatus, Error> {
-        let terminal = self.terminal.as_ref().ok_or(Error::NotTerminal)?;
-        for effect in Effect::ORDER {
-            if !matches!(self.progress.effects[effect.index()], EffectState::Pending) {
-                continue;
-            }
-            self.progress.effects[effect.index()] = EffectState::InFlight;
-            let result = backend
-                .apply(
-                    effect,
-                    Settlement {
-                        admission: &self.admission,
-                        terminal,
-                        progress: &self.progress,
-                    },
-                )
-                .await;
-            self.progress.effects[effect.index()] = result.into();
+        while let Some(pending) = self.next_effect()? {
+            let PendingEffect { effect, settlement } = pending;
+            let result = backend.apply(effect, settlement).await;
+            self.complete_effect(effect, result)?;
         }
         Ok(self.status())
     }
+
+    pub fn next_effect(&mut self) -> Result<Option<PendingEffect<'_, R, U, E>>, Error> {
+        let terminal = self.terminal.as_ref().ok_or(Error::NotTerminal)?;
+        let Some(effect) = Effect::ORDER
+            .into_iter()
+            .find(|effect| matches!(self.progress.effects[effect.index()], EffectState::Pending))
+        else {
+            return Ok(None);
+        };
+        self.progress.effects[effect.index()] = EffectState::InFlight;
+        Ok(Some(PendingEffect {
+            effect,
+            settlement: Settlement {
+                admission: &self.admission,
+                terminal,
+                progress: &self.progress,
+            },
+        }))
+    }
+
+    pub fn complete_effect(&mut self, effect: Effect, result: ApplyResult<E>) -> Result<(), Error> {
+        if !matches!(self.progress.effect(effect), EffectState::InFlight) {
+            return Err(Error::NotInFlight { effect });
+        }
+        self.progress.effects[effect.index()] = result.into();
+        Ok(())
+    }
+}
+
+pub struct PendingEffect<'a, R, U, E> {
+    pub effect: Effect,
+    pub settlement: Settlement<'a, R, U, E>,
 }

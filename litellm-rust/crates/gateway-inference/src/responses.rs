@@ -15,6 +15,23 @@ pub(crate) async fn create(
 ) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(&gateway, &body)?;
     request::authorize_model(&identity, deployment, &body).await?;
+    let accounting = match &gateway.responses_accounting {
+        Some(service) => Some(
+            service
+                .begin(crate::accounting::AdmissionRequest {
+                    caller: identity.caller().clone(),
+                    public_model: body
+                        .get("model")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    deployment_model: deployment.model.clone(),
+                    request: body.clone(),
+                })
+                .await?,
+        ),
+        None => None,
+    };
     let call = ResponsesCall {
         model: deployment.model.clone(),
         input: body.get("input").cloned().unwrap_or_default(),
@@ -36,5 +53,10 @@ pub(crate) async fn create(
             json!({"type": "error", "code": error.status().as_u16().to_string(), "message": error.to_string(), "param": null})
         ))
     });
-    Ok(litellm_host_http::serve(machine, (), (), stream, None).await?)
+    match accounting {
+        Some(hooks) => {
+            Ok(litellm_host_http::serve_with_hooks(machine, (), hooks, stream, None).await?)
+        }
+        None => Ok(litellm_host_http::serve(machine, (), (), stream, None).await?),
+    }
 }

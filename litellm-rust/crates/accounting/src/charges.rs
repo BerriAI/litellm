@@ -29,6 +29,7 @@ impl Cost {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ProviderWork {
+    Unknown,
     NotStarted,
     Started,
 }
@@ -71,7 +72,7 @@ impl Charges {
 
     pub(crate) fn for_work(self, work: ProviderWork) -> Self {
         match work {
-            ProviderWork::Started => self,
+            ProviderWork::Unknown | ProviderWork::Started => self,
             ProviderWork::NotStarted => Self {
                 provider: Cost::Known(Money::from_major(0, iso::USD)),
                 services: self.services,

@@ -30,7 +30,7 @@ pub struct RawResponse {
     pub body: String,
 }
 
-pub trait Interceptors<E>: Send + Sync {
+pub trait ProviderInterceptors<E>: Send + Sync {
     fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -43,7 +43,7 @@ pub trait Interceptors<E>: Send + Sync {
     ) -> impl Future<Output = Result<(), E>> + Send;
 }
 
-impl<E, T: Interceptors<E> + ?Sized> Interceptors<E> for &T {
+impl<E, T: ProviderInterceptors<E> + ?Sized> ProviderInterceptors<E> for &T {
     fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -60,7 +60,7 @@ impl<E, T: Interceptors<E> + ?Sized> Interceptors<E> for &T {
     }
 }
 
-impl<E> Interceptors<E> for () {
+impl<E> ProviderInterceptors<E> for () {
     async fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -73,6 +73,8 @@ impl<E> Interceptors<E> for () {
         Ok(())
     }
 }
+
+pub use ProviderInterceptors as Interceptors;
 
 #[cfg(test)]
 mod tests {
@@ -130,13 +132,13 @@ mod tests {
     async fn the_channel_yields_each_hook_as_its_op_and_returns_the_answer() {
         let mut machine = CallMachine::<Unit>::new(None, |channel| {
             Box::pin(async move {
-                let sent = Interceptors::before_provider_request(
+                let sent = ProviderInterceptors::before_provider_request(
                     &channel.interceptors,
                     wire("prepared"),
                     context(),
                 )
                 .await?;
-                Interceptors::after_provider_response(
+                ProviderInterceptors::after_provider_response(
                     &channel.interceptors,
                     RawResponse { body: "raw".into() },
                 )
@@ -175,9 +177,13 @@ mod tests {
     #[rstest::rstest]
     #[tokio::test]
     async fn no_hooks_pass_the_wire_request_through() {
-        let sent = Interceptors::<Fault>::before_provider_request(&(), wire("prepared"), context())
-            .await
-            .unwrap();
+        let sent = ProviderInterceptors::<Fault>::before_provider_request(
+            &(),
+            wire("prepared"),
+            context(),
+        )
+        .await
+        .unwrap();
         assert_eq!(sent.url, "prepared");
     }
 }

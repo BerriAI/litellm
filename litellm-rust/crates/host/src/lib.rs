@@ -7,9 +7,11 @@
 //! may rewrite the wire request before it is sent.
 
 pub mod call;
+mod error;
 pub mod hooks;
-pub mod interceptors;
+pub use error::HookError;
+pub use hooks::interceptors;
 pub mod lifecycle;
 pub mod machine;
-pub mod observation;
+pub use hooks::observation;
 pub mod protocol;

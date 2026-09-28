@@ -9,6 +9,8 @@ repository.workspace = true
 axum = { workspace = true, features = ["json", "multipart", "original-uri"] }
 base64.workspace = true
 bytes.workspace = true
+litellm-accounting.workspace = true
+litellm-host.workspace = true
 litellm-auth.workspace = true
 litellm-gateway-auth.workspace = true
 litellm-core.workspace = true
@@ -20,8 +22,12 @@ litellm-secrets.workspace = true
 litellm-types.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+tokio = { workspace = true, features = ["sync"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+tracing.workspace = true
 
 [dev-dependencies]
+rusty-money.workspace = true
 futures-util.workspace = true
 tokio = { workspace = true, features = ["io-util"] }
 rstest.workspace = true

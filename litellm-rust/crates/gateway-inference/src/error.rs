@@ -28,6 +28,28 @@ pub enum Error {
     BodyTooLarge,
     #[error("{0}")]
     Internal(String),
+    #[error(transparent)]
+    Hook(#[from] litellm_host::HookError),
+    #[error(transparent)]
+    Accounting(#[from] AccountingError),
+}
+
+pub type PluginError = std::sync::Arc<dyn std::error::Error + Send + Sync>;
+
+#[derive(Debug, thiserror::Error)]
+pub enum AccountingError {
+    #[error("accounting admission failed: {0}")]
+    Admission(#[source] PluginError),
+    #[error("accounting assessment failed: {0}")]
+    Assessment(#[source] PluginError),
+    #[error("accounting service is closed")]
+    Closed,
+    #[error("accounting settlement ended with {status:?}")]
+    Incomplete {
+        status: litellm_accounting::SettlementStatus,
+    },
+    #[error(transparent)]
+    Contract(#[from] litellm_accounting::Error),
 }
 
 impl IntoResponse for Error {
@@ -40,6 +62,7 @@ impl From<litellm_host_http::Error<RouteError>> for Error {
     fn from(error: litellm_host_http::Error<RouteError>) -> Self {
         match error {
             litellm_host_http::Error::Call(error) => Self::Route(error),
+            litellm_host_http::Error::Hook(error) => Self::Hook(error),
             litellm_host_http::Error::Protocol => Self::Internal(error.to_string()),
         }
     }
@@ -71,7 +94,9 @@ impl Error {
                 StatusCode::UNAUTHORIZED
             }
             Self::Route(error) if error.is_request() => StatusCode::BAD_REQUEST,
-            Self::Route(_) | Self::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
+            Self::Route(_) | Self::Internal(_) | Self::Hook(_) | Self::Accounting(_) => {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
         }
     }
 

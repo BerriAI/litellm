@@ -12,6 +12,8 @@ pub enum Error {
     AlreadyTerminal,
     #[error("the call has no terminal outcome")]
     NotTerminal,
+    #[error("{effect:?} has no in-flight application")]
+    NotInFlight { effect: Effect },
     #[error("{effect:?} can only be retried after a confirmed not-applied result")]
     UnsafeRetry { effect: Effect },
 }

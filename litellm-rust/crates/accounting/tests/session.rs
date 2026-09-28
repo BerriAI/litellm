@@ -489,3 +489,39 @@ async fn unknown_charges_cannot_become_successful_settlement_through_queue_accep
         &EffectState::Committed
     );
 }
+
+#[rstest]
+fn externally_driven_effects_preserve_progress_and_reject_invalid_completions(
+    mut session: Session<String, Usage, Failure>,
+    terminal: Terminal<Usage>,
+) {
+    assert!(matches!(session.next_effect(), Err(Error::NotTerminal)));
+    session.finish(terminal).unwrap();
+    assert_eq!(
+        session.complete_effect(Effect::RecordSpend, ApplyResult::Committed),
+        Err(Error::NotInFlight {
+            effect: Effect::RecordSpend
+        })
+    );
+    for effect in EFFECTS {
+        let pending = session.next_effect().unwrap().unwrap();
+        assert_eq!(pending.effect, effect);
+        assert_eq!(
+            pending.settlement.progress.effect(effect),
+            &EffectState::InFlight
+        );
+        assert_eq!(
+            pending.settlement.admission.budget().unwrap(),
+            "budget-receipt"
+        );
+        session
+            .complete_effect(effect, ApplyResult::Committed)
+            .unwrap();
+        assert_eq!(
+            session.complete_effect(effect, ApplyResult::Committed),
+            Err(Error::NotInFlight { effect })
+        );
+    }
+    assert!(session.next_effect().unwrap().is_none());
+    assert_eq!(session.status(), SettlementStatus::Committed);
+}
