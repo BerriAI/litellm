@@ -41,6 +41,7 @@ from litellm.types.utils import GenericGuardrailAPIInputs
 from .payload_policy import (
     PayloadLoss,
     accepted_rewrites,
+    block_only_response,
     raise_if_intervention_was_refused,
     resolve_payload_policy,
     restore_unseen_rows,
@@ -242,6 +243,9 @@ class GenericGuardrailAPI(CustomGuardrail):
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
         send_images: bool | None = None,
         exclude_payload_fields: Sequence[str] | None = None,
+        max_messages: int | None = None,
+        max_text_chars: int | None = None,
+        strip_patterns: Sequence[str] | None = None,
         async_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
@@ -295,6 +299,9 @@ class GenericGuardrailAPI(CustomGuardrail):
         self._payload_policy: Final = resolve_payload_policy(
             send_images=send_images,
             exclude_payload_fields=exclude_payload_fields,
+            max_messages=max_messages,
+            max_text_chars=max_text_chars,
+            strip_patterns=strip_patterns,
             guardrail_name=kwargs.get("guardrail_name"),
         )
 
@@ -539,7 +546,7 @@ class GenericGuardrailAPI(CustomGuardrail):
             dumped: Final[Mapping[str, JsonValue]] = guardrail_request.model_dump(mode="json")
             sent_messages: Final = _rows_as_sent(dumped.get("structured_messages"), structured_messages)
             request_json: Final = {**dumped, "structured_messages": sent_messages}  # mutable-ok: JSON POST body
-            payload: Final = shape_payload(request_json, self._payload_policy)
+            payload: Final = shape_payload(request_json, self._payload_policy, guardrail_name=self.guardrail_name)
 
             response: Final = await self.async_handler.post(
                 url=self.api_base,
@@ -572,7 +579,9 @@ class GenericGuardrailAPI(CustomGuardrail):
                 tools=tools,
                 structured_messages=structured_messages,
                 shown_messages=payload.sent_messages,
-                guardrail_response=guardrail_response,
+                guardrail_response=block_only_response(
+                    guardrail_response, payload, input_type=input_type, guardrail_name=self.guardrail_name
+                ),
                 loss=payload.loss,
             )
 

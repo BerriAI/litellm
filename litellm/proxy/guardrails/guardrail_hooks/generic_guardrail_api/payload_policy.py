@@ -4,15 +4,24 @@ Shaping is lossy, so every shaped payload carries a ``PayloadLoss``. Caller cont
 guardrail did not see in full is never replaced by the guardrail's response.
 """
 
-from collections.abc import Mapping, Sequence
+import time
+from collections.abc import Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
+from functools import reduce
+from itertools import accumulate, chain
 from types import MappingProxyType
-from typing import Final
+from typing import Final, Literal, assert_never
 
+import regex
 from pydantic import JsonValue
 
 from litellm._logging import verbose_proxy_logger
-from litellm.llms.base_llm.guardrail_translation.utils import unappliable_request_rewrite
+from litellm.exceptions import GuardrailRaisedException
+from litellm.llms.base_llm.guardrail_translation.utils import (
+    message_slot_texts,
+    message_with_slot_texts,
+    unappliable_request_rewrite,
+)
 from litellm.proxy.guardrails._content_utils import as_json_value, image_part_url, map_messages_image_urls
 from litellm.types.llms.openai import AllMessageValues
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
@@ -28,11 +37,20 @@ PROTECTED_PAYLOAD_FIELDS: Final = frozenset({"input_type", "litellm_call_id"})
 
 IMAGE_OMITTED_PLACEHOLDER: Final = "[omitted]"
 
+MAX_STRIP_SUBSTITUTIONS: Final = 64
+
+MAX_STRIP_CALL_CHARS: Final = 100_000
+
+STRIP_TIMEOUT_SECONDS: Final = 0.1
+
 
 @dataclass(frozen=True, slots=True)
 class PayloadPolicy:
     send_images: bool = True
     exclude_fields: frozenset[str] = frozenset()
+    max_messages: int | None = None
+    max_text_chars: int | None = None
+    strip_patterns: tuple[regex.Pattern[str], ...] = ()
 
     @property
     def omitted_fields(self) -> frozenset[str]:
@@ -43,8 +61,23 @@ class PayloadPolicy:
         return not self.send_images
 
     @property
+    def shapes_text(self) -> bool:
+        return self.max_text_chars is not None or bool(self.strip_patterns)
+
+    @property
+    def lossy_options(self) -> tuple[str, ...]:
+        options: Final = (
+            ("send_images=False", not self.send_images),
+            (f"exclude_payload_fields={sorted(self.exclude_fields)}", bool(self.exclude_fields)),
+            (f"max_messages={self.max_messages}", self.max_messages is not None),
+            (f"max_text_chars={self.max_text_chars}", self.max_text_chars is not None),
+            ("strip_patterns", bool(self.strip_patterns)),
+        )
+        return tuple(option for option, is_set in options if is_set)
+
+    @property
     def is_lossy(self) -> bool:
-        return bool(self.omitted_fields)
+        return bool(self.lossy_options)
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,6 +87,7 @@ class PayloadLoss:
     messages_omitted: bool = False
     images_omitted: bool = False
     tools_omitted: bool = False
+    text_shaped: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +118,9 @@ def resolve_payload_policy(
     *,
     send_images: object,
     exclude_payload_fields: Sequence[str] | None,
+    max_messages: object,
+    max_text_chars: object,
+    strip_patterns: Sequence[str] | None,
     guardrail_name: str | None,
 ) -> PayloadPolicy:
     policy: Final = PayloadPolicy(
@@ -91,15 +128,39 @@ def resolve_payload_policy(
         exclude_fields=_resolve_exclude_fields(
             config_values(exclude_payload_fields, option_name="exclude_payload_fields"), guardrail_name=guardrail_name
         ),
+        max_messages=_positive_int(max_messages, option_name="max_messages"),
+        max_text_chars=_positive_int(max_text_chars, option_name="max_text_chars"),
+        strip_patterns=_compile_strip_patterns(strip_patterns),
     )
     if policy.is_lossy:
         verbose_proxy_logger.warning(
-            "Generic Guardrail API (%s): %s are not sent to the guardrail, so it can only enforce on what it is "
-            "sent, and it cannot rewrite what it did not see.",
+            "Generic Guardrail API (%s): %s keep part of the request from the guardrail, so it can only enforce "
+            "on what it is sent, and it cannot rewrite what it did not see.",
             guardrail_name,
-            sorted(policy.omitted_fields),
+            ", ".join(policy.lossy_options),
         )
     return policy
+
+
+def _positive_int(value: object, *, option_name: str) -> int | None:
+    match value:
+        case None:
+            return None
+        case bool():
+            raise ValueError(f"{option_name} must be an int, got {value!r}")
+        case int() if value >= 1:
+            return value
+        case int():
+            raise ValueError(f"{option_name} must be >= 1 (got {value})")
+        case _:
+            raise ValueError(f"{option_name} must be an int, got {value!r}")
+
+
+def _compile_strip_patterns(raw: Sequence[str] | None) -> tuple[regex.Pattern[str], ...]:
+    try:
+        return tuple(regex.compile(pattern) for pattern in config_values(raw, option_name="strip_patterns"))
+    except regex.error as e:
+        raise ValueError(f"strip_patterns contains an invalid regex: {e}") from e
 
 
 def _send_images(value: object) -> bool:
@@ -152,24 +213,167 @@ def _altered_message_indices(unshaped: JsonValue, sent: JsonValue) -> frozenset[
     return frozenset(index for index, (row, sent_row) in enumerate(zip(unshaped, sent, strict=True)) if row != sent_row)
 
 
-def shape_payload(dumped: Mapping[str, JsonValue], policy: PayloadPolicy) -> ShapedPayload:
+def _string_list(value: JsonValue) -> tuple[str, ...]:
+    return tuple(item for item in value if isinstance(item, str)) if isinstance(value, list) else ()
+
+
+def _windowed_messages(messages: JsonValue, max_messages: int | None) -> JsonValue:
+    if max_messages is None or not isinstance(messages, list) or len(messages) <= max_messages:
+        return messages
+    return messages[-max_messages:]
+
+
+def _strip(text: str, patterns: tuple[regex.Pattern[str], ...], deadline: float) -> str | None:
+    def strip_one(acc: str | None, pattern: regex.Pattern[str]) -> str | None:
+        remaining: Final = deadline - time.monotonic()
+        if acc is None or remaining <= 0:
+            return None
+        try:
+            return pattern.sub("", acc, count=MAX_STRIP_SUBSTITUTIONS, timeout=remaining)
+        except TimeoutError:
+            return None
+
+    return reduce(strip_one, patterns, text)
+
+
+def _stripped_fragments(
+    fragments: Iterable[str], policy: PayloadPolicy, guardrail_name: str | None
+) -> Mapping[str, str]:
+    if not policy.strip_patterns:
+        return MappingProxyType({})
+    distinct: Final = tuple(dict.fromkeys(fragments))
+    spent: Final = tuple(accumulate(len(fragment) for fragment in distinct))
+    within_budget: Final = tuple(fragment for fragment, total in zip(distinct, spent) if total <= MAX_STRIP_CALL_CHARS)
+    deadline: Final = time.monotonic() + STRIP_TIMEOUT_SECONDS
+    stripped: Final = tuple((fragment, _strip(fragment, policy.strip_patterns, deadline)) for fragment in within_budget)
+    unstripped: Final = len(distinct) - sum(1 for _, text in stripped if text is not None)
+    if unstripped:
+        verbose_proxy_logger.warning(
+            "Generic Guardrail API (%s): %d text(s) are sent unstripped, because strip_patterns only run on the "
+            "first %d characters of distinct text per guardrail call and for at most %s seconds.",
+            guardrail_name,
+            unstripped,
+            MAX_STRIP_CALL_CHARS,
+            STRIP_TIMEOUT_SECONDS,
+        )
+    return MappingProxyType({fragment: text for fragment, text in stripped if text is not None})
+
+
+def _text_shaper(stripped: Mapping[str, str], max_text_chars: int | None) -> Callable[[str], str]:
+    def shape(text: str) -> str:
+        kept: Final = stripped.get(text, text)
+        return kept if max_text_chars is None else kept[:max_text_chars]
+
+    return shape
+
+
+def _row_with_shaped_text(row: AllMessageValues, shape: Callable[[str], str]) -> AllMessageValues:
+    return message_with_slot_texts(row, tuple(shape(text) for text in message_slot_texts(row))) or row
+
+
+def shape_payload(
+    dumped: Mapping[str, JsonValue], policy: PayloadPolicy, *, guardrail_name: str | None
+) -> ShapedPayload:
     omitted: Final = policy.omitted_fields
     dumped_messages: Final = dumped.get("structured_messages")
-    sent_messages: Final = (
-        map_messages_image_urls(dumped_messages, _omit_image) if policy.shapes_messages else dumped_messages
+    retained_messages: Final = _windowed_messages(dumped_messages, policy.max_messages)
+    rows_windowed: Final = retained_messages is not dumped_messages
+    retained_rows: Final = structured_messages_from_json(retained_messages) or ()
+    dumped_texts: Final = dumped.get("texts")
+    texts: Final = _string_list(dumped_texts)
+    windowed_texts: Final = (
+        tuple(chain.from_iterable(message_slot_texts(row) for row in retained_rows)) if rows_windowed else texts
     )
-    shaped: Final = MappingProxyType({**dumped, "structured_messages": sent_messages})
+    shape: Final = _text_shaper(
+        _stripped_fragments(
+            chain(windowed_texts, chain.from_iterable(message_slot_texts(row) for row in retained_rows)),
+            policy,
+            guardrail_name,
+        ),
+        policy.max_text_chars,
+    )
+    sent_texts: Final = tuple(shape(text) for text in windowed_texts) if policy.shapes_text else windowed_texts
+    texted_messages: Final = (
+        as_json_value([_row_with_shaped_text(row, shape) for row in retained_rows])
+        if policy.shapes_text and retained_rows
+        else retained_messages
+    )
+    sent_messages: Final = (
+        map_messages_image_urls(texted_messages, _omit_image) if policy.shapes_messages else texted_messages
+    )
+    shaped: Final = MappingProxyType(
+        {
+            **dumped,
+            "structured_messages": sent_messages,
+            "texts": None if dumped_texts is None else list(sent_texts),  # mutable-ok: JSON texts is an array
+        }
+    )
     return ShapedPayload(
         body={key: value for key, value in shaped.items() if key not in omitted},  # mutable-ok: JSON POST body
         sent_messages=structured_messages_from_json(sent_messages),
         loss=PayloadLoss(
-            altered_message_indices=_altered_message_indices(dumped_messages, sent_messages),
+            altered_message_indices=(
+                frozenset() if rows_windowed else _altered_message_indices(dumped_messages, sent_messages)
+            ),
             texts_omitted="texts" in omitted,
             messages_omitted="structured_messages" in omitted,
             images_omitted="images" in omitted,
             tools_omitted="tools" in omitted,
+            text_shaped=rows_windowed or sent_texts != texts or texted_messages != retained_messages,
         ),
     )
+
+
+def _without_nulls(value: JsonValue) -> JsonValue:
+    if isinstance(value, dict):
+        return {key: _without_nulls(item) for key, item in value.items() if item is not None}  # mutable-ok: JSON
+    if isinstance(value, list):
+        return [_without_nulls(item) for item in value]  # mutable-ok: JSON array
+    return value
+
+
+def _rewrites(response: GenericGuardrailAPIResponse, body: Mapping[str, JsonValue]) -> bool:
+    returned: Final = (
+        ("texts", response.texts),
+        ("structured_messages", response.structured_messages),
+        ("images", response.images),
+        ("tools", response.tools),
+    )
+    return response.action == "GUARDRAIL_INTERVENED" or any(
+        value and _without_nulls(as_json_value(value)) != _without_nulls(body.get(field)) for field, value in returned
+    )
+
+
+def block_only_response(
+    response: GenericGuardrailAPIResponse,
+    payload: ShapedPayload,
+    *,
+    input_type: Literal["request", "response"],
+    guardrail_name: str | None,
+) -> GenericGuardrailAPIResponse:
+    if not payload.loss.text_shaped:
+        return response
+    if not _rewrites(response, payload.body):
+        return GenericGuardrailAPIResponse(action=response.action, stream_holdback_chars=response.stream_holdback_chars)
+    verbose_proxy_logger.warning(
+        "Generic Guardrail API (%s): the guardrail rewrote a %s that max_messages, max_text_chars or strip_patterns "
+        "shaped before it was sent. A rewrite of content it saw only in part cannot be applied, so the %s is "
+        "rejected. These options are for block-only guardrails.",
+        guardrail_name,
+        input_type,
+        input_type,
+    )
+    match input_type:
+        case "request":
+            raise unappliable_request_rewrite(guardrail_name)
+        case "response":
+            raise GuardrailRaisedException(
+                guardrail_name=guardrail_name,
+                message=f"Guardrail '{guardrail_name}' returned a rewrite that cannot be applied to this response",
+                should_wrap_with_default_message=False,
+            )
+        case _:
+            assert_never(input_type)
 
 
 def _log_refused(field: str, detail: str, guardrail_name: str | None) -> None:

@@ -4519,6 +4519,7 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "python-dotenv" },
     { name = "pyyaml" },
+    { name = "regex" },
     { name = "tiktoken" },
     { name = "tokenizers" },
 ]
@@ -4835,6 +4836,7 @@ requires-dist = [
     { name = "pyyaml", marker = "extra == 'cli'", specifier = ">=6.0.3,<7.0" },
     { name = "pyyaml", marker = "extra == 'proxy'", specifier = ">=6.0.3,<7.0" },
     { name = "redisvl", marker = "extra == 'extra-proxy'", specifier = ">=0.4.1,<1.0" },
+    { name = "regex", specifier = ">=2022.1.18" },
     { name = "requests", marker = "extra == 'cli'", specifier = ">=2.32.0,<3.0" },
     { name = "resend", marker = "extra == 'extra-proxy'", specifier = ">=2.23.0,<3.0" },
     { name = "restrictedpython", marker = "extra == 'proxy'", specifier = ">=8.5,<9.0" },
