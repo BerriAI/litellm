@@ -58,7 +58,9 @@ where
             start(py, arguments, request).map(crate::logger::LoggedMachine::new)
         },
         host,
-        HookChain::new(hooks, crate::preflight::SdkPolicy),
+        HookChain::new()
+            .with(hooks)
+            .with(crate::preflight::SdkPolicy),
         arguments,
         crate::lifecycle::call_options(asynchronous),
     )

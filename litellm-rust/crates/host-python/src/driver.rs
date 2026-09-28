@@ -1075,13 +1075,10 @@ mod tests {
                 log: Log(log.0.clone()),
                 script,
             };
-            let hooks = crate::HookChain::new(
-                hook(HookScript::ObserveArguments),
-                crate::HookChain::new(
-                    hook(HookScript::RewriteArguments),
-                    hook(HookScript::ReplaceResponse),
-                ),
-            );
+            let hooks = crate::HookChain::new()
+                .with(hook(HookScript::ObserveArguments))
+                .with(hook(HookScript::RewriteArguments))
+                .with(hook(HookScript::ReplaceResponse));
             let result = run_call(
                 py,
                 move |_, _, request| Ok(success_machine()(request)),
@@ -1906,13 +1903,12 @@ mod tests {
                     op: OpScript::Answer,
                     classifier_fails: false,
                 },
-                crate::HookChain::new(
-                    SyntheticHooks {
+                crate::HookChain::new()
+                    .with(SyntheticHooks {
                         log: Log(log.0.clone()),
                         script: HookScript::RewriteArguments,
-                    },
-                    ArgumentPolicy::Inherit,
-                ),
+                    })
+                    .with(ArgumentPolicy::Inherit),
                 arguments.clone().unbind(),
                 call_options(asynchronous),
             );
@@ -2026,7 +2022,11 @@ mod tests {
                     classifier_fails: false,
                 },
                 HookScript::Plain,
-                |hooks| crate::HookChain::new(hooks, ArgumentPolicy::Reject(raised.clone_ref(py))),
+                |hooks| {
+                    crate::HookChain::new()
+                        .with(hooks)
+                        .with(ArgumentPolicy::Reject(raised.clone_ref(py)))
+                },
                 call_options(asynchronous),
             );
             assert!(result.unwrap_err().value(py).is(raised.bind(py)));
@@ -2064,7 +2064,11 @@ mod tests {
                     classifier_fails: false,
                 },
                 HookScript::Plain,
-                |hooks| crate::HookChain::new(hooks, ArgumentPolicy::Inherit),
+                |hooks| {
+                    crate::HookChain::new()
+                        .with(hooks)
+                        .with(ArgumentPolicy::Inherit)
+                },
                 call_options(asynchronous),
             );
             assert_eq!(

@@ -208,6 +208,8 @@ class Hooks:
         log.append((self.name, 'stream', value))
 first = Hooks('a')
 second = Hooks('b')
+third = Hooks('c')
+fourth = Hooks('d')
 ",
             Some(&locals),
             Some(&locals),
@@ -217,17 +219,13 @@ second = Hooks('b')
     })
 }
 
-fn chain(
-    py: Python<'_>,
-    scripts: &Py<PyDict>,
-    asynchronous: bool,
-) -> HookChain<ScriptHooks, ScriptHooks> {
+fn chain(py: Python<'_>, scripts: &Py<PyDict>, asynchronous: bool) -> HookChain {
     let hook = |name| ScriptHooks {
         object: scripts.bind(py).get_item(name).unwrap().unwrap().unbind(),
         asynchronous,
         wire: None,
     };
-    HookChain::new(hook("first"), hook("second"))
+    HookChain::new().with(hook("first")).with(hook("second"))
 }
 
 fn finish<H, T>(py: Python<'_>, hooks: &mut H, step: HookStep<H, T>) -> PyResult<T> {
@@ -273,7 +271,7 @@ fn transformations_feed_each_other_and_notifications_share_final_values(
     #[case] asynchronous: bool,
 ) {
     Python::attach(|py| {
-        let mut hooks = HookChain::new(chain(py, &scripts, asynchronous), PreparedPolicy);
+        let mut hooks = chain(py, &scripts, asynchronous).with(PreparedPolicy);
         let original = PyDict::new(py).unbind();
         let step = hooks
             .prepare_arguments(py, original.clone_ref(py), 0.0)
@@ -343,20 +341,33 @@ assert log[6][2] is response and log[7][2] is response
 #[case::async_success(true, false)]
 #[case::sync_failure(false, true)]
 #[case::async_failure(true, true)]
-fn terminal_failure_does_not_skip_the_other_hook(
+fn terminal_failure_does_not_skip_later_hooks(
     scripts: Py<PyDict>,
     #[case] asynchronous: bool,
     #[case] failed: bool,
+    #[values("first", "second")] failing_hook: &str,
 ) {
     Python::attach(|py| {
-        let mut hooks = chain(py, &scripts, asynchronous);
+        let mut hooks = chain(py, &scripts, asynchronous).with(ScriptHooks {
+            object: scripts
+                .bind(py)
+                .get_item("third")
+                .unwrap()
+                .unwrap()
+                .unbind(),
+            asynchronous,
+            wire: None,
+        });
         let locals = scripts.bind(py);
-        py.run(
-            c"first.error = RuntimeError('callback failed')",
-            Some(locals),
-            Some(locals),
-        )
-        .unwrap();
+        locals
+            .get_item(failing_hook)
+            .unwrap()
+            .unwrap()
+            .setattr(
+                "error",
+                pyo3::exceptions::PyRuntimeError::new_err("callback failed").into_value(py),
+            )
+            .unwrap();
         let error = pyo3::exceptions::PyValueError::new_err("provider failed");
         let response = py.None();
         let event = if failed {
@@ -385,9 +396,9 @@ fn terminal_failure_does_not_skip_the_other_hook(
             .unwrap();
         py.run(
             c"
-assert [name for name, kind, value in log] == ['a', 'b']
-assert log[0][1] == log[1][1]
-assert log[0][2] is selected and log[1][2] is selected
+assert [name for name, kind, value in log] == ['a', 'b', 'c']
+assert all(kind == log[0][1] for name, kind, value in log)
+assert all(value is selected for name, kind, value in log)
 ",
             Some(locals),
             Some(locals),
@@ -467,10 +478,9 @@ fn cancellation_stops_notification_dispatch(scripts: Py<PyDict>, #[case] asynchr
 }
 
 struct Preparing {
-    hooks: HookChain<ScriptHooks, ScriptHooks>,
+    hooks: HookChain,
     arguments: Option<Py<PyDict>>,
-    resume:
-        Option<litellm_host_python::HookResume<HookChain<ScriptHooks, ScriptHooks>, Py<PyDict>>>,
+    resume: Option<litellm_host_python::HookResume<HookChain, Py<PyDict>>>,
 }
 
 impl litellm_host_python::ExecutionBody for Preparing {
@@ -571,7 +581,7 @@ asyncio.run(exercise())
 
 #[pyclass(weakref)]
 struct HookOwner {
-    hooks: HookChain<ScriptHooks, ScriptHooks>,
+    hooks: HookChain,
 }
 
 #[pymethods]
@@ -604,7 +614,9 @@ fn suspended_notification_cycles_are_collectable(
         let owner = Py::new(
             py,
             HookOwner {
-                hooks: HookChain::new(hook("first", !first_ready), hook("second", true)),
+                hooks: HookChain::new()
+                    .with(hook("first", !first_ready))
+                    .with(hook("second", true)),
             },
         )
         .unwrap();
@@ -660,6 +672,60 @@ gc.collect()
 assert owner_ref() is None
 assert payload_ref() is None
 ",
+            Some(locals),
+            Some(locals),
+        )
+        .unwrap();
+    });
+}
+
+#[rstest]
+#[case::empty(0, "")]
+#[case::single(1, "a")]
+#[case::pair(2, "ab")]
+#[case::three(3, "abc")]
+#[case::four(4, "abcd")]
+fn builder_runs_hooks_in_append_order(
+    scripts: Py<PyDict>,
+    #[case] count: usize,
+    #[case] expected: &str,
+    #[values(false, true)] asynchronous: bool,
+) {
+    Python::attach(|py| {
+        let mut hooks = ["first", "second", "third", "fourth"]
+            .into_iter()
+            .take(count)
+            .fold(HookChain::new(), |chain, name| {
+                chain.with(ScriptHooks {
+                    object: scripts.bind(py).get_item(name).unwrap().unwrap().unbind(),
+                    asynchronous,
+                    wire: None,
+                })
+            });
+        let original = PyDict::new(py).unbind();
+        let step = hooks
+            .prepare_arguments(py, original.clone_ref(py), 0.0)
+            .unwrap();
+        let result = finish(py, &mut hooks, step).unwrap();
+        if count == 0 {
+            assert!(result.bind(py).is(original.bind(py)));
+        } else {
+            assert_eq!(
+                result
+                    .bind(py)
+                    .get_item("order")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                expected,
+            );
+        }
+        assert!(original.bind(py).is_empty());
+        let locals = scripts.bind(py);
+        locals.set_item("expected", expected).unwrap();
+        py.run(
+            c"assert ''.join(name for name, kind, value in log) == expected",
             Some(locals),
             Some(locals),
         )
