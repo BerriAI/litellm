@@ -98,6 +98,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03918c3dbd7701a85c6b9887732e2921175f26c350b4563841d0958c21d57e6d"
 
 [[package]]
+name = "arrayvec"
+version = "0.7.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d3fb67a6e08acf24fdeccbac2cb6ac4305825bd1f117462e0e6f2f193345ad56"
+
+[[package]]
 name = "asn1-rs"
 version = "0.7.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3346,6 +3352,17 @@ name = "litellm"
 version = "0.0.1"
 
 [[package]]
+name = "litellm-accounting"
+version = "0.1.0"
+dependencies = [
+ "rstest",
+ "rust_decimal",
+ "rusty-money",
+ "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
 name = "litellm-auth"
 version = "0.1.0"
 dependencies = [
@@ -5870,6 +5887,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "rust_decimal"
+version = "1.43.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7653272e75dcac41dc199fbea6f5797633994fafd339943c06c9af16bf29cd3a"
+dependencies = [
+ "arrayvec",
+ "num-traits",
+]
+
+[[package]]
 name = "rustc-hash"
 version = "2.1.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -6055,6 +6082,16 @@ dependencies = [
  "quick-error",
  "tempfile",
  "wait-timeout",
+]
+
+[[package]]
+name = "rusty-money"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e9826983e8a9a2f301a3810bb98618948ae7e7f2ba073eaaa16ab19104b33f2c"
+dependencies = [
+ "arrayvec",
+ "rust_decimal",
 ]
 
 [[package]]

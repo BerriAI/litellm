@@ -1,0 +1,15 @@
+[package]
+name = "litellm-accounting"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+rusty-money.workspace = true
+thiserror.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true
+rust_decimal = { version = "1.43.0", default-features = false }
+tokio.workspace = true

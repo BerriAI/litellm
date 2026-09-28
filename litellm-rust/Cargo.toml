@@ -9,6 +9,7 @@ license = "MIT"
 repository = "https://github.com/BerriAI/litellm"
 
 [workspace.dependencies]
+litellm-accounting = { path = "crates/accounting" }
 litellm-config = { path = "crates/config" }
 litellm-router = { path = "crates/router" }
 litellm-tracing = { path = "crates/tracing" }
@@ -79,6 +80,7 @@ reqwest = { version = "0.12", default-features = false, features = ["json", "mul
 qdrant-client = { version = "1.19.0", default-features = false }
 uuid = { version = "1", features = ["v4"] }
 rstest = "0.26.1"
+rusty-money = "0.5.1"
 rstest_reuse = "0.7.0"
 rustls = { version = "0.23", default-features = false, features = ["ring", "std", "tls12"] }
 rustify = "=0.7.0"
