@@ -1,5 +1,6 @@
 import contextlib
 import json
+from types import SimpleNamespace
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1151,10 +1152,7 @@ async def test_create_search_tool_survives_a_failing_router_refresh():
     assert response.json()["search_tool_name"] == "tavily-search"
 
 
-class _StoredSearchToolRow:
-    def __init__(self, **fields):
-        self.__dict__.update(fields)
-
+class _StoredSearchToolRow(SimpleNamespace):
     def __iter__(self):
         return iter(self.__dict__.items())
 

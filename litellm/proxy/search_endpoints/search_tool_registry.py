@@ -79,29 +79,29 @@ def _reencrypt_search_tool_value(value: object, new_master_key: str) -> object:
 async def _rotate_search_tool_row(
     table: SearchToolTableClient, search_tool_id: str, stored_litellm_params: Mapping[str, object], new_master_key: str
 ) -> None:
-    rows_updated: Final = await table.update_many(
-        where={"search_tool_id": search_tool_id, "litellm_params": {"equals": safe_dumps(stored_litellm_params)}},
-        data={
-            "litellm_params": safe_dumps(
-                {
-                    key: _reencrypt_search_tool_value(value, new_master_key)
-                    for key, value in stored_litellm_params.items()
-                }
-            )
-        },
-    )
-    if rows_updated:
-        return
-    reread: Final = await table.find_unique(where={"search_tool_id": search_tool_id})
-    reread_litellm_params: Final = None if reread is None else dict(reread).get("litellm_params")
-    if not isinstance(reread_litellm_params, Mapping):
-        return
-    if reread_litellm_params == stored_litellm_params:
-        verbose_proxy_logger.warning(
-            "Search tool %s was not re-encrypted: its stored litellm_params did not match on write", search_tool_id
+    expected_litellm_params: Mapping[str, object] | None = stored_litellm_params
+    while expected_litellm_params is not None:
+        rows_updated = await table.update_many(
+            where={"search_tool_id": search_tool_id, "litellm_params": {"equals": safe_dumps(expected_litellm_params)}},
+            data={
+                "litellm_params": safe_dumps(
+                    {
+                        key: _reencrypt_search_tool_value(value, new_master_key)
+                        for key, value in expected_litellm_params.items()
+                    }
+                )
+            },
         )
-        return
-    await _rotate_search_tool_row(table, search_tool_id, reread_litellm_params, new_master_key)
+        if rows_updated:
+            return
+        reread = await table.find_unique(where={"search_tool_id": search_tool_id})
+        reread_litellm_params = None if reread is None else dict(reread).get("litellm_params")
+        if isinstance(reread_litellm_params, Mapping) and reread_litellm_params == expected_litellm_params:
+            verbose_proxy_logger.warning(
+                "Search tool %s was not re-encrypted: its stored litellm_params did not match on write", search_tool_id
+            )
+            return
+        expected_litellm_params = reread_litellm_params if isinstance(reread_litellm_params, Mapping) else None
 
 
 async def rotate_search_tools_master_key(prisma_client: PrismaClient, new_master_key: str) -> None:

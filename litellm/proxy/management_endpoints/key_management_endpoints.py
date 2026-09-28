@@ -5339,7 +5339,6 @@ async def _rotate_master_key(
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate SSO identity assertions: %s", str(e))
 
-    # 4e. process search tools table
     try:
         await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key=new_master_key)
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation

@@ -18583,17 +18583,21 @@ async def test_rotate_master_key_rotates_search_tools(monkeypatch):
     )
 
     monkeypatch.setenv("LITELLM_SALT_KEY", "sk-old-master-key")
-    stored = {"search_provider": "tavily", "api_key": encrypt_value_helper("tvly-secret")}
 
     class _Row(SimpleNamespace):
         def __iter__(self):
             return iter(vars(self).items())
 
+    row = _Row(
+        search_tool_id="search-tool-1",
+        litellm_params={"search_provider": "tavily", "api_key": encrypt_value_helper("tvly-secret")},
+    )
+
     async def _update_many(where, data):
-        assert where["search_tool_id"] == "search-tool-1"
-        if json.loads(where["litellm_params"]["equals"]) != stored:
+        expected_litellm_params = json.loads(where["litellm_params"]["equals"])
+        if where["search_tool_id"] != row.search_tool_id or expected_litellm_params != row.litellm_params:
             return 0
-        stored.update(json.loads(data["litellm_params"]))
+        row.litellm_params = json.loads(data["litellm_params"])
         return 1
 
     mock_prisma_client = AsyncMock()
@@ -18601,9 +18605,7 @@ async def test_rotate_master_key_rotates_search_tools(monkeypatch):
     mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
     mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
-    mock_prisma_client.db.litellm_searchtoolstable.find_many = AsyncMock(
-        return_value=[_Row(search_tool_id="search-tool-1", litellm_params=dict(stored))]
-    )
+    mock_prisma_client.db.litellm_searchtoolstable.find_many = AsyncMock(return_value=[row])
     mock_prisma_client.db.litellm_searchtoolstable.update_many = AsyncMock(side_effect=_update_many)
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
@@ -18618,8 +18620,8 @@ async def test_rotate_master_key_rotates_search_tools(monkeypatch):
         new_master_key="sk-new-master-key",
     )
 
-    assert decrypt_if_encrypted_with(stored["api_key"], "sk-new-master-key") == "tvly-secret"
-    assert stored["search_provider"] == "tavily"
+    assert decrypt_if_encrypted_with(row.litellm_params["api_key"], "sk-new-master-key") == "tvly-secret"
+    assert row.litellm_params["search_provider"] == "tavily"
 
 
 @pytest.mark.asyncio
