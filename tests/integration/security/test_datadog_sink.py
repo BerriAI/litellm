@@ -139,7 +139,7 @@ def test_datadog_api_key_reaches_only_its_own_header(
                 "request_id": request_id,
                 "team_id": caller.team_id,
                 "user_id": caller.user_id,
-                "model_id": CONFIG_MODEL,
+                "model_id": rig.model_id,
                 "model": CONFIG_MODEL,
             },
             callers={**caller.callers(rig), "admin_viewer": viewer},
