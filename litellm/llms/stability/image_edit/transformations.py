@@ -74,7 +74,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         }
 
         # Create a copy to not mutate original - convert TypedDict to regular dict
-        mapped_params: Final[dict[str, Any]] = dict(image_edit_optional_params)
+        mapped_params: Final[dict[str, object]] = dict(image_edit_optional_params)
 
         for k, v in image_edit_optional_params.items():
             if k in param_mapping:
@@ -182,7 +182,7 @@ class StabilityImageEditConfig(BaseImageEditConfig):
         # Build Stability request
         # Populate multipart form-data as separate text fields (data) and files.
         # Stability expects prompt/output_format/etc. as normal form fields, not file parts.
-        data: Final[dict[str, Any]] = {
+        data: Final[dict[str, object]] = {
             "output_format": "png",  # Default to PNG
         }
 

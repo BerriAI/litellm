@@ -1,31 +1,77 @@
-//! The Anthropic Messages call, the Rust equivalent of Python's
-//! `litellm.messages()`.
-//!
-//! [`messages`] is the top-level entrypoint: give it a model, a body, and
-//! credentials, and it resolves the provider, transforms the request, calls the
-//! provider, and returns a typed non-streaming response. [`messages_stream`]
-//! is the streaming variant; it hands the raw upstream response back so a host
-//! can splice the event stream to its own caller.
-
-use crate::Error;
-mod client;
+use litellm_host::observation::ObservationSender;
 mod common_utils;
 mod handler;
 mod prepare;
-pub mod transformation;
-pub mod types;
+pub mod route;
+mod types;
 
-use handler::{execute_messages_provider_call, execute_messages_provider_stream};
-use types::{AnthropicMessagesResponse, MessagesRequest};
+use litellm_auth::AuthServices;
+use litellm_secrets::source::SecretSource;
+use std::sync::Arc;
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
-    execute_messages_provider_call(request).await
+pub use crate::error::RouteError as Error;
+pub use types::{MessagesCall, MessagesResponse, MessagesShaping, messages_body};
+
+#[derive(Clone)]
+pub struct MessagesRoute {
+    http: litellm_http::Client,
+    auth: Arc<AuthServices>,
+    secrets: Arc<dyn SecretSource>,
 }
 
-pub async fn messages_stream(request: MessagesRequest<'_>) -> Result<reqwest::Response, Error> {
-    execute_messages_provider_stream(request).await
-}
+impl MessagesRoute {
+    pub fn new(
+        http: litellm_http::Client,
+        auth: Arc<AuthServices>,
+        secrets: Arc<dyn SecretSource>,
+    ) -> Self {
+        Self {
+            http,
+            auth,
+            secrets,
+        }
+    }
 
-#[cfg(test)]
-mod tests;
+    pub async fn execute(
+        &self,
+        call: MessagesCall,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        observers: Option<ObservationSender>,
+    ) -> Result<MessagesResponse, Error> {
+        litellm_host::lifecycle::observe_call(
+            observers.clone(),
+            self.run(call, interceptors, observers.as_ref()),
+        )
+        .await
+    }
+
+    #[tracing::instrument(name = "litellm.route", skip_all, fields(
+        route = "messages",
+        model = %call.body.model,
+        provider,
+        resolved_model,
+        stream = call.body.params.stream == Some(true),
+        outcome
+    ))]
+    async fn run(
+        &self,
+        call: MessagesCall,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        observers: Option<&ObservationSender>,
+    ) -> Result<MessagesResponse, Error> {
+        crate::diagnostic::call(async {
+            let request = prepare::prepare(call, self.secrets.as_ref()).await?;
+            crate::diagnostic::provider(&request.body.model, request.provider.as_str());
+            let execute: futures_util::future::BoxFuture<'_, Result<MessagesResponse, Error>> =
+                Box::pin(handler::execute(
+                    &self.http,
+                    &self.auth,
+                    request,
+                    interceptors,
+                    observers,
+                ));
+            execute.await
+        })
+        .await
+    }
+}

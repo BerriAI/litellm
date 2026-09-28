@@ -1,72 +1,88 @@
-use super::OcrClient;
-use super::adapters::OcrAdapter;
-use super::hooks::OcrLifecycleHooks;
-use super::registry::OcrAdapterKind;
-use super::types::{LiteLLMOcrRequest, LiteLLMOcrResponse};
-use crate::Error;
-use crate::call_lifecycle::{CallLifecycle, CallLifecycleContext};
+use futures_util::future::BoxFuture;
+use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
+use litellm_host::lifecycle::ExecutionEvent;
+use litellm_host::observation::ObservationSender;
+use litellm_llms::base_llm::ocr::{
+    error::Error,
+    handler::{CallHooks, OcrClient},
+    transformation::{LiteLLMOcrResponse, PreparedOcrRequest},
+};
+use serde_json::Value;
+
+use super::{arguments::is_secret_param, prepare::prepare_request, provider_config::OcrConfigKind};
+use crate::ocr::types::ResolvedOcrRequest;
 
 pub(crate) async fn perform_ocr_request(
     client: &OcrClient,
-    request: LiteLLMOcrRequest,
+    request: ResolvedOcrRequest,
+    host: &impl Interceptors<Error>,
+    caller_document: bool,
+    observers: Option<&ObservationSender>,
 ) -> Result<LiteLLMOcrResponse, Error> {
-    let context = CallLifecycleContext::new(
-        "ocr",
-        request.model.clone(),
-        request.adapter.provider().as_str(),
-        request
-            .litellm_call_id
-            .clone()
-            .unwrap_or_else(|| format!("ocr-{:032x}", rand::random::<u128>())),
-    );
-    let hooks = OcrLifecycleHooks {
-        hooks: request.hooks.clone(),
-        provider_name: context.custom_llm_provider.clone(),
-    };
-    CallLifecycle::default().run(context, request, &hooks, |request| async move {
-        macro_rules! execute_selected_adapter {
-            ($( $variant:ident, $adapter:ty, $instance:expr, $provider:ident; )+) => {
-                match request.adapter {
-                    $( OcrAdapterKind::$variant => execute_ocr_provider_call(client, &$instance, request).await, )+
-                }
-            };
-        }
-        super::adapters::for_each_ocr_adapter!(execute_selected_adapter)
-    }).await
+    request.response_format()?;
+    let config = request.config;
+    let secrets = client
+        .secret_source()
+        .resolve(&config.secret_names())
+        .await
+        .map_err(|error| Error::Secret(std::sync::Arc::new(error)))?;
+    let request = prepare_request(request, caller_document, client, secrets);
+    let interceptors = OcrCallHooks::new(host, &request, config, observers);
+    config.ocr(client, &request, &interceptors).await
 }
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-async fn execute_ocr_provider_call<A: OcrAdapter>(
-    client: &OcrClient,
-    adapter: &A,
-    request: LiteLLMOcrRequest,
-) -> Result<LiteLLMOcrResponse, Error> {
-    let provider_request = adapter.prepare_request(&request, client).await?;
-    let url = provider_request.url().to_string();
-    let headers = provider_request
-        .headers()
-        .iter()
-        .map(|(name, value)| {
-            value
-                .to_str()
-                .map(|value| (name.to_string(), value.to_string()))
-                .map_err(|_| super::error::OcrRequestError::RequestField {
-                    path: "headers".into(),
-                })
-        })
-        .collect::<Result<Vec<_>, _>>()?;
-    let response = crate::http_utils::http_request(reqwest::RequestBuilder::from_parts(
-        client.provider_http().clone(),
-        provider_request,
-    ))
-    .await
-    .map_err(crate::error::TransportError::from)?;
-    let decoded = adapter
-        .read_response(client, response, &url, &headers, &request)
-        .await?;
-    let response = adapter.transform_ocr_response(&request, decoded.data)?;
-    Ok(LiteLLMOcrResponse {
-        provider_native_response: decoded.native,
-        ..response
-    })
+struct OcrCallHooks<'a, H> {
+    interceptors: &'a H,
+    context: RequestContext,
+    observers: Option<&'a ObservationSender>,
+}
+
+impl<'a, H> OcrCallHooks<'a, H> {
+    fn new(
+        interceptors: &'a H,
+        request: &PreparedOcrRequest,
+        config: OcrConfigKind,
+        observers: Option<&'a ObservationSender>,
+    ) -> Self {
+        Self {
+            interceptors,
+            observers,
+            context: RequestContext {
+                model: request.model.clone(),
+                custom_llm_provider: <&str>::from(config.provider()).to_owned(),
+                optional_params: Value::Object(request.optional_params.clone().into()),
+                secret_fields: request
+                    .optional_params
+                    .keys()
+                    .filter(|name| is_secret_param(name))
+                    .cloned()
+                    .collect(),
+                api_key: request.connection.api_key.clone(),
+            },
+        }
+    }
+}
+
+impl<H: Interceptors<Error>> CallHooks<Error> for OcrCallHooks<'_, H> {
+    fn before_provider_request(
+        &self,
+        wire: WireRequest,
+    ) -> BoxFuture<'_, Result<WireRequest, Error>> {
+        Box::pin(
+            self.interceptors
+                .before_provider_request(wire, self.context.clone()),
+        )
+    }
+
+    fn response_received<'a>(&'a self, body: &'a [u8]) -> BoxFuture<'a, Result<(), Error>> {
+        let raw = RawResponse {
+            body: String::from_utf8_lossy(body).into_owned(),
+        };
+        if let Some(observers) = self.observers {
+            observers.emit(litellm_host::lifecycle::CallEvent::Execution(
+                ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
+            ));
+        }
+        Box::pin(self.interceptors.after_provider_response(raw))
+    }
 }

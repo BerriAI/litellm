@@ -15,6 +15,8 @@ from .cassette import deserialize_cassette, serialize_cassette
 from .recording import RecordedInteraction
 
 FIXTURE_SCHEMA_VERSION: Final = 1
+
+
 class FixtureInput(Protocol):
     def canonical_input(self) -> dict[str, object]: ...
 

@@ -50,6 +50,7 @@ import {
 } from "./AgentFormKit";
 import MCPServerSelector from "@/components/mcp_server_management/MCPServerSelector";
 import MCPToolPermissions from "@/components/mcp_server_management/MCPToolPermissions";
+import AccessGroupSelector from "@/components/common_components/AccessGroupSelector";
 import GuardrailSelector from "@/components/guardrails/GuardrailSelector";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 
@@ -113,6 +114,7 @@ const SHARED_INITIAL_VALUES: AgentFormValues = {
   mcp_tool_permissions: {},
   entitlement_models: [],
   entitlement_agents: [],
+  access_group_ids: [],
   guardrails: [],
 };
 
@@ -338,6 +340,11 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       return;
     }
 
+    if (keyAssignOption === "existing_key" && !selectedExistingKey) {
+      toast.error("Please select an existing key to assign");
+      return;
+    }
+
     setIsSubmitting(true);
     try {
       const isValid = await form.trigger();
@@ -368,6 +375,9 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
       };
       if (Object.keys(objectPermission).length > 0) {
         agentData.object_permission = objectPermission;
+      }
+      if (values.access_group_ids?.length) {
+        agentData.access_group_ids = values.access_group_ids;
       }
 
       // Wire trace-id flags and budget controls into agent litellm_params (before create call)
@@ -406,12 +416,7 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
           selectedTeamId,
         );
         setCreatedKeyValue(keyResponse.key || null);
-      } else if (keyAssignOption === "existing_key") {
-        if (!selectedExistingKey) {
-          toast.error("Please select an existing key to assign");
-          setIsSubmitting(false);
-          return;
-        }
+      } else if (keyAssignOption === "existing_key" && selectedExistingKey) {
         await keyUpdateCall(accessToken, {
           key: selectedExistingKey,
           agent_id: agentId,
@@ -490,6 +495,22 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
               onValueChange={onChange}
               placeholder={loadingAgents ? "Loading agents..." : "Select agents (leave empty for all)"}
               options={availableAgents.map((a) => ({ label: a.agent_name, value: a.agent_id }))}
+            />
+          )}
+        </AgentFormField>
+
+        <AgentFormField
+          name="access_group_ids"
+          label={labelWithHint(
+            "Access Groups",
+            "Attach access groups to this agent. Attached groups cap which models, MCP servers, and agents the agent can reach, on top of its key and team permissions. Leave empty to apply no extra cap.",
+          )}
+        >
+          {({ value, onChange }) => (
+            <AccessGroupSelector
+              value={Array.isArray(value) ? (value as string[]) : []}
+              onChange={onChange}
+              placeholder="Select access groups (optional)"
             />
           )}
         </AgentFormField>
@@ -963,8 +984,8 @@ const AddAgentForm: React.FC<AddAgentFormProps> = ({ visible, onClose, accessTok
                     <SearchSelect
                       inputId="agent-existing-key"
                       placeholder={loadingKeys ? "Loading keys…" : "Search by key name…"}
-                      value={selectedExistingKey ?? ""}
-                      onValueChange={(value) => setSelectedExistingKey(value || null)}
+                      value={selectedExistingKey}
+                      onValueChange={setSelectedExistingKey}
                       options={existingKeys.map((k) => ({
                         label: k.key_alias || k.token?.slice(0, 12) + "…",
                         value: k.token,
