@@ -288,6 +288,13 @@ _STANDARD_LOGGING_METADATA_KEYS: Final[frozenset[str]] = (
 )
 
 
+def _proxy_stamped_used_client_oauth_token(metadata: object, litellm_params: Mapping[str, object] | None) -> object:
+    litellm_metadata: Final = litellm_params.get("litellm_metadata") if litellm_params is not None else None
+    if isinstance(litellm_metadata, Mapping) and "used_client_oauth_token" in litellm_metadata:
+        return litellm_metadata["used_client_oauth_token"]
+    return metadata.get("used_client_oauth_token") if isinstance(metadata, Mapping) else None
+
+
 def _get_provider_request_id(original_exception: Exception) -> str | None:
     try:
         error_response: Final = getattr(original_exception, "response", None)
@@ -5786,7 +5793,7 @@ class StandardLoggingPayloadSetup:
             team_alias=None,
             team_id=None,
             used_client_oauth_token=resolve_used_client_oauth_token(
-                metadata.get("used_client_oauth_token") if isinstance(metadata, dict) else None,
+                _proxy_stamped_used_client_oauth_token(metadata, litellm_params),
                 custom_llm_provider,
             ),
         )

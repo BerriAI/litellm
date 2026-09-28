@@ -4891,6 +4891,42 @@ def test_get_standard_logging_object_payload_resolves_used_client_oauth_token_ag
     assert payload["metadata"]["used_client_oauth_token"] is expected
 
 
+@pytest.mark.parametrize(
+    "metadata, litellm_metadata, expected",
+    [
+        ({"used_client_oauth_token": True}, {"used_client_oauth_token": False}, False),
+        ({"used_client_oauth_token": False}, {"used_client_oauth_token": True}, True),
+        ({"used_client_oauth_token": True}, {"compression_savings": 1}, True),
+    ],
+)
+def test_get_standard_logging_object_payload_takes_used_client_oauth_token_from_the_proxy_stamped_slot(
+    logging_obj, metadata: dict, litellm_metadata: dict, expected: bool
+):
+    """On routes that carry proxy metadata in `litellm_metadata`, `metadata` is the caller's own body field,
+    so a caller writing the flag there must not override what the proxy stamped."""
+    from datetime import datetime
+
+    from litellm.litellm_core_utils.litellm_logging import get_standard_logging_object_payload
+
+    now = datetime.now()
+    payload = get_standard_logging_object_payload(
+        kwargs={
+            "model": "claude-sonnet-5",
+            "messages": [],
+            "custom_llm_provider": "anthropic",
+            "litellm_params": {"metadata": metadata, "litellm_metadata": litellm_metadata},
+        },
+        init_response_obj={},
+        start_time=now,
+        end_time=now,
+        logging_obj=logging_obj,
+        status="success",
+    )
+
+    assert payload is not None
+    assert payload["metadata"]["used_client_oauth_token"] is expected
+
+
 def test_get_standard_logging_object_payload_carries_matched_access_groups(logging_obj):
     """Access groups stamped at auth time reach the logging payload, so integrations see what a request billed."""
     from datetime import datetime
