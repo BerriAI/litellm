@@ -5,7 +5,7 @@ import type { AgentFormValues, AgentRequestPayload } from "./AgentFormKit";
 export type EntraAgentIdentity = components["schemas"]["EntraIdentityConfig"];
 type AgentIdentityState = Pick<
   components["schemas"]["AgentResponse"],
-  "identity" | "enabled" | "execution_mode" | "agent_card_params"
+  "identity" | "enabled" | "execution_mode" | "agent_card_params" | "litellm_budget_table"
 >;
 
 export const IDENTITY_UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -47,6 +47,8 @@ export const parseIdentityForForm = (agent?: Partial<AgentIdentityState> | null)
     ...identityFormFields(identity),
     execution_mode: agent?.execution_mode ?? "autonomous",
     enabled: agent?.enabled ?? true,
+    agent_max_budget: agent?.litellm_budget_table?.max_budget ?? "",
+    agent_budget_duration: agent?.litellm_budget_table?.budget_duration ?? "",
   };
 };
 
@@ -98,11 +100,23 @@ export const withAgentIdentity = (
   const hasCard = !existing || cardEdited || Object.keys(existing.agent_card_params ?? {}).length > 0;
   const identityFields = buildIdentityParams(values, existing?.identity);
   const managed = values.identity_provider === "microsoft_entra" || Boolean(readAgentIdentity(existing?.identity));
+  const budgetIsSet =
+    values.agent_max_budget !== undefined && values.agent_max_budget !== "" && values.agent_max_budget !== null;
+  const budgetWasSet = existing?.litellm_budget_table?.max_budget != null;
   return {
     ...settings,
     ...(hasCard && agent_card_params ? { agent_card_params } : {}),
     ...identityFields,
     ...(managed && values.execution_mode !== undefined ? { execution_mode: values.execution_mode } : {}),
     ...(managed && values.enabled !== undefined ? { enabled: values.enabled } : {}),
+    ...(budgetIsSet
+      ? {
+          budget: {
+            max_budget: Number(values.agent_max_budget),
+            budget_duration: values.agent_budget_duration || null,
+          },
+        }
+      : {}),
+    ...(!budgetIsSet && budgetWasSet && values.agent_max_budget !== undefined ? { budget: null } : {}),
   };
 };

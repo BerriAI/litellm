@@ -24597,6 +24597,24 @@ export interface components {
                 [key: string]: string;
             };
         };
+        /** AgentBudgetConfig */
+        AgentBudgetConfig: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Max Budget */
+            max_budget: number;
+        };
+        /** AgentBudgetState */
+        AgentBudgetState: {
+            /** Budget Duration */
+            budget_duration?: string | null;
+            /** Budget Id */
+            budget_id: string;
+            /** Budget Reset At */
+            budget_reset_at?: string | null;
+            /** Max Budget */
+            max_budget?: number | null;
+        };
         /**
          * AgentCapabilities
          * @description Defines optional capabilities supported by an agent.
@@ -24678,6 +24696,7 @@ export interface components {
             agent_card_params?: components["schemas"]["AgentCard"];
             /** Agent Name */
             agent_name: string;
+            budget?: components["schemas"]["AgentBudgetConfig"] | null;
             /** Enabled */
             enabled?: boolean;
             /**
@@ -24964,6 +24983,8 @@ export interface components {
             agent_id: string;
             /** Agent Name */
             agent_name: string;
+            /** Budget Id */
+            budget_id?: string | null;
             /** Created At */
             created_at?: string | null;
             /** Created By */
@@ -24995,6 +25016,7 @@ export interface components {
             /** Keys */
             keys?: components["schemas"]["AgentKeySummary"][] | null;
             kill_switch?: components["schemas"]["AgentKillSwitchConfig"] | null;
+            litellm_budget_table?: components["schemas"]["AgentBudgetState"] | null;
             /** Litellm Params */
             litellm_params?: {
                 [key: string]: unknown;
@@ -38742,6 +38764,7 @@ export interface components {
             agent_card_params?: components["schemas"]["AgentCard"];
             /** Agent Name */
             agent_name?: string;
+            budget?: components["schemas"]["AgentBudgetConfig"] | null;
             /** Enabled */
             enabled?: boolean;
             /**

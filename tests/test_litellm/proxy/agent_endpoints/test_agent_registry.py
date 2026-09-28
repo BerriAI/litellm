@@ -1451,7 +1451,7 @@ async def test_agent_listing_preserves_stored_identity_bindings(bound: bool) -> 
         assert response.identity is None
     client.db.litellm_agentstable.find_many.assert_awaited_once_with(
         order={"created_at": "desc"},
-        include={"object_permission": True, "identity": True},
+        include={"object_permission": True, "identity": True, "litellm_budget_table": True},
     )
 
 

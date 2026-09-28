@@ -21,6 +21,8 @@ def client_and_mocks(monkeypatch):
     mock_table = MagicMock()
     mock_table.create = AsyncMock(side_effect=lambda *, data: data)
     mock_table.update = AsyncMock(side_effect=lambda *, where, data: {**where, **data})
+    mock_table.delete = AsyncMock(side_effect=lambda *, where: where)
+    mock_prisma.writer_db.litellm_agentstable.find_first = AsyncMock(return_value=None)
 
     mock_prisma.db = types.SimpleNamespace(
         litellm_budgettable=mock_table,
@@ -44,6 +46,34 @@ def client_and_mocks(monkeypatch):
     # teardown
     app.dependency_overrides.clear()
     monkeypatch.setattr(ps, "prisma_client", ps.prisma_client)
+
+
+@pytest.mark.parametrize("operation", ["update", "delete"])
+def test_agent_linked_budget_requires_the_agent_management_flow(client_and_mocks, operation):
+    client, prisma, table = client_and_mocks
+    prisma.writer_db.litellm_agentstable.find_first.return_value = types.SimpleNamespace(agent_id="agent-one")
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: admin
+    payload = {"budget_id": "agent-budget", "budget_duration": "2h"} if operation == "update" else {"id": "agent-budget"}
+
+    response = client.post(f"/budget/{operation}", json=payload)
+
+    assert response.status_code == 409
+    assert "/v1/agents/agent-one" in response.json()["detail"]
+    table.update.assert_not_awaited()
+    table.delete.assert_not_awaited()
+
+
+def test_unlinked_budget_can_still_be_deleted(client_and_mocks):
+    client, _, table = client_and_mocks
+    admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+    app.dependency_overrides[ps.user_api_key_auth] = lambda: admin
+
+    response = client.post("/budget/delete", json={"id": "ordinary-budget"})
+
+    assert response.status_code == 200
+    assert response.json()["budget_id"] == "ordinary-budget"
+    table.delete.assert_awaited_once_with(where={"budget_id": "ordinary-budget"})
 
 
 @pytest.mark.asyncio
