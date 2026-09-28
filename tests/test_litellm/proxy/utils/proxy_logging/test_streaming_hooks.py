@@ -23,7 +23,7 @@ from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
-from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
     BaseAnthropicMessagesStreamingIterator,
 )
 from litellm.proxy._types import UserAPIKeyAuth

@@ -20,6 +20,7 @@ from litellm.constants import (
 )
 from litellm.litellm_core_utils.litellm_logging import is_valid_sha256_hash
 from litellm.proxy.utils import PrismaClient
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.user_repository import UserRepository
 
 _T = TypeVar("_T")
@@ -167,9 +168,7 @@ async def _details_for_user_ids(
     if not user_ids:
         return _EMPTY_USER_DETAILS
     users: Final = await _db_or_empty(
-        lambda: UserRepository(prisma_client).table.find_many(
-            where={"user_id": {"in": list(user_ids)}},  # mutable-ok: Prisma find_many where= is a dict
-        ),
+        lambda: find_many_in(UserRepository(prisma_client).table, "user_id", user_ids),
         "Failed user detail recovery for %d user ids: %s",
         len(user_ids),
     )
@@ -215,17 +214,23 @@ def _meta_with_user_details(
     return updated
 
 
+def _user_id_needing_details(api_key: str, meta: KeyMetadataDict) -> str | None:
+    user_id: Final = meta.get("user_id")
+    if not isinstance(user_id, str) or not user_id:
+        return None
+    if meta.get("user_email") and not (_is_cli_session_key(api_key) and not meta.get("team_id")):
+        return None
+    return user_id
+
+
 async def attach_user_details(
     prisma_client: PrismaClient,
     recovered: Mapping[str, KeyMetadataDict],
 ) -> Mapping[str, KeyMetadataDict]:
     needing_details: Final = frozenset(
         user_id
-        for api_key, meta in recovered.items()
-        for user_id in (meta.get("user_id"),)
-        if isinstance(user_id, str)
-        and user_id
-        and (not meta.get("user_email") or (_is_cli_session_key(api_key) and not meta.get("team_id")))
+        for user_id in (_user_id_needing_details(api_key, meta) for api_key, meta in recovered.items())
+        if user_id is not None
     )
     details: Final = await _details_for_user_ids(prisma_client, needing_details)
     if not details:

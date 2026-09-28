@@ -7,7 +7,7 @@ admission separately decides whether the selected implementation can execute.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum, auto
+from enum import Enum
 from typing import Final, TypeAlias
 
 from litellm.rust_bridge.configuration import Decision, Rollout
@@ -27,18 +27,11 @@ class Route(str, Enum):
     TOKENIZER = "tokenizer"
 
 
-class Delivery(Enum):
-    COMPLETED = auto()
-    STREAMING = auto()
-    WEBSOCKET = auto()
-
-
 @dataclass(frozen=True, slots=True)
 class RouteContext:
     route: Route
     provider: str | None = None
     model: str | None = None
-    delivery: Delivery = Delivery.COMPLETED
 
 
 @dataclass(frozen=True, slots=True)
@@ -47,7 +40,6 @@ class RouteRule:
     rollout: Rollout
     providers: frozenset[str] | None = None
     models: frozenset[str] | None = None
-    deliveries: frozenset[Delivery] | None = None
 
     def matches(self, context: Context) -> bool:
         return (
@@ -55,7 +47,6 @@ class RouteRule:
             and context.route is self.route
             and (self.providers is None or context.provider in self.providers)
             and (self.models is None or context.model in self.models)
-            and (self.deliveries is None or context.delivery in self.deliveries)
         )
 
 
@@ -109,6 +100,7 @@ RULES: Final[Rules] = (
     RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
     RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
+    RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic"})),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
