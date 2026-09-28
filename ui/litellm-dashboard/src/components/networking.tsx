@@ -1940,7 +1940,9 @@ export const modelAvailableCall = async (
       accessToken,
       query: {
         include_model_access_groups: "True",
-        return_wildcard_routes: return_wildcard_routes === true ? "True" : undefined,
+        // Sent either way: an omitted value falls back to the proxy's
+        // general_settings.model_list_return_wildcard_routes, not to false.
+        return_wildcard_routes: return_wildcard_routes === true ? "True" : "False",
         only_model_access_groups: only_model_access_groups === true ? "True" : undefined,
         team_id: teamID || undefined,
         scope: scope || undefined,

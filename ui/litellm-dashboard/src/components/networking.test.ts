@@ -157,6 +157,37 @@ describe("modelInfoCall", () => {
   });
 });
 
+describe("modelAvailableCall", () => {
+  let currentFetch: typeof global.fetch;
+
+  beforeEach(() => {
+    currentFetch = global.fetch;
+  });
+
+  afterEach(() => {
+    global.fetch = currentFetch;
+  });
+
+  // An omitted return_wildcard_routes takes the proxy's model_list_return_wildcard_routes
+  // default, so the dashboard's own pickers always send it.
+  it.each([
+    [undefined, "False"],
+    [false, "False"],
+    [true, "True"],
+  ])("sends return_wildcard_routes=%s as %s", async (returnWildcardRoutes, sent) => {
+    const mockFetch = vi
+      .fn()
+      .mockResolvedValue({ ok: true, text: vi.fn().mockResolvedValue(JSON.stringify({ data: [] })) } as any);
+    global.fetch = mockFetch as any;
+
+    await Networking.modelAvailableCall("token", "user", "Admin", returnWildcardRoutes);
+
+    const parsed = new URL(mockFetch.mock.calls[0][0] as string, "http://example.com");
+    expect(parsed.pathname).toBe("/models");
+    expect(parsed.searchParams.get("return_wildcard_routes")).toBe(sent);
+  });
+});
+
 describe("daily activity helpers", () => {
   const startTime = new Date("2025-02-12T00:00:00.000Z");
   const endTime = new Date("2025-02-19T00:00:00.000Z");
