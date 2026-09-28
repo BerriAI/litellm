@@ -3,25 +3,21 @@ use std::time::Duration;
 use litellm_auth::SecretValue;
 use litellm_core_utils::{
     dot_notation_indexing::delete_nested_value,
-    get_llm_provider_logic::{CustomLlmProvider, get_custom_llm_provider},
-    get_provider_specific_headers::get_provider_specific_headers,
-    settings::Lookup,
+    get_provider_specific_headers::get_provider_specific_headers, settings::Lookup,
 };
-use litellm_llms::{
-    anthropic::messages::handler::shape_anthropic_messages_request,
-    base_llm::{
-        anthropic_messages::transformation::MessagesTransformContext,
-        auth::{ValidatedEnvironment, with_default_headers},
-    },
+use litellm_http::request::with_default_headers;
+use litellm_llms::base_llm::{
+    auth::ValidatedEnvironment, messages::context::MessagesTransformContext,
 };
 use litellm_secrets::source::SecretSource;
 use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
 
 use super::{
     Error, MessagesCall,
-    common_utils::{MessagesProvider, string_headers},
+    common_utils::{MessagesProvider, messages_provider, string_headers},
     types::invalid_request,
 };
+use crate::provider::resolve_llm_provider;
 
 struct ResolvedProvider {
     model: String,
@@ -38,6 +34,7 @@ pub(super) struct ProviderMessagesRequest {
     pub(super) api_key: Option<SecretValue>,
 }
 
+#[tracing::instrument(name = "litellm.prepare", level = "debug", skip_all)]
 pub(super) async fn prepare(
     call: MessagesCall,
     secrets: &dyn SecretSource,
@@ -53,26 +50,11 @@ fn resolve_provider(
     model: &str,
     custom_llm_provider: Option<&str>,
 ) -> Result<ResolvedProvider, Error> {
-    let CustomLlmProvider {
-        model,
-        custom_llm_provider: provider,
-    } = get_custom_llm_provider(model, custom_llm_provider)
-        .or_else(|| {
-            custom_llm_provider.map(|provider| CustomLlmProvider {
-                model,
-                custom_llm_provider: provider,
-            })
-        })
-        .ok_or_else(|| {
-            Error::InvalidProvider(
-                "unable to resolve custom_llm_provider for messages request".to_string(),
-            )
-        })?;
-    let provider = provider
-        .parse()
-        .map_err(|_| Error::InvalidProvider(provider.to_string()))?;
+    let resolved = resolve_llm_provider(model, custom_llm_provider, "messages")?;
+    let provider = messages_provider(resolved.provider)
+        .ok_or_else(|| Error::InvalidProvider(<&str>::from(resolved.provider).to_string()))?;
     Ok(ResolvedProvider {
-        model: model.to_string(),
+        model: resolved.model.to_string(),
         provider,
     })
 }
@@ -96,7 +78,7 @@ fn prepare_provider_request(
     let config = provider.config();
     let env_lookup = |key: &str| secrets.get(key);
 
-    let sanitized = shape_anthropic_messages_request(
+    let sanitized = config.shape_request(
         AnthropicMessagesRequest { model, ..body },
         shaping.reasoning_auto_summary,
     )?;
@@ -468,7 +450,11 @@ mod tests {
                 shaping,
             ),
             Err(Error::InvalidRequest(
-                "metadata.user_id must be a string, got 123".to_string()
+                litellm_llms::ErrorDetail::InvalidValue {
+                    field: "metadata.user_id",
+                    expected: "a string",
+                    actual: json!(123),
+                }
             ))
         );
     }

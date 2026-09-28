@@ -13,11 +13,15 @@ litellm-config = { path = "crates/config" }
 litellm-router = { path = "crates/router" }
 litellm-tracing = { path = "crates/tracing" }
 litellm-core = { path = "crates/core" }
+litellm-gateway-mcp = { path = "crates/gateway-mcp" }
 litellm-gateway = { path = "crates/gateway" }
 litellm-gateway-inference = { path = "crates/gateway-inference" }
 litellm-gateway-auth = { path = "crates/gateway-auth" }
+litellm-gateway-management = { path = "crates/gateway-management" }
+litellm-gateway-ui = { path = "crates/gateway-ui" }
 litellm-coroutine = { path = "crates/coroutine" }
 litellm-host = { path = "crates/host" }
+litellm-host-http = { path = "crates/host-http" }
 litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
 litellm-framing = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }
@@ -36,6 +40,8 @@ litellm-http = { path = "crates/http" }
 litellm-llms = { path = "crates/llms" }
 litellm-types = { path = "crates/types" }
 litellm-core-utils = { path = "crates/core-utils" }
+litellm-db = { path = "crates/db" }
+litellm-db-testing = { path = "crates/db-testing" }
 litellm-cache = { path = "crates/cache" }
 litellm-cache-azure-blob = { path = "crates/cache-azure-blob" }
 litellm-cache-memory = { path = "crates/cache-memory" }
@@ -56,6 +62,8 @@ litellm-python-compat = { path = "crates/python-compat" }
 
 tracing = "0.1"
 axum = { version = "0.8.9", default-features = false, features = ["http1", "tokio", "multipart"] }
+axum-login = "0.18.0"
+tower-sessions = { version = "0.14.0", features = ["memory-store"] }
 bytes = "1"
 http = "1"
 google-cloud-auth = { version = "1.16.0", default-features = false }
@@ -80,6 +88,7 @@ serde = { version = "1.0", features = ["derive"] }
 serde_json = { version = "1.0", features = ["float_roundtrip"] }
 serde_with = { version = "=3.16.1", default-features = false, features = ["std", "macros"] }
 sha2 = "0.10"
+sqlx = { version = "0.9.0", default-features = false, features = ["json", "macros", "postgres", "runtime-tokio", "chrono", "tls-rustls-ring-native-roots"] }
 subtle = "2"
 thiserror = "2.0"
 tokenizers = { version = "0.23.1", default-features = false, features = ["onig"] }

@@ -1,3 +1,4 @@
+import logging
 import time
 import uuid
 from types import SimpleNamespace
@@ -121,17 +122,25 @@ def _make_guardrail(
     handler: FakeHandler,
     *,
     unreachable_fallback: str = "fail_closed",
-    agent_id: str | None = None,
-    api_base: str = AGENT_365_PROD_API_BASE,
 ) -> Agent365Guardrail:
     return Agent365Guardrail(
         guardrail_name="agent-365-guard",
         tenant_id="tenant-abc",
         client_id="client-xyz",
         client_secret="secret-123",
-        api_base=api_base,
-        agent_id=agent_id,
         unreachable_fallback=unreachable_fallback,
+        async_handler=handler,
+        event_hook="pre_mcp_call",
+        default_on=True,
+    )
+
+
+def _default_fallback_guardrail(handler: FakeHandler) -> Agent365Guardrail:
+    return Agent365Guardrail(
+        guardrail_name="agent-365-guard",
+        tenant_id="tenant-abc",
+        client_id="client-xyz",
+        client_secret="secret-123",
         async_handler=handler,
         event_hook="pre_mcp_call",
         default_on=True,
@@ -206,19 +215,58 @@ class TestInitializeGuardrail:
         assert redact_string(str(exc_info.value)) == str(exc_info.value)
 
     def test_env_var_fallbacks(self, monkeypatch):
-        monkeypatch.delenv("AGENT365_RESOURCE_APP_ID", raising=False)
         monkeypatch.setenv("AGENT365_TENANT_ID", "env-tenant")
         monkeypatch.setenv("AGENT365_CLIENT_ID", "env-client")
         monkeypatch.setenv("AGENT365_CLIENT_SECRET", "env-secret")
-        monkeypatch.setenv("AGENT365_API_BASE", "https://env.example.test")
         params: Final = LitellmParams(guardrail="agent_365", mode="pre_mcp_call")
         guardrail: Final = initialize_guardrail(params, {"guardrail_name": "a365-env"})
         assert guardrail.tenant_id == "env-tenant"
         assert guardrail.client_id == "env-client"
         assert guardrail.client_secret == "env-secret"
-        assert guardrail.api_base == "https://env.example.test"
-        assert guardrail.resource_app_id == AGENT_365_PROD_RESOURCE_APP_ID
         assert guardrail.unreachable_fallback == "fail_closed"
+
+    def test_fail_open_is_opt_in_through_litellm_params(self):
+        params: Final = LitellmParams(
+            guardrail="agent_365",
+            mode="pre_mcp_call",
+            tenant_id="t",
+            client_id="c",
+            client_secret="s",
+            unreachable_fallback="fail_open",
+        )
+        guardrail: Final = initialize_guardrail(params, {"guardrail_name": "a365-open"})
+        assert guardrail.unreachable_fallback == "fail_open"
+
+    def test_ui_form_offers_only_the_credentials_and_the_fallback(self):
+        from litellm.proxy.guardrails.guardrail_endpoints import _get_fields_from_model
+
+        fields: Final = _get_fields_from_model(Agent365GuardrailConfigModel)
+        assert set(fields) == {"tenant_id", "client_id", "client_secret", "unreachable_fallback"}
+        assert fields["unreachable_fallback"]["default_value"] == "fail_closed"
+
+    @pytest.mark.asyncio
+    async def test_stale_yaml_overrides_are_ignored_and_logged(self, caplog):
+        params: Final = LitellmParams(
+            guardrail="agent_365",
+            mode="pre_mcp_call",
+            tenant_id="tenant-abc",
+            client_id="client-xyz",
+            client_secret="secret-123",
+            default_on=True,
+            api_base="https://agent365.example.test",
+            resource_app_id="00000000-0000-0000-0000-000000000000",
+            agent_id="yaml-agent",
+        )
+        handler: Final = FakeHandler([_token_response(), _allow_response()])
+        with caplog.at_level(logging.WARNING, logger="LiteLLM Proxy"):
+            guardrail: Final = initialize_guardrail(params, {"guardrail_name": "a365-stale"}, async_handler=handler)
+        assert "ignoring api_base, resource_app_id, agent_id" in caplog.text
+        await _run(guardrail, _mcp_data())
+        token_call, evaluate_call = handler.calls
+        assert token_call.url == TOKEN_URL
+        assert token_call.data["scope"] == f"{AGENT_365_PROD_RESOURCE_APP_ID}/ThreatProtection.Evaluate.All"
+        assert evaluate_call.url == EVALUATE_URL
+        assert evaluate_call.json["agentId"] == "my-agent-key"
 
     def test_explicit_params_win(self, monkeypatch):
         monkeypatch.setenv("AGENT365_TENANT_ID", "env-tenant")
@@ -228,14 +276,12 @@ class TestInitializeGuardrail:
             tenant_id="param-tenant",
             client_id="client-xyz",
             client_secret="param-secret",
-            agent_id="agent-007",
             unreachable_fallback="fail_open",
             timeout=5,
         )
         guardrail: Final = initialize_guardrail(params, {"guardrail_name": "a365-params"})
         assert guardrail.tenant_id == "param-tenant"
         assert guardrail.client_secret == "param-secret"
-        assert guardrail.agent_id == "agent-007"
         assert guardrail.unreachable_fallback == "fail_open"
         assert guardrail.request_timeout == 5.0
 
@@ -289,7 +335,7 @@ class TestAllowFlow:
     @pytest.mark.asyncio
     async def test_evaluate_payload(self):
         handler: Final = FakeHandler([_token_response(), _allow_response()])
-        guardrail: Final = _make_guardrail(handler, agent_id="agent-007")
+        guardrail: Final = _make_guardrail(handler)
         await _run(guardrail, _mcp_data())
         evaluate_call: Final = handler.calls[1]
         assert evaluate_call.url == EVALUATE_URL
@@ -298,7 +344,7 @@ class TestAllowFlow:
         assert evaluate_call.json["serverName"] == "outlook_mcp"
         assert evaluate_call.json["arguments"] == {"to": "user@example.com", "body": "hello"}
         assert evaluate_call.json["conversationId"] == "sess-123"
-        assert evaluate_call.json["agentId"] == "agent-007"
+        assert evaluate_call.json["agentId"] == "my-agent-key"
 
     @pytest.mark.asyncio
     async def test_evaluate_payload_includes_listed_tool_metadata(self):
@@ -322,13 +368,6 @@ class TestAllowFlow:
         guardrail: Final = _make_guardrail(handler)
         await _run(guardrail, _mcp_data(mcp_tool_description=description, mcp_tool_input_schema=schema))
         assert handler.calls[1].json["tool"] == {"name": "send_email"}
-
-    @pytest.mark.asyncio
-    async def test_agent_id_falls_back_to_key_alias(self):
-        handler: Final = FakeHandler([_token_response(), _allow_response()])
-        guardrail: Final = _make_guardrail(handler)
-        await _run(guardrail, _mcp_data())
-        assert handler.calls[1].json["agentId"] == "my-agent-key"
 
     @pytest.mark.asyncio
     async def test_non_mcp_call_type_skipped(self):
@@ -492,6 +531,53 @@ class TestDefenderNotEvaluated:
             await _run(guardrail, _mcp_data())
         assert exc_info.value.status_code == 400
         assert "rejected" in exc_info.value.detail["error"]
+
+
+AVAILABILITY_FAILURES: Final = (
+    pytest.param([_token_response(), httpx.ReadTimeout("timed out")], id="evaluate-timeout"),
+    pytest.param([_token_response(), _response(502, text="bad gateway")], id="evaluate-5xx"),
+    pytest.param([_token_response(), _not_evaluated_response("Skipped")], id="evaluate-skipped"),
+    pytest.param([_response(503, text="entra down")], id="entra-5xx"),
+)
+
+
+class TestFailOpenOptIn:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("responses", AVAILABILITY_FAILURES)
+    async def test_constructor_default_blocks_each_availability_failure_with_503(self, responses):
+        guardrail: Final = _default_fallback_guardrail(FakeHandler(responses))
+        assert guardrail.unreachable_fallback == "fail_closed"
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, _mcp_data())
+        assert exc_info.value.status_code == 503
+        assert "fail_closed" in exc_info.value.detail["message"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("responses", AVAILABILITY_FAILURES)
+    async def test_opted_in_fail_open_lets_each_availability_failure_through_as_failed_to_respond(self, responses):
+        guardrail: Final = _make_guardrail(FakeHandler(responses), unreachable_fallback="fail_open")
+        data: Final = _mcp_data()
+        assert await _run(guardrail, data) is data
+        info: Final = _guardrail_info(data)
+        assert info["guardrail_status"] == "guardrail_failed_to_respond"
+        assert info["guardrail_response"]["verdict"] == "Unscanned"
+
+    @pytest.mark.asyncio
+    async def test_opted_in_fail_open_logs_the_unscanned_call_at_error_level(self, caplog):
+        handler: Final = FakeHandler([_token_response(), httpx.ReadTimeout("timed out")])
+        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+        with caplog.at_level(logging.ERROR, logger="LiteLLM Proxy"):
+            await _run(guardrail, _mcp_data())
+        fail_open_logs: Final = [r for r in caplog.records if "unreachable_fallback='fail_open'" in r.getMessage()]
+        assert [r.levelno for r in fail_open_logs] == [logging.ERROR], caplog.text
+
+    @pytest.mark.asyncio
+    async def test_opted_in_fail_open_still_blocks_a_policy_block(self):
+        handler: Final = FakeHandler([_token_response(), _block_response()])
+        guardrail: Final = _make_guardrail(handler, unreachable_fallback="fail_open")
+        with pytest.raises(HTTPException) as exc_info:
+            await _run(guardrail, _mcp_data())
+        assert exc_info.value.status_code == 400
 
 
 class TestUnreachableFallback:

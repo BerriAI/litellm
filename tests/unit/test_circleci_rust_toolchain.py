@@ -13,8 +13,8 @@ Two invariants are pinned here:
 
   1. No step list (job or reusable command) reaches a `uv sync` / `uv build`
      without a Rust toolchain already provisioned ahead of it. That is the
-     `install_rust` command on Linux and an inline pinned rustup install in the
-     Windows job, so the check accepts either. A new job that syncs without one
+     `install_rust` command on Linux and `install_windows_toolchain` on Windows,
+     so the check accepts any command or step that installs a pinned rustup. A new job that syncs without one
      falls back to the unpinned path, which is exactly the regression a static
      check catches at PR time and a green CI run does not.
   2. Both installers pin what they download: an explicit rustup version, a
@@ -66,11 +66,21 @@ def _without_comments(text: str) -> str:
     return "\n".join(line for line in text.splitlines() if not line.lstrip().startswith("#"))
 
 
-def _provisions_rust(step: object) -> bool:
-    if step == "install_rust":
-        return True
+def _installs_pinned_rustup(step: object) -> bool:
     text = _step_text(step)
     return "rustup-init" in text and ("sha256sum" in text or "SHA256" in text)
+
+
+def _provisioning_commands() -> frozenset[str]:
+    return frozenset(
+        name.removeprefix("command ")
+        for name, steps in _step_lists().items()
+        if name.startswith("command ") and any(_installs_pinned_rustup(step) for step in steps)
+    )
+
+
+def _provisions_rust(step: object, provisioning_commands: frozenset[str]) -> bool:
+    return (isinstance(step, str) and step in provisioning_commands) or _installs_pinned_rustup(step)
 
 
 def _step_lists() -> dict[str, list[object]]:
@@ -87,11 +97,11 @@ def _step_lists() -> dict[str, list[object]]:
     return lists
 
 
-def _first_unprovisioned_build(steps: list[object]) -> str | None:
+def _first_unprovisioned_build(steps: list[object], provisioning_commands: frozenset[str]) -> str | None:
     """Return the shell text of the first workspace build reached without Rust, if any."""
     rust_ready = False
     for step in steps:
-        if _provisions_rust(step):
+        if _provisions_rust(step, provisioning_commands):
             rust_ready = True
         text = _step_text(step)
         if BUILDS_WORKSPACE.search(_without_comments(text)) and not rust_ready:
@@ -111,8 +121,12 @@ def test_step_lists_exist() -> None:
 
 
 def test_no_workspace_build_without_a_provisioned_rust_toolchain() -> None:
+    provisioning_commands: Final = _provisioning_commands()
+    assert {"install_rust", "install_windows_toolchain"} <= provisioning_commands
     offenders = {
-        name: build for name, steps in _step_lists().items() if (build := _first_unprovisioned_build(steps)) is not None
+        name: build
+        for name, steps in _step_lists().items()
+        if (build := _first_unprovisioned_build(steps, provisioning_commands)) is not None
     }
     assert not offenders, (
         "these CircleCI step lists run `uv sync`/`uv build` with no Rust toolchain provisioned first, "
@@ -156,7 +170,7 @@ def test_install_rust_pins_an_exact_toolchain_version(install_rust_command: str)
 
 
 def test_windows_installer_matches_the_repo_toolchain() -> None:
-    windows_steps: Final = _step_lists()["job using_litellm_on_windows"]
+    windows_steps: Final = _step_lists()["command install_windows_toolchain"]
     windows_command: Final = "\n".join(_step_text(step) for step in windows_steps)
     match: Final = EXACT_TOOLCHAIN.search(windows_command)
     assert match is not None

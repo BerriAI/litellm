@@ -1111,6 +1111,7 @@ def test_get_sync_custom_stream_wrapper_returns_wrapper():
     mock_client.post.return_value = mock_response
 
     wrapper = config.get_sync_custom_stream_wrapper(
+        litellm_params={},
         model=_GENERIC_MODEL,
         custom_llm_provider="oci",
         logging_obj=MagicMock(),
@@ -1143,6 +1144,7 @@ async def test_get_async_custom_stream_wrapper_returns_wrapper():
     mock_client.post = AsyncMock(return_value=mock_response)
 
     wrapper = await config.get_async_custom_stream_wrapper(
+        litellm_params={},
         model=_GENERIC_MODEL,
         custom_llm_provider="oci",
         logging_obj=MagicMock(),

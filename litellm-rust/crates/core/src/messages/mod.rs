@@ -1,27 +1,64 @@
-//! The Anthropic Messages call, the Rust equivalent of Python's `litellm.messages()`.
-//!
-//! [`messages`] prepares the provider request and sends it in process. [`route`] runs the
-//! same two steps as a machine for a host that answers the call's operations itself.
-
 mod common_utils;
 mod handler;
 mod prepare;
 pub mod route;
 mod types;
 
-use litellm_http::{ClientVariant, HttpClientConfig};
+use litellm_auth::AuthServices;
 use litellm_secrets::source::SecretSource;
+use std::sync::Arc;
 
 pub use crate::error::RouteError as Error;
 pub use types::{MessagesCall, MessagesResponse, MessagesShaping, messages_body};
 
-pub async fn messages(
-    resources: &crate::resources::CoreResources,
-    config: &HttpClientConfig,
-    secrets: &dyn SecretSource,
-    call: MessagesCall,
-) -> Result<MessagesResponse, Error> {
-    let http = resources.pool.client(config, ClientVariant::Provider)?;
-    let request = prepare::prepare(call, secrets).await?;
-    handler::execute(&http, &resources.auth, request, &()).await
+#[derive(Clone)]
+pub struct MessagesRoute {
+    http: litellm_http::Client,
+    auth: Arc<AuthServices>,
+    secrets: Arc<dyn SecretSource>,
+}
+
+impl MessagesRoute {
+    pub fn new(
+        http: litellm_http::Client,
+        auth: Arc<AuthServices>,
+        secrets: Arc<dyn SecretSource>,
+    ) -> Self {
+        Self {
+            http,
+            auth,
+            secrets,
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        call: MessagesCall,
+        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+    ) -> Result<MessagesResponse, Error> {
+        litellm_host::lifecycle::observe_call(hooks.observer(), self.run(call, hooks)).await
+    }
+
+    #[tracing::instrument(name = "litellm.route", skip_all, fields(
+        route = "messages",
+        model = %call.body.model,
+        provider,
+        resolved_model,
+        stream = call.body.params.stream == Some(true),
+        outcome
+    ))]
+    async fn run(
+        &self,
+        call: MessagesCall,
+        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+    ) -> Result<MessagesResponse, Error> {
+        crate::diagnostic::call(async {
+            let request = prepare::prepare(call, self.secrets.as_ref()).await?;
+            crate::diagnostic::provider(&request.body.model, request.provider.as_str());
+            let execute: futures_util::future::BoxFuture<'_, Result<MessagesResponse, Error>> =
+                Box::pin(handler::execute(&self.http, &self.auth, request, hooks));
+            execute.await
+        })
+        .await
+    }
 }

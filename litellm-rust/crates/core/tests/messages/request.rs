@@ -1,4 +1,4 @@
-use litellm_llms::anthropic::common_utils::{AnthropicModelCapabilities, SupportedEffortTiers};
+use litellm_llms::base_llm::messages::context::{MessagesModelCapabilities, SupportedEffortTiers};
 use litellm_types::llms::anthropic::{AnthropicBeta, BetaSet};
 use litellm_types::utils::{ProviderSpecificHeader, ProviderSpecificHeaders};
 use rstest::rstest;
@@ -87,8 +87,7 @@ async fn a_call_without_credentials_fails_before_sending(
         ..call
     })
     .await
-    .err()
-    .expect("a call without credentials fails");
+    .expect_err("a call without credentials fails");
 
     assert!(
         matches!(
@@ -158,8 +157,7 @@ async fn unsupported_providers_are_rejected_before_sending(
         ..with_model(call, model)
     })
     .await
-    .err()
-    .expect("unsupported provider errors");
+    .expect_err("unsupported provider errors");
 
     assert_eq!(error, Error::InvalidProvider(reported.into()));
 }
@@ -194,12 +192,18 @@ async fn caller_headers_and_provider_scoped_headers_are_forwarded(call: Messages
 }
 
 #[rstest]
+#[case::azure("azure_ai", json!({"type": "ephemeral", "ttl": "1h", "future": "kept"}))]
+#[case::anthropic("anthropic", json!({"type": "ephemeral", "ttl": "1h", "scope": "global", "future": "kept"}))]
 #[tokio::test]
-async fn azure_strips_the_cache_control_scope_anthropic_rejects(call: MessagesCall) {
+async fn cache_scope_removal_is_selected_by_the_provider(
+    call: MessagesCall,
+    #[case] provider: &str,
+    #[case] expected: Value,
+) {
     let upstream = upstream([message_response()]).await;
 
     run_message(MessagesCall {
-        custom_llm_provider: Some("azure_ai".into()),
+        custom_llm_provider: Some(provider.into()),
         api_key: Some("sk-azure".into()),
         api_base: Some(upstream.uri()),
         body: body(json!({
@@ -210,7 +214,7 @@ async fn azure_strips_the_cache_control_scope_anthropic_rejects(call: MessagesCa
                 "content": [{
                     "type": "text",
                     "text": "hi",
-                    "cache_control": {"type": "ephemeral", "scope": "global"}
+                    "cache_control": {"type": "ephemeral", "ttl": "1h", "scope": "global", "future": "kept"}
                 }]
             }]
         })),
@@ -220,7 +224,7 @@ async fn azure_strips_the_cache_control_scope_anthropic_rejects(call: MessagesCa
 
     assert_eq!(
         only_request(&upstream).await.json()["messages"][0]["content"][0]["cache_control"],
-        json!({"type": "ephemeral"})
+        expected
     );
 }
 
@@ -278,9 +282,9 @@ async fn feature_betas_join_the_callers_betas_in_one_sorted_header(
     #[case] features: &[AnthropicBeta],
 ) {
     let upstream = upstream([message_response()]).await;
-    let capabilities = AnthropicModelCapabilities {
+    let capabilities = MessagesModelCapabilities {
         supports_speed: true,
-        ..AnthropicModelCapabilities::default()
+        ..MessagesModelCapabilities::default()
     };
 
     run_message(with_fields(
@@ -358,20 +362,20 @@ async fn caller_protocol_headers_win_over_the_defaults(call: MessagesCall, #[cas
     );
 }
 
-fn sampling_removed() -> AnthropicModelCapabilities {
-    AnthropicModelCapabilities {
+fn sampling_removed() -> MessagesModelCapabilities {
+    MessagesModelCapabilities {
         supports_sampling_params: false,
-        ..AnthropicModelCapabilities::default()
+        ..MessagesModelCapabilities::default()
     }
 }
 
 #[rstest]
 #[case::sampling_params(sampling_removed(), json!({"temperature": 0.2, "top_p": 0.9, "top_k": 5}), &["temperature", "top_p", "top_k"], "temperature=0.2")]
-#[case::speed(AnthropicModelCapabilities::default(), json!({"speed": "fast"}), &["speed"], "speed='fast'")]
+#[case::speed(MessagesModelCapabilities::default(), json!({"speed": "fast"}), &["speed"], "speed='fast'")]
 #[tokio::test]
 async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_it(
     call: MessagesCall,
-    #[case] capabilities: AnthropicModelCapabilities,
+    #[case] capabilities: MessagesModelCapabilities,
     #[case] fields: Value,
     #[case] dropped: &[&str],
     #[case] rejected_as: &str,
@@ -399,10 +403,9 @@ async fn unsupported_params_are_dropped_under_drop_params_and_rejected_without_i
 
     let error = run(shaped(false))
         .await
-        .err()
-        .expect("an unsupported param is rejected without drop_params");
+        .expect_err("an unsupported param is rejected without drop_params");
     assert!(
-        matches!(&error, Error::InvalidRequest(message) if message.contains(rejected_as)),
+        matches!(&error, Error::InvalidRequest(message) if message.to_string().contains(rejected_as)),
         "{error:?}"
     );
     assert!(received(&upstream).await.is_empty());
@@ -431,10 +434,10 @@ async fn reasoning_auto_summary_marks_active_thinking_on_the_wire(
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
             shaping: MessagesShaping {
-                capabilities: AnthropicModelCapabilities {
+                capabilities: MessagesModelCapabilities {
                     supports_reasoning: true,
                     supports_adaptive_thinking: true,
-                    ..AnthropicModelCapabilities::default()
+                    ..MessagesModelCapabilities::default()
                 },
                 reasoning_auto_summary: true,
                 ..MessagesShaping::default()
@@ -450,41 +453,41 @@ async fn reasoning_auto_summary_marks_active_thinking_on_the_wire(
 
 #[rstest]
 #[case::reasoning_effort_on_an_adaptive_model(
-    AnthropicModelCapabilities {
+    MessagesModelCapabilities {
         supports_reasoning: true,
         supports_adaptive_thinking: true,
         supports_output_config: true,
         effort_tiers: SupportedEffortTiers { high: true, ..SupportedEffortTiers::default() },
-        ..AnthropicModelCapabilities::default()
+        ..MessagesModelCapabilities::default()
     },
     json!({"reasoning_effort": "high"}),
     json!({"thinking": {"type": "adaptive", "display": "summarized"}, "output_config": {"effort": "high"}})
 )]
 #[case::reasoning_effort_on_a_legacy_model_caps_the_budget_below_max_tokens(
-    AnthropicModelCapabilities {
+    MessagesModelCapabilities {
         supports_reasoning: true,
-        ..AnthropicModelCapabilities::default()
+        ..MessagesModelCapabilities::default()
     },
     json!({"reasoning_effort": "high"}),
     json!({"thinking": {"type": "enabled", "budget_tokens": 2999}})
 )]
 #[case::adaptive_payload_on_a_legacy_model_becomes_a_capped_budget(
-    AnthropicModelCapabilities {
+    MessagesModelCapabilities {
         supports_reasoning: true,
-        ..AnthropicModelCapabilities::default()
+        ..MessagesModelCapabilities::default()
     },
     json!({"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}, "temperature": 0}),
     json!({"thinking": {"type": "enabled", "budget_tokens": 2999}})
 )]
 #[case::adaptive_payload_on_a_model_without_reasoning_is_dropped(
-    AnthropicModelCapabilities::default(),
+    MessagesModelCapabilities::default(),
     json!({"thinking": {"type": "adaptive"}, "output_config": {"effort": "high"}}),
     json!({})
 )]
 #[tokio::test]
 async fn reasoning_is_translated_by_the_model_capabilities(
     call: MessagesCall,
-    #[case] capabilities: AnthropicModelCapabilities,
+    #[case] capabilities: MessagesModelCapabilities,
     #[case] fields: Value,
     #[case] expected: Value,
 ) {
@@ -556,12 +559,15 @@ async fn replayed_history_is_cleaned_before_sending(
 }
 
 #[rstest]
+#[case::anthropic("anthropic")]
+#[case::azure("azure_ai")]
 #[tokio::test]
-async fn metadata_is_reduced_to_the_user_id(call: MessagesCall) {
+async fn metadata_is_reduced_to_the_user_id(call: MessagesCall, #[case] provider: &str) {
     let upstream = upstream([message_response()]).await;
 
     run_message(with_fields(
         MessagesCall {
+            custom_llm_provider: Some(provider.into()),
             api_key: Some("sk".into()),
             api_base: Some(upstream.uri()),
             ..call
@@ -592,23 +598,43 @@ async fn an_invalid_request_fails_before_sending(call: MessagesCall, #[case] fie
         fields,
     ))
     .await
-    .err()
-    .expect("the request is rejected");
+    .expect_err("the request is rejected");
 
     assert!(error.is_request(), "{error:?}");
     assert!(received(&upstream).await.is_empty());
 }
 
 #[rstest]
+#[case::azure("azure_ai", &[], json!([
+    {"type": "text", "text": "top level"},
+    {"type": "text", "text": "from a message"}
+]), json!([{"role": "user", "content": "hi"}]))]
+#[case::anthropic("anthropic", &[], json!("top level"), json!([
+    {"role": "system", "content": "from a message"},
+    {"role": "user", "content": "hi"}
+]))]
+#[case::azure_folds_after_caller_drops("azure_ai", &["system"], json!([
+    {"type": "text", "text": "from a message"}
+]), json!([{"role": "user", "content": "hi"}]))]
 #[tokio::test]
-async fn azure_folds_system_role_messages_into_the_system_prompt(call: MessagesCall) {
+async fn system_message_folding_is_selected_by_the_provider(
+    call: MessagesCall,
+    #[case] provider: &str,
+    #[case] drop_params: &[&str],
+    #[case] expected_system: Value,
+    #[case] expected_messages: Value,
+) {
     let upstream = upstream([message_response()]).await;
 
     run_message(with_fields(
         MessagesCall {
-            custom_llm_provider: Some("azure_ai".into()),
+            custom_llm_provider: Some(provider.into()),
             api_key: Some("sk-azure".into()),
             api_base: Some(upstream.uri()),
+            shaping: MessagesShaping {
+                additional_drop_params: drop_params.iter().map(ToString::to_string).collect(),
+                ..call.shaping
+            },
             ..call
         },
         json!({
@@ -622,14 +648,8 @@ async fn azure_folds_system_role_messages_into_the_system_prompt(call: MessagesC
     .await;
 
     let sent = only_request(&upstream).await.json();
-    assert_eq!(
-        sent["system"],
-        json!([
-            {"type": "text", "text": "top level"},
-            {"type": "text", "text": "from a message"}
-        ])
-    );
-    assert_eq!(sent["messages"], json!([{"role": "user", "content": "hi"}]));
+    assert_eq!(sent["system"], expected_system);
+    assert_eq!(sent["messages"], expected_messages);
 }
 
 #[rstest]
@@ -655,4 +675,38 @@ async fn the_provider_prefix_is_stripped_exactly_once(
     .await;
 
     assert_eq!(only_request(&upstream).await.json()["model"], sent_model);
+}
+
+#[rstest]
+#[case::anthropic("anthropic")]
+#[case::azure("azure_ai")]
+#[case::bedrock("bedrock")]
+#[tokio::test]
+async fn provider_validation_runs_before_caller_parameter_removal(
+    call: MessagesCall,
+    #[case] provider: &str,
+) {
+    let upstream = upstream([message_response()]).await;
+    let result = run(with_fields(
+        MessagesCall {
+            custom_llm_provider: Some(provider.into()),
+            api_key: Some("sk-test".into()),
+            api_base: Some(upstream.uri()),
+            shaping: MessagesShaping {
+                additional_drop_params: vec!["metadata".into()],
+                ..call.shaping
+            },
+            ..call
+        },
+        json!({"metadata": {"user_id": 7}}),
+    ))
+    .await;
+    let error = result.expect_err("metadata is validated before removal");
+    assert!(
+        error
+            .to_string()
+            .contains("metadata.user_id must be a string"),
+        "{error}"
+    );
+    assert!(received(&upstream).await.is_empty());
 }

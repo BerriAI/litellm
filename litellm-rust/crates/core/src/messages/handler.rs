@@ -9,13 +9,13 @@ use litellm_host::{
 };
 use litellm_http::transport::Error as TransportError;
 use litellm_llms::base_llm::{
-    anthropic_messages::{
+    auth::{Authenticated, resolve_auth},
+    messages::{
         streaming::{ByteStream, StreamDecoder, encode_anthropic_sse},
         transformation::BaseAnthropicMessagesConfig,
     },
-    auth::{Authenticated, resolve_auth},
 };
-use litellm_tracing::{ByteChunk, debug};
+use litellm_tracing::ByteChunk;
 use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
 use serde_json::Value;
 
@@ -48,7 +48,7 @@ pub(super) async fn execute(
     };
     let authenticated = resolve_auth(auth, environment, &|key| std::env::var(key).ok()).await?;
     let wire = hooks
-        .before_send(
+        .before_provider_request(
             WireRequest {
                 url,
                 headers: authenticated.headers,
@@ -58,7 +58,7 @@ pub(super) async fn execute(
         )
         .await?;
     let provider_name = provider.as_str();
-    debug!(provider = provider_name, stream, body = %wire.body, "provider request");
+    log_request_body(provider_name, stream, &wire.body);
     let response = send(
         http,
         Authenticated {
@@ -70,11 +70,6 @@ pub(super) async fn execute(
         timeout,
     )
     .await?;
-    debug!(
-        provider = provider_name,
-        status = response.status().as_u16(),
-        "provider response headers"
-    );
     if !response.status().is_success() {
         return Err(provider_error(response).await);
     }
@@ -87,19 +82,21 @@ pub(super) async fn execute(
         ));
     }
     let text = response.text().await.map_err(network)?;
-    debug!(body = text.as_str(), "provider response body");
+    log_response_body(&text);
     hooks
-        .emit(MachineEvent::ResponseReceived {
+        .on_event(MachineEvent::ResponseReceived {
             raw: RawResponse { body: text.clone() },
         })
-        .await?;
+        .await
+        .map_err(Error::post_call)?;
     decode_response(config, &body.model, &text)
-        .map(|message| MessagesResponse::Message(Box::new(message)))
+        .map(|message| MessagesResponse::Complete(Box::new(message)))
 }
 
 fn serialize_failure(err: serde_json::Error) -> Error {
-    Error::InvalidRequest(format!(
-        "failed to serialize Anthropic messages request: {err}"
+    Error::InvalidRequest(litellm_llms::ErrorDetail::failed(
+        "Anthropic messages request serialization",
+        err,
     ))
 }
 
@@ -120,14 +117,14 @@ async fn send(
         body,
         Some(timeout.unwrap_or(Duration::from_secs(MESSAGES_TIMEOUT_SECS))),
     )?;
-    request.send(http).await.map_err(network)
+    crate::outbound::send(request, http).await.map_err(network)
 }
 
 async fn provider_error(response: reqwest::Response) -> Error {
     let status = response.status().as_u16();
     match response.text().await {
         Ok(text) => {
-            litellm_tracing::debug!(status, body = text.as_str(), "provider error body");
+            log_error_body(status, &text);
             Error::Transport(TransportError::Http {
                 status,
                 body: truncate_error_body(&text),
@@ -142,8 +139,12 @@ fn decode_response(
     model: &str,
     text: &str,
 ) -> Result<AnthropicMessagesResponse, Error> {
-    let response = serde_json::from_str(text)
-        .map_err(|err| Error::InvalidResponse(format!("invalid messages response JSON: {err}")))?;
+    let response = serde_json::from_str(text).map_err(|err| {
+        Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+            "messages response JSON",
+            err,
+        ))
+    })?;
     config
         .transform_anthropic_messages_response(model, response)
         .map_err(Error::from)
@@ -170,7 +171,10 @@ fn streaming_response(
         .boxed(),
         Some(decode) => decoded_chunks(response, decode, provider),
     };
-    MessagesResponse::Stream { headers, chunks }
+    MessagesResponse::Stream {
+        head: super::route::MessagesStreamHead { headers },
+        chunks,
+    }
 }
 
 fn decoded_chunks(
@@ -194,14 +198,26 @@ fn decoded_chunks(
     .boxed()
 }
 
-fn log_chunk(provider: &str, stage: &str, data: &Bytes) {
+fn log_request_body(provider: &str, stream: bool, body: &serde_json::Value) {
+    tracing::debug!(provider, stream, body = %body, "provider request");
+}
+
+fn log_response_body(body: &str) {
+    tracing::debug!(body, "provider response body");
+}
+
+fn log_error_body(status: u16, body: &str) {
+    tracing::debug!(status, body, "provider error body");
+}
+
+fn log_chunk(provider: &str, stage: &str, data: &bytes::Bytes) {
     let chunk = ByteChunk::new(data);
-    debug!(provider, stage, encoding = chunk.encoding(), chunk = %chunk, "stream chunk");
+    tracing::debug!(provider, stage, encoding = chunk.encoding(), chunk = %chunk, "stream chunk");
 }
 
 #[cfg(test)]
 mod tests {
-    use litellm_llms::base_llm::anthropic_messages::streaming::anthropic_sse_event_stream;
+    use litellm_llms::base_llm::messages::streaming::anthropic_sse_event_stream;
     use rstest::rstest;
     use wiremock::{Mock, MockServer, ResponseTemplate, matchers::any};
 
@@ -212,6 +228,7 @@ mod tests {
         "data: {\"type\":\"ping\"}\n\n",
         Some("event: ping\ndata: {\"type\":\"ping\"}\n\n")
     )]
+    #[rstest::rstest]
     #[case::invalid_event("data: invalid\n\ndata: {\"type\":\"ping\"}\n\n", None)]
     #[tokio::test]
     async fn decoded_streams_encode_events_and_stop_at_the_first_error(

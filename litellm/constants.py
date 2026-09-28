@@ -49,6 +49,7 @@ DEFAULT_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_FLUSH_INTERVAL_SE
 DEFAULT_S3_FLUSH_INTERVAL_SECONDS: Final = int(os.getenv("DEFAULT_S3_FLUSH_INTERVAL_SECONDS", 10))
 DEFAULT_S3_BATCH_SIZE: Final = int(os.getenv("DEFAULT_S3_BATCH_SIZE", 512))
 DEFAULT_S3_MAX_CONCURRENT_UPLOADS: Final = int(os.getenv("DEFAULT_S3_MAX_CONCURRENT_UPLOADS", "16"))
+DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY: Final = get_env_int("DEFAULT_S3_MAX_ADAPTIVE_CONCURRENCY", 200)
 # https://docs.aws.amazon.com/AmazonS3/latest/userguide/object-keys.html
 MAX_S3_OBJECT_KEY_BYTES: Final = 1024
 S3_BOUNDED_OBJECT_KEY_HEAD_BYTES: Final = 64
@@ -945,6 +946,7 @@ openai_compatible_endpoints: Final[list] = [
     "https://api.libertai.io/v1",
     "https://pinstripes.io/v1",
     "https://api.meta.ai/v1",
+    "https://api.sailresearch.com/v1",
     "https://api.cognition.ai/v1",
     "https://api.scx.ai/v1",
     "https://gigachat.devices.sberbank.ru/api/v1",
@@ -1020,6 +1022,7 @@ openai_compatible_providers: Final[list] = [
     "meta",  # Meta Model API (Muse Spark) - JSON-configured provider
     "cognition",
     "scx-ai",
+    "sail",
 ]
 
 OPENAI_AUDIO_TRANSCRIPTION_PROVIDERS: Final = frozenset({"openai"} | frozenset(openai_compatible_providers))
@@ -1607,6 +1610,8 @@ ALLOWED_VERTEX_AI_PASSTHROUGH_HEADERS: Final = {
 # e.g., 'x-pass-anthropic-beta: value' becomes 'anthropic-beta: value'
 # Works for all LLM pass-through endpoints (Vertex AI, Anthropic, Bedrock, etc.)
 PASS_THROUGH_HEADER_PREFIX: Final = "x-pass-"
+INTERNAL_KWARG_PREFIX: Final = "_litellm_"
+CONTROL_OPTIONS_KEY: Final = f"{INTERNAL_KWARG_PREFIX}control"
 
 AZURE_SPEECH_CUSTOM_LLM_PROVIDER: Final = "azure_speech"
 AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX: Final = "/azure_speech"
@@ -1872,6 +1877,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "cost_margin_config",
     "block_requests_for_models_without_pricing",
     "budget_exceeded_throttle_percentage",
+    "log_auth_failure_key_identity",
     # Every field editable from the Admin UI (proxy_server._GENERAL_SETTINGS_UI_LITELLM_FIELDS)
     # must be listed here so a DB write from one worker overrides the live litellm attribute on
     # the others when config reloads; otherwise peer workers stay on their startup value.

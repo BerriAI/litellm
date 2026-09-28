@@ -49,7 +49,8 @@ if TYPE_CHECKING:
     from litellm.types.utils import GuardrailStatus
 
 TOKEN_ENDPOINT_TEMPLATE: Final = "https://login.microsoftonline.com/{tenant_id}/oauth2/v2.0/token"
-EVALUATE_PATH: Final = "/agents/tool-evaluation/evaluate"
+EVALUATE_URL: Final = f"{AGENT_365_PROD_API_BASE}/agents/tool-evaluation/evaluate"
+OBO_SCOPE: Final = f"{AGENT_365_PROD_RESOURCE_APP_ID}/{AGENT_365_SCOPE_NAME}"
 MCP_SESSION_ID_HEADER: Final = "mcp-session-id"
 DEFENDER_STATUS_EVALUATED: Final = "Evaluated"
 _GATEWAY_OWNED_TOKEN_ERRORS: Final = frozenset(
@@ -169,9 +170,6 @@ class Agent365Guardrail(CustomGuardrail):
         tenant_id: str,
         client_id: str,
         client_secret: str,
-        api_base: str = AGENT_365_PROD_API_BASE,
-        resource_app_id: str = AGENT_365_PROD_RESOURCE_APP_ID,
-        agent_id: str | None = None,
         request_timeout: float = 10.0,
         unreachable_fallback: Literal["fail_closed", "fail_open"] = "fail_closed",
         async_handler: AsyncHTTPHandler | None = None,
@@ -187,9 +185,6 @@ class Agent365Guardrail(CustomGuardrail):
         self.tenant_id = tenant_id
         self.client_id = client_id
         self.client_secret = client_secret
-        self.api_base = api_base.rstrip("/")
-        self.resource_app_id = resource_app_id
-        self.agent_id = agent_id
         self.request_timeout = request_timeout
         self.unreachable_fallback: Literal["fail_closed", "fail_open"] = (
             "fail_open" if unreachable_fallback == "fail_open" else "fail_closed"
@@ -246,7 +241,7 @@ class Agent365Guardrail(CustomGuardrail):
                     tool_name=tool_name,
                     reason=(
                         f"Entra rejected the gateway's own Agent 365 credentials ({exc.error_code}); "
-                        "check the guardrail's client_id, client_secret and resource_app_id"
+                        "check the guardrail's client_id and client_secret"
                     ),
                 )
             self._handle_caller_fault(
@@ -278,7 +273,7 @@ class Agent365Guardrail(CustomGuardrail):
         start: Final = time.perf_counter()
         try:
             response: Final = await self._post_allowing_error_status(
-                url=f"{self.api_base}{EVALUATE_PATH}",
+                url=EVALUATE_URL,
                 json=self._build_evaluate_payload(data=data, user_api_key_dict=user_api_key_dict),
                 headers={"Authorization": f"Bearer {obo_token}"},  # mutable-ok: httpx header dict
             )
@@ -412,7 +407,7 @@ class Agent365Guardrail(CustomGuardrail):
         tool_name: Final = str(data.get("mcp_tool_name") or "")
         arguments: Final = data.get("mcp_arguments")
         server_name: Final = str(data.get("mcp_server_name") or "litellm")
-        agent_id: Final = self.agent_id or user_api_key_dict.key_alias
+        agent_id: Final = user_api_key_dict.key_alias
         description: Final = data.get("mcp_tool_description")
         tool_reference: Final = _ToolReference(
             name=tool_name,
@@ -476,7 +471,7 @@ class Agent365Guardrail(CustomGuardrail):
                 "client_id": self.client_id,
                 "client_secret": self.client_secret,
                 "assertion": assertion,
-                "scope": f"{self.resource_app_id}/{AGENT_365_SCOPE_NAME}",
+                "scope": OBO_SCOPE,
                 "requested_token_use": "on_behalf_of",
             },
             headers={"Content-Type": "application/x-www-form-urlencoded"},  # mutable-ok: httpx header dict
@@ -597,7 +592,7 @@ class Agent365Guardrail(CustomGuardrail):
         latency_ms: float | None = None,
     ) -> dict:  # mutable-ok: returns the request data dict per hook contract
         if self.unreachable_fallback == "fail_open":
-            verbose_proxy_logger.warning(
+            verbose_proxy_logger.error(
                 "Agent 365 guardrail (%s): %s; unreachable_fallback='fail_open', allowing tool call '%s' unscanned",
                 self.guardrail_name,
                 reason,
