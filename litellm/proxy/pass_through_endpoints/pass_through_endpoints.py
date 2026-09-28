@@ -3539,11 +3539,11 @@ async def _filter_endpoints_by_team_allowed_routes(
 
 
 def _mask_pass_through_headers(headers: Mapping[str, object]) -> dict[str, object]:
-    """Replace every header value except empty ones and ``os.environ/`` references with ``REDACTED_BY_LITELM_STRING``."""
+    """Replace every header value except empty ones and bare ``os.environ/`` references with ``REDACTED_BY_LITELM_STRING``."""
     return {
         name: (
             value
-            if value is None or value == "" or (isinstance(value, str) and "os.environ/" in value)
+            if value is None or value == "" or (isinstance(value, str) and value.startswith("os.environ/"))
             else REDACTED_BY_LITELM_STRING
         )
         for name, value in headers.items()
@@ -3551,7 +3551,8 @@ def _mask_pass_through_headers(headers: Mapping[str, object]) -> dict[str, objec
 
 
 def _with_masked_headers(endpoint: PassThroughGenericEndpoint) -> PassThroughGenericEndpoint:
-    return endpoint.model_copy(update={"headers": _mask_pass_through_headers(endpoint.headers)})
+    headers: Final = cast("Mapping[str, object]", endpoint.headers)  # cast-ok: the model types headers as a bare dict
+    return endpoint.model_copy(update={"headers": _mask_pass_through_headers(headers)})
 
 
 def _reject_redacted_pass_through_headers(headers: Mapping[str, object], stored: Mapping[str, object]) -> None:
@@ -3587,6 +3588,44 @@ def _restore_redacted_pass_through_headers(
         name: _stored_header_value(stored, name) if value == REDACTED_BY_LITELM_STRING else value
         for name, value in incoming.items()
     }
+
+
+def _endpoint_key(endpoint: Mapping[str, object]) -> object:
+    return endpoint.get("id") or endpoint.get("path")
+
+
+def restore_redacted_pass_through_endpoint_headers(incoming: object, stored: object) -> object:
+    """Restore redacted header values in a ``pass_through_endpoints`` list from the stored entry with the same id or path."""
+    if not isinstance(incoming, list):
+        return incoming
+    stored_headers: Final[dict[object, Mapping[str, object]]] = {}
+    for stored_endpoint in cast("list[object]", stored) if isinstance(stored, list) else []:  # cast-ok: JSON list
+        if isinstance(stored_endpoint, dict):
+            endpoint_map = cast("Mapping[str, object]", stored_endpoint)  # cast-ok: JSON object
+            headers = endpoint_map.get("headers")
+            stored_headers[_endpoint_key(endpoint_map)] = (
+                cast("Mapping[str, object]", headers) if isinstance(headers, dict) else {}  # cast-ok: JSON object
+            )
+    restored: Final[list[object]] = []
+    for endpoint in cast("list[object]", incoming):  # cast-ok: JSON list
+        if not isinstance(endpoint, dict):
+            restored.append(endpoint)
+            continue
+        endpoint_map = cast("Mapping[str, object]", endpoint)  # cast-ok: JSON object
+        headers = endpoint_map.get("headers")
+        if not isinstance(headers, dict):
+            restored.append(endpoint_map)
+            continue
+        restored.append(
+            {
+                **endpoint_map,
+                "headers": _restore_redacted_pass_through_headers(
+                    cast("Mapping[str, object]", headers),  # cast-ok: JSON object
+                    stored_headers.get(_endpoint_key(endpoint_map), {}),
+                ),
+            }
+        )
+    return restored
 
 
 @router.get(
@@ -3710,7 +3749,10 @@ async def update_pass_through_endpoints(
     # Exclude is_from_config as it's a response-only field (computed at read time)
     update_data: Final = data.model_dump(exclude_unset=True, exclude_none=True, exclude={"is_from_config"})
     if "headers" in update_data:
-        update_data["headers"] = _restore_redacted_pass_through_headers(update_data["headers"], found_endpoint.headers)
+        update_data["headers"] = _restore_redacted_pass_through_headers(
+            cast("Mapping[str, object]", update_data["headers"]),  # cast-ok: model_dump of the headers dict
+            cast("Mapping[str, object]", found_endpoint.headers),  # cast-ok: the model types headers as a bare dict
+        )
 
     # Start with existing endpoint data
     endpoint_dict: Final = found_endpoint.model_dump()
@@ -3816,7 +3858,10 @@ async def create_pass_through_endpoints(
     ## Auto-generate ID if not provided
     # Exclude is_from_config as it's a response-only field (computed at read time)
     data_dict: Final = data.model_dump(exclude={"is_from_config"})
-    _reject_redacted_pass_through_headers(data_dict["headers"], {})
+    _reject_redacted_pass_through_headers(
+        cast("Mapping[str, object]", data.headers),
+        {},  # cast-ok: the model types headers as a bare dict
+    )
     if data_dict.get("id") is None:
         data_dict["id"] = str(uuid.uuid4())
 

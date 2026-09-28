@@ -7682,7 +7682,7 @@ async def test_get_pass_through_endpoints_masks_header_values(team_id):
         "x-empty": "",
         "x-int": "REDACTED_BY_LITELM",
         "x-env": "os.environ/CFG_TOKEN",
-        "x-env-embedded": "Bearer os.environ/CFG_TOKEN",
+        "x-env-embedded": "REDACTED_BY_LITELM",
     }
     assert by_path["/db"].headers == {"x-api-key": "REDACTED_BY_LITELM", "x-enc": "REDACTED_BY_LITELM"}
     assert config_passthrough_endpoints[0]["headers"]["Authorization"] == "Bearer sk-yaml-secret-123456"
@@ -7814,3 +7814,36 @@ def test_restore_redacted_pass_through_headers_prefers_exact_name_over_case_inse
         "authorization": "Bearer B",
         "X-NUM": 12345,
     }
+
+
+def test_restore_redacted_pass_through_endpoint_headers_matches_stored_entry_by_id_then_path():
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        restore_redacted_pass_through_endpoint_headers,
+    )
+
+    stored = [
+        {"id": "ep-1", "path": "/a", "headers": {"Authorization": "Bearer id-secret"}},
+        {"path": "/legacy", "headers": {"x-api-key": "path-secret"}},
+    ]
+    incoming = [
+        {"id": "ep-1", "path": "/a-moved", "headers": {"Authorization": "REDACTED_BY_LITELM", "x-new": "v"}},
+        {"path": "/legacy", "headers": {"x-api-key": "REDACTED_BY_LITELM"}},
+    ]
+
+    assert restore_redacted_pass_through_endpoint_headers(incoming, stored) == [
+        {"id": "ep-1", "path": "/a-moved", "headers": {"Authorization": "Bearer id-secret", "x-new": "v"}},
+        {"path": "/legacy", "headers": {"x-api-key": "path-secret"}},
+    ]
+
+
+def test_restore_redacted_pass_through_endpoint_headers_rejects_placeholder_without_stored_entry():
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        restore_redacted_pass_through_endpoint_headers,
+    )
+
+    with pytest.raises(HTTPException) as exc_info:
+        restore_redacted_pass_through_endpoint_headers(
+            [{"id": "new", "path": "/new", "headers": {"Authorization": "REDACTED_BY_LITELM"}}], None
+        )
+
+    assert exc_info.value.status_code == 400

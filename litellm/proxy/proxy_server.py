@@ -738,6 +738,7 @@ from litellm.proxy.pass_through_endpoints.openai_passthrough_endpoints import (
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     initialize_pass_through_endpoints,
+    restore_redacted_pass_through_endpoint_headers,
 )
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     router as pass_through_router,
@@ -17888,6 +17889,11 @@ async def update_config(
                         existing["alerting"] = ["slack"]
                     elif isinstance(existing["alerting"], list) and "slack" not in existing["alerting"]:
                         existing["alerting"].append("slack")
+                if k == "pass_through_endpoints":
+                    stored_section = cast("Mapping[str, JsonValue]", existing)  # cast-ok: section read from the DB
+                    restored = restore_redacted_pass_through_endpoint_headers(v, stored_section.get(k))
+                    existing[k] = cast(JsonValue, restored)  # cast-ok: list in, list out
+                    continue
                 existing[k] = v
             await _upsert_section("general_settings", existing)
             asyncio.create_task(
@@ -18149,6 +18155,11 @@ async def update_config_general_settings(
     field_value = data.field_value
     if data.field_name == "plugins":
         field_value = _preserve_redacted_plugin_keys(field_value, general_settings.get("plugins"))
+    elif data.field_name == "pass_through_endpoints":
+        field_value = restore_redacted_pass_through_endpoint_headers(
+            cast(object, field_value),  # cast-ok: validated by ConfigGeneralSettings above
+            general_settings.get("pass_through_endpoints"),
+        )
 
     general_settings[data.field_name] = cast(JsonValue, field_value)  # cast-ok: ConfigGeneralSettings validated it
 
