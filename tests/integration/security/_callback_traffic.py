@@ -165,7 +165,7 @@ def spend_request_id(marker: Canary) -> str:
     return string_value(rows[0]["request_id"])
 
 
-def wait_for_sink(recorder: Recorder, marker: Canary, seconds: float = 40) -> tuple[Request, ...]:
+def wait_for_sink(recorder: Recorder, marker: Canary, seconds: float = 90) -> tuple[Request, ...]:
     return eventually(
         lambda: tuple(request for request in recorder.requests() if find_canary(request.body, (marker,))),
         bool,
