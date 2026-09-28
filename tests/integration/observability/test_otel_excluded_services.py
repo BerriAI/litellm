@@ -140,6 +140,21 @@ def _assert_core_spans_present(spans: tuple[Span, ...]) -> None:
     assert any(name.startswith("auth") for name in names), f"auth span missing in {names}"
 
 
+def _assert_tenant_keeps_redis_without_postgres(
+    candidate: Gateway, audit_sinks: SpanSinks, langfuse_vars: Mapping[str, JsonValue]
+) -> None:
+    tenant_start, _ = recorded_spans(audit_sinks.tenant)
+    operator_start, _ = recorded_spans(audit_sinks.operator)
+    traffic: Final = _drive(candidate, langfuse_vars)
+    _await_db_span(audit_sinks.operator, None, "batch_write_to_db", seconds=60, since=operator_start)
+    tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
+    _await_db_span(audit_sinks.tenant, tenant_trace, "redis", seconds=60)
+    systems: Final = _db_systems(_trace_spans(audit_sinks.tenant, tenant_trace, seconds=15))
+    assert "redis" in systems, f"redis spans missing at tenant: {systems}"
+    _, all_tenant = recorded_spans(audit_sinks.tenant, tenant_start)
+    assert "postgresql" not in _db_systems(all_tenant), f"postgresql spans reached tenant: {_db_systems(all_tenant)}"
+
+
 def _guardrail_block(config: dict) -> None:
     config["guardrails"] = [
         {
@@ -216,6 +231,7 @@ def test_env_excluded_services_drops_only_redis(
         assert "redis" not in systems, f"redis spans reached tenant: {sorted(str(s['name']) for s in tenant_spans)}"
 
 
+@pytest.mark.timeout(180)
 def test_config_excluded_services_wins_over_env(
     gateway: Gateway,
     audit_sinks: SpanSinks,
@@ -232,19 +248,10 @@ def test_config_excluded_services_wins_over_env(
     with owned_proxy(
         gateway, tmp_path, {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "redis"}, config=config, workers=2
     ) as candidate:
-        start, _ = recorded_spans(audit_sinks.tenant)
-        traffic: Final = _drive(candidate, langfuse_vars)
-        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
-        _await_db_span(audit_sinks.tenant, tenant_trace, "redis", seconds=60)
-        tenant_spans: Final = _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
-        _, all_tenant = recorded_spans(audit_sinks.tenant, start)
-        systems: Final = _db_systems(tenant_spans)
-        assert "redis" in systems, f"redis spans missing at tenant: {systems}"
-        assert "postgresql" not in _db_systems(all_tenant), (
-            f"postgresql spans reached tenant: {_db_systems(all_tenant)}"
-        )
+        _assert_tenant_keeps_redis_without_postgres(candidate, audit_sinks, langfuse_vars)
 
 
+@pytest.mark.timeout(180)
 def test_excluded_services_applies_with_preset_ordered_first(
     gateway: Gateway,
     audit_sinks: SpanSinks,
@@ -258,20 +265,12 @@ def test_excluded_services_applies_with_preset_ordered_first(
     config: Final = _config_with(
         tmp_path, otel_audit_config, otel={"excluded_services": ["postgres"]}, extra=preset_first
     )
-    with owned_proxy(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config, workers=2) as candidate:
-        start, _ = recorded_spans(audit_sinks.tenant)
-        traffic: Final = _drive(candidate, langfuse_vars)
-        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
-        _await_db_span(audit_sinks.tenant, tenant_trace, "redis", seconds=60)
-        tenant_spans: Final = _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
-        _, all_tenant = recorded_spans(audit_sinks.tenant, start)
-        systems: Final = _db_systems(tenant_spans)
-        assert "redis" in systems, f"redis spans missing at tenant: {systems}"
-        assert "postgresql" not in _db_systems(all_tenant), (
-            f"postgresql spans reached tenant: {_db_systems(all_tenant)}"
-        )
+    overrides: Final = {"LITELLM_OTEL_V2": "1", "OTEL_EXPORTER": "http/json", "OTEL_ENDPOINT": audit_sinks.operator}
+    with owned_proxy(gateway, tmp_path, overrides, config=config, workers=2) as candidate:
+        _assert_tenant_keeps_redis_without_postgres(candidate, audit_sinks, langfuse_vars)
 
 
+@pytest.mark.timeout(180)
 def test_bogus_excluded_service_logs_error_and_drops_at_proxy_start(
     gateway: Gateway,
     audit_sinks: SpanSinks,
@@ -282,19 +281,10 @@ def test_bogus_excluded_service_logs_error_and_drops_at_proxy_start(
     config: Final = _config_with(tmp_path, otel_audit_config, otel={"excluded_services": ["auth", "postgres"]})
     with owned_proxy_process(gateway, tmp_path, {"LITELLM_OTEL_V2": "1"}, config=config, workers=2) as owned:
         assert "'auth' is not a datastore service; ignored" in owned.log.read_text(), owned.log.read_text()[-3000:]
-        start, _ = recorded_spans(audit_sinks.tenant)
-        traffic: Final = _drive(owned.gateway, langfuse_vars)
-        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
-        _await_db_span(audit_sinks.tenant, tenant_trace, "redis", seconds=60)
-        tenant_spans: Final = _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
-        _, all_tenant = recorded_spans(audit_sinks.tenant, start)
-        systems: Final = _db_systems(tenant_spans)
-        assert "redis" in systems, f"redis spans missing at tenant: {systems}"
-        assert "postgresql" not in _db_systems(all_tenant), (
-            f"postgresql spans reached tenant: {_db_systems(all_tenant)}"
-        )
+        _assert_tenant_keeps_redis_without_postgres(owned.gateway, audit_sinks, langfuse_vars)
 
 
+@pytest.mark.timeout(180)
 def test_valid_config_excluded_services_tolerates_bogus_env(
     gateway: Gateway,
     audit_sinks: SpanSinks,
@@ -306,19 +296,10 @@ def test_valid_config_excluded_services_tolerates_bogus_env(
     with owned_proxy(
         gateway, tmp_path, {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "auth"}, config=config, workers=2
     ) as candidate:
-        start, _ = recorded_spans(audit_sinks.tenant)
-        traffic: Final = _drive(candidate, langfuse_vars)
-        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
-        _await_db_span(audit_sinks.tenant, tenant_trace, "redis", seconds=60)
-        tenant_spans: Final = _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
-        _, all_tenant = recorded_spans(audit_sinks.tenant, start)
-        systems: Final = _db_systems(tenant_spans)
-        assert "redis" in systems, f"redis spans missing at tenant: {systems}"
-        assert "postgresql" not in _db_systems(all_tenant), (
-            f"postgresql spans reached tenant: {_db_systems(all_tenant)}"
-        )
+        _assert_tenant_keeps_redis_without_postgres(candidate, audit_sinks, langfuse_vars)
 
 
+@pytest.mark.timeout(180)
 def test_bogus_excluded_services_env_logs_and_drops_with_preset_alongside_otel(
     gateway: Gateway,
     audit_sinks: SpanSinks,
@@ -333,19 +314,10 @@ def test_bogus_excluded_services_env_logs_and_drops_with_preset_alongside_otel(
     overrides: Final = {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "auth,postgres"}
     with owned_proxy_process(gateway, tmp_path, overrides, config=config, workers=2) as owned:
         assert "'auth' is not a datastore service; ignored" in owned.log.read_text(), owned.log.read_text()[-3000:]
-        start, _ = recorded_spans(audit_sinks.tenant)
-        traffic: Final = _drive(owned.gateway, langfuse_vars)
-        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
-        _await_db_span(audit_sinks.tenant, tenant_trace, "redis", seconds=60)
-        tenant_spans: Final = _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
-        _, all_tenant = recorded_spans(audit_sinks.tenant, start)
-        systems: Final = _db_systems(tenant_spans)
-        assert "redis" in systems, f"redis spans missing at tenant: {systems}"
-        assert "postgresql" not in _db_systems(all_tenant), (
-            f"postgresql spans reached tenant: {_db_systems(all_tenant)}"
-        )
+        _assert_tenant_keeps_redis_without_postgres(owned.gateway, audit_sinks, langfuse_vars)
 
 
+@pytest.mark.timeout(180)
 def test_bogus_excluded_services_env_logs_and_drops_without_otel_callback(
     gateway: Gateway,
     audit_sinks: SpanSinks,
@@ -357,20 +329,15 @@ def test_bogus_excluded_services_env_logs_and_drops_without_otel_callback(
         config["litellm_settings"]["callbacks"] = ["langfuse_otel"]
 
     config: Final = _config_with(tmp_path, otel_audit_config, extra=presets_only)
-    overrides: Final = {"LITELLM_OTEL_V2": "1", "LITELLM_OTEL_EXCLUDED_SERVICES": "auth,postgres"}
+    overrides: Final = {
+        "LITELLM_OTEL_V2": "1",
+        "LITELLM_OTEL_EXCLUDED_SERVICES": "auth,postgres",
+        "OTEL_EXPORTER": "http/json",
+        "OTEL_ENDPOINT": audit_sinks.operator,
+    }
     with owned_proxy_process(gateway, tmp_path, overrides, config=config, workers=2) as owned:
         assert "'auth' is not a datastore service; ignored" in owned.log.read_text(), owned.log.read_text()[-3000:]
-        start, _ = recorded_spans(audit_sinks.tenant)
-        traffic: Final = _drive(owned.gateway, langfuse_vars)
-        tenant_trace: Final = _trace_id(audit_sinks.tenant, traffic)
-        _await_db_span(audit_sinks.tenant, tenant_trace, "redis", seconds=60)
-        tenant_spans: Final = _trace_spans(audit_sinks.tenant, tenant_trace, seconds=15)
-        _, all_tenant = recorded_spans(audit_sinks.tenant, start)
-        systems: Final = _db_systems(tenant_spans)
-        assert "redis" in systems, f"redis spans missing at tenant: {systems}"
-        assert "postgresql" not in _db_systems(all_tenant), (
-            f"postgresql spans reached tenant: {_db_systems(all_tenant)}"
-        )
+        _assert_tenant_keeps_redis_without_postgres(owned.gateway, audit_sinks, langfuse_vars)
 
 
 def test_postgres_exclusion_covers_batch_write_to_db(
