@@ -22,6 +22,7 @@ from typing import Final
 
 import pytest
 from e2e_http import RateLimitedError, Success
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import KeyGenerateBody, LiteLLMParamsBody, SpendLogs, SpendLogsParams
 from spend_e2e_client import (
@@ -70,6 +71,15 @@ def _require_row(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.chat_completions.logs_cost")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.GEMINI,),
+        models=("gemini-2.5-flash",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_chat_completion_writes_nonzero_spend_row(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -105,6 +115,15 @@ def test_chat_completion_writes_nonzero_spend_row(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.stream.logs_cost")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.GEMINI,),
+        models=("gemini-2.5-flash",),
+        mode=Mode.STREAM,
+    )
+)
 def test_streaming_chat_completion_tracks_spend(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -133,6 +152,15 @@ def test_streaming_chat_completion_tracks_spend(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.messages_bridge.logs_cost")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.MESSAGES,
+        providers=(Provider.OPENAI,),
+        models=("openai-responses-codex",),
+        mode=Mode.STREAM,
+    )
+)
 def test_streaming_messages_via_responses_bridge_tracks_spend(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -203,6 +231,15 @@ def test_streaming_messages_via_responses_bridge_tracks_spend(
 
 @pytest.mark.covers("quota_management.spend_tracking.embeddings.logs_cost")
 @pytest.mark.covers("llm.embeddings.openai.basic.nonstream.cost_logged")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.EMBEDDINGS,
+        providers=(Provider.OPENAI,),
+        models=("openai-text-embedding-3-small",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_embedding_writes_nonzero_spend_row(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -226,6 +263,15 @@ def test_embedding_writes_nonzero_spend_row(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.cache_hit.zero_cost")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.GEMINI,),
+        models=("gemini-2.5-flash",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_cache_hit_is_zero_cost_and_suffixed(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -262,6 +308,15 @@ def test_cache_hit_is_zero_cost_and_suffixed(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.key_rollup.matches_sum_of_logs")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.GEMINI,),
+        models=("gemini-2.5-flash",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> None:
     for _ in range(2):
         _ = unwrap(
@@ -290,6 +345,15 @@ def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> N
 
 @pytest.mark.replayable
 @pytest.mark.covers("quota_management.spend_tracking.concurrent_burst.loses_no_spend")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.OPENAI,),
+        models=("openai/gpt-5.6-luna",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_burst_of_concurrent_calls_loses_no_spend(
     client: SpendClient, resources: ResourceManager
 ) -> None:
@@ -307,6 +371,15 @@ def test_burst_of_concurrent_calls_loses_no_spend(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.pagination.keeps_total")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.GEMINI,),
+        models=("gemini-2.5-flash",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -360,6 +433,15 @@ def test_spend_logs_v2_pagination_caps_pages_and_keeps_total(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.tags.attributes_spend")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.GEMINI,),
+        models=("gemini-2.5-flash",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_request_tags_round_trip(client: SpendClient, scoped_key: str) -> None:
     tag = f"e2e-spend-{unique_marker()}"
     _ = unwrap(
@@ -377,6 +459,15 @@ def test_request_tags_round_trip(client: SpendClient, scoped_key: str) -> None:
 
 
 @pytest.mark.covers("quota_management.spend_tracking.tags.attributes_spend")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.GEMINI,),
+        models=("gemini-2.5-flash",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_tag_spend_matches_sum_of_tagged_logs(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -415,6 +506,15 @@ def test_tag_spend_matches_sum_of_tagged_logs(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.end_user.attributes_spend")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.GEMINI,),
+        models=("gemini-2.5-flash",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_end_user_spend_attributed_on_row(
     client: SpendClient, scoped_key: str, resources: ResourceManager
 ) -> None:
@@ -468,6 +568,15 @@ def test_end_user_header_attributes_responses_row(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.per_model.writes_own_rows")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.GEMINI, Provider.ANTHROPIC),
+        models=("gemini-2.5-flash", "claude-haiku-4-5"),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_each_model_on_a_shared_key_gets_its_own_row(
     client: SpendClient, scoped_key: str
 ) -> None:
@@ -517,6 +626,15 @@ def test_each_model_on_a_shared_key_gets_its_own_row(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.failure.writes_failure_row")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.OPENAI,),
+        models=("openai/gpt-5.5",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_failure_call_writes_failure_status_row(
     client: SpendClient, resources: ResourceManager, scoped_key: str
 ) -> None:
@@ -624,6 +742,14 @@ def test_pre_call_rejection_row_attributes_provider_and_model_id(
 
 
 @pytest.mark.covers("quota_management.spend_tracking.spend_calculate.returns_cost")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.SPEND_REPORTING,
+        providers=(Provider.GEMINI,),
+        models=("gemini-2.5-flash",),
+    )
+)
 def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
     cost = client.calculate_spend(
         "gemini-2.5-flash", "estimate the cost of this request"
@@ -634,6 +760,15 @@ def test_spend_calculate_returns_nonzero_cost(client: SpendClient) -> None:
     )
 
 
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.GEMINI,),
+        models=("gemini-2.5-flash",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_spend_logs_endpoint_returns_spend(
     client: SpendClient, scoped_key: str
 ) -> None:

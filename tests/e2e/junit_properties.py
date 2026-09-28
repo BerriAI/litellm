@@ -20,7 +20,7 @@ from collections.abc import Iterable
 
 import pytest
 from coverage_registry.management_cases import case_properties
-from e2e_metadata import step_properties
+from e2e_metadata import step_properties, subject_properties
 
 # Hardcoded because the runner image copies tests/e2e/ to /app/e2e, so nothing
 # at runtime names this suite's place in the repo. test_junit_properties.py
@@ -90,13 +90,22 @@ def covers_from_item(item: pytest.Item) -> tuple[str, ...]:
 
 def result_properties(item: pytest.Item) -> tuple[tuple[str, str], ...]:
     """The custom signals a standard reporter cannot derive: the normalized suite
-    package, the comma-joined coverage-registry cell ids this test covers, and the
-    repo-relative `path:line` its source sits at."""
-    return (
+    package, the comma-joined coverage-registry cell ids this test covers, the
+    repo-relative `path:line` its source sits at, and the typed `@meta(Subject(...))`
+    fields.
+
+    The fixed three-tuple prefix is load-bearing and stays byte-identical: Loki,
+    Grafana, the status page and tests/integration/conftest.py all read
+    `package`/`covers`/`source` today. `subject_properties` only ever appends, and
+    appends nothing at all for a test with no `meta` marker -- which is every test
+    in the suite until the backfill lands.
+    """
+    fixed = (
         ("package", package_from_nodeid(item.nodeid)),
         ("covers", ",".join(covers_from_item(item))),
         ("source", source_from_item(item)),
-    ) + case_properties(item.nodeid)
+    )
+    return fixed + case_properties(item.nodeid) + subject_properties(item)
 
 
 def attach_result_properties(item: pytest.Item) -> None:

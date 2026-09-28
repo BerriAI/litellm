@@ -35,6 +35,7 @@ from cost_rows import (
 )
 from e2e_config import CHEAP_OPENAI_MODEL, unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import (
     AnthropicMessagesBody,
@@ -97,6 +98,16 @@ def _served_tier(chunks: list[_StreamChunk]) -> str:
 
 class TestServiceTierPricing:
     @pytest.mark.covers("quota_management.spend_tracking.service_tier.bills_tier_rates")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(BACKEND,),
+            capabilities=(Capability.REASONING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_priority_tier_bills_priority_rates(
         self, client: SpendClient, resources: ResourceManager, scoped_key: str
     ) -> None:

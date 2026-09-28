@@ -52,6 +52,7 @@ from cost_rows import (
 )
 from e2e_config import unique_marker
 from e2e_http import unwrap
+from e2e_metadata import Capability, Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 from models import AnthropicMessagesBody, ChatBody, ChatMessage, LiteLLMParamsBody
 from pydantic import BaseModel
@@ -122,6 +123,16 @@ def _assert_cache_read_billed(row: CostRow) -> None:
 
 class TestCacheCostAccounting:
     @pytest.mark.covers("quota_management.spend_tracking.cache_write.bills_cache_creation_rate")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(CACHE_WRITE_BACKEND,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_cache_write_tokens_billed_at_cache_creation_rate(
         self, client: SpendClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -152,6 +163,16 @@ class TestCacheCostAccounting:
         assert_total_is_sum_of_components(row)
 
     @pytest.mark.covers("quota_management.spend_tracking.cost_breakdown.reports_component_costs")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(CACHE_READ_BACKEND,),
+            capabilities=(Capability.PROMPT_CACHING, Capability.REASONING),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_cost_breakdown_reports_component_costs(
         self, client: SpendClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -216,6 +237,16 @@ class TestCacheCostAccounting:
         _assert_cache_read_billed(row)
 
     @pytest.mark.covers("quota_management.spend_tracking.stream_cache_read.bills_cache_read_rate")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.CHAT_COMPLETIONS,
+            providers=(Provider.OPENAI,),
+            models=(CACHE_READ_BACKEND,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.STREAM,
+        )
+    )
     def test_streaming_cache_read_billed_at_cache_read_rate(
         self, client: SpendClient, resources: ResourceManager, scoped_key: str
     ) -> None:
@@ -247,6 +278,16 @@ class TestCacheCostAccounting:
         _assert_cache_read_billed(row)
 
     @pytest.mark.covers("quota_management.spend_tracking.messages_bridge.keeps_cache_tokens")
+    @meta(
+        Subject(
+            domain=Domain.SPEND_BUDGETS,
+            route=Route.MESSAGES,
+            providers=(Provider.OPENAI,),
+            models=(BRIDGE_BACKEND,),
+            capabilities=(Capability.PROMPT_CACHING,),
+            mode=Mode.NONSTREAM,
+        )
+    )
     def test_messages_bridge_keeps_cache_tokens(
         self, client: SpendClient, resources: ResourceManager, scoped_key: str
     ) -> None:

@@ -6,6 +6,7 @@ import pytest
 from budget_client import BudgetClient
 from e2e_config import unique_marker
 from e2e_http import require_successful_call
+from e2e_metadata import Domain, Mode, Provider, Route, Subject, meta
 from lifecycle import ResourceManager
 
 pytestmark = pytest.mark.e2e
@@ -17,6 +18,15 @@ def _as_datetime(value: str) -> datetime:
 
 
 @pytest.mark.covers("quota_management.budget.team_member.resets_after_window")
+@meta(
+    Subject(
+        domain=Domain.SPEND_BUDGETS,
+        route=Route.CHAT_COMPLETIONS,
+        providers=(Provider.ANTHROPIC,),
+        models=("claude-haiku-4-5",),
+        mode=Mode.NONSTREAM,
+    )
+)
 def test_team_member_budget_reset_keeps_advancing(client: BudgetClient, resources: ResourceManager) -> None:
     team_id = client.create_team(alias=f"e2e-member-reset-{unique_marker()}", max_budget=100.0)
     resources.defer(lambda: client.delete_team(team_id))
