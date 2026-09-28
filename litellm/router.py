@@ -8470,8 +8470,12 @@ class Router:
             return False
         if self.enable_weighted_failover:
             return True
-        if len(self._anthropic_messages_order_levels(model_group, kwargs)) > 1:
-            return True
+        order_levels: Final = self._anthropic_messages_order_levels(model_group, kwargs)
+        if len(order_levels) > 1:
+            current_target: Final = kwargs.get("_target_order")
+            skip_up_to: Final = current_target if current_target is not None else order_levels[0]
+            if any(o > skip_up_to for o in order_levels):
+                return True
         content_policy_fallbacks: Final = kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks)
         if content_policy_fallbacks is not None and self._has_content_policy_fallback(model_group, kwargs):
             return True

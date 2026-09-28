@@ -14086,6 +14086,24 @@ def test_anthropic_messages_stream_can_fall_back_order_levels(orders, expected):
     assert router._anthropic_messages_stream_can_fall_back("primary", {"model": "primary"}) is expected
 
 
+@pytest.mark.parametrize(
+    "request_kwargs,expected",
+    [
+        pytest.param({"model": "primary"}, True, id="no-target-order"),
+        pytest.param({"model": "primary", "_target_order": 1}, True, id="higher-order-remains"),
+        pytest.param({"model": "primary", "_target_order": 2}, False, id="top-order-no-order-fallback"),
+        pytest.param(
+            {"model": "primary", "_target_order": 2, "fallbacks": [{"primary": ["fallback"]}]},
+            True,
+            id="top-order-external-fallback",
+        ),
+    ],
+)
+def test_anthropic_messages_stream_can_fall_back_order_target(request_kwargs, expected):
+    router = Router(model_list=_anthropic_messages_two_order_primary_model_list(), fallbacks=None)
+    assert router._anthropic_messages_stream_can_fall_back("primary", request_kwargs) is expected
+
+
 def test_anthropic_messages_order_levels_direct_call():
     router = Router(
         model_list=[
