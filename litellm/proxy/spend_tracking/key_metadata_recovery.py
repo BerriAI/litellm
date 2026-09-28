@@ -4,7 +4,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import Final, TypeVar
+from typing import Final, Protocol, TypeVar, cast
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -24,6 +24,11 @@ from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.user_repository import UserRepository
 
 _T = TypeVar("_T")
+
+
+class _PrismaRawQueryDatabase(Protocol):
+    def query_raw(self, query: str, *values: object) -> Awaitable[object]: ...
+
 
 _ACTIVE_TOKEN_DIGEST_SQL: Final = """
 SELECT encode(sha256(convert_to(token, 'UTF8')), 'hex') AS digest, key_alias, team_id, user_id
@@ -58,6 +63,13 @@ FROM (
       AND "startTime" < $3::timestamp
 ) named
 WHERE COALESCE(key_alias, user_id, team_id) IS NOT NULL
+GROUP BY api_key
+"""
+
+_DAILY_USER_SPEND_OWNER_SQL: Final = """
+SELECT api_key, MIN(user_id) AS first_owner, MAX(user_id) AS last_owner
+FROM "LiteLLM_DailyUserSpend"
+WHERE api_key = ANY($1::text[]) AND user_id IS NOT NULL AND user_id <> ''
 GROUP BY api_key
 """
 
@@ -104,8 +116,15 @@ class _SpendLogDigestRow(BaseModel):
         )
 
 
+class _DailyUserSpendOwnerRow(BaseModel):
+    api_key: str
+    first_owner: str | None = None
+    last_owner: str | None = None
+
+
 _TOKEN_DIGEST_ROWS: Final = TypeAdapter(tuple[_TokenDigestRow, ...])
 _SPEND_LOG_DIGEST_ROWS: Final = TypeAdapter(tuple[_SpendLogDigestRow, ...])
+_DAILY_USER_SPEND_OWNER_ROWS: Final = TypeAdapter(tuple[_DailyUserSpendOwnerRow, ...])
 _CACHED_KEY_METADATA: Final = TypeAdapter(KeyMetadataDict)
 _SPEND_LOG_METADATA_CACHE: Final = InMemoryCache(
     max_size_in_memory=SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS,
@@ -113,6 +132,7 @@ _SPEND_LOG_METADATA_CACHE: Final = InMemoryCache(
 )
 _SPEND_LOG_QUERY_LOCK: Final = asyncio.Lock()
 _EMPTY_KEY_METADATA: Final[Mapping[str, KeyMetadataDict]] = MappingProxyType({})
+_EMPTY_KEY_OWNERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 async def _db_or_empty(
@@ -148,6 +168,41 @@ async def _reverse_hash_key_metadata(
             row.digest: KeyMetadataDict(key_alias=row.key_alias, team_id=row.team_id, user_id=row.user_id)
             for row in _TOKEN_DIGEST_ROWS.validate_python(rows)
             if row.digest in wanted
+        }
+    )
+
+
+async def _daily_user_spend_owner_rows(
+    prisma_client: PrismaClient,
+    keys: AbstractSet[str],
+) -> tuple[_DailyUserSpendOwnerRow, ...]:
+    raw_database: Final[_PrismaRawQueryDatabase] = cast(
+        _PrismaRawQueryDatabase,
+        prisma_client.db,  # pyright: ignore[reportAny]  # Prisma database raw query is untyped
+    )
+    raw_rows: Final[object] = await raw_database.query_raw(_DAILY_USER_SPEND_OWNER_SQL, sorted(keys))
+    return _DAILY_USER_SPEND_OWNER_ROWS.validate_python(raw_rows)
+
+
+async def recover_key_owner_from_daily_spend(
+    prisma_client: PrismaClient,
+    keys: AbstractSet[str],
+) -> Mapping[str, str]:
+    if not keys:
+        return _EMPTY_KEY_OWNERS
+    rows: Final = await _db_or_empty(
+        lambda: _daily_user_spend_owner_rows(prisma_client, keys),
+        "Failed daily-spend key owner recovery for %d keys: %s",
+        len(keys),
+    )
+    if rows is None:
+        return _EMPTY_KEY_OWNERS
+    return MappingProxyType(
+        {
+            row.api_key: owner
+            for row in rows
+            for owner in (_unanimous(row.first_owner, row.last_owner),)
+            if row.api_key in keys and owner is not None
         }
     )
 

@@ -3,6 +3,7 @@ import time
 from collections.abc import Sequence
 from datetime import datetime, timedelta
 from types import SimpleNamespace
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -14,6 +15,7 @@ from litellm.constants import (
     SPEND_LOG_KEY_METADATA_MISS_CACHE_TTL,
     SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS,
 )
+from litellm.proxy.spend_tracking import key_metadata_recovery
 from litellm.proxy.spend_tracking.key_metadata_recovery import (
     attach_user_details,
     fill_missing_api_key_aliases,
@@ -298,7 +300,7 @@ async def test_recover_key_metadata_from_spend_logs_skips_query_when_no_missing_
 async def test_recover_key_metadata_from_spend_logs_returns_empty_on_prisma_error():
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
-    query_raw = _spend_log_transaction(mock_prisma, AsyncMock(side_effect=PrismaError("db down")))
+    _spend_log_transaction(mock_prisma, AsyncMock(side_effect=PrismaError("db down")))
 
     result = await recover_key_metadata_from_spend_logs(
         mock_prisma, {hash_token("cli-session-x")}, window, cache=InMemoryCache()
@@ -314,7 +316,7 @@ async def test_recover_key_metadata_from_spend_logs_ignores_foreign_and_all_null
     foreign = hash_token("cli-session-foreign")
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
-    query_raw = _spend_log_transaction(
+    _spend_log_transaction(
         mock_prisma,
         _query_raw_spend_logs(
             [
@@ -444,7 +446,7 @@ async def test_recover_key_metadata_from_spend_logs_drops_the_owner_of_a_digest_
     shared_ui_digest = hash_token("ui-token")
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
-    query_raw = _spend_log_transaction(
+    _spend_log_transaction(
         mock_prisma,
         _query_raw_spend_logs(
             [{**_spend_log_row(shared_ui_digest, "ui-token", "litellm-dashboard", None), "first_owner": "alice", "last_owner": "bob"}]
@@ -463,7 +465,7 @@ async def test_recover_key_metadata_from_spend_logs_keeps_the_owner_when_every_n
     digest = hash_token("cli-session-one-owner")
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     mock_prisma = MagicMock()
-    query_raw = _spend_log_transaction(
+    _spend_log_transaction(
         mock_prisma,
         _query_raw_spend_logs(
             [_spend_log_row(digest, None, None, "carol")]
@@ -482,7 +484,7 @@ async def test_recover_key_metadata_from_spend_logs_forgets_a_miss_long_before_a
     window = (datetime(2026, 9, 7), datetime(2026, 9, 10))
     cache = InMemoryCache(default_ttl=SPEND_LOG_KEY_METADATA_CACHE_TTL)
     mock_prisma = MagicMock()
-    query_raw = _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(found, "found-alias", None, None)]))
+    _spend_log_transaction(mock_prisma, _query_raw_spend_logs([_spend_log_row(found, "found-alias", None, None)]))
     started = time.time()
 
     await recover_key_metadata_from_spend_logs(mock_prisma, {found, unknown}, window, cache=cache)
@@ -702,3 +704,50 @@ async def test_attach_user_details_leaves_metadata_unchanged_when_a_later_chunk_
 
     assert mock_prisma.db.litellm_usertable.find_many.call_count == 2
     assert attached == recovered
+
+
+def _daily_spend_owner_row(api_key: str, first_owner: str, last_owner: str) -> dict[str, str]:
+    return {"api_key": api_key, "first_owner": first_owner, "last_owner": last_owner}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_keeps_a_unanimous_owner():
+    key: Final = "hashed-jwt-digest-a"
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(return_value=[_daily_spend_owner_row(key, "owner-a", "owner-a")])
+
+    result: Final = await key_metadata_recovery.recover_key_owner_from_daily_spend(mock_prisma, {key})
+
+    assert dict(result) == {key: "owner-a"}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_drops_conflicting_owners():
+    key: Final = "hashed-jwt-digest-b"
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(return_value=[_daily_spend_owner_row(key, "owner-a", "owner-b")])
+
+    result: Final = await key_metadata_recovery.recover_key_owner_from_daily_spend(mock_prisma, {key})
+
+    assert dict(result) == {}
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_skips_empty_input():
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(return_value=[])
+
+    result: Final = await key_metadata_recovery.recover_key_owner_from_daily_spend(mock_prisma, frozenset())
+
+    assert dict(result) == {}
+    mock_prisma.db.query_raw.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_recover_key_owner_from_daily_spend_returns_empty_on_prisma_error():
+    mock_prisma: Final = MagicMock()
+    mock_prisma.db.query_raw = AsyncMock(side_effect=PrismaError("db down"))
+
+    result: Final = await key_metadata_recovery.recover_key_owner_from_daily_spend(mock_prisma, {"hashed-jwt-digest-c"})
+
+    assert dict(result) == {}
