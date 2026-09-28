@@ -33,6 +33,8 @@ class SearchToolTableClient(Protocol):
 
     async def update(self, where: Mapping[str, object], data: Mapping[str, object]) -> SearchToolRecord: ...
 
+    async def update_many(self, where: Mapping[str, object], data: Mapping[str, object]) -> int: ...
+
     async def delete(self, where: Mapping[str, object]) -> SearchToolRecord: ...
 
 
@@ -74,28 +76,49 @@ def _reencrypt_search_tool_value(value: object, new_master_key: str) -> object:
     return value if plaintext is None else encrypt_value_helper(value=plaintext, new_encryption_key=new_master_key)
 
 
-async def rotate_search_tools_master_key(prisma_client: PrismaClient, new_master_key: str) -> None:
-    """Re-encrypt the litellm_params values that decrypt under the current key with new_master_key.
+_ROTATE_ROW_ATTEMPTS: Final = 5
 
-    Values that do not decrypt under the current key (plaintext rows written before encryption, or
-    ciphertext under another key) are kept as stored.
-    """
-    table: Final = _search_tools_table(prisma_client)
-    for row in await table.find_many():
-        stored_litellm_params = dict(row).get("litellm_params")
-        if not isinstance(stored_litellm_params, Mapping):
-            continue
-        await table.update(
-            where={"search_tool_id": row.search_tool_id},
+
+async def _rotate_search_tool_row(
+    table: SearchToolTableClient, search_tool_id: str, stored_litellm_params: Mapping[str, object], new_master_key: str
+) -> None:
+    current_litellm_params: Mapping[str, object] = stored_litellm_params
+    for _ in range(_ROTATE_ROW_ATTEMPTS):
+        rows_updated = await table.update_many(
+            where={"search_tool_id": search_tool_id, "litellm_params": {"equals": safe_dumps(current_litellm_params)}},
             data={
                 "litellm_params": safe_dumps(
                     {
                         key: _reencrypt_search_tool_value(value, new_master_key)
-                        for key, value in stored_litellm_params.items()
+                        for key, value in current_litellm_params.items()
                     }
                 )
             },
         )
+        if rows_updated:
+            return
+        reread = await table.find_unique(where={"search_tool_id": search_tool_id})
+        reread_litellm_params = None if reread is None else dict(reread).get("litellm_params")
+        if not isinstance(reread_litellm_params, Mapping):
+            return
+        current_litellm_params = reread_litellm_params
+    verbose_proxy_logger.warning(
+        "Search tool %s kept changing during master key rotation and was not re-encrypted", search_tool_id
+    )
+
+
+async def rotate_search_tools_master_key(prisma_client: PrismaClient, new_master_key: str) -> None:
+    """Re-encrypt the litellm_params values that decrypt under the current key with new_master_key.
+
+    Values that do not decrypt under the current key (plaintext rows written before encryption, or
+    ciphertext under another key) are kept as stored. Each row is written only if it still holds the
+    litellm_params that were read, and is re-read and rotated again if it was edited in between.
+    """
+    table: Final = _search_tools_table(prisma_client)
+    for row in await table.find_many():
+        stored_litellm_params = dict(row).get("litellm_params")
+        if isinstance(stored_litellm_params, Mapping):
+            await _rotate_search_tool_row(table, row.search_tool_id, stored_litellm_params, new_master_key)
 
 
 class SearchToolRegistry:

@@ -18589,9 +18589,12 @@ async def test_rotate_master_key_rotates_search_tools(monkeypatch):
         def __iter__(self):
             return iter(vars(self).items())
 
-    async def _update(where, data):
-        assert where == {"search_tool_id": "search-tool-1"}
+    async def _update_many(where, data):
+        assert where["search_tool_id"] == "search-tool-1"
+        if json.loads(where["litellm_params"]["equals"]) != stored:
+            return 0
         stored.update(json.loads(data["litellm_params"]))
+        return 1
 
     mock_prisma_client = AsyncMock()
     mock_prisma_client.db = MagicMock()
@@ -18601,7 +18604,7 @@ async def test_rotate_master_key_rotates_search_tools(monkeypatch):
     mock_prisma_client.db.litellm_searchtoolstable.find_many = AsyncMock(
         return_value=[_Row(search_tool_id="search-tool-1", litellm_params=dict(stored))]
     )
-    mock_prisma_client.db.litellm_searchtoolstable.update = AsyncMock(side_effect=_update)
+    mock_prisma_client.db.litellm_searchtoolstable.update_many = AsyncMock(side_effect=_update_many)
     user_api_key_dict = UserAPIKeyAuth(
         user_role=LitellmUserRoles.PROXY_ADMIN,
         api_key="sk-1234",

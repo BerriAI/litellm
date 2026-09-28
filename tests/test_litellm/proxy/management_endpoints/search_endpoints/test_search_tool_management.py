@@ -1192,6 +1192,28 @@ class _InMemorySearchToolsTable:
             setattr(row, column, json.loads(value) if column in ("litellm_params", "search_tool_info") else value)
         return row
 
+    async def update_many(self, where, data):
+        row = self.rows.get(where["search_tool_id"])
+        if row is None or row.litellm_params != json.loads(where["litellm_params"]["equals"]):
+            return 0
+        await self.update(where={"search_tool_id": row.search_tool_id}, data=data)
+        return 1
+
+
+class _TableWithEditDuringRotation(_InMemorySearchToolsTable):
+    """Applies an admin edit to a row right before the rotation's first conditional write to it."""
+
+    def __init__(self, rows, edited_id, edited_params):
+        super().__init__(rows)
+        self.pending_edit = (edited_id, edited_params)
+
+    async def update_many(self, where, data):
+        if self.pending_edit and self.pending_edit[0] == where["search_tool_id"]:
+            edited_id, edited_params = self.pending_edit
+            self.pending_edit = None
+            self.rows[edited_id].litellm_params = edited_params
+        return await super().update_many(where, data)
+
 
 def _stored_row(search_tool_id: str, name: str, litellm_params: dict) -> _StoredSearchToolRow:
     return _StoredSearchToolRow(
@@ -1315,3 +1337,25 @@ async def test_master_key_rotation_reencrypts_only_values_the_current_key_decryp
     assert table.rows["legacy-id"].litellm_params == legacy_params
     assert table.rows["foreign-id"].litellm_params == {"api_key": foreign_ciphertext}
     assert json.dumps({row_id: row.litellm_params for row_id, row in table.rows.items()}) == after_first_rotation
+
+
+@pytest.mark.asyncio
+async def test_master_key_rotation_keeps_an_edit_made_while_it_runs(salt_key):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        decrypt_if_encrypted_with,
+        encrypt_value_helper,
+    )
+    from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
+
+    new_key = "sk-new-master-key"
+    table = _TableWithEditDuringRotation(
+        [_stored_row("edited-id", "edited", {"api_key": encrypt_value_helper("tvly-before-edit")})],
+        edited_id="edited-id",
+        edited_params={"api_key": encrypt_value_helper("tvly-after-edit"), "max_results": 3},
+    )
+
+    await rotate_search_tools_master_key(prisma_client=_prisma_client_over(table), new_master_key=new_key)
+
+    rotated = table.rows["edited-id"].litellm_params
+    assert decrypt_if_encrypted_with(rotated["api_key"], new_key) == "tvly-after-edit"
+    assert rotated["max_results"] == 3
