@@ -20,20 +20,77 @@ pub struct MessagesRoute {
     cache: Option<litellm_cache_response::ScopedCache>,
 }
 
-impl MessagesRoute {
-    pub fn new(
+#[must_use]
+#[derive(Clone, Default)]
+pub struct MessagesRouteBuilder<Http = (), Auth = (), Secrets = ()> {
+    http: Http,
+    auth: Auth,
+    secrets: Secrets,
+    cache: Option<litellm_cache_response::ScopedCache>,
+}
+
+impl<Http, Auth, Secrets> MessagesRouteBuilder<Http, Auth, Secrets> {
+    pub fn with_http(
+        self,
         http: litellm_http::Client,
-        auth: Arc<AuthServices>,
-        secrets: Arc<dyn SecretSource>,
-    ) -> Self {
-        Self {
+    ) -> MessagesRouteBuilder<litellm_http::Client, Auth, Secrets> {
+        MessagesRouteBuilder {
             http,
-            auth,
-            secrets,
-            cache: None,
+            auth: self.auth,
+            secrets: self.secrets,
+            cache: self.cache,
         }
     }
 
+    pub fn with_auth(
+        self,
+        auth: Arc<AuthServices>,
+    ) -> MessagesRouteBuilder<Http, Arc<AuthServices>, Secrets> {
+        MessagesRouteBuilder {
+            http: self.http,
+            auth,
+            secrets: self.secrets,
+            cache: self.cache,
+        }
+    }
+
+    pub fn with_secrets(
+        self,
+        secrets: Arc<dyn SecretSource>,
+    ) -> MessagesRouteBuilder<Http, Auth, Arc<dyn SecretSource>> {
+        MessagesRouteBuilder {
+            http: self.http,
+            auth: self.auth,
+            secrets,
+            cache: self.cache,
+        }
+    }
+
+    pub fn with_cache(self, cache: litellm_cache_response::ScopedCache) -> Self {
+        Self {
+            cache: Some(cache),
+            ..self
+        }
+    }
+}
+
+impl MessagesRouteBuilder<litellm_http::Client, Arc<AuthServices>, Arc<dyn SecretSource>> {
+    pub fn build(self) -> MessagesRoute {
+        MessagesRoute {
+            http: self.http,
+            auth: self.auth,
+            secrets: self.secrets,
+            cache: self.cache,
+        }
+    }
+}
+
+impl MessagesRoute {
+    pub fn builder() -> MessagesRouteBuilder {
+        MessagesRouteBuilder::default()
+    }
+
+    #[must_use]
     pub fn with_cache(self, cache: litellm_cache_response::ScopedCache) -> Self {
         Self {
             cache: Some(cache),

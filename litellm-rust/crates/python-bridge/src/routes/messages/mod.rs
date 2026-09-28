@@ -26,21 +26,22 @@ fn run_messages(
         py,
         arguments,
         move |py, arguments, request| {
-            let route = litellm_core::messages::MessagesRoute::new(
-                crate::http::provider_client(py, arguments, asynchronous)?
-                    .map_err(crate::http::client_error)?,
-                crate::http::resources().auth.clone(),
-                crate::secrets::source(py)?,
-            );
+            let builder = litellm_core::messages::MessagesRoute::builder()
+                .with_http(
+                    crate::http::provider_client(py, arguments, asynchronous)?
+                        .map_err(crate::http::client_error)?,
+                )
+                .with_auth(crate::http::resources().auth.clone())
+                .with_secrets(crate::secrets::source(py)?);
             let (cache, cache_options) = crate::cache::v2::configured(py, arguments)?;
-            let route = match cache {
-                Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
+            let builder = match cache {
+                Some(cache) => builder.with_cache(litellm_cache_response::ScopedCache::new(
                     cache,
                     litellm_cache_response::CacheScope::Shared,
                 )),
-                None => route,
+                None => builder,
             };
-            Ok(route.machine(request, cache_options))
+            Ok(builder.build().machine(request, cache_options))
         },
         MessagesPythonHost::new(request.unbind()),
         hooks,
