@@ -340,6 +340,80 @@ def _raise_on_strategy_router_write_violation(
     )
 
 
+def _validate_routable_model_deployment(
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None = None,
+) -> str | None:
+    """Validate that incoming litellm_params specifies a routable LLM provider before DB insertion.
+
+    When adding or patching a model deployment, the router must be able to resolve its provider.
+    Unroutable models (such as typesafe/* without a chat completion provider) get dropped by the
+    router upon reload, causing a 500 degraded serving error and leaving dead zombie rows in
+    LiteLLM_ProxyModelTable. Pre-validating the provider returns a clean 400 Bad Request instead.
+    """
+    if incoming_params is None:
+        return None
+
+    model = getattr(incoming_params, "model", None)
+    if model is None and existing_params is not None:
+        model = getattr(existing_params, "model", None)
+
+    if not model or not isinstance(model, str):
+        return None
+
+    # Auto-router and strategy-router pseudo-models are validated separately
+    if model.startswith("auto_router/") or model.startswith("strategy_router/"):
+        return None
+
+    custom_llm_provider = getattr(incoming_params, "custom_llm_provider", None) or (
+        getattr(existing_params, "custom_llm_provider", None) if existing_params else None
+    )
+    api_base = getattr(incoming_params, "api_base", None) or (
+        getattr(existing_params, "api_base", None) if existing_params else None
+    )
+    api_key = getattr(incoming_params, "api_key", None) or (
+        getattr(existing_params, "api_key", None) if existing_params else None
+    )
+
+    try:
+        from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
+
+        get_llm_provider(
+            model=model,
+            custom_llm_provider=custom_llm_provider,
+            api_base=api_base,
+            api_key=api_key,
+            litellm_params=incoming_params,
+        )
+    except Exception as e:
+        err_msg = str(e)
+        if "typesafe" in model.lower() or (custom_llm_provider and "typesafe" in custom_llm_provider.lower()):
+            return (
+                f"Model '{model}' cannot be registered as a chat completion deployment: 'typesafe' is not a routable chat provider. "
+                "TypeSafe Jev is supported via pass-through endpoints (/typesafe/*) or as an auto-router complexity classifier "
+                f"(router_settings.classifier_type: 'jev'). Provider error: {err_msg}"
+            )
+        return f"Model '{model}' is not a routable provider: {err_msg}"
+    return None
+
+
+def _raise_on_unroutable_model_deployment(
+    incoming_params: GenericLiteLLMParams | None,
+    existing_params: GenericLiteLLMParams | None = None,
+) -> None:
+    violation = _validate_routable_model_deployment(
+        incoming_params=incoming_params, existing_params=existing_params
+    )
+    if violation is None:
+        return
+    raise ProxyException(
+        message=violation,
+        type=ProxyErrorTypes.bad_request_error.value,
+        code=status.HTTP_400_BAD_REQUEST,
+        param="litellm_params.model",
+    )
+
+
 def _stored_credential_name(existing_litellm_params: GenericLiteLLMParams | None) -> str | None:
     if existing_litellm_params is None or existing_litellm_params.litellm_credential_name is None:
         return None
@@ -1216,6 +1290,10 @@ async def patch_model(
         )
 
         _raise_on_strategy_router_write_violation(
+            incoming_params=patch_data.litellm_params,
+            existing_params=db_model.litellm_params,
+        )
+        _raise_on_unroutable_model_deployment(
             incoming_params=patch_data.litellm_params,
             existing_params=db_model.litellm_params,
         )
@@ -2433,6 +2511,10 @@ async def add_new_model(
         )
 
         _raise_on_strategy_router_write_violation(
+            incoming_params=model_params.litellm_params,
+            existing_params=None,
+        )
+        _raise_on_unroutable_model_deployment(
             incoming_params=model_params.litellm_params,
             existing_params=None,
         )

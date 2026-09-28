@@ -5986,6 +5986,45 @@ class TestStrategyRouterWriteValidation:
             is None
         )
 
+    def test_typesafe_model_rejected_with_helpful_guidance(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _validate_routable_model_deployment,
+        )
+        from litellm.types.router import LiteLLM_Params
+
+        params = LiteLLM_Params(
+            model="typesafe/jev-latest",
+            api_key="sk-test",
+        )
+        violation = _validate_routable_model_deployment(params)
+        assert violation is not None
+        assert "typesafe" in violation.lower()
+        assert "not a routable chat provider" in violation or "pass-through" in violation
+
+    def test_routable_model_accepted(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _validate_routable_model_deployment,
+        )
+        from litellm.types.router import LiteLLM_Params
+
+        params = LiteLLM_Params(
+            model="openai/gpt-4o-mini",
+            api_key="sk-test",
+        )
+        assert _validate_routable_model_deployment(params) is None
+
+    def test_auto_router_model_skipped(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _validate_routable_model_deployment,
+        )
+        from litellm.types.router import LiteLLM_Params
+
+        params = LiteLLM_Params(
+            model="auto_router/complexity_router",
+            api_key="sk-test",
+        )
+        assert _validate_routable_model_deployment(params) is None
+
     @staticmethod
     def _live_router_holding_one_capability(limit: int | None, config: Mapping[str, object]) -> Router:
         return Router(
