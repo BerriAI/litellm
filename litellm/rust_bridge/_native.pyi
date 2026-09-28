@@ -108,12 +108,6 @@ def amessages(
     args: tuple[object, ...],
     kwargs: dict[str, object],
 ) -> Coroutine[object, object, AnthropicMessagesResponse | AsyncIterator[bytes]]: ...
-def chat_completions_decline(
-    model: str,
-    messages: Sequence[object],
-    optional_params: Mapping[str, object] | None = None,
-    custom_llm_provider: str | None = None,
-) -> str | None: ...
 def chat_completions(
     model: str,
     messages: Sequence[object],
@@ -413,7 +407,6 @@ __all__ = [
     "aresponses",
     "atranscription",
     "chat_completions",
-    "chat_completions_decline",
     "completion",
     "embedding",
     "gil_stats",
