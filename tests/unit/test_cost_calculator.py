@@ -26,6 +26,7 @@ from litellm.types.utils import (
     CacheCreationTokenDetails,
     CallTypes,
     Choices,
+    EmbeddingResponse,
     ImageObject,
     ImageResponse,
     ImageUsage,
@@ -158,6 +159,68 @@ def test_cost_calculator_with_response_cost_in_additional_headers():
     )
 
     assert result == 1000
+
+
+def test_response_cost_calculator_keeps_optional_params_out_of_hidden_params():
+    class MockResponse(BaseModel):
+        pass
+
+    response = MockResponse()
+    response._hidden_params = {"custom_llm_provider": "openai"}
+    optional_params = {
+        "dimensions": 256,
+        "extra_headers": {"x-goog-api-key": "goog-secret"},
+        "aws_session_token": "session-secret",
+    }
+
+    response_cost_calculator(
+        response_object=response,
+        model="text-embedding-3-small",
+        custom_llm_provider="openai",
+        call_type="embedding",
+        optional_params=optional_params,
+    )
+
+    assert response._hidden_params == {"custom_llm_provider": "openai"}
+    assert optional_params["extra_headers"] == {"x-goog-api-key": "goog-secret"}
+    assert optional_params["aws_session_token"] == "session-secret"
+
+
+def test_embedding_success_metadata_hidden_params_carry_no_forwarded_credentials():
+    shared_metadata: dict[str, object] = {"user_api_key_alias": "alias"}
+    shared_optional_params: dict[str, object] = {"encoding_format": "float"}
+    logging_obj = Logging(
+        model="text-embedding-3-small",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=False,
+        call_type="aembedding",
+        start_time=datetime.datetime.now(),
+        litellm_call_id="embedding-hidden-params",
+        function_id="f",
+    )
+    logging_obj.update_environment_variables(
+        model="text-embedding-3-small",
+        litellm_params={"metadata": shared_metadata},
+        optional_params=shared_optional_params,
+        custom_llm_provider="openai",
+    )
+    shared_optional_params["extra_headers"] = {"x-goog-api-key": "goog-secret"}
+    response = EmbeddingResponse(model="text-embedding-3-small", data=[], usage=Usage(prompt_tokens=3, total_tokens=3))
+    response._hidden_params = {"custom_llm_provider": "openai"}
+
+    logging_obj._process_hidden_params_and_response_cost(
+        response,
+        start_time=datetime.datetime.now(),
+        end_time=datetime.datetime.now(),
+        build_logging_payload=False,
+    )
+
+    hidden_params = logging_obj.model_call_details["litellm_params"]["metadata"]["hidden_params"]
+    assert isinstance(hidden_params, dict)
+    assert "optional_params" not in hidden_params
+    assert logging_obj.model_call_details["response_cost"] is not None
+    assert "goog-secret" not in str(shared_metadata)
+    assert logging_obj.optional_params["extra_headers"] == {"x-goog-api-key": "goog-secret"}
 
 
 
