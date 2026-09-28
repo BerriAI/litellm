@@ -2183,7 +2183,7 @@ class JWTAuthManager:
         parent_otel_span: Span | None,
         proxy_logging_obj: ProxyLogging,
         team_id_upsert: bool | None,
-    ) -> tuple:
+    ) -> tuple[str | None, LiteLLM_TeamTable | None, LiteLLM_TeamMembership | None]:
         """
         If JWT did not resolve team_id, but the user belongs to exactly one team
         in LiteLLM, load that team (and membership when user_id is set) so that
@@ -2886,7 +2886,9 @@ class JWTAuthManager:
                 )
 
         authorized_team_id: Final[str | None] = selected_team_id if selected_team_id is not None else team_id
-        authorized_team_object: Final[LiteLLM_TeamTable | None] = selected_team_object if selected_team_id is not None else team_object
+        authorized_team_object: Final[LiteLLM_TeamTable | None] = (
+            selected_team_object if selected_team_id is not None else team_object
+        )
 
         ## MAP USER TO TEAMS
         if provisioning is not None and managed is None:
