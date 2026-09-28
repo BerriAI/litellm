@@ -1079,6 +1079,7 @@ class ChatCompletionRequest(TypedDict, total=False):
     user: str
     metadata: dict  # litellm specific param
     reasoning_effort: str  # OpenAI o1/o3 reasoning parameter
+    include_thoughts: bool  # Gemini: return thought summaries when thinking is on
     output_config: Mapping[str, object]  # Anthropic adaptive-thinking effort, bridged for Bedrock Claude
 
 

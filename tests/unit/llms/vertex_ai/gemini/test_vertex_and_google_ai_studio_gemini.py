@@ -6356,3 +6356,134 @@ def test_gemini_multi_candidate_messages_do_not_share_state():
     assert resp.choices[1].message.tool_calls is None
     assert getattr(resp.choices[1].message, "reasoning_content", None) is None
     assert resp.choices[1].provider_specific_fields["native_finish_reason"] == "STOP"
+
+
+@pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high"])
+@pytest.mark.parametrize("include_thoughts,expected", [(None, True), (True, True), (False, False)])
+def test_map_reasoning_effort_to_thinking_level_include_thoughts(effort, include_thoughts, expected):
+    cfg = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+        effort, "gemini-3.6-flash", include_thoughts=include_thoughts
+    )
+    assert cfg["includeThoughts"] is expected
+    assert "thinkingLevel" in cfg
+
+
+@pytest.mark.parametrize("effort", ["minimal", "low", "medium", "high"])
+@pytest.mark.parametrize("include_thoughts,expected", [(None, True), (True, True), (False, False)])
+def test_map_reasoning_effort_to_thinking_budget_include_thoughts(effort, include_thoughts, expected):
+    cfg = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+        effort, "gemini-2.5-flash", include_thoughts=include_thoughts
+    )
+    assert cfg["includeThoughts"] is expected
+    assert "thinkingBudget" in cfg
+
+
+@pytest.mark.parametrize("effort", ["none", "disable"])
+@pytest.mark.parametrize("include_thoughts", [None, True, False])
+def test_none_disable_always_suppress_thoughts_level(effort, include_thoughts):
+    cfg = VertexGeminiConfig._map_reasoning_effort_to_thinking_level(
+        effort, "gemini-3.6-flash", include_thoughts=include_thoughts
+    )
+    assert cfg["includeThoughts"] is False
+
+
+@pytest.mark.parametrize("effort", ["none", "disable"])
+@pytest.mark.parametrize("include_thoughts", [None, True, False])
+def test_none_disable_always_suppress_thoughts_budget(effort, include_thoughts):
+    cfg = VertexGeminiConfig._map_reasoning_effort_to_thinking_budget(
+        effort, "gemini-2.5-flash", include_thoughts=include_thoughts
+    )
+    assert cfg["includeThoughts"] is False
+
+
+def test_map_openai_params_include_thoughts_false_gemini3():
+    optional_params = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "reasoning_effort": "low",
+            "include_thoughts": False,
+        },
+        optional_params={},
+        model="gemini-3.6-flash",
+        drop_params=False,
+    )
+    assert optional_params["thinkingConfig"]["thinkingLevel"] == "low"
+    assert optional_params["thinkingConfig"]["includeThoughts"] is False
+
+
+def test_map_openai_params_include_thoughts_default_true_gemini3():
+    optional_params = VertexGeminiConfig().map_openai_params(
+        non_default_params={"reasoning_effort": "low"},
+        optional_params={},
+        model="gemini-3.6-flash",
+        drop_params=False,
+    )
+    assert optional_params["thinkingConfig"]["includeThoughts"] is True
+
+
+def test_include_thoughts_in_supported_openai_params():
+    params = VertexGeminiConfig().get_supported_openai_params("gemini-3.6-flash")
+    assert "include_thoughts" in params
+
+
+def test_map_openai_params_include_thoughts_with_thinking_param():
+    """include_thoughts must apply when paired with Anthropic-style thinking."""
+    optional_params = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "thinking": {"type": "enabled", "budget_tokens": 1024},
+            "include_thoughts": False,
+        },
+        optional_params={},
+        model="gemini-3.6-flash",
+        drop_params=False,
+    )
+    assert optional_params["thinkingConfig"]["includeThoughts"] is False
+
+
+def test_none_locks_include_thoughts_true_override():
+    optional_params = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "reasoning_effort": "none",
+            "include_thoughts": True,
+        },
+        optional_params={},
+        model="gemini-3.6-flash",
+        drop_params=False,
+    )
+    assert optional_params["thinkingConfig"]["includeThoughts"] is False
+
+
+def test_include_thoughts_rejects_non_bool():
+    with pytest.raises(ValueError, match="include_thoughts must be a boolean"):
+        VertexGeminiConfig().map_openai_params(
+            non_default_params={
+                "reasoning_effort": "low",
+                "include_thoughts": "false",
+            },
+            optional_params={},
+            model="gemini-3.6-flash",
+            drop_params=False,
+        )
+
+
+def test_include_thoughts_alone_without_thinking_config_is_noop():
+    optional_params = VertexGeminiConfig().map_openai_params(
+        non_default_params={"include_thoughts": False},
+        optional_params={},
+        model="gemini-3.6-flash",
+        drop_params=False,
+    )
+    assert "thinkingConfig" not in optional_params
+
+
+def test_map_openai_params_include_thoughts_budget_path():
+    optional_params = VertexGeminiConfig().map_openai_params(
+        non_default_params={
+            "reasoning_effort": "low",
+            "include_thoughts": False,
+        },
+        optional_params={},
+        model="gemini-2.5-flash",
+        drop_params=False,
+    )
+    assert optional_params["thinkingConfig"]["includeThoughts"] is False
+    assert "thinkingBudget" in optional_params["thinkingConfig"]

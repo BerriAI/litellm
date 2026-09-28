@@ -1122,6 +1122,9 @@ class ProxyChatCompletionRequest(LiteLLMPydanticObjectBase):
     # LiteLLM-specific metadata param (from original ChatCompletionRequest)
     metadata: dict[str, Any] | None = None
 
+    # Gemini: keep thinking on while suppressing returned thought summaries.
+    include_thoughts: bool | None = None
+
     # Optional LiteLLM params
     guardrails: list[str] | None = None
     caching: bool | None = None
