@@ -62,6 +62,26 @@ def _row_to_vector_store(row: "_VectorStoreRow") -> LiteLLM_ManagedVectorStore:
     return decrypt_vector_store_litellm_params(LiteLLM_ManagedVectorStore(**row.model_dump()))
 
 
+def _registry_copy(vector_store: LiteLLM_ManagedVectorStore) -> LiteLLM_ManagedVectorStore | None:
+    """The copy of a decrypted DB ``vector_store`` to put in the in-memory registry.
+
+    When a secret in it does not decrypt with this process's key (the master key was rotated and the proxy not
+    restarted yet), the registry's current ``litellm_params`` are kept, and None is returned if it has none.
+    """
+    if not holds_undecrypted_secret(vector_store):
+        return vector_store
+    registry: Final = litellm.vector_store_registry
+    vector_store_id: Final = vector_store.get("vector_store_id")
+    current: Final = (
+        registry.get_litellm_managed_vector_store_from_registry(vector_store_id)
+        if registry is not None and vector_store_id is not None
+        else None
+    )
+    if current is None:
+        return None
+    return vector_store | LiteLLM_ManagedVectorStore(litellm_params=current.get("litellm_params", {}))
+
+
 class _ConfigOwnedDetail(TypedDict):
     error: ReadOnly[str]
     vector_store_id: ReadOnly[str]
@@ -419,14 +439,13 @@ async def list_vector_stores(
                 litellm.vector_store_registry.delete_vector_store_from_registry(vector_store_id=vs_id)
                 verbose_proxy_logger.debug("Removed deleted vector store %s from in-memory registry", vs_id)
 
-            # 2. Update in-memory registry with database versions (for updates). A row whose secret this
-            # process cannot decrypt (the master key was rotated and the proxy not yet restarted) keeps
-            # the registry's working copy.
+            # 2. Update in-memory registry with database versions (for updates)
             for vector_store in vector_stores_from_db:
                 vector_store_id = vector_store.get("vector_store_id", None)
-                if vector_store_id and not holds_undecrypted_secret(vector_store):
+                registry_copy = _registry_copy(vector_store)
+                if vector_store_id and registry_copy is not None:
                     litellm.vector_store_registry.update_vector_store_in_registry(
-                        vector_store_id=vector_store_id, updated_data=vector_store
+                        vector_store_id=vector_store_id, updated_data=registry_copy
                     )
 
         # Filter vector stores based on access control
@@ -671,10 +690,11 @@ async def update_vector_store(
         updated_vs: Final = _row_to_vector_store(updated)
 
         # Immediately update in-memory registry to keep it in sync
-        if litellm.vector_store_registry is not None and not holds_undecrypted_secret(updated_vs):
+        registry_copy: Final = _registry_copy(updated_vs)
+        if litellm.vector_store_registry is not None and registry_copy is not None:
             litellm.vector_store_registry.update_vector_store_in_registry(
                 vector_store_id=vector_store_id,
-                updated_data=updated_vs,
+                updated_data=registry_copy,
             )
             verbose_proxy_logger.debug(
                 "Updated vector store %s in both database and in-memory registry", vector_store_id

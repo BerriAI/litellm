@@ -3396,7 +3396,12 @@ class TestLitellmParamsEncryptedAtRest:
         rows = [
             {
                 "vector_store_id": "vs_rotated",
+                "vector_store_description": "updated in the db",
                 "litellm_params": self._encrypted_under_another_key({"api_key": "sk-working"}, monkeypatch),
+            },
+            {
+                "vector_store_id": "vs_not_loaded",
+                "litellm_params": self._encrypted_under_another_key({"api_key": "sk-other"}, monkeypatch),
             },
             {
                 "vector_store_id": "vs_readable",
@@ -3423,19 +3428,29 @@ class TestLitellmParamsEncryptedAtRest:
 
         params_by_id = {vs["vector_store_id"]: vs["litellm_params"] for vs in registry.vector_stores}
         assert params_by_id == {"vs_rotated": {"api_key": "sk-working"}, "vs_readable": {"api_key": "sk-new"}}
+        rotated = registry.get_litellm_managed_vector_store_from_registry("vs_rotated")
+        assert rotated is not None
+        assert rotated["vector_store_description"] == "updated in the db"
 
     @pytest.mark.asyncio
     async def test_update_keeps_the_registry_copy_of_a_row_this_proxy_cannot_decrypt(self, monkeypatch):
         from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
         from litellm.types.vector_stores import VectorStoreUpdateRequest
 
+        from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
         stored_params = self._encrypted_under_another_key({"api_key": "sk-vs-secret-9"}, monkeypatch)
-        row = self._row({"vector_store_id": "vs_rotated", "litellm_params": stored_params})
+        row = self._row(
+            {"vector_store_id": "vs_rotated", "vector_store_description": "new", "litellm_params": stored_params}
+        )
         prisma_client = MagicMock()
         prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=row)
         prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(return_value=row)
-        registry = MagicMock()
-        registry.is_config_vector_store.return_value = False
+        registry = VectorStoreRegistry(
+            vector_stores=[
+                LiteLLM_ManagedVectorStore(vector_store_id="vs_rotated", litellm_params={"api_key": "sk-vs-secret-9"})
+            ]
+        )
 
         with (
             patch(
@@ -3455,7 +3470,13 @@ class TestLitellmParamsEncryptedAtRest:
                 user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
             )
 
-        registry.update_vector_store_in_registry.assert_not_called()
+        assert registry.vector_stores == [
+            {
+                "vector_store_id": "vs_rotated",
+                "vector_store_description": "new",
+                "litellm_params": {"api_key": "sk-vs-secret-9"},
+            }
+        ]
 
     @pytest.mark.asyncio
     async def test_store_resolved_from_the_shared_cache_has_decrypted_params(self):

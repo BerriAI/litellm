@@ -142,7 +142,8 @@ def _rotation_rows(encrypted_params):
     ]
     prisma_client = MagicMock()
     prisma_client.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=rows)
-    prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock()
+    prisma_client.db.litellm_managedvectorstorestable.update_many = AsyncMock()
+    prisma_client.tx.return_value.__aenter__.return_value = prisma_client.db
     return prisma_client
 
 
@@ -159,8 +160,8 @@ async def test_reencrypt_moves_encrypted_rows_to_the_new_master_key_and_leaves_p
     rewritten = await reencrypt_vector_store_litellm_params(prisma_client=prisma_client, new_master_key=new_key)
 
     assert rewritten == 1
-    prisma_client.db.litellm_managedvectorstorestable.update.assert_awaited_once()
-    call = prisma_client.db.litellm_managedvectorstorestable.update.await_args
+    prisma_client.db.litellm_managedvectorstorestable.update_many.assert_awaited_once()
+    call = prisma_client.db.litellm_managedvectorstorestable.update_many.await_args
     assert call.kwargs["where"] == {"vector_store_id": "vs_new"}
     stored = json.loads(call.kwargs["data"]["litellm_params"])
     assert _decrypted_under(stored["api_key"], new_key) == "sk-new-secret"
@@ -175,7 +176,7 @@ async def test_reencrypt_keeps_values_under_the_salt_key_when_one_is_set(salt_ke
     await reencrypt_vector_store_litellm_params(prisma_client=prisma_client, new_master_key="sk-rotated-master-key")
 
     stored = json.loads(
-        prisma_client.db.litellm_managedvectorstorestable.update.await_args.kwargs["data"]["litellm_params"]
+        prisma_client.db.litellm_managedvectorstorestable.update_many.await_args.kwargs["data"]["litellm_params"]
     )
     assert _decrypted_under(stored["api_key"], _SALT_KEY) == "sk-new-secret"
 
@@ -191,7 +192,7 @@ async def test_reencrypt_warns_about_values_it_cannot_decrypt(salt_key, monkeypa
         rewritten = await reencrypt_vector_store_litellm_params(prisma_client=prisma_client, new_master_key="sk-new")
 
     assert rewritten == 0
-    prisma_client.db.litellm_managedvectorstorestable.update.assert_not_awaited()
+    prisma_client.db.litellm_managedvectorstorestable.update_many.assert_not_awaited()
     warning.assert_called_once()
     assert "vs_new" in warning.call_args.args
     assert "sk-lost-secret" not in str(warning.call_args)
@@ -206,7 +207,7 @@ async def test_reencrypt_treats_an_empty_salt_key_as_set(monkeypatch):
     await reencrypt_vector_store_litellm_params(prisma_client=prisma_client, new_master_key="sk-rotated-master-key")
 
     stored = json.loads(
-        prisma_client.db.litellm_managedvectorstorestable.update.await_args.kwargs["data"]["litellm_params"]
+        prisma_client.db.litellm_managedvectorstorestable.update_many.await_args.kwargs["data"]["litellm_params"]
     )
     assert decrypt_vector_store_litellm_params(LiteLLM_ManagedVectorStore(vector_store_id="vs", litellm_params=stored))[
         "litellm_params"
@@ -227,3 +228,19 @@ def test_holds_undecrypted_secret(salt_key, monkeypatch):
     assert holds(readable) is False
     assert holds({"api_key": "sk-plain", "api_base": "litellm_enc::not-a-secret-key"}) is False
     assert holds(unreadable_nested) is True
+
+
+def test_secrets_inside_lists_are_encrypted_and_decrypted(salt_key):
+    params = {
+        "api_key": ["sk-first", "sk-second"],
+        "extra": [{"api_key": "sk-in-list"}, "not-a-secret"],
+    }
+
+    encrypted = encrypt_vector_store_litellm_params(params)
+
+    assert all(_decrypted_under(value, _SALT_KEY) for value in encrypted["api_key"])
+    assert _decrypted_under(encrypted["extra"][0]["api_key"], _SALT_KEY) == "sk-in-list"
+    assert encrypted["extra"][1] == "not-a-secret"
+    assert "sk-first" not in json.dumps(encrypted)
+    store = LiteLLM_ManagedVectorStore(vector_store_id="vs", litellm_params=encrypted)
+    assert decrypt_vector_store_litellm_params(store)["litellm_params"] == params

@@ -2,7 +2,10 @@
 
 import os
 from collections.abc import Callable, Mapping
+from datetime import timedelta
 from typing import TYPE_CHECKING, Final
+
+from typing_extensions import TypeIs
 
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
@@ -19,6 +22,14 @@ if TYPE_CHECKING:
 VECTOR_STORE_SECRET_PARAM_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset(("connection",)))
 
 
+def _is_json_object(value: object) -> TypeIs[dict[str, object]]:  # guard-ok: trivial isinstance; JSON keys are str
+    return isinstance(value, dict)
+
+
+def _is_json_array(value: object) -> TypeIs[list[object]]:  # guard-ok: trivial isinstance narrowing
+    return isinstance(value, list)
+
+
 def _map_litellm_param_strings(
     litellm_params: Mapping[str, object],
     transform: Callable[[str, str, bool], str],
@@ -27,15 +38,20 @@ def _map_litellm_param_strings(
 ) -> dict[str, object]:
     """Apply ``transform(key, value, is_secret)`` to every string in a nested ``litellm_params`` dict.
 
-    ``is_secret`` is true for a secret-named key and for every string nested under one.
+    ``is_secret`` is true for a secret-named key and for every string nested under one. A list item is passed
+    with the key of the list that holds it.
     """
     mapped: Final[dict[str, object]] = {}
     for key, value in litellm_params.items():
         is_secret = parent_is_secret or VECTOR_STORE_SECRET_PARAM_MASKER.is_sensitive_key(key)
         if isinstance(value, str):
             mapped[key] = transform(key, value, is_secret)
-        elif isinstance(value, dict) and depth < DEFAULT_MAX_RECURSE_DEPTH:
+        elif _is_json_object(value) and depth < DEFAULT_MAX_RECURSE_DEPTH:
             mapped[key] = _map_litellm_param_strings(value, transform, is_secret, depth + 1)
+        elif _is_json_array(value) and depth < DEFAULT_MAX_RECURSE_DEPTH:
+            mapped[key] = [
+                _map_litellm_param_strings({key: item}, transform, parent_is_secret, depth + 1)[key] for item in value
+            ]
         else:
             mapped[key] = value
     return mapped
@@ -102,7 +118,8 @@ async def reencrypt_vector_store_litellm_params(prisma_client: "PrismaClient", n
     """Re-encrypt every stored vector store's encrypted ``litellm_params`` values for a master-key rotation.
 
     Values are re-encrypted under ``LITELLM_SALT_KEY`` when it is set, else under ``new_master_key``. Plaintext
-    values and values that do not decrypt are left as stored. Returns the number of rows rewritten.
+    values and values that do not decrypt are left as stored. All rows are rewritten in one transaction. Returns the
+    number of rows rewritten.
     """
     salt_key: Final = os.getenv("LITELLM_SALT_KEY")
     new_encryption_key: Final = new_master_key if salt_key is None else salt_key
@@ -117,7 +134,7 @@ async def reencrypt_vector_store_litellm_params(prisma_client: "PrismaClient", n
         return CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(plaintext, new_encryption_key=new_encryption_key)
 
     table: Final = ManagedVectorStoresRepository(prisma_client).table
-    rewritten = 0
+    rewrites: Final[dict[str, dict[str, object]]] = {}
     for row in await table.find_many():
         stored = LiteLLM_ManagedVectorStore(**dict(row))
         litellm_params = stored.get("litellm_params")
@@ -131,11 +148,15 @@ async def reencrypt_vector_store_litellm_params(prisma_client: "PrismaClient", n
                 stored.get("vector_store_id"),
                 sorted(undecryptable_keys),
             )
-        if reencrypted == litellm_params:
+        vector_store_id = stored.get("vector_store_id")
+        if reencrypted == litellm_params or vector_store_id is None:
             continue
-        await table.update(
-            where={"vector_store_id": stored.get("vector_store_id")},
-            data={"litellm_params": safe_dumps(reencrypted)},
-        )
-        rewritten += 1
-    return rewritten
+        rewrites[vector_store_id] = reencrypted
+    if rewrites:
+        async with prisma_client.tx(timeout=timedelta(minutes=2)) as tx:
+            for vector_store_id, reencrypted in rewrites.items():
+                await tx.litellm_managedvectorstorestable.update_many(
+                    where={"vector_store_id": vector_store_id},
+                    data={"litellm_params": safe_dumps(reencrypted)},
+                )
+    return len(rewrites)
