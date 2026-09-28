@@ -135,7 +135,6 @@ from litellm.types.proxy.management_endpoints.model_management_endpoints import 
     AutoRouterClassifierDefaultPromptResponse,
     UpdateUsefulLinksRequest,
 )
-from litellm.types.proxy.management_endpoints.team_endpoints import TeamIdSearchFilter
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
     Deployment,
@@ -249,7 +248,7 @@ class _TeamRow(Protocol):
 
 
 class _TeamIdsWhere(TypedDict):
-    team_id: ReadOnly[TeamIdSearchFilter]
+    team_id: ReadOnly[Mapping[Literal["in"], Sequence[str]]]
 
 
 class _TeamLookupTable(Protocol):
