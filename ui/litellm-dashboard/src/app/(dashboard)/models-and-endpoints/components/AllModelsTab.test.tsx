@@ -567,7 +567,7 @@ describe("AllModelsTab", () => {
       renderWithProviders(<AllModelsTab {...defaultProps} />);
 
       await user.click(screen.getByTestId("models-view-select"));
-      await user.click(await screen.findByRole("option", { name: "All Available Models" }));
+      await user.click(await screen.findByRole("option", { name: "All Proxy Models" }));
 
       await waitFor(() => {
         expect(screen.queryByText(/create a Virtual Key/i)).not.toBeInTheDocument();

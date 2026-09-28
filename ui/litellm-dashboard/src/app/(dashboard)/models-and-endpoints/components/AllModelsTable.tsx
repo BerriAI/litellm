@@ -39,7 +39,7 @@ const FILTER_LABELS: Record<string, string> = {
 
 const VIEW_MODE_LABELS: Record<ModelViewMode, string> = {
   current_team: "Current Team Models",
-  all: "All Available Models",
+  all: "All Proxy Models",
 };
 
 export interface ModelsTableTeamOption {

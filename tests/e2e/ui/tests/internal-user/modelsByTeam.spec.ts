@@ -17,7 +17,7 @@ import { CHAT_MODEL_A, CHAT_MODEL_B, masterKey } from "../../helpers/traffic";
 
 const MOCK_LLM_BASE = `http://127.0.0.1:${process.env.MOCK_LLM_PORT ?? "8090"}/v1`;
 const CURRENT_TEAM_VIEW = "Current Team Models";
-const ALL_MODELS_VIEW = "All Available Models";
+const ALL_MODELS_VIEW = "All Proxy Models";
 const PERSONAL_TEAM = "Personal";
 
 const teamSelector = (page: PlaywrightPage): Locator =>
