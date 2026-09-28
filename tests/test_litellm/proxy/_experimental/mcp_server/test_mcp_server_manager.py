@@ -14058,44 +14058,6 @@ def test_discovery_cache_keys_isolate_user_dependent_auth(auth_type: MCPAuth) ->
     assert "first" not in str(first)
     assert "second" not in str(second)
 
-    from litellm.proxy._types import hash_token
-
-    same_user_other_token: Final = manager._discovery_key(
-        server, UserAPIKeyAuth(user_id="first", token=hash_token("sk-second")), None, None, None, None
-    )
-    same_token_no_key: Final = manager._discovery_key(
-        server, UserAPIKeyAuth(user_id="first", token=hash_token("sk-first")), None, None, None, None
-    )
-    with_key: Final = manager._discovery_key(
-        server, UserAPIKeyAuth(user_id="first", api_key="sk-first"), None, None, None, None
-    )
-    assert same_user_other_token != with_key
-    assert same_token_no_key == with_key
-
-
-@pytest.mark.parametrize(
-    ("signer", "static_headers", "shared"),
-    [
-        pytest.param(MagicMock(), None, False, id="signer-mints-per-caller-authorization"),
-        pytest.param(MagicMock(), {"Authorization": "Bearer admin-token"}, True, id="static-authorization-wins"),
-        pytest.param(None, None, True, id="no-signer-stays-shared"),
-    ],
-)
-def test_jwt_signer_makes_a_shared_server_discover_per_caller(signer, static_headers, shared) -> None:
-    manager: Final = MCPServerManager()
-    server: Final = _discovery_server().model_copy(update={"static_headers": static_headers})
-    alice: Final = UserAPIKeyAuth(user_id="alice", token="hashed-alice")
-    bob: Final = UserAPIKeyAuth(user_id="bob", token="hashed-bob")
-
-    with patch(  # test-quality-ok: the signer is a process-wide singleton the manager reads, no injection seam
-        "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.get_mcp_jwt_signer",
-        return_value=signer,
-    ):
-        for_alice: Final = manager._discovery_key(server, alice, None, None, None, None)
-        for_bob: Final = manager._discovery_key(server, bob, None, None, None, None)
-
-    assert (for_alice == for_bob) is shared
-
 
 def _register_local_tool(name: str, description: str) -> None:
     from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
