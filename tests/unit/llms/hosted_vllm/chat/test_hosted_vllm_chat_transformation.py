@@ -112,10 +112,10 @@ def test_hosted_vllm_supports_thinking():
     assert optional_params["reasoning_effort"] == "low"
 
 
-def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
+def test_hosted_vllm_reasoning_content_kept_and_thinking_blocks_removed():
     """
-    Test that thinking_blocks on assistant messages are removed and content
-    stays a string for vLLM compatibility.
+    Test that reasoning_content on assistant messages is forwarded to vLLM
+    while thinking_blocks are removed and content stays a string.
     """
     config = HostedVLLMChatConfig()
     messages = [
@@ -152,7 +152,7 @@ def test_hosted_vllm_thinking_blocks_prepended_to_assistant_content():
     assert isinstance(assistant_msg["content"], str)
     assert assistant_msg["content"] == "Here is my answer."
     assert "thinking_blocks" not in assistant_msg
-    assert "reasoning_content" not in assistant_msg
+    assert assistant_msg["reasoning_content"] == "Let me reason about this..."
 
 
 def test_hosted_vllm_thinking_blocks_with_list_content():
