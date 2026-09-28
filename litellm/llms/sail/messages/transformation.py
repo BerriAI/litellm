@@ -11,7 +11,10 @@ from litellm.types.router import GenericLiteLLMParams
 
 class SailAnthropicMessagesConfig(JSONProviderAnthropicMessagesConfig):
     def request_metadata(self, metadata: Mapping[str, object] | None) -> Mapping[str, object] | None:
-        return metadata
+        if metadata is None:
+            return None
+        caller_metadata: Final = {key: value for key, value in metadata.items() if isinstance(value, str)}
+        return caller_metadata or None
 
     def transform_anthropic_messages_request(
         self,

@@ -84,3 +84,30 @@ def test_messages_metadata_filtering_is_provider_owned() -> None:
 
     assert openai_like.request_metadata(metadata) == {"user_id": "u"}
     assert sail.request_metadata(metadata) == metadata
+
+
+def test_sail_messages_request_metadata_keeps_only_string_values() -> None:
+    sail_provider: Final = JSONProviderRegistry.get("sail")
+    assert sail_provider is not None
+    sail: Final = SailAnthropicMessagesConfig(sail_provider)
+
+    assert sail.request_metadata({"user_id": "u", "completion_window": "flex", "guardrails": ["pii-mask"]}) == {
+        "user_id": "u",
+        "completion_window": "flex",
+    }
+
+
+def test_sail_messages_request_metadata_returns_none_for_non_string_values() -> None:
+    sail_provider: Final = JSONProviderRegistry.get("sail")
+    assert sail_provider is not None
+    sail: Final = SailAnthropicMessagesConfig(sail_provider)
+
+    assert sail.request_metadata({"guardrails": ["pii-mask"]}) is None
+
+
+def test_sail_messages_request_metadata_returns_none_for_missing_metadata() -> None:
+    sail_provider: Final = JSONProviderRegistry.get("sail")
+    assert sail_provider is not None
+    sail: Final = SailAnthropicMessagesConfig(sail_provider)
+
+    assert sail.request_metadata(None) is None
