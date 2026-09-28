@@ -1,7 +1,7 @@
 import base64
 import time
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from itertools import groupby
+from itertools import chain, groupby
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, TypeAlias, TypedDict, Union, cast
 
@@ -369,6 +369,14 @@ class ChunkProcessor:
         # Fall back to first chunk's model if no different model found
         return first_chunk_model
 
+    @staticmethod
+    def _choice_provider_specific_fields(chunk: "_BaseChunk") -> Mapping[str, object]:
+        choices: Final = chunk.get("choices")
+        if not choices:
+            return MappingProxyType({})
+        fields: Final = choices[0].get("provider_specific_fields")
+        return fields if isinstance(fields, dict) else MappingProxyType({})
+
     def build_base_response(self, chunks: Sequence["_BaseChunk"]) -> ModelResponse:
         chunk = self.first_chunk
         id: Final = ChunkProcessor._get_chunk_id(chunks)
@@ -391,14 +399,9 @@ class ChunkProcessor:
                 if chunk_finish_reason is not None:
                     finish_reason = chunk_finish_reason
 
-        choice_provider_specific_fields: Final[dict[str, object]] = {  # mutable-ok: response field requires a dict
-            key: value
-            for chunk in chunks
-            if chunk.get("choices")
-            for fields in (chunk["choices"][0].get("provider_specific_fields"),)
-            if isinstance(fields, dict)
-            for key, value in fields.items()
-        }
+        choice_provider_specific_fields: Final[dict[str, object]] = dict(  # mutable-ok: response field requires a dict
+            chain.from_iterable(ChunkProcessor._choice_provider_specific_fields(chunk).items() for chunk in chunks)
+        )
 
         # Initialize the response dictionary
         response = ModelResponse(

@@ -2658,7 +2658,8 @@ class AmazonConverseConfig(BaseConfig):
 
         ## HANDLE TOOL CALLS
         _message: Final = Message(**chat_completion_message)
-        initial_finish_reason = completion_response["stopReason"]
+        raw_finish_reason: Final = completion_response["stopReason"]
+        initial_finish_reason = raw_finish_reason
 
         # When json_mode filtered out all synthetic tool calls the response
         # is plain content, not a pending tool invocation. Fix finish_reason
@@ -2674,11 +2675,17 @@ class AmazonConverseConfig(BaseConfig):
             tools=optional_params.get("tools"),
             initial_finish_reason=initial_finish_reason,
         )
+        choice_provider_specific_fields: Final = (
+            {"native_finish_reason": raw_finish_reason}  # mutable-ok: Choices requires a dict
+            if returned_finish_reason != raw_finish_reason
+            else None
+        )
         model_response.choices = [
             litellm.Choices(
                 finish_reason=returned_finish_reason,
                 index=0,
                 message=returned_message,
+                provider_specific_fields=choice_provider_specific_fields,
             )
         ]
         model_response.created = int(time.time())
