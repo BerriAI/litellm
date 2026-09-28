@@ -1976,12 +1976,23 @@ class Logging(LiteLLMLoggingBaseClass):
             list,
         ],
     ) -> float | None:
-        """Price a response as if it had missed the cache, without overwriting this call's cost breakdown"""
+        """Price a response as if it had missed the cache, without leaving the probe's side effects on this call"""
         previous_cost_breakdown: Final = self.cost_breakdown
+        previous_billed_token_rates: Final = self.billed_token_rates
+        previous_zero_cost_warned: Final = self.zero_cost_warned
+        debug_key: Final = "response_cost_failure_debug_information"
+        debug_missing: Final = object()
+        debug_before: Final = self.model_call_details.get(debug_key, debug_missing)
         try:
             return self._response_cost_calculator(result=result, cache_hit=False, ignore_stamped_cost=True)
         finally:
             self.cost_breakdown = previous_cost_breakdown
+            self.billed_token_rates = previous_billed_token_rates
+            self.zero_cost_warned = previous_zero_cost_warned
+            if debug_before is debug_missing:
+                self.model_call_details.pop(debug_key, None)
+            else:
+                self.model_call_details[debug_key] = debug_before
 
     def _record_zero_cost_diagnostic(
         self,

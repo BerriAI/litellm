@@ -963,11 +963,7 @@ class LLMCachingHandler:
                 )
 
                 response_obj: Final = ResponsesAPIResponse(**cached_result)
-                if (
-                    hasattr(response_obj, "_hidden_params")
-                    and response_obj._hidden_params is not None
-                    and isinstance(response_obj._hidden_params, dict)
-                ):
+                if hasattr(response_obj, "_hidden_params") and response_obj._hidden_params is not None:
                     response_obj._hidden_params["cache_hit"] = True
 
                 if _stream_replay_requested(kwargs):
@@ -980,11 +976,7 @@ class LLMCachingHandler:
                 else:
                     cached_result = response_obj
 
-        if (
-            hasattr(cached_result, "_hidden_params")
-            and cached_result._hidden_params is not None
-            and isinstance(cached_result._hidden_params, dict)
-        ):
+        if hasattr(cached_result, "_hidden_params") and cached_result._hidden_params is not None:
             cached_result._hidden_params["cache_hit"] = True
 
         #########################################################
