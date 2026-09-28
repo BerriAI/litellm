@@ -124,6 +124,8 @@ def managed_inference_request(
 
 
 async def admit_managed_actor(auth: UserAPIKeyAuth, store: AgentIdentityStore | None) -> None:
+    delegation_verified: Final = auth._managed_delegation_verified
+    auth._managed_delegation_verified = False
     if auth.agent_id is None:
         return
     if store is None:
@@ -159,10 +161,14 @@ async def admit_managed_actor(auth: UserAPIKeyAuth, store: AgentIdentityStore | 
     auth.managed_agent_policy = agent
     auth.billing_agent_policy = agent
     auth.requires_fresh_policy = True
-    if auth.managed_agent_context is not None and auth.managed_agent_context.mode == "delegated":
+    if (
+        auth.managed_agent_context is not None
+        and auth.managed_agent_context.mode == "delegated"
+        and not delegation_verified
+    ):
         from litellm.proxy.agent_endpoints.auth.agent_permission_handler import verified_human_agent_grants
 
-        grants: Final = await verified_human_agent_grants(auth.managed_agent_context.user_id)
+        grants: Final = await verified_human_agent_grants(auth.managed_agent_context.user_id, auth.team_id)
         if agent.agent_id not in grants:
             raise_identity_failure(
                 AgentIdentityFailure(message="The delegated user is not permitted to invoke this agent")

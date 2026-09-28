@@ -645,16 +645,44 @@ async def _managed_actor_agent_access(auth: UserAPIKeyAuth) -> AgentAccess:
         return RestrictedAgentAccess(capped)
     if context.user_id is None:
         return RestrictedAgentAccess(frozenset())
-    human_ids: Final = await verified_human_agent_grants(context.user_id)
+    human_ids: Final = await verified_human_agent_grants(context.user_id, auth.team_id)
     return RestrictedAgentAccess(capped.intersection(human_ids))
 
 
-async def verified_human_agent_grants(user_id: str | None) -> frozenset[str]:
+async def _verified_human_agent_sources(user_id: str | None) -> tuple[tuple[str | None, frozenset[str]], ...]:
     from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import MCPRequestHandler
 
     if user_id is None:
-        return frozenset()
+        return ()
     human: Final = await MCPRequestHandler.reload_admitted_user(user_id, requires_fresh_policy=True)
     sources: Final = await MCPRequestHandler.admitted_subject_sources(human)
-    human_access: Final = await asyncio.gather(*(_strict_agent_access(source) for source in sources))
-    return frozenset().union(*(_granted_ids(access) for access in human_access))
+    access: Final = await asyncio.gather(*(_strict_agent_access(source) for source in sources))
+    return tuple((source.team_id, _granted_ids(grant)) for source, grant in zip(sources, access, strict=True))
+
+
+async def verified_human_agent_grants(user_id: str | None, team_id: str | None = None) -> frozenset[str]:
+    sources: Final = await _verified_human_agent_sources(user_id)
+    return frozenset().union(*(grants for source, grants in sources if source is None or source == team_id))
+
+
+async def resolve_delegated_agent_team(
+    user_id: str | None,
+    agent_id: str,
+    team_id: str | None,
+    *,
+    explicit_team: bool,
+    allowed_team_ids: frozenset[str] | None = None,
+) -> str | None:
+    sources: Final = await _verified_human_agent_sources(user_id)
+    if any(source is None and agent_id in grants for source, grants in sources):
+        return team_id
+    granting_teams: Final = frozenset(
+        source
+        for source, grants in sources
+        if source is not None and agent_id in grants and (allowed_team_ids is None or source in allowed_team_ids)
+    )
+    if team_id in granting_teams:
+        return team_id
+    if not explicit_team and granting_teams:
+        return min(granting_teams)
+    raise HTTPException(403, "Select a team that grants access to this agent using x-litellm-team-id")
