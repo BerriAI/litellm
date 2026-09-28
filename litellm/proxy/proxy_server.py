@@ -2550,7 +2550,7 @@ def general_settings_view() -> Mapping[str, object]:
     return _GENERAL_SETTINGS_VIEW.validate_python(general_settings)
 
 
-config_passthrough_endpoints: list[dict[str, Any]] | None = None
+config_passthrough_endpoints: list[dict[str, object]] | None = None
 log_file: Final = "api_log.json"
 worker_config: Final = None
 master_key: str | None = None
@@ -2584,7 +2584,7 @@ use_queue = False
 health_check_interval = None
 health_check_concurrency = None
 health_check_details = None
-health_check_results: dict[str, int | list[dict[str, Any]]] = {}
+health_check_results: dict[str, int | list[dict[str, object]]] = {}
 background_health_check_loop_active = False
 background_health_check_cycle_seq = 0
 queue: Final[list] = []
@@ -13640,7 +13640,7 @@ async def _try_provider_token_count(
     model_to_use: str,
     messages: list | None,
     contents: list | None,
-    deployment: dict[str, Any] | None,
+    deployment: dict[str, object] | None,
     request_model: str,
     tools: list | None = None,
     system: str | None = None,
@@ -14439,7 +14439,7 @@ async def _fetch_db_models_for_search(
     sort_by: str | None,
     is_byok_outside_caller_teams: Callable[[dict[str, JsonValue]], bool],
     model_name: str | None = None,
-) -> tuple[list[dict[str, Any]], int]:
+) -> tuple[list[dict[str, object]], int]:
     """
     Run the bounded DB query that backs `/v2/model/info?search=`. Returns
     `(decrypted_models, total_count)` where `total_count` is the cheap
@@ -14586,7 +14586,7 @@ async def _apply_search_filter_to_models(
     router_models_count: Final = config_models_count + db_models_in_router_count
 
     # Query database for additional models with search term
-    db_models: list[dict[str, Any]] = []
+    db_models: list[dict[str, object]] = []
     exact_name_can_match: Final = model_name is None or search_lower in model_name.lower()
     if prisma_client is not None and exact_name_can_match:
         try:
@@ -14781,7 +14781,7 @@ def _matches_model_info_filters(
 
 
 def _paginate_models_response(
-    all_models: list[dict[str, Any]],
+    all_models: Sequence[Mapping[str, object]],
     page: int,
     size: int,
     total_count: int | None,

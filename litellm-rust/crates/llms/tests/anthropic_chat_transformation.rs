@@ -7,6 +7,7 @@ use litellm_llms::{
     },
 };
 use litellm_types::{llms::openai::ChatMessage, utils::ChatCompletionsResponse};
+use rstest::rstest;
 use serde_json::{Map, Value, json};
 
 fn messages(value: Value) -> Vec<ChatMessage> {
@@ -166,22 +167,19 @@ fn accepts_an_explicit_stream_false() {
     );
 }
 
-#[test]
-fn declines_any_param_outside_the_allowlist() {
-    for param in [
-        json!({"tools": []}),
-        json!({"tool_choice": {"type": "auto"}}),
-        json!({"thinking": {"type": "enabled"}}),
-        json!({"system": "injected"}),
-        json!({"metadata": {"user_id": "u1"}}),
-        json!({"output_config": {"effort": "high"}}),
-    ] {
-        assert_eq!(
-            reason(json!([{"role": "user", "content": "hi"}]), param.clone()),
-            Some(Unsupported("unrecognized request parameter")),
-            "expected {param} to decline"
-        );
-    }
+#[rstest]
+#[case::tools(json!({"tools": []}))]
+#[case::tool_choice(json!({"tool_choice": {"type": "auto"}}))]
+#[case::thinking(json!({"thinking": {"type": "enabled"}}))]
+#[case::system(json!({"system": "injected"}))]
+#[case::metadata(json!({"metadata": {"user_id": "u1"}}))]
+#[case::output_config(json!({"output_config": {"effort": "high"}}))]
+fn declines_any_param_outside_the_allowlist(#[case] param: Value) {
+    assert_eq!(
+        reason(json!([{"role": "user", "content": "hi"}]), param.clone()),
+        Some(Unsupported("unrecognized request parameter")),
+        "expected {param} to decline"
+    );
 }
 
 #[test]
@@ -403,23 +401,22 @@ fn declines_a_response_carrying_a_non_text_block() {
     assert_eq!(err, Error::Unsupported("non-text response content block"));
 }
 
-#[test]
-fn errors_on_a_response_missing_required_fields() {
+#[rstest::rstest]
+#[case::not_an_object(json!("nope"))]
+#[case::missing_content(json!({"model": "test-model", "usage": {"input_tokens": 1, "output_tokens": 1}}))]
+#[case::missing_usage(json!({"model": "test-model", "content": []}))]
+#[case::missing_model(json!({"content": [], "usage": {"input_tokens": 1, "output_tokens": 1}}))]
+fn errors_on_a_response_missing_required_fields(#[case] body: Value) {
+    let error = transform_response(body).expect_err("invalid response");
+    assert!(matches!(error, Error::InvalidResponse(_)));
+    let source = std::iter::successors(Some(&error as &dyn std::error::Error), |error| {
+        error.source()
+    })
+    .find_map(|error| error.downcast_ref::<serde_json::Error>())
+    .expect("the JSON decoding source is preserved");
     assert_eq!(
-        transform_response(json!("nope")).expect_err("not an object"),
-        Error::InvalidResponse("messages response is not an object".to_string())
-    );
-    assert_eq!(
-        transform_response(json!({"model": "m", "usage": {}})).expect_err("no content"),
-        Error::MissingField("content")
-    );
-    assert_eq!(
-        transform_response(json!({"model": "m", "content": []})).expect_err("no usage"),
-        Error::MissingField("usage")
-    );
-    assert_eq!(
-        transform_response(json!({"content": [], "usage": {}})).expect_err("no model"),
-        Error::MissingField("model")
+        error.to_string(),
+        format!("invalid response: invalid messages response: {source}")
     );
 }
 

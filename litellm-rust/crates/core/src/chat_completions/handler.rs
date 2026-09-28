@@ -33,6 +33,7 @@ pub(super) async fn execute(
         body,
         optional_params,
         environment,
+        secrets,
         timeout,
         api_key,
     } = request;
@@ -43,9 +44,9 @@ pub(super) async fn execute(
         secret_fields: Vec::new(),
         api_key,
     };
-    let authenticated = resolve_auth(auth, environment, &|key| std::env::var(key).ok()).await?;
+    let authenticated = resolve_auth(auth, environment, &|key| secrets.get(key)).await?;
     let wire = hooks
-        .before_send(
+        .before_provider_request(
             WireRequest {
                 url,
                 headers: authenticated.headers,
@@ -64,7 +65,7 @@ pub(super) async fn execute(
         timeout,
     )?;
 
-    let response = outbound.send(http).await.map_err(|err| {
+    let response = crate::outbound::send(outbound, http).await.map_err(|err| {
         // Failing to establish the connection means the request never went out,
         // so the host can still serve it. Everything else here, a timeout
         // above all, may have reached the provider and been answered.
@@ -87,13 +88,17 @@ pub(super) async fn execute(
         }));
     }
     hooks
-        .emit(MachineEvent::ResponseReceived {
+        .on_event(MachineEvent::ResponseReceived {
             raw: RawResponse { body: text.clone() },
         })
-        .await?;
+        .await
+        .map_err(Error::post_call)?;
 
     let body: Value = serde_json::from_str(&text).map_err(|err| {
-        Error::InvalidResponse(format!("invalid chat completions response JSON: {err}"))
+        Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+            "chat completions response JSON",
+            err,
+        ))
     })?;
     config
         .transform_response(&model, ProviderChatResponseData { body })
@@ -114,7 +119,7 @@ pub(super) fn as_response_error(err: Error) -> Error {
     match err {
         already @ (Error::InvalidResponse(_)
         | Error::Transport(litellm_http::transport::Error::Http { .. })) => already,
-        other => Error::InvalidResponse(other.to_string()),
+        other => Error::InvalidResponse(other.to_string().into()),
     }
 }
 
@@ -164,7 +169,7 @@ mod tests {
     }
 
     impl RouteHooks<Error> for RecordingHooks {
-        async fn before_send(
+        async fn before_provider_request(
             &self,
             wire: WireRequest,
             context: RequestContext,
@@ -183,7 +188,7 @@ mod tests {
             })
         }
 
-        async fn emit(&self, event: MachineEvent) -> Result<(), Error> {
+        async fn on_event(&self, event: MachineEvent) -> Result<(), Error> {
             let MachineEvent::ResponseReceived { raw } = event;
             self.raw.lock().unwrap().push(raw.body);
             Ok(())
@@ -203,6 +208,7 @@ mod tests {
                 timeout: None,
             })
             .unwrap(),
+            std::sync::Arc::new(|_: &str| None),
         )
         .unwrap()
     }
@@ -235,7 +241,7 @@ mod tests {
         assert_eq!(request.headers["x-host"], "seen");
         assert_eq!(request.headers["x-api-key"], "sk-test");
         let [context] = <[RequestContext; 1]>::try_from(hooks.contexts.into_inner().unwrap())
-            .unwrap_or_else(|seen| panic!("before_send runs once, saw {}", seen.len()));
+            .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
         assert_eq!(
             (context.model.as_str(), context.custom_llm_provider.as_str()),
             ("claude-sonnet-4-5", "anthropic")
@@ -270,12 +276,12 @@ mod tests {
         assert!(hooks.raw.into_inner().unwrap().is_empty());
     }
 
-    #[test]
+    #[rstest::rstest]
     fn response_errors_collapse_to_one_variant_that_can_only_mean_already_sent() {
         for original in [
             Error::MissingField("usage"),
             Error::Unsupported("non-text response content block"),
-            Error::InvalidRequest("whatever".to_string()),
+            Error::InvalidRequest("whatever".to_string().into()),
             Error::Auth(litellm_auth::Error::InvalidHeader),
         ] {
             let label = format!("{original:?}");
