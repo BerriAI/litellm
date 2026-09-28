@@ -8,8 +8,12 @@ skip the other shapes — these helpers normalise that so every hook sees
 every text fragment.
 """
 
+import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
 from typing import Any, Final
+
+from pydantic import JsonValue
+from pydantic_core import to_jsonable_python
 
 # Call types whose body carries free-form chat / prompt text that
 # text-content guardrails (banned keywords, content moderation, secret
@@ -307,3 +311,12 @@ def build_inspection_messages(data: dict[str, Any]) -> list[dict[str, str]]:
         role = message.get("role", "user") or "user"
         flattened.append({"role": role, "content": text})
     return flattened
+
+
+def as_json_value(value: object) -> JsonValue:
+    """Round-trips through the stdlib codec because pydantic's serializer turns anything nested
+    past 254 levels into "...", while this keeps about the depth the proxy's request parser accepts"""
+    parsed: Final[JsonValue] = json.loads(  # pyright: ignore[reportAny]  # untyped stdlib parse of json.dumps output
+        json.dumps(value, default=to_jsonable_python)
+    )
+    return parsed

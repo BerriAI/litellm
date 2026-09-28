@@ -2,6 +2,7 @@
 
 from litellm.proxy.guardrails._content_utils import (
     apply_redacted_messages_back,
+    as_json_value,
     build_inspection_messages,
     has_non_string_content,
     is_non_conversational_call_type,
@@ -741,3 +742,14 @@ def test_is_non_conversational_call_type_defaults_to_inspecting_unknown_call_typ
     """A call type this module has never heard of must still be inspected —
     failing closed is the point of the deny-list."""
     assert is_non_conversational_call_type("some_future_call_type") is False
+
+
+def _nested(depth: int) -> dict[str, object]:
+    return {"leaf": "x"} if depth == 0 else {"nested": _nested(depth - 1)}
+
+
+def test_as_json_value_keeps_content_nested_past_the_pydantic_serializer_limit_and_decodes_bytes():
+    assert as_json_value([{"type": "document", "source": _nested(600), "data": b"raw"}, ("a", 1)]) == [
+        {"type": "document", "source": _nested(600), "data": "raw"},
+        ["a", 1],
+    ], "nothing may be truncated to '...' and non-JSON types must become their JSON form"
