@@ -1920,9 +1920,18 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # If any message has thinking_blocks, we must keep thinking enabled, otherwise
         # Anthropic errors with: "When thinking is disabled, an assistant message cannot contain thinking"
         # Related issue: https://github.com/BerriAI/litellm/issues/18926
+        #
+        # Adaptive-thinking models (Claude 4.6+ / Opus 5.x) are exempt: with
+        # thinking={"type": "adaptive"} Anthropic accepts a tool_use-only prior
+        # turn (adaptive thinking may legitimately decide not to think on a
+        # trivial tool call), so the guard applies only to legacy budget-based
+        # thinking. Dropping it there breaks streaming for effort-configured
+        # models (no reasoning_content deltas until first text/tool token).
+        # Related issue: https://github.com/BerriAI/litellm/issues/43531
         if (
             optional_params.get("thinking") is not None
             and messages is not None
+            and not AnthropicConfig._is_adaptive_thinking_model(model, self._resolved_provider)
             and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
             and not any_assistant_message_has_thinking_blocks(messages)
         ):

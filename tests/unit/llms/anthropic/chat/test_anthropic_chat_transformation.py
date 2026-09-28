@@ -6798,3 +6798,91 @@ def test_chat_dummy_tool_result_for_an_orphaned_tool_call_replays_a_byte_identic
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[0]["messages"]] == ["user", "assistant", "user"]
     assert requests[0]["messages"][2]["content"][0]["type"] == "tool_result"
+
+
+def test_adaptive_thinking_kept_for_adaptive_model_when_tool_calls_missing_thinking_blocks():
+    """
+    modify_params must NOT drop thinking for adaptive-thinking models
+    (Claude 4.6+ / Opus 5.x): Anthropic accepts a tool_use-only prior turn
+    with thinking={"type": "adaptive"}, and dropping it breaks reasoning
+    streaming (no reasoning_content deltas until first text/tool token).
+
+    Related issue: https://github.com/BerriAI/litellm/issues/43531
+    """
+    import litellm
+
+    original_modify_params = litellm.modify_params
+    litellm.modify_params = True
+    try:
+        messages = [
+            {"role": "user", "content": "Run `echo seed` with bash, then reason."},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "toolu_1",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": '{"command":"echo seed"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "toolu_1", "content": "seed"},
+        ]
+        optional_params = {
+            "thinking": {"type": "adaptive", "display": "summarized"},
+            "output_config": {"effort": "xhigh"},
+        }
+        transformed = AnthropicConfig().transform_request(
+            model="claude-opus-5-5",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        assert "thinking" in transformed
+        assert transformed["thinking"] == {"type": "adaptive", "display": "summarized"}
+        assert transformed["output_config"] == {"effort": "xhigh"}
+    finally:
+        litellm.modify_params = original_modify_params
+
+
+def test_legacy_budget_thinking_still_dropped_when_tool_calls_missing_thinking_blocks():
+    """
+    The original guard (#14194 / #18926) must keep working for legacy
+    budget-based thinking: a tool_use-only prior turn is rejected by
+    Anthropic unless the request pairs it with thinking blocks.
+
+    Related issue: https://github.com/BerriAI/litellm/issues/43531
+    """
+    import litellm
+
+    original_modify_params = litellm.modify_params
+    litellm.modify_params = True
+    try:
+        messages = [
+            {"role": "user", "content": "Run `echo seed` with bash, then reason."},
+            {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [
+                    {
+                        "id": "toolu_1",
+                        "type": "function",
+                        "function": {"name": "bash", "arguments": '{"command":"echo seed"}'},
+                    }
+                ],
+            },
+            {"role": "tool", "tool_call_id": "toolu_1", "content": "seed"},
+        ]
+        optional_params = {"thinking": {"type": "enabled", "budget_tokens": 1024}}
+        transformed = AnthropicConfig().transform_request(
+            model="claude-3-5-sonnet-20241022",
+            messages=messages,
+            optional_params=optional_params,
+            litellm_params={},
+            headers={},
+        )
+        assert "thinking" not in transformed
+    finally:
+        litellm.modify_params = original_modify_params
