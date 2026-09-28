@@ -560,9 +560,6 @@ async def _check_summary_model_rate_limit(
     create_descriptors: Final[_CreateRateLimitDescriptors | None] = getattr(
         limiter, "_create_rate_limit_descriptors", None
     )
-    add_team_descriptor: Final[_AddModelRateLimitDescriptor | None] = getattr(
-        limiter, "_add_team_model_rate_limit_descriptor_from_metadata", None
-    )
     add_project_descriptor: Final[_AddModelRateLimitDescriptor | None] = getattr(
         limiter, "_add_project_model_rate_limit_descriptor_from_metadata", None
     )
@@ -573,7 +570,6 @@ async def _check_summary_model_rate_limit(
         limiter is None
         or should_rate_limit_check is None
         or create_descriptors is None
-        or add_team_descriptor is None
         or add_project_descriptor is None
         or create_org_descriptors is None
     ):
@@ -589,11 +585,12 @@ async def _check_summary_model_rate_limit(
             tpm_limit_type=metadata.get("tpm_limit_type"),
             model_has_failures=False,
         )
-        add_team_descriptor(
-            user_api_key_dict=user_api_key_auth,
-            requested_model=summary_model,
-            descriptors=base_descriptors,
-        )
+        # The team per-model descriptor is appended by ``_create_rate_limit_descriptors``
+        # itself; adding it again here repeats one (key, value) pair, and every
+        # counter consumer charges the request once per descriptor it is given.
+        # The repeat is currently harmless only because ``read_only=True`` below
+        # reads the pair twice and increments nothing -- a property of this call
+        # site rather than of the code it calls.
         add_project_descriptor(
             user_api_key_dict=user_api_key_auth,
             requested_model=summary_model,

@@ -27,6 +27,7 @@ from litellm.llms.anthropic.pass_through.context_management import (
 )
 from litellm.llms.anthropic.pass_through.context_management.editors.compact import (
     _augment_system_with_summary,
+    _check_summary_model_rate_limit,
     _extract_summary_text,
     _select_last_user_question,
     _slice_around_compaction_block,
@@ -2868,3 +2869,51 @@ async def test_threshold_check_counts_tokens_off_the_event_loop(monkeypatch):
     assert result.messages == messages
     assert result.compaction_block is None
     assert_loop_stayed_free(took, lags)
+
+
+async def test_summary_check_hands_the_team_model_counter_to_the_limiter_once():
+    """The team per-model descriptor reaches the read-only check exactly once.
+
+    ``_create_rate_limit_descriptors`` appends it itself, so assembling it a
+    second time here hands the limiter one counter twice. That is harmless
+    while the check runs ``read_only=True``, but every counter consumer charges
+    a request once per descriptor it is given, so a repeat is one refactor away
+    from halving the team's configured per-model limit.
+    """
+    from litellm.caching.caching import DualCache
+    from litellm.proxy._types import UserAPIKeyAuth
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import (
+        _PROXY_MaxParallelRequestsHandler_v3,
+    )
+    from litellm.proxy.utils import InternalUsageCache, hash_token
+
+    summary_model = "claude-haiku-4-5"
+    limiter = _PROXY_MaxParallelRequestsHandler_v3(
+        internal_usage_cache=InternalUsageCache(DualCache())
+    )
+    captured: List[List[Dict[str, Any]]] = []
+
+    async def _capture(**kwargs):
+        captured.append(list(kwargs.get("descriptors") or []))
+        return {"overall_code": "OK"}
+
+    limiter.should_rate_limit = _capture
+
+    auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-team-model-dedup"),
+        team_id="team-1",
+        team_metadata={"model_rpm_limit": {summary_model: 2}},
+    )
+
+    with patch(
+        "litellm.proxy.proxy_server.proxy_logging_obj",
+        _proxy_logging_like_the_live_proxy(limiter),
+    ):
+        allowed = await _check_summary_model_rate_limit(auth, summary_model)
+
+    assert allowed is True
+    assert captured, "the read-only rate-limit check never ran"
+    team_descriptors = [d for d in captured[0] if d["key"] == "model_per_team"]
+    assert len(team_descriptors) == 1, (
+        f"expected one model_per_team descriptor, got {len(team_descriptors)}: {team_descriptors}"
+    )
