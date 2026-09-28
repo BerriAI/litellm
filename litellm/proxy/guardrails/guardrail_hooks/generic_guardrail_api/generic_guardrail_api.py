@@ -19,7 +19,9 @@ from litellm._version import version as litellm_version
 from litellm.exceptions import GuardrailRaisedException, Timeout
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    get_session_id_from_request_data,
     log_guardrail_information,
+    skip_guardrail_success_record,
 )
 from litellm.litellm_core_utils.core_helpers import as_str_mapping
 from litellm.llms.custom_httpx.http_handler import (
@@ -33,9 +35,12 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GenericGuardrailAPIMetadata,
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
+    GuardrailInformationScope,
     GuardrailToolParam,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
+
+from .record_scope import DEFAULT_GUARDRAIL_INFORMATION_SCOPE, RecordScope, returned_unchanged
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -281,6 +286,7 @@ class GenericGuardrailAPI(CustomGuardrail):
         num_retries: int | None = None,
         async_handler: AsyncHTTPHandler | None = None,
         fresh_handler_factory: Callable[[], AsyncHTTPHandler] | None = None,
+        guardrail_information_scope: GuardrailInformationScope | None = None,
         **kwargs,
     ):
         self.async_handler = async_handler or get_async_httpx_client(
@@ -336,6 +342,10 @@ class GenericGuardrailAPI(CustomGuardrail):
         )
         if streaming_buffer_until_moderated is not None:
             self.streaming_buffer_until_moderated: bool = streaming_buffer_until_moderated
+
+        self._record_scope: Final = RecordScope(
+            DEFAULT_GUARDRAIL_INFORMATION_SCOPE if guardrail_information_scope is None else guardrail_information_scope
+        )
 
         # Set supported event hooks
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
@@ -626,7 +636,7 @@ class GenericGuardrailAPI(CustomGuardrail):
                     blocked_content=True,
                 )
 
-            return self._build_guardrail_return_inputs(
+            return_inputs: Final = self._build_guardrail_return_inputs(
                 texts=texts,
                 images=images,
                 tools=tools,
@@ -649,6 +659,15 @@ class GenericGuardrailAPI(CustomGuardrail):
             return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj)
         except Exception as e:
             return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj, is_unreachable=False)
+
+        unchanged_allow: Final = guardrail_response.action == "NONE" and returned_unchanged(inputs, return_inputs)
+        if unchanged_allow and not self._record_scope.should_record_allow(
+            session_id=get_session_id_from_request_data(request_data),
+            tenant=user_metadata.get("user_api_key_hash") or user_metadata.get("user_api_key_team_id"),
+            input_type=input_type,
+        ):
+            skip_guardrail_success_record()
+        return return_inputs
 
     @staticmethod
     def get_config_model() -> type["GuardrailConfigModel"] | None:

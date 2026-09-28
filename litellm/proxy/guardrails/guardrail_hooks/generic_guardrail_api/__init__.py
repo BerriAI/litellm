@@ -45,6 +45,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
         ),
         timeout=litellm_params.timeout,
         num_retries=litellm_params.num_retries,
+        guardrail_information_scope=_get_config_value(litellm_params, optional_params, "guardrail_information_scope"),
     )
 
     litellm.logging_callback_manager.add_litellm_callback(_generic_guardrail_api_callback)
