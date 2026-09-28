@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+from collections.abc import AsyncIterator
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, Final, Literal, Optional
@@ -39,6 +40,7 @@ from mcp.types import Tool as MCPTool
 from pydantic import AnyUrl, TypeAdapter
 
 from litellm.constants import MCP_METADATA_TIMEOUT
+from litellm.proxy._experimental.mcp_server.tool_outcome import TextResult
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
     MCPServerManager,
     _deserialize_json_dict,
@@ -62,7 +64,7 @@ from litellm.proxy._types import (
     UserAPIKeyAuth,
 )
 from litellm.types.llms.custom_http import httpxSpecialProvider
-from litellm.types.mcp import MCPAuth, MCPAuthType
+from litellm.types.mcp import MCPAuth, MCPAuthType, MCPUpstreamProtocol
 from litellm.types.mcp_server.mcp_server_manager import MCPOAuthMetadata, MCPServer
 from litellm.caching.caching import DualCache
 from litellm.caching.llm_caching_handler import LLMClientCache
@@ -4893,69 +4895,258 @@ class TestMCPServerManager:
         assert result.last_health_check is not None
 
     @pytest.mark.asyncio
-    async def test_health_check_server_oauth2_skips_check(self):
-        """Test that health check is skipped for OAuth2 servers and returns unknown status"""
-        manager = MCPServerManager()
-
-        # Mock OAuth2 server
-        server = MCPServer(
+    @pytest.mark.parametrize("oauth2_flow", [None, "authorization_code", "client_credentials"])
+    async def test_health_check_server_oauth2_reports_reachability(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: MockRouter, oauth2_flow: Literal["authorization_code", "client_credentials"] | None
+    ) -> None:
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
             server_id="oauth2-server",
             name="oauth2-server",
             transport=MCPTransport.http,
             auth_type=MCPAuth.oauth2,
             url="http://oauth2-server.com",
+            oauth2_flow=oauth2_flow,
+            client_id="client-id",
+            client_secret="stored-client-secret",
+            static_headers={"Authorization": "Bearer static-secret", "X-API-Key": "key-secret", "Cookie": "secret"},
         )
-
-        manager.get_mcp_server_by_id = MagicMock(return_value=server)
-
-        # _create_mcp_client should not be called for OAuth2 servers
+        manager.registry[server.server_id] = server
         manager._create_mcp_client = AsyncMock()
+        route: Final = respx_mock.get(server.url).respond(401)
 
-        # Perform health check
-        result = await manager.health_check_server("oauth2-server")
+        result: Final = await manager.health_check_server(server.server_id, mcp_auth_header="caller-secret")
 
-        # Verify that client was not created (health check was skipped)
         manager._create_mcp_client.assert_not_called()
+        assert result.status == "reachable"
+        assert result.health_check_error is None
+        assert result.last_health_check is not None
+        assert route.call_count == 1
+        assert not {"authorization", "x-api-key", "cookie"}.intersection(route.calls[0].request.headers)
 
-        # Verify results
-        assert isinstance(result, LiteLLM_MCPServerTable)
-        assert result.server_id == "oauth2-server"
-        assert result.status == "unknown"
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("auth_type", [
+        MCPAuth.bearer_token, MCPAuth.api_key, MCPAuth.basic, MCPAuth.authorization, MCPAuth.token,
+        MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag, MCPAuth.true_passthrough, MCPAuth.oauth_delegate,
+    ])
+    @pytest.mark.parametrize("transport", [MCPTransport.http, MCPTransport.sse])
+    @pytest.mark.parametrize("response_code", [200, 204, 302, 401, 403, 405, 503])
+    async def test_health_check_without_credentials_accepts_any_http_response(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: MockRouter, auth_type: MCPAuthType, transport: Literal[MCPTransport.http, MCPTransport.sse],
+        response_code: int,
+    ) -> None:
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="no-token-server",
+            name="no-token-server",
+            transport=transport,
+            auth_type=auth_type,
+            authentication_token=None,
+            url="http://no-token-server.com",
+        )
+        manager.registry[server.server_id] = server
+        manager._create_mcp_client = AsyncMock()
+        route: Final = respx_mock.get(server.url).respond(response_code)
+
+        result: Final = await manager.health_check_server(server.server_id)
+
+        manager._create_mcp_client.assert_not_called()
+        assert route.call_count == 1
+        assert result.status == "reachable"
         assert result.health_check_error is None
         assert result.last_health_check is not None
 
     @pytest.mark.asyncio
-    async def test_health_check_server_no_token_skips_check(self):
-        """Test that health check is skipped when auth_type is set but authentication_token is missing"""
-        manager = MCPServerManager()
+    @pytest.mark.parametrize("response_code", [200, 302])
+    async def test_health_reachability_closes_sse_without_body_redirect_or_cookie_reuse(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: MockRouter, response_code: int
+    ) -> None:
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        class UnreadBody(httpx.AsyncByteStream):
+            def __init__(self) -> None:
+                self.read = False
+                self.closed = False
 
-        # Mock server with auth_type but no authentication_token
-        server = MCPServer(
-            server_id="no-token-server",
-            name="no-token-server",
-            transport=MCPTransport.http,
-            auth_type=MCPAuth.bearer_token,
-            authentication_token=None,  # No token
-            url="http://no-token-server.com",
+            async def __aiter__(self) -> AsyncIterator[bytes]:
+                self.read = True
+                yield b"secret SSE body"
+
+            async def aclose(self) -> None:
+                self.closed = True
+
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="streaming-health", name="streaming-health", transport=MCPTransport.sse,
+            auth_type=MCPAuth.oauth2, url="https://mcp.example.test/events",
+        )
+        manager.registry[server.server_id] = server
+        bodies: Final = (UnreadBody(), UnreadBody())
+        route: Final = respx_mock.get(server.url).mock(side_effect=[
+            httpx.Response(response_code, stream=body, headers={
+                "Content-Type": "text/event-stream", "Set-Cookie": "health=secret; Path=/",
+                "Location": "http://127.0.0.1/private",
+            }) for body in bodies
+        ])
+
+        first: Final = await manager.health_check_server(server.server_id)
+        second: Final = await manager.health_check_server(server.server_id)
+
+        assert (first.status, second.status) == ("reachable", "reachable")
+        assert route.call_count == len(respx_mock.calls) == 2
+        assert all(body.closed and not body.read for body in bodies)
+        assert all("cookie" not in call.request.headers for call in route.calls)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(("transport", "url"), [
+        (MCPTransport.stdio, "https://mcp.example.test"),
+        (MCPTransport.http, None), (MCPTransport.http, ""), (MCPTransport.http, "not-a-url"),
+        (MCPTransport.http, "ftp://mcp.example.test"),
+        (MCPTransport.http, "https://user:secret@mcp.example.test"),
+        (MCPTransport.http, "https://mcp.example.test:bad/mcp"),
+    ])
+    async def test_health_reachability_rejects_unprobeable_urls_without_requests(
+        self, respx_mock: MockRouter, transport: Literal[MCPTransport.http, MCPTransport.stdio], url: str | None
+    ) -> None:
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="unprobeable", name="unprobeable", transport=transport, auth_type=MCPAuth.oauth2, url=url,
+        )
+        manager.registry[server.server_id] = server
+
+        result: Final = await manager.health_check_server(server.server_id)
+
+        assert result.status == "unknown"
+        assert result.health_check_error and "secret" not in result.health_check_error
+        assert not respx_mock.calls
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("failure", [
+        httpx.ConnectError("TLS/connection failure with secret details"),
+        httpx.ReadTimeout("secret timeout details"),
+        httpx.RemoteProtocolError("secret malformed response"),
+    ])
+    async def test_health_reachability_reports_no_response_without_secret_details(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: MockRouter, failure: httpx.RequestError
+    ) -> None:
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="failed-health", name="failed-health", transport=MCPTransport.http,
+            auth_type=MCPAuth.bearer_token, is_byok=True, url="https://mcp.example.test/secret?token=secret",
+        )
+        manager.registry[server.server_id] = server
+        route: Final = respx_mock.get(server.url).mock(side_effect=failure)
+
+        result: Final = await manager.health_check_server(server.server_id)
+
+        assert result.status == "unhealthy"
+        assert result.health_check_error and "secret" not in result.health_check_error
+        assert route.call_count == 1
+
+    @pytest.mark.asyncio
+    async def test_health_reachability_contains_ssl_setup_errors(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setenv("SSL_SECURITY_LEVEL", "invalid-secret-cipher")
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="bad-tls", name="bad-tls", transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2, url="https://mcp.example.test",
+        )
+        manager.registry[server.server_id] = server
+
+        result: Final = await manager.health_check_server(server.server_id)
+
+        assert result.status == "unhealthy"
+        assert result.health_check_error == "Reachability check failed (SSLError)"
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("cancel", [False, True])
+    async def test_health_reachability_timeout_and_cancellation_clean_up(
+        self, respx_mock: MockRouter, monkeypatch: pytest.MonkeyPatch, cancel: bool
+    ) -> None:
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        monkeypatch.setattr("litellm.proxy._experimental.mcp_server.mcp_server_manager.MCP_HEALTH_CHECK_TIMEOUT", 0.1)
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="slow-health", name="slow-health", transport=MCPTransport.http,
+            auth_type=MCPAuth.oauth2, url="https://mcp.example.test/slow",
+        )
+        manager.registry[server.server_id] = server
+        started: Final = asyncio.Event()
+        stopped: Final = asyncio.Event()
+
+        async def slow_response(request: httpx.Request) -> httpx.Response:
+            started.set()
+            try:
+                await asyncio.Event().wait()
+                return httpx.Response(200)
+            finally:
+                stopped.set()
+
+        respx_mock.get(server.url).mock(side_effect=slow_response)
+        task: Final = asyncio.create_task(manager.health_check_server(server.server_id))
+        await asyncio.wait_for(started.wait(), timeout=1)
+        if cancel:
+            task.cancel()
+        result: Final = await task
+
+        assert result.status == ("unknown" if cancel else "unhealthy")
+        assert result.health_check_error == (
+            "Reachability check was cancelled" if cancel else "Reachability check timed out after 0.1 seconds"
+        )
+        assert stopped.is_set()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("server_count", [0, 1, 10, 11, 25])
+    @pytest.mark.parametrize("filtered", [False, True])
+    async def test_bulk_health_checks_deduplicate_and_bound_upstream_requests(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: MockRouter, server_count: int, filtered: bool
+    ) -> None:
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+
+        class Probe:
+            def __init__(self) -> None:
+                self.active = 0
+                self.peak = 0
+
+            async def respond(self, request: httpx.Request) -> httpx.Response:
+                self.active += 1
+                self.peak = max(self.peak, self.active)
+                try:
+                    await asyncio.sleep(0)
+                    return httpx.Response(401)
+                finally:
+                    self.active -= 1
+
+        manager: Final = MCPServerManager()
+        server_ids: Final = [f"health-{index}" for index in range(server_count)]
+        manager.registry = {
+            server_id: MCPServer(
+                server_id=server_id, name=server_id, transport=MCPTransport.http,
+                auth_type=MCPAuth.oauth2, url=f"https://health.example.test/{server_id}",
+            )
+            for server_id in server_ids
+        }
+        probe: Final = Probe()
+        route: Final = respx_mock.get(host="health.example.test").mock(side_effect=probe.respond)
+        requested_ids: Final = [*server_ids, *reversed(server_ids), *server_ids, "not-registered"]
+
+        results: Final = (
+            await manager.get_all_mcp_servers_with_health_and_teams(
+                user_api_key_auth=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN),
+                server_ids=requested_ids,
+            )
+            if filtered
+            else await manager.get_all_mcp_servers_with_health_unfiltered(server_ids=requested_ids)
         )
 
-        manager.get_mcp_server_by_id = MagicMock(return_value=server)
-
-        # _create_mcp_client should not be called
-        manager._create_mcp_client = AsyncMock()
-
-        # Perform health check
-        result = await manager.health_check_server("no-token-server")
-
-        # Verify that client was not created (health check was skipped)
-        manager._create_mcp_client.assert_not_called()
-
-        # Verify results
-        assert isinstance(result, LiteLLM_MCPServerTable)
-        assert result.server_id == "no-token-server"
-        assert result.status == "unknown"
-        assert result.health_check_error is None
-        assert result.last_health_check is not None
+        assert [(server.server_id, server.status) for server in results] == [
+            (server_id, "reachable") for server_id in server_ids
+        ]
+        assert route.call_count == server_count
+        assert probe.peak == min(server_count, 10)
+        assert probe.active == 0
 
     @pytest.mark.asyncio
     async def test_health_check_server_with_static_headers(self):
@@ -5002,70 +5193,58 @@ class TestMCPServerManager:
         assert result.health_check_error is None
 
     @pytest.mark.asyncio
-    async def test_health_check_skips_passthrough_auth_with_authorization_header(self):
-        """Test that health check is skipped for servers with passthrough Authorization header"""
-        manager = MCPServerManager()
-
-        # Mock server with auth_type=none and Authorization in extra_headers (passthrough auth)
-        server = MCPServer(
+    async def test_health_check_reaches_passthrough_auth_with_authorization_header(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: MockRouter
+    ) -> None:
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
             server_id="github-server",
             name="github-server",
             transport=MCPTransport.http,
             auth_type=MCPAuth.none,
             authentication_token=None,
             url="http://github-server.com",
-            extra_headers=["Authorization"],  # Passthrough auth configured
+            extra_headers=["Authorization"],
         )
-
-        manager.get_mcp_server_by_id = MagicMock(return_value=server)
-
-        # _create_mcp_client should not be called (health check should be skipped)
+        manager.registry[server.server_id] = server
         manager._create_mcp_client = AsyncMock()
+        route: Final = respx_mock.get(server.url).respond(401)
 
-        # Perform health check
-        result = await manager.health_check_server("github-server")
+        result: Final = await manager.health_check_server(server.server_id)
 
-        # Verify that client was not created (health check was skipped)
         manager._create_mcp_client.assert_not_called()
-
-        # Verify results
-        assert isinstance(result, LiteLLM_MCPServerTable)
-        assert result.server_id == "github-server"
-        assert result.status == "unknown"
+        assert route.call_count == 1
+        assert "authorization" not in route.calls[0].request.headers
+        assert result.status == "reachable"
         assert result.health_check_error is None
         assert result.last_health_check is not None
 
     @pytest.mark.asyncio
-    async def test_health_check_skips_passthrough_auth_with_api_key_header(self):
-        """Test that health check is skipped for servers with passthrough x-api-key header"""
-        manager = MCPServerManager()
-
-        # Mock server with auth_type=none and x-api-key in extra_headers
-        server = MCPServer(
+    async def test_health_check_reaches_passthrough_auth_with_api_key_header(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: MockRouter
+    ) -> None:
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
             server_id="sourcegraph-server",
             name="sourcegraph-server",
             transport=MCPTransport.http,
             auth_type=MCPAuth.none,
             authentication_token=None,
             url="http://sourcegraph-server.com",
-            extra_headers=["x-api-key"],  # Passthrough auth configured
+            extra_headers=["x-api-key"],
         )
-
-        manager.get_mcp_server_by_id = MagicMock(return_value=server)
-
-        # _create_mcp_client should not be called
+        manager.registry[server.server_id] = server
         manager._create_mcp_client = AsyncMock()
+        route: Final = respx_mock.get(server.url).respond(403)
 
-        # Perform health check
-        result = await manager.health_check_server("sourcegraph-server")
+        result: Final = await manager.health_check_server(server.server_id)
 
-        # Verify that client was not created (health check was skipped)
         manager._create_mcp_client.assert_not_called()
-
-        # Verify results
-        assert isinstance(result, LiteLLM_MCPServerTable)
-        assert result.server_id == "sourcegraph-server"
-        assert result.status == "unknown"
+        assert route.call_count == 1
+        assert "x-api-key" not in route.calls[0].request.headers
+        assert result.status == "reachable"
         assert result.health_check_error is None
         assert result.last_health_check is not None
 
@@ -6730,7 +6909,7 @@ class TestMCPServerManager:
         # Create mock client that tracks call_tool usage
         mock_client = AsyncMock()
 
-        async def mock_call_tool(params, host_progress_callback=None):
+        async def mock_call_tool(params, host_progress_callback=None, allow_input_required=False):
             # Return a mock CallToolResult
             result = MagicMock(spec=CallToolResult)
             result.content = [{"type": "text", "text": "Tool executed successfully"}]
@@ -8709,6 +8888,35 @@ class TestMCPServerManagerExpandToolPermissions:
         result = manager.expand_tool_permissions({"uuid-a": ["read_file"], "alias-a": ["write_file"]})
         assert sorted(result["uuid-a"]) == ["read_file", "write_file"]
 
+    def test_wildcard_survives_expansion_as_list_entry(self):
+        """["*"] stays in the expanded list so the caller's wildcard check
+        (``_union_tool_grants``) can read it; this function only normalizes
+        keys and never maps grants to None."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alpha")
+
+        result = manager.expand_tool_permissions({"uuid-a": ["*"]})
+        assert result == {"uuid-a": ["*"]}
+
+    def test_wildcard_unions_with_concrete_names_across_keys_for_same_server(self):
+        """An alias key carrying ["*"] unioned with an id key naming one tool
+        keeps both entries; interpretation of the wildcard belongs to the
+        caller, not the expansion."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alias-a", alias="alias-a")
+
+        result = manager.expand_tool_permissions({"uuid-a": ["read_file"], "alias-a": ["*"]})
+        assert sorted(result["uuid-a"]) == ["*", "read_file"]
+
+    def test_empty_list_stays_deny_all(self):
+        """[] is deny-all, a distinct meaning from no entry (unrestricted);
+        the key must survive expansion rather than disappear."""
+        manager = MCPServerManager()
+        manager.config_mcp_servers["uuid-a"] = self._make_server("uuid-a", server_name="alpha")
+
+        result = manager.expand_tool_permissions({"uuid-a": []})
+        assert result == {"uuid-a": []}
+
 
 class TestOAuthDiscoverySSRFGuard:
     """SSRF guard for the OAuth metadata discovery follow-up fetches.
@@ -9209,16 +9417,19 @@ class TestRegistryTableConversionPreservesEnvVars:
         self._assert_env_vars_round_tripped(table)
 
     @pytest.mark.asyncio
-    async def test_health_check_server_preserves_env_vars(self):
-        # OAuth2 without client credentials needs a per-user token, so the
-        # health check is skipped (no network) and we exercise the table
-        # construction path directly.
-        manager = MCPServerManager()
-        server = self._server_with_env_vars()
+    async def test_health_check_server_preserves_env_vars(
+        self, monkeypatch: pytest.MonkeyPatch, respx_mock: MockRouter
+    ) -> None:
+        monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+        manager: Final = MCPServerManager()
+        server: Final = self._server_with_env_vars()
         assert server.requires_per_user_auth is True
         manager.registry[server.server_id] = server
-        table = await manager.health_check_server(server.server_id)
+        route: Final = respx_mock.get(server.url).respond(401)
+        table: Final = await manager.health_check_server(server.server_id)
         self._assert_env_vars_round_tripped(table)
+        assert route.call_count == 1
+        assert "x-db-url" not in route.calls[0].request.headers
 
 
 class TestHealthCheckInterpolatesGlobalEnvVars:
@@ -9354,6 +9565,60 @@ class TestGetPublicMCPServers:
         for s in servers:
             manager.config_mcp_servers[s.server_id] = s
         return manager
+
+    @pytest.mark.parametrize("registered_in", ("config", "database", "both", "neither"))
+    @pytest.mark.parametrize("public_ids", (None, [], ["server-id"], ["server-alias"], ["Server Name"]))
+    @pytest.mark.parametrize(
+        "strict,network_access,implicitly_public",
+        ((True, True, False), (True, False, False), (False, True, True), (False, False, False)),
+    )
+    def test_public_status_agrees_with_hub_membership(
+        self,
+        registered_in: Literal["config", "database", "both", "neither"],
+        public_ids: list[str] | None,
+        strict: bool,
+        network_access: bool,
+        implicitly_public: bool,
+    ) -> None:
+        manager: Final = MCPServerManager()
+        server: Final = MCPServer(
+            server_id="server-id",
+            name="server-alias",
+            alias="server-alias",
+            server_name="Server Name",
+            transport=MCPTransport.http,
+            available_on_public_internet=network_access,
+            mcp_info={"is_public": True, "description": "Preserve custom metadata"},
+        )
+        config_server: Final = (
+            server.model_copy(update={"available_on_public_internet": not network_access})
+            if registered_in == "both"
+            else server
+        )
+        manager.config_mcp_servers = (
+            {server.server_id: config_server} if registered_in in ("config", "both") else {}
+        )
+        manager.registry = {server.server_id: server} if registered_in in ("database", "both") else {}
+        original_server: Final = server.model_dump()
+        original_config_server: Final = config_server.model_dump()
+        expected_public: Final = registered_in != "neither" and (
+            public_ids == [server.server_id] or implicitly_public
+        )
+
+        with (
+            patch("litellm.public_mcp_servers", public_ids),
+            patch("litellm.public_mcp_hub_strict_whitelist", strict),
+        ):
+            public_servers: Final = manager.get_public_mcp_servers()
+            assert manager.is_mcp_server_public(server.server_id) is expected_public
+            assert [item.server_id for item in public_servers] == (
+                [server.server_id] if expected_public else []
+            )
+            assert manager.is_mcp_server_public("server-alias") is False
+            assert manager.is_mcp_server_public("missing-server") is False
+
+        assert server.model_dump() == original_server
+        assert config_server.model_dump() == original_config_server
 
     @patch("litellm.public_mcp_servers", None)
     def test_returns_empty_when_whitelist_is_none(self):
@@ -10032,7 +10297,7 @@ class _RetryFakeClient:
         self._MCPClient = MCPClient
         self.attempts = 0
 
-    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+    async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, allow_input_required=False):
         self.attempts += 1
         if self._raises is not None:
             if raise_on_error:
@@ -10244,7 +10509,7 @@ class TestOBOConcurrencyLimit:
         inflight = {"current": 0, "peak": 0}
 
         class _ConcurrencyRecordingClient:
-            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False):
+            async def call_tool(self, params, host_progress_callback=None, raise_on_error=False, allow_input_required=False):
                 inflight["current"] += 1
                 inflight["peak"] = max(inflight["peak"], inflight["current"])
                 try:
@@ -12220,6 +12485,38 @@ class TestOpenApiHandlerRelaysUpstreamAuth:
 
         assert result.is_error is True
         assert "upstream returned HTTP 503" in result.content[0].text
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("body", "compat", "expected_structured"),
+        [
+            ('{"total": 1.10, "items": [ ]}', "legacy", {"total": 1.1, "items": []}),
+            ('{"total": 1.10, "items": [ ]}', "modern", {"total": 1.1, "items": []}),
+            ("[1, 2]", "legacy", None),
+            ("[1, 2]", "modern", [1, 2]),
+            ("plain text", "legacy", None),
+            ("plain text", "modern", None),
+        ],
+    )
+    async def test_json_bodies_keep_verbatim_text_and_gain_structured_content(self, body, compat, expected_structured):
+        """The OpenAPI arm used to stringify the response; now the text block is the upstream body
+        byte for byte, exactly once, and JSON bodies carry structuredContent when the caller's revision admits it."""
+        from litellm.proxy._experimental.mcp_server.tool_outcome import WireCompat, parse_http_body
+        from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+        manager = MCPServerManager()
+
+        async def handler(**_kwargs):
+            return parse_http_body(body)
+
+        tool = MagicMock()
+        tool.handler = handler
+        with patch.object(global_mcp_tool_registry, "get_tool", return_value=tool):
+            result = await manager._call_openapi_tool_handler(self._server(), "list_reports", {}, WireCompat(compat))
+
+        assert result.is_error is False
+        assert [block.text for block in result.content] == [body]
+        assert result.structured_content == expected_structured
 
 
 class TestConfigServerIdPinning:
@@ -14225,7 +14522,7 @@ class TestProtectedCredentialPreparation:
         caller_token: Final = _request_auth_header.set(caller)
         extra_token: Final = _request_extra_headers.set(forwarded)
         try:
-            assert await tool() == "authenticated"
+            assert await tool() == TextResult("authenticated")
             sent: Final = destination.calls.last.request.headers
             assert sent.get("x-api-key") == static.get("X-API-Key", (forwarded or {}).get("X-API-Key"))
             if caller:
@@ -14516,3 +14813,86 @@ async def test_client_sampling_does_not_fill_explicit_context_from_another_ambie
         assert captured["client_ip"] is None
     finally:
         auth_context_var.reset(token)
+
+
+class TestSharedIdentifierPrefixWarning:
+    """Two stored rows sharing lowercased alias-or-server_name publish one tool
+    prefix; reload must surface them once so the ambiguity is visible."""
+
+    @pytest.mark.asyncio
+    async def test_reload_warns_once_per_shared_identifier(self, caplog):
+        manager = MCPServerManager()
+        rows = [
+            LiteLLM_MCPServerTable(
+                server_id="srv-a", server_name="alpha", alias="shared", url="https://a.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+            LiteLLM_MCPServerTable(
+                server_id="srv-b", server_name="beta", alias="Shared", url="https://b.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+            LiteLLM_MCPServerTable(
+                server_id="srv-c", server_name="gamma", alias="lonely", url="https://c.example.com/mcp",
+                transport=MCPTransport.http, updated_at=datetime.now(),
+            ),
+        ]
+        raw_rows = [MagicMock(model_dump=lambda row=row: row.model_dump()) for row in rows]
+        repository = MagicMock()
+        repository.table.find_many = AsyncMock(return_value=raw_rows)
+
+        async def build_from_table(table, **_kwargs):
+            return MCPServer(
+                server_id=table.server_id,
+                name=table.alias or table.server_name,
+                alias=table.alias,
+                server_name=table.server_name,
+                url=table.url,
+                transport=table.transport,
+            )
+
+        with (
+            patch(
+                "litellm.proxy._experimental.mcp_server.mcp_server_manager.MCPServerRepository",
+                return_value=repository,
+            ),
+            patch(
+                "litellm.proxy.management_endpoints.mcp_management_endpoints.get_prisma_client_or_throw",
+                return_value=MagicMock(),
+            ),
+            patch.object(manager, "build_mcp_server_from_table", new=build_from_table),
+            patch.object(manager, "_maybe_register_openapi_tools", new=AsyncMock()),
+            patch.object(manager, "_prime_oauth_metadata_discovery_for_servers"),
+            caplog.at_level(logging.WARNING, logger="LiteLLM"),
+        ):
+            await manager.reload_servers_from_database()
+
+        shared_warnings = [m for m in caplog.messages if "share the identifier" in m]
+        assert len(shared_warnings) == 1
+        assert "srv-a" in shared_warnings[0]
+        assert "srv-b" in shared_warnings[0]
+        assert "srv-c" not in shared_warnings[0]
+        assert "'shared'" in shared_warnings[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("revision", ["auto", "2024-11-05", "2025-03-26", "2025-06-18", "2025-11-25"])
+async def test_configured_protocol_reaches_the_upstream_client(config_only_mcp_manager_factory, revision):
+    manager = config_only_mcp_manager_factory()
+    await manager.load_servers_from_config({"versions": {"url": "http://127.0.0.1:9/mcp", "transport": "http", "protocol_version": revision}})
+    server = next(iter(manager.config_mcp_servers.values()))
+    client = await manager._create_mcp_client(server)
+    assert server.protocol_version == revision
+    assert client.protocol_version == revision
+
+
+@pytest.mark.parametrize("revision", ("auto", "2024-11-05", "2025-06-18"))
+@pytest.mark.parametrize("explicit", (None, "auto", "2025-11-25"))
+def test_runtime_protocol_metadata_preserves_explicit_precedence(
+    revision: MCPUpstreamProtocol, explicit: MCPUpstreamProtocol | None
+) -> None:
+    server: Final = MCPServer.model_validate({
+        "server_id": "preview", "name": "preview", "transport": "http",
+        "mcp_info": {"protocol_version": revision},
+        **({"protocol_version": explicit} if explicit is not None else {}),
+    })
+    assert server.protocol_version == (explicit if explicit is not None else revision)
