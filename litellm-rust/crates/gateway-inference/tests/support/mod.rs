@@ -1,3 +1,6 @@
+// Shared across integration-test targets; each target uses a different subset.
+#![allow(dead_code)]
+
 use std::{sync::Arc, time::Duration};
 
 use axum::{
