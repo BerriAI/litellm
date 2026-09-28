@@ -129,6 +129,7 @@ type ModelInfo struct {
 
 // Key represents a LiteLLM API key.
 type Key struct {
+	clearKeyAlias            bool
 	Key                      string                 `json:"key,omitempty"`
 	TokenID                  string                 `json:"token_id,omitempty"`
 	Models                   []string               `json:"models"`

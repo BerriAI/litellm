@@ -322,6 +322,7 @@ func resourceKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{
 
 	key := &Key{Key: d.Id()}
 	mapResourceDataToKey(d, key)
+	key.clearKeyAlias = d.HasChange("key_alias") && key.KeyAlias == ""
 	if !d.HasChange("duration") {
 		key.Duration = ""
 	}
