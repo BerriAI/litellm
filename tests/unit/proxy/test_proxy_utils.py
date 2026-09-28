@@ -124,6 +124,32 @@ async def test_add_litellm_data_to_request_snapshots_requester_metadata(mock_req
     assert header_snapshot["metadata"]["trace_id"] == "t-hdr"
 
 
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_strips_reserved_snapshot_metadata(mock_request):
+    mock_request.url.path = "/chat/completions"
+    mock_request.headers = {}
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key")
+    proxy_config = Mock()
+
+    data: Final = await add_litellm_data_to_request(
+        {
+            "metadata": {
+                "foo": "bar",
+                "dd_api_key": "k",
+                "dd_site": "s",
+                "original_model_group": "g",
+                "attempted_fallbacks": 1,
+            }
+        },
+        mock_request,
+        user_api_key_dict,
+        proxy_config,
+    )
+
+    assert data["metadata"]["requester_metadata"] == {"foo": "bar"}
+    assert get_requester_metadata(data["metadata"]) == {"foo": "bar"}
+
+
 # test adding traceparent
 
 

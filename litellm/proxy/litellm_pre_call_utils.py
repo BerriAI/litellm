@@ -2020,9 +2020,7 @@ async def add_litellm_data_to_request(
         for _mk in list(_user_metadata.keys()):
             if _mk.startswith("user_api_key_"):
                 del _user_metadata[_mk]
-    _requester_metadata_source: Final = (
-        copy.deepcopy(_user_metadata) if isinstance(_user_metadata, dict) else {}
-    )
+    _requester_metadata_source: Final = copy.deepcopy(_user_metadata) if isinstance(_user_metadata, dict) else {}
     if isinstance(_requester_metadata_source, dict):
         _strip_untrusted_request_header_controls(
             _requester_metadata_source.get("headers"),
@@ -2030,6 +2028,13 @@ async def add_litellm_data_to_request(
         )
         for _metadata_key in _UNTRUSTED_METADATA_CONTROL_FIELDS:
             _requester_metadata_source.pop(_metadata_key, None)
+        _requester_metadata_request: Final = {"metadata": _requester_metadata_source}
+        if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
+            _strip_client_pricing_overrides(_requester_metadata_request)
+        _strip_router_reserved_metadata(_requester_metadata_request)
+        _strip_client_callback_credentials(_requester_metadata_request)
+        if not _allow_client_message_redaction_opt_out and litellm.turn_off_message_logging is True:
+            _strip_client_message_redaction_opt_out(_requester_metadata_request)
     _raw_headers: Final[dict[str, str]] = RedactedDict(_safe_get_request_headers(request))
 
     forward_llm_auth = False
