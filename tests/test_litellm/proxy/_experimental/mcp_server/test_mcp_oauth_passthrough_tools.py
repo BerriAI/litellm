@@ -854,3 +854,71 @@ async def test_tool_handler_preserves_unrelated_protocol_errors(
         await server.mcp_server_tool_call(_mcp_request_ctx(), CallToolRequestParams(name="example", arguments={}))
     assert caught.value is failure
     execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("path", ("/mcp", "/github/mcp"))
+@pytest.mark.parametrize("has_token", (False, True))
+@pytest.mark.parametrize("healthy_companion", (False, True))
+async def test_initialize_challenges_missing_upstream_credentials_before_creating_session(
+    monkeypatch: pytest.MonkeyPatch, path: str, has_token: bool, healthy_companion: bool
+) -> None:
+    from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+    from litellm.proxy._experimental.mcp_server import server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    github: Final = MCPServer(
+        server_id="github-id", name="github", alias="github", server_name="github",
+        url="https://github.example/mcp", transport=MCPTransport.http,
+        auth_type=MCPAuth.oauth2, oauth2_flow="authorization_code",
+        authorization_url="https://github.example/authorize", token_url="https://github.example/token",
+        client_id="registered-client",
+    )
+    auth: Final = UserAPIKeyAuth(api_key="test-owner", user_id="test-user")
+    selected: Final = ["github"] if path != "/mcp" else None
+    monkeypatch.setattr(
+        server, "extract_mcp_auth_context", AsyncMock(return_value=(auth, None, selected, None, None, None))
+    )
+    manager: Final = server.operations.global_mcp_server_manager
+    public: Final = MCPServer(
+        server_id="public-id", name="public", alias="public", server_name="public",
+        url="https://public.example/mcp", transport=MCPTransport.http, auth_type=MCPAuth.none,
+    )
+    eligible: Final = [github, public] if healthy_companion and selected is None else [github]
+    monkeypatch.setattr(manager, "get_mcp_server_by_name", lambda name, **kwargs: next(s for s in eligible if s.alias == name))
+    monkeypatch.setattr(manager, "has_user_oauth_token", AsyncMock(return_value=has_token))
+    monkeypatch.setattr(manager, "_ensure_upstream_initialize_instructions_cached", AsyncMock())
+    monkeypatch.setattr(server.operations, "_get_allowed_mcp_servers", AsyncMock(return_value=eligible))
+    monkeypatch.setattr(server, "_check_passthrough_upstream_auth", AsyncMock())
+    monkeypatch.setattr(
+        server, "session_manager_stateful",
+        StreamableHTTPSessionManager(app=server.server, stateless=False, json_response=True),
+    )
+    monkeypatch.setattr(
+        server, "session_manager_stateless",
+        StreamableHTTPSessionManager(app=server.server, stateless=True, json_response=True),
+    )
+    await server.initialize_session_managers()
+    try:
+        async with httpx.AsyncClient(transport=httpx.ASGITransport(app=server.app), base_url="http://gateway") as client:
+            response: Final = await client.post(
+                path, headers={"accept": "application/json, text/event-stream"},
+                json={"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+                    "protocolVersion": "2025-06-18", "capabilities": {},
+                    "clientInfo": {"name": "test-client", "version": "1"},
+                }},
+            )
+        can_initialize: Final = has_token or (healthy_companion and selected is None)
+        assert response.status_code == (200 if can_initialize else 401), response.text
+        if can_initialize:
+            assert response.json()["result"]["serverInfo"]["name"]
+            assert response.headers["mcp-session-id"]
+        else:
+            assert response.headers["www-authenticate"].startswith("Bearer ")
+            if path == "/mcp":
+                assert response.headers["www-authenticate"] == (
+                    'Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp"'
+                )
+            assert "mcp-session-id" not in response.headers
+    finally:
+        await server.shutdown_session_managers()

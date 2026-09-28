@@ -34,6 +34,7 @@ from litellm.llms.custom_httpx.http_handler import (
 )
 from litellm.proxy._experimental.mcp_server.auth.user_api_key_auth_mcp import (
     MCPRequestHandler,
+    _gateway_dcr_challenge,
     _is_mcp_admitted_user_subject,
 )
 from litellm.proxy._experimental.mcp_server.client_allowlist import (
@@ -1698,7 +1699,42 @@ if MCP_AVAILABLE:
         excludes a passthrough server is not pushed into an OAuth flow for
         a server it will be 403'd on immediately after authentication.
         """
-        for server_name in mcp_servers or []:
+        if mcp_servers is None:
+            allowed: Final = await operations._get_allowed_mcp_servers(
+                user_api_key_auth=user_api_key_auth, mcp_servers=None, client_ip=client_ip
+            )
+            eligible: Final = tuple(
+                server for server in allowed if allowed_server_ids is None or server.server_id in allowed_server_ids
+            )
+            results: Final = await asyncio.gather(
+                *(
+                    _raise_preemptive_401_for_unauthenticated_servers(
+                        scope=scope,
+                        mcp_servers=[server.alias or server.server_name or server.name],
+                        oauth2_headers=oauth2_headers,
+                        mcp_server_auth_headers=mcp_server_auth_headers,
+                        user_api_key_auth=user_api_key_auth,
+                        client_ip=client_ip,
+                        allowed_server_ids=allowed_server_ids,
+                        raw_headers=raw_headers,
+                    )
+                    for server in eligible
+                ),
+                return_exceptions=True,
+            )
+            for result in results:
+                if isinstance(result, asyncio.CancelledError):
+                    raise result
+            if results and all(isinstance(result, HTTPException) and result.status_code == 401 for result in results):
+                if all(server.is_gateway_managed_oauth2 for server in eligible):
+                    raise _gateway_dcr_challenge(
+                        StarletteRequest(scope), get_route_relative_request_path(scope), None, invalid_token=False
+                    )
+                first: Final = results[0]
+                if isinstance(first, HTTPException):
+                    raise first
+            return
+        for server_name in mcp_servers:
             server = operations.global_mcp_server_manager.get_mcp_server_by_name(server_name, client_ip=client_ip)
             if server is not None and allowed_server_ids is not None and server.server_id not in allowed_server_ids:
                 # Caller's narrowed scope excludes this server — skip the
@@ -2114,16 +2150,17 @@ if MCP_AVAILABLE:
             # from the fully-authorized server set: a passthrough server that
             # the active toolset excludes should not trigger an OAuth flow
             # for a server the caller will be 403'd on after authentication.
-            await _raise_preemptive_401_for_unauthenticated_servers(
-                scope=scope,
-                mcp_servers=mcp_servers,
-                oauth2_headers=oauth2_headers,
-                mcp_server_auth_headers=mcp_server_auth_headers,
-                user_api_key_auth=user_api_key_auth,
-                client_ip=_client_ip,
-                allowed_server_ids=toolset_allowed_server_ids,
-                raw_headers=raw_headers,
-            )
+            if mcp_servers is not None:
+                await _raise_preemptive_401_for_unauthenticated_servers(
+                    scope=scope,
+                    mcp_servers=mcp_servers,
+                    oauth2_headers=oauth2_headers,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    user_api_key_auth=user_api_key_auth,
+                    client_ip=_client_ip,
+                    allowed_server_ids=toolset_allowed_server_ids,
+                    raw_headers=raw_headers,
+                )
 
             # Pre-flight auth check for pass-through servers.  Must run after
             # toolset scoping so the probe list is derived from the fully-authorized
@@ -2199,6 +2236,18 @@ if MCP_AVAILABLE:
             if scope.get("method") == "POST":
                 consumed_messages, body = await _read_request_body_for_routing(receive)
                 is_initialize = _is_initialize_request(body)
+
+            if is_initialize and mcp_servers is None:
+                await _raise_preemptive_401_for_unauthenticated_servers(
+                    scope=scope,
+                    mcp_servers=None,
+                    oauth2_headers=oauth2_headers,
+                    mcp_server_auth_headers=mcp_server_auth_headers,
+                    user_api_key_auth=user_api_key_auth,
+                    client_ip=_client_ip,
+                    allowed_server_ids=toolset_allowed_server_ids,
+                    raw_headers=raw_headers,
+                )
 
             use_stateful: Final = bool(session_id or is_initialize)
             target_manager: Final = session_manager_stateful if use_stateful else session_manager_stateless

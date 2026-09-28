@@ -10690,3 +10690,101 @@ async def test_discovery_adapter_preserves_authenticated_context(_mcp_request_ct
     context = dispatched.await_args.args[1]
     assert context.user_api_key_auth.user_id == "discover-caller"
     assert context.mcp_servers == ("allowed",)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "token_states, allowed_ids, expected_status",
+    (
+        ((False,), None, 401),
+        ((False, False), None, 401),
+        ((False, True), None, None),
+        ((True, False), None, None),
+        ((False, False), {"server-1"}, 401),
+        ((False, True), {"server-1"}, None),
+        ((False,), set(), None),
+        ((), None, None),
+    ),
+)
+async def test_unified_preflight_challenges_only_when_all_authorized_servers_need_oauth(
+    monkeypatch: pytest.MonkeyPatch,
+    token_states: tuple[bool, ...],
+    allowed_ids: set[str] | None,
+    expected_status: int | None,
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server as server_module
+
+    servers: Final = tuple(
+        _make_oauth2_server(f"server-{index}").model_copy(update={"server_id": f"server-{index}"})
+        for index in range(len(token_states))
+    )
+    auth: Final = UserAPIKeyAuth(api_key="test-key", user_id="reader")
+    lookup: Final = AsyncMock(return_value=servers)
+    monkeypatch.setattr(mcp_operations, "_get_allowed_mcp_servers", lookup)
+    manager: Final = mcp_operations.global_mcp_server_manager
+    monkeypatch.setattr(manager, "get_mcp_server_by_name", lambda name, **kwargs: next(s for s in servers if s.alias == name))
+    tokens: Final = AsyncMock(side_effect=lambda s, user: token_states[int(s.server_id.rsplit("-", 1)[1])])
+    monkeypatch.setattr(manager, "has_user_oauth_token", tokens)
+    scope: Final[Scope] = {"type": "http", "method": "POST", "path": "/mcp", "headers": [(b"host", b"gateway")]}
+    request: Final = server_module._raise_preemptive_401_for_unauthenticated_servers(
+        scope=scope, mcp_servers=None, oauth2_headers=None, mcp_server_auth_headers=None,
+        user_api_key_auth=auth, client_ip="127.0.0.1", allowed_server_ids=allowed_ids,
+    )
+    if expected_status is not None:
+        with pytest.raises(HTTPException) as caught:
+            await request
+        assert caught.value.status_code == expected_status
+        assert "www-authenticate" in {key.lower() for key in (caught.value.headers or {})}
+    else:
+        await request
+    lookup.assert_awaited_once_with(user_api_key_auth=auth, mcp_servers=None, client_ip="127.0.0.1")
+    assert {call.args[0].server_id for call in tokens.await_args_list} == {
+        s.server_id for s in servers if allowed_ids is None or s.server_id in allowed_ids
+    }
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", (HTTPException(status_code=503, detail="unavailable"), asyncio.CancelledError()))
+async def test_unified_preflight_does_not_misclassify_discovery_failure_as_oauth(
+    monkeypatch: pytest.MonkeyPatch, failure: BaseException
+) -> None:
+    from litellm.proxy._experimental.mcp_server import server as server_module
+
+    upstream: Final = _make_oauth2_server("unavailable")
+    monkeypatch.setattr(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[upstream]))
+    manager: Final = mcp_operations.global_mcp_server_manager
+    monkeypatch.setattr(manager, "get_mcp_server_by_name", lambda *args, **kwargs: upstream)
+    discovery: Final = AsyncMock(side_effect=failure)
+    monkeypatch.setattr(manager, "ensure_oauth_metadata_discovered", discovery)
+    request: Final = server_module._raise_preemptive_401_for_unauthenticated_servers(
+        scope={"type": "http", "path": "/mcp", "method": "POST", "headers": []},
+        mcp_servers=None, oauth2_headers=None, mcp_server_auth_headers=None,
+        user_api_key_auth=UserAPIKeyAuth(user_id="reader"), client_ip=None,
+    )
+    if isinstance(failure, asyncio.CancelledError):
+        with pytest.raises(asyncio.CancelledError):
+            await request
+    else:
+        await request
+    discovery.assert_awaited_once_with(upstream)
+
+
+@pytest.mark.asyncio
+async def test_unified_preflight_preserves_delegated_oauth_challenge(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._experimental.mcp_server import server as server_module
+
+    upstream: Final = _make_oauth2_server("delegated", delegate_auth_to_upstream=True)
+    monkeypatch.setattr(mcp_operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[upstream]))
+    monkeypatch.setattr(
+        mcp_operations.global_mcp_server_manager, "get_mcp_server_by_name", lambda *args, **kwargs: upstream
+    )
+    with pytest.raises(HTTPException) as caught:
+        await server_module._raise_preemptive_401_for_unauthenticated_servers(
+            scope={"type": "http", "path": "/mcp", "method": "POST", "headers": [(b"host", b"gateway")]},
+            mcp_servers=None, oauth2_headers=None, mcp_server_auth_headers=None,
+            user_api_key_auth=UserAPIKeyAuth(user_id="reader"), client_ip=None,
+        )
+    assert caught.value.status_code == 401
+    assert (caught.value.headers or {})["www-authenticate"] == (
+        'Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp/delegated"'
+    )
