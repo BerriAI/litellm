@@ -7482,6 +7482,66 @@ def test_passthrough_sees_the_public_list_rebound_after_import(monkeypatch: pyte
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    (
+        b"{'model': 'gpt-4o-mini'}",
+        b'(1, 2, {"role": "user"})',
+        b"[1, 2]",
+        b'{"model":',
+    ),
+)
+async def test_adapter_chat_rejects_non_object_or_non_json_body(monkeypatch: pytest.MonkeyPatch, body: bytes):
+    proxy_logging = MagicMock()
+    proxy_logging.post_call_failure_hook = AsyncMock()
+    add_request_data = AsyncMock()
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", add_request_data)
+    request = MagicMock(spec=Request)
+    request.body = AsyncMock(return_value=body)
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert (raised.value.type, raised.value.code) == ("invalid_request_error", "400")
+    add_request_data.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_adapter_chat_accepts_json_object(monkeypatch: pytest.MonkeyPatch):
+    proxy_logging = MagicMock()
+    proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+    proxy_logging.post_call_failure_hook = AsyncMock()
+
+    async def add_request_data(**kwargs: object) -> object:
+        return kwargs["data"]
+
+    monkeypatch.setattr("litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging)
+    monkeypatch.setattr("litellm.proxy.proxy_server.add_litellm_data_to_request", add_request_data)
+    monkeypatch.setattr("litellm.proxy.proxy_server.llm_router", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.user_model", None)
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
+    request = MagicMock(spec=Request)
+    request.body = AsyncMock(return_value=b'{"model":"unknown-model","messages":[]}')
+
+    with pytest.raises(ProxyException) as raised:
+        await chat_completion_pass_through_endpoint(
+            fastapi_response=Response(),
+            request=request,
+            adapter_id="anthropic",
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+        )
+
+    assert (raised.value.type, raised.value.code) == ("invalid_request_error", "400")
+    assert proxy_logging.pre_call_hook.await_args.kwargs["data"]["model"] == "unknown-model"
+
+
+@pytest.mark.asyncio
 async def test_chat_completion_pass_through_endpoint_answers_an_openai_typed_error_for_an_unknown_model(
     monkeypatch: pytest.MonkeyPatch,
 ):
