@@ -73,7 +73,7 @@ def listing_auth_error(outcomes: Mapping[str, ServerOutcome]) -> MCPUpstreamAuth
         for name, outcome in outcomes.items()
         if isinstance(outcome, ServerListFault) and outcome.tag in ("auth_required", "forbidden")
     )
-    if not blocked or len(blocked) != len(outcomes):
+    if not blocked or any(isinstance(outcome, ServerListOk) for outcome in outcomes.values()):
         return None
     name, outcome = next((entry for entry in blocked if entry[1].tag == "auth_required"), blocked[0])
     return MCPUpstreamAuthError(
@@ -132,15 +132,20 @@ def raise_classified_list_failure(
     a classified fault. Every fetch site delegates here so the two channels cannot drift apart per
     call site. ``suppress_challenge`` is for dcr_bridge servers, whose upstream challenge points
     clients at the wrong protected-resource metadata and must never relay."""
-    auth: Final = upstream_auth_challenge(exc)
+    auth: Final = upstream_auth_error(exc, server_name, suppress_challenge=suppress_challenge)
     if auth is not None:
-        status_code, challenge = auth
-        raise MCPUpstreamAuthError(
-            status_code=status_code,
-            www_authenticate=None if suppress_challenge else challenge,
-            server_name=server_name,
-        ) from exc
+        raise auth from exc
     raise MCPServerListError(classify_list_exception(exc), server_name) from exc
+
+
+def upstream_auth_error(
+    exc: BaseException, server_name: str, *, suppress_challenge: bool = False
+) -> MCPUpstreamAuthError | None:
+    auth: Final = upstream_auth_challenge(exc)
+    if auth is None:
+        return None
+    status_code, challenge = auth
+    return MCPUpstreamAuthError(status_code, None if suppress_challenge else challenge, server_name)
 
 
 def classify_list_exception(exc: BaseException) -> ServerListFault:

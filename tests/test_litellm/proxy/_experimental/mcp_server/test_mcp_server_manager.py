@@ -1842,7 +1842,11 @@ class TestMCPServerManager:
             server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
         ):  # pragma: no cover - helper
             captured["subject_token"] = subject_token
-            return AsyncMock()
+            return AsyncMock(
+                discovery_auth_fingerprint=AsyncMock(return_value="test-credential-hash"),
+                list_prompts=AsyncMock(return_value=[]),
+                list_resources=AsyncMock(return_value=[]),
+            )
 
         manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
         manager._fetch_tools_with_timeout = AsyncMock(return_value=[])
@@ -2630,7 +2634,11 @@ class TestMCPServerManager:
             server, mcp_auth_header, extra_headers, stdio_env, subject_token=None, **kwargs
         ):  # pragma: no cover - helper
             captured["subject_token"] = subject_token
-            return AsyncMock()
+            return AsyncMock(
+                discovery_auth_fingerprint=AsyncMock(return_value="test-credential-hash"),
+                list_prompts=AsyncMock(return_value=[]),
+                list_resources=AsyncMock(return_value=[]),
+            )
 
         manager._create_mcp_client = AsyncMock(side_effect=capture_create_mcp_client)
         await call(manager)
@@ -13143,6 +13151,7 @@ class TestLitellmAdmissionKeyIsNeverTheSubjectToken:
         client: Final = AsyncMock()
         client.call_tool = AsyncMock(return_value=CallToolResult(content=[], isError=False))
         client.list_prompts = AsyncMock(return_value=[])
+        client.discovery_auth_fingerprint = AsyncMock(return_value="test-credential-hash")
         client.read_resource = AsyncMock(return_value=ReadResourceResult(contents=[]))
         manager._create_mcp_client = AsyncMock(return_value=client)
         return manager
@@ -13922,8 +13931,12 @@ async def test_discovery_cache_empty_results_and_failures(kind: str, outcome: st
         "templates": manager.get_resource_templates_from_server,
     }[kind]
     with _mcp_upstream(upstream.respond):
-        assert await operation(_discovery_server(), None) == []
-        assert await operation(_discovery_server(), None) == []
+        for _ in range(2):
+            if outcome == "failure":
+                with pytest.raises(MCPServerListError, match="discovery"):
+                    await operation(_discovery_server(), None)
+            else:
+                assert await operation(_discovery_server(), None) == []
         assert upstream.initializes == (2 if outcome == "failure" else 1)
         if outcome == "failure":
             upstream.outcome = "supported"
@@ -13943,7 +13956,8 @@ async def test_discovery_cache_retries_failed_pagination_before_caching_complete
         "templates": manager.get_resource_templates_from_server,
     }[kind]
     with _mcp_upstream(upstream.respond):
-        assert await operation(_discovery_server(), None) == []
+        with pytest.raises(MCPServerListError, match="discovery"):
+            await operation(_discovery_server(), None)
         assert upstream.initializes == 1
         upstream.outcome = "paged"
         recovered: Final = await operation(_discovery_server(), None)

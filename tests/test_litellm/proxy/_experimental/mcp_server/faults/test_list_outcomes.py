@@ -261,16 +261,18 @@ def test_pure_non_auth_response_still_classifies_upstream_error():
     "outcomes,expected_status",
     (
         ({}, None),
+        ({"timeout": ServerListFault(tag="timeout")}, None),
+        ({"denied": ServerListFault(tag="forbidden", status_code=403), "timeout": ServerListFault(tag="timeout")}, 403),
         ({"empty": ServerListOk(tool_count=0)}, None),
         ({"auth": ServerListFault(tag="auth_required", status_code=401)}, 401),
         ({"denied": ServerListFault(tag="forbidden", status_code=403)}, 403),
         ({"denied": ServerListFault(tag="forbidden", status_code=403), "auth": ServerListFault(tag="auth_required", status_code=401)}, 401),
         ({"auth": ServerListFault(tag="auth_required", status_code=401), "empty": ServerListOk(tool_count=0)}, None),
         ({"auth": ServerListFault(tag="auth_required", status_code=401), "healthy": ServerListOk(tool_count=2)}, None),
-        ({"auth": ServerListFault(tag="auth_required", status_code=401), "timeout": ServerListFault(tag="timeout")}, None),
+        ({"auth": ServerListFault(tag="auth_required", status_code=401), "timeout": ServerListFault(tag="timeout")}, 401),
     ),
 )
-def test_listing_auth_failure_requires_every_server_to_be_blocked(
+def test_listing_auth_failure_requires_no_successful_server(
     outcomes: dict[str, ServerListOk | ServerListFault], expected_status: int | None
 ) -> None:
     from litellm.proxy._experimental.mcp_server.faults.list_outcomes import listing_auth_error

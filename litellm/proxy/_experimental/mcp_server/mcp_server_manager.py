@@ -87,6 +87,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     ServerListFault,
     raise_classified_list_failure,
     upstream_auth_challenge,
+    upstream_auth_error,
 )
 from litellm.proxy._experimental.mcp_server.mcp_debug import describe_upstream_http_failure, record_auth_resolution
 from litellm.proxy._experimental.mcp_server.oauth2_token_cache import (
@@ -4632,9 +4633,7 @@ class MCPServerManager:
             return self._create_prefixed_prompts(items, server, add_prefix=add_prefix)
         except Exception as error:
             verbose_logger.warning("Failed to get prompts from server %s: %s", server.name, error)
-            if upstream_auth_challenge(error) is not None:
-                raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
-            return []
+            raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
 
     async def get_resources_from_server(
         self,
@@ -4680,9 +4679,7 @@ class MCPServerManager:
             return self._create_prefixed_resources(items, server, add_prefix=add_prefix)
         except Exception as error:
             verbose_logger.warning("Failed to get resources from server %s: %s", server.name, error)
-            if upstream_auth_challenge(error) is not None:
-                raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
-            return []
+            raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
 
     async def get_resource_templates_from_server(
         self,
@@ -4728,9 +4725,7 @@ class MCPServerManager:
             return self._create_prefixed_resource_templates(items, server, add_prefix=add_prefix)
         except Exception as error:
             verbose_logger.warning("Failed to get resource_templates from server %s: %s", server.name, error)
-            if upstream_auth_challenge(error) is not None:
-                raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
-            return []
+            raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
 
     async def read_resource_from_server(
         self,
@@ -4769,12 +4764,9 @@ class MCPServerManager:
 
             return await client.read_resource(url)
         except Exception as exc:
-            auth_failure: Final = upstream_auth_challenge(exc)
+            auth_failure: Final = upstream_auth_error(exc, server.name, suppress_challenge=server.is_dcr_bridge)
             if auth_failure is not None:
-                status_code, challenge = auth_failure
-                raise MCPUpstreamAuthError(
-                    status_code, None if server.is_dcr_bridge else challenge, server.name
-                ) from exc
+                raise auth_failure from exc
             raise
 
     async def get_prompt_from_server(
@@ -4819,12 +4811,9 @@ class MCPServerManager:
             )
             return await client.get_prompt(get_prompt_request_params)
         except Exception as exc:
-            auth_failure: Final = upstream_auth_challenge(exc)
+            auth_failure: Final = upstream_auth_error(exc, server.name, suppress_challenge=server.is_dcr_bridge)
             if auth_failure is not None:
-                status_code, challenge = auth_failure
-                raise MCPUpstreamAuthError(
-                    status_code, None if server.is_dcr_bridge else challenge, server.name
-                ) from exc
+                raise auth_failure from exc
             raise
 
     @staticmethod

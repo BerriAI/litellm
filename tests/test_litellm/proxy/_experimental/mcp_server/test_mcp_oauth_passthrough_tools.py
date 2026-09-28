@@ -735,14 +735,15 @@ async def test_optional_listing_propagates_auth_without_discarding_healthy_serve
     ),
 )
 @pytest.mark.parametrize("status", (401, 403))
+@pytest.mark.parametrize("dcr_bridge", (False, True))
 async def test_manager_preserves_auth_failures_for_prompts_and_resources(
-    operation: str, status: int, monkeypatch: pytest.MonkeyPatch
+    operation: str, status: int, dcr_bridge: bool, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from fastapi import HTTPException
     from pydantic import AnyUrl
 
     manager: Final = MCPServerManager()
-    upstream: Final = _http_server("upstream", "upstream")
+    upstream: Final = _http_server("upstream", "upstream", auth_type=MCPAuth.oauth_delegate, dcr_bridge=dcr_bridge)
     create: Final = AsyncMock(side_effect=HTTPException(status, headers={"WWW-Authenticate": "Bearer"}))
     monkeypatch.setattr(manager, "_create_mcp_client", create)
     kwargs: Final = (
@@ -755,7 +756,7 @@ async def test_manager_preserves_auth_failures_for_prompts_and_resources(
     with pytest.raises(MCPUpstreamAuthError) as failure:
         await getattr(manager, operation)(server=upstream, user_api_key_auth=None, **kwargs)
     assert failure.value.status_code == status
-    assert failure.value.www_authenticate == "Bearer"
+    assert failure.value.www_authenticate == (None if dcr_bridge else "Bearer")
     assert failure.value.server_name == "upstream"
     create.assert_awaited_once()
 
@@ -773,8 +774,9 @@ async def test_optional_listing_preserves_cancellation() -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("operation", ("get_prompt_from_server", "read_resource_from_server"))
+@pytest.mark.parametrize("extra_headers", (None, {"x-forwarded": "caller"}))
 async def test_prompt_and_resource_calls_preserve_static_headers_and_non_auth_failures(
-    operation: str, monkeypatch: pytest.MonkeyPatch
+    operation: str, extra_headers: dict[str, str] | None, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from pydantic import AnyUrl
 
@@ -789,9 +791,9 @@ async def test_prompt_and_resource_calls_preserve_static_headers_and_non_auth_fa
         else {"url": AnyUrl("https://example.com/resource")}
     )
     with pytest.raises(RuntimeError) as caught:
-        await getattr(manager, operation)(server=upstream, user_api_key_auth=None, **kwargs)
+        await getattr(manager, operation)(server=upstream, user_api_key_auth=None, extra_headers=extra_headers, **kwargs)
     assert caught.value is failure
-    assert create.await_args.kwargs["extra_headers"] == {"x-upstream": "configured"}
+    assert create.await_args.kwargs["extra_headers"] == {**(extra_headers or {}), "x-upstream": "configured"}
     create.assert_awaited_once()
 
 
@@ -922,3 +924,26 @@ async def test_initialize_challenges_missing_upstream_credentials_before_creatin
             assert "mcp-session-id" not in response.headers
     finally:
         await server.shutdown_session_managers()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("prompts", "resources", "resource_templates"))
+async def test_optional_listing_challenges_auth_when_other_server_times_out(
+    kind: str, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from litellm.proxy._experimental.mcp_server import operations
+
+    blocked: Final = _http_server("blocked", "blocked")
+    unavailable: Final = _http_server("unavailable", "unavailable")
+    manager: Final = MCPServerManager()
+    create: Final = AsyncMock(side_effect=[MCPUpstreamAuthError(401, "Bearer", "blocked"), TimeoutError()])
+    monkeypatch.setattr(manager, "_create_mcp_client", create)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None)))
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[blocked, unavailable]))
+    with pytest.raises(MCPUpstreamAuthError) as caught:
+        await getattr(operations, f"_list_mcp_{kind}")()
+    assert caught.value.status_code == 401
+    assert caught.value.www_authenticate == "Bearer"
+    assert caught.value.server_name == "blocked"
+    assert create.await_count == 2
