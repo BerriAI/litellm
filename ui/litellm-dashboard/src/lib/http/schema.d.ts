@@ -3761,7 +3761,8 @@ export interface paths {
          *     verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
          *     route those requests fall through to the Cursor Cloud Agents passthrough, which
          *     demands a Cursor API key and 401s, so key verification silently fails before any
-         *     chat request is ever sent. Delegates to the standard `/v1/models` handler.
+         *     chat request is ever sent. Delegates to the standard `/v1/models` handler with
+         *     wildcard routes left out, since Cursor offers every listed id as a callable model.
          */
         get: operations["cursor_model_list_cursor_models_get"];
         put?: never;
@@ -3787,7 +3788,8 @@ export interface paths {
          *     verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
          *     route those requests fall through to the Cursor Cloud Agents passthrough, which
          *     demands a Cursor API key and 401s, so key verification silently fails before any
-         *     chat request is ever sent. Delegates to the standard `/v1/models` handler.
+         *     chat request is ever sent. Delegates to the standard `/v1/models` handler with
+         *     wildcard routes left out, since Cursor offers every listed id as a callable model.
          */
         get: operations["cursor_model_list_cursor_v1_models_get"];
         put?: never;
@@ -59947,6 +59949,7 @@ export interface operations {
             query?: {
                 team_id?: string | null;
                 healthy_only?: boolean | null;
+                return_wildcard_routes?: boolean | null;
             };
             header?: never;
             path: {
@@ -73252,6 +73255,7 @@ export interface operations {
             query?: {
                 team_id?: string | null;
                 healthy_only?: boolean | null;
+                return_wildcard_routes?: boolean | null;
             };
             header?: never;
             path: {

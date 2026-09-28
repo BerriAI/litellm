@@ -478,13 +478,11 @@ async def cursor_model_list(
     verify models via `GET {base}/models` (the OpenAI SDK contract). Without this
     route those requests fall through to the Cursor Cloud Agents passthrough, which
     demands a Cursor API key and 401s, so key verification silently fails before any
-    chat request is ever sent. Delegates to the standard `/v1/models` handler.
+    chat request is ever sent. Delegates to the standard `/v1/models` handler with
+    wildcard routes left out, since Cursor offers every listed id as a callable model.
     """
     from litellm.proxy.proxy_server import model_list
 
-    # Cursor offers every listed id as a model and a wildcard route such as
-    # `openai/*` is not callable, so the proxy-wide model_list_return_wildcard_routes
-    # default is pinned off here; Cursor sends no query params to opt out itself.
     return await model_list(user_api_key_dict=user_api_key_dict, return_wildcard_routes=False)
 
 

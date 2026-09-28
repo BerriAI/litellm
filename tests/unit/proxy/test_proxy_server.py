@@ -3138,16 +3138,19 @@ async def _listed_model_ids(
     return [model["id"] for model in response["data"]]
 
 
+@pytest.mark.parametrize("setting", [True, "true"])
 @pytest.mark.parametrize(
     "user_role, query",
     [(LitellmUserRoles.INTERNAL_USER, {}), (LitellmUserRoles.PROXY_ADMIN, {"scope": "expand"})],
 )
 @pytest.mark.asyncio
 async def test_model_list_return_wildcard_routes_setting_matches_query_param(
-    openai_wildcard_router, monkeypatch, user_role, query
+    openai_wildcard_router, monkeypatch, user_role, query, setting
 ):
     requested = await _listed_model_ids(monkeypatch, {}, user_role, return_wildcard_routes=True, **query)
-    from_setting = await _listed_model_ids(monkeypatch, {"model_list_return_wildcard_routes": True}, user_role, **query)
+    from_setting = await _listed_model_ids(
+        monkeypatch, {"model_list_return_wildcard_routes": setting}, user_role, **query
+    )
 
     assert "openai/*" in from_setting, from_setting
     assert from_setting == requested
@@ -3158,6 +3161,8 @@ async def test_model_list_return_wildcard_routes_setting_matches_query_param(
     [
         ({}, {}),
         ({"model_list_return_wildcard_routes": "false"}, {}),
+        ({"model_list_return_wildcard_routes": "True"}, {}),
+        ({"model_list_return_wildcard_routes": 1}, {}),
         ({"model_list_return_wildcard_routes": True}, {"return_wildcard_routes": False}),
     ],
 )
@@ -3169,6 +3174,42 @@ async def test_model_list_leaves_out_wildcard_routes_unless_enabled(
 
     assert "gpt-4o" in listed, listed
     assert "openai/*" not in listed, listed
+
+
+async def _model_info_resolves(model_id: str, **query: bool) -> bool:
+    from fastapi import HTTPException
+
+    try:
+        response = await litellm.proxy.proxy_server.model_info(
+            model_id=model_id,
+            user_api_key_dict=UserAPIKeyAuth(api_key="sk-test", user_role=LitellmUserRoles.INTERNAL_USER),
+            **query,
+        )
+    except HTTPException as e:
+        assert e.status_code == 404, e.detail
+        return False
+    return response["id"] == model_id
+
+
+@pytest.mark.parametrize(
+    "general_settings, query, wildcard_listed",
+    [
+        ({}, {}, False),
+        ({"model_list_return_wildcard_routes": True}, {}, True),
+        ({"model_list_return_wildcard_routes": "true"}, {}, True),
+        ({"model_list_return_wildcard_routes": True}, {"return_wildcard_routes": False}, False),
+        ({}, {"return_wildcard_routes": True}, True),
+    ],
+)
+@pytest.mark.asyncio
+async def test_model_info_resolves_exactly_the_ids_model_list_lists(
+    openai_wildcard_router, monkeypatch, general_settings, query, wildcard_listed
+):
+    listed = await _listed_model_ids(monkeypatch, general_settings, LitellmUserRoles.INTERNAL_USER, **query)
+    resolvable = [model_id for model_id in ("gpt-4o", "openai/*") if await _model_info_resolves(model_id, **query)]
+
+    assert ("openai/*" in listed) is wildcard_listed, listed
+    assert resolvable == [model_id for model_id in ("gpt-4o", "openai/*") if model_id in listed], (listed, resolvable)
 
 
 @pytest.mark.asyncio

@@ -11342,6 +11342,16 @@ async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_a
     return listed_name in await _names_hidden_by_listing_callbacks(user_api_key_dict, (listed_name,))
 
 
+def _includes_wildcard_routes(return_wildcard_routes: bool | None, settings: Mapping[str, object]) -> bool:
+    """Whether a listing or lookup includes wildcard routes such as `openai/*`. A request's
+    own `return_wildcard_routes` wins; without one, `model_list_return_wildcard_routes`
+    counts as on exactly when the admin UI's switch shows it on (`true` or `"true"`)."""
+    if return_wildcard_routes is not None:
+        return return_wildcard_routes
+    configured: Final = settings.get("model_list_return_wildcard_routes")
+    return configured is True or configured == "true"
+
+
 @router.get("/v1/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"])
 @router.get(
     "/models", dependencies=[Depends(user_api_key_auth)], tags=["model management"]
@@ -11456,11 +11466,7 @@ async def model_list(
 
     hidden_names: Final = blocked_names | unhealthy_names
 
-    include_wildcard_routes: Final = (
-        settings.get("model_list_return_wildcard_routes") is True
-        if return_wildcard_routes is None
-        else return_wildcard_routes
-    )
+    include_wildcard_routes: Final = _includes_wildcard_routes(return_wildcard_routes, settings)
 
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
@@ -11609,6 +11615,7 @@ async def model_info(
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
     team_id: str | None = None,
     healthy_only: bool | None = False,
+    return_wildcard_routes: bool | None = None,
 ):
     """
     Retrieve information about a specific model accessible to your API key.
@@ -11643,7 +11650,7 @@ async def model_info(
         team_id=team_id,
         include_model_access_groups=False,
         only_model_access_groups=False,
-        return_wildcard_routes=False,
+        return_wildcard_routes=_includes_wildcard_routes(return_wildcard_routes, settings),
         user_api_key_cache=user_api_key_cache,
     )
 

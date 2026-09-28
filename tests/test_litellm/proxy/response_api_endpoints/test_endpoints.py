@@ -1351,8 +1351,9 @@ def test_cursor_models_route_delegates_to_model_list():
                 assert response.status_code == 200, f"{path}: {response.text}"
                 assert response.json() == model_payload
             assert mock_model_list.call_count == 2
-            # Cursor lists every id it gets, so the proxy-wide wildcard default must not reach it
-            assert all(call.kwargs["return_wildcard_routes"] is False for call in mock_model_list.call_args_list)
+            assert all(call.kwargs["return_wildcard_routes"] is False for call in mock_model_list.call_args_list), (
+                "Cursor offers every listed id, so model_list_return_wildcard_routes must not reach it"
+            )
     finally:
         app.dependency_overrides.pop(user_api_key_auth, None)
 

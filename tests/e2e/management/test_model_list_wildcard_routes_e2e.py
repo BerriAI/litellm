@@ -3,8 +3,8 @@ default for whether GET /v1/models lists a wildcard route such as `openai/*` nex
 the models it expands to.
 
 The setting is written through /config/field/update, the route behind the admin UI's
-General Settings toggle, and deleted on teardown so the shared proxy goes back to
-leaving wildcard routes out. The other listings the suites run either pass
+General Settings toggle, and teardown puts back whatever the database held before, so
+the shared proxy ends the test the way it started. The other listings the suites run either pass
 return_wildcard_routes explicitly or only check that a named model is present, so the
 window with the setting on changes none of them. The wildcard deployment gets a unique prefix instead of `openai/*`, which would
 claim every `openai/...` request the other suites send.
@@ -12,16 +12,16 @@ claim every `openai/...` request the other suites send.
 
 from __future__ import annotations
 
-from typing import Final
+from typing import Final, Literal
 
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, JsonValue, RootModel
 
 from e2e_config import unique_marker
 from e2e_http import NoBody, Success, unwrap
 from lifecycle import ResourceManager
 from management_client import ManagementClient
-from models import LiteLLMParamsBody, ModelsListParams, ModelsListResponse
+from models import ConfigListParams, LiteLLMParamsBody, ModelsListParams, ModelsListResponse
 
 pytestmark = pytest.mark.e2e
 
@@ -31,7 +31,7 @@ _DUMMY_API_KEY: Final = "e2e-dummy-key"
 
 class ConfigFieldUpdateBody(BaseModel):
     field_name: str
-    field_value: bool
+    field_value: JsonValue
     config_type: str = "general_settings"
 
 
@@ -40,12 +40,23 @@ class ConfigFieldDeleteBody(BaseModel):
     config_type: str = "general_settings"
 
 
-def _write_setting(client: ManagementClient, enabled: bool) -> None:
+class StoredField(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+    field_name: str
+    field_value: JsonValue = None
+    source: Literal["config", "db", "env", "default", "unset"] = "unset"
+
+
+class StoredFieldList(RootModel[tuple[StoredField, ...]]):
+    pass
+
+
+def _write_setting(client: ManagementClient, value: JsonValue) -> None:
     _ = unwrap(
         client.proxy.transport.post(
             "/config/field/update",
             headers=client.proxy.transport.master,
-            json=ConfigFieldUpdateBody(field_name=_SETTING, field_value=enabled),
+            json=ConfigFieldUpdateBody(field_name=_SETTING, field_value=value),
             response_type=NoBody,
         )
     )
@@ -60,6 +71,25 @@ def _delete_setting(client: ManagementClient) -> None:
             response_type=NoBody,
         )
     )
+
+
+def _stored_setting(client: ManagementClient) -> StoredField | None:
+    fields: Final = unwrap(
+        client.proxy.transport.get(
+            "/config/list",
+            headers=client.proxy.transport.master,
+            params=ConfigListParams(config_type="general_settings"),
+            response_type=StoredFieldList,
+        )
+    ).root
+    return next((field for field in fields if field.field_name == _SETTING and field.source == "db"), None)
+
+
+def _restore_setting(client: ManagementClient, stored: StoredField | None) -> None:
+    if stored is None:
+        _delete_setting(client)
+        return
+    _write_setting(client, stored.field_value)
 
 
 def _await_listing(client: ManagementClient, pattern: str, query: BaseModel, *, listed: bool) -> None:
@@ -84,9 +114,11 @@ class TestModelListWildcardRoutesSetting:
         model_id = client.proxy.create_model(pattern, LiteLLMParamsBody(model="openai/*", api_key=_DUMMY_API_KEY))
         resources.defer(lambda: client.proxy.delete_model(model_id))
 
+        stored: Final = _stored_setting(client)
+        resources.defer(lambda: _restore_setting(client, stored))
+        _write_setting(client, False)
         _await_listing(client, pattern, NoBody(), listed=False)
 
-        resources.defer(lambda: _delete_setting(client))
         _write_setting(client, True)
         _await_listing(client, pattern, NoBody(), listed=True)
         _await_listing(client, pattern, ModelsListParams(return_wildcard_routes=False), listed=False)

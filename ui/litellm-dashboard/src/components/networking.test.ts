@@ -168,8 +168,6 @@ describe("modelAvailableCall", () => {
     global.fetch = currentFetch;
   });
 
-  // An omitted return_wildcard_routes takes the proxy's model_list_return_wildcard_routes
-  // default, so the dashboard's own pickers always send it.
   it.each([
     [undefined, "False"],
     [false, "False"],
