@@ -28,7 +28,7 @@ pub(crate) async fn create(
         extra_headers: None,
         timeout: deployment.timeout,
     };
-    let machine = gateway.responses.clone().machine(call);
+    let machine = gateway.responses.clone().machine(call, None);
     let stream = Sse::<Responses, _, _>::new(Json, |error| {
         let error = Error::from(error);
         Bytes::from(format!(
@@ -36,5 +36,5 @@ pub(crate) async fn create(
             json!({"type": "error", "code": error.status().as_u16().to_string(), "message": error.to_string(), "param": null})
         ))
     });
-    Ok(litellm_host_http::serve(machine, (), (), stream).await?)
+    Ok(litellm_host_http::serve(machine, (), (), stream, None).await?)
 }
