@@ -2170,6 +2170,15 @@ BATCH_ENQUEUED_TOKEN_TTL_SECONDS: Final[int] = 8 * 24 * 60 * 60
 # admins may write it: when present it replaces the standard RPM/TPM checks for
 # batch submissions.
 BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY: Final = "batch_enqueued_token_limit"
+MAX_BATCH_FILE_RECORDS_KEY: Final = "max_batch_file_records"
+MAX_BATCH_FILE_UPLOADS_PER_DAY_KEY: Final = "max_batch_file_uploads_per_day"
+MAX_FILE_DOWNLOADS_PER_MINUTE_KEY: Final = "max_file_downloads_per_minute"
+ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS: Final = (
+    BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    MAX_BATCH_FILE_RECORDS_KEY,
+    MAX_BATCH_FILE_UPLOADS_PER_DAY_KEY,
+    MAX_FILE_DOWNLOADS_PER_MINUTE_KEY,
+)
 
 # Shared read-only empty mapping, for defaulting optional Mapping parameters without
 # constructing a fresh mutable dict at each call site.

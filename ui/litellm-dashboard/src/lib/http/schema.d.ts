@@ -28204,10 +28204,20 @@ export interface components {
              */
             master_key?: string | null;
             /**
+             * Max Batch File Records
+             * @description max records (non-blank lines) per batch input file for /v1/files uploads with purpose=batch, applied per key. A key or team can carry its own value in metadata, set by a proxy admin, and the lowest applicable value wins. Unset means no limit
+             */
+            max_batch_file_records?: number | null;
+            /**
              * Max Batch File Size Mb
              * @description max batch input file size in MB for /v1/files uploads with purpose=batch, if a file is larger than this size it will be rejected before being forwarded to the provider
              */
             max_batch_file_size_mb?: number | null;
+            /**
+             * Max Batch File Uploads Per Day
+             * @description max /v1/files uploads with purpose=batch per key per UTC day. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit
+             */
+            max_batch_file_uploads_per_day?: number | null;
             /**
              * Max Failed Login Attempts Per Source
              * @description Failed Admin UI sign-in attempts allowed from one source address, across every username, within `failed_login_window_seconds`. One more blocks that address for `failed_login_block_seconds`. Half this value, rounded down but at least 1, is the allowance for one username from that address; one more blocks that address for that username only, and its further failures stop counting toward the address limit, so a script stuck on one account does not block everyone behind a shared address. The per-address limit is only enforced when `trusted_proxy_ranges` is set: to the proxies in front of LiteLLM, or to an empty list when clients connect directly. Left unset, the peer address may be a shared ingress and only the per-username half runs. IPv6 addresses are grouped by /64. Set under `general_settings` in config.yaml. Defaults to 10
@@ -28220,6 +28230,11 @@ export interface components {
             max_failed_login_attempts_per_source_overrides?: {
                 [key: string]: number;
             } | null;
+            /**
+             * Max File Downloads Per Minute
+             * @description max GET /v1/files/{file_id}/content calls per key per file per minute. A key's metadata can override it and a team's metadata adds a shared team cap, both set by a proxy admin. Unset means no limit
+             */
+            max_file_downloads_per_minute?: number | null;
             /**
              * Max File Size Mb
              * @description max file size in MB for /v1/files uploads, for any purpose, if a file is larger than this size it will be rejected before being forwarded to the provider

@@ -14,7 +14,7 @@ import litellm
 from litellm import Router, constants, provider_list
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import (
-    BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY,
+    ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS,
     EMPTY_MAPPING,
     INVALID_VIRTUAL_KEY_ERROR_MARKER,
     MINIMUM_CUSTOM_KEY_LENGTH,
@@ -1226,8 +1226,8 @@ def enforce_output_token_estimates_are_admin_only(
     )
 
 
-class BatchEnqueuedTokenLimitRequest(Protocol):
-    """The shape of any management request that can carry a batch enqueued-token limit."""
+class BatchLimitRequest(Protocol):
+    """The shape of any management request that can carry an admin-only batch limit in its metadata."""
 
     @property
     def metadata(self) -> Mapping[str, object] | None: ...
@@ -1236,18 +1236,18 @@ class BatchEnqueuedTokenLimitRequest(Protocol):
     def model_fields_set(self) -> Collection[str]: ...
 
 
-def enforce_batch_enqueued_token_limit_is_admin_only(
-    data: BatchEnqueuedTokenLimitRequest,
+def enforce_batch_limits_are_admin_only(
+    data: BatchLimitRequest,
     existing_metadata: Mapping[str, object] | None,
     user_api_key_dict: UserAPIKeyAuth,
     entity: Literal["key", "team"],
 ) -> None:
-    """Only a proxy admin may change a key or team's batch enqueued-token limit.
+    """Only a proxy admin may change a key or team's batch limits.
 
-    When set, ``batch_enqueued_token_limit`` replaces the standard RPM/TPM checks
-    for batch submissions, so a holder-writable copy would let a caller lift their
-    own batch quota. Gated on the resulting value rather than on presence, so a
-    form resending the stored value stays a no-op.
+    Every key in ``ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS`` caps what the holder
+    may do with batches, so a holder-writable copy would let a caller lift their
+    own quota. Gated on the resulting value rather than on presence, so a form
+    resending the stored value stays a no-op.
     """
     if user_api_key_dict.user_role == LitellmUserRoles.PROXY_ADMIN.value:
         return
@@ -1255,13 +1255,17 @@ def enforce_batch_enqueued_token_limit_is_admin_only(
     requested: Final[Mapping[str, object]] = (
         (data.metadata or EMPTY_MAPPING) if "metadata" in data.model_fields_set else stored
     )
-    if requested.get(BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY) == stored.get(BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY):
+    changed: Final = next(
+        (key for key in ADMIN_ONLY_BATCH_LIMIT_METADATA_KEYS if requested.get(key) != stored.get(key)),
+        None,
+    )
+    if changed is None:
         return
     raise HTTPException(
         status_code=403,
         detail={  # mutable-ok: HTTPException.detail has no immutable form
-            "error": f"Only proxy admins can set {BATCH_ENQUEUED_TOKEN_LIMIT_METADATA_KEY} on a {entity}. "
-            "It replaces the standard rate limit checks for batch submissions."
+            "error": f"Only proxy admins can set {changed} on a {entity}. "
+            "It limits what the holder can do with batches, so the holder cannot raise it."
         },
     )
 

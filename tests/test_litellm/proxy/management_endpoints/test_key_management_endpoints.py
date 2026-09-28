@@ -18930,30 +18930,37 @@ async def test_regenerate_key_output_token_estimate_lowered_rejected_for_non_adm
 _BATCH_LIMIT = "batch_enqueued_token_limit"
 
 
+_UNTOUCHED = object()
+
+
 @pytest.mark.parametrize(
-    "label, request_body, existing_metadata, allowed",
+    "limit_key",
     [
-        ("set on a key with none stored", {"metadata": {_BATCH_LIMIT: 50000}}, None, False),
-        ("raised above the stored limit", {"metadata": {_BATCH_LIMIT: 200000}}, {_BATCH_LIMIT: 100000}, False),
-        ("cleared by replacing the blob", {"metadata": {}}, {_BATCH_LIMIT: 100000}, False),
-        ("resent unchanged", {"metadata": {_BATCH_LIMIT: 100000}}, {_BATCH_LIMIT: 100000}, True),
-        ("left untouched", {}, {_BATCH_LIMIT: 100000}, True),
+        "batch_enqueued_token_limit",
+        "max_batch_file_records",
+        "max_batch_file_uploads_per_day",
+        "max_file_downloads_per_minute",
     ],
 )
-def test_batch_enqueued_token_limit_admin_gate_matrix(label, request_body, existing_metadata, allowed):
-    """A non-admin may only leave a key's stored batch enqueued-token limit as it is.
-
-    When set, the limit replaces the standard RPM/TPM checks for batch
-    submissions, so a key holder writing it would pick their own batch quota.
-    Resending the stored value is what the edit form produces on every save
-    and has to stay allowed.
-    """
+@pytest.mark.parametrize(
+    "label, sent, stored, allowed",
+    [
+        ("set on a key with none stored", 50000, None, False),
+        ("raised above the stored limit", 200000, 100000, False),
+        ("cleared by replacing the blob", None, 100000, False),
+        ("resent unchanged", 100000, 100000, True),
+        ("left untouched", _UNTOUCHED, 100000, True),
+    ],
+)
+def test_batch_limits_admin_gate_matrix(limit_key, label, sent, stored, allowed):
+    request_body = {} if sent is _UNTOUCHED else {"metadata": {} if sent is None else {limit_key: sent}}
+    existing_metadata = None if stored is None else {limit_key: stored}
     from litellm.proxy.auth.auth_utils import (
-        enforce_batch_enqueued_token_limit_is_admin_only,
+        enforce_batch_limits_are_admin_only,
     )
 
     def _call(caller):
-        enforce_batch_enqueued_token_limit_is_admin_only(
+        enforce_batch_limits_are_admin_only(
             data=UpdateKeyRequest(key="sk-1", **request_body),
             existing_metadata=existing_metadata,
             user_api_key_dict=caller,
@@ -18971,7 +18978,7 @@ def test_batch_enqueued_token_limit_admin_gate_matrix(label, request_body, exist
         with pytest.raises(HTTPException) as exc:
             _call(non_admin)
         assert exc.value.status_code == 403
-        assert "Only proxy admins can set" in str(exc.value.detail)
+        assert f"Only proxy admins can set {limit_key}" in str(exc.value.detail)
 
     _call(
         UserAPIKeyAuth(

@@ -84,6 +84,11 @@ from litellm.proxy.openai_files_endpoints.common_utils import (
     validate_managed_files_requirement,
     validate_managed_id_requirement,
 )
+from litellm.proxy.openai_files_endpoints.file_usage_caps import (
+    batch_file_record_limit,
+    enforce_batch_file_upload_limit,
+    enforce_file_download_limit,
+)
 from litellm.proxy.openai_files_endpoints.general_upload_validation import (
     MB,
     check_allowed_extension,
@@ -672,9 +677,13 @@ async def create_file(
                 file_source,
                 _MAX_BATCH_FILE_SIZE_MB_ADAPTER.validate_python(general_settings.get("max_batch_file_size_mb")),
                 PASSTHROUGH_BATCH_LINE_SHAPE if passthrough else BATCH_LINE_SHAPE,
+                batch_file_record_limit(user_api_key_dict, general_settings),
             )
             if batch_file_failure is not None:
                 raise_batch_file_validation_failure(batch_file_failure)
+            await enforce_batch_file_upload_limit(
+                proxy_logging_obj.internal_usage_cache, user_api_key_dict, general_settings
+            )
 
         data = {"passthrough": True} if passthrough else {}
 
@@ -978,6 +987,9 @@ async def get_file_content(
             user_api_key_dict=user_api_key_dict,
             managed_files_obj=proxy_logging_obj.get_proxy_hook("managed_files"),
         )
+        await enforce_file_download_limit(
+            proxy_logging_obj.internal_usage_cache, user_api_key_dict, general_settings, file_id
+        )
 
         # Include original request and headers in the data
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
@@ -1216,6 +1228,8 @@ async def get_file_content(
         )
         verbose_proxy_logger.exception("litellm.proxy.proxy_server.retrieve_file_content(): Exception occured - %s", e)
         verbose_proxy_logger.debug(traceback.format_exc())
+        if isinstance(e, ProxyException):
+            raise e
         if isinstance(e, HTTPException):
             raise ProxyException(
                 message=getattr(e, "message", str(e.detail)),
