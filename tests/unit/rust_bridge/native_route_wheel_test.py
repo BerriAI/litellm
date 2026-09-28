@@ -154,12 +154,8 @@ def success_value(route: str, response: dict[object, object]) -> object:
 
 
 def assert_rate_limit(native: object, route: str, error: BaseException) -> None:
-    if route == "chat_completions":
-        upstream_error: Final = native.RustUpstreamError
-        if not isinstance(error, upstream_error) or error.args[0] != 429:
-            raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
-        return
-    if not isinstance(error, RuntimeError) or "429" not in str(error):
+    upstream_error: Final = native.RustUpstreamError
+    if not isinstance(error, upstream_error) or error.args[0] != 429:
         raise AssertionError(f"{route} returned the wrong 429 error: {error!r}")
 
 
