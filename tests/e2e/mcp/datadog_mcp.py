@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import os
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 
 from e2e_config import datadog_mcp_url, unique_marker
 from lifecycle import ResourceManager
@@ -37,6 +37,7 @@ def register_datadog_mcp(
     *,
     mcp_access_groups: list[str] | None = None,
     allowed_tools: Sequence[str] | None = (SEARCH_LOGS_TOOL,),
+    tool_name_to_description: Mapping[str, str] | None = None,
 ) -> str:
     """Register the core Datadog toolset with its credentials from the env. By default
     the server exposes only `search_datadog_logs`; pass `allowed_tools=None` to expose
@@ -54,6 +55,7 @@ def register_datadog_mcp(
         },
         allowed_tools=None if allowed_tools is None else list(allowed_tools),
         mcp_access_groups=mcp_access_groups,
+        tool_name_to_description=tool_name_to_description,
     )
     resources.defer(lambda: client.delete_server(server_id))
     return server_id

@@ -1,4 +1,5 @@
 from litellm.proxy._experimental.mcp_server import operations as mcp_operations
+
 """
 Tests for MCP tool search feature.
 
@@ -13,7 +14,7 @@ Covers:
 import json
 from collections.abc import Sequence
 from types import SimpleNamespace
-from typing import Any
+from typing import Any, Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -31,6 +32,7 @@ from litellm.proxy._experimental.mcp_server.tool_search import (
     ToolSearchResult,
     coerce_top_k,
     get_virtual_tool_definitions,
+    rank_mcp_tools,
     search_mcp_tools,
     search_tools,
 )
@@ -86,12 +88,11 @@ FAKE_VECTORS: dict[str, Vector] = {
 }
 
 
-
-
 def _paged_params():
     from mcp.types import PaginatedRequestParams
 
     return PaginatedRequestParams()
+
 
 class RecordingEmbedder:
     def __init__(self) -> None:
@@ -100,6 +101,19 @@ class RecordingEmbedder:
     async def __call__(self, texts: Sequence[str]) -> Sequence[Vector]:
         self.calls.append(tuple(texts))
         return tuple(FAKE_VECTORS[text] for text in texts)
+
+
+class OversizedRecordingEmbedder:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, ...]] = []  # mutable-ok: test spy recording embed inputs
+
+    async def __call__(self, texts: Sequence[str]) -> Sequence[Vector]:
+        self.calls.append(tuple(texts))
+        if any("OVERSIZED" in text for text in texts):
+            raise litellm.ContextWindowExceededError(
+                message="input is too long", model="text-embedding-3-large", llm_provider="openai"
+            )
+        return tuple((1.0, 0.0) if "weather" in text.lower() else (0.0, 1.0) for text in texts)
 
 
 def _ranker(embedder: RecordingEmbedder | None = None) -> SemanticToolRanker:
@@ -112,6 +126,26 @@ def _names(results: Sequence[ToolSearchResult] | EmbeddingFailed) -> list[str]:
 
 
 class TestSearchMcpTools:
+    @pytest.mark.asyncio
+    async def test_rank_mcp_tools_omits_oversized_description(self) -> None:
+        tools: Final = _make_tools(
+            [
+                ("get_weather", "Get the current weather forecast for a city"),
+                ("send_email", "Send an email to a recipient"),
+                ("list_files", "List files in a directory"),
+                ("huge_tool", "OVERSIZED description"),
+            ]
+        )
+        embedder = OversizedRecordingEmbedder()
+        ranker = SemanticToolRanker(embed=embedder, embedding_model="emb", index=SemanticTextIndex())
+
+        hits: Final = await rank_mcp_tools("weather", tools, 5, MCPToolSearchSettings(embedding_model="emb"), ranker)
+
+        assert not isinstance(hits, EmbeddingFailed)
+        names: Final = [hit.tool.name for hit in hits]
+        assert names[0] == "get_weather"
+        assert "huge_tool" not in names
+
     @pytest.mark.asyncio
     async def test_semantic_mode_finds_foreign_exchange_tool_for_fx(self) -> None:
         keyword_only = await search_mcp_tools("FX", CATALOG, 5, MCPToolSearchSettings(), ranker=None)
@@ -1028,7 +1062,8 @@ class TestDispatchVirtualMcpTool:
         sentinel_logging_obj = object()
         with (
             patch.object(
-                mcp_operations, "_build_virtual_call_logging_obj",
+                mcp_operations,
+                "_build_virtual_call_logging_obj",
                 new_callable=AsyncMock,
                 return_value=sentinel_logging_obj,
             ) as mock_build,
@@ -1171,9 +1206,7 @@ class TestCaptureHostProgressCallback:
         callback = _capture_host_progress_callback(_mcp_request_ctx(meta=params.meta, session=session))
         assert callback is not None
         await callback(0.5, 1.0)
-        session.send_progress_notification.assert_awaited_once_with(
-            progress_token=token, progress=0.5, total=1.0
-        )
+        session.send_progress_notification.assert_awaited_once_with(progress_token=token, progress=0.5, total=1.0)
 
 
 class TestHandleListToolsVirtual:
