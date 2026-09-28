@@ -43,6 +43,7 @@ from litellm.constants import (
     MAXIMUM_TRACEBACK_LINES_TO_LOG,
     PASSTHROUGH_UPSTREAM_ERROR_BODY_MAX_LOG_CHARS,
     REDACTED_BY_LITELLM,
+    REDACTED_BY_LITELM_STRING,
     SESSION_ID_OMITTED_METADATA_KEY,
     WEBSOCKET_CLOSE_REASON_MAX_BYTES,
 )
@@ -3537,6 +3538,57 @@ async def _filter_endpoints_by_team_allowed_routes(
     return pass_through_endpoints
 
 
+def _mask_pass_through_headers(headers: Mapping[str, object]) -> dict[str, object]:
+    """Replace every header value except empty ones and ``os.environ/`` references with ``REDACTED_BY_LITELM_STRING``."""
+    return {
+        name: (
+            value
+            if value is None or value == "" or (isinstance(value, str) and "os.environ/" in value)
+            else REDACTED_BY_LITELM_STRING
+        )
+        for name, value in headers.items()
+    }
+
+
+def _with_masked_headers(endpoint: PassThroughGenericEndpoint) -> PassThroughGenericEndpoint:
+    return endpoint.model_copy(update={"headers": _mask_pass_through_headers(endpoint.headers)})
+
+
+def _reject_redacted_pass_through_headers(headers: Mapping[str, object], stored: Mapping[str, object]) -> None:
+    unresolved: Final = [
+        name
+        for name, value in headers.items()
+        if value == REDACTED_BY_LITELM_STRING and _stored_header_value(stored, name) is None
+    ]
+    if unresolved:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": (
+                    f"{REDACTED_BY_LITELM_STRING!r} is the placeholder returned for hidden header values and there is "
+                    f"no stored value to keep for {unresolved}. Send the real header value."
+                )
+            },
+        )
+
+
+def _stored_header_value(stored: Mapping[str, object], name: str) -> object | None:
+    if name in stored:
+        return stored[name]
+    return next((value for stored_name, value in stored.items() if stored_name.lower() == name.lower()), None)
+
+
+def _restore_redacted_pass_through_headers(
+    incoming: Mapping[str, object], stored: Mapping[str, object]
+) -> dict[str, object]:
+    """Replace each redacted incoming header value with the stored value of the same header name."""
+    _reject_redacted_pass_through_headers(incoming, stored)
+    return {
+        name: _stored_header_value(stored, name) if value == REDACTED_BY_LITELM_STRING else value
+        for name, value in incoming.items()
+    }
+
+
 @router.get(
     "/config/pass_through_endpoint",
     dependencies=[Depends(user_api_key_auth)],
@@ -3590,7 +3642,7 @@ async def get_pass_through_endpoints(
             prisma_client=prisma_client,
         )
 
-    return PassThroughEndpointResponse(endpoints=pass_through_endpoints)
+    return PassThroughEndpointResponse(endpoints=[_with_masked_headers(ep) for ep in pass_through_endpoints])
 
 
 @router.post(
@@ -3657,6 +3709,8 @@ async def update_pass_through_endpoints(
     # an existing auth=false entry on any unrelated edit.
     # Exclude is_from_config as it's a response-only field (computed at read time)
     update_data: Final = data.model_dump(exclude_unset=True, exclude_none=True, exclude={"is_from_config"})
+    if "headers" in update_data:
+        update_data["headers"] = _restore_redacted_pass_through_headers(update_data["headers"], found_endpoint.headers)
 
     # Start with existing endpoint data
     endpoint_dict: Final = found_endpoint.model_dump()
@@ -3729,7 +3783,7 @@ async def update_pass_through_endpoints(
             timeout=updated_endpoint.timeout,
         )
 
-    return PassThroughEndpointResponse(endpoints=[updated_endpoint] if updated_endpoint else [])
+    return PassThroughEndpointResponse(endpoints=[_with_masked_headers(updated_endpoint)])
 
 
 @router.post(
@@ -3762,6 +3816,7 @@ async def create_pass_through_endpoints(
     ## Auto-generate ID if not provided
     # Exclude is_from_config as it's a response-only field (computed at read time)
     data_dict: Final = data.model_dump(exclude={"is_from_config"})
+    _reject_redacted_pass_through_headers(data_dict["headers"], {})
     if data_dict.get("id") is None:
         data_dict["id"] = str(uuid.uuid4())
 
@@ -3821,7 +3876,7 @@ async def create_pass_through_endpoints(
             timeout=created_endpoint.timeout,
         )
 
-    return PassThroughEndpointResponse(endpoints=[created_endpoint])
+    return PassThroughEndpointResponse(endpoints=[_with_masked_headers(created_endpoint)])
 
 
 @router.delete(
@@ -3898,7 +3953,7 @@ async def delete_pass_through_endpoints(
     )
     await update_config_general_settings(data=updated_data, user_api_key_dict=user_api_key_dict)
 
-    return PassThroughEndpointResponse(endpoints=[response_obj])
+    return PassThroughEndpointResponse(endpoints=[_with_masked_headers(response_obj)])
 
 
 def _find_endpoint_by_id(

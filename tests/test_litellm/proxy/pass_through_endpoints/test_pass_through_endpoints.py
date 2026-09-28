@@ -1789,7 +1789,7 @@ async def test_create_pass_through_endpoint():
             created_endpoint = result.endpoints[0]
             assert created_endpoint.path == "/test/endpoint"
             assert created_endpoint.target == "http://example.com/api"
-            assert created_endpoint.headers == {"Authorization": "Bearer test-token"}
+            assert created_endpoint.headers == {"Authorization": "REDACTED_BY_LITELM"}
             assert created_endpoint.include_subpath is True
             assert created_endpoint.cost_per_request == 0.50
             assert created_endpoint.id is not None  # Should be auto-generated
@@ -1883,9 +1883,9 @@ async def test_update_pass_through_endpoint():
             assert updated_endpoint.path == "/test/endpoint"
             assert updated_endpoint.target == "http://newapi.com/v2"  # Updated
             assert updated_endpoint.headers == {
-                "Authorization": "Bearer new-token",
-                "X-Custom": "header",
-            }  # Updated
+                "Authorization": "REDACTED_BY_LITELM",
+                "X-Custom": "REDACTED_BY_LITELM",
+            }  # Updated, masked in the response
             assert updated_endpoint.include_subpath is False  # Preserved existing value
             assert updated_endpoint.cost_per_request == 0.75  # Updated
 
@@ -1903,6 +1903,10 @@ async def test_update_pass_through_endpoint():
             assert updated_data["id"] == existing_endpoint_id
             assert updated_data["target"] == "http://newapi.com/v2"
             assert updated_data["cost_per_request"] == 0.75
+            assert updated_data["headers"] == {
+                "Authorization": "Bearer new-token",
+                "X-Custom": "header",
+            }
 
 
 @pytest.mark.asyncio
@@ -2234,7 +2238,7 @@ async def test_delete_pass_through_endpoint():
             assert deleted_endpoint.id == endpoint_to_delete_id
             assert deleted_endpoint.path == "/test/endpoint"
             assert deleted_endpoint.target == "http://example.com/api"
-            assert deleted_endpoint.headers == {"Authorization": "Bearer test-token"}
+            assert deleted_endpoint.headers == {"Authorization": "REDACTED_BY_LITELM"}
             assert deleted_endpoint.include_subpath is True
             assert deleted_endpoint.cost_per_request == 0.50
 
@@ -7622,3 +7626,191 @@ def test_passthrough_attributes_a_cli_session_to_its_alias_not_the_login_token()
     metadata = kwargs["litellm_params"]["metadata"]
     assert metadata["user_api_key"] == "cli-session-alice"
     assert _get_spend_logs_metadata(metadata)["user_api_key"] == "cli-session-alice"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("team_id", [None, "team-1"])
+async def test_get_pass_through_endpoints_masks_header_values(team_id):
+    from litellm.proxy._types import PassThroughGenericEndpoint, UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        get_pass_through_endpoints,
+    )
+
+    config_passthrough_endpoints = [
+        {
+            "path": "/cfg",
+            "target": "https://cfg.example.com",
+            "headers": {
+                "Authorization": "Bearer sk-yaml-secret-123456",
+                "x-short": "abc",
+                "x-empty": "",
+                "x-int": 3,
+                "x-env": "os.environ/CFG_TOKEN",
+                "x-env-embedded": "Bearer os.environ/CFG_TOKEN",
+            },
+        }
+    ]
+    db_endpoint = PassThroughGenericEndpoint(
+        id="db-1",
+        path="/db",
+        target="https://db.example.com",
+        headers={"x-api-key": "db-literal-key-7890", "x-enc": "litellm_enc::QUJDREVGR0g="},
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+        patch("litellm.proxy.proxy_server.config_passthrough_endpoints", config_passthrough_endpoints),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._get_pass_through_endpoints_from_db",
+            new_callable=AsyncMock,
+            return_value=[db_endpoint],
+        ),
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints._filter_endpoints_by_team_allowed_routes",
+            new_callable=AsyncMock,
+            side_effect=lambda team_id, pass_through_endpoints, prisma_client: pass_through_endpoints,
+        ),
+    ):
+        result = await get_pass_through_endpoints(
+            endpoint_id=None, user_api_key_dict=MagicMock(spec=UserAPIKeyAuth), team_id=team_id
+        )
+
+    by_path = {ep.path: ep for ep in result.endpoints}
+    assert by_path["/cfg"].headers == {
+        "Authorization": "REDACTED_BY_LITELM",
+        "x-short": "REDACTED_BY_LITELM",
+        "x-empty": "",
+        "x-int": "REDACTED_BY_LITELM",
+        "x-env": "os.environ/CFG_TOKEN",
+        "x-env-embedded": "Bearer os.environ/CFG_TOKEN",
+    }
+    assert by_path["/db"].headers == {"x-api-key": "REDACTED_BY_LITELM", "x-enc": "REDACTED_BY_LITELM"}
+    assert config_passthrough_endpoints[0]["headers"]["Authorization"] == "Bearer sk-yaml-secret-123456"
+    assert db_endpoint.headers["x-api-key"] == "db-literal-key-7890"
+
+
+def _stored_endpoint_config(headers):
+    from litellm.proxy._types import ConfigFieldInfo
+
+    return ConfigFieldInfo(
+        field_name="pass_through_endpoints",
+        field_value=[{"id": "ep-1", "path": "/pt", "target": "https://up.example.com", "headers": headers}],
+    )
+
+
+@pytest.mark.asyncio
+async def test_update_pass_through_endpoint_keeps_stored_header_when_redacted_sent_back(monkeypatch):
+    from litellm.proxy._types import PassThroughGenericEndpoint, UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        InitPassThroughEndpointHelpers,
+        update_pass_through_endpoints,
+    )
+
+    monkeypatch.setenv("PT_ENV_TOKEN", "resolved-env-token")
+    stored_headers = {
+        "authorization": "Bearer sk-stored-secret-123456",
+        "x-enc": "litellm_enc::QUJDREVGR0g=",
+        "x-change": "old-value-1234",
+        "x-env": "os.environ/PT_ENV_TOKEN",
+    }
+    incoming_headers = {
+        "Authorization": "REDACTED_BY_LITELM",
+        "x-enc": "REDACTED_BY_LITELM",
+        "x-change": "new-value-5678",
+        "x-env": "os.environ/PT_ENV_TOKEN",
+        "x-new": "brand-new-header",
+    }
+
+    with (
+        patch("litellm.proxy.proxy_server.get_config_general_settings", new_callable=AsyncMock) as mock_get_config,
+        patch("litellm.proxy.proxy_server.update_config_general_settings", new_callable=AsyncMock) as mock_update,
+        patch.object(InitPassThroughEndpointHelpers, "add_exact_path_route") as mock_add_route,
+        patch.object(InitPassThroughEndpointHelpers, "remove_endpoint_routes"),
+    ):
+        mock_get_config.return_value = _stored_endpoint_config(stored_headers)
+        result = await update_pass_through_endpoints(
+            endpoint_id="ep-1",
+            data=PassThroughGenericEndpoint(path="/pt", target="https://up.example.com", headers=incoming_headers),
+            request=MagicMock(spec=Request),
+            user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+        )
+
+    persisted_headers = mock_update.call_args.kwargs["data"].field_value[0]["headers"]
+    assert persisted_headers == {
+        "Authorization": "Bearer sk-stored-secret-123456",
+        "x-enc": "litellm_enc::QUJDREVGR0g=",
+        "x-change": "new-value-5678",
+        "x-env": "os.environ/PT_ENV_TOKEN",
+        "x-new": "brand-new-header",
+    }
+    registered_headers = mock_add_route.call_args.kwargs["custom_headers"]
+    assert registered_headers["Authorization"] == "Bearer sk-stored-secret-123456"
+    assert registered_headers["x-env"] == "resolved-env-token"
+    assert result.endpoints[0].headers["Authorization"] == "REDACTED_BY_LITELM"
+
+
+@pytest.mark.asyncio
+async def test_update_pass_through_endpoint_rejects_redacted_header_with_no_stored_value():
+    from litellm.proxy._types import PassThroughGenericEndpoint, UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        update_pass_through_endpoints,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.get_config_general_settings", new_callable=AsyncMock) as mock_get_config,
+        patch("litellm.proxy.proxy_server.update_config_general_settings", new_callable=AsyncMock) as mock_update,
+    ):
+        mock_get_config.return_value = _stored_endpoint_config({"Authorization": "Bearer sk-stored-secret-123456"})
+        with pytest.raises(HTTPException) as exc_info:
+            await update_pass_through_endpoints(
+                endpoint_id="ep-1",
+                data=PassThroughGenericEndpoint(
+                    path="/pt", target="https://up.example.com", headers={"X-Renamed-Auth": "REDACTED_BY_LITELM"}
+                ),
+                request=MagicMock(spec=Request),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+    assert exc_info.value.status_code == 400
+    assert "X-Renamed-Auth" in str(exc_info.value.detail)
+    mock_update.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_create_pass_through_endpoint_rejects_redacted_header_value():
+    from litellm.proxy._types import PassThroughGenericEndpoint, UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        create_pass_through_endpoints,
+    )
+
+    with (
+        patch("litellm.proxy.proxy_server.get_config_general_settings", new_callable=AsyncMock) as mock_get_config,
+        patch("litellm.proxy.proxy_server.update_config_general_settings", new_callable=AsyncMock) as mock_update,
+    ):
+        mock_get_config.return_value = _stored_endpoint_config({})
+        with pytest.raises(HTTPException) as exc_info:
+            await create_pass_through_endpoints(
+                data=PassThroughGenericEndpoint(
+                    path="/clone", target="https://up.example.com", headers={"Authorization": "REDACTED_BY_LITELM"}
+                ),
+                request=MagicMock(spec=Request),
+                user_api_key_dict=MagicMock(spec=UserAPIKeyAuth),
+            )
+
+    assert exc_info.value.status_code == 400
+    mock_update.assert_not_called()
+
+
+def test_restore_redacted_pass_through_headers_prefers_exact_name_over_case_insensitive_match():
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        _restore_redacted_pass_through_headers,
+    )
+
+    stored = {"Authorization": "Bearer A", "authorization": "Bearer B", "x-num": 12345}
+    incoming = {"Authorization": "REDACTED_BY_LITELM", "authorization": "REDACTED_BY_LITELM", "X-NUM": "REDACTED_BY_LITELM"}
+
+    assert _restore_redacted_pass_through_headers(incoming, stored) == {
+        "Authorization": "Bearer A",
+        "authorization": "Bearer B",
+        "X-NUM": 12345,
+    }
