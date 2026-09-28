@@ -34,7 +34,7 @@ def decline_reason(request: LiteLLMResponsesRequest) -> str | None:
     if request.custom_llm_provider is None and "/" not in request.model:
         try:
             _, provider, _, _ = get_llm_provider(model=request.model)
-        except Exception:  # noqa: BLE001  # unresolved models stay on the existing Python dispatch path
+        except litellm.exceptions.BadRequestError:
             return "native Responses could not resolve the provider"
         if provider != "openai":
             return "native HTTP responses provider"
