@@ -176,6 +176,32 @@ async def test_reencryption_moves_every_stored_shape_to_the_new_key_and_nothing_
 
 
 @pytest.mark.asyncio
+async def test_reencryption_moves_marked_vector_store_credentials_and_skips_plaintext_rows():
+    tables: Tables = {
+        "LiteLLM_ManagedVectorStoresTable": [
+            {
+                "vector_store_id": "vs-new",
+                "litellm_params": {
+                    "api_key": "litellm_enc::" + _encrypted("vector-store-key"),
+                    "api_base": "https://vector.example/v1",
+                },
+            },
+            {"vector_store_id": "vs-legacy", "litellm_params": {"api_key": "sk-legacy-plaintext"}},
+        ]
+    }
+    database = _FakeDatabase(tables)
+
+    migrated = await reencrypt_stored_values(database, from_key=PREVIOUS_KEY, to_key=NEW_KEY)
+
+    assert migrated == 1
+    assert database.writes == [("LiteLLM_ManagedVectorStoresTable", "litellm_params", "vs-new")]
+    rotated = tables["LiteLLM_ManagedVectorStoresTable"][0]["litellm_params"]
+    assert decrypt_if_encrypted_with(rotated["api_key"].removeprefix("litellm_enc::"), NEW_KEY) == "vector-store-key"
+    assert rotated["api_base"] == "https://vector.example/v1"
+    assert tables["LiteLLM_ManagedVectorStoresTable"][1]["litellm_params"] == {"api_key": "sk-legacy-plaintext"}
+
+
+@pytest.mark.asyncio
 async def test_count_follows_the_values_from_the_previous_key_to_the_new_one():
     database = _FakeDatabase(_seeded_tables())
 

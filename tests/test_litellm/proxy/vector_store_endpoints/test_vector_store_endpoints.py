@@ -3256,3 +3256,229 @@ class TestConfigOwnedVectorStores:
         assert response["status"] == "success", response
         prisma.db.litellm_managedvectorstorestable.delete.assert_awaited_once_with(where={"vector_store_id": self.DB_ID})
         assert registry.get_litellm_managed_vector_store_from_registry(self.DB_ID) is None
+
+
+class TestLitellmParamsEncryptedAtRest:
+    SALT_KEY = "sk-vector-store-endpoint-salt"
+
+    @pytest.fixture(autouse=True)
+    def _salt_key(self, monkeypatch):
+        from litellm.proxy import proxy_server
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", self.SALT_KEY)
+        monkeypatch.setattr(proxy_server, "general_settings", {})
+
+    @staticmethod
+    def _row(data):
+        row = MagicMock()
+        row.model_dump.return_value = {
+            **data,
+            "litellm_params": json.loads(data["litellm_params"])
+            if isinstance(data.get("litellm_params"), str)
+            else data.get("litellm_params"),
+        }
+        return row
+
+    @pytest.mark.asyncio
+    async def test_create_writes_encrypted_secrets_and_registers_decrypted_params(self):
+        from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
+
+        prisma_client = MagicMock()
+        table = prisma_client.db.litellm_managedvectorstorestable
+        table.find_unique = AsyncMock(return_value=None)
+        table.create = AsyncMock(side_effect=lambda data: self._row(data))
+        registry = MagicMock()
+
+        with patch.object(litellm, "vector_store_registry", registry):
+            created = await create_vector_store_in_db(
+                vector_store_id="vs_encrypted",
+                custom_llm_provider="openai",
+                prisma_client=prisma_client,
+                litellm_params={"api_key": "sk-vs-secret-9", "api_base": "https://vector.example/v1"},
+            )
+
+        stored = json.loads(table.create.await_args.kwargs["data"]["litellm_params"])
+        assert "sk-vs-secret-9" not in json.dumps(stored)
+        assert stored["api_key"].startswith("litellm_enc::")
+        assert decrypt_if_encrypted_with(stored["api_key"].removeprefix("litellm_enc::"), self.SALT_KEY) == (
+            "sk-vs-secret-9"
+        )
+        assert stored["api_base"] == "https://vector.example/v1"
+        assert created["litellm_params"]["api_key"] == "sk-vs-secret-9"
+        registered = registry.add_vector_store_to_registry.call_args.kwargs["vector_store"]
+        assert registered["litellm_params"]["api_key"] == "sk-vs-secret-9"
+
+    @pytest.mark.asyncio
+    async def test_new_endpoint_response_redacts_the_decrypted_key(self):
+        from litellm.constants import REDACTED_BY_LITELM_STRING
+
+        prisma_client = MagicMock()
+        table = prisma_client.db.litellm_managedvectorstorestable
+        table.find_unique = AsyncMock(return_value=None)
+        table.create = AsyncMock(side_effect=lambda data: self._row(data))
+
+        with (
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new_callable=AsyncMock,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch.object(litellm, "vector_store_registry", None),
+        ):
+            response = await new_vector_store(
+                vector_store=LiteLLM_ManagedVectorStore(
+                    vector_store_id="vs_encrypted",
+                    custom_llm_provider="openai",
+                    litellm_params={"api_key": "sk-vs-secret-9", "api_base": "https://vector.example/v1"},
+                ),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            )
+
+        assert response["vector_store"]["litellm_params"]["api_key"] == REDACTED_BY_LITELM_STRING
+        assert "litellm_enc::" not in json.dumps(response, default=str)
+
+    @pytest.mark.asyncio
+    async def test_update_registers_decrypted_params_for_an_encrypted_row(self):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+        from litellm.proxy.vector_store_endpoints.litellm_params_encryption import encrypt_vector_store_litellm_params
+
+        stored_params = encrypt_vector_store_litellm_params({"api_key": "sk-vs-secret-9", "api_base": "https://b"})
+        row = self._row({"vector_store_id": "vs_encrypted", "litellm_params": stored_params})
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=row)
+        prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(return_value=row)
+        registry = MagicMock()
+        registry.is_config_vector_store.return_value = False
+
+        with (
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch.object(litellm, "vector_store_registry", registry),
+        ):
+            await update_vector_store(
+                data=VectorStoreUpdateRequest(vector_store_id="vs_encrypted", vector_store_description="new"),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            )
+
+        registered = registry.update_vector_store_in_registry.call_args.kwargs["updated_data"]
+        assert registered["litellm_params"] == {"api_key": "sk-vs-secret-9", "api_base": "https://b"}
+
+    @staticmethod
+    def _encrypted_under_another_key(params, monkeypatch):
+        from litellm.proxy.vector_store_endpoints.litellm_params_encryption import encrypt_vector_store_litellm_params
+
+        monkeypatch.setenv("LITELLM_SALT_KEY", "sk-rotated-away-salt")
+        encrypted = encrypt_vector_store_litellm_params(params)
+        monkeypatch.setenv("LITELLM_SALT_KEY", TestLitellmParamsEncryptedAtRest.SALT_KEY)
+        return encrypted
+
+    @pytest.mark.asyncio
+    async def test_list_keeps_the_registry_copy_of_a_row_this_proxy_cannot_decrypt(self, monkeypatch):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import list_vector_stores
+        from litellm.proxy.vector_store_endpoints.litellm_params_encryption import encrypt_vector_store_litellm_params
+        from litellm.vector_stores.vector_store_registry import VectorStoreRegistry
+
+        registry = VectorStoreRegistry(
+            vector_stores=[
+                LiteLLM_ManagedVectorStore(vector_store_id="vs_rotated", litellm_params={"api_key": "sk-working"}),
+                LiteLLM_ManagedVectorStore(vector_store_id="vs_readable", litellm_params={"api_key": "sk-old"}),
+            ]
+        )
+        rows = [
+            {
+                "vector_store_id": "vs_rotated",
+                "litellm_params": self._encrypted_under_another_key({"api_key": "sk-working"}, monkeypatch),
+            },
+            {
+                "vector_store_id": "vs_readable",
+                "litellm_params": encrypt_vector_store_litellm_params({"api_key": "sk-new"}),
+            },
+        ]
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_managedvectorstorestable.find_many = AsyncMock(return_value=rows)
+
+        with (
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints.filter_listable_vector_stores",
+                new_callable=AsyncMock,
+                side_effect=lambda stores, _: list(stores),
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch.object(litellm, "vector_store_registry", registry),
+        ):
+            await list_vector_stores(user_api_key_dict=UserAPIKeyAuth(user_id="admin"))
+
+        params_by_id = {vs["vector_store_id"]: vs["litellm_params"] for vs in registry.vector_stores}
+        assert params_by_id == {"vs_rotated": {"api_key": "sk-working"}, "vs_readable": {"api_key": "sk-new"}}
+
+    @pytest.mark.asyncio
+    async def test_update_keeps_the_registry_copy_of_a_row_this_proxy_cannot_decrypt(self, monkeypatch):
+        from litellm.proxy.vector_store_endpoints.management_endpoints import update_vector_store
+        from litellm.types.vector_stores import VectorStoreUpdateRequest
+
+        stored_params = self._encrypted_under_another_key({"api_key": "sk-vs-secret-9"}, monkeypatch)
+        row = self._row({"vector_store_id": "vs_rotated", "litellm_params": stored_params})
+        prisma_client = MagicMock()
+        prisma_client.db.litellm_managedvectorstorestable.find_unique = AsyncMock(return_value=row)
+        prisma_client.db.litellm_managedvectorstorestable.update = AsyncMock(return_value=row)
+        registry = MagicMock()
+        registry.is_config_vector_store.return_value = False
+
+        with (
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints.check_feature_access_for_user",
+                new_callable=AsyncMock,
+            ),
+            patch(
+                "litellm.proxy.vector_store_endpoints.management_endpoints._check_vector_store_access",
+                new_callable=AsyncMock,
+                return_value=True,
+            ),
+            patch("litellm.proxy.proxy_server.prisma_client", prisma_client),
+            patch.object(litellm, "vector_store_registry", registry),
+        ):
+            await update_vector_store(
+                data=VectorStoreUpdateRequest(vector_store_id="vs_rotated", vector_store_description="new"),
+                user_api_key_dict=UserAPIKeyAuth(user_id="admin"),
+            )
+
+        registry.update_vector_store_in_registry.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_store_resolved_from_the_shared_cache_has_decrypted_params(self):
+        from litellm.proxy._types import LiteLLM_ManagedVectorStoresTable
+        from litellm.proxy.vector_store_endpoints.utils import get_litellm_managed_vector_store
+        from litellm.proxy.vector_store_endpoints.litellm_params_encryption import encrypt_vector_store_litellm_params
+
+        cached_row = LiteLLM_ManagedVectorStoresTable(
+            vector_store_id="vs_encrypted",
+            custom_llm_provider="openai",
+            litellm_params=encrypt_vector_store_litellm_params({"api_key": "sk-vs-secret-9"}),
+        )
+
+        with (
+            patch.object(litellm, "vector_store_registry", None),
+            patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),
+            patch(
+                "litellm.proxy.auth.auth_checks.get_managed_vector_store_rows_by_uuids",
+                new_callable=AsyncMock,
+                return_value=[cached_row],
+            ),
+        ):
+            resolved = await get_litellm_managed_vector_store("vs_encrypted")
+
+        assert resolved is not None
+        assert resolved["litellm_params"] == {"api_key": "sk-vs-secret-9"}

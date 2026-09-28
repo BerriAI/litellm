@@ -133,6 +133,7 @@ from litellm.proxy.utils import (
     handle_exception_on_proxy,
     is_valid_api_key,
 )
+from litellm.proxy.vector_store_endpoints.litellm_params_encryption import reencrypt_vector_store_litellm_params
 from litellm.repositories.base_repository import BaseRepository
 from litellm.repositories.budget_repository import BudgetRepository
 from litellm.repositories.config_repository import ConfigParam, ConfigRepository
@@ -5337,6 +5338,12 @@ async def _rotate_master_key(
         )
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate SSO identity assertions: %s", str(e))
+
+    # 4e. process managed vector store table
+    try:
+        await reencrypt_vector_store_litellm_params(prisma_client=prisma_client, new_master_key=new_master_key)
+    except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
+        verbose_proxy_logger.warning("Failed to rotate vector store credentials: %s", str(e))
 
     # 5. process credentials table
     try:

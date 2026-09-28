@@ -23,7 +23,6 @@ import litellm
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import REDACTED_BY_LITELM_STRING
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
-from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
 from litellm.proxy._types import (
     LiteLLM_ManagedVectorStoresTable,
     ResponseLiteLLM_ManagedVectorStore,
@@ -31,6 +30,12 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.rbac_utils import check_feature_access_for_user
+from litellm.proxy.vector_store_endpoints.litellm_params_encryption import (
+    VECTOR_STORE_SECRET_PARAM_MASKER,
+    decrypt_vector_store_litellm_params,
+    encrypt_vector_store_litellm_params,
+    holds_undecrypted_secret,
+)
 from litellm.proxy.vector_store_endpoints.utils import (
     can_user_access_vector_store,
     filter_listable_vector_stores,
@@ -54,7 +59,7 @@ def _vector_store_table(prisma_client: "PrismaClient") -> "TableActions[_VectorS
 
 
 def _row_to_vector_store(row: "_VectorStoreRow") -> LiteLLM_ManagedVectorStore:
-    return LiteLLM_ManagedVectorStore(**row.model_dump())
+    return decrypt_vector_store_litellm_params(LiteLLM_ManagedVectorStore(**row.model_dump()))
 
 
 class _ConfigOwnedDetail(TypedDict):
@@ -81,9 +86,6 @@ def _raise_if_config_owned(vector_store_id: str) -> None:
 def _with_ownership(vector_store: LiteLLM_ManagedVectorStore) -> LiteLLM_ManagedVectorStore:
     ownership: Final = LiteLLM_ManagedVectorStore(is_config=vector_store.get("is_config", False))
     return vector_store | ownership
-
-
-_LITELLM_PARAMS_MASKER: Final = SensitiveDataMasker(extra_sensitive_patterns=frozenset(("connection",)))
 
 
 _REDACT_LITELLM_PARAMS_MAX_DEPTH: Final = 10
@@ -123,7 +125,7 @@ def _redact_sensitive_litellm_params(litellm_params: object, _depth: int = 0) ->
         return litellm_params
     out: Final[dict[str, object]] = {}
     for k, v in litellm_params.items():
-        if _LITELLM_PARAMS_MASKER.is_sensitive_key(k):
+        if VECTOR_STORE_SECRET_PARAM_MASKER.is_sensitive_key(k):
             out[k] = REDACTED_BY_LITELM_STRING
         elif isinstance(v, dict):
             out[k] = _redact_sensitive_litellm_params(v, _depth + 1)
@@ -247,7 +249,7 @@ async def create_vector_store_in_db(
     # on the deployment and never reach the database.
     if litellm_params:
         litellm_params_dict: Final = GenericLiteLLMParams(**litellm_params).model_dump(exclude_none=True)
-        data_to_create["litellm_params"] = safe_dumps(litellm_params_dict)
+        data_to_create["litellm_params"] = safe_dumps(encrypt_vector_store_litellm_params(litellm_params_dict))
     else:
         # Provide empty dict if no litellm_params provided
         data_to_create["litellm_params"] = safe_dumps({})
@@ -417,10 +419,12 @@ async def list_vector_stores(
                 litellm.vector_store_registry.delete_vector_store_from_registry(vector_store_id=vs_id)
                 verbose_proxy_logger.debug("Removed deleted vector store %s from in-memory registry", vs_id)
 
-            # 2. Update in-memory registry with database versions (for updates)
+            # 2. Update in-memory registry with database versions (for updates). A row whose secret this
+            # process cannot decrypt (the master key was rotated and the proxy not yet restarted) keeps
+            # the registry's working copy.
             for vector_store in vector_stores_from_db:
                 vector_store_id = vector_store.get("vector_store_id", None)
-                if vector_store_id:
+                if vector_store_id and not holds_undecrypted_secret(vector_store):
                     litellm.vector_store_registry.update_vector_store_in_registry(
                         vector_store_id=vector_store_id, updated_data=vector_store
                     )
@@ -650,7 +654,7 @@ async def update_vector_store(
         if "litellm_params" in update_data:
             _input_litellm_params: Final[dict] = update_data.get("litellm_params", {}) or {}
             litellm_params_dict: Final = GenericLiteLLMParams(**_input_litellm_params).model_dump(exclude_none=True)
-            update_data["litellm_params"] = safe_dumps(litellm_params_dict)
+            update_data["litellm_params"] = safe_dumps(encrypt_vector_store_litellm_params(litellm_params_dict))
 
         # Update in database
         updated: Final = await _vector_store_table(prisma_client).update(
@@ -667,7 +671,7 @@ async def update_vector_store(
         updated_vs: Final = _row_to_vector_store(updated)
 
         # Immediately update in-memory registry to keep it in sync
-        if litellm.vector_store_registry is not None:
+        if litellm.vector_store_registry is not None and not holds_undecrypted_secret(updated_vs):
             litellm.vector_store_registry.update_vector_store_in_registry(
                 vector_store_id=vector_store_id,
                 updated_data=updated_vs,

@@ -501,13 +501,17 @@ class VectorStoreRegistry:
         """
         vector_stores_from_db: Final[list[LiteLLM_ManagedVectorStore]] = []
         if prisma_client is not None:
+            from litellm.proxy.vector_store_endpoints.litellm_params_encryption import (
+                decrypt_vector_store_litellm_params,
+            )
+
             _vector_stores_from_db: Final = await ManagedVectorStoresRepository(prisma_client).table.find_many(
                 order={"created_at": "desc"},
             )
             for vector_store in _vector_stores_from_db:
                 _dict_vector_store = dict(vector_store)
                 _litellm_managed_vector_store = LiteLLM_ManagedVectorStore(**_dict_vector_store)
-                vector_stores_from_db.append(_litellm_managed_vector_store)
+                vector_stores_from_db.append(decrypt_vector_store_litellm_params(_litellm_managed_vector_store))
         return vector_stores_from_db
 
     def get_credentials_for_vector_store(self, vector_store_id: str) -> dict[str, object]:

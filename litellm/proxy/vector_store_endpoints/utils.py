@@ -17,6 +17,7 @@ from litellm.proxy._types import (
     LitellmUserRoles,
     UserAPIKeyAuth,
 )
+from litellm.proxy.vector_store_endpoints.litellm_params_encryption import decrypt_vector_store_litellm_params
 from litellm.types.utils import LlmProviders
 from litellm.types.vector_stores import LiteLLM_ManagedVectorStore
 from litellm.utils import ProviderConfigManager
@@ -308,7 +309,9 @@ async def get_litellm_managed_vector_store(
         )
         if not rows:
             return None
-        return _normalize_litellm_params(LiteLLM_ManagedVectorStore(**rows[0].model_dump()))
+        return decrypt_vector_store_litellm_params(
+            _normalize_litellm_params(LiteLLM_ManagedVectorStore(**rows[0].model_dump()))
+        )
     except Exception as e:
         verbose_proxy_logger.warning(
             "Failed to resolve vector store id=%s from shared cache: %s",

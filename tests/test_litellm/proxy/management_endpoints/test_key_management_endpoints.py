@@ -18568,6 +18568,46 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
 
 
 @pytest.mark.asyncio
+async def test_rotate_master_key_reencrypts_vector_store_litellm_params():
+    """Master-key rotation re-encrypts the managed vector store credentials (step 4e)."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_master_key,
+    )
+
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_config", MagicMock()),
+        patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_server_credentials_master_key"),
+        patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_user_credentials_master_key"),
+        patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_mcp_user_env_vars_master_key"),
+        patch("litellm.proxy.management_endpoints.key_management_endpoints.rotate_sso_identity_assertions_master_key"),
+        patch(
+            "litellm.proxy.management_endpoints.key_management_endpoints.reencrypt_vector_store_litellm_params",
+            new_callable=AsyncMock,
+        ) as mock_reencrypt_vector_stores,
+    ):
+        await _rotate_master_key(
+            prisma_client=mock_prisma_client,
+            user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"),
+            current_master_key="sk-old-master-key",
+            new_master_key="sk-new-master-key",
+        )
+
+    mock_reencrypt_vector_stores.assert_awaited_once_with(
+        prisma_client=mock_prisma_client,
+        new_master_key="sk-new-master-key",
+    )
+
+
+@pytest.mark.asyncio
 async def test_check_encryption_endpoint_rejects_proxy_admin_viewer():
     """The residual scan walks and decrypt-classifies every credential-bearing table,
     so it stays proxy_admin-only despite being read-only."""
