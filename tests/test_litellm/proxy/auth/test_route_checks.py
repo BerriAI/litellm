@@ -207,6 +207,51 @@ def test_proxy_admin_viewer_config_update_route_rejected():
 
 
 @pytest.mark.parametrize(
+    "inference_route",
+    [
+        "/v1/chat/completions",
+        "/chat/completions",
+        "/v1/embeddings",
+        "/v1/responses",
+        "/v1/images/generations",
+    ],
+)
+def test_proxy_admin_viewer_inference_routes_rejected(inference_route):
+    """proxy_admin_viewer must not call cost-incurring LLM routes (#43478).
+
+    `non_proxy_admin_allowed_routes_check` used to early-return on
+    `is_llm_api_route`, so `_check_proxy_admin_viewer_access` never ran for
+    /v1/chat/completions and friends — a view-only key could spend budget.
+    """
+    user_obj = LiteLLM_UserTable(
+        user_id="viewer_user",
+        user_email="viewer@example.com",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    valid_token = UserAPIKeyAuth(
+        user_id="viewer_user",
+        user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+    )
+    request = MagicMock(spec=Request)
+    request.query_params = {}
+    request.method = "POST"
+
+    with pytest.raises(HTTPException) as exc_info:
+        RouteChecks.non_proxy_admin_allowed_routes_check(
+            user_obj=user_obj,
+            _user_role=LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value,
+            route=inference_route,
+            request=request,
+            valid_token=valid_token,
+            request_data={},
+        )
+
+    assert exc_info.value.status_code == 403
+    assert "OpenAI routes" in str(exc_info.value.detail) or "not allowed" in str(exc_info.value.detail)
+    assert "proxy_admin_viewer" in str(exc_info.value.detail)
+
+
+@pytest.mark.parametrize(
     "blocked_route",
     [
         # team write routes that previously fell through the blocklist

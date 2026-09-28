@@ -284,7 +284,16 @@ class RouteChecks:
                 jwt_team_allowed_routes=RouteChecks._jwt_team_allowed_routes(valid_token=valid_token),
             )
         elif RouteChecks.is_llm_api_route(route=route):
-            pass
+            # View-only admins must not spend provider budget on inference.
+            # _check_proxy_admin_viewer_access already 403s LLM routes, but that
+            # branch sits below this early pass — so call it here first (#43478).
+            if _user_role == LitellmUserRoles.PROXY_ADMIN_VIEW_ONLY.value:
+                RouteChecks._check_proxy_admin_viewer_access(
+                    route=route,
+                    _user_role=_user_role,
+                    request_data=request_data,
+                    request=request,
+                )
         elif RouteChecks.is_info_route(route=route):
             # check if user allowed to call an info route
             if route == "/key/info":
