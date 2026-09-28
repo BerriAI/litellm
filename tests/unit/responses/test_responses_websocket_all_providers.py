@@ -2719,6 +2719,60 @@ class TestWebSocketChunkTypes:
         assert "Complete reasoning" in serialized
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("model", ["gpt-6-luna", "openai/gpt-6-luna"])
+@pytest.mark.parametrize(
+    ("api_key", "expected_key"),
+    [
+        ("sk-deployment-test", "sk-deployment-test"),
+        (None, "sk-environment-test"),
+    ],
+)
+async def test_responses_websocket_handshake_uses_deployment_key_before_environment(
+    monkeypatch: pytest.MonkeyPatch, model: str, api_key: str | None, expected_key: str
+) -> None:
+    from collections.abc import Mapping
+    from datetime import datetime, timezone
+    from typing import Final, NoReturn
+    from unittest.mock import patch
+
+    from fastapi import WebSocket
+
+    from litellm.litellm_core_utils.litellm_logging import Logging
+    from litellm.responses.main import _aresponses_websocket
+
+    monkeypatch.setenv("OPENAI_API_KEY", "sk-environment-test")
+    handshake_headers: Final[list[Mapping[str, str]]] = []
+
+    def capture_handshake(
+        url: str, *, additional_headers: Mapping[str, str], **kwargs: object
+    ) -> NoReturn:
+        handshake_headers.append(additional_headers)
+        raise RuntimeError("stop before network")
+
+    logging_obj: Final = Logging(
+        model=model,
+        messages=[],
+        stream=True,
+        call_type="_aresponses_websocket",
+        start_time=datetime(2026, 1, 1, tzinfo=timezone.utc),
+        litellm_call_id="websocket-credential-test",
+        function_id="websocket-credential-test",
+    )
+
+    with patch("websockets.connect", new=capture_handshake):
+        await _aresponses_websocket.__wrapped__(
+            model=model,
+            websocket=MagicMock(spec=WebSocket),
+            api_base="https://provider.example/v1",
+            api_key=api_key,
+            litellm_logging_obj=logging_obj,
+        )
+
+    assert len(handshake_headers) == 1
+    assert handshake_headers[0]["Authorization"] == f"Bearer {expected_key}"
+
+
 class TestNativeWebSocketUrlConstruction:
     """Test that native WebSocket URLs include the model query parameter.
 
