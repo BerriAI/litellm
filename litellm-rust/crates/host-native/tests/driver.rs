@@ -9,13 +9,13 @@ use litellm_host::{
     event::{CallEvent, MachineEvent, RawResponse, RequestContext, WireRequest},
     hooks::RouteHooks,
     lifecycle::CallObserver,
-    machine::MachineFault,
+    machine::{CallMachine, HostFailure, Interrupted, Machine, MachineFault, Step},
     protocol::{Demand, Protocol, Reply},
     services::HostCallHandler,
 };
 use litellm_host_native::{
     Boundary, Driver,
-    in_process::{Host, StreamConsumer, run_hosted},
+    in_process::{Host, StreamConsumer, run, run_hosted},
 };
 use rstest::{fixture, rstest};
 use serde_json::json;
@@ -289,6 +289,25 @@ async fn dropping_the_driver_drops_the_call(#[case] chunks_before_drop: usize) {
     assert_eq!(polls.load(Ordering::SeqCst), chunks_before_drop);
 }
 
+struct Interruptible {
+    inner: TestMachine,
+    interrupted: Arc<Mutex<Vec<HostFailure<TestError>>>>,
+}
+
+impl Machine for Interruptible {
+    type Protocol = TestProtocol;
+    type Complete = HostedCompletion<String>;
+
+    fn resume(&mut self) -> Step<'_, Self> {
+        self.inner.resume()
+    }
+
+    fn interrupt(&mut self, failure: HostFailure<TestError>) -> Interrupted<'_, Self> {
+        self.interrupted.lock().unwrap().push(failure.clone());
+        self.inner.interrupt(failure)
+    }
+}
+
 struct Consumer {
     detach_after: Option<usize>,
     fail_after: Option<usize>,
@@ -372,6 +391,149 @@ async fn in_process_runner_follows_consumer_demand(
         Ok(_) => assert!(matches!(events[1], CallEvent::Succeeded { .. })),
         Err(_) => assert!(matches!(events[1], CallEvent::Failed { .. })),
     }
+}
+
+#[rstest]
+#[case::at_open(0)]
+#[case::after_chunk(1)]
+#[tokio::test]
+async fn consumer_failures_interrupt_the_machine(#[case] fail_after: usize) {
+    let Streaming { polls, machine, .. } = streaming_call(vec![Ok(0), Ok(1), Ok(2)]);
+    let interrupted = Arc::new(Mutex::new(Vec::new()));
+    let consumer = Consumer {
+        detach_after: None,
+        fail_after: Some(fail_after),
+        delivered: Mutex::new(Vec::new()),
+    };
+    let outcome = run(
+        Interruptible {
+            inner: machine,
+            interrupted: interrupted.clone(),
+        },
+        Host {
+            services: &Services { reject: false },
+            hooks: &(),
+            stream: &consumer,
+            observer: None,
+        },
+    )
+    .await;
+    assert_eq!(outcome, Err(TestError::Consumer));
+    assert_eq!(
+        *interrupted.lock().unwrap(),
+        [HostFailure::Error(TestError::Consumer)]
+    );
+    assert_eq!(polls.load(Ordering::SeqCst), fail_after);
+}
+
+struct Recording {
+    ops: &'static [&'static str],
+    calls: AtomicUsize,
+    seen: Mutex<Vec<String>>,
+    fail: Option<&'static str>,
+}
+
+impl Recording {
+    fn runtime(&self) -> Host<'_, Self, (), ()> {
+        Host {
+            services: self,
+            hooks: &(),
+            stream: &(),
+            observer: Some(self),
+        }
+    }
+}
+
+impl HostCallHandler<TestProtocol> for Recording {
+    async fn handle_host_call(&self, reply: Reply<&'static str>) -> Result<(), TestError> {
+        let op = self.ops[self.calls.fetch_add(1, Ordering::SeqCst)];
+        self.seen.lock().unwrap().push(format!("op:{op}"));
+        if self.fail == Some(op) {
+            return Err(TestError::Service);
+        }
+        reply.send(op);
+        Ok(())
+    }
+}
+
+impl CallObserver for Recording {
+    fn observe(&self, event: CallEvent) {
+        self.seen.lock().unwrap().push(match event {
+            CallEvent::Started { .. } => "started".into(),
+            CallEvent::Succeeded { .. } => "succeeded".into(),
+            CallEvent::Failed { .. } => "failed".into(),
+            other => format!("{other:?}"),
+        });
+    }
+}
+
+fn scripted(
+    ops: &'static [&'static str],
+    outcome: Result<(), TestError>,
+) -> CallMachine<TestProtocol, ()> {
+    CallMachine::new(move |host| {
+        Box::pin(async move {
+            for op in ops {
+                let answered = host.services.call(|reply| reply).await?;
+                assert_eq!(answered, *op);
+            }
+            outcome
+        })
+    })
+}
+
+#[rstest]
+#[case::succeeds(&["sign", "send"], Ok(()), None, Ok(()), &["started", "op:sign", "op:send", "succeeded"])]
+#[case::call_fails(&[], Err(TestError::Provider), None, Err(TestError::Provider), &["started", "failed"])]
+#[case::service_fails(&["sign", "send", "never"], Ok(()), Some("send"), Err(TestError::Service), &["started", "op:sign", "op:send", "failed"])]
+#[tokio::test]
+async fn generic_runner_forwards_ops_and_emits_one_terminal(
+    #[case] ops: &'static [&'static str],
+    #[case] call_outcome: Result<(), TestError>,
+    #[case] fail: Option<&'static str>,
+    #[case] expected: Result<(), TestError>,
+    #[case] seen: &[&str],
+) {
+    let host = Recording {
+        ops,
+        calls: AtomicUsize::new(0),
+        seen: Mutex::new(Vec::new()),
+        fail,
+    };
+    let outcome = run(scripted(ops, call_outcome), host.runtime()).await;
+    assert_eq!(outcome, expected);
+    assert_eq!(*host.seen.lock().unwrap(), seen);
+}
+
+#[rstest]
+#[tokio::test]
+async fn generic_runner_success_keeps_the_start_time(observer: Arc<Observer>) {
+    let services = Recording {
+        ops: &["send"],
+        calls: AtomicUsize::new(0),
+        seen: Mutex::new(Vec::new()),
+        fail: None,
+    };
+    let outcome = run(
+        scripted(&["send"], Ok(())),
+        Host {
+            services: &services,
+            hooks: &(),
+            stream: &(),
+            observer: Some(observer.as_ref()),
+        },
+    )
+    .await;
+    assert_eq!(outcome, Ok(()));
+    let events = observer.0.lock().unwrap();
+    let [
+        CallEvent::Started { start_time },
+        CallEvent::Succeeded { timing },
+    ] = events.as_slice()
+    else {
+        panic!("unexpected events {events:?}");
+    };
+    assert_eq!(*start_time, timing.start_time);
 }
 
 #[rstest]

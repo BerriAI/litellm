@@ -46,6 +46,13 @@ where
         self.resume(Demand::Detached).await
     }
 
+    /// Interrupts the machine with a failure the consumer hit at the last stream boundary,
+    /// dropping the held demand reply unanswered
+    pub async fn fail(&mut self, error: ErrorOf<M>) -> Result<M::Complete, ErrorOf<M>> {
+        self.demand = None;
+        self.machine.interrupt(HostFailure::Error(error)).await
+    }
+
     async fn resume(&mut self, demand: Demand) -> Result<Boundary<M>, ErrorOf<M>> {
         if let Some(reply) = self.demand.take() {
             reply.send(demand);
@@ -79,11 +86,7 @@ where
                 }
             };
             if let Err(error) = answered {
-                return self
-                    .machine
-                    .interrupt(HostFailure::Error(error))
-                    .await
-                    .map(Boundary::Complete);
+                return self.fail(error).await.map(Boundary::Complete);
             }
         }
     }

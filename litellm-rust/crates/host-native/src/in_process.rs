@@ -116,10 +116,14 @@ where
             Demand::More => driver.advance().await?,
             Demand::Detached => driver.detach().await?,
         };
-        demand = match boundary {
+        let delivered = match boundary {
             Boundary::Complete(complete) => return Ok(complete),
-            Boundary::Open(head) => stream.open_stream(head).await?,
-            Boundary::Chunk(chunk) => stream.send_chunk(chunk).await?,
+            Boundary::Open(head) => stream.open_stream(head).await,
+            Boundary::Chunk(chunk) => stream.send_chunk(chunk).await,
+        };
+        demand = match delivered {
+            Ok(demand) => demand,
+            Err(error) => return driver.fail(error).await,
         };
     }
 }
