@@ -706,6 +706,10 @@ try:
 except ImportError:
     build_billing_metrics_recorder = None
     shutdown_billing_metrics_recorder = None
+from litellm.proxy.middleware.active_websocket_sessions_middleware import (
+    ActiveWebSocketSessionsMiddleware,
+    create_prometheus_active_websocket_sessions_gauge,
+)
 from litellm.proxy.middleware.admission_control_middleware import (
     AdmissionControlMiddleware,
     admission_control_state,
@@ -2420,6 +2424,10 @@ app.add_middleware(
 )
 app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_budget_reservation)
 app.add_middleware(InFlightRequestsMiddleware)
+app.add_middleware(
+    ActiveWebSocketSessionsMiddleware,
+    gauge_factory=create_prometheus_active_websocket_sessions_gauge,
+)
 app.add_middleware(SecurityHeadersMiddleware)
 
 
