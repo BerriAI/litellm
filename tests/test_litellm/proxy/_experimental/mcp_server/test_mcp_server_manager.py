@@ -9616,6 +9616,9 @@ class TestGetPublicMCPServers:
             )
             assert manager.is_mcp_server_public("server-alias") is False
             assert manager.is_mcp_server_public("missing-server") is False
+            assert manager.is_mcp_server_public(server.server_id, public_ids=frozenset()) is (
+                registered_in != "neither" and implicitly_public
+            )
 
         assert server.model_dump() == original_server
         assert config_server.model_dump() == original_config_server
