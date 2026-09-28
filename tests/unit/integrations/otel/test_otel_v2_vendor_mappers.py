@@ -161,7 +161,6 @@ def test_langfuse_usage_details_split_openai_cached_and_reasoning_tokens():
             "completion_tokens_details": {"reasoning_tokens": 30},
         }
     )
-    # Langfuse prices each key separately, so input/output carry only the uncached, non-reasoning part.
     assert usage == {
         "input": 40,
         "input_cached_tokens": 60,

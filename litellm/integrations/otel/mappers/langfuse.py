@@ -56,7 +56,7 @@ class LangfuseMapper:
         "presence_penalty": lambda rp: rp.presence_penalty,
         "seed": lambda rp: rp.seed,
     }
-    # Langfuse prices each key separately, so input/output exclude the cache and reasoning buckets.
+    # Langfuse prices every key, and litellm's prompt/completion counts include cache and reasoning tokens
     _USAGE_FIELDS: dict[str, Callable[[LLMUsage], AttrValue | None]] = {
         "input": lambda u: u.uncached_input_tokens,
         "input_cached_tokens": lambda u: u.cache_read_input_tokens or None,

@@ -128,7 +128,6 @@ class LLMUsage:
 
     @property
     def uncached_input_tokens(self) -> int | None:
-        """``input_tokens`` minus cache reads and writes, which litellm's normalized prompt count includes."""
         if self.input_tokens is None:
             return None
         cached: Final = (self.cache_read_input_tokens or 0) + (self.cache_creation_input_tokens or 0)
@@ -136,7 +135,6 @@ class LLMUsage:
 
     @property
     def non_reasoning_output_tokens(self) -> int | None:
-        """``output_tokens`` minus reasoning tokens, which litellm's normalized completion count includes."""
         if self.output_tokens is None:
             return None
         return max(self.output_tokens - (self.reasoning_tokens or 0), 0)
