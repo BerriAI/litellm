@@ -7,7 +7,7 @@
   - Python, Rust SDK and gateway use one lifecycle-bearing core route entrypoint; provider helpers stay private, never bridge-accessible transport drivers
   - Built-in provider/config/secret/auth/document preparation stays in Rust; caller-authored callbacks and focused Python-file reads run only at core-selected points
 - Target GIL-enabled CPython explicitly with `#[pymodule(gil_used = true)]`; detach Rust-only work
-  - GIL and tokio invariants, each pinned by a test in `host-python` (`execution.rs`,
+  - GIL and tokio invariants, each pinned by a test in `host-python` (`runtime.rs`,
     `gil.rs`) so a regression fails there before it deadlocks a proxy:
     - Never hold the GIL while waiting on the runtime. A sync entrypoint releases it with
       `release_gil` around `block_on`, because every task that attaches would otherwise wait

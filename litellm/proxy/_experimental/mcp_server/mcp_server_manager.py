@@ -897,6 +897,41 @@ def _sanitized_error_text(exc: Exception) -> str:
     return re.sub(r"https?://\S+", "<url>", str(exc))[:200]
 
 
+async def _mcp_server_reachability(
+    server: MCPServer, *, timeout: float
+) -> tuple[Literal["reachable", "unhealthy", "unknown"], str | None]:
+    if server.transport not in (MCPTransport.http, MCPTransport.sse) or not server.url:
+        return "unknown", "Server reachability requires an HTTP or SSE URL"
+    try:
+        url: Final = httpx.URL(server.url)
+    except (httpx.InvalidURL, ValueError):
+        return "unknown", "Server reachability requires an HTTP URL without embedded credentials"
+    if url.scheme not in ("http", "https") or not url.host or url.userinfo:
+        return "unknown", "Server reachability requires an HTTP URL without embedded credentials"
+
+    async def probe() -> None:
+        handler: Final = get_async_httpx_client(llm_provider="mcp_reachability")
+        async with handler.client.stream(
+            "GET",
+            url,
+            headers={"Accept": "text/event-stream, application/json"},
+            auth=None,
+            follow_redirects=False,
+            timeout=timeout,
+        ):
+            pass
+
+    try:
+        await asyncio.wait_for(probe(), timeout=timeout)
+    except (asyncio.TimeoutError, httpx.TimeoutException):
+        return "unhealthy", f"Reachability check timed out after {timeout} seconds"
+    except asyncio.CancelledError:
+        return "unknown", "Reachability check was cancelled"
+    except Exception as exc:
+        return "unhealthy", f"Reachability check failed ({type(exc).__name__})"
+    return "reachable", None
+
+
 async def _openapi_spec_health(
     spec_path: str, *, timeout: float
 ) -> tuple[Literal["healthy", "unhealthy", "unknown"], str | None]:
@@ -6764,6 +6799,16 @@ class MCPServerManager:
                 return server
         return None
 
+    @staticmethod
+    def _is_public_mcp_server(server: MCPServer, public_ids: Container[str]) -> bool:
+        return server.server_id in public_ids or (
+            not litellm.public_mcp_hub_strict_whitelist and server.available_on_public_internet
+        )
+
+    def is_mcp_server_public(self, server_id: str) -> bool:
+        server: Final = self.registry.get(server_id) or self.config_mcp_servers.get(server_id)
+        return server is not None and self._is_public_mcp_server(server, litellm.public_mcp_servers or ())
+
     def get_public_mcp_servers(self) -> list[MCPServer]:
         """
         Return the MCP servers published to the AI Hub via /v1/mcp/make_public.
@@ -6781,18 +6826,8 @@ class MCPServerManager:
         deployments that relied on the OR-with-default semantics; will be
         removed in a future release.
         """
-        if litellm.public_mcp_hub_strict_whitelist:
-            if litellm.public_mcp_servers is None:
-                return []
-            public_ids = set(litellm.public_mcp_servers)
-            return [server for server in self.get_registry().values() if server.server_id in public_ids]
-
-        public_ids = set(litellm.public_mcp_servers or [])
-        return [
-            server
-            for server in self.get_registry().values()
-            if server.available_on_public_internet or server.server_id in public_ids
-        ]
+        public_ids: Final = frozenset(litellm.public_mcp_servers or ())
+        return [server for server in self.get_registry().values() if self._is_public_mcp_server(server, public_ids)]
 
     def expand_permission_list(self, identifiers: list[str]) -> list[str]:
         """
@@ -6986,13 +7021,9 @@ class MCPServerManager:
                 )
             )
 
-        status: Literal["healthy", "unhealthy", "unknown"] = "unknown"
+        status: Literal["healthy", "reachable", "unhealthy", "unknown"] = "unknown"
         health_check_error = None
 
-        # Check if we should skip health check based on auth configuration
-        should_skip_health_check = False
-
-        # Skip if server requires per-user authentication (OAuth2 or passthrough auth)
         if (
             server.requires_per_user_auth
             or (
@@ -7003,9 +7034,8 @@ class MCPServerManager:
             )
             or self._references_per_user_env_var(server)
         ):
-            should_skip_health_check = True
-
-        if not should_skip_health_check:
+            status, health_check_error = await _mcp_server_reachability(server, timeout=MCP_HEALTH_CHECK_TIMEOUT)
+        else:
             try:
                 resolved_static_headers: Final = await self._resolve_static_headers_with_env_vars(
                     server=server,
@@ -7081,6 +7111,8 @@ class MCPServerManager:
         self,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         server_ids: list[str] | None = None,
+        *,
+        checked_server_ids: frozenset[str] = frozenset(),
     ) -> list[LiteLLM_MCPServerTable]:
         """
         Get all MCP servers that the user has access to, with health status and team information.
@@ -7105,7 +7137,7 @@ class MCPServerManager:
             # Check all accessible servers
             target_server_ids = allowed_server_ids
 
-        return await self._run_health_checks(target_server_ids)
+        return await self._run_health_checks([sid for sid in target_server_ids if sid not in checked_server_ids])
 
     async def get_all_allowed_mcp_servers(
         self,
@@ -7236,9 +7268,15 @@ class MCPServerManager:
         if not target_server_ids:
             return []
 
-        tasks: Final = [self.health_check_server(server_id) for server_id in target_server_ids]
-        results: Final = await asyncio.gather(*tasks)
-        return [server for server in results if server is not None]
+        unique_server_ids: Final = tuple(dict.fromkeys(target_server_ids))
+        batch_size: Final = 10
+        batches: Final = [
+            await asyncio.gather(
+                *(self.health_check_server(server_id) for server_id in unique_server_ids[offset : offset + batch_size])
+            )
+            for offset in range(0, len(unique_server_ids), batch_size)
+        ]
+        return [server for batch in batches for server in batch if server is not None]
 
 
 global_mcp_server_manager: Final[MCPServerManager] = MCPServerManager()

@@ -739,7 +739,7 @@ async def _parse_event_data_for_error(event_line: str | bytes) -> int | None:
         if not json_str or json_str == "[DONE]":  # handle empty data or [DONE] message
             return None
         try:
-            data: Final = orjson.loads(json_str)
+            data: Final[object] = orjson.loads(json_str)
             if isinstance(data, dict) and "error" in data and isinstance(data["error"], dict):
                 error_code_raw: Final = data["error"].get("code")
                 error_code: int | None = None
@@ -792,7 +792,7 @@ def _extract_error_from_sse_chunk(event_line: str | bytes) -> dict:
             return default_error
 
         try:
-            data: Final = orjson.loads(json_str)
+            data: Final[object] = orjson.loads(json_str)
             if isinstance(data, dict) and "error" in data:
                 error_obj: Final = data["error"]
                 if isinstance(error_obj, dict):
@@ -4131,7 +4131,9 @@ class ProxyBaseLLMRequestProcessing:
                 if stripped_ln.startswith("data:"):
                     json_part = stripped_ln.split("data:", 1)[1].strip()
                     if json_part and json_part != "[DONE]":
-                        obj = json.loads(json_part)
+                        obj: object = json.loads(json_part)
+                        if not isinstance(obj, dict):
+                            return None
                         maybe_modified = ProxyBaseLLMRequestProcessing._inject_cost_into_usage_dict(
                             obj, model_name, litellm_logging_obj
                         )

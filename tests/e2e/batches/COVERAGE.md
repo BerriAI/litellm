@@ -134,7 +134,7 @@ reporting failures as test errors. Already deleted files and batches that are
 terminal are safe to clean up again. Managed batch cancellation polls for up to two minutes
 before input deletion. A managed batch still `cancelling` after that is left for the provider to
 finish, and its input file is left in place because LiteLLM refuses to delete a file a non-terminal
-batch references. Both are reported as `BatchCleanupLeftover` warnings naming their ids rather than
+batch references. Both are reported as `UserWarning`s naming their ids rather than
 failing the test. Any other status or error still fails
 Accepted cancellation may still report validating or in_progress while the provider
 updates its state. Raw and model-encoded batches are polled until cancelling or
