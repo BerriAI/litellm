@@ -1506,6 +1506,115 @@ def test_responses_api_bridge_check_gpt_5_tools_without_summary_stays_chat():
     assert model_info.get("mode") != "responses"
 
 
+def test_bedrock_runtime_gpt56_tools_with_reasoning_bridge_to_responses(local_cost_map: None) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    function_tools: Final = [{"type": "function", "function": {"name": "get_capital"}}]
+    request_params: Final = {"tools": function_tools, "reasoning_effort": "medium"}
+    model_info, model = responses_api_bridge_check(
+        model="us.openai.gpt-5.6-sol",
+        custom_llm_provider="bedrock",
+        tools=function_tools,
+        reasoning_effort="medium",
+        request_params=request_params,
+    )
+
+    assert model == "us.openai.gpt-5.6-sol"
+    assert model_info.get("mode") == "responses"
+
+
+def test_bedrock_runtime_qwen_tools_with_reasoning_stay_on_chat(local_cost_map: None) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    function_tools: Final = [{"type": "function", "function": {"name": "get_capital"}}]
+    request_params: Final = {"tools": function_tools, "reasoning_effort": "medium"}
+    model_info, model = responses_api_bridge_check(
+        model="qwen.qwen3-32b-v1:0",
+        custom_llm_provider="bedrock",
+        tools=function_tools,
+        reasoning_effort="medium",
+        request_params=request_params,
+    )
+
+    assert model == "qwen.qwen3-32b-v1:0"
+    assert model_info.get("mode") != "responses"
+
+
+def test_bedrock_mantle_gpt56_plain_request_stays_on_chat(local_cost_map: None) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model="openai.gpt-5.6-sol",
+        custom_llm_provider="bedrock_mantle",
+        request_params={},
+    )
+
+    assert model == "openai.gpt-5.6-sol"
+    assert model_info.get("mode") != "responses"
+
+
+def test_bedrock_mantle_gpt56_tools_with_reasoning_bridge_to_responses(local_cost_map: None) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    function_tools: Final = [{"type": "function", "function": {"name": "get_capital"}}]
+    request_params: Final = {"tools": function_tools, "reasoning_effort": "medium"}
+    model_info, model = responses_api_bridge_check(
+        model="openai.gpt-5.6-sol",
+        custom_llm_provider="bedrock_mantle",
+        tools=function_tools,
+        reasoning_effort="medium",
+        request_params=request_params,
+    )
+
+    assert model == "openai.gpt-5.6-sol"
+    assert model_info.get("mode") == "responses"
+
+
+def test_bedrock_mantle_gpt56_cyber_plain_request_uses_responses(local_cost_map: None) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    model_info, model = responses_api_bridge_check(
+        model="openai.gpt-5.6-cyber",
+        custom_llm_provider="bedrock_mantle",
+        request_params={},
+    )
+
+    assert model == "openai.gpt-5.6-cyber"
+    assert model_info.get("mode") == "responses"
+
+
+def test_bedrock_mantle_reasoning_summary_alias_bridges_to_responses(local_cost_map: None) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    request_params: Final = {"reasoning_effort": "medium", "reasoningSummary": "detailed"}
+    model_info, model = responses_api_bridge_check(
+        model="openai.gpt-5.6-sol",
+        custom_llm_provider="bedrock_mantle",
+        reasoning_effort="medium",
+        request_params=request_params,
+    )
+
+    assert model == "openai.gpt-5.6-sol"
+    assert model_info.get("mode") == "responses"
+
+
+def test_bedrock_mantle_grok46_tools_with_reasoning_stay_on_chat(local_cost_map: None) -> None:
+    from litellm.main import responses_api_bridge_check
+
+    function_tools: Final = [{"type": "function", "function": {"name": "get_capital"}}]
+    request_params: Final = {"tools": function_tools, "reasoning_effort": "medium"}
+    model_info, model = responses_api_bridge_check(
+        model="xai.grok-4.6",
+        custom_llm_provider="bedrock_mantle",
+        tools=function_tools,
+        reasoning_effort="medium",
+        request_params=request_params,
+    )
+
+    assert model == "xai.grok-4.6"
+    assert model_info.get("mode") != "responses"
+
+
 @patch("litellm.completion_extras.responses_api_bridge.completion")
 def test_gpt_5_4_responses_bridge_preserves_reasoning_summary_dict(
     mock_responses_completion,
@@ -3378,7 +3487,7 @@ async def test_acompletion_forwards_aws_credentials_through_responses_bridge(
                 "object": "response",
                 "created_at": 1760144904,
                 "status": "completed",
-                "model": "openai.gpt-5.4",
+                "model": "openai.gpt-5.6-sol",
                 "output": [
                     {
                         "type": "message",
@@ -3392,8 +3501,10 @@ async def test_acompletion_forwards_aws_credentials_through_responses_bridge(
         )
 
         response = await litellm.acompletion(
-            model="bedrock_mantle/openai.gpt-5.4",
+            model="bedrock_mantle/openai.gpt-5.6-sol",
             messages=[{"role": "user", "content": "hi"}],
+            tools=[{"type": "function", "function": {"name": "get_capital"}}],
+            reasoning_effort="medium",
             api_base="https://bedrock-mantle.us-east-2.api.aws/v1",
             aws_region_name="us-east-2",
             num_retries=0,

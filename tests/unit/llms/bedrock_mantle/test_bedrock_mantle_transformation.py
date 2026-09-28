@@ -5,10 +5,10 @@ Bedrock Mantle is Amazon Bedrock's OpenAI-compatible inference engine (Project M
 API docs: https://docs.aws.amazon.com/bedrock/latest/userguide/bedrock-mantle.html
 """
 
-import json
 import asyncio
+import json
+from typing import Final
 from unittest.mock import Mock, patch
-
 
 import httpx
 import pytest
@@ -16,8 +16,8 @@ from botocore.auth import SigV4Auth
 from botocore.awsrequest import AWSRequest
 
 import litellm
-from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
 from litellm.llms.bedrock.base_aws_llm import sign_request_off_loop_if_aws
+from litellm.llms.bedrock_mantle.chat.transformation import BedrockMantleChatConfig
 from litellm.types.utils import LlmProviders
 from tests.unit.llms.bedrock.event_loop_probe import EventLoopProbe
 
@@ -254,6 +254,38 @@ class TestBedrockMantleConfig:
             drop_params=False,
         )
         assert optional_params["verbosity"] == "low"
+
+    def test_max_token_mapping_follows_openai_path_metadata(self, local_cost_map: None) -> None:
+        cfg: Final = BedrockMantleChatConfig()
+        openai_path_params: Final = cfg.map_openai_params(
+            non_default_params={"max_tokens": 64},
+            optional_params={},
+            model="openai.gpt-5.6-sol",
+            drop_params=False,
+        )
+        v1_path_params: Final = cfg.map_openai_params(
+            non_default_params={"max_completion_tokens": 64},
+            optional_params={},
+            model="openai.gpt-oss-120b",
+            drop_params=False,
+        )
+
+        assert openai_path_params == {"max_completion_tokens": 64}
+        assert v1_path_params == {"max_tokens": 64}
+
+    def test_bedrock_tools_reasoning_flag_supports_reasoning_effort(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.setattr(
+            litellm,
+            "model_cost",
+            {
+                "bedrock_mantle/test-model": {
+                    "supports_bedrock_chat_completions_tools_with_reasoning": True,
+                }
+            },
+        )
+        cfg: Final = BedrockMantleChatConfig()
+
+        assert "reasoning_effort" in cfg.get_supported_openai_params("test-model")
 
 
 class TestBedrockMantleChatAuth:

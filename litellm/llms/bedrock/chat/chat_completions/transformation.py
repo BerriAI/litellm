@@ -19,6 +19,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Final, Literal
 
 import httpx
+from pydantic import TypeAdapter
 from typing_extensions import assert_never
 
 import litellm
@@ -29,7 +30,12 @@ from litellm.litellm_core_utils.prompt_templates.image_handling import (
 )
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM
-from litellm.llms.bedrock.common_utils import BedrockError, split_bedrock_region_path
+from litellm.llms.bedrock.common_utils import (
+    BedrockError,
+    bedrock_chat_completions_serves_tools_with_reasoning,
+    split_bedrock_region_path,
+    with_max_completion_tokens,
+)
 from litellm.llms.openai.chat.gpt_transformation import OpenAIChatCompletionStreamingHandler
 from litellm.llms.openai_like.chat.transformation import OpenAILikeChatConfig
 from litellm.types.llms.openai import AllMessageValues
@@ -41,6 +47,7 @@ if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
 
 REASONING_OPEN_TAG: Final = "<reasoning>"
+_SUPPORTED_OPENAI_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
 REASONING_CLOSE_TAG: Final = "</reasoning>"
 
 CHAT_COMPLETIONS_REFUSED_PARAMS_BY_FAMILY: Final = MappingProxyType(
@@ -198,24 +205,6 @@ class BedrockRuntimeChatCompletionsStreamingHandler(OpenAIChatCompletionStreamin
             if content or choice.delta.content is not None:
                 choice.delta.content = content
         return parsed
-
-
-def with_max_completion_tokens(params: Mapping[str, object]) -> Mapping[str, object]:
-    """
-    Send the caller's ``max_tokens`` as ``max_completion_tokens``.
-
-    Every model on this surface accepts ``max_completion_tokens`` and the GPT-5.6 family
-    rejects ``max_tokens``; an explicit ``max_completion_tokens`` wins when both are set.
-    """
-    if "max_tokens" not in params:
-        return params
-    return MappingProxyType(
-        {
-            key: value
-            for key, value in (("max_completion_tokens", params["max_tokens"]), *params.items())
-            if key != "max_tokens"
-        }
-    )
 
 
 class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
@@ -394,15 +383,19 @@ class AmazonBedrockRuntimeChatCompletionsConfig(OpenAILikeChatConfig):
             choice.message.content = content
         return response
 
-    def get_supported_openai_params(self, model: str) -> list:  # mutable-ok: BaseConfig signature
+    def get_supported_openai_params(self, model: str) -> list[str]:  # mutable-ok: BaseConfig signature
         refused: Final = frozenset(("n", *chat_completions_params_refused_for(model)))
-        base_params: Final = tuple(
-            param for param in super().get_supported_openai_params(model) if param not in refused
+        supported_params: Final = _SUPPORTED_OPENAI_PARAMS_ADAPTER.validate_python(
+            super().get_supported_openai_params(model)  # pyright: ignore[reportUnknownMemberType]  # base untyped
         )
+        base_params: Final = tuple(param for param in supported_params if param not in refused)
         reasoning_param: Final = (
             ("reasoning_effort",)
             if "reasoning_effort" not in base_params
-            and litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
+            and (
+                bedrock_chat_completions_serves_tools_with_reasoning(model)
+                or litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
+            )
             else ()
         )
         return [*base_params, *reasoning_param]  # mutable-ok: BaseConfig signature returns a list

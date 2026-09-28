@@ -103,6 +103,11 @@ from litellm.litellm_core_utils.provider_affinity import add_provider_affinity_h
 from litellm.litellm_core_utils.request_timeout_resolver import (
     get_configured_request_timeout,
 )
+from litellm.litellm_core_utils.responses_api_utils import (
+    filter_additional_drop_params,
+    has_function_tool,
+    reasoning_effort_is_active,
+)
 from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 from litellm.llms.azure_ai.common_utils import (
     azure_ai_supports_native_responses,
@@ -112,7 +117,13 @@ from litellm.llms.base_llm import BaseConfig, BaseImageGenerationConfig
 from litellm.llms.base_llm.base_model_iterator import (
     convert_model_response_to_streaming,
 )
-from litellm.llms.bedrock.common_utils import BedrockModelInfo, bedrock_route_for_request
+from litellm.llms.bedrock.common_utils import (
+    BedrockModelInfo,
+    bedrock_chat_completions_serves_tools_with_reasoning,
+    bedrock_chat_request_needs_native_responses_for_request,
+    bedrock_reasoning_effort_is_active,
+    bedrock_route_for_request,
+)
 from litellm.llms.cohere.common_utils import CohereModelInfo
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler, http2_enabled
 from litellm.llms.openai.chat.gpt_5_transformation import OpenAIGPT5Config
@@ -1065,7 +1076,9 @@ def responses_api_bridge_check(
     reasoning_effort: str | Mapping[str, object] | None = None,
     reasoning_summary: object | None = None,
     api_base: str | None = None,
-) -> tuple[dict, str]:
+    request_params: Mapping[str, object] | None = None,
+    additional_drop_params: Sequence[str] | None = None,
+) -> tuple[dict[str, object], str]:
     model_info: dict[str, object] = {}
 
     # Global flag: route ALL OpenAI chat completions through Responses API.
@@ -1077,7 +1090,7 @@ def responses_api_bridge_check(
 
     try:
         model_info = cast(
-            dict,
+            dict[str, object],
             _get_model_info_helper(model=model, custom_llm_provider=custom_llm_provider),
         )
         if model_info.get("mode") is None and model.startswith("responses/"):
@@ -1121,18 +1134,8 @@ def responses_api_bridge_check(
     #   azure_ai gate keys on those measured boundaries instead of gpt-5.4+.
     # - Older GPT-5 names (e.g. ``gpt-5``, ``gpt-5.1``): bridge only when a reasoning
     #   summary alias is present with ``reasoning_effort`` (tools alone stay on chat).
-    has_function_tool: Final = any(
-        (
-            tool.get("type") == "function" and (isinstance(tool.get("function"), dict) or "name" in tool)
-            if isinstance(tool, dict)
-            else getattr(tool, "type", None) == "function"
-        )
-        for tool in (tools or ())
-    )
-    if isinstance(reasoning_effort, dict):
-        reasoning_active = reasoning_effort.get("effort") != "none" or reasoning_effort.get("summary") is not None
-    else:
-        reasoning_active = reasoning_effort != "none"
+    has_function_tool_in_request: Final = has_function_tool(tools)
+    reasoning_active: Final = reasoning_effort_is_active(reasoning_effort)
     # The reasoning+tools constraint is enforced by the real OpenAI backend behind any api.openai.com
     # host (the default URL or a PrivateLink hostname such as <region>.privatelink.api.openai.com) and
     # by Azure OpenAI through the azure provider. Resolve the effective OpenAI base arg>global>env>default
@@ -1147,7 +1150,7 @@ def responses_api_bridge_check(
         custom_llm_provider == "azure" or resolved_api_base == "" or _is_openai_backed_api_base(resolved_api_base)
     )
     chat_rejects_function_tools: Final = (
-        has_function_tool
+        has_function_tool_in_request
         and reasoning_active
         and (
             foundry_chat_rejects_function_tools_while_reasoning(model, reasoning_effort)
@@ -1158,6 +1161,46 @@ def responses_api_bridge_check(
             )
         )
     )
+    if (
+        custom_llm_provider == "bedrock"
+        and request_params is not None
+        and model_info.get("mode") != "responses"
+        and bedrock_chat_request_needs_native_responses_for_request(
+            model,
+            request_params,
+            additional_drop_params,
+        )
+    ):
+        model_info["mode"] = "responses"
+    if custom_llm_provider == "bedrock_mantle" and model_info.get("mode") != "responses":
+        from litellm.llms.bedrock_mantle.common_utils import mantle_supports_responses
+
+        mantle_request_params: Final = (
+            filter_additional_drop_params(request_params, additional_drop_params)
+            if request_params is not None
+            else MappingProxyType({"tools": tools, "reasoning_effort": reasoning_effort})
+        )
+        mantle_reasoning_effort: Final = mantle_request_params.get("reasoning_effort")
+        mantle_reasoning_summary: Final = (
+            peek_reasoning_summary_aliases(mantle_request_params) if request_params is not None else None
+        )
+        mantle_needs_native_responses: Final = (
+            has_function_tool(mantle_request_params.get("tools"))
+            and not bedrock_chat_completions_serves_tools_with_reasoning(model, "bedrock_mantle")
+            and bedrock_reasoning_effort_is_active(
+                model,
+                mantle_reasoning_effort,
+                "bedrock_mantle",
+            )
+        ) or (
+            mantle_reasoning_effort is not None
+            and (mantle_reasoning_summary is not None or reasoning_summary is not None)
+        )
+        mantle_model_cost: Final = cast(  # cast-ok: model price rows use string keys
+            Mapping[str, object], litellm.model_cost
+        )
+        if mantle_needs_native_responses and mantle_supports_responses(model, mantle_model_cost):
+            model_info["mode"] = "responses"
     if (
         (custom_llm_provider in ("openai", "azure") or on_foundry_openai_endpoint)
         and model_info.get("mode") != "responses"
@@ -5558,7 +5601,7 @@ def completion(
             if bridges_to_responses_api
             else kwargs.get("allowed_openai_params")
         )
-        optional_param_args: Final = {
+        optional_param_args: Final[dict[str, object]] = {
             "functions": functions,
             "function_call": function_call,
             "temperature": temperature,
@@ -5736,7 +5779,17 @@ def completion(
         # check handles cases like gpt-5.4+ with tools+reasoning_effort or
         # reasoningSummary/reasoning_summary without tools (AI SDK) that the first
         # (early) check doesn't cover.
-        _reasoning_summary_for_bridge: Final = peek_reasoning_summary_aliases(optional_params)
+        _completion_request_params: Final[Mapping[str, object]] = MappingProxyType(
+            {**optional_param_args, **non_default_params}
+        )
+        completion_kwargs: Final = cast(  # cast-ok: completion's **kwargs are untyped
+            Mapping[str, object], kwargs
+        )
+        _reasoning_summary_for_bridge: Final = peek_reasoning_summary_aliases(
+            cast(  # cast-ok: get_optional_params returns request fields
+                Mapping[str, object], optional_params
+            )
+        )
         if responses_api_model_info.get("mode") != "responses":
             responses_api_model_info, model = responses_api_bridge_check(
                 model=model,
@@ -5746,6 +5799,11 @@ def completion(
                 reasoning_effort=reasoning_effort,
                 reasoning_summary=_reasoning_summary_for_bridge,
                 api_base=api_base,
+                request_params=_completion_request_params,
+                additional_drop_params=cast(  # cast-ok: completion kwargs may carry drop parameters
+                    Sequence[str] | None,
+                    completion_kwargs.get("additional_drop_params"),
+                ),
             )
 
         # Use base_model (the true underlying model) for Azure model-type
@@ -5819,7 +5877,7 @@ def completion(
             optional_params=optional_params,
             organization=organization,
             provider_config=provider_config,
-            request_params=MappingProxyType({**optional_param_args, **non_default_params}),
+            request_params=_completion_request_params,
             shared_session=shared_session,
             stream=stream,
             temperature=temperature,

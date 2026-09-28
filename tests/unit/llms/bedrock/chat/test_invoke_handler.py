@@ -893,7 +893,7 @@ def test_converse_stream_with_an_empty_200_body_raises_instead_of_an_empty_turn(
     with pytest.raises(MidStreamFallbackError) as exc_info:
         list(
             litellm.completion(
-                model="bedrock/us.moonshotai.kimi-k3",
+                model="bedrock/converse/us.moonshotai.kimi-k3",
                 messages=[{"role": "user", "content": "hi"}],
                 stream=True,
                 client=client,
@@ -916,7 +916,7 @@ async def test_async_converse_stream_with_an_empty_200_body_raises_instead_of_an
     client.post = AsyncMock(return_value=response)
 
     stream: Final = await litellm.acompletion(
-        model="bedrock/us.moonshotai.kimi-k3",
+        model="bedrock/converse/us.moonshotai.kimi-k3",
         messages=[{"role": "user", "content": "hi"}],
         stream=True,
         client=client,

@@ -13,8 +13,8 @@ global state.
 """
 
 import re
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Mapping, Sequence
+from typing import Final, cast
 
 from botocore.exceptions import (
     CredentialRetrievalError,
@@ -127,7 +127,7 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
             ) from e
 
 
-def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:
+def mantle_supports_responses(model: str | None, model_cost: Mapping[str, object]) -> bool:
     """Whether a Bedrock Mantle model can serve the native Responses API.
 
     Purely data-driven from the model's price-map capability signal -- either
@@ -139,10 +139,20 @@ def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:
     gpt-oss substring), so a substring gate would be wrong. A model absent from
     model_cost simply has no signal and returns False (chat-completions emulation).
     """
-    entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
-    if "/v1/responses" in (entry.get("supported_endpoints") or []):
-        return True
-    return entry.get("mode") == "responses"
+    entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}") if model else None
+    if not isinstance(entry, Mapping):
+        return False
+    typed_entry: Final = cast(  # cast-ok: the entry passed the Mapping check
+        Mapping[str, object], entry
+    )
+    supported_endpoints: Final = typed_entry.get("supported_endpoints")
+    return (
+        isinstance(supported_endpoints, Sequence)
+        and "/v1/responses"
+        in cast(  # cast-ok: model-price endpoints are strings
+            Sequence[object], supported_endpoints
+        )
+    ) or typed_entry.get("mode") == "responses"
 
 
 def mantle_base_segment(model: str | None, model_cost: dict) -> str:

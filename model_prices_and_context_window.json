@@ -12678,6 +12678,10 @@
         "supports_tool_choice": true
     },
     "bedrock/ap-northeast-1/deepseek.v3.2": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.4e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 163840,
@@ -12695,6 +12699,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-northeast-1/minimax.minimax-m2.1": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 196000,
@@ -12711,6 +12719,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-northeast-1/minimax.minimax-m2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
@@ -12728,6 +12740,10 @@
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/ap-northeast-1/moonshotai.kimi-k2-thinking": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -12739,6 +12755,10 @@
         "supports_reasoning": true
     },
     "bedrock/ap-northeast-1/moonshotai.kimi-k2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.2e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -12755,6 +12775,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-northeast-1/qwen.qwen3-coder-next": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -12771,6 +12795,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/moonshotai.kimi-k2-thinking": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -12782,6 +12810,10 @@
         "supports_reasoning": true
     },
     "bedrock/moonshotai.kimi-k2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -12818,6 +12850,10 @@
         "output_cost_per_token": 7.2e-07
     },
     "bedrock/ap-south-1/deepseek.v3.2": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.4e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 163840,
@@ -12835,6 +12871,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-south-1/minimax.minimax-m2.1": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 196000,
@@ -12851,6 +12891,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-south-1/minimax.minimax-m2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
@@ -12868,6 +12912,10 @@
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/ap-south-1/moonshotai.kimi-k2-thinking": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.1e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -12879,6 +12927,10 @@
         "supports_reasoning": true
     },
     "bedrock/ap-south-1/moonshotai.kimi-k2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.2e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -12895,6 +12947,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-south-1/qwen.qwen3-coder-next": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -12911,6 +12967,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-southeast-2/minimax.minimax-m2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.09e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
@@ -12928,6 +12988,10 @@
         "output_cost_per_token": 1.236e-06
     },
     "bedrock/ap-southeast-3/deepseek.v3.2": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.4e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 163840,
@@ -12945,6 +13009,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-southeast-3/minimax.minimax-m2.1": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 196000,
@@ -12961,6 +13029,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-southeast-3/minimax.minimax-m2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
@@ -12978,6 +13050,10 @@
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/ap-southeast-3/moonshotai.kimi-k2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.2e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -12994,6 +13070,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/ap-southeast-3/qwen.qwen3-coder-next": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -13028,6 +13108,10 @@
         "output_cost_per_token": 6.9e-07
     },
     "bedrock/eu-north-1/deepseek.v3.2": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.4e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 163840,
@@ -13045,6 +13129,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-north-1/minimax.minimax-m2.1": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 196000,
@@ -13061,6 +13149,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-north-1/minimax.minimax-m2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
@@ -13078,6 +13170,10 @@
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/eu-north-1/moonshotai.kimi-k2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.2e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -13181,6 +13277,10 @@
         "supports_tool_choice": true
     },
     "bedrock/eu-central-1/minimax.minimax-m2.1": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 196000,
@@ -13197,6 +13297,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-central-1/minimax.minimax-m2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
@@ -13214,6 +13318,10 @@
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/eu-central-1/qwen.qwen3-coder-next": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -13248,6 +13356,10 @@
         "output_cost_per_token": 6.5e-07
     },
     "bedrock/eu-west-1/minimax.minimax-m2.1": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 196000,
@@ -13264,6 +13376,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-west-1/minimax.minimax-m2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
@@ -13281,6 +13397,10 @@
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/eu-west-1/qwen.qwen3-coder-next": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -13315,6 +13435,10 @@
         "output_cost_per_token": 7.8e-07
     },
     "bedrock/eu-west-2/minimax.minimax-m2.1": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 4.7e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 196000,
@@ -13331,6 +13455,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-west-2/minimax.minimax-m2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 4.7e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
@@ -13365,6 +13493,10 @@
         "supports_vision": false
     },
     "bedrock/eu-west-2/qwen.qwen3-coder-next": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.8e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -13412,6 +13544,10 @@
         "supports_tool_choice": true
     },
     "bedrock/eu-south-1/minimax.minimax-m2.1": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 196000,
@@ -13428,6 +13564,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/eu-south-1/minimax.minimax-m2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
@@ -13445,6 +13585,10 @@
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/eu-south-1/qwen.qwen3-coder-next": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -13497,6 +13641,10 @@
         "output_cost_per_token": 1.01e-06
     },
     "bedrock/sa-east-1/deepseek.v3.2": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.4e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 163840,
@@ -13514,6 +13662,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/sa-east-1/minimax.minimax-m2.1": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 196000,
@@ -13530,6 +13682,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/sa-east-1/minimax.minimax-m2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3.6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
@@ -13547,6 +13703,10 @@
         "output_cost_per_token": 1.44e-06
     },
     "bedrock/sa-east-1/moonshotai.kimi-k2-thinking": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -13558,6 +13718,10 @@
         "supports_reasoning": true
     },
     "bedrock/sa-east-1/moonshotai.kimi-k2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.2e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -13574,6 +13738,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/sa-east-1/qwen.qwen3-coder-next": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -13727,6 +13895,10 @@
         "supports_tool_choice": true
     },
     "bedrock/us-east-1/deepseek.v3.2": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6.2e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 163840,
@@ -13744,6 +13916,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-1/minimax.minimax-m2.1": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 196000,
@@ -13760,6 +13936,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-1/minimax.minimax-m2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
         "litellm_provider": "bedrock",
@@ -13776,6 +13956,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-1/moonshotai.kimi-k2-thinking": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -13787,6 +13971,10 @@
         "supports_reasoning": true
     },
     "bedrock/us-east-1/moonshotai.kimi-k2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -13803,6 +13991,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-1/qwen.qwen3-coder-next": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -13819,6 +14011,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-2/deepseek.v3.2": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6.2e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 163840,
@@ -13836,6 +14032,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-2/minimax.minimax-m2.1": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 196000,
@@ -13852,6 +14052,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-2/minimax.minimax-m2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 1000000,
@@ -13869,6 +14073,10 @@
         "output_cost_per_token": 1.2e-06
     },
     "bedrock/us-east-2/moonshotai.kimi-k2-thinking": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -13880,6 +14088,10 @@
         "supports_reasoning": true
     },
     "bedrock/us-east-2/moonshotai.kimi-k2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -13896,6 +14108,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-east-2/qwen.qwen3-coder-next": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -14357,6 +14573,10 @@
         "supports_tool_choice": true
     },
     "bedrock/us-west-2/deepseek.v3.2": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6.2e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 163840,
@@ -14374,6 +14594,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-west-2/minimax.minimax-m2.1": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 196000,
@@ -14390,6 +14614,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-west-2/minimax.minimax-m2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
         "litellm_provider": "bedrock",
@@ -14406,6 +14634,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-west-2/moonshotai.kimi-k2-thinking": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -14417,6 +14649,10 @@
         "supports_reasoning": true
     },
     "bedrock/us-west-2/moonshotai.kimi-k2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -14433,6 +14669,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-west-2/qwen.qwen3-coder-next": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 262144,
@@ -21984,6 +22224,10 @@
         "supports_tool_choice": true
     },
     "deepseek.v3-v1:0": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 5.8e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 163840,
@@ -21998,6 +22242,10 @@
         "supports_native_structured_output": true
     },
     "deepseek.v3.2": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6.2e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 164000,
@@ -31237,6 +31485,10 @@
         "output_cost_per_token": 2e-06
     },
     "google.gemma-3-12b-it": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 9e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -31252,6 +31504,10 @@
         "supports_vision": true
     },
     "google.gemma-3-27b-it": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 2.3e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -31267,6 +31523,10 @@
         "supports_vision": true
     },
     "google.gemma-3-4b-it": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 4e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -37500,6 +37760,10 @@
         "supports_tool_choice": true
     },
     "minimax.minimax-m2": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 1000000,
@@ -37516,6 +37780,10 @@
         "supports_vision": false
     },
     "minimax.minimax-m2.1": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 196000,
@@ -37532,6 +37800,10 @@
         "supports_vision": false
     },
     "minimax.minimax-m2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 3e-07,
         "output_cost_per_token": 1.2e-06,
         "litellm_provider": "bedrock_converse",
@@ -37786,6 +38058,10 @@
         "supports_tool_choice": true
     },
     "mistral.mistral-large-3-675b-instruct": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 256000,
@@ -38613,6 +38889,10 @@
         "supports_vision": true
     },
     "moonshot.kimi-k2-thinking": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 256000,
@@ -38630,6 +38910,10 @@
         "supports_vision": false
     },
     "moonshotai.kimi-k2.5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 256000,
@@ -41101,7 +41385,7 @@
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
-        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -41119,7 +41403,7 @@
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
-        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -41134,6 +41418,10 @@
         "supports_tool_choice": true
     },
     "openai.gpt-oss-safeguard-120b": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -41149,6 +41437,10 @@
         "supports_vision": false
     },
     "openai.gpt-oss-safeguard-20b": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 128000,
@@ -44296,6 +44588,10 @@
         "supports_reasoning": true
     },
     "qwen.qwen3-coder-480b-a35b-v1:0": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 4.5e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 262000,
@@ -44310,6 +44606,10 @@
         "source": "https://pricing.us-east-1.amazonaws.com/offers/v1.0/aws/AmazonBedrock/current/us-west-2/index.json"
     },
     "qwen.qwen3-235b-a22b-2507-v1:0": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 2.2e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 262144,
@@ -44325,6 +44625,10 @@
         "output_cost_per_token_batches": 4.4e-07
     },
     "qwen.qwen3-coder-30b-a3b-v1:0": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 262144,
@@ -44338,6 +44642,10 @@
         "supports_native_structured_output": true
     },
     "qwen.qwen3-32b-v1:0": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 131072,
@@ -44351,6 +44659,10 @@
         "supports_native_structured_output": true
     },
     "qwen.qwen3-next-80b-a3b": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 1.5e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 256000,
@@ -44367,6 +44679,10 @@
         "supports_vision": false
     },
     "bedrock/ap-northeast-1/qwen.qwen3-next-80b-a3b": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 1.8e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -44383,6 +44699,10 @@
         "supports_vision": false
     },
     "bedrock/ap-south-1/qwen.qwen3-next-80b-a3b": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 1.8e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -44399,6 +44719,10 @@
         "supports_vision": false
     },
     "bedrock/ap-southeast-2/qwen.qwen3-next-80b-a3b": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 1.545e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -44415,6 +44739,10 @@
         "supports_vision": false
     },
     "bedrock/eu-west-1/qwen.qwen3-next-80b-a3b": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 1.8e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -44431,6 +44759,10 @@
         "supports_vision": false
     },
     "bedrock/eu-west-2/qwen.qwen3-next-80b-a3b": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 2.3e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -44447,6 +44779,10 @@
         "supports_vision": false
     },
     "bedrock/sa-east-1/qwen.qwen3-next-80b-a3b": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 1.8e-07,
         "litellm_provider": "bedrock",
         "max_input_tokens": 128000,
@@ -44463,6 +44799,10 @@
         "supports_vision": false
     },
     "qwen.qwen3-vl-235b-a22b": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 5.3e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 256000,
@@ -44479,6 +44819,10 @@
         "supports_response_schema": false
     },
     "qwen.qwen3-coder-next": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 5e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 256000,
@@ -46862,7 +47206,7 @@
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
-        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -46879,7 +47223,7 @@
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
-        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -46890,9 +47234,10 @@
         "output_cost_per_token": 7.92e-06,
         "cache_read_input_token_cost": 6.6e-07,
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
-        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_bedrock_runtime_chat_completions_response_format": true,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 500000,
@@ -47105,6 +47450,10 @@
         "supports_tool_choice": false
     },
     "us.deepseek.v3.2": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6.2e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 163840,
@@ -47121,6 +47470,10 @@
         "supports_vision": false
     },
     "eu.deepseek.v3.2": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7.4e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 163840,
@@ -51848,6 +52201,10 @@
         "supports_web_search": true
     },
     "zai.glm-4.7": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 6e-07,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 203000,
@@ -51865,6 +52222,10 @@
         "supports_vision": false
     },
     "zai.glm-5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 3.2e-06,
         "litellm_provider": "bedrock_converse",
@@ -51883,6 +52244,10 @@
         "supports_vision": false
     },
     "zai.glm-4.7-flash": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 7e-08,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 203000,
@@ -57281,7 +57646,7 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -57324,7 +57689,7 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -57432,7 +57797,7 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -57654,6 +58019,7 @@
             "text",
             "image"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supported_output_modalities": [
             "text"
         ],
@@ -57665,6 +58031,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57685,6 +58052,7 @@
             "text",
             "image"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supported_output_modalities": [
             "text"
         ],
@@ -57696,6 +58064,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57716,6 +58085,7 @@
             "text",
             "image"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supported_output_modalities": [
             "text"
         ],
@@ -57727,6 +58097,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57747,6 +58118,7 @@
             "text",
             "image"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supported_output_modalities": [
             "text"
         ],
@@ -57758,6 +58130,7 @@
         "supports_vision": true,
         "supports_sampling_params": false,
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57810,7 +58183,7 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -57848,7 +58221,7 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -57886,7 +58259,7 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -57943,6 +58316,7 @@
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -57978,6 +58352,7 @@
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -58013,6 +58388,7 @@
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -58048,10 +58424,15 @@
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
     "openai.gpt-6-sol": {
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
         "input_cost_per_token": 2e-06,
         "input_cost_per_token_above_272k_tokens": 4e-06,
         "cache_creation_input_token_cost": 2.5e-06,
@@ -58115,10 +58496,15 @@
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
     "openai.gpt-6-luna": {
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
         "input_cost_per_token": 1e-07,
         "input_cost_per_token_above_272k_tokens": 2e-07,
         "cache_creation_input_token_cost": 1.25e-07,
@@ -58182,6 +58568,7 @@
         "supports_vision": true,
         "source": "https://aws.amazon.com/bedrock/pricing/",
         "supported_endpoints": [
+            "/v1/chat/completions",
             "/v1/responses"
         ]
     },
@@ -58201,12 +58588,13 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supported_modalities": [
             "text",
             "image"
@@ -58241,12 +58629,13 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supported_modalities": [
             "text",
             "image"
@@ -58278,6 +58667,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,
@@ -58297,6 +58687,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,
@@ -58316,6 +58707,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,
@@ -58336,6 +58728,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -58357,6 +58750,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -58398,9 +58792,10 @@
         "output_cost_per_token": 6.6e-06,
         "cache_read_input_token_cost": 5.5e-07,
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
-        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_bedrock_runtime_chat_completions_response_format": true,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 500000,
@@ -58419,9 +58814,10 @@
         "output_cost_per_token": 6e-06,
         "cache_read_input_token_cost": 5e-07,
         "supported_endpoints": [
-            "/v1/chat/completions"
+            "/v1/chat/completions",
+            "/v1/responses"
         ],
-        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_bedrock_runtime_chat_completions_response_format": true,
         "litellm_provider": "bedrock_converse",
         "max_input_tokens": 500000,
@@ -58620,6 +59016,10 @@
         ]
     },
     "bedrock/us-east-1/zai.glm-5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 3.2e-06,
         "litellm_provider": "bedrock",
@@ -58638,6 +59038,10 @@
         "source": "https://aws.amazon.com/bedrock/pricing/"
     },
     "bedrock/us-west-2/zai.glm-5": {
+        "supported_endpoints": [
+            "/v1/chat/completions"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "input_cost_per_token": 1e-06,
         "output_cost_per_token": 3.2e-06,
         "litellm_provider": "bedrock",
@@ -64379,7 +64783,7 @@
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
-        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -64396,7 +64800,7 @@
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
-        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -64641,7 +65045,7 @@
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
-        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -64658,7 +65062,7 @@
         "supported_endpoints": [
             "/v1/chat/completions"
         ],
-        "supports_bedrock_runtime_chat_completions_tools_with_reasoning": true,
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -64835,7 +65239,7 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -64870,7 +65274,7 @@
         "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
-        "mode": "responses",
+        "mode": "chat",
         "use_openai_responses_path": true,
         "supported_endpoints": [
             "/v1/chat/completions",
@@ -64910,6 +65314,7 @@
         "supported_endpoints": [
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supported_modalities": [
             "text",
             "image"
@@ -64940,6 +65345,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_reasoning": true,
         "supports_response_schema": true,
@@ -64964,6 +65370,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -64984,6 +65391,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,
@@ -65003,6 +65411,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,
@@ -65022,6 +65431,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_parallel_function_calling": false,
         "supports_reasoning": true,
@@ -65074,6 +65484,7 @@
         "supported_endpoints": [
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supported_modalities": [
             "text",
             "image"
@@ -65107,6 +65518,7 @@
             "/v1/chat/completions",
             "/v1/responses"
         ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
@@ -75852,6 +76264,11 @@
         "supports_web_search": true
     },
     "moonshotai.kimi-k3": {
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
@@ -75872,6 +76289,11 @@
         "supports_vision": true
     },
     "global.moonshotai.kimi-k3": {
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "cache_creation_input_token_cost": 3.75e-06,
         "cache_read_input_token_cost": 3e-07,
         "input_cost_per_token": 3e-06,
@@ -75892,6 +76314,11 @@
         "supports_vision": true
     },
     "us.moonshotai.kimi-k3": {
+        "supported_endpoints": [
+            "/v1/chat/completions",
+            "/v1/responses"
+        ],
+        "supports_bedrock_chat_completions_tools_with_reasoning": true,
         "cache_creation_input_token_cost": 4.125e-06,
         "cache_read_input_token_cost": 3.3e-07,
         "input_cost_per_token": 3.3e-06,
