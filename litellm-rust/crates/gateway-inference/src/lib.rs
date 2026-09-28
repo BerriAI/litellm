@@ -23,7 +23,7 @@ use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
 use litellm_secrets::source::SecretSource;
 
 pub use error::Error;
-pub use litellm_router::{Deployment, Router as ModelList};
+pub use litellm_router::{Deployment, Router as ModelRouter};
 pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
@@ -32,7 +32,7 @@ pub struct Gateway {
     pub messages: MessagesRoute,
     pub ocr: OcrRoute,
     pub responses: ResponsesRoute,
-    pub models: ModelList,
+    pub models: ModelRouter,
     pub secrets: Arc<dyn SecretSource>,
     pub resources: CoreResources,
     pub http: HttpClientConfig,
@@ -43,7 +43,7 @@ impl Gateway {
         resources: CoreResources,
         http: HttpClientConfig,
         secrets: Arc<dyn SecretSource>,
-        models: ModelList,
+        models: ModelRouter,
     ) -> Result<Self, litellm_http::Error> {
         let provider = resources.pool.client(&http, ClientVariant::Provider)?;
         let auth = resources.auth.clone();

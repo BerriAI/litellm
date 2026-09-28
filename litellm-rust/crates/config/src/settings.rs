@@ -35,6 +35,8 @@ pub struct GeneralSettings {
     pub dangerously_permit_weak_or_unset_master_key: Option<bool>,
     pub plugins: Option<Box<[Object]>>,
     pub coordination_redis: Option<Object>,
+    pub mcp_allowed_hosts: Option<Box<[String]>>,
+    pub mcp_allowed_origins: Box<[String]>,
     #[serde(flatten)]
     pub additional_fields: AdditionalFields,
 }
@@ -69,6 +71,8 @@ impl Default for GeneralSettings {
             dangerously_permit_weak_or_unset_master_key: None,
             plugins: None,
             coordination_redis: None,
+            mcp_allowed_hosts: None,
+            mcp_allowed_origins: Box::default(),
             additional_fields: AdditionalFields::new(),
         }
     }
