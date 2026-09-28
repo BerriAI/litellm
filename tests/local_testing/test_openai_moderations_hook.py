@@ -31,7 +31,7 @@ async def test_openai_moderation_error_raising(monkeypatch):
     from unittest.mock import AsyncMock, MagicMock
     from litellm.types.llms.openai import OpenAIModerationResponse
 
-    litellm.openai_moderations_model_name = "text-moderation-latest"
+    litellm.openai_moderations_model_name = "omni-moderation-latest"
     openai_mod = _ENTERPRISE_OpenAI_Moderation()
     _api_key = "sk-12345"
     _api_key = hash_token("sk-12345")
@@ -41,9 +41,9 @@ async def test_openai_moderation_error_raising(monkeypatch):
     llm_router = litellm.Router(
         model_list=[
             {
-                "model_name": "text-moderation-latest",
+                "model_name": "omni-moderation-latest",
                 "litellm_params": {
-                    "model": "text-moderation-latest",
+                    "model": "omni-moderation-latest",
                     "api_key": os.environ.get("OPENAI_API_KEY", "fake-key"),
                 },
             }

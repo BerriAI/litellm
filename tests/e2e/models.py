@@ -124,6 +124,32 @@ class KeyDeleteBody(BaseModel):
     keys: list[str]
 
 
+class KeyDeleteByAliasBody(BaseModel):
+    key_aliases: list[str]
+
+
+class AuditLogParams(BaseModel):
+    object_id: str
+    action: str
+    table_name: str
+    page_size: int
+
+
+class AuditLogEntry(BaseModel):
+    id: str
+    changed_by: str | None = None
+    changed_by_api_key: str | None = None
+    action: str
+    table_name: str
+    object_id: str
+    before_value: object | None = None
+
+
+class AuditLogPage(BaseModel):
+    audit_logs: list[AuditLogEntry]
+    total: int
+
+
 class KeyInfoParams(BaseModel):
     key: str
 
@@ -308,6 +334,7 @@ class ChatBody(BaseModel):
     tools: Sequence[ChatTool | McpChatTool] | None = None
     tool_choice: str | None = None
     guardrails: list[str] | None = None
+    include_guardrail_response: bool | None = None
     response_format: dict[str, object] | None = None
     chat_template_kwargs: dict[str, bool] | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
@@ -422,6 +449,14 @@ class Usage(BaseModel):
     completion_tokens_details: CompletionTokensDetails | None = None
 
 
+class GuardrailInformationEntry(BaseModel):
+    guardrail_name: str
+    guardrail_status: str
+    guardrail_mode: object | None = None
+    guardrail_response: object | None = None
+    duration: float | None = None
+
+
 class ChatResponse(BaseModel):
     id: str | None = None
     object: str | None = None
@@ -429,6 +464,7 @@ class ChatResponse(BaseModel):
     choices: list[ChatChoice] = []
     usage: Usage | None = None
     service_tier: str | None = None
+    guardrail_information: list[GuardrailInformationEntry] | None = None
 
 
 # ---------- anthropic /v1/messages + count_tokens ----------
@@ -560,6 +596,16 @@ class CountTokensResponse(BaseModel):
     whose body lacks it fails validation instead of passing vacuously."""
 
     input_tokens: int
+
+
+class AnthropicErrorBody(BaseModel):
+    type: str
+    message: str
+
+
+class AnthropicErrorEvent(BaseModel):
+    type: Literal["error"]
+    error: AnthropicErrorBody
 
 
 # ---------- mcp servers ----------
@@ -749,6 +795,12 @@ class OcrBody(BaseModel):
     document: OcrDocument
 
 
+class OcrForm(BaseModel):
+    """Multipart /v1/ocr form fields; the document travels as the `file` part."""
+
+    model: str
+
+
 class OcrPage(BaseModel):
     index: int
     markdown: str
@@ -796,6 +848,51 @@ class ImageDatum(BaseModel):
 
 class ImageGenerationResponse(BaseModel):
     data: list[ImageDatum] = []
+
+
+class ImageEditForm(BaseModel):
+    """POST /v1/images/edits form fields; the image travels as the `image` multipart part."""
+
+    model: str
+    prompt: str
+    size: str = "1024x1024"
+    quality: str = "low"
+
+
+class SearchBody(BaseModel):
+    """POST /v1/search/{search_tool_name} body (Perplexity-compatible)."""
+
+    query: str
+    max_results: int = 2
+
+
+class SearchResultItem(BaseModel):
+    title: str = ""
+    url: str = ""
+    snippet: str = ""
+
+
+class SearchResponse(BaseModel):
+    results: list[SearchResultItem] = []
+
+
+class SearchToolLiteLLMParamsBody(BaseModel):
+    search_provider: str
+
+
+class SearchToolBody(BaseModel):
+    search_tool_name: str
+    litellm_params: SearchToolLiteLLMParamsBody
+
+
+class SearchToolCreateBody(BaseModel):
+    """POST /search_tools body: the tool as it would sit under `search_tools:` in the config."""
+
+    search_tool: SearchToolBody
+
+
+class SearchToolCreateResponse(BaseModel):
+    search_tool_id: str
 
 
 # ---------- audio ----------
@@ -850,10 +947,18 @@ class GuardrailRunRecord(BaseModel):
     guardrail_response: object | None = None
 
 
+class SpendLogErrorInformation(BaseModel):
+    error_code: str | None = None
+    error_class: str | None = None
+    error_message: str | None = None
+    normalized_error: str | None = None
+
+
 class SpendLogMetadata(BaseModel):
     user_api_key_alias: str | None = None
     applied_guardrails: list[str] | None = None
     guardrail_information: list[GuardrailRunRecord] | None = None
+    error_information: SpendLogErrorInformation | None = None
 
 
 class SpendLogRow(BaseModel):
@@ -865,6 +970,7 @@ class SpendLogRow(BaseModel):
     cache_hit: str | None = None
     call_type: str | None = None
     custom_llm_provider: str | None = None
+    model_id: str | None = None
     team_id: str | None = None
     user: str | None = None
     end_user: str | None = None
@@ -872,6 +978,7 @@ class SpendLogRow(BaseModel):
     completion_tokens: int | None = None
     total_tokens: int | None = None
     request_tags: list[str] | None = None
+    session_id: str | None = None
     metadata: SpendLogMetadata | None = None
     proxy_server_request: JsonValue = None
     response: JsonValue = None
@@ -906,6 +1013,15 @@ class SpendLogsPageParams(BaseModel):
     page: int
     page_size: int
     api_key: str | None = None
+
+
+class SessionSpendLogsParams(BaseModel):
+    """Query for /spend/logs/session/ui, the session view the Admin UI logs page
+    opens: every row whose session_id equals the given one, newest first."""
+
+    session_id: str
+    page: int = 1
+    page_size: int = 100
 
 
 class SpendLogsPage(BaseModel):
@@ -1091,7 +1207,7 @@ class LiteLLMParamsBody(BaseModel):
     """POST /model/new litellm_params: `model` is the only required field; `api_key`
     et al may be an `os.environ/FOO` reference the proxy resolves at call time.
     The `*_cost_per_token` / `*_token_cost` fields register a per-deployment custom
-    pricing override (the cache and `_priority` rates only apply when both base
+    pricing override (the cache and service-tier rates only apply when both base
     rates are set, which is what makes the proxy register the deployment's full
     pricing entry); left None (and dropped from the body) the deployment keeps the
     backend's canonical rate."""
@@ -1127,6 +1243,12 @@ class LiteLLMParamsBody(BaseModel):
     cache_creation_input_token_cost: float | None = None
     input_cost_per_token_priority: float | None = None
     output_cost_per_token_priority: float | None = None
+    input_cost_per_token_balanced: float | None = None
+    output_cost_per_token_balanced: float | None = None
+    cache_read_input_token_cost_balanced: float | None = None
+    input_cost_per_token_flex: float | None = None
+    output_cost_per_token_flex: float | None = None
+    cache_read_input_token_cost_flex: float | None = None
     extra_headers: dict[str, str] | None = None
     use_in_pass_through: bool | None = None
     complexity_router_config: dict[str, object] | None = None
@@ -1320,6 +1442,7 @@ class TeamNewBody(BaseModel):
     team_id: str | None = None
     organization_id: str | None = None
     metadata: TeamMetadata | None = None
+    model_aliases: dict[str, str] | None = None
 
 
 class TeamNewResponse(BaseModel):

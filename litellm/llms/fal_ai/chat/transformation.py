@@ -115,13 +115,13 @@ class FalAIChatConfig(BaseConfig):
         return list(("reasoning_effort", "temperature", "top_p"))  # mutable-ok: inherited contract returns a list
 
     def _map_reasoning_effort(self, value: object, model: str, drop_params: bool) -> bool | None:
-        if value in REASONING_DISABLED_EFFORTS:
+        if isinstance(value, str) and value in REASONING_DISABLED_EFFORTS:
             return False
-        if value in REASONING_ENABLED_EFFORTS:
+        if isinstance(value, str) and value in REASONING_ENABLED_EFFORTS:
             return True
         if drop_params:
             return None
-        raise FalAIError(status_code=400, message=f"Unsupported reasoning_effort '{value}' for {model}")
+        raise FalAIError(status_code=400, message=f"Unsupported reasoning_effort {value!r} for {model}")
 
     def _translate_param(self, param: str, value: object, model: str, drop_params: bool) -> tuple[str, object] | None:
         if param in ("temperature", "top_p"):

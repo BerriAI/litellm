@@ -12,5 +12,7 @@ r2d2 = "0.8.10"
 tokio.workspace = true
 
 [dev-dependencies]
+litellm-cache-testing.workspace = true
 redis-test = "1.0.4"
+rstest.workspace = true
 serde_json.workspace = true
