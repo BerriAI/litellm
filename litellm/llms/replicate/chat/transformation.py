@@ -91,11 +91,6 @@ class ReplicateConfig(BaseConfig):
             "max_tokens",
             "top_p",
             "stop",
-            "seed",
-            "tools",
-            "tool_choice",
-            "functions",
-            "function_call",
         ]
 
     def map_openai_params(

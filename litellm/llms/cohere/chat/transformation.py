@@ -144,7 +144,6 @@ class CohereChatConfig(BaseConfig):
             "stop",
             "n",
             "tools",
-            "tool_choice",
             "seed",
             "extra_headers",
         ]
