@@ -1395,9 +1395,9 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         )
 
         assert [
-            (tool_call["id"], tool_call["function"]["arguments"])
-            for tool_call in guardrail.seen_inputs[-1]["tool_calls"]
-        ] == [("call_1", '{"fruit": "persimmon"}'), ("call_2", '{"fruit": "durian"}')]
+            [(tool_call["id"], tool_call["function"]["arguments"]) for tool_call in inputs["tool_calls"]]
+            for inputs in guardrail.seen_inputs
+        ] == [[("call_1", '{"fruit": "persimmon"}')], [("call_2", '{"fruit": "durian"}')]]
 
     @pytest.mark.asyncio
     async def test_deliver_ended_stream_tool_rewrites_keep_choice_indices(self) -> None:

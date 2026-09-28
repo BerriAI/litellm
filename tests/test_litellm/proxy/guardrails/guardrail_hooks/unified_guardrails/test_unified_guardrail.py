@@ -962,9 +962,11 @@ class _ToolRedactingGuardrail(CustomGuardrail):
         calls: Final = TypeAdapter(tuple[ChatCompletionMessageToolCall, ...]).validate_python(
             inputs.get("tool_calls", ())
         )
+        input_texts: Final = inputs.get("texts", ())
         texts: Final = tuple(
-            "checked:" + text.replace("SECRET", "MASKED") if calls or not self.require_tool_context else text
-            for text in inputs.get("texts", ())
+            "checked:" + text.replace("SECRET", "MASKED")
+            if not self.require_tool_context or (calls and index == len(input_texts) - 1) else text
+            for index, text in enumerate(input_texts)
         )
         return {
             **inputs,
@@ -1019,6 +1021,29 @@ class TestStreamingTransform:
         assert "".join(_delta_text(chunk) for chunk in out) == ("checked:hello MASKED" if include_text else "")
         assert any(choice.finish_reason == "tool_calls" for chunk in out for choice in chunk.choices)
         assert out[-1].usage.total_tokens == 18
+        assert all("SECRET" not in chunk.model_dump_json() for chunk in out)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("tool_choice_index", [0, 1])
+    async def test_tool_dependent_text_rewrites_keep_choice_context(self, tool_choice_index: int) -> None:
+        chunks: Final = (
+            ModelResponseStream(choices=[StreamingChoices(
+                index=index, delta=Delta(content="SECRET" if index == tool_choice_index else "plain"),
+            ) for index in (1, 0)]),
+            ModelResponseStream(choices=[StreamingChoices(
+                index=tool_choice_index,
+                delta=Delta(tool_calls=[{
+                    "index": 0, "id": "call_context", "type": "function",
+                    "function": {"name": "contact", "arguments": '{"contact":"SECRET"}'},
+                }]), finish_reason="tool_calls",
+            )]),
+        )
+        out: Final = await _drive_stream(UnifiedLLMGuardrails(), _ToolRedactingGuardrail(True), chunks)
+        for index in (0, 1):
+            text: Final = "".join(
+                choice.delta.content or "" for chunk in out for choice in chunk.choices if choice.index == index
+            )
+            assert text == ("checked:MASKED" if index == tool_choice_index else "plain")
         assert all("SECRET" not in chunk.model_dump_json() for chunk in out)
 
     @pytest.mark.asyncio

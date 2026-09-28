@@ -657,13 +657,22 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         model_response: Final = self._rebuild_ended_stream_per_choice(responses_so_far, litellm_logging_obj)
         pre_guardrail_texts: Final = self._string_choice_contents(model_response)
         pre_guardrail_tool_calls: Final = self._function_tool_call_shapes(model_response)
-        await self.process_output_response(
-            response=model_response,
-            guardrail_to_apply=guardrail_to_apply,
-            litellm_logging_obj=litellm_logging_obj,
-            user_api_key_dict=user_api_key_dict,
-            request_data=request_data,
+        inspection_responses: Final = (
+            tuple(
+                model_response.model_copy(update=MappingProxyType({"choices": [choice]}))
+                for choice in model_response.choices
+            )
+            if pre_guardrail_tool_calls and len(model_response.choices) > 1
+            else (model_response,)
         )
+        for inspection_response in inspection_responses:
+            await self.process_output_response(
+                response=inspection_response,
+                guardrail_to_apply=guardrail_to_apply,
+                litellm_logging_obj=litellm_logging_obj,
+                user_api_key_dict=user_api_key_dict,
+                request_data=request_data,
+            )
         if not deliver_ended_stream_rewrites:
             return
         await self._write_ended_stream_text_rewrites(
@@ -798,6 +807,24 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
         if self._streamed_tool_call_fingerprints(responses_so_far):
             assembled: Final = self._rebuild_ended_stream_per_choice(responses_so_far, litellm_logging_obj)
+            if len(assembled.choices) > 1:
+                choice_sinks: Final = tuple((choice.index, StreamTransformSink()) for choice in assembled.choices)
+                for index, choice_sink in choice_sinks:
+                    await self._process_streaming_transform(
+                        responses_so_far=[self._narrowed_to_choice(chunk, index) for chunk in responses_so_far],
+                        guardrail_to_apply=guardrail_to_apply,
+                        litellm_logging_obj=litellm_logging_obj,
+                        user_api_key_dict=user_api_key_dict,
+                        request_data=request_data,
+                        sink=choice_sink,
+                    )
+                sink.mutated_text_per_choice = dict(
+                    chain.from_iterable(choice_sink.mutated_text_per_choice.items() for _, choice_sink in choice_sinks)
+                )
+                sink.holdback_per_choice = dict(
+                    chain.from_iterable(choice_sink.holdback_per_choice.items() for _, choice_sink in choice_sinks)
+                )
+                return
             tool_calls: Final = chain.from_iterable(choice.message.tool_calls or () for choice in assembled.choices)
             inputs["tool_calls"] = TypeAdapter(list[ChatCompletionToolCallChunk]).validate_python(
                 tuple(
