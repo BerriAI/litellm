@@ -566,3 +566,11 @@ def test_wildcard_health_check_models_bare_provider_and_star_wildcard_unchanged(
     candidates: Final = ("databricks/databricks-gpt-5",)
     assert _wildcard_health_check_models("databricks/*", candidates) == candidates
     assert _wildcard_health_check_models("*", candidates) == candidates
+
+
+def test_wildcard_health_check_models_partial_prefix_matching_literal_keeps_stripped_id():
+    assert _wildcard_health_check_models("openai/gpt-4*", ["gpt-4o-mini"]) == ("openai/gpt-4o-mini",)
+
+
+def test_wildcard_health_check_models_partial_prefix_splices_suffix_around_star():
+    assert _wildcard_health_check_models("openai/ft:*", ["gpt-4o-mini"]) == ("openai/ft:gpt-4o-mini",)

@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, Final, Literal
 from litellm.llms.base_llm.ocr.transformation import DocumentType
 from litellm.rust_bridge import runtime
 from litellm.rust_bridge.ocr.entrypoints import NATIVE_OCR_HEALTH_CHECK_DOCUMENT
-from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS
+from litellm.types.utils import LIST_BATCHES_SUPPORTED_PROVIDERS, LlmProviders
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
@@ -39,16 +39,23 @@ def _ocr_health_check_document(model: str, custom_llm_provider: str) -> Document
     return native(model, custom_llm_provider)
 
 
+def _strip_known_provider_prefix(model: str, known_providers: frozenset[str]) -> str:
+    leading, sep, model_suffix = model.partition("/")
+    return model_suffix if sep and leading in known_providers else model
+
+
 def _wildcard_health_check_models(wildcard_model: str, cheapest_models: Sequence[str]) -> tuple[str, ...]:
-    """Substitute each candidate id into the wildcard's dynamic segment so the health
-    check probes a name the wildcard route actually expands, instead of the bare
-    cost-map id (e.g. `databricks/system.ai.*` + `databricks/databricks-x` ->
-    `databricks/system.ai.databricks-x`)."""
     provider_prefix, sep, wildcard_suffix = wildcard_model.partition("/")
     if not sep or wildcard_suffix == "*":
         return tuple(cheapest_models)
+    known_providers: Final = frozenset(provider.value for provider in LlmProviders)
+    literal_prefix: Final = wildcard_suffix.replace("*", "")
+    stripped_ids: Final = tuple(_strip_known_provider_prefix(model, known_providers) for model in cheapest_models)
     return tuple(
-        f"{provider_prefix}/{wildcard_suffix.replace('*', model.partition('/')[-1], 1)}" for model in cheapest_models
+        f"{provider_prefix}/{stripped}"
+        if stripped.startswith(literal_prefix)
+        else f"{provider_prefix}/{wildcard_suffix.replace('*', stripped, 1)}"
+        for stripped in stripped_ids
     )
 
 
