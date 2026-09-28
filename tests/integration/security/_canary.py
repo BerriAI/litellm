@@ -81,6 +81,12 @@ SLOTS: Final = MappingProxyType(
     {
         MARKER: Slot(MARKER, "Sensitivity marker in message content; must appear where prompts are stored"),
         "B1": Slot("B1", "Deployment api_key declared in the proxy config.yaml model_list"),
+        "C1": Slot(
+            "C1", "Team callback langfuse_secret_key (team callback API, config team settings, callback_settings)"
+        ),
+        "C2": Slot("C2", "Key-level callback langfuse_secret_key in key metadata.logging"),
+        "C3": Slot("C3", "Team callback dd_api_key for the Datadog sink"),
+        "D5": Slot("D5", "Request-supplied langfuse_secret_key in the request body"),
     }
 )
 
