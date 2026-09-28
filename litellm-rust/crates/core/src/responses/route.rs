@@ -47,24 +47,6 @@ impl ResponsesRoute {
 impl crate::caching::Cachable for Responses {
     const SURFACE: &'static str = "responses";
 
-    fn provider(
-        request: &Self::Request,
-    ) -> Result<litellm_host::interceptors::ProviderIdentity, crate::RouteError> {
-        super::prepare::resolve_provider(&request.model, request.custom_llm_provider.as_deref())
-    }
-
-    fn cache_input(request: &Self::Request) -> Result<serde_json::Value, crate::RouteError> {
-        Ok(serde_json::json!({
-            "model": request.model,
-            "input": request.input,
-            "params": request.optional_params,
-            "provider": request.custom_llm_provider,
-            "api_key": request.api_key,
-            "api_base": request.api_base,
-            "headers": request.extra_headers
-        }))
-    }
-
     fn reusable(response: &Self::Response) -> bool {
         response
             .extra

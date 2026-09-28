@@ -98,7 +98,8 @@ impl NativeCacheHandle {
                     ResponseCacheCodec,
                 )
             })
-            .map_err(super::cache_error)?,
+            .map_err(super::cache_error)?
+            .with_namespace(Some(namespace.clone())),
         );
         let backend = Arc::new(ResponseCache::new(storage.clone()).with_config(
             ResponseCacheConfig {
@@ -327,6 +328,15 @@ pub(crate) fn configured(
             litellm_cache_response::CacheOptions::new(litellm_cache_response::CacheScope::Shared),
         ));
     };
+    if !configured
+        .call_method("should_use_cache", (), Some(kwargs))?
+        .extract::<bool>()?
+    {
+        return Ok((
+            None,
+            litellm_cache_response::CacheOptions::new(litellm_cache_response::CacheScope::Shared),
+        ));
+    }
     let handle = native_handle(&configured)?.ok_or_else(|| {
         pyo3::exceptions::PyRuntimeError::new_err(
             "the configured cache changed to a Python cache after native admission",
@@ -344,7 +354,7 @@ pub(crate) fn configured(
             let name = name.extract::<String>()?;
             if !matches!(
                 name.as_str(),
-                "no-cache" | "no-store" | "ttl" | "s-maxage" | "s-max-age"
+                "no-cache" | "no-store" | "ttl" | "s-maxage" | "s-max-age" | "use-cache"
             ) {
                 return Err(PyValueError::new_err(format!(
                     "unsupported v2 cache control: {name}"

@@ -131,17 +131,8 @@ impl MessagesRoute {
         observers: Option<&ObservationSender>,
     ) -> Result<MessagesResponse, Error> {
         crate::diagnostic::call(async {
-            crate::caching::execute_streaming::<route::Messages, _, _>(
-                call,
-                self.cache.as_ref().map(|cache| cache.service.clone()),
-                self.cache
-                    .as_ref()
-                    .map(|cache| cache.options(cache_options)),
-                interceptors,
-                observers,
-                |call| self.run_provider(call, interceptors, observers),
-            )
-            .await
+            self.run_provider(call, cache_options, interceptors, observers)
+                .await
         })
         .await
     }
@@ -149,6 +140,7 @@ impl MessagesRoute {
     async fn run_provider(
         &self,
         call: MessagesCall,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
         interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<MessagesResponse, Error> {
@@ -159,6 +151,8 @@ impl MessagesRoute {
                 &self.http,
                 &self.auth,
                 request,
+                self.cache.clone(),
+                cache_options,
                 interceptors,
                 observers,
             ));

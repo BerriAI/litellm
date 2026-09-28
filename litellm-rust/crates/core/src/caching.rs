@@ -11,7 +11,7 @@ use litellm_cache_response::{
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
-    interceptors::{ExecutionFacts, Interceptors, ProviderIdentity, ResultSource},
+    interceptors::{ExecutionFacts, Interceptors, ProviderIdentity, ResultSource, WireRequest},
     lifecycle::{CallEvent, ExecutionEvent},
     observation::ObservationSender,
     protocol::Protocol,
@@ -25,12 +25,30 @@ use crate::RouteError;
 pub trait Cachable: Protocol<Error = RouteError> {
     const SURFACE: &'static str;
 
-    fn provider(request: &Self::Request) -> Result<ProviderIdentity, RouteError>;
-
-    fn cache_input(request: &Self::Request) -> Result<Value, RouteError>;
-
     fn reusable(_response: &Self::Response) -> bool {
         true
+    }
+}
+
+pub struct CacheRequest {
+    pub identity: ProviderIdentity,
+    pub input: Value,
+}
+
+impl CacheRequest {
+    pub fn from_wire(identity: ProviderIdentity, wire: Option<&WireRequest>) -> Self {
+        Self {
+            input: wire.map_or(Value::Null, |wire| {
+                serde_json::json!({
+                    "provider": identity.provider,
+                    "model": identity.model,
+                    "url": wire.url,
+                    "headers": wire.headers,
+                    "body": wire.body,
+                })
+            }),
+            identity,
+        }
     }
 }
 
@@ -57,17 +75,13 @@ impl CacheSession {
     fn prepare<P: Cachable>(
         service: Option<Arc<dyn ResponseCacheService>>,
         options: Option<CacheOptions>,
-        request: &P::Request,
-    ) -> Result<Option<Self>, RouteError> {
-        let Some(options) = options.filter(CacheOptions::enabled) else {
-            return Ok(None);
-        };
-        let Some(service) = service else {
-            return Ok(None);
-        };
-        let input = P::cache_input(request)?;
+        request: &CacheRequest,
+    ) -> Option<Self> {
+        let options = options.filter(CacheOptions::enabled)?;
+        let service = service?;
+        let input = request.input.clone();
         let request = options.request(&service.config().namespace, P::SURFACE, input);
-        Ok(Some(Self { service, request }))
+        Some(Self { service, request })
     }
 
     async fn lookup<P: Cachable>(&self) -> Option<CachedOutput<P::Response>>
@@ -124,7 +138,7 @@ impl CacheSession {
 }
 
 pub async fn execute_unary<P, F, Fut>(
-    request: P::Request,
+    request: CacheRequest,
     cache: Option<Arc<dyn ResponseCacheService>>,
     options: Option<CacheOptions>,
     interceptors: &impl Interceptors<RouteError>,
@@ -134,12 +148,12 @@ pub async fn execute_unary<P, F, Fut>(
 where
     P: Cachable,
     P::Response: Serialize + DeserializeOwned,
-    F: FnOnce(P::Request) -> Fut,
+    F: FnOnce() -> Fut,
     Fut: Future<Output = Result<P::Response, RouteError>>,
 {
-    let identity = P::provider(&request)?;
+    let identity = request.identity.clone();
     crate::diagnostic::provider(&identity.model, &identity.provider);
-    let session = CacheSession::prepare::<P>(cache, options, &request)?;
+    let session = CacheSession::prepare::<P>(cache, options, &request);
     let hit = match &session {
         Some(session) => session.lookup::<P>().await.and_then(|entry| match entry {
             CachedOutput::Response(response) => Some((response, cache_key(&session.request.key))),
@@ -149,7 +163,7 @@ where
     };
     let (response, source) = match hit {
         Some((response, key)) => (response, ResultSource::Cache { key }),
-        None => (provider(request).await?, ResultSource::Provider),
+        None => (provider().await?, ResultSource::Provider),
     };
     let from_provider = source == ResultSource::Provider;
     publish(
@@ -168,7 +182,7 @@ where
 }
 
 pub async fn execute_streaming<P, F, Fut>(
-    request: P::Request,
+    request: CacheRequest,
     cache: Option<Arc<dyn ResponseCacheService>>,
     options: Option<CacheOptions>,
     interceptors: &impl Interceptors<RouteError>,
@@ -178,12 +192,12 @@ pub async fn execute_streaming<P, F, Fut>(
 where
     P: StreamCachable,
     P::Response: Serialize + DeserializeOwned,
-    F: FnOnce(P::Request) -> Fut,
+    F: FnOnce() -> Fut,
     Fut: Future<Output = Result<OutputOf<P>, RouteError>>,
 {
-    let identity = P::provider(&request)?;
+    let identity = request.identity.clone();
     crate::diagnostic::provider(&identity.model, &identity.provider);
-    let session = CacheSession::prepare::<P>(cache, options, &request)?;
+    let session = CacheSession::prepare::<P>(cache, options, &request);
     let hit = match &session {
         Some(session) => session.lookup::<P>().await.and_then(|entry| {
             let output = match entry {
@@ -196,7 +210,7 @@ where
     };
     let (output, source) = match hit {
         Some((output, key)) => (output, ResultSource::Cache { key }),
-        None => (provider(request).await?, ResultSource::Provider),
+        None => (provider().await?, ResultSource::Provider),
     };
     let from_provider = source == ResultSource::Provider;
     publish(

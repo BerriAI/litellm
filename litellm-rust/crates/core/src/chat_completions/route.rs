@@ -60,29 +60,18 @@ impl ChatCompletionsRoute {
         observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {
         crate::diagnostic::unary(async {
-            crate::caching::execute_unary::<ChatCompletions, _, _>(
-                call,
-                self.cache.as_ref().map(|cache| cache.service.clone()),
-                self.cache
-                    .as_ref()
-                    .map(|cache| cache.options(cache_options)),
-                interceptors,
-                observers,
-                |call| async move {
-                    let request = ChatCompletionsRequest {
-                        model: &call.model,
-                        messages: call.messages,
-                        optional_params: call.optional_params,
-                        api_key: call.api_key.as_deref(),
-                        api_base: call.api_base.as_deref(),
-                        custom_llm_provider: call.custom_llm_provider.as_deref(),
-                        extra_headers: call.extra_headers,
-                        timeout: call.timeout,
-                    };
-                    self.run(request, interceptors, observers).await
-                },
-            )
-            .await
+            let request = ChatCompletionsRequest {
+                model: &call.model,
+                messages: call.messages,
+                optional_params: call.optional_params,
+                api_key: call.api_key.as_deref(),
+                api_base: call.api_base.as_deref(),
+                custom_llm_provider: call.custom_llm_provider.as_deref(),
+                extra_headers: call.extra_headers,
+                timeout: call.timeout,
+            };
+            self.run(request, cache_options, interceptors, observers)
+                .await
         })
         .await
     }
@@ -90,30 +79,4 @@ impl ChatCompletionsRoute {
 
 impl crate::caching::Cachable for ChatCompletions {
     const SURFACE: &'static str = "chat_completions";
-
-    fn provider(
-        request: &Self::Request,
-    ) -> Result<litellm_host::interceptors::ProviderIdentity, crate::RouteError> {
-        let resolved = crate::provider::resolve_llm_provider(
-            &request.model,
-            request.custom_llm_provider.as_deref(),
-            "chat completions",
-        )?;
-        Ok(litellm_host::interceptors::ProviderIdentity {
-            model: resolved.model.into(),
-            provider: <&str>::from(resolved.provider).into(),
-        })
-    }
-
-    fn cache_input(request: &Self::Request) -> Result<serde_json::Value, crate::RouteError> {
-        Ok(serde_json::json!({
-            "model": request.model,
-            "messages": request.messages,
-            "params": request.optional_params,
-            "provider": request.custom_llm_provider,
-            "api_key": request.api_key,
-            "api_base": request.api_base,
-            "headers": request.extra_headers
-        }))
-    }
 }

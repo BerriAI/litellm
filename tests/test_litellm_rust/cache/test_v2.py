@@ -9,6 +9,7 @@ from pydantic import BaseModel, TypeAdapter
 import litellm
 from litellm import _v2
 from litellm._v2.cache import NativeBackend
+from litellm.caching.caching import CacheMode
 from litellm.caching.caching_handler import (
     _PENDING_CACHE_WRITES,  # pyright: ignore[reportPrivateUsage]  # await the existing background cache writer before the next request
 )
@@ -531,3 +532,87 @@ async def test_v2_cache_honors_supported_call_types_for_reads_and_writes(
     litellm.cache.supported_call_types = excluded
     await invoke(route, recording_server, {}, native=native)
     assert len(recording_server.requests) == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_v2_redis_flush_only_removes_its_namespace(
+    redis_url: str, recording_server: RecordingServer, asynchronous: bool
+) -> None:
+    own: Final = _v2.Cache.redis(redis_url, namespace="flush-own")
+    other: Final = _v2.Cache.redis(redis_url, namespace="flush-other")
+    litellm.cache = own
+    recording_server.expected_requests = 2
+    await own.async_add_cache({"answer": "own"}, cache_key="shared")
+    await other.async_add_cache({"answer": "other"}, cache_key="shared")
+    await invoke("responses", recording_server, {})
+    hit: Final = await invoke("responses", recording_server, {})
+    assert isinstance(cache_key(hit), str)
+    assert await own.async_get_cache(cache_key="shared") == {"answer": "own"}
+    backend: Final = own.cache
+    assert isinstance(backend, NativeBackend)
+    if asynchronous:
+        await backend.async_flush_cache()
+    else:
+        backend.flush_cache()
+    assert await own.async_get_cache(cache_key="shared") is None
+    assert await other.async_get_cache(cache_key="shared") == {"answer": "other"}
+    refreshed: Final = await invoke("responses", recording_server, {})
+    assert cache_key(refreshed) is None
+    assert len(recording_server.requests) == 2
+    await own.disconnect()
+    await other.disconnect()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("native", (False, True))
+@pytest.mark.parametrize("route", ("chat", "messages", "responses"))
+async def test_v2_default_off_requires_opt_in_even_for_existing_entries(
+    recording_server: RecordingServer, monkeypatch: pytest.MonkeyPatch,
+    route: Literal["chat", "messages", "responses"], native: bool,
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    litellm.cache = _v2.Cache.memory()
+    litellm.cache.mode = CacheMode.default_off
+    recording_server.expected_requests = 4
+    await invoke(route, recording_server, {}, native=native)
+    await invoke(route, recording_server, {}, native=native)
+    assert len(recording_server.requests) == 2
+    await invoke(route, recording_server, {"cache": {"use-cache": True}}, native=native)
+    assert len(recording_server.requests) == 3
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    await invoke(route, recording_server, {"cache": {"use-cache": True}}, native=native)
+    assert len(recording_server.requests) == 3
+    await invoke(route, recording_server, {}, native=native)
+    assert len(recording_server.requests) == 4
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("chat", "messages", "responses"))
+async def test_v2_lookup_follows_python_request_callbacks(
+    recording_server: RecordingServer, route: Literal["chat", "messages", "responses"],
+) -> None:
+    from tests.test_litellm_rust.support.requests import request_body
+
+    class Rewrite(RecordingLogger):
+        temperature = 0.1
+
+        def log_pre_api_call(self, model: str, messages: object, kwargs: dict[str, object]) -> None:
+            request_body(kwargs)["temperature"] = self.temperature
+            super().log_pre_api_call(model, messages, kwargs)
+
+    logger: Final = Rewrite()
+    litellm.cache = _v2.Cache.memory()
+    recording_server.expected_requests = 2
+    await invoke(route, recording_server, {"callbacks": [logger]})
+    first_hit: Final = await invoke(route, recording_server, {"callbacks": [logger]})
+    logger.temperature = 0.8
+    await invoke(route, recording_server, {"callbacks": [logger]})
+    second_hit: Final = await invoke(route, recording_server, {"callbacks": [logger]})
+    assert logger.names.count("log_pre_api_call") == 4
+    assert len(recording_server.requests) == 2
+    assert recording_server.requests[0].body["temperature"] == 0.1
+    assert recording_server.requests[1].body["temperature"] == 0.8
+    assert isinstance(cache_key(first_hit), str)
+    assert isinstance(cache_key(second_hit), str)
+    assert cache_key(first_hit) != cache_key(second_hit)

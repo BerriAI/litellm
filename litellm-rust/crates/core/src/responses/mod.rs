@@ -76,17 +76,8 @@ impl ResponsesRoute {
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
         crate::diagnostic::call(async {
-            crate::caching::execute_streaming::<route::Responses, _, _>(
-                call,
-                self.cache.as_ref().map(|cache| cache.service.clone()),
-                self.cache
-                    .as_ref()
-                    .map(|cache| cache.options(cache_options)),
-                interceptors,
-                observers,
-                |call| self.run_provider(call, interceptors, observers),
-            )
-            .await
+            self.run_provider(call, cache_options, interceptors, observers)
+                .await
         })
         .await
     }
@@ -94,14 +85,22 @@ impl ResponsesRoute {
     async fn run_provider(
         &self,
         call: ResponsesCall,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
         interceptors: &impl Interceptors<Error>,
         observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
         let request = prepare::prepare(call, self.secrets.as_ref()).await?;
         crate::diagnostic::provider(&request.context.model, &request.context.custom_llm_provider);
-        let execute: futures_util::future::BoxFuture<'_, Result<ResponsesOutput, Error>> = Box::pin(
-            handler::execute(&self.http, &self.auth, request, interceptors, observers),
-        );
+        let execute: futures_util::future::BoxFuture<'_, Result<ResponsesOutput, Error>> =
+            Box::pin(handler::execute(
+                &self.http,
+                &self.auth,
+                request,
+                self.cache.clone(),
+                cache_options,
+                interceptors,
+                observers,
+            ));
         execute.await
     }
 }

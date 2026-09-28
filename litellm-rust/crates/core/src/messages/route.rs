@@ -52,32 +52,6 @@ impl super::MessagesRoute {
 
 impl crate::caching::Cachable for Messages {
     const SURFACE: &'static str = "messages";
-
-    fn provider(
-        request: &Self::Request,
-    ) -> Result<litellm_host::interceptors::ProviderIdentity, crate::RouteError> {
-        let resolved = crate::provider::resolve_llm_provider(
-            &request.body.model,
-            request.custom_llm_provider.as_deref(),
-            "messages",
-        )?;
-        Ok(litellm_host::interceptors::ProviderIdentity {
-            model: resolved.model.into(),
-            provider: <&str>::from(resolved.provider).into(),
-        })
-    }
-
-    fn cache_input(request: &Self::Request) -> Result<serde_json::Value, crate::RouteError> {
-        Ok(serde_json::json!({
-            "body": request.body,
-            "provider": request.custom_llm_provider,
-            "api_key": request.api_key,
-            "api_base": request.api_base,
-            "headers": request.extra_headers,
-            "provider_headers": request.provider_specific_header,
-            "shaping": request.shaping
-        }))
-    }
 }
 
 impl crate::caching::StreamCachable for Messages {
