@@ -334,11 +334,12 @@ def test_mcp_credential_reaches_only_its_peer(
             ids={
                 "request_id": tool_row,
                 "server_id": wiring.server_id,
-                "mcp_server_name": wiring.alias,
+                # The OAuth discovery routes keyed by server name exist only for OAuth servers.
+                **({"mcp_server_name": wiring.alias} if slot == "F2" else {}),
                 "team_id": wiring.caller.team_id,
                 "user_id": wiring.caller.user_id,
                 "model": CONFIG_MODEL,
-                "model_id": CONFIG_MODEL,
+                "model_id": rig.model_id,
             },
             callers=wiring.caller.callers(rig),
             own_headers=rig.own_headers,

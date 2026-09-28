@@ -190,7 +190,7 @@ def test_upstream_credential_reaches_only_its_upstream(
                 "vector_store_id": VECTOR_STORE_ID,
                 "search_tool_name": SEARCH_TOOL,
                 "model": CONFIG_MODEL,
-                "model_id": CONFIG_MODEL,
+                "model_id": rig.model_id,
             },
             callers=caller.callers(rig),
             own_headers=rig.own_headers,
