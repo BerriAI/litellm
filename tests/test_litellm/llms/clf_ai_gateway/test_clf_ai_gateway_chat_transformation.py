@@ -21,13 +21,13 @@ MODELS = [
 ]
 
 GATEWAY_REASONING_EFFORTS = {
-    "glm-5.3": ("none", "low", "medium", "high", "max"),
-    "glm-5.3-flash": ("low", "medium", "high", "xhigh"),
-    "glm-5.2": ("low", "medium", "high", "xhigh"),
+    "glm-5.3": ("low", "medium", "high", "max"),
+    "glm-5.3-flash": ("low", "medium", "high", "xhigh", "max"),
+    "glm-5.2": ("low", "medium", "high", "xhigh", "max"),
     "glm-4.7-flash": ("low", "medium", "high"),
-    "deepseek-v4-pro": ("low", "medium", "high", "xhigh"),
-    "deepseek-v4-flash": ("low", "medium", "high", "xhigh"),
-    "kimi-k2.6": ("low", "medium", "high"),
+    "deepseek-v4-pro": ("low", "medium", "high", "xhigh", "max"),
+    "deepseek-v4-flash": ("low", "medium", "high", "xhigh", "max"),
+    "kimi-k2.6": ("none", "low", "medium", "high"),
     "kimi-k2.7-code": ("low", "medium", "high"),
     "qwen3.8-27b": ("low", "medium", "xhigh"),
 }
