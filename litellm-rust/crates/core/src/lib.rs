@@ -11,4 +11,4 @@ mod provider;
 pub mod resources;
 pub mod responses;
 
-pub use error::{Phase, RouteError};
+pub use error::RouteError;

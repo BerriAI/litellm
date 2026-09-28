@@ -6,7 +6,7 @@ import pytest
 
 from litellm.rust_bridge import configuration
 from litellm.rust_bridge.bindings import NativeBinding
-from litellm.rust_bridge.catalog import CacheRule, Delivery, Route, RouteContext, RouteRule, Rules, SecretManagerRule
+from litellm.rust_bridge.catalog import CacheRule, Route, RouteContext, RouteRule, Rules, SecretManagerRule
 from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import PublicDispatch
 from litellm.rust_bridge.runtime import NO_PYTHON, NoPythonImplementationError
@@ -99,12 +99,12 @@ def test_native_stream_result_is_not_consumed_or_wrapped() -> None:
     rules: Final[Rules] = (
         CacheRule(Rollout.PYTHON_ONLY),
         SecretManagerRule(Rollout.PYTHON_ONLY),
-        RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED, deliveries=frozenset({Delivery.STREAMING})),
+        RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_REQUIRED),
     )
     dispatch: Final = PublicDispatch(
         route=Route.CHAT_COMPLETIONS,
         request=lambda args, kwargs: request,
-        context=lambda value: RouteContext(Route.CHAT_COMPLETIONS, model=value.model, delivery=Delivery.STREAMING),
+        context=lambda value: RouteContext(Route.CHAT_COMPLETIONS, model=value.model),
     )
 
     def native(request: Request, args: tuple[object, ...], kwargs: Mapping[str, object]) -> Iterator[int]:
@@ -157,13 +157,11 @@ async def test_async_route_without_rules_preserves_async_iterator_result(rules: 
 @pytest.mark.asyncio
 async def test_async_dispatch_accepts_websocket_style_none_result() -> None:
     request: Final = Request(model="realtime-model")
-    rules: Final[Rules] = (
-        RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED, deliveries=frozenset({Delivery.WEBSOCKET})),
-    )
+    rules: Final[Rules] = (RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),)
     dispatch: Final = PublicDispatch(
         route=Route.RESPONSES,
         request=lambda args, kwargs: request,
-        context=lambda value: RouteContext(Route.RESPONSES, model=value.model, delivery=Delivery.WEBSOCKET),
+        context=lambda value: RouteContext(Route.RESPONSES, model=value.model),
     )
 
     async def python(*args: object, **kwargs: object) -> None:  # kwargs-ok: public pass-through shape

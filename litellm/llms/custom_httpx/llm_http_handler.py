@@ -188,10 +188,10 @@ from litellm.utils import (
 def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
 ) -> bool:
-    from litellm.rust_bridge.catalog import Delivery, Route, RouteContext, decision
+    from litellm.rust_bridge.catalog import Route, RouteContext, decision
     from litellm.rust_bridge.configuration import Decision
 
-    context: Final = RouteContext(Route.RESPONSES, provider=custom_llm_provider, delivery=Delivery.WEBSOCKET)
+    context: Final = RouteContext(Route.RESPONSES, provider=custom_llm_provider)
     return decision(context) is not Decision.PYTHON
 
 
