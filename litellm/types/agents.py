@@ -10,6 +10,7 @@ from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.proxy.agent_identity import (
     AgentExecutionMode,
     AgentIdentityBinding,
+    EntraIdentityConfig,
 )
 
 if TYPE_CHECKING:
@@ -252,8 +253,11 @@ class AgentKillSwitchResult(BaseModel):
 
 
 class AgentConfig(TypedDict, total=False):
+    identity: ReadOnly[EntraIdentityConfig | None]
+    enabled: ReadOnly[bool]
+    execution_mode: ReadOnly[AgentExecutionMode]
     agent_name: Required[str]
-    agent_card_params: Required[AgentCard]
+    agent_card_params: ReadOnly[AgentCard]
     litellm_params: dict[str, object]  # allow for any future litellm params
     object_permission: AgentObjectPermission
     tpm_limit: int | None
@@ -267,6 +271,9 @@ class AgentConfig(TypedDict, total=False):
 
 
 class PatchAgentRequest(TypedDict, total=False):
+    identity: ReadOnly[EntraIdentityConfig | None]
+    enabled: ReadOnly[bool]
+    execution_mode: ReadOnly[AgentExecutionMode]
     agent_name: str
     agent_card_params: AgentCard
     litellm_params: dict[str, object]
