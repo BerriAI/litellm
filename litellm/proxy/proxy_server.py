@@ -1104,6 +1104,12 @@ async def proxy_shutdown_event(worker_heartbeat: ProxyWorkerHeartbeat | None = N
     verbose_proxy_logger.info("Shutting down LiteLLM Proxy Server")
     if worker_heartbeat is not None and prisma_client:
         await worker_heartbeat.deregister()
+    try:
+        from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
+
+        await drain_audit_tasks()
+    except Exception as e:  # noqa: BLE001  # shutdown must continue even if the drain fails
+        verbose_proxy_logger.exception("Error draining audit tasks on shutdown: %s", e)
     if prisma_client:
         # Drain the SGR fold first: it lives in memory, so an un-drained interval
         # is lost, and a write attempted after disconnect raises
@@ -1603,6 +1609,13 @@ async def proxy_startup_event(app: FastAPI) -> AsyncGenerator[None, None]:
     await flush_spend_counters_on_shutdown()
 
     await _flush_spend_logs_queue_on_shutdown()
+
+    try:
+        from litellm.proxy.management_helpers.audit_logs import drain_audit_tasks
+
+        await drain_audit_tasks()
+    except Exception as e:  # noqa: BLE001  # shutdown must continue even if the drain fails
+        verbose_proxy_logger.exception("Error draining audit tasks on shutdown: %s", e)
 
     await proxy_config.stop_config_sync_subscriber()
 
@@ -18450,7 +18463,7 @@ async def _persist_general_settings_ui_litellm_field(
         config["litellm_settings"] = {}
     config["litellm_settings"][field_name] = validated
     await proxy_config.save_config(new_config=config)
-    asyncio.create_task(create_config_audit_log(field_name, "updated", before_value, validated, user_api_key_dict))
+    await create_config_audit_log(field_name, "updated", before_value, validated, user_api_key_dict)
     return {"message": f"Field {field_name} updated", "status": "success"}
 
 
@@ -18463,7 +18476,7 @@ async def _reset_general_settings_ui_litellm_field(field_name: str, user_api_key
     if "litellm_settings" in config:
         config["litellm_settings"].pop(field_name, None)
     await proxy_config.save_config(new_config=config)
-    asyncio.create_task(create_config_audit_log(field_name, "deleted", before_value, default_value, user_api_key_dict))
+    await create_config_audit_log(field_name, "deleted", before_value, default_value, user_api_key_dict)
     return {"message": f"Field {field_name} reset", "status": "success"}
 
 

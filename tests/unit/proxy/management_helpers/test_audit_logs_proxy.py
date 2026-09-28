@@ -2,6 +2,7 @@ import os
 import traceback
 from litellm._uuid import uuid
 from datetime import datetime
+from typing import Final
 
 from dotenv import load_dotenv
 from fastapi import Request
@@ -40,8 +41,11 @@ verbose_proxy_logger.setLevel(level=logging.DEBUG)
 from starlette.datastructures import URL
 
 from litellm.proxy.management_helpers.audit_logs import (
+    _pending_audit_tasks,
     create_audit_log_for_update,
+    drain_audit_tasks,
     get_audit_log_changed_by,
+    track_audit_task,
 )
 from litellm.proxy._types import LiteLLM_AuditLogs, LitellmTableNames, UserAPIKeyAuth
 from litellm.caching.caching import DualCache
@@ -261,3 +265,76 @@ async def test_create_audit_log_in_db(prisma_client):
     assert last_log.id == audit_log_id
 
     setattr(litellm, "store_audit_logs", False)
+
+
+@pytest.mark.asyncio
+async def test_track_audit_task_lifecycle():
+    task_completed: Final = asyncio.Event()
+
+    async def _sample_coroutine() -> None:
+        await asyncio.sleep(0.01)
+        task_completed.set()
+
+    task: Final = track_audit_task(asyncio.create_task(_sample_coroutine()))
+    assert task in _pending_audit_tasks
+
+    await task
+    await asyncio.sleep(0.01)
+    assert task_completed.is_set()
+    assert task not in _pending_audit_tasks
+
+
+@pytest.mark.asyncio
+async def test_drain_audit_tasks_waits_for_all_tasks():
+    event1: Final = asyncio.Event()
+    event2: Final = asyncio.Event()
+
+    async def _worker(event: asyncio.Event) -> None:
+        await asyncio.sleep(0.02)
+        event.set()
+
+    task1: Final = track_audit_task(asyncio.create_task(_worker(event1)))
+    task2: Final = track_audit_task(asyncio.create_task(_worker(event2)))
+
+    assert task1 in _pending_audit_tasks
+    assert task2 in _pending_audit_tasks
+
+    await drain_audit_tasks(timeout=1.0)
+
+    assert event1.is_set()
+    assert event2.is_set()
+    assert task1 not in _pending_audit_tasks
+    assert task2 not in _pending_audit_tasks
+
+
+@pytest.mark.asyncio
+async def test_drain_audit_tasks_handles_failing_task_cleanly():
+    async def _failing_worker() -> None:
+        await asyncio.sleep(0.01)
+        raise RuntimeError("test audit log write failure")
+
+    task: Final = track_audit_task(asyncio.create_task(_failing_worker()))
+    assert task in _pending_audit_tasks
+
+    await drain_audit_tasks(timeout=1.0)
+    assert task not in _pending_audit_tasks
+    assert task.done()
+
+
+@pytest.mark.asyncio
+async def test_drain_audit_tasks_timeout_does_not_raise():
+    async def _long_running_worker() -> None:
+        await asyncio.sleep(10.0)
+
+    task: Final = track_audit_task(asyncio.create_task(_long_running_worker()))
+    try:
+        assert task in _pending_audit_tasks
+        await drain_audit_tasks(timeout=0.05)
+    finally:
+        task.cancel()
+        try:
+            await task
+        except asyncio.CancelledError:
+            pass
+        _pending_audit_tasks.discard(task)
+

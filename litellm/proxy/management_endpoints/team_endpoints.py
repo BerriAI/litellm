@@ -1815,23 +1815,21 @@ async def new_team(
 
             _updated_values = json.dumps(_updated_values, default=str)
 
-            asyncio.create_task(
-                create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        ),
-                        changed_by_api_key=user_api_key_dict.api_key,
-                        table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                        object_id=data.team_id,
-                        action="created",
-                        updated_values=_updated_values,
-                        before_value=None,
-                    )
+            await create_audit_log_for_update(
+                request_data=LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=get_audit_log_changed_by(
+                        litellm_changed_by=litellm_changed_by,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    ),
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                    object_id=data.team_id,
+                    action="created",
+                    updated_values=_updated_values,
+                    before_value=None,
                 )
             )
 
@@ -1871,23 +1869,21 @@ async def _create_team_update_audit_log(
     _before_value = json.dumps(_before_value, default=str)
     _after_value: Final[str] = json.dumps(updated_kv, default=str)
 
-    asyncio.create_task(
-        create_audit_log_for_update(
-            request_data=LiteLLM_AuditLogs(
-                id=str(uuid.uuid4()),
-                updated_at=datetime.now(timezone.utc),
-                changed_by=get_audit_log_changed_by(
-                    litellm_changed_by=litellm_changed_by,
-                    user_api_key_dict=user_api_key_dict,
-                    litellm_proxy_admin_name=litellm_proxy_admin_name,
-                ),
-                changed_by_api_key=user_api_key_dict.api_key,
-                table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                object_id=team_id,
-                action="updated",
-                updated_values=_after_value,
-                before_value=_before_value,
-            )
+    await create_audit_log_for_update(
+        request_data=LiteLLM_AuditLogs(
+            id=str(uuid.uuid4()),
+            updated_at=datetime.now(timezone.utc),
+            changed_by=get_audit_log_changed_by(
+                litellm_changed_by=litellm_changed_by,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+            ),
+            changed_by_api_key=user_api_key_dict.api_key,
+            table_name=LitellmTableNames.TEAM_TABLE_NAME,
+            object_id=team_id,
+            action="updated",
+            updated_values=_after_value,
+            before_value=_before_value,
         )
     )
 
@@ -3234,25 +3230,28 @@ def _schedule_team_membership_audit_log(
     after_members: Sequence[Member],
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
-) -> None:
+) -> asyncio.Task[None] | None:
     from litellm.proxy.management_helpers.audit_logs import (
         create_object_audit_log,
         is_audit_logging_enabled,
+        track_audit_task,
     )
 
     if not is_audit_logging_enabled() or tuple(before_members) == tuple(after_members):
-        return
+        return None
 
-    asyncio.create_task(
-        create_object_audit_log(
-            object_id=team_id,
-            action="updated",
-            litellm_changed_by=None,
-            user_api_key_dict=user_api_key_dict,
-            litellm_proxy_admin_name=litellm_proxy_admin_name,
-            table_name=LitellmTableNames.TEAM_TABLE_NAME,
-            before_value=_members_audit_value(team_alias, before_members),
-            after_value=_members_audit_value(team_alias, after_members),
+    return track_audit_task(
+        asyncio.create_task(
+            create_object_audit_log(
+                object_id=team_id,
+                action="updated",
+                litellm_changed_by=None,
+                user_api_key_dict=user_api_key_dict,
+                litellm_proxy_admin_name=litellm_proxy_admin_name,
+                table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                before_value=_members_audit_value(team_alias, before_members),
+                after_value=_members_audit_value(team_alias, after_members),
+            )
         )
     )
 
@@ -3266,33 +3265,37 @@ def _schedule_team_member_add_audit_logs(
     after_members: Sequence[Member],
     user_api_key_dict: UserAPIKeyAuth,
     litellm_proxy_admin_name: str,
-) -> None:
+) -> tuple[asyncio.Task[None], ...]:
     """Record the membership change, and any user row it created, in the audit log."""
     from litellm.proxy.management_helpers.audit_logs import (
         create_object_audit_log,
         is_audit_logging_enabled,
+        track_audit_task,
     )
 
     if not is_audit_logging_enabled():
-        return
+        return ()
 
-    for user in updated_users:
-        if user.user_id in existing_user_ids:
-            continue
-        asyncio.create_task(
-            create_object_audit_log(
-                object_id=user.user_id,
-                action="created",
-                litellm_changed_by=None,
-                user_api_key_dict=user_api_key_dict,
-                litellm_proxy_admin_name=litellm_proxy_admin_name,
-                table_name=LitellmTableNames.USER_TABLE_NAME,
-                before_value=None,
-                after_value=safe_dumps(user.model_dump(exclude_none=True)),
+    user_tasks: Final = tuple(
+        track_audit_task(
+            asyncio.create_task(
+                create_object_audit_log(
+                    object_id=user.user_id,
+                    action="created",
+                    litellm_changed_by=None,
+                    user_api_key_dict=user_api_key_dict,
+                    litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    table_name=LitellmTableNames.USER_TABLE_NAME,
+                    before_value=None,
+                    after_value=safe_dumps(user.model_dump(exclude_none=True)),
+                )
             )
         )
+        for user in updated_users
+        if user.user_id not in existing_user_ids
+    )
 
-    _schedule_team_membership_audit_log(
+    membership_task: Final = _schedule_team_membership_audit_log(
         team_id=team_id,
         team_alias=team_alias,
         before_members=before_members,
@@ -3300,6 +3303,9 @@ def _schedule_team_member_add_audit_logs(
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
+    if membership_task is not None:
+        return (*user_tasks, membership_task)
+    return user_tasks
 
 
 async def _validate_and_populate_member_user_info(
@@ -3539,7 +3545,7 @@ async def team_member_add(
 
     _emit_team_members_metric(complete_team_data)
 
-    _schedule_team_member_add_audit_logs(
+    audit_tasks: Final = _schedule_team_member_add_audit_logs(
         team_id=data.team_id,
         team_alias=complete_team_data.team_alias,
         updated_users=updated_users,
@@ -3549,6 +3555,8 @@ async def team_member_add(
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
+    if audit_tasks:
+        await asyncio.gather(*audit_tasks)
 
     return TeamAddMemberResponse.model_validate(
         {
@@ -3617,7 +3625,7 @@ async def team_member_delete(
         data=data, user_api_key_dict=user_api_key_dict
     )
 
-    _schedule_team_membership_audit_log(
+    audit_task: Final = _schedule_team_membership_audit_log(
         team_id=existing_team_row.team_id,
         team_alias=existing_team_row.team_alias,
         before_members=before_members,
@@ -3625,6 +3633,8 @@ async def team_member_delete(
         user_api_key_dict=user_api_key_dict,
         litellm_proxy_admin_name=litellm_proxy_admin_name,
     )
+    if audit_task is not None:
+        await audit_task
 
     return existing_team_row
 
@@ -3954,7 +3964,7 @@ async def team_member_update(
     if role_change is not None:
         members_before_role_update, team_members = role_change
         team_table.members_with_roles = list(team_members)
-        _schedule_team_membership_audit_log(
+        audit_task: Final = _schedule_team_membership_audit_log(
             team_id=data.team_id,
             team_alias=team_table.team_alias,
             before_members=members_before_role_update,
@@ -3962,6 +3972,8 @@ async def team_member_update(
             user_api_key_dict=user_api_key_dict,
             litellm_proxy_admin_name=litellm_proxy_admin_name,
         )
+        if audit_task is not None:
+            await audit_task
 
     return TeamMemberUpdateResponse(
         team_id=data.team_id,
@@ -4458,23 +4470,21 @@ async def delete_team(
 
             _team_row = team_row.json(exclude_none=True)
 
-            asyncio.create_task(
-                create_audit_log_for_update(
-                    request_data=LiteLLM_AuditLogs(
-                        id=str(uuid.uuid4()),
-                        updated_at=datetime.now(timezone.utc),
-                        changed_by=get_audit_log_changed_by(
-                            litellm_changed_by=litellm_changed_by,
-                            user_api_key_dict=user_api_key_dict,
-                            litellm_proxy_admin_name=litellm_proxy_admin_name,
-                        ),
-                        changed_by_api_key=user_api_key_dict.api_key,
-                        table_name=LitellmTableNames.TEAM_TABLE_NAME,
-                        object_id=team_id,
-                        action="deleted",
-                        updated_values="{}",
-                        before_value=_team_row,
-                    )
+            await create_audit_log_for_update(
+                request_data=LiteLLM_AuditLogs(
+                    id=str(uuid.uuid4()),
+                    updated_at=datetime.now(timezone.utc),
+                    changed_by=get_audit_log_changed_by(
+                        litellm_changed_by=litellm_changed_by,
+                        user_api_key_dict=user_api_key_dict,
+                        litellm_proxy_admin_name=litellm_proxy_admin_name,
+                    ),
+                    changed_by_api_key=user_api_key_dict.api_key,
+                    table_name=LitellmTableNames.TEAM_TABLE_NAME,
+                    object_id=team_id,
+                    action="deleted",
+                    updated_values="{}",
+                    before_value=_team_row,
                 )
             )
 

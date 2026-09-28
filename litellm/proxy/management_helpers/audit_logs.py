@@ -5,7 +5,7 @@ Functions to create audit logs for LiteLLM Proxy
 import asyncio
 import json
 from datetime import datetime, timezone
-from typing import Final
+from typing import Any, Final
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -124,14 +124,33 @@ def _build_audit_log_payload(
     )
 
 
-def _audit_log_task_done_callback(task: asyncio.Task) -> None:
-    """Log exceptions from audit log callback tasks so they don't slip through silently."""
+_pending_audit_tasks: Final[set[asyncio.Task[Any]]] = set()
+
+
+def _audit_log_task_done_callback(task: asyncio.Task[Any]) -> None:
+    _pending_audit_tasks.discard(task)
     try:
         exc: Final = task.exception()
     except asyncio.CancelledError:
         return
     if exc is not None:
         verbose_proxy_logger.error("Audit log callback task failed: %s", exc, exc_info=exc)
+
+
+def track_audit_task(task: asyncio.Task[Any]) -> asyncio.Task[Any]:
+    _pending_audit_tasks.add(task)
+    task.add_done_callback(_audit_log_task_done_callback)
+    return task
+
+
+async def drain_audit_tasks(timeout: float = 10.0) -> None:
+    if not _pending_audit_tasks:
+        return
+    tasks: Final = tuple(_pending_audit_tasks)
+    try:
+        await asyncio.wait_for(asyncio.gather(*tasks, return_exceptions=True), timeout=timeout)
+    except (asyncio.TimeoutError, Exception) as e:
+        verbose_proxy_logger.warning("Error or timeout draining audit tasks on shutdown: %s", e)
 
 
 async def _dispatch_audit_log_to_callbacks(
@@ -153,8 +172,7 @@ async def _dispatch_audit_log_to_callbacks(
                     continue
 
             if isinstance(resolved, CustomLogger):
-                task = asyncio.create_task(resolved.async_log_audit_log_event(payload))
-                task.add_done_callback(_audit_log_task_done_callback)
+                track_audit_task(asyncio.create_task(resolved.async_log_audit_log_event(payload)))
         except Exception as e:
             verbose_proxy_logger.error("Failed dispatching audit log to callback: %s", e)
 
