@@ -317,3 +317,12 @@ def test_responses_with_retries_uses_the_dispatch_entrypoint(monkeypatch: pytest
     assert result is expected
     assert calls[0]["num_retries"] == 0
     assert calls[0]["max_retries"] == 0
+
+
+def test_positional_parameters_remain_available_to_native_projection() -> None:
+    include: Final = ["reasoning.encrypted_content"]
+    request: Final = _DISPATCH.request((INPUT, "openai/test-model", include, "Be brief", 16), {})
+    assert request is not None
+    assert request.parameters["include"] is include
+    assert request.parameters["instructions"] == "Be brief"
+    assert request.parameters["max_output_tokens"] == 16

@@ -355,3 +355,11 @@ def test_internal_acompletion_marker_bypasses_native() -> None:
     )
 
     assert response is expected
+
+
+def test_positional_parameters_remain_available_to_native_projection() -> None:
+    request: Final = _DISPATCH.request(("anthropic/test-model", MESSAGES, 12.0, 0.25), {})
+    assert request is not None
+    assert request.parameters["timeout"] == 12.0
+    assert request.parameters["temperature"] == 0.25
+    assert request.messages is MESSAGES
