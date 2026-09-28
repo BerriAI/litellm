@@ -135,7 +135,11 @@ PARAMETER_ALIASES: Final = MappingProxyType(
     }
 )
 NOT_FOUND_EXPECTED: Final = MappingProxyType(
-    {"/fallback/{model}": "answers 404 when the model has no fallbacks configured"}
+    {
+        "/fallback/{model}": "answers 404 when the model has no fallbacks configured",
+        "/team/{team_id}/members/me": "answers 404 when the caller is not a member, which the admin is not",
+        "/guardrails/submissions/{guardrail_id}": "answers 404 for a guardrail no team submitted for review",
+    }
 )
 
 ADMIN_ONLY_ALLOWANCES: Final = MappingProxyType(
