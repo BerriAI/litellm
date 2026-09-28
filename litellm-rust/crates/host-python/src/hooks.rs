@@ -28,6 +28,7 @@ pub enum HookEvent<'a> {
     Succeeded {
         timing: Timing,
         response: &'a Py<PyAny>,
+        detached: bool,
     },
     Failed {
         timing: Timing,

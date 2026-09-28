@@ -8,6 +8,12 @@ from types import MappingProxyType
 from typing import Final
 
 import pytest
+
+from tests.test_litellm_rust.support.callback_contract import (
+    CallbackRoute,
+    TestCallbackContract as TestCallbackContract,
+)
+from tests.test_litellm_rust.support.callback_routes import ocr_contract
 from hypothesis import HealthCheck, given, settings
 from hypothesis import strategies as st
 
@@ -594,3 +600,8 @@ async def test_native_azure_ocr_releases_token_provider_after_cancellation(
     await asyncio.sleep(0)
     gc.collect()
     assert reference() is None
+
+
+@pytest.fixture
+def callback_route() -> CallbackRoute:
+    return ocr_contract()

@@ -268,7 +268,7 @@ where
                 self.pending = Some(Pending::Response(resume));
                 Ok(ExecutionStep::Await(awaitable))
             }
-            HookStep::Ready(response) => self.succeeded(py, response),
+            HookStep::Ready(response) => self.succeeded(py, response, false),
         }
     }
 
@@ -460,8 +460,11 @@ where
         self.ended_at = Some(epoch_seconds());
         let response = match response {
             HostedCompletion::Complete(response) => response,
-            HostedCompletion::StreamEnded | HostedCompletion::Detached => {
-                return self.succeeded(py, py.None());
+            HostedCompletion::StreamEnded => {
+                return self.succeeded(py, py.None(), false);
+            }
+            HostedCompletion::Detached => {
+                return self.succeeded(py, py.None(), true);
             }
         };
         let public = match self.binding.encode_response(py, response) {
@@ -469,7 +472,7 @@ where
             Err(error) => return self.failure(py, error, FailureOrigin::Call),
         };
         if let Stage::Streaming = self.stage {
-            return self.succeeded(py, public);
+            return self.succeeded(py, public, false);
         }
         self.stage = Stage::AfterSuccess;
         match self.hooks.transform_response(py, public, self.timing()) {
@@ -499,10 +502,16 @@ where
         classifier_error
     }
 
-    fn succeeded(&mut self, py: Python<'_>, response: Py<PyAny>) -> PyResult<ExecutionStep> {
+    fn succeeded(
+        &mut self,
+        py: Python<'_>,
+        response: Py<PyAny>,
+        detached: bool,
+    ) -> PyResult<ExecutionStep> {
         let event = HookEvent::Succeeded {
             timing: self.timing(),
             response: &response,
+            detached,
         };
         let step = self.hooks.on_event(py, event)?;
         self.stage = Stage::Succeeded(response);
@@ -858,8 +867,11 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 HookEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
                     format!("response:{}", raw.body)
                 }
-                HookEvent::Succeeded { response, .. } => {
-                    format!("succeeded:{}", response.bind(py))
+                HookEvent::Succeeded {
+                    response, detached, ..
+                } => {
+                    let outcome = if detached { "detached" } else { "succeeded" };
+                    format!("{outcome}:{}", response.bind(py))
                 }
                 HookEvent::Failed { origin, error, .. } => {
                     format!("failed:{origin:?}:{}", error.value(py))
@@ -1223,7 +1235,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                     "begin",
                     "opened",
                     "delivered",
-                    "succeeded:None",
+                    "detached:None",
                     "adapter.close"
                 ]
             );

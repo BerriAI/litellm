@@ -1,6 +1,7 @@
 from typing import Final
 
 import litellm
+from pydantic import JsonValue
 from litellm.llms.base_llm.ocr.transformation import OCRResponse
 from tests.test_litellm_rust.support.recording_server import RecordingServer
 
@@ -95,3 +96,23 @@ def request_headers(kwargs: dict[str, object]) -> dict[str, object]:
     headers = additional_args["headers"]
     assert isinstance(headers, dict)
     return headers
+
+
+RESPONSES_MODEL: Final = "openai/gpt-6-sol"
+RESPONSES_RESPONSE: Final[dict[str, JsonValue]] = {
+    "id": "resp_native",
+    "object": "response",
+    "created_at": 1,
+    "model": RESPONSES_MODEL.removeprefix("openai/"),
+    "status": "completed",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_native",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "native response", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 5, "output_tokens": 4, "total_tokens": 9},
+}

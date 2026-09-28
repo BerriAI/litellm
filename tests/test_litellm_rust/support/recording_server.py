@@ -26,6 +26,7 @@ class ResponseSpec:
     headers: dict[str, str] = field(default_factory=dict)
     delay: float = 0
     events: tuple[tuple[str, object], ...] = ()
+    disconnect_after_payloads: int | None = None
 
     def payloads(self) -> tuple[bytes, ...]:
         if isinstance(self.body, bytes):
@@ -89,7 +90,7 @@ def recording_service() -> Iterator[RecordingServer]:
                 self.send_header(name, value)
             self.end_headers()
             try:
-                for payload in payloads:
+                for payload in payloads[: response.disconnect_after_payloads]:
                     self.wfile.write(payload)
                     self.wfile.flush()
             except (BrokenPipeError, ConnectionResetError):

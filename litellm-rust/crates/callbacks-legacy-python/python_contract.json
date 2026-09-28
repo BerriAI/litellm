@@ -98,7 +98,8 @@
     "chunks",
     "start",
     "end",
-    "first_chunk"
+    "first_chunk",
+    "detached"
   ],
   "stream_failure": [
     "logger",
