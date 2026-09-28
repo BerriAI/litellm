@@ -917,3 +917,77 @@ async def test_update_spend_logs_parks_failed_batch_in_redis_with_wire_safe_date
     parked = await buffer.get_spend_logs_from_redis_buffer(limit=10)
     assert mock_prisma_client.spend_log_transactions == []
     assert [(row["request_id"], row["startTime"]) for row in parked] == [("a", started.isoformat())]
+
+
+@pytest.mark.asyncio
+async def test_spend_log_serialization_failure_requeues_only_unwritten_tail(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.delenv("SPEND_LOGS_URL", raising=False)
+    rows = [make_spend_log_row(request_id=f"committed-{i}") for i in range(1000)]
+    rows.append(make_spend_log_row(request_id="unwritten"))
+    original_jsonify = mock_prisma_client.jsonify_object
+
+    def jsonify(row: Any) -> Any:
+        if row["request_id"] == "unwritten":
+            raise TypeError("bad local serialization")
+        return original_jsonify(row)
+
+    mock_prisma_client.jsonify_object = jsonify
+    mock_prisma_client.db.litellm_spendlogs.create_many = AsyncMock()
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    with pytest.raises(TypeError, match="bad local serialization"):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=0,
+            prisma_client=mock_prisma_client,
+            db_writer_client=None,
+            proxy_logging_obj=proxy_logging,
+            logs_to_process=rows,
+        )
+    assert mock_prisma_client.db.litellm_spendlogs.create_many.await_count >= 1
+    assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["unwritten"]
+
+
+@pytest.mark.asyncio
+async def test_external_spend_log_preflight_failure_requeues_without_post(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SPEND_LOGS_URL", "http://writer.invalid")
+    rows = [make_spend_log_row(request_id="unwritten")]
+    rows[0]["unserializable"] = object()
+    writer = MagicMock()
+    writer.post = AsyncMock()
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    with pytest.raises(TypeError):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=0,
+            prisma_client=mock_prisma_client,
+            db_writer_client=writer,
+            proxy_logging_obj=proxy_logging,
+            logs_to_process=rows,
+        )
+    writer.post.assert_not_awaited()
+    assert [row["request_id"] for row in mock_prisma_client.spend_log_transactions] == ["unwritten"]
+
+
+@pytest.mark.asyncio
+async def test_external_spend_log_post_error_is_not_replayed(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    monkeypatch.setenv("SPEND_LOGS_URL", "http://writer.invalid")
+    writer = MagicMock()
+    writer.post = AsyncMock(side_effect=ValueError("uncertain delivery"))
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    with pytest.raises(ValueError, match="uncertain delivery"):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=0,
+            prisma_client=mock_prisma_client,
+            db_writer_client=writer,
+            proxy_logging_obj=proxy_logging,
+            logs_to_process=[make_spend_log_row(request_id="maybe-committed")],
+        )
+    writer.post.assert_awaited_once()
+    assert mock_prisma_client.spend_log_transactions == []

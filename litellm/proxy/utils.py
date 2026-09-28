@@ -7288,7 +7288,12 @@ class ProxyUpdateSpend:
                         if not base_url.endswith("/"):
                             base_url += "/"
                         verbose_proxy_logger.debug("base_url: %s", base_url)
-                        json_data = json.dumps(logs_to_process)
+                        try:
+                            json_data = json.dumps(logs_to_process)
+                        except (TypeError, ValueError):
+                            # No external request has been sent. The batch is safe to replay.
+                            await requeue_spend_logs(prisma_client, proxy_logging_obj, logs_to_process)
+                            raise
                         response = await db_writer_client.post(
                             url=base_url + "spend/update",
                             data=json_data,
@@ -7301,7 +7306,13 @@ class ProxyUpdateSpend:
                     else:
                         for j in range(0, len(logs_to_process), BATCH_SIZE):
                             batch = logs_to_process[j : j + BATCH_SIZE]
-                            batch_with_dates = [prisma_client.jsonify_object({**entry}) for entry in batch]
+                            try:
+                                batch_with_dates = [prisma_client.jsonify_object({**entry}) for entry in batch]
+                            except (TypeError, ValueError):
+                                # This batch has not reached Prisma. Earlier batches may
+                                # already have committed, so replay only this tail.
+                                await requeue_spend_logs(prisma_client, proxy_logging_obj, logs_to_process[j:])
+                                raise
                             isolation_budget = MAX_SPEND_LOG_ISOLATION_FAILURES_PER_BATCH
                             for statement_rows in spend_log_write_batches(
                                 batch_with_dates,
