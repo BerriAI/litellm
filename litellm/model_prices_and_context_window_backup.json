@@ -28000,7 +28000,7 @@
         "mode": "realtime",
         "output_cost_per_audio_token": 1.2e-05,
         "output_cost_per_token": 4.5e-06,
-        "source": "https://ai.google.dev/gemini-api/docs/pricing",
+        "source": "https://cloud.google.com/gemini-enterprise-agent-platform/generative-ai/pricing",
         "supported_endpoints": [
             "/vertex_ai/live",
             "/v1/realtime"
@@ -28021,7 +28021,8 @@
         "supports_response_schema": false,
         "supports_vision": true,
         "supports_web_search": true,
-        "gemini_audio_only_live": true
+        "gemini_audio_only_live": true,
+        "output_cost_per_video_token": 1e-06
     },
     "vertex_ai/gemini-3.1-pro-preview": {
         "prompt_cache_min_tokens": 4096,
@@ -40232,7 +40233,8 @@
         "supports_response_schema": false,
         "supports_tool_choice": false,
         "supports_vision": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "deprecation_date": "2026-07-23"
     },
     "o3-2025-04-16": {
         "cache_read_input_token_cost": 5e-07,
@@ -40461,7 +40463,8 @@
         "supports_response_schema": false,
         "supports_tool_choice": false,
         "supports_vision": true,
-        "supports_pdf_input": true
+        "supports_pdf_input": true,
+        "deprecation_date": "2026-07-23"
     },
     "o4-mini-2025-04-16": {
         "cache_read_input_token_cost": 2.75e-07,
@@ -64292,47 +64295,20 @@
         "supports_vision": true
     },
     "azure_ai/deepseek-v4.1-flash": {
-        "cache_read_input_token_cost": 8e-09,
-        "input_cost_per_token": 3.75e-07,
+        "cache_read_input_token_cost": 6e-09,
+        "input_cost_per_token": 3e-07,
         "litellm_provider": "azure_ai",
         "max_input_tokens": 1000000,
         "max_output_tokens": 384000,
         "max_tokens": 384000,
         "mode": "chat",
-        "output_cost_per_token": 1.5e-06,
+        "output_cost_per_token": 1.2e-06,
         "supports_function_calling": true,
         "supports_prompt_caching": true,
         "supports_reasoning": true,
         "supports_tool_choice": true,
         "deprecation_date": "2026-12-15",
-        "source": "https://prices.azure.com/api/retail/prices?$filter=serviceName%20eq%20'Foundry%20Models'%20and%20armRegionName%20eq%20'eastus'%20and%20priceType%20eq%20'Consumption'"
-    },
-    "azure_ai/muse-spark-1.3": {
-        "cache_read_input_token_cost": 1.5e-07,
-        "input_cost_per_token": 1.25e-06,
-        "litellm_provider": "azure_ai",
-        "max_input_tokens": 1048576,
-        "max_output_tokens": 131072,
-        "max_tokens": 131072,
-        "mode": "chat",
-        "output_cost_per_token": 4.25e-06,
-        "source": "https://ai.developer.meta.com/docs/pricing-rate-limits",
-        "supported_endpoints": [
-            "/v1/chat/completions"
-        ],
-        "supported_modalities": [
-            "text",
-            "image"
-        ],
-        "supported_output_modalities": [
-            "text"
-        ],
-        "supports_function_calling": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_vision": true
+        "source": "https://techcommunity.microsoft.com/blog/azure-ai-foundry-blog/deepseek-v4-1-flash-is-coming-to-microsoft-foundry/4556431"
     },
     "azure_ai/MAI-Image-2.6": {
         "input_cost_per_image_token": 8e-06,
