@@ -56,9 +56,8 @@ impl PythonCache {
             .bind(py)
             .copy()?;
         let (method, result) = match call {
-            CacheCall::Lookup { key, reply } => {
+            CacheCall::Lookup { reply } => {
                 self.pending = Some(Pending::Lookup(reply));
-                arguments.set_item("cache_key", key)?;
                 (
                     if self.asynchronous {
                         "async_get_cache"
@@ -68,9 +67,8 @@ impl PythonCache {
                     None,
                 )
             }
-            CacheCall::Store { key, value, reply } => {
+            CacheCall::Store { value, reply } => {
                 self.pending = Some(Pending::Store(reply));
-                arguments.set_item("cache_key", key)?;
                 (
                     if self.asynchronous {
                         "async_add_cache"

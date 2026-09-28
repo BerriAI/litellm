@@ -321,12 +321,12 @@ async def test_v2_global_cache_leaves_legacy_only_calls_usable() -> None:
 @pytest.mark.parametrize(
     ("route", "legacy"), (("chat", False), ("messages", False), ("responses", False), ("messages", True))
 )
-async def test_v2_cache_controls_and_credentials_isolate_requests(
+async def test_cache_controls_and_backend_credential_key_semantics(
     recording_server: RecordingServer,
     route: Literal["chat", "messages", "responses"],
     legacy: bool,
 ) -> None:
-    recording_server.expected_requests = 4
+    recording_server.expected_requests = 3 if legacy else 4
     litellm.cache = Cache() if legacy else _v2.Cache.memory()
     await invoke(route, recording_server, {"cache": {"no-store": True}})
     await invoke(route, recording_server, {})
@@ -334,7 +334,7 @@ async def test_v2_cache_controls_and_credentials_isolate_requests(
     assert len(recording_server.requests) == 2
     await invoke(route, recording_server, {"cache": {"no-cache": True}})
     await invoke(route, recording_server, {"api_key": "another-key"})
-    assert len(recording_server.requests) == 4
+    assert len(recording_server.requests) == recording_server.expected_requests
 
 
 async def collect(stream: object) -> bytes:
@@ -615,7 +615,7 @@ async def test_v2_default_off_requires_opt_in_even_for_existing_entries(
 @pytest.mark.parametrize(
     ("route", "legacy"), (("chat", False), ("messages", False), ("responses", False), ("messages", True))
 )
-async def test_v2_lookup_follows_python_request_callbacks(
+async def test_cache_lookup_uses_backend_request_callback_semantics(
     recording_server: RecordingServer,
     route: Literal["chat", "messages", "responses"],
     legacy: bool,
@@ -631,19 +631,21 @@ async def test_v2_lookup_follows_python_request_callbacks(
 
     logger: Final = Rewrite()
     litellm.cache = Cache() if legacy else _v2.Cache.memory()
-    recording_server.expected_requests = 2
+    recording_server.expected_requests = 1 if legacy else 2
     await invoke(route, recording_server, {"callbacks": [logger]})
     first_hit: Final = await invoke(route, recording_server, {"callbacks": [logger]})
     logger.temperature = 0.8
     await invoke(route, recording_server, {"callbacks": [logger]})
     second_hit: Final = await invoke(route, recording_server, {"callbacks": [logger]})
     assert logger.names.count("log_pre_api_call") == 4
-    assert len(recording_server.requests) == 2
+    assert len(recording_server.requests) == recording_server.expected_requests
     assert recording_server.requests[0].body["temperature"] == 0.1
-    assert recording_server.requests[1].body["temperature"] == 0.8
+    if not legacy:
+        assert recording_server.requests[1].body["temperature"] == 0.8
     assert isinstance(cache_key(first_hit), str)
     assert isinstance(cache_key(second_hit), str)
-    assert cache_key(first_hit) != cache_key(second_hit)
+    if not legacy:
+        assert cache_key(first_hit) != cache_key(second_hit)
 
 
 @pytest.mark.asyncio
@@ -728,4 +730,65 @@ def test_sync_rust_messages_calls_python_cache(recording_server: RecordingServer
     second: Final = call()
     assert payload(first) == payload(second)
     assert cache_key(second)
+    assert len(recording_server.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("namespace_source", ("cache", "metadata"))
+async def test_rust_messages_legacy_cache_honors_request_namespaces(
+    recording_server: RecordingServer, namespace_source: str
+) -> None:
+    litellm.cache = Cache()
+    recording_server.expected_requests = 2
+    first_options: Final = (
+        {"cache": {"namespace": "first"}} if namespace_source == "cache" else {"metadata": {"redis_namespace": "first"}}
+    )
+    second_options: Final = (
+        {"cache": {"namespace": "second"}}
+        if namespace_source == "cache"
+        else {"metadata": {"redis_namespace": "second"}}
+    )
+    await invoke("messages", recording_server, first_options)
+    second: Final = await invoke("messages", recording_server, second_options)
+    first_hit: Final = await invoke("messages", recording_server, first_options)
+    second_hit: Final = await invoke("messages", recording_server, second_options)
+    assert cache_key(second) is None
+    assert cache_key(first_hit) is not None
+    assert cache_key(second_hit) is not None
+    assert len(recording_server.requests) == 2
+
+
+@pytest.mark.asyncio
+async def test_rust_messages_legacy_semantic_cache_preserves_python_scope(
+    recording_server: RecordingServer,
+) -> None:
+    from litellm.caching.in_memory_cache import InMemoryCache
+    from litellm.types.caching import LiteLLMCacheType
+
+    litellm.cache = Cache(type=LiteLLMCacheType.REDIS_SEMANTIC, _backend=InMemoryCache())
+    first_options: Final = {"messages": [{"role": "user", "content": "hello"}]}
+    second_options: Final = {"messages": [{"role": "user", "content": "hi"}]}
+    first: Final = await invoke("messages", recording_server, first_options)
+    second: Final = await invoke("messages", recording_server, second_options)
+    assert cache_key(first) is None
+    assert cache_key(second) is not None
+    assert payload(first) == payload(second)
+    assert len(recording_server.requests) == 1
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("rust_first", (False, True), ids=("python_to_rust", "rust_to_python"))
+@pytest.mark.parametrize("stream", (False, True), ids=("response", "stream"))
+async def test_legacy_cache_keeps_public_messages_responses_compatible(
+    recording_server: RecordingServer, monkeypatch: pytest.MonkeyPatch, rust_first: bool, stream: bool
+) -> None:
+    litellm.cache = Cache()
+    monkeypatch.setenv("LITELLM_RUST", "0")
+    options: Final = {"litellm_params": {"preset_cache_key": "shared-messages"}, "stream": stream}
+    first: Final = await invoke("messages", recording_server, options, native=rust_first)
+    first_payload: Final = await collect(first) if stream else payload(first)
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    second: Final = await invoke("messages", recording_server, options, native=not rust_first)
+    second_payload: Final = await collect(second) if stream else payload(second)
+    assert second_payload == first_payload
     assert len(recording_server.requests) == 1

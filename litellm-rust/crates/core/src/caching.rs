@@ -61,7 +61,7 @@ pub trait StreamCachable: Cachable {
 
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "kind", content = "value")]
-enum CachedOutput<R> {
+pub enum CachedOutput<R> {
     Response(R),
     Stream(String),
 }
