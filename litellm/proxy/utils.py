@@ -303,6 +303,47 @@ class _EndUserSpendBatch(Protocol):
     def litellm_endusertable(self) -> _EndUserBatchTable: ...
 
 
+class _BatchUpdateTable(Protocol):
+    def update(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
+
+
+class _UpdateManyBatch(Protocol):
+    @property
+    def litellm_verificationtoken(self) -> _BatchUpdateTable: ...
+
+    @property
+    def litellm_usertable(self) -> _EndUserBatchTable: ...
+
+    @property
+    def litellm_endusertable(self) -> _EndUserBatchTable: ...
+
+    @property
+    def litellm_budgettable(self) -> _EndUserBatchTable: ...
+
+    @property
+    def litellm_teamtable(self) -> _EndUserBatchTable: ...
+
+    async def commit(self) -> None: ...
+
+
+class _BudgetAlertEmailLogger(Protocol):
+    async def budget_alerts(
+        self,
+        type: Literal[
+            "token_budget",
+            "user_budget",
+            "soft_budget",
+            "max_budget_alert",
+            "team_budget",
+            "organization_budget",
+            "proxy_budget",
+            "projected_limit_exceeded",
+            "project_budget",
+        ],
+        user_info: CallInfo,
+    ) -> None: ...
+
+
 unified_guardrail: Final = UnifiedLLMGuardrails()
 
 NON_OPENAI_STREAM_GUARDRAIL_TRANSLATION_CALL_TYPES: "frozenset[CallTypes]" = frozenset({CallTypes.anthropic_messages})
@@ -1111,7 +1152,7 @@ class _CallbackCapabilities:
     # Tuple[(resolved_callback, "override" | "apply_guardrail"), ...]
     # Ordered the same as ``litellm.callbacks``; used to build the streaming
     # iterator chain without re-scanning per request.
-    iterator_overrides: tuple[tuple[Any, str], ...] = field(default_factory=tuple)
+    iterator_overrides: tuple[tuple[CustomLogger, str], ...] = field(default_factory=tuple)
     # Resolved CustomLogger callbacks in original order. Pre-resolving once
     # avoids the per-request ``get_custom_logger_compatible_class`` walk for
     # every string entry in ``litellm.callbacks``.
@@ -1194,7 +1235,7 @@ class ProxyLogging:
             alerting=self.alerting,
             internal_usage_cache=self.internal_usage_cache.dual_cache,
         )
-        self.email_logging_instance: Any | None = None
+        self.email_logging_instance: _BudgetAlertEmailLogger | None = None
         if BaseEmailLogger is not None:
             email_logger_class: Final = _get_email_logger_class()
             if email_logger_class is not None:
@@ -2761,7 +2802,7 @@ class ProxyLogging:
         has_pre_call_override = False
         has_content_enforcer = False
         has_moderation_override = False
-        iterator_overrides: Final[list[tuple[Any, str]]] = []  # (callback, kind)
+        iterator_overrides: Final[list[tuple[CustomLogger, str]]] = []  # (callback, kind)
         resolved_callbacks: Final[list[CustomLogger]] = []
 
         for callback in callbacks:
@@ -5481,7 +5522,7 @@ class PrismaClient:
                 """
                 Batch write update queries
                 """
-                batcher = self.db.batch_()
+                batcher: _UpdateManyBatch = self.db.batch_()
                 for idx, t in enumerate(data_list):
                     # check if plain text or hash
                     if t.token.startswith("sk-"):
@@ -6638,7 +6679,7 @@ class PrismaClient:
         read-only as a whole (replica, failover in progress) does not get its
         engine killed on every watchdog cycle or failed write."""
         backoff_seconds: Final = min(
-            self._db_reconnect_cooldown_seconds * 2 ** min(self._db_read_only_recreate_streak, 10),
+            self._db_reconnect_cooldown_seconds * (1 << min(self._db_read_only_recreate_streak, 10)),
             _READ_ONLY_RECREATE_BACKOFF_CAP_SECONDS,
         )
         if time.time() - self._db_read_only_recreate_ts < backoff_seconds:
@@ -7344,7 +7385,7 @@ class ProxyUpdateSpend:
                     if i >= n_retry_times:
                         await requeue_spend_logs(prisma_client, proxy_logging_obj, logs_to_process)
                         raise
-                    await asyncio.sleep(2**i)
+                    await asyncio.sleep(1 << i)
         except Exception as e:
             _raise_failed_update_spend_exception(e=e, start_time=start_time, proxy_logging_obj=proxy_logging_obj)
         finally:
