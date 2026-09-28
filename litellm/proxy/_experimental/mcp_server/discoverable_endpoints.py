@@ -107,6 +107,9 @@ _OAUTH_METADATA_CACHE_MAX_SIZE: Final = 128
 # Per-(server_id, resource_url) async locks so concurrent discovery requests
 # coalesce onto a single upstream fetch instead of issuing N parallel calls.
 _OAUTH_METADATA_FETCH_LOCKS: Final[dict[tuple[str, str], asyncio.Lock]] = {}
+# Per-server_id generation, bumped on invalidation so a fetch that started before the server
+# definition changed cannot repopulate the cache with the stale reply.
+_OAUTH_METADATA_GENERATIONS: Final[dict[str, int]] = {}
 
 router: Final = APIRouter(
     tags=["mcp"],
@@ -143,6 +146,7 @@ def _prune_oauth_metadata_cache(now: float | None = None) -> None:
 
 def invalidate_oauth_metadata_cache(server_id: str) -> None:
     """Drop cached upstream IdP metadata for a server whose definition changed."""
+    _OAUTH_METADATA_GENERATIONS[server_id] = _OAUTH_METADATA_GENERATIONS.get(server_id, 0) + 1
     for cache_key in [key for key in _OAUTH_METADATA_CACHE if key[0] == server_id]:
         del _OAUTH_METADATA_CACHE[cache_key]
     for cache_key in [key for key in _OAUTH_METADATA_FETCH_LOCKS if key[0] == server_id]:
@@ -2377,6 +2381,14 @@ async def fetch_upstream_oauth_protected_resource(
         cached = _OAUTH_METADATA_CACHE.get(cache_key)
         if cached is not None and cached[0] > now:
             return cached[1]
+        generation: Final = _OAUTH_METADATA_GENERATIONS.get(mcp_server.server_id, 0)
+
+        def store(payload: dict | None, ttl_seconds: int) -> None:
+            if _OAUTH_METADATA_GENERATIONS.get(mcp_server.server_id, 0) != generation:
+                return
+            stored_at: Final = time.time()
+            _OAUTH_METADATA_CACHE[cache_key] = (stored_at + ttl_seconds, payload)
+            _prune_oauth_metadata_cache(stored_at)
 
         host_base: Final = f"{upstream.scheme}://{upstream.netloc}"
         candidates: Final = [f"{host_base}/.well-known/oauth-protected-resource"]
@@ -2418,12 +2430,7 @@ async def fetch_upstream_oauth_protected_resource(
                     )
                     continue
                 if isinstance(payload, dict):
-                    now = time.time()
-                    _OAUTH_METADATA_CACHE[cache_key] = (
-                        now + _OAUTH_METADATA_CACHE_TTL_SECONDS,
-                        payload,
-                    )
-                    _prune_oauth_metadata_cache(now)
+                    store(payload, _OAUTH_METADATA_CACHE_TTL_SECONDS)
                     return payload
 
         if len(network_errors) == len(candidates):
@@ -2432,12 +2439,7 @@ async def fetch_upstream_oauth_protected_resource(
         # Negative-result caching: when no candidate yielded a usable payload,
         # remember that for a shorter TTL so we don't re-fetch on every
         # subsequent discovery request (and so the per-key lock can be pruned).
-        now = time.time()
-        _OAUTH_METADATA_CACHE[cache_key] = (
-            now + _OAUTH_METADATA_NEGATIVE_CACHE_TTL_SECONDS,
-            None,
-        )
-        _prune_oauth_metadata_cache(now)
+        store(None, _OAUTH_METADATA_NEGATIVE_CACHE_TTL_SECONDS)
         return None
 
 

@@ -4607,39 +4607,23 @@ class MCPServerManager:
         self._listed_tools_by_server_id.pop(server_id, None)
         invalidate_oauth_metadata_cache(server_id)
 
-    def _discovers_per_caller(self, server: MCPServer) -> bool:
-        return (
-            server.requires_per_user_auth
-            or self._references_per_user_env_var(server)
-            or server.delegate_auth_to_upstream
-            or server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag)
-            or self._signs_caller_identity_upstream(server)
-        )
-
-    @staticmethod
-    def _signs_caller_identity_upstream(server: MCPServer) -> bool:
-        """Whether MCPJWTSigner mints a per-caller ``Authorization`` for ``server``, so the upstream may
-        tailor its catalog to the caller even though the server itself is configured as shared."""
-        from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (  # noqa: PLC0415  # lazy: guardrail package imports the proxy server
-            get_mcp_jwt_signer,
-        )
-
-        if get_mcp_jwt_signer() is None:
-            return False
-        return not any(k.lower() == "authorization" for k in (server.static_headers or {}))
-
     def _listed_tools_identity(self, server: MCPServer, caller: ListedToolsCaller | None) -> str | None:
         """Key the listed-tool cache by every request input that can change the upstream catalog.
 
         Forwarded headers, header-driven stdio env, the caller bearer (forwarded as-is or
-        exchanged as the OBO subject), and the server-specific auth header all reach
-        upstream, so two callers differing in any of them may be shown different tools. Shared
-        servers with none of those stay on the shared (``None``) slot. OpenAPI servers list from
-        the process-wide registry.
+        exchanged as the OBO subject), the server-specific auth header, and the per-caller JWT
+        MCPJWTSigner mints for tools/list all reach upstream, so two callers differing in any of
+        them may be shown different tools. Shared servers with none of those stay on the shared
+        (``None``) slot. OpenAPI servers list from the process-wide registry.
         """
         if server.spec_path or caller is None:
             return None
         auth: Final = caller.user_api_key_auth
+        signed_caller: Final = (
+            f"{auth.user_id}:{auth.api_key}"
+            if auth is not None and self._signs_caller_identity_upstream(server)
+            else None
+        )
         forwarded: Final = dict(self._forwarded_header_values(server, caller.raw_headers)) or None
         header_env: Final = self._build_stdio_env(server, caller.raw_headers)
         stdio_env: Final = None if header_env == self._build_stdio_env(server) else header_env
@@ -4649,7 +4633,19 @@ class MCPServerManager:
             else None
         )
         _, digest = self._discovery_key(server, auth, caller.mcp_auth_header, forwarded, stdio_env, caller_bearer)
-        return digest
+        if signed_caller is None:
+            return digest
+        return hashlib.sha256(f"{digest}:{signed_caller}".encode()).hexdigest()
+
+    @staticmethod
+    def _signs_caller_identity_upstream(server: MCPServer) -> bool:
+        from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (  # noqa: PLC0415  # lazy: guardrail package imports the proxy server
+            get_mcp_jwt_signer,
+        )
+
+        if get_mcp_jwt_signer() is None:
+            return False
+        return not any(k.lower() == "authorization" for k in (server.static_headers or {}))
 
     @staticmethod
     def _forwarded_header_values(
@@ -4688,11 +4684,18 @@ class MCPServerManager:
         subject_token: str | None,
         credential_fingerprint: str | None = None,
     ) -> _DiscoveryKey:
-        per_user: Final = self._discovers_per_caller(server)
+        per_user: Final = (
+            server.requires_per_user_auth
+            or self._references_per_user_env_var(server)
+            or server.delegate_auth_to_upstream
+            or server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag)
+        )
         if not (per_user or mcp_auth_header or extra_headers or stdio_env or subject_token):
             return server.server_id, None
         identity: Final = (
-            (user_api_key_auth.user_id, user_api_key_auth.token) if per_user and user_api_key_auth is not None else None
+            (user_api_key_auth.user_id, user_api_key_auth.api_key)
+            if per_user and user_api_key_auth is not None
+            else None
         )
         material: Final = json.dumps(
             (identity, mcp_auth_header, extra_headers, stdio_env, subject_token, credential_fingerprint),
