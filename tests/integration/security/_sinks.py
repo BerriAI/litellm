@@ -29,7 +29,8 @@ API:
 - ``Rig.model_id``: the router's ``model_info.id`` for ``CONFIG_MODEL`` (read from
   ``/model/info`` once the proxy is up). Pass it as ``ids["model_id"]`` so the
   ``{model_id}`` routes (``/credentials/by_model/{model_id}``, ...) resolve the deployment.
-- ``Rig.proxy``: the owned proxy ``Gateway`` (master key). ``Rig.canaries``: config-held
+- ``Rig.proxy``: the owned proxy ``Gateway`` with its master key (the ``LITELLM_MASTER_KEY``
+  from ``environment`` when a scenario overrides it). ``Rig.canaries``: config-held
   canaries by slot id. ``Rig.provider`` and ``Rig.sinks[name]``: ``Recorder`` objects whose
   ``requests()`` returns every request received so far (the underlying queue is drained into a
   list, so repeated polls keep earlier requests).
@@ -236,15 +237,18 @@ def canary_rig(
             **(environment or {}),
         }
         with owned_proxy_process(gateway, root, overrides, config=config) as owned:
+            admin = Gateway(
+                owned.gateway.client, overrides.get("LITELLM_MASTER_KEY", owned.gateway.key), owned.gateway.upstream_url
+            )
             yield Rig(
-                owned.gateway,
+                admin,
                 owned,
                 Recorder(provider),
                 MappingProxyType({GENERIC_SINK: Recorder(sink)}),
                 MappingProxyType(planted),
                 own_headers,
                 egress,
-                config_model_id(owned.gateway),
+                config_model_id(admin),
             )
         assert egress() == (), f"Owned proxy tried to reach external hosts: {sorted(set(egress()))}"
 
