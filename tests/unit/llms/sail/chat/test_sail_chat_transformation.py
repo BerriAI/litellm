@@ -281,6 +281,40 @@ async def test_sail_chat_drops_unknown_metadata_window_when_requested(
 
 
 @pytest.mark.asyncio
+async def test_sail_chat_rejects_extra_body_completion_window_before_sending(
+    sail_env: None, chat_route: respx.Route
+) -> None:
+    with pytest.raises(
+        litellm.UnsupportedParamsError,
+        match=r"extra_body\.metadata\.completion_window",
+    ) as error:
+        await litellm.acompletion(
+            model=MODEL,
+            messages=MESSAGES,
+            extra_body={"metadata": {"completion_window": "flex"}},
+        )
+
+    assert error.value.status_code == 400
+    assert not chat_route.called
+
+
+@pytest.mark.asyncio
+async def test_sail_chat_drops_extra_body_completion_window_when_requested(
+    sail_env: None, chat_route: respx.Route, spend_capture: SpendCapture
+) -> None:
+    await litellm.acompletion(
+        model=MODEL,
+        messages=MESSAGES,
+        extra_body={"metadata": {"completion_window": "flex"}},
+        drop_params=True,
+        litellm_call_id=spend_capture.call_id,
+    )
+
+    assert "completion_window" not in (sent_body(chat_route).get("metadata") or {})
+    assert await spend_capture.settled_cost() == pytest.approx(cost_at(""))
+
+
+@pytest.mark.asyncio
 async def test_sail_chat_merges_extra_body_metadata_with_normalized_window(
     sail_env: None, chat_route: respx.Route, spend_capture: SpendCapture
 ) -> None:

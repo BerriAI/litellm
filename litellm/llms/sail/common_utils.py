@@ -68,13 +68,34 @@ def completion_window_for_service_tier(
     )
 
 
+def _metadata_without_caller_window(
+    metadata: object, *, field: str, model: str, drop_params: bool
+) -> Mapping[str, object]:
+    if not isinstance(metadata, Mapping):
+        return _EMPTY
+    if "completion_window" in metadata and not _dropping(drop_params):
+        raise _unsupported(f"sail does not accept {field}.completion_window. Send service_tier instead.", model)
+    return without_keys(metadata, frozenset({"completion_window"}))
+
+
 def extra_body_for_sail(
-    extra_body: Mapping[str, object], request_metadata: object, *, model: str, drop_params: bool
+    extra_body: Mapping[str, object],
+    request_metadata: object,
+    *,
+    model: str,
+    drop_params: bool,
+    reject_metadata_window: bool = False,
 ) -> Mapping[str, object]:
     if "service_tier" in extra_body and not _dropping(drop_params):
         raise _unsupported("sail does not accept service_tier inside extra_body. Send service_tier instead.", model)
     caller_metadata: Final[Mapping[str, object]] = (
-        extra_body.get("metadata") if isinstance(extra_body.get("metadata"), Mapping) else _EMPTY
+        _metadata_without_caller_window(
+            extra_body.get("metadata"), field="extra_body.metadata", model=model, drop_params=drop_params
+        )
+        if reject_metadata_window
+        else extra_body.get("metadata")
+        if isinstance(extra_body.get("metadata"), Mapping)
+        else _EMPTY
     )
     request_metadata_mapping: Final[Mapping[str, object]] = (
         request_metadata if isinstance(request_metadata, Mapping) else _EMPTY
@@ -97,7 +118,13 @@ def chat_request_for_sail(request: Mapping[str, object], *, model: str, drop_par
             **(
                 _entry(
                     "extra_body",
-                    extra_body_for_sail(extra_body, request.get("metadata"), model=model, drop_params=drop_params),
+                    extra_body_for_sail(
+                        extra_body,
+                        request.get("metadata"),
+                        model=model,
+                        drop_params=drop_params,
+                        reject_metadata_window=True,
+                    ),
                 )
                 if isinstance(extra_body, Mapping)
                 else _EMPTY
