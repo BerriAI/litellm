@@ -870,6 +870,31 @@ def test_initial_snapshot_refresh_clears_a_previous_guardrail_checkpoint() -> No
     assert proxy_request == {"body": {"messages": [{"role": "user", "content": "new request"}]}}
 
 
+def test_body_snapshot_excludes_team_callback_credentials() -> None:
+    from litellm.proxy.litellm_pre_call_utils import refresh_proxy_server_request_body_snapshot
+    from litellm.types.litellm_params import TRUSTED_CALLBACK_VARS_FIELD
+
+    callback_vars: Final = {
+        "langfuse_public_key": "pk-lf-team",
+        "langfuse_secret_key": "sk-lf-team-secret",
+        "langfuse_host": "https://cloud.langfuse.com",
+    }
+    proxy_request: Final = {"body": None}
+    data: Final = {
+        "messages": [{"role": "user", "content": "hi"}],
+        "proxy_server_request": proxy_request,
+        "success_callback": ["langfuse"],
+        **callback_vars,
+        TRUSTED_CALLBACK_VARS_FIELD: callback_vars,
+    }
+
+    refresh_proxy_server_request_body_snapshot(data)
+
+    assert proxy_request == {
+        "body": {"messages": [{"role": "user", "content": "hi"}], "success_callback": ["langfuse"]}
+    }, proxy_request
+
+
 @pytest.mark.asyncio
 @pytest.mark.parametrize("pre_call_ran", [False, True])
 async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_logs(
