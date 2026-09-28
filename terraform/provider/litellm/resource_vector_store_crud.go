@@ -30,8 +30,6 @@ func resourceLiteLLMVectorStoreCreate(d *schema.ResourceData, m interface{}) err
 		paramsMap[k] = v
 	}
 
-	// /vector_store/new rejects a missing vector_store_id, and the attribute is
-	// computed, so the provider has to mint the id it stores under.
 	vectorStoreID := uuid.New().String()
 
 	vectorStoreRequest := VectorStoreRequest{
@@ -80,7 +78,6 @@ func resourceLiteLLMVectorStoreRead(d *schema.ResourceData, m interface{}) error
 		return nil
 	}
 
-	// /vector_store/info nests the store under "vector_store".
 	var infoResp struct {
 		VectorStore VectorStoreResponse `json:"vector_store"`
 	}

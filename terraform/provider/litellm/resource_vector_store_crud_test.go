@@ -54,9 +54,6 @@ func TestVectorStoreReadDoesNotPersistServerLitellmParams(t *testing.T) {
 	}
 }
 
-// /vector_store/new 400s without a vector_store_id, and the attribute is
-// computed, so create has to mint one and key the resource on it rather than on
-// the store's name.
 func TestVectorStoreCreateSendsGeneratedIDAndUsesItAsResourceID(t *testing.T) {
 	var createBody map[string]interface{}
 
