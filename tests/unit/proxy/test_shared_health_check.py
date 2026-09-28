@@ -121,28 +121,87 @@ class TestSharedHealthCheckManager:
         assert result is False
 
     @pytest.mark.asyncio
-    async def test_release_health_check_lock_success(
-        self, shared_health_manager, mock_redis_cache
-    ):
-        """Test successful lock release"""
-        mock_redis_cache.async_get_cache.return_value = shared_health_manager.pod_id
+    async def test_release_health_check_lock_success(self, shared_health_manager, mock_redis_cache):
+        """The Lua script compares with the JSON-encoded owner written by RedisCache."""
+        script = AsyncMock(return_value=1)
+        mock_redis_cache.async_register_script = MagicMock(return_value=script)
 
         await shared_health_manager.release_health_check_lock()
 
-        mock_redis_cache.async_get_cache.assert_called_once_with("health_check_lock")
-        mock_redis_cache.async_delete_cache.assert_called_once_with("health_check_lock")
+        mock_redis_cache.async_register_script.assert_called_once_with(
+            SharedHealthCheckManager._COMPARE_AND_DELETE_LOCK_SCRIPT
+        )
+        script.assert_awaited_once_with(keys=["health_check_lock"], args=[json.dumps(shared_health_manager.pod_id)])
+        mock_redis_cache.async_get_cache.assert_not_called()
+        mock_redis_cache.async_delete_cache.assert_not_called()
 
     @pytest.mark.asyncio
-    async def test_release_health_check_lock_wrong_owner(
-        self, shared_health_manager, mock_redis_cache
-    ):
-        """Test lock release when not the owner"""
-        mock_redis_cache.async_get_cache.return_value = "other_pod_id"
+    async def test_release_health_check_lock_wrong_owner(self, shared_health_manager, mock_redis_cache):
+        script = AsyncMock(return_value=0)
+        mock_redis_cache.async_register_script = MagicMock(return_value=script)
 
         await shared_health_manager.release_health_check_lock()
 
-        mock_redis_cache.async_get_cache.assert_called_once_with("health_check_lock")
+        script.assert_awaited_once()
         mock_redis_cache.async_delete_cache.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_release_health_check_lock_script_failure_does_not_delete(
+        self, shared_health_manager, mock_redis_cache
+    ):
+        script = AsyncMock(side_effect=RuntimeError("NOSCRIPT"))
+        mock_redis_cache.async_register_script = MagicMock(return_value=script)
+
+        await shared_health_manager.release_health_check_lock()
+
+        assert shared_health_manager._release_lock_script is None
+        mock_redis_cache.async_get_cache.assert_not_called()
+        mock_redis_cache.async_delete_cache.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_release_health_check_lock_without_script_preserves_new_owner(self):
+        class ReplacedLockCache:
+            def __init__(self):
+                self.owner = None
+                self.reads = 0
+                self.deletes = 0
+
+            async def async_set_cache(self, key, value, nx=False, ttl=None):
+                self.owner = value
+                return True
+
+            async def async_get_cache(self, key):
+                self.reads += 1
+                old_owner = self.owner
+                self.owner = "new-pod"
+                return old_owner
+
+            async def async_delete_cache(self, key):
+                self.deletes += 1
+                self.owner = None
+                return 1
+
+        cache = ReplacedLockCache()
+        manager = SharedHealthCheckManager(redis_cache=cache)
+        assert await manager.acquire_health_check_lock() is True
+        await manager.release_health_check_lock()
+
+        assert cache.owner == manager.pod_id
+        assert cache.reads == 0
+        assert cache.deletes == 0
+
+    @pytest.mark.asyncio
+    async def test_release_health_check_lock_reuses_script(self, shared_health_manager, mock_redis_cache):
+        script = AsyncMock(side_effect=[1, 0])
+        mock_redis_cache.async_register_script = MagicMock(return_value=script)
+
+        await shared_health_manager.release_health_check_lock()
+        await shared_health_manager.release_health_check_lock()
+
+        mock_redis_cache.async_register_script.assert_called_once()
+        assert script.await_count == 2
+        mock_redis_cache.async_delete_cache.assert_not_called()
+
 
     @pytest.mark.asyncio
     async def test_release_health_check_lock_no_redis(self):
@@ -288,8 +347,9 @@ class TestSharedHealthCheckManager:
         """Test performing shared health check when acquiring lock"""
         # No cached results
         mock_redis_cache.async_get_cache.return_value = None
-        # Lock acquisition succeeds
+        # Lock acquisition succeeds; registration returns an awaitable script callable.
         mock_redis_cache.async_set_cache.return_value = True
+        mock_redis_cache.async_register_script = MagicMock(return_value=AsyncMock(return_value=1))
 
         model_list = [
             {"model_name": "test-model", "litellm_params": {"model": "test-model"}}
