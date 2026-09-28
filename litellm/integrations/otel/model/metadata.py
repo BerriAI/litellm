@@ -220,6 +220,10 @@ class LLMCallEvent:
     # actually attempted — router pre-call rejections, SDK failures before the
     # provider handoff, and standalone guardrail runs all lack it.
     upstream_started: bool
+    # True for a response served from the litellm response cache. A cache hit
+    # never hands off to a provider, so ``upstream_started`` stays False even
+    # though the call completed and is worth a span.
+    cache_hit: bool
     # A best-effort ``"{operation} {model}"`` name known at ``pre_call`` time. The
     # span is renamed from the typed payload at close (``finish_span``); this only
     # needs to be reasonable for a span that never gets closed (a leak).
@@ -242,6 +246,7 @@ class LLMCallEvent:
             auth_metadata=auth_metadata(payload, kwargs),
             is_no_upstream_call=bool(kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)),
             upstream_started=kwargs.get("api_call_start_time") is not None,
+            cache_hit=bool(cast("Mapping[str, object]", payload).get("cache_hit")) if payload else False,
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
             trace=trace,

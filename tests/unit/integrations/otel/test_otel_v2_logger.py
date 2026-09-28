@@ -432,6 +432,38 @@ def test_no_span_when_pre_call_never_ran():
     assert exporter.get_finished_spans() == ()  # no phantom LLM span
 
 
+def test_cache_hit_without_pre_call_emits_zero_cost_span():
+    """A response served from the litellm cache never hands off to a provider,
+    so ``pre_call`` never runs and ``api_call_start_time`` is never stamped —
+    but the completed call's payload still warrants a span, carrying the cache
+    attributes rather than being dropped like a gate rejection."""
+    logger, exporter = _logger()
+    payload = _payload(cache_hit=True, response_cost=0.0, saved_cache_cost=0.002, cost_breakdown=None)
+    asyncio.run(
+        logger.async_log_success_event(_kwargs(payload=payload), None, None, None)
+    )
+    (span,) = exporter.get_finished_spans()
+    assert span.attributes[LiteLLM.CACHE_HIT] is True
+    assert span.attributes[LiteLLM.SAVED_CACHE_COST] == 0.002
+    assert span.attributes[f"{LiteLLM.COST_PREFIX}total"] == 0.0
+    assert not [
+        k
+        for k in span.attributes
+        if k.startswith(LiteLLM.COST_PREFIX) and k != f"{LiteLLM.COST_PREFIX}total"
+    ]
+
+
+def test_cache_miss_without_pre_call_still_emits_no_span():
+    """The cache-hit relaxation is not a general loosening: a success callback
+    with no ``pre_call`` carrier and no cache hit still emits nothing."""
+    logger, exporter = _logger()
+    payload = _payload(cache_hit=False, response_cost=0.002)
+    asyncio.run(
+        logger.async_log_success_event(_kwargs(payload=payload), None, None, None)
+    )
+    assert exporter.get_finished_spans() == ()
+
+
 def test_real_llm_failure_still_emitted():
     """A genuine LLM failure: ``pre_call`` ran (the call was attempted), so the
     CLIENT span is opened at the boundary and closed ERROR."""
