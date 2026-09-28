@@ -8673,7 +8673,7 @@ def test_model_has_no_cost_mapping_non_token_price_from_litellm_params_is_false(
     assert model_has_no_cost_mapping(model="custom-tts", llm_router=router) is False
 
 
-@pytest.mark.parametrize("cost_field", ["input_cost_per_second", "input_cost_per_token"])
+@pytest.mark.parametrize("cost_field", ["cost_per_second", "input_cost_per_second", "input_cost_per_token"])
 def test_model_has_no_cost_mapping_explicit_zero_price_is_false(cost_field):
     from litellm.proxy.auth.auth_checks import model_has_no_cost_mapping
     from litellm.router import Router

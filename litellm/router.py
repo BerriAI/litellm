@@ -8758,7 +8758,7 @@ class Router:
             return
         if any(
             model_info.get(field) is not None
-            for field in ("input_cost_per_token", "input_cost_per_second", "tiered_pricing")
+            for field in ("input_cost_per_token", "input_cost_per_second", "cost_per_second", "tiered_pricing")
         ):
             return
         try:
