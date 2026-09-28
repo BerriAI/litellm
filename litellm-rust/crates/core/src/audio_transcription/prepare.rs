@@ -1,3 +1,4 @@
+use litellm_core_utils::call_arguments::{CallArguments, ProviderParameters};
 use litellm_http::request::string_headers;
 use litellm_http::request::with_default_headers;
 use litellm_llms::{
@@ -35,6 +36,8 @@ pub async fn prepare_audio_transcription_provider_call(
     request: AudioTranscriptionRequest<'_>,
     secrets: &dyn SecretSource,
 ) -> Result<ProviderAudioTranscriptionRequest, Error> {
+    let params =
+        ProviderParameters::from_arguments(&CallArguments::from(request.optional_params.clone()))?;
     let provider_info = resolve_llm_provider(
         request.model,
         request.custom_llm_provider,
@@ -58,15 +61,17 @@ pub async fn prepare_audio_transcription_provider_call(
         &request.optional_params,
         &env_lookup,
     )?;
-    let filtered_params = config.map_transcription_params(&request.optional_params);
+    let filtered_params = config.map_transcription_params(params.fields());
     let transformed =
         config.transform_audio_transcription_request(&model, request.audio, filtered_params)?;
+    let consumed: Vec<&str> = params.fields().keys().map(String::as_str).collect();
+    let body = params.compose(&transformed.body, &consumed)?;
     Ok(ProviderAudioTranscriptionRequest {
         model,
         custom_llm_provider: <&str>::from(provider_info.provider).to_string(),
         config,
         url,
-        body: transformed.body,
+        body,
         environment,
         secrets: snapshot,
         timeout: request.timeout,

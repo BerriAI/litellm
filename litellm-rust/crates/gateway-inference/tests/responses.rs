@@ -55,6 +55,8 @@ async fn responses_aliases_run_the_core_route(
 #[case::missing_input(json!({"model": "public/model"}), 400)]
 #[case::invalid_stream(json!({"model": "public/model", "input": "hello", "stream": "yes"}), 400)]
 #[case::unknown_model(json!({"model": "unknown", "input": "hello"}), 400)]
+#[case::invalid_extra_body(json!({"model": "public/model", "input": "hello", "extra_body": []}), 400)]
+#[case::late_stream_override(json!({"model": "public/model", "input": "hello", "extra_body": {"stream": true}}), 400)]
 #[tokio::test]
 async fn invalid_responses_requests_never_reach_the_provider(
     #[case] body: serde_json::Value,

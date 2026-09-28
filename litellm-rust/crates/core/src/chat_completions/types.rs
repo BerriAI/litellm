@@ -2,16 +2,11 @@ use litellm_secrets::source::Secrets;
 use std::time::Duration;
 
 use litellm_auth::SecretValue;
+use litellm_core_utils::call_arguments::ProviderParameters;
 use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
 use litellm_types::llms::openai::ChatMessage;
 use serde_json::{Map, Value};
 
-/// A `/chat/completions` call as it crosses into the core.
-///
-/// `optional_params` arrives already mapped to the provider's own parameter
-/// names by the host, exactly as the messages route receives an already
-/// Anthropic-shaped body. The core owns the conversation translation, the
-/// provider call, and the response normalization.
 pub struct ChatCompletionsRequest<'a> {
     pub model: &'a str,
     pub messages: Value,
@@ -55,6 +50,7 @@ pub struct ResolvedChatCompletionsRequest<'a> {
     pub config: &'static dyn BaseConfig,
     pub messages: Vec<ChatMessage>,
     pub optional_params: Map<String, Value>,
+    pub provider_params: ProviderParameters,
     pub api_key: Option<&'a str>,
     pub api_base: Option<&'a str>,
     pub extra_headers: Option<Map<String, Value>>,

@@ -2,7 +2,11 @@ use litellm_core::RouteError;
 use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host_python::{from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use pyo3::{
+    exceptions::PyValueError,
+    prelude::*,
+    types::{IntoPyDict, PyDict},
+};
 use serde::Serialize;
 use serde_json::{Map, Value};
 
@@ -50,15 +54,22 @@ impl InferenceHost {
         let string = |name: &str| -> PyResult<Option<String>> {
             argument(name)?.map(|value| value.extract()).transpose()
         };
-        let names: Vec<String> = py.import(self.module)?.getattr("PARAMETERS")?.extract()?;
-        let params = names
+        let names = py.import(self.module)?.getattr("PARAMETERS")?;
+        let names_list: Vec<String> = names.extract()?;
+        let selected = names_list
             .iter()
             .filter_map(|name| match argument(name) {
-                Ok(Some(value)) => Some(from_py(&value).map(|value| (name.clone(), value))),
+                Ok(Some(value)) => Some(Ok((name.as_str(), value))),
                 Ok(None) => None,
                 Err(error) => Some(Err(error)),
             })
-            .collect::<PyResult<Map<String, Value>>>()?;
+            .collect::<PyResult<Vec<_>>>()?
+            .into_py_dict(py)?;
+        let projected = py
+            .import("litellm.rust_bridge.public_call")?
+            .getattr("provider_parameters")?
+            .call1((selected, request.getattr("kwargs")?, arguments, names))?;
+        let params = from_py(&projected)?;
         let timeout = argument("timeout")?
             .or(argument("request_timeout")?)
             .map(|value| python_timeout_seconds(py, value.unbind()))
@@ -73,6 +84,7 @@ impl InferenceHost {
             .getattr("connection_defaults")?
             .call1((provider,))?
             .extract()?;
+
         Ok(ProjectedCall {
             options: RouteOptions {
                 model,

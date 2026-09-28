@@ -98,7 +98,8 @@ fn call_configuration_never_enters_the_body() {
     let body = transform(
         "my-model",
         json!([{"role": "user", "content": "hi"}]),
-        json!({"custom_endpoint": true, "extra_headers": {"x": "y"}, "max_retries": 2}),
+        json!({"custom_endpoint": true,
+                "future_provider_knob": {"nested": [null, false, 0]}, "extra_headers": {"x": "y"}, "max_retries": 2}),
     );
     assert_eq!(
         body.as_object().unwrap().keys().collect::<Vec<_>>(),
@@ -304,7 +305,6 @@ fn a_non_text_response_content_declines() {
 
 #[rstest]
 #[case::streaming(json!({"stream": true}), "streaming")]
-#[case::unrecognized_param(json!({"some_provider_knob": 1}), "unrecognized request parameter")]
 fn declines(#[case] opts: Value, #[case] expected: &'static str) {
     assert_eq!(
         reason(json!([{"role": "user", "content": "hi"}]), opts),
@@ -323,6 +323,7 @@ fn accepts_standard_openai_params() {
                 "max_tokens": 16,
                 "response_format": {"type": "json_object"},
                 "custom_endpoint": true,
+                "future_provider_knob": {"nested": [null, false, 0]},
             }),
         ),
         None

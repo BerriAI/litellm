@@ -121,7 +121,19 @@ pub(super) fn project_request(
     let specs = consumed_optional_params(&model, custom_llm_provider.as_deref())
         .map_err(ocr_error_to_pyerr)?;
     let names = specs.iter().map(|spec| spec.name).collect::<Vec<_>>();
-    let optional_params = project_optional_fields(kwargs, &names)?;
+    let known = project_optional_fields(kwargs, &names)?;
+    let py = request.py();
+    let extras = py
+        .import("litellm.rust_bridge.public_call")?
+        .getattr("provider_parameters")?
+        .call1((
+            PyDict::new(py),
+            PyDict::new(py),
+            kwargs,
+            Vec::<String>::new(),
+        ))?;
+    let extras: Map<String, Value> = from_py(&extras)?;
+    let optional_params = extras.into_iter().chain(known).collect();
     let input_sources = request_input_sources(
         kwargs,
         names

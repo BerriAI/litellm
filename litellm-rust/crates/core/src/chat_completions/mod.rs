@@ -4,6 +4,7 @@ pub use crate::error::RouteError as Error;
 mod common_utils;
 pub(crate) mod handler;
 mod prepare;
+use litellm_core_utils::call_arguments::{CallArguments, ProviderParameters};
 use litellm_types::utils::ChatCompletionsResponse;
 use prepare::{parse_messages, prepare_provider_request, resolve_provider_config, resolve_request};
 use serde_json::{Map, Value};
@@ -42,8 +43,14 @@ pub fn chat_completions_decline_reason(
     if messages.is_empty() {
         return Some("empty message list");
     }
+    let Ok(params) =
+        ProviderParameters::from_arguments(&CallArguments::from(optional_params.clone()))
+    else {
+        return None;
+    };
     config
-        .unsupported_reason(&messages, optional_params)
+        .unsupported_reason(&messages, &config.map_openai_params(params.fields()))
+        .or_else(|| config.unsupported_reason(&messages, params.overrides()))
         .map(|reason| reason.0)
 }
 

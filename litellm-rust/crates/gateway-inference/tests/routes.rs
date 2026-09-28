@@ -22,6 +22,75 @@ use wiremock::{
 };
 
 #[rstest]
+#[case::chat("/v1/chat/completions", "openai_like/test-model", "messages")]
+#[case::messages("/v1/messages", "anthropic/test-model", "messages")]
+#[case::responses("/v1/responses", "openai/test-model", "input")]
+#[tokio::test]
+async fn request_parameters_have_the_same_ownership_and_merge_rules(
+    #[case] route: &str,
+    #[case] model: &str,
+    #[case] input_field: &str,
+) {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "response-test", "model": "test-model", "output": [],
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "hello"}, "finish_reason": "stop"}],
+            "type": "message", "role": "assistant", "content": [{"type": "text", "text": "hello"}],
+            "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}
+        })))
+        .expect(1)
+        .mount(&upstream).await;
+    let extension = json!({"api_key": "provider field", "values": [null, false, 0, "", []]});
+    let response = support::post(support::app(model, &upstream.uri()), route, json!({
+        "model": "public/model", input_field: [{"role": "user", "content": "hello"}], "max_tokens": 16,
+        "api_key": "untrusted", "api_base": "https://untrusted.invalid", "timeout": 5,
+        "litellm_metadata": {"internal": true}, "callbacks": ["internal"],
+        "future": {"old": true}, "future_null": null, "nested": extension,
+        "extra_body": {"future": {"new": true}, "model": "untrusted", "api_key": "untrusted", "litellm_secret": "internal"}
+    })).await;
+    assert_eq!(response.status(), 200, "{}", support::json(response).await);
+    let requests = upstream.received_requests().await.unwrap();
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert_eq!(body["model"], "test-model");
+    assert_eq!(body["nested"], extension);
+    assert_eq!(body["future"], json!({"new": true}));
+    assert_eq!(body.get("future_null"), Some(&Value::Null));
+    let unexpected: Vec<_> = body
+        .as_object()
+        .unwrap()
+        .keys()
+        .filter(|name| {
+            matches!(
+                name.as_str(),
+                "extra_body" | "api_key" | "api_base" | "timeout" | "callbacks"
+            ) || name.starts_with("litellm_")
+        })
+        .collect();
+    assert!(unexpected.is_empty(), "forwarded controls: {unexpected:?}");
+}
+
+#[rstest]
+#[tokio::test]
+async fn chat_maps_api_parameters_in_core() {
+    let upstream = MockServer::start().await;
+    Mock::given(method("POST"))
+        .and(body_partial_json(json!({"stop_sequences": ["done"]})))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "id": "message-test", "model": "test-model", "content": [{"type": "text", "text": "hello"}],
+            "stop_reason": "end_turn", "usage": {"input_tokens": 1, "output_tokens": 1}
+        })))
+        .expect(1).mount(&upstream).await;
+    let response = support::post(support::app("anthropic/test-model", &upstream.uri()), "/v1/chat/completions", json!({
+        "model": "public/model", "messages": [{"role": "user", "content": "hello"}], "max_tokens": 16, "stop": ["done"]
+    })).await;
+    assert_eq!(response.status(), 200);
+    let requests = upstream.received_requests().await.unwrap();
+    let body: Value = serde_json::from_slice(&requests[0].body).unwrap();
+    assert!(body.get("stop").is_none());
+}
+
+#[rstest]
 #[case::chat("/chat/completions", Some("public/model"))]
 #[case::versioned_chat("/v1/chat/completions", Some("public/model"))]
 #[case::engine("/engines/public%2Fmodel/chat/completions", None)]

@@ -19,6 +19,8 @@ pub enum Error {
 
 #[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum ErrorDetail {
+    #[error(transparent)]
+    Parameters(#[from] litellm_core_utils::params::Error),
     #[error("{0}")]
     Message(String),
     #[error("invalid {subject}: {source}")]

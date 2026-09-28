@@ -2,15 +2,19 @@ use std::time::Duration;
 
 use litellm_auth::SecretValue;
 use litellm_core_utils::{
+    call_arguments::{CallArguments, ProviderParameters},
     dot_notation_indexing::delete_nested_value,
-    get_provider_specific_headers::get_provider_specific_headers, settings::Lookup,
+    get_provider_specific_headers::get_provider_specific_headers,
+    settings::Lookup,
 };
 use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment, messages::context::MessagesTransformContext,
 };
 use litellm_secrets::source::SecretSource;
-use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
+use litellm_types::llms::anthropic_messages::anthropic_request::{
+    AnthropicMessagesOptionalParams, AnthropicMessagesRequest,
+};
 
 use super::{
     Error, MessagesCall,
@@ -78,6 +82,16 @@ fn prepare_provider_request(
     let config = provider.config();
     let env_lookup = |key: &str| secrets.get(key);
 
+    let arguments = CallArguments::from(body.params.extra);
+    let params = ProviderParameters::from_arguments(&arguments)?;
+    let body = AnthropicMessagesRequest {
+        params: AnthropicMessagesOptionalParams {
+            extra: params.fields().clone(),
+            ..body.params
+        },
+        ..body
+    };
+
     let sanitized = config.shape_request(
         AnthropicMessagesRequest { model, ..body },
         shaping.reasoning_auto_summary,
@@ -87,6 +101,10 @@ fn prepare_provider_request(
         trimmed,
         &MessagesTransformContext::new(shaping.capabilities, shaping.drop_params),
     )?;
+    params.validate_stream(transformed.params.stream)?;
+    let transformed = transformed
+        .with_overrides(params.overrides().clone())
+        .map_err(invalid_request)?;
 
     let scoped =
         get_provider_specific_headers(provider_specific_header.as_ref(), provider.as_str());
