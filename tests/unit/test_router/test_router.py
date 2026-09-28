@@ -13926,6 +13926,28 @@ async def test_anthropic_messages_ping_behind_buffered_lifecycle_frame_is_forwar
 
 
 @pytest.mark.asyncio
+async def test_anthropic_messages_split_ping_stays_in_order_behind_buffered_lifecycle_frame():
+    """A ping the transport splits across two reads is not a whole frame, so
+    neither fragment may jump ahead of the buffered message_start: yielding
+    the head live and flushing the tail behind message_start would splice a
+    lifecycle frame into the middle of the ping on the wire."""
+    router = _anthropic_messages_make_router(fallbacks=[{"primary": ["fallback"]}])
+    ping_head, ping_tail = b'event: ping\ndata: {"ty', b'pe": "ping"}\n\n'
+    source = _AnthropicMessagesFakeByteStream(
+        [_anthropic_messages_message_start_chunk(), ping_head, ping_tail, _anthropic_messages_content_chunk("hi")]
+    )
+
+    wrapped = await router._aanthropic_messages_streaming_iterator(response=source, initial_kwargs={"model": "primary"})
+
+    assert [chunk async for chunk in wrapped] == [
+        _anthropic_messages_message_start_chunk(),
+        ping_head,
+        ping_tail,
+        _anthropic_messages_content_chunk("hi"),
+    ]
+
+
+@pytest.mark.asyncio
 async def test_anthropic_messages_no_fallback_message_start_reaches_client_before_content():
     """With no fallback able to take over, the stream is committed from the
     first frame: message_start reaches the client live instead of waiting
