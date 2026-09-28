@@ -4640,10 +4640,7 @@ class MCPServerManager:
         if server.spec_path or caller is None:
             return None
         auth: Final = caller.user_api_key_auth
-        identity: Final = (
-            (auth.user_id, auth.token) if auth is not None and self._discovers_per_caller(server) else None
-        )
-        forwarded: Final = self._forwarded_header_values(server, caller.raw_headers)
+        forwarded: Final = dict(self._forwarded_header_values(server, caller.raw_headers)) or None
         header_env: Final = self._build_stdio_env(server, caller.raw_headers)
         stdio_env: Final = None if header_env == self._build_stdio_env(server) else header_env
         caller_bearer: Final = (
@@ -4651,11 +4648,8 @@ class MCPServerManager:
             if server.is_client_forwarded_token or server.auth_type == MCPAuth.oauth2_token_exchange
             else None
         )
-        inputs: Final = (identity, caller.mcp_auth_header, forwarded, stdio_env, caller_bearer)
-        if not any(inputs):
-            return None
-        material: Final = json.dumps(inputs, sort_keys=True, separators=(",", ":"))
-        return hashlib.sha256(material.encode(), usedforsecurity=False).hexdigest()
+        _, digest = self._discovery_key(server, auth, caller.mcp_auth_header, forwarded, stdio_env, caller_bearer)
+        return digest
 
     @staticmethod
     def _forwarded_header_values(
