@@ -13,8 +13,8 @@ global state.
 """
 
 import re
-from collections.abc import Mapping
-from typing import Final
+from collections.abc import Mapping, Sequence
+from typing import Final, cast
 
 from botocore.exceptions import (
     CredentialRetrievalError,
@@ -23,8 +23,16 @@ from botocore.exceptions import (
     ProfileNotFound,
 )
 
+import litellm
+from litellm.litellm_core_utils.responses_api_utils import has_function_tool, peek_reasoning_summary_aliases
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
-from litellm.llms.bedrock.common_utils import AmazonBedrockGlobalConfig
+from litellm.llms.bedrock.common_utils import (
+    AmazonBedrockGlobalConfig,
+    _bedrock_mantle_price_map_keys,
+    bedrock_chat_completions_serves_tools_with_reasoning,
+    bedrock_reasoning_effort_is_active,
+    bedrock_supports_web_search,
+)
 from litellm.secret_managers.main import get_secret_str
 
 BEDROCK_MANTLE_DEFAULT_REGION: Final = "us-east-1"
@@ -127,7 +135,7 @@ class BedrockMantleAuthMixin(SignsRequestsWithAWS):
             ) from e
 
 
-def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:
+def mantle_supports_responses(model: str | None, model_cost: Mapping[str, object]) -> bool:
     """Whether a Bedrock Mantle model can serve the native Responses API.
 
     Purely data-driven from the model's price-map capability signal -- either
@@ -139,10 +147,56 @@ def mantle_supports_responses(model: str | None, model_cost: dict) -> bool:
     gpt-oss substring), so a substring gate would be wrong. A model absent from
     model_cost simply has no signal and returns False (chat-completions emulation).
     """
-    entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}", {}) if model else {}
-    if "/v1/responses" in (entry.get("supported_endpoints") or []):
-        return True
-    return entry.get("mode") == "responses"
+    if not model:
+        return False
+    return any(
+        _mantle_price_map_entry_supports_responses(model_cost.get(key)) for key in _bedrock_mantle_price_map_keys(model)
+    )
+
+
+def _mantle_price_map_entry_supports_responses(entry: object) -> bool:
+    if not isinstance(entry, Mapping):
+        return False
+    typed_entry: Final = cast(  # cast-ok: the entry passed the Mapping check
+        Mapping[str, object], entry
+    )
+    supported_endpoints: Final = typed_entry.get("supported_endpoints")
+    return (
+        isinstance(supported_endpoints, Sequence)
+        and "/v1/responses"
+        in cast(  # cast-ok: model-price endpoints are strings
+            Sequence[object], supported_endpoints
+        )
+    ) or typed_entry.get("mode") == "responses"
+
+
+def mantle_chat_request_needs_native_responses(
+    model: str,
+    request_params: Mapping[str, object],
+    reasoning_summary: object | None,
+    *,
+    read_summary_aliases: bool = True,
+) -> bool:
+    if request_params.get("functions"):
+        return False
+    reasoning_effort: Final = request_params.get("reasoning_effort")
+    reasoning_summary_alias: Final = peek_reasoning_summary_aliases(request_params) if read_summary_aliases else None
+    needs_native_responses: Final = (
+        (
+            has_function_tool(request_params.get("tools"))
+            and not bedrock_chat_completions_serves_tools_with_reasoning(model, "bedrock_mantle")
+            and bedrock_reasoning_effort_is_active(model, reasoning_effort, "bedrock_mantle")
+        )
+        or (
+            request_params.get("web_search_options") is not None
+            and bedrock_supports_web_search(model, "bedrock_mantle")
+        )
+        or (reasoning_effort is not None and (reasoning_summary_alias is not None or reasoning_summary is not None))
+    )
+    model_cost: Final = cast(  # cast-ok: model price rows use string keys
+        Mapping[str, object], litellm.model_cost
+    )
+    return needs_native_responses and mantle_supports_responses(model, model_cost)
 
 
 def mantle_base_segment(model: str | None, model_cost: dict) -> str:

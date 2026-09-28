@@ -11,7 +11,7 @@ import os
 import re
 from collections.abc import Mapping, Sequence
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict
+from typing import TYPE_CHECKING, Any, Final, Literal, TypedDict, cast
 
 if TYPE_CHECKING:
     from botocore.model import Shape
@@ -24,6 +24,12 @@ from pydantic import TypeAdapter, ValidationError
 import litellm
 from litellm import verbose_logger
 from litellm.litellm_core_utils.aws_partition import get_aws_dns_suffix
+from litellm.litellm_core_utils.responses_api_utils import (
+    filter_additional_drop_params,
+    has_function_tool,
+    peek_reasoning_summary_aliases,
+    reasoning_effort_is_active,
+)
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
@@ -820,18 +826,53 @@ def split_bedrock_region_path(model: str) -> tuple[str | None, str]:
     return None, stripped
 
 
+def _bedrock_mantle_price_map_keys(model: str) -> tuple[str, ...]:
+    mantle_model: Final = model.removeprefix("bedrock_mantle/")
+    region, model_id = split_bedrock_region_path(mantle_model)
+    return (
+        f"bedrock_mantle/{mantle_model}",
+        f"bedrock_mantle/{region}/{model_id}" if region is not None else f"bedrock_mantle/{model_id}",
+        f"bedrock_mantle/{model_id}",
+    )
+
+
+def _bedrock_mantle_price_map_entries(model: str) -> tuple[Mapping[str, object] | None, ...]:
+    model_cost: Final = cast(  # cast-ok: model price rows use string keys
+        Mapping[str, Mapping[str, object]], litellm.model_cost
+    )
+    return tuple(model_cost.get(key) for key in _bedrock_mantle_price_map_keys(model))
+
+
 BEDROCK_RUNTIME_PRICE_MAP_PROVIDERS: Final = frozenset(("bedrock", "bedrock_converse"))
 
 
 def _bedrock_price_map_entries(model: str) -> tuple[Mapping[str, object] | None, ...]:
+    model_cost: Final = cast(  # cast-ok: model price rows use string keys
+        Mapping[str, Mapping[str, object]], litellm.model_cost
+    )
     return tuple(
-        litellm.model_cost.get(key)
-        for key in (model, strip_bedrock_routing_prefix(model), split_bedrock_region_path(model)[1])
+        model_cost.get(key) for key in (model, strip_bedrock_routing_prefix(model), split_bedrock_region_path(model)[1])
     )
 
 
-def _bedrock_price_map_flag(model: str, flag: str) -> bool:
-    return any(entry is not None and entry.get(flag) is True for entry in _bedrock_price_map_entries(model))
+def _bedrock_price_map_flag(
+    model: str,
+    flag: str,
+    custom_llm_provider: Literal["bedrock", "bedrock_mantle"] = "bedrock",
+) -> bool:
+    entries: Final = (
+        _bedrock_mantle_price_map_entries(model)
+        if custom_llm_provider == "bedrock_mantle"
+        else _bedrock_price_map_entries(model)
+    )
+    return any(entry is not None and entry.get(flag) is True for entry in entries)
+
+
+def bedrock_supports_web_search(
+    model: str,
+    custom_llm_provider: Literal["bedrock", "bedrock_mantle"] = "bedrock",
+) -> bool:
+    return _bedrock_price_map_flag(model, "supports_web_search", custom_llm_provider)
 
 
 def _bedrock_runtime_row_lists_chat_completions(entry: Mapping[str, object]) -> bool:
@@ -860,14 +901,48 @@ def uses_bedrock_runtime_chat_completions(model: str) -> bool:
     )
 
 
-def bedrock_runtime_chat_completions_serves_tools_with_reasoning(model: str) -> bool:
+def bedrock_chat_completions_serves_tools_with_reasoning(
+    model: str,
+    custom_llm_provider: Literal["bedrock", "bedrock_mantle"] = "bedrock",
+) -> bool:
     """Whether AWS's native Chat Completions serves this model's function tools with any ``reasoning_effort``.
 
-    Data-driven from the price-map ``supports_bedrock_runtime_chat_completions_tools_with_reasoning``
-    flag (gpt-oss, Grok). Without it AWS only takes tools with ``reasoning_effort="none"``
-    (the GPT-5.6 family), and Converse serves tools with any effort, so those requests fall back to it.
+    Data-driven from the price-map ``supports_bedrock_chat_completions_tools_with_reasoning``
+    flag. Without it, function tools with active reasoning require Responses when available.
     """
-    return _bedrock_price_map_flag(model, "supports_bedrock_runtime_chat_completions_tools_with_reasoning")
+    return _bedrock_price_map_flag(
+        model,
+        "supports_bedrock_chat_completions_tools_with_reasoning",
+        custom_llm_provider,
+    )
+
+
+def with_max_completion_tokens(params: Mapping[str, object]) -> Mapping[str, object]:
+    if "max_tokens" not in params:
+        return params
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in (("max_completion_tokens", params["max_tokens"]), *params.items())
+            if key != "max_tokens"
+        }
+    )
+
+
+def bedrock_reasoning_effort_is_active(
+    model: str,
+    reasoning_effort: object,
+    custom_llm_provider: Literal["bedrock", "bedrock_mantle"] = "bedrock",
+) -> bool:
+    entries: Final = (
+        _bedrock_mantle_price_map_entries(model)
+        if custom_llm_provider == "bedrock_mantle"
+        else _bedrock_price_map_entries(model)
+    )
+    supports_none_reasoning_effort: Final = not any(
+        entry is not None and entry.get("supports_none_reasoning_effort") is False for entry in entries
+    )
+    return reasoning_effort_is_active(reasoning_effort, supports_none_reasoning_effort)
 
 
 def bedrock_runtime_chat_completions_enforces_response_format(model: str) -> bool:
@@ -900,11 +975,25 @@ def _response_format_needs_converse(model: str, response_format: object) -> bool
         return False
     if not isinstance(response_format, Mapping):
         return not bedrock_runtime_chat_completions_enforces_response_format(model)
-    response_format_type: Final = response_format.get("type")
+    response_format_mapping: Final = cast(  # cast-ok: API response-format keys are strings
+        Mapping[str, object], response_format
+    )
+    response_format_type: Final = response_format_mapping.get("type")
     if response_format_type == "text":
         return False
-    is_json_schema: Final = response_format_type == "json_schema" and "json_schema" in response_format
+    is_json_schema: Final = response_format_type == "json_schema" and "json_schema" in response_format_mapping
     return not (is_json_schema and bedrock_runtime_chat_completions_enforces_response_format(model))
+
+
+def _bedrock_request_has_non_tool_converse_trigger(
+    model: str,
+    request_params: Mapping[str, object],
+) -> bool:
+    return (
+        any(request_params.get(key) is not None for key in BEDROCK_CONVERSE_ONLY_REQUEST_KEYS)
+        or bedrock_request_metadata_is_owned()
+        or _response_format_needs_converse(model, request_params.get("response_format"))
+    )
 
 
 def bedrock_request_needs_converse(model: str, request_params: Mapping[str, object]) -> bool:
@@ -915,27 +1004,60 @@ def bedrock_request_needs_converse(model: str, request_params: Mapping[str, obje
     forwards as ``additionalModelRequestFields`` and ``inferenceConfig``) have no field on
     AWS's native OpenAI surface, ``stop`` stays on Converse where it fails loudly instead of silently
     stopping hidden reasoning, operator-owned request metadata is only written onto the Converse body,
-    function tools (``tools`` or legacy ``functions``) on a model without
-    ``supports_bedrock_runtime_chat_completions_tools_with_reasoning`` are rejected there unless
-    ``reasoning_effort`` is exactly ``"none"``, and a ``response_format`` goes native only as
+    function tools with active reasoning on models without
+    ``supports_bedrock_chat_completions_tools_with_reasoning`` use Responses when available and Converse otherwise.
+    Legacy ``functions`` with active reasoning still require Converse, and a ``response_format`` goes native only as
     ``{"type": "json_schema", "json_schema": ...}`` (a pydantic model is converted to that) on a model with
     ``supports_bedrock_runtime_chat_completions_response_format``: a schema on any other model is only
     honored by Converse, and every ``json_object`` form (``response_schema`` included) keeps Converse's
     handling everywhere, since AWS's native surface rejects that type with a 400 unless the prompt
     mentions json.
     """
-    if any(request_params.get(key) is not None for key in BEDROCK_CONVERSE_ONLY_REQUEST_KEYS):
+    if _bedrock_request_has_non_tool_converse_trigger(model, request_params):
         return True
-    if bedrock_request_metadata_is_owned():
-        return True
-    if _response_format_needs_converse(model, request_params.get("response_format")):
-        return True
-    if not (request_params.get("tools") or request_params.get("functions")):
+    has_tools: Final = has_function_tool(request_params.get("tools"))
+    has_legacy_functions: Final = bool(request_params.get("functions"))
+    if not (has_tools or has_legacy_functions):
         return False
-    return (
-        not bedrock_runtime_chat_completions_serves_tools_with_reasoning(model)
-        and request_params.get("reasoning_effort") != "none"
+    if bedrock_chat_completions_serves_tools_with_reasoning(model):
+        return False
+    if not bedrock_reasoning_effort_is_active(model, request_params.get("reasoning_effort")):
+        return False
+    model_cost: Final = cast(  # cast-ok: model price rows use string keys
+        Mapping[str, object], litellm.model_cost
     )
+    return has_legacy_functions or not bedrock_supports_openai_responses(model, model_cost)
+
+
+def bedrock_chat_request_needs_native_responses(model: str, request_params: Mapping[str, object]) -> bool:
+    if request_params.get("functions"):
+        return False
+    if _bedrock_request_has_non_tool_converse_trigger(model, request_params):
+        return False
+    model_cost: Final = cast(  # cast-ok: model price rows use string keys
+        Mapping[str, object], litellm.model_cost
+    )
+    if not bedrock_supports_openai_responses(model, model_cost):
+        return False
+    if request_params.get("web_search_options") is not None and bedrock_supports_web_search(model):
+        return True
+    reasoning_effort: Final = request_params.get("reasoning_effort")
+    if reasoning_effort is not None and peek_reasoning_summary_aliases(request_params) is not None:
+        return True
+    return (
+        has_function_tool(request_params.get("tools"))
+        and not bedrock_chat_completions_serves_tools_with_reasoning(model)
+        and bedrock_reasoning_effort_is_active(model, reasoning_effort)
+    )
+
+
+def bedrock_chat_request_needs_native_responses_for_request(
+    model: str,
+    request_params: Mapping[str, object],
+    additional_drop_params: Sequence[str] | None,
+) -> bool:
+    filtered_request_params: Final = filter_additional_drop_params(request_params, additional_drop_params)
+    return bedrock_chat_request_needs_native_responses(model, filtered_request_params)
 
 
 def bedrock_route_for_request(
@@ -946,9 +1068,8 @@ def bedrock_route_for_request(
     Param mapping and dispatch both call this with the same inputs, so a request that falls back to
     Converse is mapped with the Converse config and sent to Converse, never one without the other.
     """
-    dropped: Final = frozenset(additional_drop_params or ())
     return BedrockModelInfo.get_bedrock_route(
-        model, MappingProxyType({key: value for key, value in request_params.items() if key not in dropped})
+        model, filter_additional_drop_params(request_params, additional_drop_params)
     )
 
 
@@ -1359,9 +1480,9 @@ class BedrockModelInfo(BaseLLMModelInfo):
         if is_bedrock_application_inference_profile_arn(model):
             return "converse"
 
-        if uses_bedrock_runtime_chat_completions(model) and not (
-            request_params is not None and bedrock_request_needs_converse(model, request_params)
-        ):
+        if uses_bedrock_runtime_chat_completions(model):
+            if request_params is not None and bedrock_request_needs_converse(model, request_params):
+                return "converse"
             return "chat_completions"
 
         base_model: Final = BedrockModelInfo.get_base_model(model)

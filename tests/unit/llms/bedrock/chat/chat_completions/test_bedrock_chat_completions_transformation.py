@@ -1,10 +1,12 @@
 """Native Bedrock Runtime Chat Completions: Grok, gpt-oss and GPT-5.6 stay on /openai/v1/chat/completions."""
 
 import json
+from collections.abc import Callable, Generator, Mapping, Sequence
+from typing import Final, Protocol, cast
 
 import httpx
 import pytest
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter
 
 import litellm
 from litellm.llms.bedrock.chat.chat_completions.transformation import (
@@ -18,21 +20,35 @@ from litellm.llms.bedrock.chat.chat_completions.transformation import (
 from litellm.llms.bedrock.common_utils import (
     BEDROCK_CONVERSE_ONLY_REQUEST_KEYS,
     BedrockModelInfo,
+    bedrock_chat_request_needs_native_responses,
+    bedrock_chat_request_needs_native_responses_for_request,
     bedrock_request_needs_converse,
     bedrock_route_for_request,
     get_bedrock_chat_config,
     uses_bedrock_runtime_chat_completions,
 )
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
+from litellm.types.utils import ModelResponse
+
+
+class _CacheClearable(Protocol):
+    def cache_clear(self) -> None: ...
+
+
+def _clear_model_info_cache() -> None:
+    model_info_cache: Final = cast(_CacheClearable, litellm.get_model_info)
+    model_info_cache.cache_clear()
 
 
 @pytest.fixture
-def local_cost_map(monkeypatch):
+def local_cost_map(monkeypatch: pytest.MonkeyPatch) -> Generator[None, None, None]:
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "true")
-    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
-    litellm.get_model_info.cache_clear()
+    get_model_cost_map: Final = cast(Callable[..., object], litellm.get_model_cost_map)
+    cost_map: Final = TypeAdapter(dict[str, dict[str, object]]).validate_python(get_model_cost_map(url=""))
+    monkeypatch.setattr(litellm, "model_cost", cost_map)
+    _clear_model_info_cache()
     yield
-    litellm.get_model_info.cache_clear()
+    _clear_model_info_cache()
 
 
 @pytest.mark.parametrize(
@@ -139,8 +155,16 @@ def test_transform_request_is_openai_chat_body_not_converse():
     assert "messages" in body
 
 
-def _chat_completion_json(content, model, tool_calls=None):
-    message = {"role": "assistant", "content": content, **({"tool_calls": tool_calls} if tool_calls else {})}
+def _chat_completion_json(
+    content: str | None,
+    model: str,
+    tool_calls: Sequence[Mapping[str, object]] | None = None,
+) -> dict[str, object]:
+    message: Final[dict[str, object]] = {
+        "role": "assistant",
+        "content": content,
+        **({"tool_calls": tool_calls} if tool_calls else {}),
+    }
     return {
         "id": "chatcmpl-test",
         "object": "chat.completion",
@@ -151,15 +175,33 @@ def _chat_completion_json(content, model, tool_calls=None):
     }
 
 
-CONVERSE_JSON = {
+CONVERSE_JSON: Final[dict[str, object]] = {
     "output": {"message": {"role": "assistant", "content": [{"text": "ok"}]}},
     "stopReason": "end_turn",
     "usage": {"inputTokens": 1, "outputTokens": 1, "totalTokens": 2},
 }
 
+RESPONSES_JSON: Final[dict[str, object]] = {
+    "id": "resp_test",
+    "object": "response",
+    "created_at": 1733529600,
+    "status": "completed",
+    "model": "openai.gpt-5.6-sol",
+    "output": [
+        {
+            "type": "message",
+            "id": "msg_test",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": "ok", "annotations": []}],
+        }
+    ],
+    "usage": {"input_tokens": 1, "output_tokens": 1, "total_tokens": 2},
+}
+
 
 @pytest.fixture
-def fake_aws_env(monkeypatch):
+def fake_aws_env(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("AWS_REGION_NAME", "us-west-2")
     monkeypatch.delenv("AWS_BEDROCK_RUNTIME_ENDPOINT", raising=False)
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
@@ -168,12 +210,19 @@ def fake_aws_env(monkeypatch):
     monkeypatch.setenv("AWS_SESSION_TOKEN", "testing")
 
 
-def _recording_client(**response_kwargs):
+def _recording_client(
+    *,
+    json: Mapping[str, object] | None = None,
+    content: str | bytes | None = None,
+    headers: Mapping[str, str] | None = None,
+) -> tuple[list[httpx.Request], HTTPHandler]:
     requests: list[httpx.Request] = []
 
-    def handle(request):
+    def handle(request: httpx.Request) -> httpx.Response:
         requests.append(request)
-        return httpx.Response(200, **response_kwargs)
+        if json is not None:
+            return httpx.Response(200, json=json)
+        return httpx.Response(200, content=content or b"", headers=headers)
 
     return requests, HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handle)))
 
@@ -272,7 +321,8 @@ def test_guardrail_config_falls_back_to_converse(local_cost_map, model):
 
 
 @pytest.mark.parametrize(
-    "model", ["openai.gpt-oss-20b-1:0", "us.xai.grok-4.6", "global.openai.gpt-5.6-sol"]
+    "model",
+    ["openai.gpt-oss-20b-1:0", "us.xai.grok-4.6", "global.openai.gpt-5.6-sol"],
 )
 @pytest.mark.parametrize(
     "request_params",
@@ -286,21 +336,184 @@ def test_converse_extension_params_fall_back_to_converse(local_cost_map, model, 
 
 
 @pytest.mark.parametrize(
-    "request_params, expected_route",
+    "request_params",
     [
-        ({"tools": [GET_WEATHER_TOOL]}, "converse"),
-        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low"}, "converse"),
-        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": None}, "converse"),
-        ({"tools": [GET_WEATHER_TOOL], "reasoning_effort": "none"}, "chat_completions"),
-        ({"reasoning_effort": "low"}, "chat_completions"),
-        ({"tools": None, "reasoning_effort": "low"}, "chat_completions"),
-        ({"tools": [], "reasoning_effort": "low"}, "chat_completions"),
-        ({}, "chat_completions"),
+        {"tools": [GET_WEATHER_TOOL]},
+        {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low"},
+        {"tools": [GET_WEATHER_TOOL], "reasoning_effort": None},
+        {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "none"},
+        {"reasoning_effort": "low"},
+        {"tools": None, "reasoning_effort": "low"},
+        {"tools": [], "reasoning_effort": "low"},
+        {},
     ],
 )
-def test_gpt56_tools_need_reasoning_none_on_chat_completions(local_cost_map, request_params, expected_route):
-    assert BedrockModelInfo.get_bedrock_route("global.openai.gpt-5.6-sol", request_params) == expected_route
-    assert BedrockModelInfo.get_bedrock_route("bedrock/us.openai.gpt-5.6-terra", request_params) == expected_route
+def test_gpt56_tools_with_responses_support_stay_on_chat_route(
+    local_cost_map: None,
+    request_params: dict[str, object],
+) -> None:
+    assert BedrockModelInfo.get_bedrock_route("global.openai.gpt-5.6-sol", request_params) == "chat_completions"
+    assert BedrockModelInfo.get_bedrock_route("us.openai.gpt-5.6-terra", request_params) == "chat_completions"
+
+
+@pytest.fixture
+def chat_model_without_responses(
+    local_cost_map: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> Generator[str, None, None]:
+    validated_model_cost: Final = TypeAdapter(dict[str, dict[str, object]]).validate_python(
+        cast(object, litellm.model_cost)
+    )
+    isolated_model_cost: Final = dict(validated_model_cost)
+    monkeypatch.setattr(litellm, "model_cost", isolated_model_cost)
+    model: Final = "bedrock-test-no-responses-tools-reasoning"
+    litellm.register_model(
+        {
+            model: {
+                "litellm_provider": "bedrock_converse",
+                "supported_endpoints": ["/v1/chat/completions"],
+            }
+        },
+        persist_across_reloads=False,
+    )
+    _clear_model_info_cache()
+    try:
+        yield model
+    finally:
+        _clear_model_info_cache()
+
+
+@pytest.mark.parametrize(
+    "request_params",
+    [{}, {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "medium"}],
+    ids=("plain", "tools-with-reasoning"),
+)
+def test_qwen_native_chat_support_does_not_bridge(
+    local_cost_map: None,
+    request_params: dict[str, object],
+) -> None:
+    assert BedrockModelInfo.get_bedrock_route("qwen.qwen3-32b-v1:0", request_params) == "chat_completions"
+    assert bedrock_chat_request_needs_native_responses("qwen.qwen3-32b-v1:0", request_params) is False
+
+
+def test_gpt56_tools_with_reasoning_bridge_but_keep_native_chat_route(local_cost_map: None) -> None:
+    model: Final = "us.openai.gpt-5.6-sol"
+    request_params: Final = {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "medium"}
+
+    assert BedrockModelInfo.get_bedrock_route(model, request_params) == "chat_completions"
+    assert bedrock_chat_request_needs_native_responses(model, request_params) is True
+
+
+def test_converse_only_guardrail_prevents_gpt56_responses_bridge(local_cost_map: None) -> None:
+    model: Final = "us.openai.gpt-5.6-sol"
+    request_params: Final = {
+        "tools": [GET_WEATHER_TOOL],
+        "reasoning_effort": "medium",
+        "guardrailConfig": {"guardrailIdentifier": "gr-1", "guardrailVersion": "1"},
+    }
+
+    assert BedrockModelInfo.get_bedrock_route(model, request_params) == "converse"
+    assert bedrock_chat_request_needs_native_responses(model, request_params) is False
+
+
+def test_response_format_needing_converse_prevents_responses_bridge(local_cost_map: None) -> None:
+    model: Final = "us.openai.gpt-5.6-sol"
+    request_params: Final = {
+        "tools": [GET_WEATHER_TOOL],
+        "reasoning_effort": "medium",
+        "response_format": {"type": "json_object"},
+    }
+
+    assert BedrockModelInfo.get_bedrock_route(model, request_params) == "converse"
+    assert bedrock_chat_request_needs_native_responses(model, request_params) is False
+
+
+def test_gpt56_tools_with_reasoning_none_stay_on_native_chat(local_cost_map: None) -> None:
+    model: Final = "us.openai.gpt-5.6-sol"
+    request_params: Final = {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "none"}
+
+    assert BedrockModelInfo.get_bedrock_route(model, request_params) == "chat_completions"
+    assert bedrock_chat_request_needs_native_responses(model, request_params) is False
+
+
+def test_gpt6_astra_tools_with_reasoning_none_bridge(local_cost_map: None) -> None:
+    model: Final = "us.openai.gpt-6-astra"
+    request_params: Final = {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "none"}
+
+    assert BedrockModelInfo.get_bedrock_route(model, request_params) == "chat_completions"
+    assert bedrock_chat_request_needs_native_responses(model, request_params) is True
+
+
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("us.openai.gpt-6-sol", True),
+        ("us.openai.gpt-5.6-sol", False),
+    ],
+)
+def test_dict_reasoning_effort_none_respects_model_support(
+    local_cost_map: None,
+    model: str,
+    expected: bool,
+) -> None:
+    request_params: Final[dict[str, object]] = {
+        "tools": [GET_WEATHER_TOOL],
+        "reasoning_effort": {"effort": "none"},
+    }
+
+    assert bedrock_chat_request_needs_native_responses(model, request_params) is expected
+
+
+def test_gpt56_legacy_functions_with_reasoning_stay_on_converse(local_cost_map: None) -> None:
+    model: Final = "us.openai.gpt-5.6-sol"
+    request_params: Final = {"functions": [GET_WEATHER_TOOL["function"]], "reasoning_effort": "medium"}
+
+    assert BedrockModelInfo.get_bedrock_route(model, request_params) == "converse"
+    assert bedrock_chat_request_needs_native_responses(model, request_params) is False
+
+
+def test_function_tools_without_native_responses_use_converse(chat_model_without_responses: str) -> None:
+    request_params: Final = {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "medium"}
+
+    assert BedrockModelInfo.get_bedrock_route(chat_model_without_responses, request_params) == "converse"
+    assert bedrock_chat_request_needs_native_responses(chat_model_without_responses, request_params) is False
+
+
+def test_dropping_function_tools_prevents_responses_bridge(local_cost_map: None) -> None:
+    model: Final = "us.openai.gpt-5.6-sol"
+    request_params: Final = {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "medium"}
+
+    assert bedrock_route_for_request(model, request_params, ["tools"]) == "chat_completions"
+    assert bedrock_chat_request_needs_native_responses_for_request(model, request_params, ["tools"]) is False
+
+
+def test_reasoning_effort_mapping_with_summary_is_active_for_bridge(local_cost_map: None) -> None:
+    model: Final = "us.openai.gpt-5.6-sol"
+    request_params: Final = {
+        "tools": [GET_WEATHER_TOOL],
+        "reasoning_effort": {"effort": "none", "summary": "detailed"},
+    }
+
+    assert bedrock_chat_request_needs_native_responses(model, request_params) is True
+
+
+def test_reasoning_summary_alias_bridges_to_responses(local_cost_map: None) -> None:
+    model: Final = "us.openai.gpt-5.6-sol"
+    request_params: Final = {"reasoning_effort": "medium", "reasoningSummary": "detailed"}
+
+    assert bedrock_chat_request_needs_native_responses(model, request_params) is True
+
+
+def test_legacy_functions_with_reasoning_summary_stay_on_converse(local_cost_map: None) -> None:
+    model: Final = "us.openai.gpt-5.6-sol"
+    request_params: Final = {
+        "functions": [GET_WEATHER_TOOL["function"]],
+        "reasoning_effort": "medium",
+        "reasoningSummary": "auto",
+    }
+
+    assert BedrockModelInfo.get_bedrock_route(model, request_params) == "converse"
+    assert bedrock_chat_request_needs_native_responses(model, request_params) is False
 
 
 @pytest.mark.parametrize("reasoning_effort", ["low", "high", None])
@@ -373,11 +586,9 @@ def _assert_remote_images_inlined(content):
 
 
 def test_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch):
-    import litellm.litellm_core_utils.prompt_templates.image_handling as image_handling
+    from litellm.litellm_core_utils.prompt_templates import image_handling
 
-    monkeypatch.setattr(
-        image_handling, "convert_url_to_base64", lambda url: f"data:image/png;base64,{url}"
-    )
+    monkeypatch.setattr(image_handling, "convert_url_to_base64", lambda url: f"data:image/png;base64,{url}")
     body = AmazonBedrockRuntimeChatCompletionsConfig().transform_request(
         model="us.xai.grok-4.6",
         messages=IMAGE_MESSAGES,
@@ -390,7 +601,7 @@ def test_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch
 
 
 async def test_async_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch):
-    import litellm.litellm_core_utils.prompt_templates.image_handling as image_handling
+    from litellm.litellm_core_utils.prompt_templates import image_handling
 
     async def fake_convert(url):
         return f"data:image/png;base64,{url}"
@@ -670,19 +881,65 @@ def test_gpt_oss_completion_hits_chat_completions_and_splits_reasoning(local_cos
     assert response.choices[0].message.content == "Hi"
 
 
-def test_gpt56_tools_with_reasoning_effort_go_to_converse(local_cost_map, fake_aws_env):
-    requests, client = _recording_client(json=CONVERSE_JSON)
-    response = litellm.completion(
-        model="bedrock/global.openai.gpt-5.6-sol",
-        messages=[{"role": "user", "content": "hello"}],
-        tools=[GET_WEATHER_TOOL],
-        reasoning_effort="low",
-        client=client,
+def test_runtime_gpt56_bridge_and_qwen_chat_dispatch_use_native_endpoints(
+    local_cost_map: None,
+    fake_aws_env: None,
+) -> None:
+    responses_requests, responses_client = _recording_client(json=RESPONSES_JSON)
+    responses_response: Final[ModelResponse] = cast(
+        ModelResponse,
+        litellm.completion(
+            model="bedrock/global.openai.gpt-5.6-sol",
+            messages=[{"role": "user", "content": "hello"}],
+            tools=[GET_WEATHER_TOOL],
+            reasoning_effort="medium",
+            client=responses_client,
+        ),
     )
 
-    assert requests[0].url.raw_path.endswith(b"/model/global.openai.gpt-5.6-sol/converse")
-    assert json.loads(requests[0].content)["toolConfig"]["tools"][0]["toolSpec"]["name"] == "get_weather"
-    assert response.choices[0].message.content == "ok"
+    assert len(responses_requests) == 1
+    assert str(responses_requests[0].url) == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/responses"
+    assert responses_response.choices[0].message.content == "ok"
+
+    chat_requests, chat_client = _recording_client(json=_chat_completion_json("ok", "qwen.qwen3-32b-v1:0"))
+    chat_response: Final[ModelResponse] = cast(
+        ModelResponse,
+        litellm.completion(
+            model="bedrock/qwen.qwen3-32b-v1:0",
+            messages=[{"role": "user", "content": "hello"}],
+            tools=[GET_WEATHER_TOOL],
+            reasoning_effort="medium",
+            client=chat_client,
+        ),
+    )
+
+    assert len(chat_requests) == 1
+    assert str(chat_requests[0].url) == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
+    assert chat_response.choices[0].message.content == "ok"
+
+
+def test_minimax_tools_with_reasoning_use_native_chat(
+    local_cost_map: None,
+    fake_aws_env: None,
+) -> None:
+    tool_calls: Final = [{"id": "call_0", "type": "function", "function": {"name": "get_weather", "arguments": "{}"}}]
+    requests, client = _recording_client(json=_chat_completion_json(None, "minimax.minimax-m2.5", tool_calls))
+    response: Final[ModelResponse] = cast(
+        ModelResponse,
+        litellm.completion(
+            model="bedrock/minimax.minimax-m2.5",
+            messages=[{"role": "user", "content": "weather in Paris"}],
+            tools=[GET_WEATHER_TOOL],
+            reasoning_effort="medium",
+            client=client,
+        ),
+    )
+
+    assert str(requests[0].url) == "https://bedrock-runtime.us-west-2.amazonaws.com/openai/v1/chat/completions"
+    body: Final = TypeAdapter(dict[str, object]).validate_json(requests[0].content)
+    assert body["reasoning_effort"] == "medium"
+    assert body["tools"] == [GET_WEATHER_TOOL]
+    assert response.choices[0].message.tool_calls[0].function.name == "get_weather"
 
 
 def test_gpt56_tools_with_reasoning_none_stay_on_chat_completions(local_cost_map, fake_aws_env):
@@ -990,7 +1247,7 @@ SYNTHETIC_NATIVE_MODEL = "vendor.native-model-v1:0"
         ({}, {"tools": [GET_WEATHER_TOOL]}, True),
         ({}, {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "none"}, False),
         (
-            {"supports_bedrock_runtime_chat_completions_tools_with_reasoning": True},
+            {"supports_bedrock_chat_completions_tools_with_reasoning": True},
             {"tools": [GET_WEATHER_TOOL], "reasoning_effort": "low"},
             False,
         ),

@@ -11,9 +11,10 @@ Auth: Bearer token (litellm_params.api_key, BEDROCK_MANTLE_API_KEY, or the
 """
 
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final
+from typing import Any, Final, cast
 
 import httpx
+from pydantic import TypeAdapter
 
 import litellm
 from litellm._logging import verbose_logger
@@ -28,9 +29,16 @@ from litellm.types.llms.openai import AllMessageValues
 from litellm.types.router import GenericLiteLLMParams
 
 from ...base_llm.chat.transformation import BaseLLMException
-from ...bedrock.common_utils import BedrockError
+from ...bedrock.common_utils import (
+    BedrockError,
+    bedrock_chat_completions_serves_tools_with_reasoning,
+    with_max_completion_tokens,
+)
 from ...openai_like.chat.transformation import OpenAILikeChatConfig
 from ..common_utils import mantle_base_segment, split_mantle_region_prefix
+
+_SUPPORTED_OPENAI_PARAMS_ADAPTER: Final = TypeAdapter(list[str])
+_BOOLEAN_ADAPTER: Final = TypeAdapter(bool)
 
 
 class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
@@ -107,8 +115,10 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
             headers["OpenAI-Project"] = project_id
         return headers
 
-    def get_supported_openai_params(self, model: str) -> list:
-        base_params: Final = super().get_supported_openai_params(model)
+    def get_supported_openai_params(self, model: str) -> list[str]:
+        base_params: Final = _SUPPORTED_OPENAI_PARAMS_ADAPTER.validate_python(
+            super().get_supported_openai_params(model)  # pyright: ignore[reportUnknownMemberType]  # base untyped
+        )
         extra_params: Final = tuple(
             param
             for param, supported in (
@@ -119,9 +129,39 @@ class BedrockMantleChatConfig(BedrockMantleAuthMixin, OpenAILikeChatConfig):
         )
         return [*base_params, *extra_params]  # mutable-ok: fresh list required by the inherited signature
 
+    def map_openai_params(
+        self,
+        non_default_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        optional_params: dict[str, object],  # mutable-ok: BaseConfig signature
+        model: str,
+        drop_params: bool,
+        replace_max_completion_tokens_with_max_tokens: bool = True,
+    ) -> dict[str, object]:  # mutable-ok: BaseConfig signature
+        model_cost: Final = cast(dict[str, dict[str, object]], litellm.model_cost)
+        uses_openai_path: Final = mantle_base_segment(model, model_cost) == "openai/v1"
+        mapped: Final = TypeAdapter(dict[str, object]).validate_python(
+            super().map_openai_params(  # pyright: ignore[reportUnknownMemberType]  # parent mapper is untyped
+                non_default_params=non_default_params,
+                optional_params=optional_params,
+                model=model,
+                drop_params=drop_params,
+                replace_max_completion_tokens_with_max_tokens=(
+                    replace_max_completion_tokens_with_max_tokens and not uses_openai_path
+                ),
+            )
+        )
+        if not uses_openai_path:
+            return mapped
+        return dict(with_max_completion_tokens(mapped))  # mutable-ok: BaseConfig signature
+
     def _supports_reasoning(self, model: str) -> bool:
         try:
-            return litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
+            return bedrock_chat_completions_serves_tools_with_reasoning(
+                model,
+                custom_llm_provider="bedrock_mantle",
+            ) or _BOOLEAN_ADAPTER.validate_python(
+                litellm.supports_reasoning(model=model, custom_llm_provider=self.custom_llm_provider)
+            )
         except Exception as e:
             verbose_logger.debug("BedrockMantleChatConfig: error checking reasoning support: %s", e)
             return False

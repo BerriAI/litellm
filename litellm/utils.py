@@ -88,6 +88,9 @@ from litellm.litellm_core_utils.fallback_generalizations import (
     match_capability_generalizations,
     match_fill_missing_generalizations,
 )
+from litellm.litellm_core_utils.responses_api_utils import (
+    peek_reasoning_summary_aliases as peek_reasoning_summary_aliases,  # noqa: PLC0414  # public utils compatibility
+)
 from litellm.litellm_core_utils.sensitive_data_masker import redact_credentials_in_payload
 from litellm.litellm_core_utils.tokenizer import Encoding, HuggingFace, strip_special_tokens
 from litellm.rust_bridge import tokenizer as tokenizer_dispatch
@@ -10140,24 +10143,6 @@ def get_standard_openai_params(params: Mapping[str, object]) -> dict:
 
 def get_non_default_completion_params(kwargs: Mapping[str, object]) -> dict[str, object]:
     return filter_out_litellm_params(kwargs, excluding=litellm.OPENAI_CHAT_COMPLETION_PARAMS)
-
-
-def peek_reasoning_summary_aliases(optional_params: dict) -> object | None:
-    """Read AI-SDK-style reasoning summary from optional_params or nested extra_body.
-
-    Uses key membership (not ``or`` chains) so falsy values like ``""`` are not skipped.
-    """
-    if "reasoningSummary" in optional_params:
-        return optional_params["reasoningSummary"]
-    if "reasoning_summary" in optional_params:
-        return optional_params["reasoning_summary"]
-    extra_body: Final = optional_params.get("extra_body")
-    if isinstance(extra_body, dict):
-        if "reasoningSummary" in extra_body:
-            return extra_body["reasoningSummary"]
-        if "reasoning_summary" in extra_body:
-            return extra_body["reasoning_summary"]
-    return None
 
 
 def strip_reasoning_summary_aliases_from_optional_params(

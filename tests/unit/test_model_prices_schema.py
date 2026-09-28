@@ -4,12 +4,14 @@ import importlib.util
 import json
 import re
 from collections.abc import Mapping
+from itertools import groupby
 from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
 import jsonschema
 import pytest
+from pydantic import TypeAdapter
 
 import litellm
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
@@ -338,7 +340,13 @@ def test_azure_gpt_chat_latest_declares_the_one_effort_azure_accepts(prices: dic
 
 BEDROCK_OPENAI_GPT_MARKERS: Final = ("openai.gpt-5.4", "openai.gpt-5.5", "openai.gpt-5.6", "openai.gpt-6-astra")
 BEDROCK_PROVIDERS: Final = frozenset(("bedrock", "bedrock_converse", "bedrock_mantle"))
+BEDROCK_RUNTIME_PROVIDERS: Final = frozenset(("bedrock", "bedrock_converse"))
 BEDROCK_ROW_PREFIXES: Final = ("bedrock_mantle/", "us.", "global.")
+BEDROCK_RUNTIME_CRIS_PREFIXES: Final = ("us-gov.", "global.", "apac.", "eu.", "us.", "jp.", "au.")
+BEDROCK_CHAT_ENDPOINT: Final = "/v1/chat/completions"
+BEDROCK_TOOLS_REASONING_FLAG: Final = "supports_bedrock_chat_completions_tools_with_reasoning"
+BEDROCK_RESPONSE_FORMAT_FLAG: Final = "supports_bedrock_runtime_chat_completions_response_format"
+BEDROCK_SUPPORTED_ENDPOINTS_ADAPTER: Final = TypeAdapter(list[str])
 GPT_5_4_BEDROCK_LADDER: Final = ("none", "low", "medium", "high", "xhigh")
 GPT_5_6_BEDROCK_LADDER: Final = ("none", "low", "medium", "high", "xhigh", "max")
 GPT_6_ASTRA_BEDROCK_LADDER: Final = ("low", "medium", "high", "xhigh", "max")
@@ -381,6 +389,71 @@ def test_every_bedrock_openai_gpt_row_advertises_xhigh(prices: dict):
         and "xhigh" not in (resolve_supported_reasoning_efforts(entry, deployment_is_mapped=True) or ())
     ]
     assert missing == []
+
+
+def bedrock_runtime_base_model_id(name: str) -> str:
+    without_provider_prefix: Final = name.removeprefix("bedrock_converse/").removeprefix("bedrock/")
+    first_component, separator, remainder = without_provider_prefix.partition("/")
+    model_id: Final = (
+        remainder
+        if separator and re.fullmatch(r"[a-z]{2}(?:-[a-z0-9]+)+-\d+", first_component)
+        else without_provider_prefix
+    )
+    return next(
+        (model_id.removeprefix(prefix) for prefix in BEDROCK_RUNTIME_CRIS_PREFIXES if model_id.startswith(prefix)),
+        model_id,
+    )
+
+
+def bedrock_supported_endpoints(entry: Mapping[str, object]) -> tuple[str, ...]:
+    supported_endpoints: Final = entry.get("supported_endpoints")
+    if supported_endpoints is None:
+        return ()
+    return tuple(BEDROCK_SUPPORTED_ENDPOINTS_ADAPTER.validate_python(supported_endpoints))
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_bedrock_endpoint_capabilities_are_consistent(path: Path) -> None:
+    prices: Final = TypeAdapter(dict[str, dict[str, object]]).validate_json(path.read_text())
+    runtime_rows: Final = tuple(
+        (bedrock_runtime_base_model_id(name), entry)
+        for name, entry in prices.items()
+        if entry.get("litellm_provider") in BEDROCK_RUNTIME_PROVIDERS
+    )
+    ordered_runtime_rows: Final = tuple(sorted(runtime_rows, key=lambda row: row[0]))
+    runtime_groups: Final = tuple(
+        (base_id, tuple(entry for _, entry in group))
+        for base_id, group in groupby(ordered_runtime_rows, key=lambda row: row[0])
+    )
+    inconsistent_runtime_rows: Final = tuple(
+        base_id
+        for base_id, entries in runtime_groups
+        if len(
+            frozenset(
+                json.dumps((bedrock_supported_endpoints(entry), entry.get(BEDROCK_TOOLS_REASONING_FLAG)))
+                for entry in entries
+            )
+        )
+        != 1
+    )
+    runtime_capabilities_without_chat: Final = tuple(
+        name
+        for name, entry in prices.items()
+        if entry.get("litellm_provider") in BEDROCK_RUNTIME_PROVIDERS
+        and (entry.get(BEDROCK_TOOLS_REASONING_FLAG) is True or entry.get(BEDROCK_RESPONSE_FORMAT_FLAG) is True)
+        and BEDROCK_CHAT_ENDPOINT not in bedrock_supported_endpoints(entry)
+    )
+    mantle_responses_with_chat: Final = tuple(
+        name
+        for name, entry in prices.items()
+        if entry.get("litellm_provider") == "bedrock_mantle"
+        and entry.get("mode") == "responses"
+        and BEDROCK_CHAT_ENDPOINT in bedrock_supported_endpoints(entry)
+    )
+
+    assert inconsistent_runtime_rows == ()
+    assert runtime_capabilities_without_chat == ()
+    assert mantle_responses_with_chat == ()
 
 
 def is_active_priced_mistral_chat_row(name: str, entry: Mapping[str, object]) -> bool:
