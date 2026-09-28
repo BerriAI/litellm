@@ -3093,12 +3093,13 @@ class AmazonConverseConfig(BaseConfig):
 
         ## HANDLE TOOL CALLS
         _message: Final = Message(**chat_completion_message)
-        mapped_finish_reason: Final = map_finish_reason(completion_response["stopReason"])
+        raw_finish_reason: Final = completion_response["stopReason"]
+        mapped_finish_reason: Final = map_finish_reason(raw_finish_reason)
 
         initial_finish_reason: Final = (
             "stop"
             if resolved_json_mode and not filtered_tools and tools and mapped_finish_reason == "tool_calls"
-            else completion_response["stopReason"]
+            else raw_finish_reason
         )
 
         (
@@ -3109,11 +3110,17 @@ class AmazonConverseConfig(BaseConfig):
             tools=optional_params.get("tools"),
             initial_finish_reason=initial_finish_reason,
         )
+        choice_provider_specific_fields: Final = (
+            {"native_finish_reason": raw_finish_reason}  # mutable-ok: Choices requires a dict
+            if returned_finish_reason != raw_finish_reason
+            else None
+        )
         model_response.choices = [
             litellm.Choices(
                 finish_reason=returned_finish_reason,
                 index=0,
                 message=returned_message,
+                provider_specific_fields=choice_provider_specific_fields,
             )
         ]
         model_response.created = int(time.time())
