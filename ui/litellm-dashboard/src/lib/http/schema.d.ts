@@ -27214,6 +27214,8 @@ export interface components {
              * @default false
              */
             passthrough: boolean;
+            /** Project */
+            project?: string | null;
             /** Purpose */
             purpose: string;
             /**
@@ -27243,6 +27245,8 @@ export interface components {
              * @default false
              */
             passthrough: boolean;
+            /** Project */
+            project?: string | null;
             /** Purpose */
             purpose: string;
             /**
@@ -27272,6 +27276,8 @@ export interface components {
              * @default false
              */
             passthrough: boolean;
+            /** Project */
+            project?: string | null;
             /** Purpose */
             purpose: string;
             /**
