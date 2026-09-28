@@ -867,7 +867,6 @@ async def test_initialize_challenges_missing_upstream_credentials_before_creatin
     from litellm.proxy._experimental.mcp_server import server
     from litellm.proxy._types import UserAPIKeyAuth
 
-    monkeypatch.setenv("LITELLM_SALT_KEY", "test-mcp-oauth-signing")
     github: Final = MCPServer(
         server_id="github-id", name="github", alias="github", server_name="github",
         url="https://github.example/mcp", transport=MCPTransport.http,
@@ -917,8 +916,8 @@ async def test_initialize_challenges_missing_upstream_credentials_before_creatin
         else:
             assert response.headers["www-authenticate"].startswith("Bearer ")
             if path == "/mcp":
-                assert response.headers["www-authenticate"].startswith(
-                    'Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp", scope="litellm:mcp:connect:'
+                assert response.headers["www-authenticate"] == (
+                    'Bearer resource_metadata="http://gateway/.well-known/oauth-protected-resource/mcp"'
                 )
             assert "mcp-session-id" not in response.headers
     finally:

@@ -31398,6 +31398,21 @@
               "title": "Flow",
               "type": "string"
             },
+            "selected_servers": {
+              "anyOf": [
+                {
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 100,
+                  "type": "array"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "title": "Selected Servers"
+            },
             "team_id": {
               "anyOf": [
                 {

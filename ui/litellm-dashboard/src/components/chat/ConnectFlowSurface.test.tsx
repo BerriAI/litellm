@@ -40,10 +40,10 @@ const flow = (state: "unscoped" | "interactive" | "m2m" | "stale", connected: bo
   connected,
 });
 
-const renderSurface = () =>
+const renderSurface = (selectedServers: string[] = []) =>
   render(
     <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <ConnectFlowSurface accessToken="token-123" selectedServers={[]} onChange={vi.fn()} />
+      <ConnectFlowSurface accessToken="token-123" selectedServers={selectedServers} onChange={vi.fn()} />
     </QueryClientProvider>,
   );
 
@@ -57,7 +57,7 @@ afterEach(() => {
 
 describe("ConnectFlowSurface", () => {
   it.each([
-    { result: flow("unscoped"), grid: true, finish: true, cancel: false, oauthStarts: 0 },
+    { result: flow("unscoped"), grid: true, finish: false, cancel: true, oauthStarts: 0 },
     { result: flow("interactive", false), grid: false, finish: false, cancel: true, oauthStarts: 1 },
     { result: flow("interactive", true), grid: false, finish: true, cancel: true, oauthStarts: 0 },
     { result: flow("m2m", true), grid: false, finish: true, cancel: true, oauthStarts: 0 },
@@ -76,6 +76,16 @@ describe("ConnectFlowSurface", () => {
       expect(screen.queryByRole("button", { name: "Cancel" }) !== null).toBe(cancel);
     },
   );
+
+  it("submits the selected upstreams with the protected flow", async () => {
+    state.connectFlow = "flow-handle-123";
+    vi.mocked(fetchConnectFlow).mockResolvedValue(flow("unscoped"));
+    renderSurface(["github", "slack"]);
+    const finish = await screen.findByRole("button", { name: /finish connecting/i });
+    const submitted = new FormData((finish as HTMLButtonElement).form!);
+    expect(submitted.get("flow")).toBe("flow-handle-123");
+    expect(submitted.getAll("selected_servers")).toEqual(["github", "slack"]);
+  });
 
   it("keeps the grid and Finish hidden until the gateway accepts a handle", () => {
     state.connectFlow = "flow-handle-123";

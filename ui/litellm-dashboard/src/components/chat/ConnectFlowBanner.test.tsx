@@ -23,7 +23,7 @@ const unscoped = (client_origin: string): ConnectFlowStatus => ({
   connected: null,
 });
 
-const renderBanner = (clientOrigin: string) =>
+const renderBanner = (clientOrigin: string, selectedServers: string[] = ["github"]) =>
   render(
     <ConnectFlowBanner
       flowHandle="flow-handle-123"
@@ -31,11 +31,12 @@ const renderBanner = (clientOrigin: string) =>
       accessToken="tok"
       onConnected={vi.fn()}
       failed={false}
+      selectedServers={selectedServers}
     />,
   );
 
 describe("ConnectFlowBanner", () => {
-  it("posts only the flow handle to the proxy /authorize/complete as a full-page form", () => {
+  it("posts the flow handle and selected servers to the proxy /authorize/complete as a full-page form", () => {
     const { container } = renderBanner("https://claude.ai");
 
     const form = container.querySelector("form")!;
@@ -44,7 +45,14 @@ describe("ConnectFlowBanner", () => {
     expect(screen.getByDisplayValue("flow-handle-123")).toHaveAttribute("name", "flow");
     expect(form.innerHTML).not.toContain("token");
     expect(screen.getByRole("button", { name: /finish connecting/i })).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Cancel" })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
+    expect(new FormData(form).getAll("selected_servers")).toEqual(["github"]);
+  });
+
+  it("requires a selection before offering Finish but still allows cancellation", () => {
+    renderBanner("https://claude.ai", []);
+    expect(screen.queryByRole("button", { name: /finish connecting/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: "Cancel" })).toBeInTheDocument();
   });
 
   it("offers manual delivery only for a loopback client, posted only when checked", () => {

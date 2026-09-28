@@ -10714,7 +10714,6 @@ async def test_unified_preflight_challenges_only_when_all_authorized_servers_nee
 ) -> None:
     from litellm.proxy._experimental.mcp_server import server as server_module
 
-    monkeypatch.setenv("LITELLM_SALT_KEY", "test-mcp-oauth-signing")
     servers: Final = tuple(
         _make_oauth2_server(f"server-{index}").model_copy(update={"server_id": f"server-{index}"})
         for index in range(len(token_states))

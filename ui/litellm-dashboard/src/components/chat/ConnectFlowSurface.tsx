@@ -48,6 +48,7 @@ const ConnectFlowSurface: React.FC<Props> = ({ accessToken, selectedServers, onC
         accessToken={accessToken}
         onConnected={refetch}
         failed={isError}
+        selectedServers={selectedServers}
       />
       {flow?.state === "unscoped" && (
         <MCPAppsPanel accessToken={accessToken} selectedServers={selectedServers} onChange={onChange} connectMode />

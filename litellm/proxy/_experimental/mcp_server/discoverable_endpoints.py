@@ -5,7 +5,7 @@ import secrets
 import time
 from collections.abc import Callable, Mapping
 from datetime import datetime, timezone
-from typing import TYPE_CHECKING, Any, Final, Literal, Optional
+from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, Optional
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
 import httpx
@@ -2085,6 +2085,7 @@ async def authorize_complete(
     delivery: str | None = Form(None),
     team_id: str | None = Form(None),
     decision: str | None = Form(None),
+    selected_servers: Annotated[list[str] | None, Form(max_length=100)] = None,
 ) -> Response:
     """Finish an aggregate connect flow: mint the gateway authorization code for the
     signed-in user and hand it back to the DCR client, by 303 redirect (default) or, for
@@ -2102,6 +2103,7 @@ async def authorize_complete(
         delivery=delivery,
         team_id=team_id,
         decision=decision,
+        selected_servers=tuple(selected_servers or ()),
         lookup_vendor_credential=_vendor_credential_state,
         lookup_server_reachability=_user_can_reach_mcp_server,
     )
