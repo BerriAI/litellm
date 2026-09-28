@@ -1,4 +1,19 @@
 - Target invariants, not completion claims; these supersede the crate guidance below where they conflict
+
+## Boundary migration
+
+Keep domain composition here and execution mechanics in `litellm-host-python`. A helper does not belong in the runtime adapter merely because it uses PyO3. LiteLLM argument rules, provider defaults, public responses, public exception policy and cache or secret-manager compatibility remain product responsibilities
+
+The bridge supplies the Python lifecycle binding and public stream construction to the runtime adapter. Preserve the single inline coroutine driver; removing the host's hardcoded import must not introduce another driver or a separate asyncio task for caller hooks
+
+Move `litellm-host-python::wrap_failure` here with its existing exception behavior. Move resolved-Future construction from `src/cache/future.rs` into `litellm-host-python`, passing an already constructed Python value. Keep cache-specific serialization and disabled-cache results here
+
+Implement the migration in separate steps that preserve public API contracts: first defer route resource setup until prepared arguments and preflight are available, then supply the lifecycle binding and separate public stream construction, then relocate the two helpers. Change the host interface and its consumers together in each step. The `native.rs` rename is optional and comes last
+
+Each step needs focused regression tests in the owning crate and Python integration coverage where the public contract crosses crates. Verify deferred setup and setup failure ordering, caller task and context identity, sync and async streams, exception provenance, cancellation and GC. Use a fresh installed extension to verify Python behavior and update `_native.pyi` when public signatures change. Do not treat these instructions as evidence that the migration is complete
+
+## Existing bridge invariants
+
 - Keep this crate the product-specific PyO3 consumer of `litellm-host-python`
   - Own registration, input projection, the route host and the caller callables it answers operations with (file readers, token providers), public response/error construction and the per-call composition of machine, route host and callback contract
   - Legacy callback sharing (the caller's args, kwargs and request object, body/header roots, re-aliasing unchanged body keys) lives in `litellm-callbacks-legacy-python` behind `PublicCall` and `run_legacy_call`; the bridge hands the public call over and keeps no copy

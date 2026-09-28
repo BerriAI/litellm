@@ -1,4 +1,21 @@
 - Target invariants; implementation and runtime validation may lag these rules
+
+## Boundary with Python consumers
+
+This crate owns CPython execution mechanics for generic `litellm-host` machines and hooks. Consumers supply domain bindings, host operations, public result construction and callback policy. Neither Rust dependencies nor Python imports may require LiteLLM route modules or legacy `Logging`
+
+`src/native.rs` belongs here: it runs a generic machine through the Python runtime and owns its pending execution and abort handle. Keep provider selection, request projection and public exception policy out of it. A rename to `machine_runner.rs` is optional and must not change behavior
+
+The execution handle must receive its Python lifecycle binding from its consumer rather than import a fixed `litellm.rust_bridge` module. Generic suspension and execution state validation belong here; public stream wrappers and `_hidden_params` conventions belong to the consumer. `src/handle.rs` currently imports `litellm.rust_bridge.lifecycle`, so this invariant still requires migration
+
+Creating a resolved asyncio Future from an already constructed Python value belongs here, alongside runtime waiting, interpreter detachment and panic containment. Choosing which callable exceptions become a public `RuntimeError` belongs to the consumer; `src/callable.rs::wrap_failure` currently carries that policy and must move to `python-bridge`
+
+The driver owns ordering: start, argument preparation, preflight, binding decode and machine start. Fallible per-call resource setup supplied by the consumer runs after preparation and preflight, using the prepared argument view, and before provider work. Setup failure follows the existing terminal failure path. Creating or discarding an unstarted coroutine must not initialize clients, acquire credentials or capture execution context
+
+Boundary tests exercise behavior with a supplied lifecycle binding without importing the LiteLLM Python package. Pin inline awaiting, awaitable final values, exception identity, cancellation, re-entry and release of retained objects, rather than module names or source layout
+
+## Existing runtime invariants
+
 - Keep this crate the CPython runtime adapter and nothing more: Serde marshalling, interpreter detachment, tokio/asyncio glue, the `Execution` handle, the call driver and the `PythonBinding`, `PythonHostCalls` and `PythonOwned` traits, and the `PythonRuntime` specialization of `host::hooks::CallHooks`
   - No LiteLLM domain dependencies beyond `litellm-host`: no route types, no `Logging` policy, no public API registration, no cdylib build features
   - `PythonCallHooks` only constrains the shared call-stage interface to `PythonRuntime` and Python ownership. It must not redeclare the stages
@@ -16,7 +33,7 @@
   - Keep diagnostic counters in the consumer; wrapper invocations do not measure every interpreter release
   - Release exclusive class borrows/locks before Python calls or decrements that can invoke finalizers; expose retained Python edges to GC without calling Python during traversal
 - Keep coroutine driving in the shared Python driver and the native handle
-  - Driver: `litellm/rust_bridge/lifecycle.py`; handle: `src/handle.rs`; call driver: `src/driver.rs`; native-backed behavior tests: `tests/lifecycle.py`
+  - Current driver implementation: `litellm/rust_bridge/lifecycle.py`; handle: `src/handle.rs`; call driver: `src/driver.rs`; native-backed behavior tests: `tests/lifecycle.py`. The consumer supplies the lifecycle binding after the boundary migration
   - Every lifecycle suspension is awaited inline in the caller's task; `into_future` creates a separate task and cannot satisfy this contract
 - References: [ownership](https://pyo3.rs/v0.29.2/types.html), [conversions](https://pyo3.rs/v0.29.2/conversions/traits.html), [pythonize errors](https://docs.rs/pythonize/0.29.0/src/pythonize/error.rs.html)
   - [GC](https://pyo3.rs/v0.29.2/class/protocols.html#garbage-collector-integration), [re-entry](https://pyo3.rs/v0.29.2/class/call.html), [parallelism](https://pyo3.rs/v0.29.2/parallelism.html), [async delivery source](https://docs.rs/pyo3-async-runtimes/0.29.0/src/pyo3_async_runtimes/generic.rs.html)
