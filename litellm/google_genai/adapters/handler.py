@@ -46,6 +46,10 @@ class GenerateContentToCompletionHandler:
             if "extra_headers" in extra_kwargs:
                 completion_kwargs["extra_headers"] = extra_kwargs["extra_headers"]
 
+            # Forward proxy_server_request for proxy spend logs and request inspection (#43533)
+            if "proxy_server_request" in extra_kwargs:
+                completion_kwargs["proxy_server_request"] = extra_kwargs["proxy_server_request"]
+
         if stream:
             completion_kwargs["stream"] = stream
 

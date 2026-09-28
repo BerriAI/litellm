@@ -257,3 +257,23 @@ def test_citation_metadata_transformation():
 
     except Exception as e:
         pytest.fail(f"Citation metadata transformation failed: {e}")
+
+
+def test_prepare_completion_kwargs_forwards_proxy_server_request():
+    """
+    Verify that GenerateContentToCompletionHandler._prepare_completion_kwargs
+    forwards proxy_server_request from extra_kwargs into completion_kwargs (#43533).
+    """
+    raw_proxy_request = {
+        "model": "gemini-2.5-flash",
+        "contents": [{"role": "user", "parts": [{"text": "Hello, world!"}]}],
+        "custom_key": "custom_value",
+    }
+
+    completion_kwargs = GenerateContentToCompletionHandler._prepare_completion_kwargs(
+        model="gemini-2.5-flash",
+        contents=[{"role": "user", "parts": [{"text": "Hello, world!"}]}],
+        extra_kwargs={"proxy_server_request": raw_proxy_request},
+    )
+
+    assert completion_kwargs.get("proxy_server_request") == raw_proxy_request
