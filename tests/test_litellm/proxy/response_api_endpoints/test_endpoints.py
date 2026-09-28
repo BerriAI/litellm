@@ -95,8 +95,8 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
     )
 
     assert result.status_code == 200, result.text
-    assert message in result.text
     if path == "/v1/responses":
+        assert message in result.text
         assert frames[-1] == "data: [DONE]", result.text
         assert frames[-2].startswith("event: response.failed\n"), result.text
         if partial:
@@ -121,6 +121,11 @@ async def test_streaming_upstream_errors_keep_the_client_protocol(
         assert events[0]["object"] == "chat.completion.chunk", result.text
         assert "response.failed" not in result.text
         assert "error" in events[-1]
+        assert events[-1]["error"] == {
+            "message": "An error occurred while streaming the response.",
+            "type": "server_error", "param": None, "code": "500",
+        }
+        assert message not in result.text
 
 
 @pytest.mark.asyncio
