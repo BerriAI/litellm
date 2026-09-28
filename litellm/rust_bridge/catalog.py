@@ -106,13 +106,11 @@ Rules: TypeAlias = tuple[Rule, ...]
 
 RULES: Final[Rules] = (
     LoggerRule(Rollout.RUST_OPT_IN),
-    RouteRule(Route.CHAT_COMPLETIONS, Rollout.RUST_OPT_IN, deliveries=frozenset({Delivery.COMPLETED})),
     RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
     RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
     RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
     RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic"})),
     RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
-    RouteRule(Route.RESPONSES, Rollout.RUST_OPT_IN, deliveries=frozenset({Delivery.COMPLETED})),
     RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
     RouteRule(Route.TOKENIZER, Rollout.PYTHON_ONLY),
