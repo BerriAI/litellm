@@ -518,31 +518,20 @@ def _with_router_resolved_session_model(session: object, model_name: str) -> Map
 
 
 # Router._aanthropic_messages_streaming_iterator buffers lifecycle chunks
-# until real content commits the primary stream; a hostile or slow-starting
-# upstream that never emits content or an error could otherwise grow that
-# buffer without bound, so hitting this cap forces an early commit instead.
+# until real content commits the primary stream, and only while a fallback
+# can still take over; a hostile or slow-starting upstream that never emits
+# content or an error could otherwise grow that buffer without bound, so
+# hitting this cap forces an early commit instead.
 MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS: Final = 200
 
 
-def _anthropic_stream_should_drop_pre_content_ping(chunk: object, has_generated_content: bool) -> bool:
-    """A `ping` keepalive seen before any real content is dropped outright - it recurs indefinitely on a
-    slow-starting connection and carries nothing worth buffering toward a possible fallback."""
+def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: bool) -> bool:
+    """A `ping` keepalive reaches the client live whenever the stream has not committed: it carries no
+    lifecycle, so it cannot create overlapping lifecycles on the wire, and it keeps the connection alive
+    while lifecycle frames sit buffered for a possible fallback during a long thinking pass."""
     from litellm.llms.anthropic.pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
 
-    if has_generated_content:
-        return False
-    return is_anthropic_ping_chunk(chunk)
-
-
-def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: bool, buffered_chunk_count: int) -> bool:
-    """A `ping` that no lifecycle frame precedes reaches the client live: a fallback's own message_start can still
-    follow it without overlapping lifecycles, and AgenticAnthropicStreamingIterator's hold-back keepalive is exactly
-    such a ping."""
-    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
-
-    if has_generated_content or buffered_chunk_count:
-        return False
-    return is_anthropic_ping_chunk(chunk)
+    return not has_generated_content and is_anthropic_ping_chunk(chunk)
 
 
 def _is_retriable_anthropic_status(status_code: int) -> bool:
@@ -5457,14 +5446,19 @@ class Router:
 
         Lifecycle/bookkeeping frames (message_start, content_block_start,
         ping, ...) do not by themselves disqualify a fallback attempt -
-        Anthropic routinely sends message_start before an overload error -
-        but they are BUFFERED rather than forwarded immediately, since
-        forwarding one and then appending a fallback attempt's own
-        message_start would produce two overlapping message lifecycles on
-        one SSE stream. Buffered frames are flushed, in order, the moment
-        real content arrives (the primary attempt has committed by then
-        anyway) or once the stream ends without ever producing content or
-        an error.
+        Anthropic routinely sends message_start before an overload error.
+        When a fallback can still take over they are BUFFERED rather than
+        forwarded immediately, since forwarding one and then appending a
+        fallback attempt's own message_start would produce two overlapping
+        message lifecycles on one SSE stream; a `ping` carries no lifecycle,
+        so it is forwarded live even while lifecycle frames sit buffered,
+        keeping the connection alive during a long thinking pass. Buffered
+        frames are flushed, in order, the moment real content arrives (the
+        primary attempt has committed by then anyway) or once the stream
+        ends without ever producing content or an error. When no fallback
+        can take over the request is already committed, so every frame,
+        including pings and provider error frames, is forwarded live and
+        verbatim instead.
         """
         from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             aclose_if_supported,
@@ -5481,33 +5475,32 @@ class Router:
             from litellm.exceptions import MidStreamFallbackError
 
             # Lifecycle/bookkeeping frames (message_start, content_block_start,
-            # ping, ...) are held back rather than forwarded immediately:
-            # Anthropic routinely sends message_start before an overload
-            # error, and once a byte reaches the client a fallback attempt
-            # can only append its OWN message_start, producing two
-            # overlapping message lifecycles on one SSE stream. Buffered
-            # frames are flushed the moment real content (content_block_delta)
+            # ...) are held back rather than forwarded immediately, but only
+            # while a fallback can still take over: Anthropic routinely sends
+            # message_start before an overload error, and once a byte reaches
+            # the client a fallback attempt can only append its OWN
+            # message_start, producing two overlapping message lifecycles on
+            # one SSE stream. A `ping` keepalive carries no lifecycle, so it
+            # is forwarded live even behind buffered frames, keeping the
+            # connection alive through a long thinking pass. Buffered frames
+            # are flushed the moment real content (content_block_delta)
             # arrives - at that point the primary attempt has committed and a
             # clean retry is no longer possible anyway - or once the primary
-            # stream ends without ever producing content. A `ping` keepalive
-            # that nothing precedes is forwarded live (it is how a hold-back
-            # turn keeps its connection alive); one behind buffered frames is
-            # dropped outright rather than buffered, since it can recur
-            # indefinitely on a slow-starting connection and carries nothing
-            # worth preserving; hitting MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS
-            # forces the same early commit as real content arriving, so a
-            # hostile or pathological upstream can't grow the buffer forever.
-            has_generated_content = False  # rebind-ok: set once real content is seen, or the buffer cap is hit
-            buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
+            # stream ends without ever producing content. Hitting
+            # MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS forces the same early
+            # commit as real content arriving, so a hostile or pathological
+            # upstream can't grow the buffer forever. With no fallback able
+            # to take over there is nothing to buffer for, so every frame,
+            # including pings and provider error frames, is forwarded live.
             model: Final = cast(str, initial_kwargs.get("model"))  # cast-ok: kwargs always carries the model group
+            has_generated_content = not self._anthropic_messages_stream_can_fall_back(  # rebind-ok: set once real content is seen, the buffer cap is hit, or no fallback can take over
+                model, initial_kwargs
+            )
+            buffered_lifecycle_chunks: tuple[bytes, ...] = ()  # rebind-ok: flushed once committed or on decline
             try:
                 async for chunk in source_iterator:
-                    if _anthropic_stream_forwards_ping_live(
-                        chunk, has_generated_content, len(buffered_lifecycle_chunks)
-                    ):
+                    if _anthropic_stream_forwards_ping_live(chunk, has_generated_content):
                         yield chunk
-                        continue
-                    if _anthropic_stream_should_drop_pre_content_ping(chunk, has_generated_content):
                         continue
                     if _anthropic_stream_commits_now(chunk, has_generated_content, len(buffered_lifecycle_chunks)):
                         has_generated_content = True
@@ -8424,6 +8417,25 @@ class Router:
         )
         return False
 
+    def _generic_fallback_available(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
+        """
+        Whether the generic fallback chain could still take over for this request: fallbacks are
+        enabled for the request and either a "*" default fallback is configured or the fallbacks
+        lookup (tier first, then the requested group) resolves to a target not yet attempted.
+        """
+        if fallbacks_disabled_for_request(kwargs):
+            return False
+        if self._has_default_fallbacks():
+            return True
+        fallbacks: Final = kwargs.get("fallbacks", self.fallbacks)
+        if fallbacks is None:
+            return False
+        resolved, _ = get_fallback_model_group_for_lookup_groups(
+            fallbacks=fallbacks,
+            lookup_groups=fallback_lookup_groups(kwargs, model_group),
+        )
+        return has_unattempted_fallback_target(resolved, kwargs)
+
     def _refusal_fallback_available(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
         """
         Whether a safeguard refusal can actually be recovered by the dispatcher. A configured
@@ -8436,16 +8448,17 @@ class Router:
         content_policy_fallbacks: Final = kwargs.get("content_policy_fallbacks", self.content_policy_fallbacks)
         if content_policy_fallbacks is not None:
             return self._has_content_policy_fallback(model_group, kwargs)
-        if self._has_default_fallbacks():
-            return True
-        fallbacks: Final = kwargs.get("fallbacks", self.fallbacks)
-        if fallbacks is None:
-            return False
-        resolved, _ = get_fallback_model_group_for_lookup_groups(
-            fallbacks=fallbacks,
-            lookup_groups=fallback_lookup_groups(kwargs, model_group),
+        return self._generic_fallback_available(model_group, kwargs)
+
+    def _anthropic_messages_stream_can_fall_back(self, model_group: str, kwargs: Mapping[str, Any]) -> bool:
+        """
+        Whether any fallback (generic or safeguard-refusal) could still take over an
+        anthropic_messages stream, which is the only case where holding lifecycle frames
+        back from the client buys a clean retry.
+        """
+        return self._generic_fallback_available(model_group, kwargs) or self._refusal_fallback_available(
+            model_group, kwargs
         )
-        return has_unattempted_fallback_target(resolved, kwargs)
 
     def _should_raise_content_policy_error(self, model: str, response: ModelResponse, kwargs: dict) -> bool:
         """
