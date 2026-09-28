@@ -5840,7 +5840,7 @@ class TestStrategyRouterWriteValidation:
             is None
         )
 
-    def test_typesafe_model_rejected_with_helpful_guidance(self):
+    def test_unroutable_model_rejected(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
             _validate_routable_model_deployment,
         )
@@ -5852,8 +5852,7 @@ class TestStrategyRouterWriteValidation:
         )
         violation = _validate_routable_model_deployment(params)
         assert violation is not None
-        assert "typesafe" in violation.lower()
-        assert "not a routable chat provider" in violation or "pass-through" in violation
+        assert "not a supported or routable provider" in violation or "not a routable provider" in violation
 
     def test_routable_model_accepted(self):
         from litellm.proxy.management_endpoints.model_management_endpoints import (
@@ -5878,6 +5877,53 @@ class TestStrategyRouterWriteValidation:
             api_key="sk-test",
         )
         assert _validate_routable_model_deployment(params) is None
+
+    def test_prompt_management_model_skipped(self):
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            _validate_routable_model_deployment,
+        )
+        from litellm.types.router import LiteLLM_Params
+
+        params = LiteLLM_Params(
+            model="dotprompt/hello-world",
+            api_key="sk-test",
+        )
+        assert _validate_routable_model_deployment(params) is None
+
+    @pytest.mark.asyncio
+    async def test_add_new_model_rejects_unroutable_model_before_db_write(self):
+        from litellm.proxy._types import LitellmUserRoles, ProxyException, UserAPIKeyAuth
+        from litellm.proxy.management_endpoints.model_management_endpoints import (
+            add_new_model,
+        )
+        from litellm.types.router import Deployment, LiteLLM_Params
+
+        admin = UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN)
+        mock_prisma = MagicMock()
+
+        with (
+            patch("litellm.proxy.proxy_server.prisma_client", mock_prisma),
+            patch("litellm.proxy.proxy_server.store_model_in_db", True),
+            patch("litellm.proxy.proxy_server.premium_user", True),
+            patch(
+                "litellm.proxy.management_endpoints.model_management_endpoints.ModelManagementAuthChecks.can_user_make_model_call",
+                new=AsyncMock(return_value=None),
+            ),
+        ):
+            with pytest.raises(ProxyException) as exc_info:
+                await add_new_model(
+                    model_params=Deployment(
+                        model_name="test-unroutable-model",
+                        litellm_params=LiteLLM_Params(model="typesafe/jev-latest"),
+                        model_info={"id": "test-unroutable-id"},
+                    ),
+                    user_api_key_dict=admin,
+                )
+            assert exc_info.value.code == 400
+            assert "not a supported or routable provider" in str(
+                exc_info.value.message
+            ) or "not a routable provider" in str(exc_info.value.message)
+            mock_prisma.db.litellm_proxymodeltable.create.assert_not_called()
 
     @staticmethod
     def _live_router_holding_one_capability(limit: int | None, config: Mapping[str, object]) -> Router:
