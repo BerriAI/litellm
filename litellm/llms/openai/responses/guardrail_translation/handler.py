@@ -536,19 +536,20 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     async def _apply_guardrailed_texts(
         self,
-        data: dict,
+        data: dict[str, object],
         input_data: "str | ResponseInputParam",
         extracted: _ExtractedInputs,
         guardrail_to_apply: "CustomGuardrail",
         guardrailed_inputs: GenericGuardrailAPIInputs,
     ) -> None:
-        rewritten_texts: Final = tuple(guardrailed_inputs.get("texts") or ())
-        if not rewritten_texts:
+        returned_texts: Final = guardrailed_inputs.get("texts")
+        if returned_texts is None:
             return
+        rewritten_texts: Final = tuple(returned_texts)
         offset: Final = 0 if extracted.instructions is None else 1
         input_texts: Final = rewritten_texts[offset:]
         expected: Final = 1 if isinstance(input_data, str) else len(extracted.task_mappings)
-        if len(input_texts) != expected:
+        if len(rewritten_texts) != offset + expected:
             raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
         if offset:
             data["instructions"] = rewritten_texts[0]  # rebind-ok: data is an out-param

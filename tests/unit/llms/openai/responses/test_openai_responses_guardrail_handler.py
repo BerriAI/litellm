@@ -98,6 +98,24 @@ class LastTextDroppingGuardrail(CustomGuardrail):
         return {**inputs, "texts": list(inputs.get("texts", []))[:-1]}
 
 
+class TextsReplacingGuardrail(CustomGuardrail):
+    """Answers with the given texts list, or without a texts key at all when given None"""
+
+    def __init__(self, texts: list[str] | None, **kwargs):
+        super().__init__(**kwargs)
+        self.texts = texts
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: LiteLLMLoggingObj | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        answer = {key: value for key, value in inputs.items() if key != "texts"}
+        return answer if self.texts is None else {**answer, "texts": list(self.texts)}
+
+
 class PersimmonMaskingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
@@ -336,6 +354,36 @@ class TestOpenAIResponsesHandlerInputProcessing:
         assert excinfo.value.guardrail_name == "dropper"
         assert data["instructions"] == original["instructions"]
         assert data["input"] == original["input"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("data_input", ["Hello", [{"role": "user", "content": "Hello"}]])
+    async def test_empty_texts_answer_is_rejected_instead_of_forwarding_the_raw_request(self, data_input):
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
+        handler = OpenAIResponsesHandler()
+        guardrail = TextsReplacingGuardrail(guardrail_name="emptier", texts=[])
+        data = {"model": "gpt-4", "instructions": "Be terse", "input": data_input}
+        original = copy.deepcopy(data)
+
+        with pytest.raises(UnappliableRequestRewrite) as excinfo:
+            await handler.process_input_messages(data, guardrail)
+
+        assert excinfo.value.guardrail_name == "emptier"
+        assert data["instructions"] == original["instructions"]
+        assert data["input"] == original["input"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("data_input", ["Hello", [{"role": "user", "content": "Hello"}]])
+    async def test_answer_without_texts_key_leaves_instructions_and_input_untouched(self, data_input):
+        handler = OpenAIResponsesHandler()
+        guardrail = TextsReplacingGuardrail(guardrail_name="silent", texts=None)
+        data = {"model": "gpt-4", "instructions": "Be terse", "input": data_input}
+        original = copy.deepcopy(data)
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert result["instructions"] == original["instructions"]
+        assert result["input"] == original["input"]
 
 
 class TestOpenAIResponsesHandlerOutputProcessing:
