@@ -2738,10 +2738,10 @@ class JWTAuthManager:
 
         from litellm.proxy.agent_endpoints.auth.agent_permission_handler import resolve_delegated_agent_team
 
-        claimed_teams: Final = (
+        claimed_teams: Final[frozenset[str]] = (
             frozenset(handler.get_all_jwt_team_ids(jwt_valid_token)) if managed is not None else frozenset()
         )
-        scoped_teams: Final = claimed_teams or (
+        scoped_teams: Final[frozenset[str] | None] = claimed_teams or (
             frozenset((team_id,))
             if managed is not None and team_id and handler.get_team_alias(jwt_valid_token, default_value=None)
             else None
@@ -2761,8 +2761,8 @@ class JWTAuthManager:
             if not JWTAuthManager._is_team_route_allowed(route, request_method, handler):
                 raise HTTPException(403, "The granting team is not allowed to access this route")
 
-        selected_team_id: Final = granting_team if granting_team is not None else team_id
-        selected_team_object: Final = (
+        selected_team_id: Final[str | None] = granting_team if granting_team is not None else team_id
+        selected_team_object: Final[LiteLLM_TeamTable | None] = (
             await get_team_object(
                 team_id=selected_team_id,
                 prisma_client=prisma_client,
@@ -2885,8 +2885,8 @@ class JWTAuthManager:
                     ),
                 )
 
-        authorized_team_id: Final = selected_team_id if selected_team_id is not None else team_id
-        authorized_team_object: Final = selected_team_object if selected_team_id is not None else team_object
+        authorized_team_id: Final[str | None] = selected_team_id if selected_team_id is not None else team_id
+        authorized_team_object: Final[LiteLLM_TeamTable | None] = selected_team_object if selected_team_id is not None else team_object
 
         ## MAP USER TO TEAMS
         if provisioning is not None and managed is None:

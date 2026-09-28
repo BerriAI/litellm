@@ -926,9 +926,10 @@ async def test_delegated_team_selection_preserves_the_grant_source(
             await permissions.resolve_delegated_agent_team("human", "actor", selected, explicit_team=explicit)
         assert error.value.status_code == 403
     else:
-        assert await permissions.resolve_delegated_agent_team(
-            "human", "actor", selected, explicit_team=explicit
-        ) == expected
+        assert (
+            await permissions.resolve_delegated_agent_team("human", "actor", selected, explicit_team=explicit)
+            == expected
+        )
 
 
 @pytest.mark.parametrize(

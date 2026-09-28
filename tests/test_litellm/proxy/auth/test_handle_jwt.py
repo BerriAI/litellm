@@ -8131,7 +8131,9 @@ async def test_delegated_jwt_uses_granting_team_policy_before_route_authorizatio
             **(
                 {"team_alias": "other-team"}
                 if team_claim == "alias:other-team"
-                else {"team": team_claim} if team_claim else {}
+                else {"team": team_claim}
+                if team_claim
+                else {}
             ),
         },
     )
