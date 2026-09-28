@@ -18,7 +18,7 @@ from litellm.caching.caching import DualCache
 from litellm.cost_calculator import _infer_call_type
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
-from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.litellm_core_utils.api_route_to_call_types import get_primary_call_type_for_route
 from litellm.llms import get_guardrail_translation_mapping, load_guardrail_translation_mappings
 from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation, StreamingScanKey
 from litellm.proxy._types import UserAPIKeyAuth
@@ -76,12 +76,10 @@ def resolve_endpoint_translation(
     response chunk (the same resolution order the streaming iterator hook uses).
     Returns None when the call type is unresolvable or has no translation.
     """
-    route_call_types: Final = (
-        get_call_types_for_route(user_api_key_dict.request_route) if user_api_key_dict.request_route else None
-    )
+    route_call_type: Final = get_primary_call_type_for_route(user_api_key_dict.request_route)
     call_type: Final = (
-        route_call_types[0].value
-        if route_call_types
+        route_call_type.value
+        if route_call_type is not None
         else (
             _infer_call_type(call_type=None, completion_response=first_response_item)
             if first_response_item is not None
@@ -313,11 +311,7 @@ class UnifiedLLMGuardrails(CustomLogger):
 
         verbose_proxy_logger.debug("async_post_call_success_hook response: %s", response)
 
-        call_type: CallTypesLiteral | None = None
-        if user_api_key_dict.request_route is not None:
-            call_types: Final = get_call_types_for_route(user_api_key_dict.request_route)
-            if call_types is not None and len(call_types) > 0:
-                call_type = call_types[0]
+        call_type: CallTypesLiteral | None = get_primary_call_type_for_route(user_api_key_dict.request_route)
         if call_type is None:
             call_type = _infer_call_type(call_type=None, completion_response=response)
 
@@ -421,20 +415,13 @@ class UnifiedLLMGuardrails(CustomLogger):
             OpenAIChatCompletionsHandler,
         )
 
-        if user_api_key_dict.request_route is None:
+        route_call_type: Final = get_primary_call_type_for_route(user_api_key_dict.request_route)
+        if route_call_type is None:
             return None
-        call_types: Final = get_call_types_for_route(user_api_key_dict.request_route)
-        if not call_types:
-            return None
-        call_type: Final = call_types[0].value
-        try:
-            mapped: Final = CallTypes(call_type)
-        except ValueError:
-            return None
-        handler_cls: Final = mappings.get(mapped)
+        handler_cls: Final = mappings.get(route_call_type)
         if handler_cls is None or not issubclass(handler_cls, OpenAIChatCompletionsHandler):
             return None
-        return call_type
+        return route_call_type.value
 
     async def emit_streaming_http_error(
         self,
@@ -1081,8 +1068,8 @@ class UnifiedLLMGuardrails(CustomLogger):
                 getattr(guardrail_to_apply, "guardrail_name", None),
             )
 
-        # Infer call type from first chunk
-        call_type = None
+        route_call_type: Final = get_primary_call_type_for_route(user_api_key_dict.request_route)
+        call_type = route_call_type.value if route_call_type is not None else None
         chunk_counter = 0
         responses_so_far: Final[list[object]] = []
         responses_yielded: Final[list[object]] = []
@@ -1098,12 +1085,6 @@ class UnifiedLLMGuardrails(CustomLogger):
         async for item in response:
             chunk_counter += 1
             responses_so_far.append(item)
-
-            # Infer call type from first chunk if not already done
-            if call_type is None and user_api_key_dict.request_route is not None:
-                call_types = get_call_types_for_route(user_api_key_dict.request_route)
-                if call_types is not None:
-                    call_type = call_types[0].value
 
             if call_type is None:
                 call_type = _infer_call_type(call_type=None, completion_response=item)
