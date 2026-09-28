@@ -3817,23 +3817,8 @@ class Router:
         model_group_alias: str | None = None
         if self._get_model_from_alias(model=model):
             model_group_alias = model
-        self._snapshot_requester_metadata(kwargs=kwargs, metadata_variable_name=metadata_variable_name)
         kwargs.setdefault(metadata_variable_name, {}).update(
             {"model_group": model, "model_group_alias": model_group_alias}
-        )
-
-    @staticmethod
-    def _snapshot_requester_metadata(
-        kwargs: dict[str, object], metadata_variable_name: str | None
-    ) -> None:
-        if metadata_variable_name != "metadata":
-            return
-        existing: Final = kwargs.get("metadata")
-        metadata: Final = existing if isinstance(existing, dict) else {}
-        kwargs["metadata"] = metadata
-        metadata.setdefault(
-            "requester_metadata",
-            copy.deepcopy(existing) if isinstance(existing, dict) else {},
         )
 
     def _set_deployment_num_retries_on_exception(self, exception: Exception, deployment: dict) -> None:
@@ -4599,7 +4584,6 @@ class Router:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
             kwargs["original_function"] = self._image_generation
-            self._snapshot_requester_metadata(kwargs=kwargs, metadata_variable_name="metadata")
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             response: Final = self.function_with_fallbacks(**kwargs)
 
@@ -4961,7 +4945,6 @@ class Router:
             kwargs["model"] = model
             kwargs["prompt"] = prompt
             kwargs["num_retries"] = kwargs.get("num_retries", self.num_retries)
-            self._snapshot_requester_metadata(kwargs=kwargs, metadata_variable_name="metadata")
             kwargs.setdefault("metadata", {}).update({"model_group": model})
 
             # pick the one that is available (lowest TPM/RPM)
@@ -5076,7 +5059,6 @@ class Router:
             kwargs["model"] = model
             kwargs["adapter_id"] = adapter_id
             kwargs["original_function"] = self._aadapter_completion
-            self._snapshot_requester_metadata(kwargs=kwargs, metadata_variable_name="metadata")
             kwargs.setdefault("metadata", {}).update({"model_group": model})
             response: Final = await self.async_function_with_fallbacks(**kwargs)
 

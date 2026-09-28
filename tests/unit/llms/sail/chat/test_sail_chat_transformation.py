@@ -157,34 +157,6 @@ async def test_sail_chat_does_not_forward_internal_proxy_metadata_without_caller
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("metadata", [None, {"completion_window": "flex"}], ids=["none", "caller"])
-async def test_sail_router_chat_forwards_only_caller_metadata(
-    sail_env: None,
-    chat_route: respx.Route,
-    metadata: dict[str, str] | None,
-) -> None:
-    router: Final = litellm.Router(
-        model_list=[
-            {
-                "model_name": MODEL,
-                "litellm_params": {"model": MODEL, "api_base": SAIL_API_BASE},
-            }
-        ]
-    )
-
-    await router.acompletion(model=MODEL, messages=MESSAGES, metadata=metadata)
-
-    body: Final = sent_body(chat_route)
-    if metadata is None:
-        assert "metadata" not in body
-    else:
-        assert body["metadata"] == {"completion_window": "flex"}
-    assert "model_group" not in json.dumps(body)
-    assert "deployment" not in json.dumps(body)
-    assert "api_base" not in json.dumps(body)
-
-
-@pytest.mark.asyncio
 async def test_openai_completion_does_not_forward_metadata(
     monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
 ) -> None:
