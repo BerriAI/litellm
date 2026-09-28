@@ -1,5 +1,5 @@
 from collections.abc import Mapping, Sequence
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import TYPE_CHECKING, Annotated, Any, Final, Literal, TypeAlias
 from urllib.parse import urlsplit
 
@@ -8,6 +8,8 @@ from typing_extensions import ReadOnly, Required, TypedDict
 
 from litellm.types.llms.base import LiteLLMPydanticObjectBase
 from litellm.types.proxy.agent_identity import (
+    AgentBudgetConfig,
+    AgentBudgetState,
     AgentExecutionMode,
     AgentIdentityBinding,
     EntraIdentityConfig,
@@ -15,6 +17,7 @@ from litellm.types.proxy.agent_identity import (
 
 if TYPE_CHECKING:
     from a2a.types import SendMessageResponse
+    from prisma.types import LiteLLM_AgentsTableWhereInput
 
 
 # AgentProvider
@@ -253,6 +256,7 @@ class AgentKillSwitchResult(BaseModel):
 
 
 class AgentConfig(TypedDict, total=False):
+    budget: ReadOnly[AgentBudgetConfig | None]
     identity: ReadOnly[EntraIdentityConfig | None]
     enabled: ReadOnly[bool]
     execution_mode: ReadOnly[AgentExecutionMode]
@@ -271,6 +275,7 @@ class AgentConfig(TypedDict, total=False):
 
 
 class PatchAgentRequest(TypedDict, total=False):
+    budget: ReadOnly[AgentBudgetConfig | None]
     identity: ReadOnly[EntraIdentityConfig | None]
     enabled: ReadOnly[bool]
     execution_mode: ReadOnly[AgentExecutionMode]
@@ -311,7 +316,30 @@ class AgentKeySummary(BaseModel):
     key_name: str | None = None
 
 
+def agent_budget_counter_key(agent_id: str, reset_at: datetime | None) -> str:
+    if reset_at is None:
+        return f"spend:agent:{agent_id}"
+    aware: Final = reset_at if reset_at.tzinfo is not None else reset_at.replace(tzinfo=timezone.utc)
+    window: Final = aware.astimezone(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+    return f"spend:agent_window:{window}:{agent_id}"
+
+
+def agent_spend_filter(counter_key: str) -> "LiteLLM_AgentsTableWhereInput":
+    if counter_key.startswith("spend:agent_window:"):
+        _, _, raw_window, agent_id = counter_key.split(":", 3)
+        window: Final = datetime.strptime(raw_window, "%Y%m%dT%H%M%S.%fZ").replace(tzinfo=timezone.utc)
+        windowed: Final[LiteLLM_AgentsTableWhereInput] = {"agent_id": agent_id, "spend_window": window}
+        return windowed
+    cumulative: Final[LiteLLM_AgentsTableWhereInput] = {
+        "agent_id": counter_key.removeprefix("spend:agent:"),
+        "spend_window": None,
+    }
+    return cumulative
+
+
 class AgentResponse(BaseModel):
+    budget_id: str | None = None
+    litellm_budget_table: AgentBudgetState | None = None
     identity: AgentIdentityBinding | None = None
     identity_managed: bool = False
     enabled: bool = True
@@ -337,6 +365,12 @@ class AgentResponse(BaseModel):
     updated_at: datetime | None = None
     created_by: str | None = None
     updated_by: str | None = None
+
+    @property
+    def budget_counter_key(self) -> str:
+        return agent_budget_counter_key(
+            self.agent_id, self.litellm_budget_table.budget_reset_at if self.litellm_budget_table else None
+        )
 
 
 class ListAgentsResponse(BaseModel):

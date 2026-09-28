@@ -46,6 +46,22 @@ class AgentIdentityBinding(BaseModel):
     last_authenticated_at: datetime | None = None
 
 
+class AgentBudgetConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    max_budget: float = Field(ge=0, allow_inf_nan=False)
+    budget_duration: str | None = None
+
+
+class AgentBudgetState(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    budget_id: str
+    max_budget: float | None = None
+    budget_duration: str | None = None
+    budget_reset_at: datetime | None = None
+
+
 class AgentSubject(BaseModel):
     model_config = ConfigDict(frozen=True)
 

@@ -8590,3 +8590,19 @@ def test_signoz_callback_vars_are_scoped_to_the_signoz_callback():
         team_callback_settings_obj=None,
     )
     assert under_other.callback_vars == {"langfuse_host": "https://cloud.langfuse.com"}
+@pytest.mark.parametrize("bound", [False, True])
+def test_agent_budget_window_metadata_is_owned_by_authenticated_policy(bound: bool) -> None:
+    from litellm.types.agents import AgentResponse
+
+    auth: Final = UserAPIKeyAuth(agent_id="agent" if bound else None)
+    if bound:
+        auth.billing_agent_policy = AgentResponse(
+            agent_id="agent", agent_name="Agent", agent_card_params={},
+            litellm_budget_table={"budget_id": "budget", "budget_reset_at": "2026-01-02T00:00:00Z"},
+        )
+    result: Final = LiteLLMProxyRequestSetup.add_user_api_key_auth_to_request_metadata(
+        {"metadata": {"billing_agent_counter_key": "spend:agent:victim"}}, auth, "metadata"
+    )
+    assert result["metadata"]["billing_agent_counter_key"] == (
+        "spend:agent_window:20260102T000000.000000Z:agent" if bound else None
+    )

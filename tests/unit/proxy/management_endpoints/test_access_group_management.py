@@ -714,6 +714,9 @@ class _FakePrismaClient:
             litellm_modelaccessgroupbudgettable=self.access_group_budget_table,
             litellm_proxymodeltable=self.model_table,
         )
+        self.writer_db = SimpleNamespace(
+            litellm_agentstable=SimpleNamespace(find_first=AsyncMock(return_value=None)),
+        )
 
     def jsonify_object(self, data):
         return dict(data)
