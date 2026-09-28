@@ -53,6 +53,56 @@ function Form({
 }
 
 describe("Auto-router classifier selection", () => {
+  it("switches Jev to Laya without carrying TypeSafe settings", () => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <AutoRouterClassifierTabs
+        value={{
+          ...initial,
+          classifier_type: "jev",
+          jev_classifier_config: {
+            model: "jev-latest",
+            timeout_ms: 3000,
+          },
+        }}
+        onChange={onChange}
+      >
+        Settings
+      </AutoRouterClassifierTabs>,
+    );
+    fireEvent.click(screen.getByRole("radio", { name: "Laya" }));
+    expect(onChange).toHaveBeenCalledWith(
+      expect.objectContaining({
+        classifier_type: "jev",
+        jev_classifier_config: { provider: "laya", model: "english", timeout_ms: 3000 },
+      }),
+    );
+  });
+
+  it("shows saved Laya settings without rewriting them", () => {
+    const onChange = vi.fn();
+    renderWithProviders(
+      <AutoRouterClassifierTabs
+        value={{
+          ...initial,
+          classifier_type: "jev",
+          jev_classifier_config: {
+            provider: "laya",
+            model: "multilingual",
+            timeout_ms: 4000,
+            api_base: "https://laya.example.com",
+          },
+        }}
+        onChange={onChange}
+      >
+        Settings
+      </AutoRouterClassifierTabs>,
+    );
+    expect(screen.getByRole("radio", { name: "Laya" })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: "Laya" }));
+    expect(onChange).not.toHaveBeenCalled();
+  });
+
   it.each(["heuristic", "heuristic_v2", "llm", "heuristic_first", "hybrid", "jev"] as const)(
     "shows saved %s without changing its configuration",
     async (classifier_type) => {

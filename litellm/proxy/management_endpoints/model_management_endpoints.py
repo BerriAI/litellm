@@ -419,6 +419,8 @@ def _effective_complexity_router_config(
         return incoming
     supplied: Final = TypeAdapter(dict[str, object]).validate_python(incoming_jev)
     stored: Final = TypeAdapter(dict[str, object]).validate_python(existing_jev)
+    if supplied.get("provider", "typesafe") != stored.get("provider", "typesafe"):
+        return incoming
     same_base: Final = "api_base" not in supplied or supplied["api_base"] == stored.get("api_base")
     transport: Final = MappingProxyType(
         {

@@ -17,20 +17,50 @@ export default function JevClassifierConfig({
 }) {
   const id = useId();
   const config = value.jev_classifier_config ?? defaultJevClassifierConfig();
+  const isLaya = config.provider === "laya";
+  const name = isLaya ? "Laya" : "Jev";
   const update = (patch: Partial<typeof config>) =>
     onChange({ ...value, jev_classifier_config: { ...config, ...patch } });
 
   return (
     <div className="mt-4 space-y-3">
       <p className="text-sm text-muted-foreground">
-        Uses TypeSafe System One Choice evaluation with your configured tiers
+        {isLaya
+          ? "Uses your self-hosted Laya server to choose from your configured tiers"
+          : "Uses TypeSafe System One Choice evaluation with your configured tiers"}
       </p>
+      {isLaya && (
+        <>
+          <div>
+            <Label htmlFor={`${id}-base`}>Laya Server URL</Label>
+            <Input
+              id={`${id}-base`}
+              type="url"
+              placeholder="http://localhost:8000"
+              value={config.api_base ?? ""}
+              onChange={(event) => update({ api_base: event.target.value })}
+            />
+            <p className="text-xs text-muted-foreground">Base URL reachable from the gateway, without /v1/systemone</p>
+          </div>
+          <div>
+            <Label htmlFor={`${id}-key`}>Laya API Key (optional)</Label>
+            <Input
+              id={`${id}-key`}
+              type="password"
+              autoComplete="new-password"
+              value={config.api_key ?? ""}
+              placeholder="Leave blank unless your Laya server requires a key"
+              onChange={(event) => update({ api_key: event.target.value })}
+            />
+          </div>
+        </>
+      )}
       <div>
-        <Label htmlFor={`${id}-model`}>Jev Model</Label>
+        <Label htmlFor={`${id}-model`}>{name} Model</Label>
         <Input id={`${id}-model`} value={config.model} onChange={(event) => update({ model: event.target.value })} />
       </div>
       <div>
-        <Label htmlFor={`${id}-timeout`}>Jev Timeout (ms)</Label>
+        <Label htmlFor={`${id}-timeout`}>{name} Timeout (ms)</Label>
         <Input
           id={`${id}-timeout`}
           type="number"
@@ -50,7 +80,7 @@ export default function JevClassifierConfig({
         }
       />
       <div>
-        <Label htmlFor={`${id}-instructions`}>Jev Instructions</Label>
+        <Label htmlFor={`${id}-instructions`}>{name} Instructions</Label>
         <AutoRouterAllowanceNote
           feature="tier_or_classifier_prompt"
           label="Custom instructions share the custom-tier allowance"
@@ -63,11 +93,11 @@ export default function JevClassifierConfig({
         />
         {config.instructions && (
           <Button variant="outline" type="button" onClick={() => update({ instructions: undefined })}>
-            Restore built-in Jev instructions
+            Restore built-in {name} instructions
           </Button>
         )}
         <p className="text-xs text-muted-foreground">
-          Built-in Jev is available without a license and uses the shipped tier criteria
+          Built-in {name} is available without a license and uses the shipped tier criteria
         </p>
       </div>
     </div>

@@ -55,7 +55,7 @@ from litellm.litellm_core_utils.prompt_templates.common_utils import (
 from litellm.litellm_core_utils.sensitive_data_masker import mask_credentials_in_payload
 from litellm.llms.anthropic.common_utils import is_claude_code_user_agent
 from litellm.llms.base_llm.base_utils import type_to_response_format_param
-from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, get_async_httpx_client
 from litellm.router_strategy.adaptive_router.classifier import classify_prompt
 from litellm.router_strategy.complexity_router.context_compaction import compaction_pending
 from litellm.router_strategy.complexity_router.tier_predictor import (
@@ -1067,6 +1067,7 @@ class ClassificationOutcome(NamedTuple):
         "llm_classifier",
         "capability_classifier",
         "jev_classifier",
+        "laya_classifier",
         "llm_v2_classifier",
         "llm_v2_fallback",
         "heuristic_first_short_circuit",
@@ -1308,15 +1309,20 @@ class ComplexityRouter(CustomLogger):
     """
 
     @staticmethod
-    def _build_jev_client(config: JevClassifierConfig) -> JevClassifierClient:
-        api_key: Final = config.api_key or get_secret_str("TYPESAFE_API_KEY")
-        if not api_key:
+    def _build_jev_client(
+        config: JevClassifierConfig, http_client: AsyncHTTPHandler | None = None
+    ) -> JevClassifierClient:
+        api_key: Final = (
+            config.api_key if config.provider == "laya" else config.api_key or get_secret_str("TYPESAFE_API_KEY")
+        )
+        if not api_key and config.provider == "typesafe":
             raise ValueError("jev_classifier_config.api_key or TYPESAFE_API_KEY is required for classifier_type 'jev'")
         api_base: Final = config.api_base or get_secret_str("TYPESAFE_API_BASE") or "https://api.typesafe.ai"
         return HttpJevClassifierClient(
             api_key=api_key,
             api_base=api_base,
-            http_client=get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
+            provider=config.provider,
+            http_client=http_client or get_async_httpx_client(httpxSpecialProvider.PassThroughEndpoint),
         )
 
     def __init__(
@@ -2165,16 +2171,17 @@ class ComplexityRouter(CustomLogger):
         client: Final = self._jev_client
         if config is None or client is None:
             return self._classifier_failure_outcome("jev classifier is not configured", prompt, system_prompt)
+        classifier_name: Final = "laya" if config.provider == "laya" else "jev"
         marker_pairs: Final = self._reminder_markers_for_request(request_kwargs or EMPTY_MAPPING)
         if _encrypted_classifier_task(request_kwargs, marker_pairs) is not None:
             return self._classifier_failure_outcome(
-                "jev classifier does not support encrypted agent tasks", prompt, system_prompt
+                f"{classifier_name} classifier does not support encrypted agent tasks", prompt, system_prompt
             )
         breaker: Final = self._classifier_circuit_breaker
         permit: Final = breaker.acquire_permit() if breaker is not None else None
         if breaker is not None and permit is None:
             return self._classifier_failure_outcome(
-                "jev classifier circuit is open",
+                f"{classifier_name} classifier circuit is open",
                 prompt,
                 system_prompt,
                 signal=_CLASSIFIER_CIRCUIT_OPEN_SIGNAL,
@@ -2217,7 +2224,8 @@ class ComplexityRouter(CustomLogger):
                 probabilities=answer.probabilities,
                 confidence=answer.confidence,
                 model=model,
-                cost=jev_classifier_cost(response, config.model),
+                cost=jev_classifier_cost(response, config.model, config.provider),
+                provider=config.provider,
             )
             if breaker is not None and permit is not None:
                 breaker.record_success(permit)
@@ -2225,14 +2233,14 @@ class ComplexityRouter(CustomLogger):
                 tier=tier,
                 score=None,
                 signals=(
-                    f"jev-classifier:{tier_name}",
-                    f"jev-confidence={answer.confidence:.6f}",
+                    f"{classifier_name}-classifier:{tier_name}",
+                    f"{classifier_name}-confidence={answer.confidence:.6f}",
                     *(
                         f"tier-probability:{label}={probability:.6f}"
                         for label, probability in answer.probabilities.items()
                     ),
                 ),
-                cause="jev_classifier",
+                cause="laya_classifier" if config.provider == "laya" else "jev_classifier",
                 classifier_cost=verdict.cost,
                 jev_verdict=verdict,
             )
@@ -2244,7 +2252,7 @@ class ComplexityRouter(CustomLogger):
             if breaker is not None and permit is not None:
                 breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
             return self._classifier_failure_outcome(
-                f"jev classifier failed ({type(e).__name__})", prompt, system_prompt
+                f"{classifier_name} classifier failed ({type(e).__name__})", prompt, system_prompt
             )
 
     def _classifier_failure_outcome(
@@ -4765,8 +4773,8 @@ class ComplexityRouter(CustomLogger):
 
         tier_litellm_params: Final = self._litellm_params_for_model(tier, routed_model)
         classifier_model: Final = (
-            f"typesafe/{outcome.jev_verdict.model}"
-            if outcome.cause == "jev_classifier" and outcome.jev_verdict is not None
+            f"{outcome.jev_verdict.provider}/{outcome.jev_verdict.model}"
+            if outcome.cause in ("jev_classifier", "laya_classifier") and outcome.jev_verdict is not None
             else self.config.classifier_llm_config.model
             if outcome.cause in ("llm_classifier", "capability_classifier", "llm_v2_classifier", "llm_v2_fallback")
             and self.config.classifier_llm_config is not None

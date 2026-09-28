@@ -142,6 +142,8 @@ function describeCause(decision: RoutingDecision): string {
       return describeReasoningOverride(tierLabel, overrideFloor);
     case "llm_classifier":
       return classifierModel ? `LLM classifier (${classifierModel})` : "LLM classifier";
+    case "laya_classifier":
+      return "Laya Classifier";
     case "jev_classifier":
       return "JEV classifier";
     case "literal_keyword_match":

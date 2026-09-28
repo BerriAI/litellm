@@ -16,6 +16,7 @@ import {
   type ClassifierType,
   type ComplexityRouterConfigValue,
 } from "./ComplexityRouterConfig";
+import { defaultJevClassifierConfig, defaultLayaClassifierConfig } from "./jev_classifier_config";
 import { transitionClassifierType } from "./classifier_type_transition";
 import { isForecastClassifier } from "./forecast_classifier_config";
 import {
@@ -136,7 +137,10 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
     jev: "jev",
     custom: "custom",
   };
-  const family = familyByType[classifierType];
+  const family =
+    classifierType === "jev" && value.jev_classifier_config?.provider === "laya"
+      ? "laya"
+      : familyByType[classifierType];
   const hasCustomTiers = Boolean(value.custom_tier_set);
   const changeType = (next: ClassifierType) => {
     if (next !== classifierType) onChange(transitionClassifierType(value, next));
@@ -146,7 +150,12 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
     if (next === family) return;
     if (next === "heuristics") changeType("heuristic");
     if (next === "llm") changeType("llm");
-    if (next === "jev") changeType("jev");
+    if (next === "jev" || next === "laya") {
+      onChange({
+        ...transitionClassifierType(value, "jev"),
+        jev_classifier_config: next === "laya" ? defaultLayaClassifierConfig() : defaultJevClassifierConfig(),
+      });
+    }
   };
   const approachLabels: Partial<Record<ClassifierType, string>> = { capability: "Capability", llm_v2: "Fuse v2" };
   const approachDescription: Partial<Record<ClassifierType, string>> = {
@@ -160,11 +169,12 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
           What classifies your requests?
           <AutoRouterLimits />
         </legend>
-        <RadioGroup value={family} onValueChange={changeFamily} className="grid gap-3 sm:grid-cols-3">
+        <RadioGroup value={family} onValueChange={changeFamily} className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
           {[
             { value: "heuristics", label: "Heuristics", description: "Classify locally, with no API call" },
             { value: "llm", label: "LLM", description: "Use a judge model to choose a solver" },
             { value: "jev", label: "Jev", description: "Use TypeSafe System One Choice to choose a tier" },
+            { value: "laya", label: "Laya", description: "Use a self-hosted, open-source model to choose a tier" },
           ].map((option) => (
             <Label
               key={option.value}
@@ -224,7 +234,7 @@ const AutoRouterClassifierTabs: React.FC<AutoRouterClassifierTabsProps> = ({ val
           </p>
         </div>
       )}
-      {(family === "llm" || family === "jev") && (
+      {["llm", "jev", "laya"].includes(family) && (
         <div className="space-y-2">
           <Label htmlFor={`${id}-approach`}>Routing approach</Label>
           <ClassifierMenu

@@ -73,6 +73,31 @@ const response = (cause: string) => ({
 afterEach(() => vi.unstubAllGlobals());
 
 describe("JEV network probes", () => {
+  it.each(["laya_classifier", "classifier_fallback"])("reports Laya probe result %s", async (cause) => {
+    vi.stubGlobal(
+      "fetch",
+      vi.fn<typeof fetch>(async () => new Response(JSON.stringify(response(cause)))),
+    );
+    const layaRequest = {
+      prompt: JEV_CONNECTION_TEST_PROMPT,
+      complexity_router_config: {
+        ...config,
+        jev_classifier_config: {
+          provider: "laya",
+          model: "english",
+          api_base: "https://laya.example.com",
+          timeout_ms: 3000,
+        },
+      },
+    };
+    renderWithProviders(<AutoRouterConnectionTest accessToken="test-token" targets={[]} jevRequest={layaRequest} />);
+    const expected =
+      cause === "laya_classifier"
+        ? "Laya classification succeeded"
+        : `Laya was not reached successfully (routing cause: ${cause})`;
+    await waitFor(() => expect(screen.getByRole("status", { name: "Laya connection" })).toHaveTextContent(expected));
+  });
+
   it.each(["jev_classifier", "classifier_fallback", "default_model_fallback", "keyword_match"])(
     "probes the routing endpoint independently of tier models and checks the cause %s",
     async (cause) => {

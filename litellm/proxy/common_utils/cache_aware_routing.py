@@ -37,6 +37,7 @@ _CLASSIFIED_CAUSES: Final = frozenset(
         "llm_classifier",
         "llm_v2_classifier",
         "jev_classifier",
+        "laya_classifier",
         "capability_classifier",
         "heuristic_first_short_circuit",
         "hybrid_short_circuit",

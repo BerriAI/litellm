@@ -30,14 +30,15 @@ from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
 
 
 class _UsageRecorder(CustomLogger):
-    def __init__(self) -> None:
+    def __init__(self, model: str = "jev-accounting") -> None:
         super().__init__()
+        self.model = model
         self.calls: tuple[Mapping[str, object], ...] = ()
 
     async def async_log_success_event(
         self, kwargs: Mapping[str, object], response_obj: object, start_time: datetime, end_time: datetime
     ) -> None:
-        if str(kwargs.get("model", "")).removeprefix("typesafe/") != "jev-accounting":
+        if str(kwargs.get("model", "")).removeprefix("typesafe/").removeprefix("laya/") != self.model:
             return
         self.calls = (*self.calls, kwargs)
 
@@ -550,3 +551,75 @@ async def test_http_jev_classifier_client_posts_to_system_one() -> None:
     assert captured["content_type"] == "application/json"
     assert captured["body"] == request.model_dump(mode="json")
     assert response.model == "jev-1.13.0"
+
+
+@pytest.mark.parametrize("api_base", [None, "", "   "])
+def test_laya_requires_an_explicit_server(api_base: str | None) -> None:
+    with pytest.raises(ValueError, match="Laya requires"):
+        JevClassifierConfig(provider="laya", api_base=api_base)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("api_key", [None, "laya-only-key"])
+async def test_laya_routes_and_logs_without_typesafe_credentials(
+    monkeypatch: pytest.MonkeyPatch, api_key: str | None
+) -> None:
+    monkeypatch.setenv("TYPESAFE_API_KEY", "typesafe-must-stay-home")
+    monkeypatch.setenv("TYPESAFE_API_BASE", "https://typesafe.invalid")
+    config: Final = JevClassifierConfig(provider="laya", api_base="https://laya.test/", api_key=api_key)
+    recorder: Final = _UsageRecorder(model="english")
+    monkeypatch.setattr(litellm, "_async_success_callback", [recorder])
+    captured: Final[list[httpx.Request]] = []
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        captured.append(request)
+        return httpx.Response(
+            200,
+            json={
+                "answers": {"tier": _answer().model_dump()},
+                "usage": {"input_tokens": 35, "output_tokens": 0},
+            },
+        )
+
+    handler: Final = AsyncHTTPHandler()
+    handler.client = httpx.AsyncClient(transport=httpx.MockTransport(respond))
+    client: Final = ComplexityRouter._build_jev_client(config, http_client=handler)
+    router: Final = ComplexityRouter(
+        "laya-router",
+        litellm.Router(model_list=[]),
+        {"classifier_type": "jev", "jev_classifier_config": config.model_dump(), "tiers": {"SIMPLE": "cheap"}},
+        jev_client=client,
+        derive_savings_baseline=False,
+    )
+    result: Final = await router.async_pre_routing_hook(
+        model="laya-router",
+        messages=[{"role": "user", "content": "Summarize this request"}],
+        request_kwargs={"model": "laya-router"},
+    )
+    await GLOBAL_LOGGING_WORKER.flush()
+    await handler.client.aclose()
+    assert result is not None and result.routing_decision is not None
+    assert (
+        result.model,
+        result.routing_decision["cause"],
+        result.routing_decision["classifier_model"],
+        result.routing_decision["classifier_cost"],
+    ) == ("cheap", "laya_classifier", "laya/english", 0.0)
+    assert len(recorder.calls) == 1
+    assert recorder.calls[0]["custom_llm_provider"] == "laya"
+    assert recorder.calls[0]["response_cost"] == 0.0
+    assert len(captured) == 1
+    request: Final = captured[0]
+    assert str(request.url) == "https://laya.test/v1/systemone"
+    assert request.headers.get("Authorization") == (None if api_key is None else f"Bearer {api_key}")
+    sent: Final = json.loads(request.content)
+    assert sent["model"] == config.model
+    assert "Summarize this request" in sent["state"]
+    assert sent["questions"]["tier"]["type"] == "choice"
+
+
+def test_laya_cost_does_not_use_typesafe_prices() -> None:
+    response: Final = JevSystemOneResponse(
+        model="jev-latest", answers={"tier": _answer()}, usage=JevUsage(input_tokens=100, output_tokens=20)
+    )
+    assert jev_classifier_cost(response, "english", "laya") == 0.0

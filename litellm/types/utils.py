@@ -2981,6 +2981,7 @@ RoutingDecisionCause = Literal[
     "llm_classifier",
     "capability_classifier",
     "jev_classifier",
+    "laya_classifier",
     "llm_v2_classifier",
     "llm_v2_fallback",
     # classifier_type 'heuristic_first': the local scorer produced at least one signal and landed at

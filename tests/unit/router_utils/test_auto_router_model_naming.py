@@ -23,21 +23,21 @@ COMPLEXITY_FIELDS = frozenset({"complexity_router_config"})
 SEMANTIC_FIELDS = frozenset({"auto_router_config", "auto_router_default_model", "auto_router_embedding_model"})
 
 
-@pytest.mark.parametrize("model", ["jev-latest", "jev-preview"])
-def test_jev_enumerates_a_paid_evaluation_without_a_completion_classifier(model: str) -> None:
+@pytest.mark.parametrize(("provider", "model"), [("typesafe", "jev-latest"), ("typesafe", "jev-preview"), ("laya", "english")])
+def test_jev_enumerates_a_paid_evaluation_without_a_completion_classifier(provider: str, model: str) -> None:
     found = strategy_router_dependencies(
         {
             "model": "auto_router/complexity_router",
             "complexity_router_config": {
                 "classifier_type": "jev",
-                "jev_classifier_config": {"model": model},
+                "jev_classifier_config": {"model": model, "provider": provider},
                 "tiers": {"SIMPLE": "cheap"},
             },
         }
     )
     assert tuple((dep.model_name, dep.role) for dep in found) == (
         ("cheap", "tier"),
-        (f"typesafe/{model}", "evaluation"),
+        (f"{provider}/{model}", "evaluation"),
     )
 
 

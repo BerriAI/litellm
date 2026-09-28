@@ -66,7 +66,9 @@ const COMPLEXITY_TYPE_LABELS: Record<string, string> = {
 };
 
 export const complexityTypeLabel = (config: Record<string, unknown>): string =>
-  (typeof config.classifier_type === "string" && COMPLEXITY_TYPE_LABELS[config.classifier_type]) || "Heuristic";
+  config.classifier_type === "jev" && asRecord(config.jev_classifier_config).provider === "laya"
+    ? "Laya Classifier"
+    : (typeof config.classifier_type === "string" && COMPLEXITY_TYPE_LABELS[config.classifier_type]) || "Heuristic";
 
 interface Presentation {
   typeLabel: string;

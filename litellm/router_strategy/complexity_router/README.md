@@ -697,3 +697,36 @@ LLM V2 combines task demands, available verification, and model capability in on
 This classifier is intended for evaluation. Its probabilities are raw forecasts unless matching per-model calibration is supplied, and an estimated quality allowance is not a measured quality guarantee. It requires two model groups, profiles for both solvers, and a description of their harness and budget. Adaptive selection is disabled for this mode so it cannot override the forecast. Existing user-turn classification can reuse a decision until the user changes the task
 
 V2 reads all human task messages and follow-ups, without the complexity classifier's prior-turn truncation or assistant summaries. Long task histories can therefore increase judge cost or exceed its context window, which falls back to the capable solver. Profiles must describe every deployment behind their model group and calibration must match the prompt, solver settings, and harness being evaluated
+
+## Laya: self-hosted open-source classifier
+
+[Laya](https://github.com/NandhaKishorM/laya) serves typed decisions over the same `/v1/systemone` protocol as Jev. In the dashboard, choose **Laya** under **What classifies your requests?**, enter your server URL, and choose a checkpoint. The gateway runs Laya over HTTP, so its model weights and inference dependencies stay on your Laya server
+
+Start the server separately with `pip install 'laya[serve]'`, then `LAYA_PRELOAD=1 laya-serve`. Set `LAYA_API_KEY` on that server if bearer authentication is required
+
+The YAML configuration reuses `classifier_type: jev` with `provider: laya`:
+
+```yaml
+model_list:
+  - model_name: laya-router
+    litellm_params:
+      model: auto_router/complexity_router
+      complexity_router_config:
+        classifier_type: jev
+        jev_classifier_config:
+          provider: laya
+          model: english
+          api_base: http://localhost:8000
+          timeout_ms: 3000
+        tiers:
+          SIMPLE: small-solver
+          MEDIUM: small-solver
+          COMPLEX: large-solver
+          REASONING: large-solver
+```
+
+`small-solver` and `large-solver` must be existing gateway model groups. `api_base` is the Laya server's base URL as reachable from the gateway, without `/v1/systemone`. It is required. In separate containers, use the Laya service hostname instead of `localhost`. The API key is optional and must be supplied explicitly through `api_key` when needed. LiteLLM never sends `TYPESAFE_API_KEY` to Laya
+
+Laya defaults to the `english` checkpoint. Set `multilingual` or `typed-decisions` to select another checkpoint. The router reuses tier descriptions, bounded conversation context, timeout, circuit breaker and fallback settings from the Jev integration. Laya server configuration requires a proxy administrator, just like other custom classifier endpoints
+
+Routing decisions and logs identify Laya separately, with `cause: laya_classifier` and a `laya/` model prefix. Self-hosted inference has no provider token charge by default; hosting costs are not included. Returned confidence is Laya's own entropy-based confidence, which is not interchangeable with Jev's confidence. Evaluate classification quality and latency on your own prompts, especially when sending long conversation context

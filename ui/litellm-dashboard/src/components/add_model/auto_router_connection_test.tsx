@@ -7,6 +7,7 @@ import {
   testAutoRouterRouting,
   AutoRouterRoutingTestRequest,
 } from "../networking";
+import { jevClassifierConfigSchema } from "./jev_classifier_config";
 import { AutoRouterTestTarget } from "./build_auto_router_test_targets";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
@@ -31,6 +32,10 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
   jevRequest,
   onTestComplete,
 }) => {
+  const classifierConfig = jevClassifierConfigSchema.safeParse(
+    jevRequest?.complexity_router_config.jev_classifier_config,
+  );
+  const classifierName = classifierConfig.success && classifierConfig.data.provider === "laya" ? "Laya" : "Jev";
   const [results, setResults] = React.useState<TargetResult[]>(() => targets.map(() => ({ status: "pending" })));
   const [jevResult, setJevResult] = React.useState<TargetResult>({ status: "pending" });
 
@@ -46,11 +51,11 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
       }
       const decision = response.result.routing_decision;
       setJevResult(
-        decision.cause === "jev_classifier"
+        decision.cause === (classifierName === "Laya" ? "laya_classifier" : "jev_classifier")
           ? { status: "success" }
           : {
               status: "error",
-              error: `Jev was not reached successfully (routing cause: ${decision.cause ?? "unknown"})`,
+              error: `${classifierName} was not reached successfully (routing cause: ${decision.cause ?? "unknown"})`,
             },
       );
     };
@@ -91,11 +96,11 @@ const AutoRouterConnectionTest: React.FC<AutoRouterConnectionTestProps> = ({
         classifier probe includes its reasoning effort override.
       </p>
       {jevRequest && (
-        <div role="status" aria-label="Jev connection" className="rounded-lg border p-3 text-sm">
-          <strong>Jev Classifier</strong>
+        <div role="status" aria-label={`${classifierName} connection`} className="rounded-lg border p-3 text-sm">
+          <strong>{classifierName} Classifier</strong>
           <p>
-            {jevResult.status === "pending" && "Testing Jev classification"}
-            {jevResult.status === "success" && "Jev classification succeeded"}
+            {jevResult.status === "pending" && `Testing ${classifierName} classification`}
+            {jevResult.status === "success" && `${classifierName} classification succeeded`}
             {jevResult.status === "error" && jevResult.error}
           </p>
         </div>

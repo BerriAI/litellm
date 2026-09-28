@@ -1,6 +1,11 @@
 import { z } from "zod";
 
 const jevClassifierConfigFields = {
+  provider: z.enum(["typesafe", "laya"]).optional(),
+  api_base: z
+    .string()
+    .nullish()
+    .transform((value) => value ?? undefined),
   model: z.string().trim().min(1).default("jev-latest"),
   timeout_ms: z.number().int().positive().default(3000),
   instructions: z
@@ -11,15 +16,21 @@ const jevClassifierConfigFields = {
   circuit_breaker_cooldown_seconds: z.number().finite().positive().optional(),
 };
 
-export const jevClassifierConfigSchema = z.object(jevClassifierConfigFields);
+export const jevClassifierConfigSchema = z.object(jevClassifierConfigFields).transform(({ api_base, ...config }) => ({
+  ...config,
+  ...(config.provider === "laya" && api_base ? { api_base } : {}),
+}));
 
-export type JevClassifierConfig = z.infer<typeof jevClassifierConfigSchema>;
+export type JevClassifierConfig = z.infer<typeof jevClassifierConfigSchema> & { api_key?: string };
 
 export const defaultJevClassifierConfig = (): JevClassifierConfig => jevClassifierConfigSchema.parse({});
 
 export const normalizeJevClassifierConfig = (
   config: JevClassifierConfig = defaultJevClassifierConfig(),
 ): JevClassifierConfig => ({
+  ...(config.provider && { provider: config.provider }),
+  ...(config.provider === "laya" && config.api_base?.trim() && { api_base: config.api_base.trim() }),
+  ...(config.provider === "laya" && config.api_key?.trim() && { api_key: config.api_key.trim() }),
   model: config.model.trim(),
   timeout_ms: config.timeout_ms,
   ...(config.instructions?.trim() && { instructions: config.instructions.trim() }),
@@ -27,4 +38,10 @@ export const normalizeJevClassifierConfig = (
   ...(config.circuit_breaker_cooldown_seconds !== undefined && {
     circuit_breaker_cooldown_seconds: config.circuit_breaker_cooldown_seconds,
   }),
+});
+
+export const defaultLayaClassifierConfig = (): JevClassifierConfig => ({
+  ...defaultJevClassifierConfig(),
+  provider: "laya",
+  model: "english",
 });

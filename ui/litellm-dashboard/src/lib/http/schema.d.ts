@@ -31536,12 +31536,12 @@ export interface components {
         JevClassifierConfig: {
             /**
              * Api Base
-             * @description TypeSafe API base, falling back to TYPESAFE_API_BASE and then https://api.typesafe.ai
+             * @description TypeSafe API base, falling back to TYPESAFE_API_BASE and then https://api.typesafe.ai; required server URL for Laya
              */
             api_base?: string | null;
             /**
              * Api Key
-             * @description TypeSafe API key, falling back to TYPESAFE_API_KEY
+             * @description TypeSafe API key, falling back to TYPESAFE_API_KEY; optional explicit bearer key for Laya
              */
             api_key?: string | null;
             /**
@@ -31564,6 +31564,12 @@ export interface components {
              * @default jev-latest
              */
             model: string;
+            /**
+             * Provider
+             * @default typesafe
+             * @enum {string}
+             */
+            provider: "typesafe" | "laya";
             /**
              * Timeout Ms
              * @default 3000
@@ -42587,7 +42593,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "prompt_cache_cost" | "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "prompt_cache_cost" | "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "laya_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Calibrated Capable P Solve */
             classifier_calibrated_capable_p_solve?: number;
             /** Classifier Calibrated Efficient P Solve */
