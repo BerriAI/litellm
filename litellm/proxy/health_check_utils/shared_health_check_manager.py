@@ -1,8 +1,8 @@
 import asyncio
 import json
 import time
-from collections.abc import Mapping, Sequence
-from typing import TYPE_CHECKING, Any, Final
+from collections.abc import Awaitable, Callable, Mapping, Sequence
+from typing import TYPE_CHECKING, Any, Final, cast
 
 from litellm._logging import verbose_proxy_logger
 from litellm.caching.redis_cache import RedisCache
@@ -38,7 +38,7 @@ class SharedHealthCheckManager:
         self.health_check_ttl = health_check_ttl
         self.lock_ttl = lock_ttl
         self.pod_id = f"pod_{int(time.time() * 1000)}"
-        self._release_lock_script: Any | None = None
+        self._release_lock_script: Callable[..., Awaitable[int]] | None = None
 
     @staticmethod
     def get_health_check_lock_key() -> str:
@@ -111,7 +111,9 @@ end
 
         try:
             if self._release_lock_script is None:
-                self._release_lock_script = script_register(self._COMPARE_AND_DELETE_LOCK_SCRIPT)
+                self._release_lock_script = cast(
+                    Callable[..., Awaitable[int]], script_register(self._COMPARE_AND_DELETE_LOCK_SCRIPT)
+                )
             result: Final = await self._release_lock_script(keys=[lock_key], args=[json.dumps(self.pod_id)])
             if int(result or 0) == 1:
                 verbose_proxy_logger.info("Pod %s released health check lock", self.pod_id)
