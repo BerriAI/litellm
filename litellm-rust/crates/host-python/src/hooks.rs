@@ -1,6 +1,6 @@
 use crate::PythonOwned;
 use litellm_host::{
-    hooks::{MachineEvent, RequestContext, WireRequest},
+    interceptors::{RawResponse, RequestContext, WireRequest},
     lifecycle::{FailureOrigin, Timing},
 };
 use pyo3::prelude::*;
@@ -27,7 +27,7 @@ pub enum HookEvent<'a> {
     Started {
         start_time: f64,
     },
-    Machine(&'a MachineEvent),
+    AfterProviderResponse(&'a RawResponse),
     Succeeded {
         timing: Timing,
         response: &'a Py<PyAny>,

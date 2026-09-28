@@ -20,7 +20,7 @@ async fn calls_defer_execution_until_polled(
 ) {
     use futures_util::future::BoxFuture;
 
-    use litellm_host::lifecycle::{CallEvent, CallObserver};
+    use litellm_host::lifecycle::CallEvent;
 
     let upstream = upstream([message_response()]).await;
     let secrets = Arc::new(RecordingSecrets::new([("ANTHROPIC_API_KEY", "test-key")]));
@@ -30,7 +30,8 @@ async fn calls_defer_execution_until_polled(
         ..call
     });
     let request = host.request().unwrap();
-    let observer: Option<Arc<dyn CallObserver>> = with_observer.then(|| host.events.clone() as _);
+    let observer: Option<litellm_host::observation::ObservationSender> =
+        with_observer.then(|| host.events.0.sender.clone());
     let future: BoxFuture<'_, Result<MessagesResponse, Error>> = if with_hooks {
         Box::pin(route.execute(request, &host, observer))
     } else {
@@ -56,18 +57,22 @@ async fn calls_defer_execution_until_polled(
     assert!(matches!(
         (with_hooks, with_observer, events.as_slice()),
         (false, false, [])
-            | (true, false, [CallEvent::Machine(_)])
+            | (true, false, [])
             | (
                 false,
                 true,
-                [CallEvent::Started { .. }, CallEvent::Succeeded { .. }]
+                [
+                    CallEvent::Started { .. },
+                    CallEvent::Execution(_),
+                    CallEvent::Succeeded { .. }
+                ]
             )
             | (
                 true,
                 true,
                 [
                     CallEvent::Started { .. },
-                    CallEvent::Machine(_),
+                    CallEvent::Execution(_),
                     CallEvent::Succeeded { .. }
                 ]
             )

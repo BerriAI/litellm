@@ -1,7 +1,9 @@
+use litellm_host::lifecycle::ExecutionEvent;
+use litellm_host::observation::ObservationSender;
 use std::time::Duration;
 
 use futures_util::StreamExt;
-use litellm_host::hooks::{MachineEvent, RawResponse, RouteHooks, WireRequest};
+use litellm_host::interceptors::{Interceptors, RawResponse, WireRequest};
 use litellm_llms::base_llm::auth::{Authenticated, resolve_auth};
 
 use super::{
@@ -13,10 +15,11 @@ pub(super) async fn execute(
     http: &litellm_http::Client,
     auth: &litellm_auth::AuthServices,
     request: ProviderResponsesRequest,
-    hooks: &impl RouteHooks<Error>,
+    interceptors: &impl Interceptors<Error>,
+    observers: Option<&ObservationSender>,
 ) -> Result<ResponsesOutput, Error> {
     let authenticated = resolve_auth(auth, request.environment, &|_| None).await?;
-    let wire = hooks
+    let wire = interceptors
         .before_provider_request(
             WireRequest {
                 url: request.url,
@@ -68,10 +71,14 @@ pub(super) async fn execute(
         });
     }
     let body = response.text().await.map_err(network)?;
-    hooks
-        .on_event(MachineEvent::ResponseReceived {
-            raw: RawResponse { body: body.clone() },
-        })
+    let raw = RawResponse { body: body.clone() };
+    if let Some(observers) = observers {
+        observers.emit(litellm_host::lifecycle::CallEvent::Execution(
+            ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
+        ));
+    }
+    interceptors
+        .after_provider_response(raw)
         .await
         .map_err(Error::post_call)?;
     let value = serde_json::from_str(&body)

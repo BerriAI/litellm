@@ -35,7 +35,7 @@ fn run_messages(
         py,
         SURFACE,
         PublicCall::capture(&request, &args, &kwargs)?,
-        move |request| crate::logger::LoggedMachine::new(route.machine(request)),
+        move |request| crate::logger::LoggedMachine::new(route.machine(request, None)),
         MessagesPythonHost::new(request.unbind()),
         crate::preflight::sdk_preflight,
         asynchronous,

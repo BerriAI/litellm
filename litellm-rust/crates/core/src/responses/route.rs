@@ -1,3 +1,4 @@
+use litellm_host::observation::ObservationSender;
 use std::convert::Infallible;
 
 use bytes::Bytes;
@@ -24,9 +25,17 @@ impl Protocol for Responses {
 }
 
 impl ResponsesRoute {
-    pub fn machine(self, call: ResponsesCall) -> HostedMachine<Responses> {
-        hosted_call(call, move |call, _, hooks| async move {
-            self.run(call, &hooks).await
-        })
+    pub fn machine(
+        self,
+        call: ResponsesCall,
+        observers: Option<ObservationSender>,
+    ) -> HostedMachine<Responses> {
+        hosted_call(
+            call,
+            observers,
+            move |call, _, interceptors, observers| async move {
+                self.run(call, &interceptors, observers.as_ref()).await
+            },
+        )
     }
 }

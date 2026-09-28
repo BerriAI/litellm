@@ -1,3 +1,4 @@
+use litellm_host::observation::ObservationSender;
 use std::{convert::Infallible, sync::Arc};
 
 use axum::{body::Body, response::Response};
@@ -6,8 +7,8 @@ use futures_util::{StreamExt, stream};
 
 use litellm_host::{
     call::{CallOutput, HostedCompletion, HostedMachine},
-    hooks::RouteHooks,
-    lifecycle::{CallObserver, observe_call, observe_unary},
+    interceptors::Interceptors,
+    lifecycle::{observe_call, observe_unary},
     machine::MachineFault,
     protocol::Protocol,
 };
@@ -21,19 +22,19 @@ type HostedDriver<P, S, H> = Driver<HostedMachine<P>, S, H>;
 pub async fn serve_unary<P, A, H, S>(
     machine: HostedMachine<P>,
     services: S,
-    hooks: H,
+    interceptors: H,
     encoder: A,
-    observer: Option<Arc<dyn CallObserver>>,
+    observers: Option<ObservationSender>,
 ) -> Result<Response, Error<P::Error>>
 where
     P: Protocol<Chunk = Infallible, StreamHead = Infallible>,
     P::Error: From<MachineFault>,
-    H: RouteHooks<P::Error>,
+    H: Interceptors<P::Error>,
     S: HostCallHandler<P>,
     A: ResponseEncoder<Protocol = P>,
 {
-    let mut driver = Driver::new(machine, services, hooks);
-    observe_unary(observer, async move {
+    let mut driver = Driver::new(machine, services, interceptors);
+    observe_unary(observers, async move {
         match driver.advance().await.map_err(Error::Call)? {
             Boundary::Complete(HostedCompletion::Complete(value)) => {
                 encoder.encode_response(value).map_err(Error::Call)
@@ -47,20 +48,20 @@ where
 pub async fn serve<P, A, H, S>(
     machine: HostedMachine<P>,
     services: S,
-    hooks: H,
+    interceptors: H,
     encoder: A,
-    observer: Option<Arc<dyn CallObserver>>,
+    observers: Option<ObservationSender>,
 ) -> Result<Response, Error<P::Error>>
 where
     P: Protocol,
     P::Error: From<MachineFault>,
     A: StreamEncoder<Protocol = P>,
-    H: RouteHooks<P::Error> + 'static,
+    H: Interceptors<P::Error> + 'static,
     S: HostCallHandler<P> + 'static,
 {
     let encoder = Arc::new(encoder);
-    let driver = Driver::new(machine, services, hooks);
-    match observe_call(observer, start(driver, encoder.clone())).await? {
+    let driver = Driver::new(machine, services, interceptors);
+    match observe_call(observers, start(driver, encoder.clone())).await? {
         CallOutput::Complete(response) => Ok(response),
         CallOutput::Stream { head, chunks } => {
             let body = chunks.map(move |chunk| {
@@ -81,7 +82,7 @@ where
     P: Protocol,
     P::Error: From<MachineFault>,
     A: StreamEncoder<Protocol = P>,
-    H: RouteHooks<P::Error> + 'static,
+    H: Interceptors<P::Error> + 'static,
     S: HostCallHandler<P> + 'static,
 {
     match driver.advance().await.map_err(Error::Call)? {

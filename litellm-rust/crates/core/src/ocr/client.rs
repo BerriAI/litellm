@@ -1,6 +1,7 @@
+use litellm_host::observation::ObservationSender;
 use std::sync::Arc;
 
-use litellm_host::hooks::RouteHooks;
+use litellm_host::interceptors::Interceptors;
 use litellm_llms::base_llm::ocr::{
     error::Error, handler::OcrClient, transformation::LiteLLMOcrResponse,
 };
@@ -23,10 +24,14 @@ impl OcrRoute {
     pub async fn execute(
         &self,
         request: LiteLLMOcrRequest,
-        hooks: &impl RouteHooks<Error>,
-        observer: Option<Arc<dyn litellm_host::lifecycle::CallObserver>>,
+        interceptors: &impl Interceptors<Error>,
+        observers: Option<ObservationSender>,
     ) -> Result<LiteLLMOcrResponse, Error> {
-        litellm_host::lifecycle::observe_unary(observer, self.run(request, hooks)).await
+        litellm_host::lifecycle::observe_unary(
+            observers.clone(),
+            self.run(request, interceptors, observers.as_ref()),
+        )
+        .await
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(
@@ -40,7 +45,8 @@ impl OcrRoute {
     pub(super) async fn run(
         &self,
         request: LiteLLMOcrRequest,
-        hooks: &impl RouteHooks<Error>,
+        interceptors: &impl Interceptors<Error>,
+        observers: Option<&ObservationSender>,
     ) -> Result<LiteLLMOcrResponse, Error> {
         crate::diagnostic::unary(async {
             let caller_document = matches!(&request.document, OcrDocumentInput::Document(_));
@@ -49,8 +55,9 @@ impl OcrRoute {
                 Box::pin(perform_ocr_request(
                     &self.client,
                     prepared,
-                    hooks,
+                    interceptors,
                     caller_document,
+                    observers,
                 ));
             execute.await
         })

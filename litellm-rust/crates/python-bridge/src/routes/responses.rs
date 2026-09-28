@@ -75,7 +75,7 @@ fn run_public(
             stream: None,
         },
         PublicCall::capture(&request, &args, &kwargs)?,
-        move |request| crate::logger::LoggedMachine::new(route.machine(request)),
+        move |request| crate::logger::LoggedMachine::new(route.machine(request, None)),
         host::ResponsesPythonHost(host),
         crate::preflight::sdk_preflight,
         asynchronous,

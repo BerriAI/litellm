@@ -1,3 +1,4 @@
+use litellm_host::interceptors::RawResponse;
 use std::time::Duration;
 
 use litellm_core::chat_completions::{
@@ -346,7 +347,8 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
     );
     let response = if hosted {
         let result = litellm_host_native::in_process::run_hosted(
-            chat_completions_route().machine(host.request().unwrap()),
+            chat_completions_route()
+                .machine(host.request().unwrap(), Some(host.events.0.sender.clone())),
             host.runtime(),
         )
         .await
@@ -370,7 +372,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
                     timeout: call.timeout,
                 },
                 &host,
-                Some(host.events.clone()),
+                Some(host.events.0.sender.clone()),
             )
             .await
             .unwrap()
@@ -388,7 +390,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
         &events[..],
         [
             CallEvent::Started { .. },
-            CallEvent::Machine(_),
+            CallEvent::Execution(_),
             CallEvent::Succeeded { .. }
         ]
     ));
@@ -399,9 +401,9 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
 async fn a_post_call_hook_failure_never_looks_safe_to_retry(
     request: ChatCompletionsRequest<'static>,
 ) {
-    use litellm_host::hooks::{MachineEvent, RequestContext, RouteHooks, WireRequest};
+    use litellm_host::interceptors::{Interceptors, RequestContext, WireRequest};
     struct FailingHook;
-    impl RouteHooks<Error> for FailingHook {
+    impl Interceptors<Error> for FailingHook {
         async fn before_provider_request(
             &self,
             wire: WireRequest,
@@ -409,7 +411,7 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
         ) -> Result<WireRequest, Error> {
             Ok(wire)
         }
-        async fn on_event(&self, _: MachineEvent) -> Result<(), Error> {
+        async fn after_provider_response(&self, _: RawResponse) -> Result<(), Error> {
             Err(Error::InvalidRequest("callback rejected".into()))
         }
     }

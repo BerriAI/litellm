@@ -1,12 +1,12 @@
+use crate::observation::ObservationSender;
 use std::{
     future::Future,
-    sync::Arc,
     time::{SystemTime, UNIX_EPOCH},
 };
 
 use futures_util::TryStreamExt;
 
-use crate::{call::CallOutput, hooks::MachineEvent};
+use crate::{call::CallOutput, interceptors::RawResponse};
 
 /// Seconds since the Unix epoch, on one clock for every host.
 pub fn epoch_seconds() -> f64 {
@@ -37,7 +37,7 @@ pub enum CallEvent {
     Started {
         start_time: f64,
     },
-    Machine(MachineEvent),
+    Execution(ExecutionEvent),
     Succeeded {
         timing: Timing,
     },
@@ -50,23 +50,28 @@ pub enum CallEvent {
     },
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ExecutionEvent {
+    ProviderResponseReceived { raw: RawResponse },
+}
+
 pub trait CallObserver: Send + Sync {
     fn observe(&self, event: CallEvent);
 }
 
 struct CallGuard {
-    observer: Option<Arc<dyn CallObserver>>,
+    observers: Option<ObservationSender>,
     started_at: f64,
 }
 
 impl CallGuard {
-    fn new(observer: Arc<dyn CallObserver>) -> Self {
+    fn new(observers: ObservationSender) -> Self {
         let started_at = epoch_seconds();
-        observer.observe(CallEvent::Started {
+        observers.emit(CallEvent::Started {
             start_time: started_at,
         });
         Self {
-            observer: Some(observer),
+            observers: Some(observers),
             started_at,
         }
     }
@@ -79,8 +84,8 @@ impl CallGuard {
     }
 
     fn finish(mut self, failed: bool) {
-        if let Some(observer) = self.observer.take() {
-            observer.observe(if failed {
+        if let Some(observers) = self.observers.take() {
+            observers.emit(if failed {
                 CallEvent::Failed {
                     timing: self.timing(),
                     origin: FailureOrigin::Call,
@@ -96,8 +101,8 @@ impl CallGuard {
 
 impl Drop for CallGuard {
     fn drop(&mut self) {
-        if let Some(observer) = self.observer.take() {
-            observer.observe(CallEvent::Cancelled {
+        if let Some(observers) = self.observers.take() {
+            observers.emit(CallEvent::Cancelled {
                 timing: self.timing(),
             });
         }
@@ -105,17 +110,17 @@ impl Drop for CallGuard {
 }
 
 pub async fn observe_call<R, H, C, E>(
-    observer: Option<Arc<dyn CallObserver>>,
+    observers: Option<ObservationSender>,
     execute: impl Future<Output = Result<CallOutput<R, H, C, E>, E>>,
 ) -> Result<CallOutput<R, H, C, E>, E>
 where
     C: Send + 'static,
     E: Send + 'static,
 {
-    let Some(observer) = observer else {
+    let Some(observers) = observers else {
         return execute.await;
     };
-    let guard = CallGuard::new(observer);
+    let guard = CallGuard::new(observers);
     match execute.await {
         Err(error) => {
             guard.finish(true);
@@ -151,13 +156,13 @@ where
 }
 
 pub async fn observe_unary<R, E>(
-    observer: Option<Arc<dyn CallObserver>>,
+    observers: Option<ObservationSender>,
     execute: impl Future<Output = Result<R, E>>,
 ) -> Result<R, E> {
-    let Some(observer) = observer else {
+    let Some(observers) = observers else {
         return execute.await;
     };
-    let guard = CallGuard::new(observer);
+    let guard = CallGuard::new(observers);
     let result = execute.await;
     guard.finish(result.is_err());
     result

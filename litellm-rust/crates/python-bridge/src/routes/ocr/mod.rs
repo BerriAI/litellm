@@ -62,7 +62,7 @@ fn run_ocr(
         py,
         if asynchronous { ASYNC_SURFACE } else { SURFACE },
         PublicCall::capture(&request, &args, &kwargs)?,
-        move |request| crate::logger::LoggedMachine::new(route.machine(request)),
+        move |request| crate::logger::LoggedMachine::new(route.machine(request, None)),
         OcrPythonHost::new(request.unbind()),
         crate::preflight::sdk_preflight,
         asynchronous,

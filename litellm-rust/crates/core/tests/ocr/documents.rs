@@ -1,6 +1,6 @@
 use base64::Engine;
 use litellm_core::ocr::types::OcrDocumentInput;
-use litellm_host::hooks::WireRequest;
+use litellm_host::interceptors::WireRequest;
 use rstest::rstest;
 use wiremock::{Mock, matchers::any};
 
@@ -209,7 +209,7 @@ async fn configured_client_preserves_document_url_policy(#[case] allowed: bool) 
         json!({}),
     ));
     let result = litellm_host_native::in_process::run_hosted(
-        route.machine(host.request().unwrap()),
+        route.machine(host.request().unwrap(), None),
         host.runtime(),
     )
     .await;

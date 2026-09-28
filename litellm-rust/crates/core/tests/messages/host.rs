@@ -1,8 +1,9 @@
+use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::Mutex;
 
 use litellm_core::messages::route::Messages;
 use litellm_host::{
-    hooks::{MachineEvent, RequestContext, WireRequest},
+    interceptors::{RequestContext, WireRequest},
     lifecycle::CallEvent,
 };
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
@@ -17,7 +18,7 @@ type Rewrite = Box<dyn Fn(WireRequest) -> Result<WireRequest, Error> + Send + Sy
 struct RecordingHost {
     call: LocalMessagesHost,
     rewrite: Rewrite,
-    events: Mutex<Vec<CallEvent>>,
+    events: super::support::Observations,
     optional_params: Mutex<Vec<Value>>,
 }
 
@@ -26,7 +27,7 @@ impl RecordingHost {
         Self {
             call: LocalMessagesHost::new(call),
             rewrite,
-            events: Mutex::new(Vec::new()),
+            events: super::support::Observations::default(),
             optional_params: Mutex::new(Vec::new()),
         }
     }
@@ -41,7 +42,7 @@ impl RecordingHost {
             .unwrap()
             .iter()
             .filter_map(|event| match event {
-                CallEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
+                CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
                     Some(raw.body.clone())
                 }
                 _ => None,
@@ -57,19 +58,19 @@ impl RecordingHost {
     pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, ()> {
         litellm_host_native::in_process::Host {
             services: &(),
-            hooks: self,
+            interceptors: self,
             stream: &(),
-            observer: Some(self),
+            observers: Some(&self.events.sender),
         }
     }
 }
 
 impl litellm_host::lifecycle::CallObserver for RecordingHost {
     fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
-        self.events.lock().unwrap().push(event.clone());
+        self.events.sender.emit(event);
     }
 }
-impl litellm_host::hooks::RouteHooks<<Messages as litellm_host::protocol::Protocol>::Error>
+impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protocol::Protocol>::Error>
     for RecordingHost
 {
     async fn before_provider_request(
@@ -83,13 +84,15 @@ impl litellm_host::hooks::RouteHooks<<Messages as litellm_host::protocol::Protoc
             .push(context.optional_params.clone());
         (self.rewrite)(wire)
     }
-    async fn on_event(
+    async fn after_provider_response(
         &self,
-        event: litellm_host::hooks::MachineEvent,
+        raw: litellm_host::interceptors::RawResponse,
     ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
         litellm_host::lifecycle::CallObserver::observe(
             self,
-            litellm_host::lifecycle::CallEvent::Machine(event),
+            litellm_host::lifecycle::CallEvent::Execution(
+                litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
+            ),
         );
         Ok(())
     }

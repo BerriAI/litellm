@@ -30,25 +30,20 @@ pub struct RawResponse {
     pub body: String,
 }
 
-/// What a machine reports while it runs.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub enum MachineEvent {
-    ResponseReceived { raw: RawResponse },
-}
-
-/// What a route reaches for mid-call: the send-time rewrite and the events it reports.
-/// Python's `logging_obj.pre_call` and `post_call`, in that order.
-pub trait RouteHooks<E>: Send + Sync {
+pub trait Interceptors<E>: Send + Sync {
     fn before_provider_request(
         &self,
         wire: WireRequest,
         context: RequestContext,
     ) -> impl Future<Output = Result<WireRequest, E>> + Send;
 
-    fn on_event(&self, event: MachineEvent) -> impl Future<Output = Result<(), E>> + Send;
+    fn after_provider_response(
+        &self,
+        raw: RawResponse,
+    ) -> impl Future<Output = Result<(), E>> + Send;
 }
 
-impl<E, T: RouteHooks<E> + ?Sized> RouteHooks<E> for &T {
+impl<E, T: Interceptors<E> + ?Sized> Interceptors<E> for &T {
     fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -57,12 +52,15 @@ impl<E, T: RouteHooks<E> + ?Sized> RouteHooks<E> for &T {
         (**self).before_provider_request(wire, context)
     }
 
-    fn on_event(&self, event: MachineEvent) -> impl Future<Output = Result<(), E>> + Send {
-        (**self).on_event(event)
+    fn after_provider_response(
+        &self,
+        raw: RawResponse,
+    ) -> impl Future<Output = Result<(), E>> + Send {
+        (**self).after_provider_response(raw)
     }
 }
 
-impl<E> RouteHooks<E> for () {
+impl<E> Interceptors<E> for () {
     async fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -71,7 +69,7 @@ impl<E> RouteHooks<E> for () {
         Ok(wire)
     }
 
-    async fn on_event(&self, _: MachineEvent) -> Result<(), E> {
+    async fn after_provider_response(&self, _: RawResponse) -> Result<(), E> {
         Ok(())
     }
 }
@@ -83,7 +81,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
-    use crate::protocol::HookRequest;
+    use crate::protocol::InterceptRequest;
     use crate::{
         machine::{CallMachine, Machine, MachineFault, MachineStep},
         protocol::{HostRequest, Protocol},
@@ -130,30 +128,26 @@ mod tests {
     #[rstest::rstest]
     #[tokio::test]
     async fn the_channel_yields_each_hook_as_its_op_and_returns_the_answer() {
-        let mut machine = CallMachine::<Unit>::new(|channel| {
+        let mut machine = CallMachine::<Unit>::new(None, |channel| {
             Box::pin(async move {
-                let sent = RouteHooks::before_provider_request(
-                    &channel.hooks,
+                let sent = Interceptors::before_provider_request(
+                    &channel.interceptors,
                     wire("prepared"),
                     context(),
                 )
                 .await?;
-                RouteHooks::on_event(
-                    &channel.hooks,
-                    MachineEvent::ResponseReceived {
-                        raw: RawResponse { body: "raw".into() },
-                    },
+                Interceptors::after_provider_response(
+                    &channel.interceptors,
+                    RawResponse { body: "raw".into() },
                 )
                 .await?;
                 Ok((sent, ()))
             })
         });
 
-        let Ok(MachineStep::Suspended(HostRequest::Hook(HookRequest::BeforeProviderRequest {
-            wire,
-            reply,
-            ..
-        }))) = machine.resume().await
+        let Ok(MachineStep::Suspended(HostRequest::Intercept(
+            InterceptRequest::BeforeProviderRequest { wire, reply, .. },
+        ))) = machine.resume().await
         else {
             panic!("before_provider_request yields BeforeSend");
         };
@@ -163,12 +157,13 @@ mod tests {
             ..*wire
         });
 
-        let Ok(MachineStep::Suspended(HostRequest::Hook(HookRequest::Event(event, reply)))) =
-            machine.resume().await
+        let Ok(MachineStep::Suspended(HostRequest::Intercept(
+            InterceptRequest::AfterProviderResponse { raw, reply },
+        ))) = machine.resume().await
         else {
             panic!("on_event yields Emit");
         };
-        assert!(matches!(event, MachineEvent::ResponseReceived { .. }));
+        assert_eq!(raw.body, "raw");
         reply.send(());
 
         let Ok(MachineStep::Complete((sent, ()))) = machine.resume().await else {
@@ -180,7 +175,7 @@ mod tests {
     #[rstest::rstest]
     #[tokio::test]
     async fn no_hooks_pass_the_wire_request_through() {
-        let sent = RouteHooks::<Fault>::before_provider_request(&(), wire("prepared"), context())
+        let sent = Interceptors::<Fault>::before_provider_request(&(), wire("prepared"), context())
             .await
             .unwrap();
         assert_eq!(sent.url, "prepared");

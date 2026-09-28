@@ -3,7 +3,7 @@ use std::sync::Arc;
 use bytes::{Bytes, BytesMut};
 use futures_util::future::BoxFuture;
 use litellm_auth::AuthServices;
-use litellm_host::hooks::WireRequest;
+use litellm_host::interceptors::WireRequest;
 use litellm_http::{
     Client, ClientVariant, HttpClientConfig, HttpClientPool,
     media::{MediaFetcher, UrlPolicy},

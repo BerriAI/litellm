@@ -1,9 +1,11 @@
+use litellm_host::lifecycle::ExecutionEvent;
+use litellm_host::observation::ObservationSender;
 use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
 use litellm_auth::AuthServices;
-use litellm_host::hooks::{MachineEvent, RawResponse, RequestContext, RouteHooks, WireRequest};
+use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
 use litellm_http::transport::Error as TransportError;
 use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
@@ -25,7 +27,8 @@ pub(super) async fn execute(
     http: &litellm_http::Client,
     auth: &AuthServices,
     request: ProviderMessagesRequest,
-    hooks: &impl RouteHooks<Error>,
+    interceptors: &impl Interceptors<Error>,
+    observers: Option<&ObservationSender>,
 ) -> Result<MessagesResponse, Error> {
     let ProviderMessagesRequest {
         provider,
@@ -44,7 +47,7 @@ pub(super) async fn execute(
         api_key,
     };
     let authenticated = resolve_auth(auth, environment, &|key| std::env::var(key).ok()).await?;
-    let wire = hooks
+    let wire = interceptors
         .before_provider_request(
             WireRequest {
                 url,
@@ -80,10 +83,14 @@ pub(super) async fn execute(
     }
     let text = response.text().await.map_err(network)?;
     log_response_body(&text);
-    hooks
-        .on_event(MachineEvent::ResponseReceived {
-            raw: RawResponse { body: text.clone() },
-        })
+    let raw = RawResponse { body: text.clone() };
+    if let Some(observers) = observers {
+        observers.emit(litellm_host::lifecycle::CallEvent::Execution(
+            ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
+        ));
+    }
+    interceptors
+        .after_provider_response(raw)
         .await
         .map_err(Error::post_call)?;
     decode_response(config, &body.model, &text)

@@ -7,10 +7,10 @@ use pyo3::types::PyDict;
 
 use litellm_host::{
     call::HostedCompletion,
-    hooks::WireRequest,
+    interceptors::WireRequest,
     lifecycle::{FailureOrigin, Timing, epoch_seconds},
     machine::{HostFailure, Machine, MachineStep},
-    protocol::{HookRequest, HostRequest, Protocol, Reply, StreamDelivery},
+    protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery},
 };
 
 use crate::PythonHostCalls;
@@ -359,7 +359,7 @@ where
         };
         let answered = match op {
             HostRequest::HostCall(op) => answered(self.binding.handle_host_call(py, op)),
-            HostRequest::Hook(HookRequest::BeforeProviderRequest {
+            HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
                 wire,
                 context,
                 reply,
@@ -380,8 +380,11 @@ where
             HostRequest::Stream(StreamDelivery::Chunk(chunk, reply)) => {
                 return self.delivered(py, chunk, reply).map(Next::Return);
             }
-            HostRequest::Hook(HookRequest::Event(event, reply)) => {
-                match self.hooks.on_event(py, HookEvent::Machine(&event)) {
+            HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
+                match self
+                    .hooks
+                    .on_event(py, HookEvent::AfterProviderResponse(&raw))
+                {
                     Ok(HookStep::Ready(())) => {
                         reply.send(());
                         Ok(Ok(()))
@@ -586,7 +589,7 @@ mod tests {
     use std::sync::{Arc, Mutex};
 
     use litellm_host::{
-        hooks::{MachineEvent, RawResponse, RequestContext},
+        interceptors::{RawResponse, RequestContext},
         machine::{CallMachine, MachineFault},
     };
     use pyo3::exceptions::{PyBaseException, PyValueError};
@@ -594,7 +597,7 @@ mod tests {
 
     use super::*;
     use crate::PythonOwned;
-    use litellm_host::hooks::RouteHooks;
+    use litellm_host::interceptors::Interceptors;
 
     static PYTHON_GLOBALS: Mutex<()> = Mutex::new(());
 
@@ -860,7 +863,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         ) -> PyResult<HookStep<Self, ()>> {
             self.log.push(match event {
                 HookEvent::Started { .. } => "started".into(),
-                HookEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
+                HookEvent::AfterProviderResponse(raw) => {
                     format!("response:{}", raw.body)
                 }
                 HookEvent::Succeeded { response, .. } => {
@@ -971,17 +974,15 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
     /// response, so a driver that misroutes a reply changes what the call returns.
     fn success_machine() -> impl FnOnce(String) -> CallMachine<Synthetic> + Send + Sync {
         move |projected| {
-            CallMachine::new(move |host| {
+            CallMachine::new(None, move |host| {
                 Box::pin(async move {
                     let signed = host.services.call(|reply| ("sign", reply)).await?;
                     let wire = host
-                        .hooks
+                        .interceptors
                         .before_provider_request(wire(), context())
                         .await?;
-                    host.hooks
-                        .on_event(MachineEvent::ResponseReceived {
-                            raw: RawResponse { body: "raw".into() },
-                        })
+                    host.interceptors
+                        .after_provider_response(RawResponse { body: "raw".into() })
                         .await?;
                     Ok(format!("{projected}|{signed}|{}", wire.url))
                 })
@@ -1159,7 +1160,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
     fn streaming_machine()
     -> impl FnOnce(()) -> litellm_host::call::HostedMachine<Streaming> + Send + Sync {
         move |()| {
-            litellm_host::call::hosted_call((), |(), _, _| async {
+            litellm_host::call::hosted_call((), None, |(), _, _, _observations| async {
                 Ok(litellm_host::call::CallOutput::Stream {
                     head: vec![("request-id", "req_1")],
                     chunks: Box::pin(futures_util::stream::iter([Ok("first"), Ok("second")])),
@@ -1308,7 +1309,9 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
 
     fn failing_machine() -> impl FnOnce(String) -> CallMachine<Synthetic> + Send + Sync {
         move |_| {
-            CallMachine::new(|_| Box::pin(async move { Err(Error("provider exploded".into())) }))
+            CallMachine::new(None, |_| {
+                Box::pin(async move { Err(Error("provider exploded".into())) })
+            })
         }
     }
 

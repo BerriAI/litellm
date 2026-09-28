@@ -80,7 +80,7 @@ mod tests {
 
     use futures_util::future::BoxFuture;
     use litellm_core_utils::call_arguments::{CallArguments, compose_body, parse_options};
-    use litellm_host::hooks::WireRequest;
+    use litellm_host::interceptors::WireRequest;
     use litellm_llms::{
         base_llm::ocr::{
             error::Error,
@@ -100,7 +100,7 @@ mod tests {
         wire::{OcrWireRequest, decode_request},
     };
 
-    /// Stands in for a host with no hooks registered.
+    /// Stands in for a host with no interceptors registered.
     struct NoHooks;
 
     impl CallHooks<Error> for NoHooks {

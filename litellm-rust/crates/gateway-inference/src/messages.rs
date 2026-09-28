@@ -44,7 +44,7 @@ async fn handle(
     let deployment = request::resolve_deployment(gateway, &body)?;
     request::authorize_model(identity, deployment, &body).await?;
     let call = project(deployment, body, headers)?;
-    let machine = gateway.messages.clone().machine(call);
+    let machine = gateway.messages.clone().machine(call, None);
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
     Ok(litellm_host_http::serve(machine, (), (), stream, None).await?)

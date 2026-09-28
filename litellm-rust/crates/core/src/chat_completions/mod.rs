@@ -1,3 +1,4 @@
+use litellm_host::observation::ObservationSender;
 pub mod route;
 pub mod types;
 pub use crate::error::RouteError as Error;
@@ -63,10 +64,14 @@ impl ChatCompletionsRoute {
     pub async fn execute(
         &self,
         request: ChatCompletionsRequest<'_>,
-        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
-        observer: Option<Arc<dyn litellm_host::lifecycle::CallObserver>>,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        observers: Option<ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {
-        litellm_host::lifecycle::observe_unary(observer, self.run(request, hooks)).await
+        litellm_host::lifecycle::observe_unary(
+            observers.clone(),
+            self.run(request, interceptors, observers.as_ref()),
+        )
+        .await
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(
@@ -80,7 +85,8 @@ impl ChatCompletionsRoute {
     async fn run(
         &self,
         request: ChatCompletionsRequest<'_>,
-        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        observers: Option<&ObservationSender>,
     ) -> Result<ChatCompletionsResponse, Error> {
         crate::diagnostic::unary(async {
             let resolved = resolve_request(request)?;
@@ -93,7 +99,13 @@ impl ChatCompletionsRoute {
             let execute: futures_util::future::BoxFuture<
                 '_,
                 Result<ChatCompletionsResponse, Error>,
-            > = Box::pin(handler::execute(&self.http, &self.auth, prepared, hooks));
+            > = Box::pin(handler::execute(
+                &self.http,
+                &self.auth,
+                prepared,
+                interceptors,
+                observers,
+            ));
             execute.await
         })
         .await

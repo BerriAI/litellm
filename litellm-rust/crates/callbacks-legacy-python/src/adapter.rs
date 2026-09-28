@@ -5,7 +5,7 @@
 use litellm_host_python::PythonOwned;
 
 use litellm_host::{
-    hooks::{MachineEvent, RequestContext, WireRequest},
+    interceptors::{RequestContext, WireRequest},
     lifecycle::{FailureOrigin, Timing, epoch_seconds},
 };
 use litellm_host_python::{HookEvent, HookStep, PythonCallHooks, from_py, missing_state, to_py};
@@ -410,7 +410,7 @@ impl PythonCallHooks for LegacyLogging {
     fn on_event(&mut self, py: Python<'_>, event: HookEvent<'_>) -> PyResult<HookStep<Self, ()>> {
         match event {
             HookEvent::Started { .. } => Ok(HookStep::Ready(())),
-            HookEvent::Machine(MachineEvent::ResponseReceived { raw }) => {
+            HookEvent::AfterProviderResponse(raw) => {
                 let api_key = self
                     .request
                     .as_ref()
@@ -809,7 +809,7 @@ mod payload_tests {
     use std::ffi::CStr;
 
     use litellm_auth::SecretValue;
-    use litellm_host::hooks::{MachineEvent, RawResponse, RequestContext, WireRequest};
+    use litellm_host::interceptors::{RawResponse, RequestContext, WireRequest};
     use litellm_host_python::{HookEvent, HookStep, PythonCallHooks, PythonOwned, to_py};
     use proptest::prelude::*;
     use pyo3::gc::{PyTraverseError, PyVisit};
@@ -925,13 +925,13 @@ check = lambda: None
         let step = logging
             .before_provider_request(py, Box::new(wire), context)
             .unwrap();
-        let raw = MachineEvent::ResponseReceived {
-            raw: RawResponse {
-                body: "raw response".into(),
-            },
+        let raw = RawResponse {
+            body: "raw response".into(),
         };
         assert!(matches!(
-            logging.on_event(py, HookEvent::Machine(&raw)).unwrap(),
+            logging
+                .on_event(py, HookEvent::AfterProviderResponse(&raw))
+                .unwrap(),
             HookStep::Ready(())
         ));
         (logging, step)

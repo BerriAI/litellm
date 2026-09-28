@@ -1,4 +1,5 @@
 pub use crate::error::RouteError as Error;
+use litellm_host::observation::ObservationSender;
 pub mod websocket;
 
 mod handler;
@@ -9,7 +10,7 @@ pub mod types;
 use std::sync::Arc;
 
 use litellm_auth::AuthServices;
-use litellm_host::hooks::RouteHooks;
+use litellm_host::interceptors::Interceptors;
 use litellm_secrets::source::SecretSource;
 use types::{ResponsesCall, ResponsesOutput};
 
@@ -36,10 +37,14 @@ impl ResponsesRoute {
     pub async fn execute(
         &self,
         call: ResponsesCall,
-        hooks: &impl RouteHooks<Error>,
-        observer: Option<Arc<dyn litellm_host::lifecycle::CallObserver>>,
+        interceptors: &impl Interceptors<Error>,
+        observers: Option<ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
-        litellm_host::lifecycle::observe_call(observer, self.run(call, hooks)).await
+        litellm_host::lifecycle::observe_call(
+            observers.clone(),
+            self.run(call, interceptors, observers.as_ref()),
+        )
+        .await
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(
@@ -53,7 +58,8 @@ impl ResponsesRoute {
     async fn run(
         &self,
         call: ResponsesCall,
-        hooks: &impl RouteHooks<Error>,
+        interceptors: &impl Interceptors<Error>,
+        observers: Option<&ObservationSender>,
     ) -> Result<ResponsesOutput, Error> {
         crate::diagnostic::call(async {
             let request = prepare::prepare(call, self.secrets.as_ref()).await?;
@@ -62,7 +68,13 @@ impl ResponsesRoute {
                 &request.context.custom_llm_provider,
             );
             let execute: futures_util::future::BoxFuture<'_, Result<ResponsesOutput, Error>> =
-                Box::pin(handler::execute(&self.http, &self.auth, request, hooks));
+                Box::pin(handler::execute(
+                    &self.http,
+                    &self.auth,
+                    request,
+                    interceptors,
+                    observers,
+                ));
             execute.await
         })
         .await

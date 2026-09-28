@@ -2,7 +2,7 @@ use std::ops::ControlFlow;
 
 pub use litellm_coroutine::{Abandoned, Answer, Reply, reply};
 
-use crate::hooks::{MachineEvent, RequestContext, WireRequest};
+use crate::interceptors::{RawResponse, RequestContext, WireRequest};
 
 pub trait Protocol: Send + Sync + 'static {
     type Request: Send + 'static;
@@ -15,17 +15,20 @@ pub trait Protocol: Send + Sync + 'static {
 
 pub enum HostRequest<P: Protocol> {
     HostCall(P::HostCall),
-    Hook(HookRequest),
+    Intercept(InterceptRequest),
     Stream(StreamDelivery<P>),
 }
 
-pub enum HookRequest {
+pub enum InterceptRequest {
     BeforeProviderRequest {
         wire: Box<WireRequest>,
         context: Box<RequestContext>,
         reply: Reply<WireRequest>,
     },
-    Event(MachineEvent, Reply<()>),
+    AfterProviderResponse {
+        raw: RawResponse,
+        reply: Reply<()>,
+    },
 }
 
 pub enum StreamDelivery<P: Protocol> {

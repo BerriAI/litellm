@@ -1,3 +1,4 @@
+use litellm_host::observation::ObservationSender;
 mod common_utils;
 mod handler;
 mod prepare;
@@ -34,10 +35,14 @@ impl MessagesRoute {
     pub async fn execute(
         &self,
         call: MessagesCall,
-        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
-        observer: Option<Arc<dyn litellm_host::lifecycle::CallObserver>>,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        observers: Option<ObservationSender>,
     ) -> Result<MessagesResponse, Error> {
-        litellm_host::lifecycle::observe_call(observer, self.run(call, hooks)).await
+        litellm_host::lifecycle::observe_call(
+            observers.clone(),
+            self.run(call, interceptors, observers.as_ref()),
+        )
+        .await
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(
@@ -51,13 +56,20 @@ impl MessagesRoute {
     async fn run(
         &self,
         call: MessagesCall,
-        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        observers: Option<&ObservationSender>,
     ) -> Result<MessagesResponse, Error> {
         crate::diagnostic::call(async {
             let request = prepare::prepare(call, self.secrets.as_ref()).await?;
             crate::diagnostic::provider(&request.body.model, request.provider.as_str());
             let execute: futures_util::future::BoxFuture<'_, Result<MessagesResponse, Error>> =
-                Box::pin(handler::execute(&self.http, &self.auth, request, hooks));
+                Box::pin(handler::execute(
+                    &self.http,
+                    &self.auth,
+                    request,
+                    interceptors,
+                    observers,
+                ));
             execute.await
         })
         .await

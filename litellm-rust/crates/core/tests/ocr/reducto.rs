@@ -1,9 +1,7 @@
+use litellm_host::lifecycle::ExecutionEvent;
 use std::sync::{Arc, Mutex};
 
-use litellm_host::{
-    hooks::{MachineEvent, WireRequest},
-    lifecycle::CallEvent,
-};
+use litellm_host::{interceptors::WireRequest, lifecycle::CallEvent};
 use rstest::rstest;
 
 use super::*;
@@ -150,7 +148,7 @@ async fn response_received_fires_once_for_the_parse_response() {
     let recorder = observed.clone();
     let host = LocalOcrHost::new(ocr_request("reducto/parse-v3", &upstream.uri(), json!({})))
         .with_observer(move |event| {
-            if let CallEvent::Machine(MachineEvent::ResponseReceived { raw }) = event {
+            if let CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) = event {
                 recorder.lock().unwrap().push(raw.body.clone());
             }
         });

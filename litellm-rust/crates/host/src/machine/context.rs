@@ -1,26 +1,29 @@
+use crate::observation::ObservationSender;
 use std::ops::ControlFlow;
 
 use litellm_coroutine::Co;
 
 use super::coroutine::MachineFault;
 use crate::{
-    hooks::{MachineEvent, RequestContext, WireRequest},
-    protocol::{HookRequest, HostRequest, Protocol, Reply, StreamDelivery},
+    interceptors::{RawResponse, RequestContext, WireRequest},
+    protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery},
 };
 
 pub struct CallContext<P: Protocol> {
     pub services: HostServices<P>,
-    pub hooks: ChannelHooks<P>,
+    pub interceptors: ChannelInterceptors<P>,
     pub stream: StreamSender<P>,
+    pub observers: Option<ObservationSender>,
 }
 
 impl<P: Protocol> CallContext<P> {
-    pub(super) fn new(co: Co<HostRequest<P>>) -> Self {
+    pub(super) fn new(co: Co<HostRequest<P>>, observers: Option<ObservationSender>) -> Self {
         let channel = Channel(co);
         Self {
             services: HostServices(channel.clone()),
-            hooks: ChannelHooks(channel.clone()),
+            interceptors: ChannelInterceptors(channel.clone()),
             stream: StreamSender(channel),
+            observers,
         }
     }
 }
@@ -70,15 +73,15 @@ where
     }
 }
 
-pub struct ChannelHooks<P: Protocol>(Channel<P>);
+pub struct ChannelInterceptors<P: Protocol>(Channel<P>);
 
-impl<P: Protocol> Clone for ChannelHooks<P> {
+impl<P: Protocol> Clone for ChannelInterceptors<P> {
     fn clone(&self) -> Self {
         Self(self.0.clone())
     }
 }
 
-impl<P: Protocol> crate::hooks::RouteHooks<P::Error> for ChannelHooks<P>
+impl<P: Protocol> crate::interceptors::Interceptors<P::Error> for ChannelInterceptors<P>
 where
     P::Error: From<MachineFault>,
 {
@@ -89,7 +92,7 @@ where
     ) -> Result<WireRequest, P::Error> {
         self.0
             .request_reply(|reply| {
-                HostRequest::Hook(HookRequest::BeforeProviderRequest {
+                HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
                     wire: Box::new(wire),
                     context: Box::new(context),
                     reply,
@@ -98,9 +101,11 @@ where
             .await
     }
 
-    async fn on_event(&self, event: MachineEvent) -> Result<(), P::Error> {
+    async fn after_provider_response(&self, raw: RawResponse) -> Result<(), P::Error> {
         self.0
-            .request_reply(|reply| HostRequest::Hook(HookRequest::Event(event, reply)))
+            .request_reply(|reply| {
+                HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply })
+            })
             .await
     }
 }

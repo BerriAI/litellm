@@ -1,3 +1,4 @@
+use litellm_host::lifecycle::ExecutionEvent;
 use std::{
     ops::ControlFlow,
     sync::{
@@ -9,7 +10,7 @@ use std::{
 use futures_util::{StreamExt, stream};
 use litellm_host::{
     call::{CallOutput, HostedCompletion, hosted_call},
-    hooks::{MachineEvent, RawResponse, RequestContext, RouteHooks, WireRequest},
+    interceptors::{Interceptors, RawResponse, RequestContext, WireRequest},
     lifecycle::{CallEvent, CallObserver},
     machine::{CallMachine, HostFailure, Interrupted, Machine, MachineFault, Step},
     protocol::{Protocol, Reply},
@@ -65,11 +66,40 @@ impl HostCallHandler<TestProtocol> for Services {
 }
 
 #[derive(Default)]
-struct Observer(Mutex<Vec<CallEvent>>);
+struct Observer(Observations);
+struct Observations {
+    sender: litellm_host::observation::ObservationSender,
+    receiver: Mutex<tokio::sync::mpsc::Receiver<CallEvent>>,
+    recorded: Mutex<Vec<CallEvent>>,
+}
+
+impl Default for Observations {
+    fn default() -> Self {
+        let (sender, receiver) = litellm_host::observation::observation_channel(
+            std::num::NonZeroUsize::new(128).unwrap(),
+        );
+        Self {
+            sender,
+            receiver: Mutex::new(receiver),
+            recorded: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl Observations {
+    fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Vec<CallEvent>>> {
+        let mut events = self.recorded.lock()?;
+        let mut receiver = self.receiver.lock().unwrap();
+        while let Ok(event) = receiver.try_recv() {
+            events.push(event);
+        }
+        Ok(events)
+    }
+}
 
 impl CallObserver for Observer {
     fn observe(&self, event: CallEvent) {
-        self.0.lock().unwrap().push(event);
+        self.0.sender.emit(event);
     }
 }
 
@@ -78,7 +108,7 @@ struct Hooks {
     reject: bool,
 }
 
-impl RouteHooks<TestError> for Hooks {
+impl Interceptors<TestError> for Hooks {
     async fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -93,11 +123,13 @@ impl RouteHooks<TestError> for Hooks {
         })
     }
 
-    async fn on_event(&self, event: MachineEvent) -> Result<(), TestError> {
+    async fn after_provider_response(&self, raw: RawResponse) -> Result<(), TestError> {
         if self.reject {
             return Err(TestError::Hook);
         }
-        self.observer.observe(CallEvent::Machine(event));
+        self.observer.observe(CallEvent::Execution(
+            litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
+        ));
         Ok(())
     }
 }
@@ -108,7 +140,7 @@ fn observer() -> Arc<Observer> {
 }
 
 #[fixture]
-fn hooks(observer: Arc<Observer>) -> Hooks {
+fn interceptors(observer: Arc<Observer>) -> Hooks {
     Hooks {
         observer,
         reject: false,
@@ -116,33 +148,35 @@ fn hooks(observer: Arc<Observer>) -> Hooks {
 }
 
 fn dispatching_call() -> TestMachine {
-    hosted_call::<TestProtocol, _, _>("projected", |request, services, route_hooks| async move {
-        let custom = services.call(|reply| reply).await?;
-        let wire = route_hooks
-            .before_provider_request(
-                WireRequest {
-                    url: request.into(),
-                    headers: Vec::new(),
-                    body: json!({}),
-                },
-                RequestContext {
-                    model: custom.into(),
-                    custom_llm_provider: "test".into(),
-                    optional_params: json!({}),
-                    secret_fields: Vec::new(),
-                    api_key: None,
-                },
-            )
-            .await?;
-        route_hooks
-            .on_event(MachineEvent::ResponseReceived {
-                raw: RawResponse {
+    hosted_call::<TestProtocol, _, _>(
+        "projected",
+        None,
+        |request, services, route_hooks, _observations| async move {
+            let custom = services.call(|reply| reply).await?;
+            let wire = route_hooks
+                .before_provider_request(
+                    WireRequest {
+                        url: request.into(),
+                        headers: Vec::new(),
+                        body: json!({}),
+                    },
+                    RequestContext {
+                        model: custom.into(),
+                        custom_llm_provider: "test".into(),
+                        optional_params: json!({}),
+                        secret_fields: Vec::new(),
+                        api_key: None,
+                    },
+                )
+                .await?;
+            route_hooks
+                .after_provider_response(RawResponse {
                     body: wire.url.clone(),
-                },
-            })
-            .await?;
-        Ok(CallOutput::Complete(wire.url))
-    })
+                })
+                .await?;
+            Ok(CallOutput::Complete(wire.url))
+        },
+    )
 }
 
 struct Release(Arc<AtomicBool>);
@@ -164,18 +198,22 @@ fn streaming_call(chunks: Vec<Result<usize, TestError>>) -> Streaming {
     let released = Arc::new(AtomicBool::new(false));
     let provider_polls = polls.clone();
     let release = Release(released.clone());
-    let machine = hosted_call::<TestProtocol, _, _>("input", move |_, _, _| async move {
-        let chunks = stream::iter(chunks)
-            .inspect(move |_| {
-                let _held = &release;
-                provider_polls.fetch_add(1, Ordering::SeqCst);
+    let machine = hosted_call::<TestProtocol, _, _>(
+        "input",
+        None,
+        move |_, _, _, _observations| async move {
+            let chunks = stream::iter(chunks)
+                .inspect(move |_| {
+                    let _held = &release;
+                    provider_polls.fetch_add(1, Ordering::SeqCst);
+                })
+                .boxed();
+            Ok(CallOutput::Stream {
+                head: "headers",
+                chunks,
             })
-            .boxed();
-        Ok(CallOutput::Stream {
-            head: "headers",
-            chunks,
-        })
-    });
+        },
+    );
     Streaming {
         polls,
         released,
@@ -185,9 +223,9 @@ fn streaming_call(chunks: Vec<Result<usize, TestError>>) -> Streaming {
 
 #[rstest]
 #[tokio::test]
-async fn services_and_hooks_answer_the_machine_inline(hooks: Hooks) {
-    let observer = hooks.observer.clone();
-    let mut driver = Driver::new(dispatching_call(), Services { reject: false }, hooks);
+async fn services_and_hooks_answer_the_machine_inline(interceptors: Hooks) {
+    let observer = interceptors.observer.clone();
+    let mut driver = Driver::new(dispatching_call(), Services { reject: false }, interceptors);
     let Boundary::Complete(HostedCompletion::Complete(response)) = driver.advance().await.unwrap()
     else {
         panic!("a unary call completes at the first boundary")
@@ -195,7 +233,7 @@ async fn services_and_hooks_answer_the_machine_inline(hooks: Hooks) {
     assert_eq!(response, "projected/custom");
     assert!(matches!(
         observer.0.lock().unwrap().as_slice(),
-        [CallEvent::Machine(MachineEvent::ResponseReceived { raw })] if raw.body == "projected/custom"
+        [CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw })] if raw.body == "projected/custom"
     ));
 }
 
@@ -370,9 +408,9 @@ async fn in_process_runner_follows_consumer_demand(
         machine,
         Host {
             services: &Services { reject: false },
-            hooks: &(),
+            interceptors: &(),
             stream: &consumer,
-            observer: Some(observer.as_ref()),
+            observers: Some(&observer.0.sender),
         },
     )
     .await;
@@ -414,9 +452,9 @@ async fn consumer_failures_interrupt_the_machine(#[case] fail_after: usize) {
         },
         Host {
             services: &Services { reject: false },
-            hooks: &(),
+            interceptors: &(),
             stream: &consumer,
-            observer: None,
+            observers: None,
         },
     )
     .await;
@@ -433,15 +471,16 @@ struct Recording {
     calls: AtomicUsize,
     seen: Mutex<Vec<String>>,
     fail: Option<&'static str>,
+    events: Observations,
 }
 
 impl Recording {
     fn runtime(&self) -> Host<'_, Self, (), ()> {
         Host {
             services: self,
-            hooks: &(),
+            interceptors: &(),
             stream: &(),
-            observer: Some(self),
+            observers: Some(&self.events.sender),
         }
     }
 }
@@ -473,7 +512,7 @@ fn scripted(
     ops: &'static [&'static str],
     outcome: Result<(), TestError>,
 ) -> CallMachine<TestProtocol, ()> {
-    CallMachine::new(move |host| {
+    CallMachine::new(None, move |host| {
         Box::pin(async move {
             for op in ops {
                 let answered = host.services.call(|reply| reply).await?;
@@ -501,10 +540,27 @@ async fn generic_runner_forwards_ops_and_emits_one_terminal(
         calls: AtomicUsize::new(0),
         seen: Mutex::new(Vec::new()),
         fail,
+        events: Observations::default(),
     };
     let outcome = run(scripted(ops, call_outcome), host.runtime()).await;
     assert_eq!(outcome, expected);
-    assert_eq!(*host.seen.lock().unwrap(), seen);
+    assert_eq!(
+        *host.seen.lock().unwrap(),
+        seen.iter()
+            .filter(|item| item.starts_with("op:"))
+            .copied()
+            .collect::<Vec<_>>()
+    );
+    let events = host.events.lock().unwrap();
+    assert!(matches!(events.as_slice(), [CallEvent::Started { .. }, _]));
+    assert_eq!(
+        matches!(events[1], CallEvent::Failed { .. }),
+        expected.is_err()
+    );
+    assert_eq!(
+        matches!(events[1], CallEvent::Succeeded { .. }),
+        expected.is_ok()
+    );
 }
 
 #[rstest]
@@ -515,14 +571,15 @@ async fn generic_runner_success_keeps_the_start_time(observer: Arc<Observer>) {
         calls: AtomicUsize::new(0),
         seen: Mutex::new(Vec::new()),
         fail: None,
+        events: Observations::default(),
     };
     let outcome = run(
         scripted(&["send"], Ok(())),
         Host {
             services: &services,
-            hooks: &(),
+            interceptors: &(),
             stream: &(),
-            observer: Some(observer.as_ref()),
+            observers: Some(&observer.0.sender),
         },
     )
     .await;
@@ -540,15 +597,15 @@ async fn generic_runner_success_keeps_the_start_time(observer: Arc<Observer>) {
 
 #[rstest]
 #[tokio::test]
-async fn in_process_runner_dispatches_services_and_hooks(hooks: Hooks) {
-    let observer = hooks.observer.clone();
+async fn in_process_runner_dispatches_services_and_hooks(interceptors: Hooks) {
+    let observer = interceptors.observer.clone();
     let completion = run_hosted(
         dispatching_call(),
         Host {
             services: &Services { reject: false },
-            hooks: &hooks,
+            interceptors: &interceptors,
             stream: &(),
-            observer: Some(observer.as_ref()),
+            observers: Some(&observer.0.sender),
         },
     )
     .await
@@ -561,8 +618,78 @@ async fn in_process_runner_dispatches_services_and_hooks(hooks: Hooks) {
         observer.0.lock().unwrap().as_slice(),
         [
             CallEvent::Started { .. },
-            CallEvent::Machine(MachineEvent::ResponseReceived { .. }),
+            CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
             CallEvent::Succeeded { .. },
         ]
     ));
+}
+
+struct ResponseGate {
+    ready: tokio::sync::Notify,
+    reject: bool,
+}
+
+impl Interceptors<TestError> for ResponseGate {
+    async fn before_provider_request(
+        &self,
+        wire: WireRequest,
+        _: RequestContext,
+    ) -> Result<WireRequest, TestError> {
+        Ok(wire)
+    }
+
+    async fn after_provider_response(&self, raw: RawResponse) -> Result<(), TestError> {
+        assert_eq!(raw.body, "provider response");
+        self.ready.notified().await;
+        if self.reject {
+            Err(TestError::Hook)
+        } else {
+            Ok(())
+        }
+    }
+}
+
+#[rstest]
+#[case::accept(false)]
+#[case::reject(true)]
+#[tokio::test]
+async fn response_interception_waits_and_can_reject_after_observation(#[case] reject: bool) {
+    let (sender, mut receiver) =
+        litellm_host::observation::observation_channel(std::num::NonZeroUsize::new(1).unwrap());
+    let machine = hosted_call::<TestProtocol, _, _>(
+        "input",
+        Some(sender),
+        |_, _, interceptors, observers| async move {
+            let raw = RawResponse {
+                body: "provider response".into(),
+            };
+            observers.unwrap().emit(CallEvent::Execution(
+                ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
+            ));
+            interceptors.after_provider_response(raw).await?;
+            Ok(CallOutput::Complete("accepted".into()))
+        },
+    );
+    let interceptor = ResponseGate {
+        ready: tokio::sync::Notify::new(),
+        reject,
+    };
+    let mut driver = Driver::new(machine, Services { reject: false }, &interceptor);
+    let mut advance = Box::pin(driver.advance());
+    assert!(futures_util::poll!(&mut advance).is_pending());
+    assert!(
+        matches!(receiver.try_recv(), Ok(CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw })) if raw.body == "provider response")
+    );
+    interceptor.ready.notify_one();
+    match advance.await {
+        Err(error) => {
+            assert!(reject);
+            assert_eq!(error, TestError::Hook);
+        }
+        Ok(Boundary::Complete(HostedCompletion::Complete(value))) => {
+            assert!(!reject);
+            assert_eq!(value, "accepted");
+        }
+        _ => panic!("expected completion or rejection"),
+    }
 }

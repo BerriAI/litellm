@@ -1,4 +1,5 @@
 use litellm_auth::{ResolvedCredential, TokenProviderHandle};
+use litellm_host::observation::ObservationSender;
 use litellm_host::{
     call::{CallOutput, HostedMachine, hosted_call},
     machine::HostServices,
@@ -48,10 +49,11 @@ fn caller_token_provider(services: HostServices<Ocr>) -> TokenProviderHandle {
 }
 
 impl crate::ocr::OcrRoute {
-    pub fn machine(self, request: OcrCall) -> OcrMachine {
+    pub fn machine(self, request: OcrCall, observers: Option<ObservationSender>) -> OcrMachine {
         hosted_call(
             request,
-            move |projection: OcrCall, services, hooks| async move {
+            observers,
+            move |projection: OcrCall, services, interceptors, observers| async move {
                 let request = LiteLLMOcrRequest {
                     azure_ad_token_provider: projection
                         .caller_token
@@ -59,7 +61,9 @@ impl crate::ocr::OcrRoute {
                         .or(projection.request.azure_ad_token_provider),
                     ..projection.request
                 };
-                self.run(request, &hooks).await.map(CallOutput::Complete)
+                self.run(request, &interceptors, observers.as_ref())
+                    .await
+                    .map(CallOutput::Complete)
             },
         )
     }

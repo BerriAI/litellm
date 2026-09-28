@@ -1,9 +1,9 @@
 use std::ops::ControlFlow;
 
 use litellm_host::{
-    hooks::RouteHooks,
+    interceptors::Interceptors,
     machine::{HostFailure, Machine, MachineStep},
-    protocol::{HookRequest, HostRequest, Protocol, Reply, StreamDelivery},
+    protocol::{HostRequest, InterceptRequest, Protocol, Reply, StreamDelivery},
 };
 
 use crate::services::HostCallHandler;
@@ -17,12 +17,12 @@ pub enum Boundary<M: Machine> {
     Chunk(<ProtocolOf<M> as Protocol>::Chunk),
 }
 
-/// Answers host calls and hooks inline and stops at each stream delivery, holding its demand
+/// Answers host calls and interceptors inline and stops at each stream delivery, holding its demand
 /// reply until the consumer advances again. Dropping the driver drops the in-flight call.
 pub struct Driver<M: Machine, S, H> {
     machine: M,
     services: S,
-    hooks: H,
+    interceptors: H,
     demand: Option<Reply<ControlFlow<()>>>,
 }
 
@@ -30,13 +30,13 @@ impl<M, S, H> Driver<M, S, H>
 where
     M: Machine,
     S: HostCallHandler<ProtocolOf<M>>,
-    H: RouteHooks<ErrorOf<M>>,
+    H: Interceptors<ErrorOf<M>>,
 {
-    pub fn new(machine: M, services: S, hooks: H) -> Self {
+    pub fn new(machine: M, services: S, interceptors: H) -> Self {
         Self {
             machine,
             services,
-            hooks,
+            interceptors,
             demand: None,
         }
     }
@@ -67,17 +67,20 @@ where
             };
             let answered = match request {
                 HostRequest::HostCall(call) => self.services.handle_host_call(call).await,
-                HostRequest::Hook(HookRequest::BeforeProviderRequest {
+                HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
                     wire,
                     context,
                     reply,
                 }) => self
-                    .hooks
+                    .interceptors
                     .before_provider_request(*wire, *context)
                     .await
                     .map(|wire| reply.send(wire)),
-                HostRequest::Hook(HookRequest::Event(event, reply)) => {
-                    self.hooks.on_event(event).await.map(|()| reply.send(()))
+                HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
+                    self.interceptors
+                        .after_provider_response(raw)
+                        .await
+                        .map(|()| reply.send(()))
                 }
                 HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
                     self.demand = Some(reply);

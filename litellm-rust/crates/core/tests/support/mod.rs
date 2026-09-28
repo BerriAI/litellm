@@ -251,11 +251,43 @@ pub struct RecordingCall<P: litellm_host::protocol::Protocol> {
 }
 
 #[derive(Default)]
-pub struct CallEvents(pub Mutex<Vec<litellm_host::lifecycle::CallEvent>>);
+pub struct CallEvents(pub Observations);
+pub struct Observations {
+    pub sender: litellm_host::observation::ObservationSender,
+    receiver: Mutex<tokio::sync::mpsc::Receiver<litellm_host::lifecycle::CallEvent>>,
+    recorded: Mutex<Vec<litellm_host::lifecycle::CallEvent>>,
+}
+
+impl Default for Observations {
+    fn default() -> Self {
+        let (sender, receiver) = litellm_host::observation::observation_channel(
+            std::num::NonZeroUsize::new(128).unwrap(),
+        );
+        Self {
+            sender,
+            receiver: Mutex::new(receiver),
+            recorded: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl Observations {
+    pub fn lock(
+        &self,
+    ) -> std::sync::LockResult<std::sync::MutexGuard<'_, Vec<litellm_host::lifecycle::CallEvent>>>
+    {
+        let mut events = self.recorded.lock()?;
+        let mut receiver = self.receiver.lock().unwrap();
+        while let Ok(event) = receiver.try_recv() {
+            events.push(event);
+        }
+        Ok(events)
+    }
+}
 
 impl litellm_host::lifecycle::CallObserver for CallEvents {
     fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
-        self.0.lock().unwrap().push(event);
+        self.0.sender.emit(event);
     }
 }
 
@@ -270,15 +302,15 @@ impl<P: litellm_host::protocol::Protocol> RecordingCall<P> {
     }
 }
 
-impl<P: litellm_host::protocol::Protocol> litellm_host::hooks::RouteHooks<P::Error>
+impl<P: litellm_host::protocol::Protocol> litellm_host::interceptors::Interceptors<P::Error>
     for RecordingCall<P>
 {
     async fn before_provider_request(
         &self,
-        wire: litellm_host::hooks::WireRequest,
-        _: litellm_host::hooks::RequestContext,
-    ) -> Result<litellm_host::hooks::WireRequest, P::Error> {
-        Ok(litellm_host::hooks::WireRequest {
+        wire: litellm_host::interceptors::WireRequest,
+        _: litellm_host::interceptors::RequestContext,
+    ) -> Result<litellm_host::interceptors::WireRequest, P::Error> {
+        Ok(litellm_host::interceptors::WireRequest {
             headers: wire
                 .headers
                 .into_iter()
@@ -288,12 +320,10 @@ impl<P: litellm_host::protocol::Protocol> litellm_host::hooks::RouteHooks<P::Err
         })
     }
 
-    async fn on_event(&self, event: litellm_host::hooks::MachineEvent) -> Result<(), P::Error> {
-        self.events
-            .0
-            .lock()
-            .unwrap()
-            .push(litellm_host::lifecycle::CallEvent::Machine(event));
+    async fn after_provider_response(
+        &self,
+        _: litellm_host::interceptors::RawResponse,
+    ) -> Result<(), P::Error> {
         Ok(())
     }
 }
@@ -313,9 +343,9 @@ where
     pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, Self> {
         litellm_host_native::in_process::Host {
             services: &(),
-            hooks: self,
+            interceptors: self,
             stream: self,
-            observer: Some(self),
+            observers: Some(&self.events.0.sender),
         }
     }
 }
@@ -340,7 +370,7 @@ where
     P::Error: From<litellm_host::machine::MachineFault>,
 {
     fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
-        self.events.0.lock().unwrap().push(event.clone());
+        self.events.0.sender.emit(event);
     }
 }
 

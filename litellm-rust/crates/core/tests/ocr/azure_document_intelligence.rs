@@ -3,8 +3,10 @@ use std::{
     time::Duration,
 };
 
-use litellm_host::{hooks::MachineEvent, lifecycle::CallEvent};
+use litellm_host::lifecycle::CallEvent;
+use litellm_host::lifecycle::ExecutionEvent;
 use litellm_llms::base_llm::ocr::settings::OcrSettings;
+
 use rstest::rstest;
 
 use super::*;
@@ -281,7 +283,7 @@ async fn response_received_fires_for_the_submission_and_the_completed_poll() {
     let recorder = observed.clone();
     let host =
         LocalOcrHost::new(read_request(&upstream.uri(), json!({}))).with_observer(move |event| {
-            if let CallEvent::Machine(MachineEvent::ResponseReceived { raw }) = event {
+            if let CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) = event {
                 recorder.lock().unwrap().push(raw.body.clone());
             }
         });
