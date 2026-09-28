@@ -321,3 +321,72 @@ async def test_update_spend_logs_multiple_batches_with_failure():
 
     # Verify all logs were cleared from transactions
     assert len(prisma_client.spend_log_transactions) == 0
+
+
+# These tests live in the proxy-db-db-and-spend CI shard, unlike the separate
+# prisma_and_spend suite, so their branch coverage contributes to codecov.
+def _spend_log_lifetime_fakes():
+    client = MockPrismaClient()
+    logging = create_mock_proxy_logging()
+    logging.db_spend_update_writer.redis_update_buffer.store_spend_logs_in_redis = AsyncMock(return_value=False)
+    return client, logging
+
+
+@pytest.mark.asyncio
+async def test_spend_log_pre_write_failure_requeues_only_unwritten_tail(monkeypatch):
+    from litellm.proxy.utils import ProxyUpdateSpend
+
+    monkeypatch.delenv("SPEND_LOGS_URL", raising=False)
+    client, logging = _spend_log_lifetime_fakes()
+    rows = [{"request_id": f"committed-{i}"} for i in range(1000)]
+    rows.append({"request_id": "unwritten"})
+
+    def jsonify(row):
+        if row["request_id"] == "unwritten":
+            raise TypeError("local conversion failed")
+        return row
+
+    client.jsonify_object = jsonify
+    with pytest.raises(TypeError, match="local conversion failed"):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=0, prisma_client=client, db_writer_client=None,
+            proxy_logging_obj=logging, logs_to_process=rows,
+        )
+    assert client.db.litellm_spendlogs.create_many.await_count >= 1
+    assert client.spend_log_transactions == [{"request_id": "unwritten"}]
+
+
+@pytest.mark.asyncio
+async def test_spend_log_external_preflight_requeues_without_post(monkeypatch):
+    from litellm.proxy.utils import ProxyUpdateSpend
+
+    monkeypatch.setenv("SPEND_LOGS_URL", "http://writer.invalid")
+    client, logging = _spend_log_lifetime_fakes()
+    rows = [{"request_id": "unwritten", "bad": object()}]
+    writer = MagicMock()
+    writer.post = AsyncMock()
+    with pytest.raises(TypeError):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=0, prisma_client=client, db_writer_client=writer,
+            proxy_logging_obj=logging, logs_to_process=rows,
+        )
+    writer.post.assert_not_awaited()
+    assert client.spend_log_transactions == rows
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("failure", [ValueError("uncertain delivery"), httpx.ReadError("response lost after send")])
+async def test_spend_log_external_post_failure_never_retries_or_requeues(monkeypatch, failure):
+    from litellm.proxy.utils import ProxyUpdateSpend
+
+    monkeypatch.setenv("SPEND_LOGS_URL", "http://writer.invalid")
+    client, logging = _spend_log_lifetime_fakes()
+    writer = MagicMock()
+    writer.post = AsyncMock(side_effect=failure)
+    with pytest.raises(type(failure)):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=2, prisma_client=client, db_writer_client=writer,
+            proxy_logging_obj=logging, logs_to_process=[{"request_id": "maybe-committed"}],
+        )
+    writer.post.assert_awaited_once()
+    assert client.spend_log_transactions == []
