@@ -81,7 +81,15 @@ fn run_public(
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );
-            Ok(route.machine(request, None))
+            let (cache, cache_options) = crate::cache::v2::configured(py, arguments)?;
+            let route = match cache {
+                Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
+                    cache,
+                    litellm_cache_response::CacheScope::Shared,
+                )),
+                None => route,
+            };
+            Ok(route.machine(request, cache_options))
         },
         host::ResponsesPythonHost(host),
         hooks,

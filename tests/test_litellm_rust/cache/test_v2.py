@@ -218,17 +218,31 @@ async def test_cache_hit_keeps_model_budget_spend_but_accounts_for_usage(
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("native", (False, True), ids=("python", "rust"))
-async def test_cache_hit_releases_parallel_slot_and_preserves_request_rate_limit(
-    recording_server: RecordingServer, native: bool, monkeypatch: pytest.MonkeyPatch
+@pytest.mark.parametrize("backend", ("disabled", "memory", "redis"))
+async def test_response_cache_backend_does_not_control_coordination(
+    recording_server: RecordingServer,
+    native: bool,
+    monkeypatch: pytest.MonkeyPatch,
+    backend: Literal["disabled", "memory", "redis"],
+    redis_url: str,
 ) -> None:
     monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
-    litellm.cache = _v2.Cache.memory()
+    litellm.cache = (
+        None
+        if backend == "disabled"
+        else _v2.Cache.memory()
+        if backend == "memory"
+        else _v2.Cache.redis(redis_url, namespace="independent-coordination")
+    )
+    recording_server.expected_requests = 2 if backend == "disabled" else 1
     counters: Final = litellm.DualCache()
+    budget: Final = _PROXY_VirtualKeyModelMaxBudgetLimiter(counters)
     limiter: Final = _PROXY_MaxParallelRequestsHandler_v3(
         InternalUsageCache(counters), model_group_resolver=lambda model: model
     )
     key_hash: Final = "b" * 64
     identity: Final = UserAPIKeyAuth(api_key=key_hash, rpm_limit=2, tpm_limit=1000, max_parallel_requests=1)
+    spend_key: Final = model_budget_spend_cache_key(Litellm_EntityType.KEY, key_hash, "cached-model", "1h")
     request_key: Final = limiter.create_rate_limit_keys("api_key", key_hash, "requests")
     token_key: Final = limiter.create_rate_limit_keys("api_key", key_hash, "tokens")
     parallel_key: Final = limiter.create_rate_limit_keys("api_key", key_hash, "max_parallel_requests")
@@ -241,12 +255,16 @@ async def test_cache_hit_releases_parallel_slot_and_preserves_request_rate_limit
             "messages": list(MESSAGES),
             "litellm_call_id": call_id,
             "max_tokens": 32,
-            "metadata": {"user_api_key": key_hash},
+            "metadata": {
+                "user_api_key": key_hash,
+                "model_group": "cached-model",
+                "user_api_key_model_max_budget": {"cached-model": {"max_budget": 1, "budget_duration": "1h"}},
+            },
         }
         await limiter.async_pre_call_hook(identity, counters, data, "acompletion")
         assert len(TypeAdapter(dict[str, float]).validate_python(counters.get_cache(parallel_key))) == 1
         response: Final = await invoke(
-            "chat", recording_server, {**data, "callbacks": [limiter, recorder]}, native=native
+            "chat", recording_server, {**data, "callbacks": [budget, limiter, recorder]}, native=native
         )
         await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
         await recorder.wait_for_async("async_log_success_event", count=successes)
@@ -256,16 +274,26 @@ async def test_cache_hit_releases_parallel_slot_and_preserves_request_rate_limit
     assert counters.get_cache(parallel_key) == {}
     assert counters.get_cache(request_key) == 1
     assert counters.get_cache(token_key) == expected_tokens
+    first_events: Final = await recorder.wait_for_async("async_log_success_event")
+    first_cost: Final = TypeAdapter(float).validate_python(first_events[0].kwargs["response_cost"])
+    assert first_cost > 0
+    assert counters.get_cache(spend_key) == pytest.approx(first_cost)
     await asyncio.create_task(request("cache-hit", 2))
-    assert len(recording_server.requests) == 1
+    expected_spend: Final = first_cost * recording_server.expected_requests
+    assert counters.get_cache(spend_key) == pytest.approx(expected_spend)
+    assert len(recording_server.requests) == recording_server.expected_requests
     assert counters.get_cache(parallel_key) == {}
     assert counters.get_cache(request_key) == 2
     assert counters.get_cache(token_key) == 2 * expected_tokens
     with pytest.raises(litellm.RateLimitError):
         await asyncio.create_task(request("over-rpm-limit", 3))
-    assert len(recording_server.requests) == 1
+    assert len(recording_server.requests) == recording_server.expected_requests
     assert counters.get_cache(parallel_key) == {}
     assert counters.get_cache(token_key) == 2 * expected_tokens
+
+    assert counters.get_cache(spend_key) == pytest.approx(expected_spend)
+    if litellm.cache is not None:
+        await litellm.cache.disconnect()
 
 
 @pytest.mark.asyncio

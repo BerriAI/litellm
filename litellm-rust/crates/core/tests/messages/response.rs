@@ -1,4 +1,8 @@
 use litellm_core::messages::{MessagesResponse, messages_body};
+use litellm_host::{
+    interceptors::{ExecutionFacts, ResultSource},
+    lifecycle::ExecutionEvent,
+};
 use litellm_http::transport::Error as TransportError;
 use rstest::rstest;
 
@@ -60,7 +64,13 @@ async fn calls_defer_execution_until_polled(
                 true,
                 [
                     CallEvent::Started { .. },
-                    CallEvent::Execution(_),
+                    CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
+                    CallEvent::Execution(ExecutionEvent::ResultReady {
+                        facts: ExecutionFacts {
+                            source: ResultSource::Provider,
+                            ..
+                        }
+                    }),
                     CallEvent::Succeeded { .. }
                 ]
             )
@@ -69,7 +79,13 @@ async fn calls_defer_execution_until_polled(
                 true,
                 [
                     CallEvent::Started { .. },
-                    CallEvent::Execution(_),
+                    CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }),
+                    CallEvent::Execution(ExecutionEvent::ResultReady {
+                        facts: ExecutionFacts {
+                            source: ResultSource::Provider,
+                            ..
+                        }
+                    }),
                     CallEvent::Succeeded { .. }
                 ]
             )

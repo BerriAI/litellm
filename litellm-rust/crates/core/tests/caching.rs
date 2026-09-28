@@ -11,14 +11,20 @@ use std::{
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream};
 use litellm_cache_memory::InMemoryCache;
-use litellm_cache_response::{ResponseCache, ResponseCacheConfig, ResponseCacheService};
+use litellm_cache_response::{
+    CacheOptions, CacheScope, ResponseCache, ResponseCacheConfig, ResponseCacheService,
+    ResponseEnvelope,
+};
 use litellm_core::{
     RouteError,
-    caching::{Cachable, CacheOptions, StreamCachable, execute_streaming, execute_unary},
+    caching::{Cachable, StreamCachable, execute_streaming, execute_unary},
 };
 use litellm_host::{
     call::{CallOutput, OutputOf},
-    interceptors::{Interceptors, RawResponse, RequestContext, WireRequest},
+    interceptors::{
+        ExecutionFacts, Interceptors, ProviderIdentity, RawResponse, RequestContext, ResultSource,
+        WireRequest,
+    },
     lifecycle::{CallEvent, ExecutionEvent},
     observation::observation_channel,
     protocol::Protocol,
@@ -38,6 +44,13 @@ impl Protocol for TestRoute {
 }
 
 impl Cachable for TestRoute {
+    fn provider(_: &Self::Request) -> Result<ProviderIdentity, RouteError> {
+        Ok(ProviderIdentity {
+            model: "test-model".into(),
+            provider: "test-provider".into(),
+        })
+    }
+
     const SURFACE: &'static str = "test";
     fn cache_input(request: &Value) -> Result<Value, RouteError> {
         Ok(request.clone())
@@ -78,7 +91,7 @@ fn cache_with_limit(max_entry_bytes: usize) -> Arc<dyn ResponseCacheService> {
 
 async fn call(
     cache: &Arc<dyn ResponseCacheService>,
-    options: CacheOptions,
+    options: Option<CacheOptions>,
     calls: &AtomicUsize,
     request: Value,
 ) -> Value {
@@ -103,10 +116,10 @@ async fn call(
 }
 
 #[rstest]
-#[case::normal(CacheOptions::default(), true, true)]
-#[case::no_cache(CacheOptions { no_cache: true, ..Default::default() }, false, true)]
-#[case::no_store(CacheOptions { no_store: true, ..Default::default() }, true, false)]
-#[case::disabled(CacheOptions { caching: Some(false), ..Default::default() }, false, false)]
+#[case::normal(CacheOptions::new(CacheScope::Shared), true, true)]
+#[case::no_cache(CacheOptions { no_cache: true, ..CacheOptions::new(CacheScope::Shared) }, false, true)]
+#[case::no_store(CacheOptions { no_store: true, ..CacheOptions::new(CacheScope::Shared) }, true, false)]
+#[case::disabled(CacheOptions { caching: Some(false), ..CacheOptions::new(CacheScope::Shared) }, false, false)]
 #[tokio::test]
 async fn cache_controls_apply_to_both_reads_and_writes(
     cache: Arc<dyn ResponseCacheService>,
@@ -115,8 +128,15 @@ async fn cache_controls_apply_to_both_reads_and_writes(
     #[case] writes: bool,
 ) {
     let calls = AtomicUsize::new(0);
+    let options = Some(options);
     let first = call(&cache, options.clone(), &calls, json!({"model":"test"})).await;
-    let second = call(&cache, Default::default(), &calls, json!({"model":"test"})).await;
+    let second = call(
+        &cache,
+        Some(CacheOptions::new(CacheScope::Shared)),
+        &calls,
+        json!({"model":"test"}),
+    )
+    .await;
     assert_eq!(first == second, writes);
     let third = call(&cache, options, &calls, json!({"model":"test"})).await;
     assert_eq!(second == third, reads);
@@ -132,14 +152,14 @@ async fn request_identity_is_canonical_and_scoped(cache: Arc<dyn ResponseCacheSe
     let calls = AtomicUsize::new(0);
     let first = call(
         &cache,
-        Default::default(),
+        Some(CacheOptions::new(CacheScope::Shared)),
         &calls,
         json!({"model":"m", "input":{"a":1,"b":2}}),
     )
     .await;
     let second = call(
         &cache,
-        Default::default(),
+        Some(CacheOptions::new(CacheScope::Shared)),
         &calls,
         json!({"input":{"b":2,"a":1}, "model":"m"}),
     )
@@ -147,10 +167,10 @@ async fn request_identity_is_canonical_and_scoped(cache: Arc<dyn ResponseCacheSe
     assert_eq!(first, second);
     let other = call(
         &cache,
-        CacheOptions {
-            scope: "other-tenant".into(),
-            ..Default::default()
-        },
+        Some(CacheOptions {
+            scope: CacheScope::Isolated("other-tenant".into()),
+            ..CacheOptions::new(CacheScope::Shared)
+        }),
         &calls,
         json!({"model":"m", "input":{"a":1,"b":2}}),
     )
@@ -158,7 +178,7 @@ async fn request_identity_is_canonical_and_scoped(cache: Arc<dyn ResponseCacheSe
     assert_ne!(first, other);
     let changed = call(
         &cache,
-        Default::default(),
+        Some(CacheOptions::new(CacheScope::Shared)),
         &calls,
         json!({"model":"m", "input":{"a":2,"b":2}}),
     )
@@ -175,7 +195,7 @@ async fn streamed(
     execute_streaming::<TestRoute, _, _>(
         json!({"stream":true}),
         Some(cache.clone()),
-        Default::default(),
+        Some(CacheOptions::new(CacheScope::Shared)),
         &(),
         None,
         |_| async {
@@ -291,7 +311,7 @@ async fn a_provider_failure_never_populates_the_cache(cache: Arc<dyn ResponseCac
     let first = execute_streaming::<TestRoute, _, _>(
         json!({}),
         Some(cache.clone()),
-        Default::default(),
+        Some(CacheOptions::new(CacheScope::Shared)),
         &(),
         None,
         |_| async {
@@ -301,8 +321,20 @@ async fn a_provider_failure_never_populates_the_cache(cache: Arc<dyn ResponseCac
     )
     .await;
     assert!(first.is_err());
-    let successful = call(&cache, Default::default(), &calls, json!({})).await;
-    let replayed = call(&cache, Default::default(), &calls, json!({})).await;
+    let successful = call(
+        &cache,
+        Some(CacheOptions::new(CacheScope::Shared)),
+        &calls,
+        json!({}),
+    )
+    .await;
+    let replayed = call(
+        &cache,
+        Some(CacheOptions::new(CacheScope::Shared)),
+        &calls,
+        json!({}),
+    )
+    .await;
     assert_eq!(successful, replayed);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
@@ -342,16 +374,31 @@ impl ResponseCacheService for InvalidEntryCache {
 }
 
 #[rstest]
+#[case::legacy(json!({"unexpected":"old-format"}))]
+#[case::wrong_version(json!({"version":2,"surface":"test","output":{"kind":"Response","value":{"call":100}}}))]
+#[case::wrong_surface(json!({"version":1,"surface":"other","output":{"kind":"Response","value":{"call":100}}}))]
 #[tokio::test]
-async fn an_invalid_cached_envelope_is_replaced_by_a_provider_result() {
+async fn an_invalid_cached_envelope_is_replaced_by_a_provider_result(#[case] poisoned: Value) {
     let cache: Arc<dyn ResponseCacheService> = Arc::new(InvalidEntryCache(
         ResponseCache::new(Arc::new(InMemoryCache::default())),
-        json!({"unexpected":"old-format"}),
+        poisoned,
     ));
     let request = json!({"input":"hello"});
     let calls = AtomicUsize::new(0);
-    let first = call(&cache, Default::default(), &calls, request.clone()).await;
-    let second = call(&cache, Default::default(), &calls, request).await;
+    let first = call(
+        &cache,
+        Some(CacheOptions::new(CacheScope::Shared)),
+        &calls,
+        request.clone(),
+    )
+    .await;
+    let second = call(
+        &cache,
+        Some(CacheOptions::new(CacheScope::Shared)),
+        &calls,
+        request,
+    )
+    .await;
     assert_eq!(first, second);
     assert_eq!(calls.load(Ordering::SeqCst), 1);
 }
@@ -368,7 +415,7 @@ async fn responses_refetches_instead_of_deserializing_another_api_response(
 
     let cache: Arc<dyn ResponseCacheService> = Arc::new(InvalidEntryCache(
         ResponseCache::new(Arc::new(InMemoryCache::default())),
-        poisoned,
+        serde_json::to_value(ResponseEnvelope::new("responses", poisoned)).unwrap(),
     ));
     let calls = AtomicUsize::new(0);
     for _ in 0..2 {
@@ -384,7 +431,7 @@ async fn responses_refetches_instead_of_deserializing_another_api_response(
                 timeout: None,
             },
             Some(cache.clone()),
-            Default::default(),
+            Some(CacheOptions::new(CacheScope::Shared)),
             &(),
             None,
             |_| async {
@@ -444,7 +491,7 @@ async fn messages_cache_identity_includes_provider_native_parameters(
                     shaping: Default::default(),
                 },
                 Some(cache.clone()),
-                Default::default(),
+                Some(CacheOptions::new(CacheScope::Shared)),
                 &(),
                 None,
                 |_| async {
@@ -505,8 +552,20 @@ async fn backend_failures_do_not_fail_inference() {
         }),
     );
     let calls = AtomicUsize::new(0);
-    let first = call(&cache, Default::default(), &calls, json!({})).await;
-    let second = call(&cache, Default::default(), &calls, json!({})).await;
+    let first = call(
+        &cache,
+        Some(CacheOptions::new(CacheScope::Shared)),
+        &calls,
+        json!({}),
+    )
+    .await;
+    let second = call(
+        &cache,
+        Some(CacheOptions::new(CacheScope::Shared)),
+        &calls,
+        json!({}),
+    )
+    .await;
     assert_ne!(first, second);
     assert_eq!(calls.load(Ordering::SeqCst), 2);
 }
@@ -521,8 +580,18 @@ struct CacheHitAccounting {
 }
 
 impl Interceptors<RouteError> for CacheHitAccounting {
-    async fn cache_hit(&self, key: String) -> Result<(), RouteError> {
+    async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), RouteError> {
         self.calls.fetch_add(1, Ordering::SeqCst);
+        let ResultSource::Cache { key } = facts.source else {
+            panic!("expected cache source")
+        };
+        assert_eq!(
+            facts.provider,
+            ProviderIdentity {
+                model: "test-model".into(),
+                provider: "test-provider".into()
+            }
+        );
         self.key.set(key).unwrap();
         if self.reject {
             return Err(RouteError::Unsupported("cache accounting rejected"));
@@ -578,13 +647,19 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
             .unwrap()
         )
     } else {
-        unary_call(&cache, Default::default(), &provider_calls, request.clone()).await
+        unary_call(
+            &cache,
+            Some(CacheOptions::new(CacheScope::Shared)),
+            &provider_calls,
+            request.clone(),
+        )
+        .await
     };
     let result = if streaming_route {
         match execute_streaming::<TestRoute, _, _>(
             request,
             Some(cache),
-            Default::default(),
+            Some(CacheOptions::new(CacheScope::Shared)),
             &accounting,
             Some(&observer),
             |_| async { panic!("a cache hit must not call the provider") },
@@ -598,7 +673,7 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
         execute_unary::<UnaryTestRoute, _, _>(
             request,
             Some(cache),
-            Default::default(),
+            Some(CacheOptions::new(CacheScope::Shared)),
             &accounting,
             Some(&observer),
             |_| async { panic!("a cache hit must not call the provider") },
@@ -619,7 +694,7 @@ async fn cache_hits_notify_accounting_once_and_propagate_its_failure(
     assert!(!key.is_empty());
     assert!(matches!(
         events.try_recv().unwrap(),
-        CallEvent::Execution(ExecutionEvent::CacheHit { key: observed }) if observed == *key
+        CallEvent::Execution(ExecutionEvent::ResultReady { facts }) if facts.source == ResultSource::Cache { key: key.clone() }
     ));
     assert!(events.try_recv().is_err());
 }
@@ -634,6 +709,13 @@ impl Protocol for UnaryTestRoute {
 }
 
 impl Cachable for UnaryTestRoute {
+    fn provider(_: &Self::Request) -> Result<ProviderIdentity, RouteError> {
+        Ok(ProviderIdentity {
+            model: "test-model".into(),
+            provider: "test-provider".into(),
+        })
+    }
+
     const SURFACE: &'static str = "unary-test";
 
     fn cache_input(request: &Value) -> Result<Value, RouteError> {
@@ -643,7 +725,7 @@ impl Cachable for UnaryTestRoute {
 
 async fn unary_call(
     cache: &Arc<dyn ResponseCacheService>,
-    options: CacheOptions,
+    options: Option<CacheOptions>,
     calls: &AtomicUsize,
     request: Value,
 ) -> Value {
@@ -660,10 +742,10 @@ async fn unary_call(
 }
 
 #[rstest]
-#[case::normal(CacheOptions::default(), true, true)]
-#[case::no_cache(CacheOptions { no_cache: true, ..Default::default() }, false, true)]
-#[case::no_store(CacheOptions { no_store: true, ..Default::default() }, true, false)]
-#[case::disabled(CacheOptions { caching: Some(false), ..Default::default() }, false, false)]
+#[case::normal(CacheOptions::new(CacheScope::Shared), true, true)]
+#[case::no_cache(CacheOptions { no_cache: true, ..CacheOptions::new(CacheScope::Shared) }, false, true)]
+#[case::no_store(CacheOptions { no_store: true, ..CacheOptions::new(CacheScope::Shared) }, true, false)]
+#[case::disabled(CacheOptions { caching: Some(false), ..CacheOptions::new(CacheScope::Shared) }, false, false)]
 #[tokio::test]
 async fn unary_cache_controls_do_not_change_the_shared_service(
     cache: Arc<dyn ResponseCacheService>,
@@ -672,12 +754,25 @@ async fn unary_cache_controls_do_not_change_the_shared_service(
     #[case] writes: bool,
 ) {
     let calls = AtomicUsize::new(0);
+    let options = Some(options);
     let first = unary_call(&cache, options.clone(), &calls, json!({"input":"hello"})).await;
-    let second = unary_call(&cache, Default::default(), &calls, json!({"input":"hello"})).await;
+    let second = unary_call(
+        &cache,
+        Some(CacheOptions::new(CacheScope::Shared)),
+        &calls,
+        json!({"input":"hello"}),
+    )
+    .await;
     assert_eq!(first == second, writes);
     let third = unary_call(&cache, options, &calls, json!({"input":"hello"})).await;
     assert_eq!(second == third, reads);
-    let fourth = unary_call(&cache, Default::default(), &calls, json!({"input":"hello"})).await;
+    let fourth = unary_call(
+        &cache,
+        Some(CacheOptions::new(CacheScope::Shared)),
+        &calls,
+        json!({"input":"hello"}),
+    )
+    .await;
     assert_eq!(fourth, if !reads && writes { third } else { second });
     assert_eq!(
         calls.load(Ordering::SeqCst),
@@ -704,21 +799,21 @@ async fn namespaces_and_surfaces_isolate_entries_on_shared_storage() {
     let calls = AtomicUsize::new(0);
     let first = call(
         &first_cache,
-        Default::default(),
+        Some(CacheOptions::new(CacheScope::Shared)),
         &calls,
         json!({"input":"hello"}),
     )
     .await;
     let different_namespace = call(
         &second_cache,
-        Default::default(),
+        Some(CacheOptions::new(CacheScope::Shared)),
         &calls,
         json!({"input":"hello"}),
     )
     .await;
     let different_surface = unary_call(
         &first_cache,
-        Default::default(),
+        Some(CacheOptions::new(CacheScope::Shared)),
         &calls,
         json!({"input":"hello"}),
     )
@@ -728,7 +823,7 @@ async fn namespaces_and_surfaces_isolate_entries_on_shared_storage() {
     assert_eq!(
         call(
             &first_cache,
-            Default::default(),
+            Some(CacheOptions::new(CacheScope::Shared)),
             &calls,
             json!({"input":"hello"})
         )
@@ -738,7 +833,7 @@ async fn namespaces_and_surfaces_isolate_entries_on_shared_storage() {
     assert_eq!(
         call(
             &second_cache,
-            Default::default(),
+            Some(CacheOptions::new(CacheScope::Shared)),
             &calls,
             json!({"input":"hello"})
         )
@@ -748,7 +843,7 @@ async fn namespaces_and_surfaces_isolate_entries_on_shared_storage() {
     assert_eq!(
         unary_call(
             &first_cache,
-            Default::default(),
+            Some(CacheOptions::new(CacheScope::Shared)),
             &calls,
             json!({"input":"hello"})
         )
@@ -784,7 +879,7 @@ async fn responses_cache_only_reuses_completed_responses(
                 timeout: None,
             },
             Some(cache.clone()),
-            Default::default(),
+            Some(CacheOptions::new(CacheScope::Shared)),
             &(),
             None,
             |_| async {
@@ -802,4 +897,94 @@ async fn responses_cache_only_reuses_completed_responses(
         assert_eq!(response.extra.get("status"), Some(&json!(status)));
     }
     assert_eq!(calls.load(Ordering::SeqCst), expected_calls);
+}
+
+mod support;
+use support::traces;
+
+#[rstest]
+#[case::without_cache(false)]
+#[case::with_cache(true)]
+#[tokio::test]
+async fn the_same_route_entrypoint_reports_facts_with_or_without_caching(
+    cache: Arc<dyn ResponseCacheService>,
+    #[case] caching: bool,
+    traces: support::TraceCapture,
+) {
+    use litellm_cache_response::ScopedCache;
+    use litellm_core::chat_completions::types::ChatCompletionsRequest;
+    use wiremock::{Mock, MockServer, ResponseTemplate, matchers::method};
+
+    let upstream = MockServer::start().await;
+    let body = json!({"id":"msg-test","type":"message","role":"assistant","model":"cache-test-model",
+        "content":[{"type":"text","text":"cached answer"}],"stop_reason":"end_turn",
+        "stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}});
+    Mock::given(method("POST"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(body))
+        .expect(if caching { 1 } else { 2 })
+        .mount(&upstream)
+        .await;
+    let route = support::chat_completions_route();
+    let route = if caching {
+        route.with_cache(ScopedCache::new(cache, CacheScope::Shared))
+    } else {
+        route
+    };
+    let (observer, mut events) = observation_channel(NonZeroUsize::new(16).unwrap());
+    let base = upstream.uri();
+    for _ in 0..2 {
+        let response = traces
+            .logger()
+            .instrument(route.execute(
+                ChatCompletionsRequest {
+                    model: "anthropic/cache-test-model",
+                    messages: json!([{"role":"user","content":"hello"}]),
+                    optional_params: [("max_tokens".into(), json!(16))].into_iter().collect(),
+                    api_key: Some("test-key"),
+                    api_base: Some(&base),
+                    custom_llm_provider: None,
+                    extra_headers: None,
+                    timeout: None,
+                },
+                &(),
+                Some(observer.clone()),
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(response).unwrap()["usage"]["total_tokens"],
+            15
+        );
+    }
+    let facts: Vec<_> = std::iter::from_fn(|| events.try_recv().ok())
+        .filter_map(|event| match event {
+            CallEvent::Execution(ExecutionEvent::ResultReady { facts }) => Some(facts),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(facts.len(), 2);
+    assert_eq!(
+        facts[0].provider,
+        ProviderIdentity {
+            model: "cache-test-model".into(),
+            provider: "anthropic".into()
+        }
+    );
+    assert_eq!(facts[1].provider, facts[0].provider);
+    assert_eq!(facts[0].source, ResultSource::Provider);
+    match &facts[1].source {
+        ResultSource::Provider => assert!(!caching),
+        ResultSource::Cache { key } => {
+            assert!(caching);
+            assert!(!key.is_empty());
+        }
+    }
+    let summaries = traces.summaries("litellm.route");
+    assert_eq!(summaries.len(), 2);
+    for summary in summaries {
+        assert_eq!(summary["provider"], "anthropic");
+        assert_eq!(summary["resolved_model"], "cache-test-model");
+        assert_eq!(summary["outcome"], "success");
+    }
+    upstream.verify().await;
 }

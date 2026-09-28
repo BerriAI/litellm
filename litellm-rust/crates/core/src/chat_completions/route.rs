@@ -27,26 +27,93 @@ impl ChatCompletionsRoute {
     pub fn machine(
         self,
         call: ChatCompletionsCall,
-        observers: Option<ObservationSender>,
+        options: impl Into<crate::CallOptions>,
     ) -> HostedMachine<ChatCompletions> {
+        let crate::CallOptions {
+            cache: cache_options,
+            observers,
+        } = options.into();
         hosted_call(
             call,
             observers,
-            move |call: ChatCompletionsCall, _, interceptors, observers| async move {
-                let request = ChatCompletionsRequest {
-                    model: &call.model,
-                    messages: call.messages,
-                    optional_params: call.optional_params,
-                    api_key: call.api_key.as_deref(),
-                    api_base: call.api_base.as_deref(),
-                    custom_llm_provider: call.custom_llm_provider.as_deref(),
-                    extra_headers: call.extra_headers,
-                    timeout: call.timeout,
-                };
-                self.run(request, &interceptors, observers.as_ref())
+            move |call, _, interceptors, observers| async move {
+                self.run_call(call, cache_options, &interceptors, observers.as_ref())
                     .await
                     .map(CallOutput::Complete)
             },
         )
+    }
+
+    #[tracing::instrument(name = "litellm.route", skip_all, fields(
+        route = "chat_completions",
+        model = %call.model,
+        provider,
+        resolved_model,
+        stream = false,
+        outcome
+    ))]
+    pub(super) async fn run_call(
+        &self,
+        call: ChatCompletionsCall,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        observers: Option<&ObservationSender>,
+    ) -> Result<ChatCompletionsResponse, Error> {
+        crate::diagnostic::unary(async {
+            crate::caching::execute_unary::<ChatCompletions, _, _>(
+                call,
+                self.cache.as_ref().map(|cache| cache.service.clone()),
+                self.cache
+                    .as_ref()
+                    .map(|cache| cache.options(cache_options)),
+                interceptors,
+                observers,
+                |call| async move {
+                    let request = ChatCompletionsRequest {
+                        model: &call.model,
+                        messages: call.messages,
+                        optional_params: call.optional_params,
+                        api_key: call.api_key.as_deref(),
+                        api_base: call.api_base.as_deref(),
+                        custom_llm_provider: call.custom_llm_provider.as_deref(),
+                        extra_headers: call.extra_headers,
+                        timeout: call.timeout,
+                    };
+                    self.run(request, interceptors, observers).await
+                },
+            )
+            .await
+        })
+        .await
+    }
+}
+
+impl crate::caching::Cachable for ChatCompletions {
+    const SURFACE: &'static str = "chat_completions";
+
+    fn provider(
+        request: &Self::Request,
+    ) -> Result<litellm_host::interceptors::ProviderIdentity, crate::RouteError> {
+        let resolved = crate::provider::resolve_llm_provider(
+            &request.model,
+            request.custom_llm_provider.as_deref(),
+            "chat completions",
+        )?;
+        Ok(litellm_host::interceptors::ProviderIdentity {
+            model: resolved.model.into(),
+            provider: <&str>::from(resolved.provider).into(),
+        })
+    }
+
+    fn cache_input(request: &Self::Request) -> Result<serde_json::Value, crate::RouteError> {
+        Ok(serde_json::json!({
+            "model": request.model,
+            "messages": request.messages,
+            "params": request.optional_params,
+            "provider": request.custom_llm_provider,
+            "api_key": request.api_key,
+            "api_base": request.api_base,
+            "headers": request.extra_headers
+        }))
     }
 }

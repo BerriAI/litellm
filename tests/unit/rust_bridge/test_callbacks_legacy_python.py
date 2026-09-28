@@ -43,7 +43,7 @@ def test_setup_reuses_a_supplied_logger() -> None:
 
 
 @pytest.mark.parametrize("explicit_provider", (None, "openai"))
-def test_cache_hit_finalization_preserves_provider_attribution(explicit_provider: str | None) -> None:
+def test_cache_hit_finalization_preserves_execution_provider_attribution(explicit_provider: str | None) -> None:
     now: Final = datetime.datetime.now()
     kwargs: Final = {
         "model": "openai/cache-test-model",
@@ -52,11 +52,19 @@ def test_cache_hit_finalization_preserves_provider_attribution(explicit_provider
         "metadata": {"user_api_key": "key-hash"},
     }
     prepared: Final = setup("acompletion", (), kwargs, now, asynchronous=True)
+    legacy.update_logging(
+        prepared.logger,
+        prepared.kwargs,
+        "resolved-cache-model",
+        {},
+        {**prepared.logger.litellm_params, "custom_llm_provider": "azure"},
+        "azure",
+    )
     prepared.logger.model_call_details.update({"cache_hit": True, "cache_key": "cached-response"})
     response: Final = ModelResponse(model="cache-test-model")
     legacy.finalize(response, prepared.logger, prepared.kwargs, now, now)
-    assert prepared.logger.model_call_details["custom_llm_provider"] == "openai"
-    assert prepared.logger.model_call_details["model"] == "cache-test-model"
+    assert prepared.logger.model_call_details["custom_llm_provider"] == "azure"
+    assert prepared.logger.model_call_details["model"] == "resolved-cache-model"
     assert prepared.logger.litellm_params["metadata"]["user_api_key"] == "key-hash"
     assert response._hidden_params["cache_key"] == "cached-response"
     assert response._hidden_params["response_cost"] == 0

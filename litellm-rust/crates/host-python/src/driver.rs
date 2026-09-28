@@ -427,6 +427,21 @@ where
             HostRequest::Stream(StreamDelivery::Chunk(chunk, reply)) => {
                 return self.delivered(py, chunk, reply).map(Next::Return);
             }
+            HostRequest::Intercept(InterceptRequest::ResultReady { facts, reply }) => {
+                let event = PythonCallEvent::Execution(ExecutionEvent::ResultReady { facts });
+                self.observe(&event);
+                match self.hooks.on_event(py, event) {
+                    Ok(HookStep::Ready(())) => {
+                        reply.send(());
+                        Ok(Ok(()))
+                    }
+                    Ok(HookStep::Await(awaitable, resume)) => {
+                        self.pending = Some(Pending::Event(resume, EventNext::Emitted(reply)));
+                        return Ok(Next::Return(ExecutionStep::Await(awaitable)));
+                    }
+                    Err(error) => Err(error),
+                }
+            }
             HostRequest::Intercept(InterceptRequest::AfterProviderResponse { raw, reply }) => {
                 let event = PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived {
                     raw: &raw,
@@ -466,7 +481,7 @@ where
             Ok(head) => head,
             Err(error) => return self.interrupt(py, error),
         };
-        match self.hooks.on_stream_open(py) {
+        match self.hooks.on_stream_open(py, &head) {
             Ok(()) => {
                 self.pending = Some(Pending::Consumer(reply));
                 Ok(ExecutionStep::Open(head))
@@ -988,6 +1003,9 @@ mod tests {
                 return Err(PyValueError::new_err("callback failed"));
             }
             self.log.push(match event {
+                PythonCallEvent::Execution(ExecutionEvent::ResultReady { .. }) => {
+                    "cache_hit".into()
+                }
                 PythonCallEvent::Started { .. } => "started".into(),
                 PythonCallEvent::Cancelled { .. } => "cancelled".into(),
                 PythonCallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) => {
@@ -1003,7 +1021,7 @@ mod tests {
             Ok(HookStep::Ready(()))
         }
 
-        fn on_stream_open(&mut self, _: Python<'_>) -> PyResult<()> {
+        fn on_stream_open(&mut self, _: Python<'_>, _: &Py<PyAny>) -> PyResult<()> {
             self.log.push("opened");
             Ok(())
         }

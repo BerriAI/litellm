@@ -81,21 +81,6 @@ def finalize(
     from litellm.litellm_core_utils.llm_response_utils import response_metadata
 
     model: Final = kwargs.get("model")
-    if logger.model_call_details.get("cache_hit") is True and isinstance(model, str):
-        from litellm import get_llm_provider
-
-        supplied_provider: Final = kwargs.get("custom_llm_provider")
-        resolved_model, provider, _, _ = get_llm_provider(
-            model=model,
-            custom_llm_provider=supplied_provider if isinstance(supplied_provider, str) else None,
-        )
-        logger.update_from_kwargs(
-            kwargs=kwargs,
-            model=resolved_model,
-            optional_params=logger.optional_params,
-            litellm_params={**logger.litellm_params, "custom_llm_provider": provider},
-            custom_llm_provider=provider,
-        )
     update: Final = cast(  # cast-ok: legacy metadata function accepts concrete kwargs
         MetadataUpdater, response_metadata.update_response_metadata
     )
