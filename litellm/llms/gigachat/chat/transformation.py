@@ -208,10 +208,7 @@ class GigaChatConfig(BaseConfig):
                     ]
                     optional_params["function_call"] = {"name": schema_name}  # mutable-ok: request payload
                     optional_params["_structured_output"] = True
-                elif not (
-                    isinstance(value, Mapping)
-                    and (value.get("type") in (None, "text", "json_schema"))
-                ):
+                elif not (isinstance(value, Mapping) and (value.get("type") in (None, "text", "json_schema"))):
                     # Only json_schema is actually mapped above; other response_format
                     # values (e.g. json_object) would otherwise be silently ignored.
                     if not drop_params:
