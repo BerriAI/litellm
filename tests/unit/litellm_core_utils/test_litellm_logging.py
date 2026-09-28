@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
 from litellm.litellm_core_utils.litellm_logging import (
     _extract_response_obj_and_hidden_params,
     _get_status_fields,
+    get_standard_logging_object_payload,
     set_callbacks,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
@@ -9090,12 +9091,51 @@ def test_uncached_response_cost_recomputes_price_past_a_zero_stamp():
         litellm.model_cost.pop(deployment_id, None)
 
 
+def test_uncached_response_cost_leaves_no_pricing_state_on_the_call():
+    """The uncached price probe restores every field the priced path writes on the logging object."""
+    deployment_id: Final = "lit8679-probe-state-deployment"
+    litellm.register_model(
+        model_cost={
+            deployment_id: {
+                "litellm_provider": "openai",
+                "mode": "chat",
+                "input_cost_per_token": 1e-06,
+                "output_cost_per_token": 2e-06,
+            }
+        },
+        persist_across_reloads=False,
+    )
+    try:
+        logging_obj: Final = _lit8679_priced_logging_obj(deployment_id, "lit8679-probe-state")
+        cached_response: Final = ModelResponse(
+            model="gpt-5.4-nano",
+            choices=[litellm.Choices(message=litellm.Message(role="assistant", content="cached"))],
+            usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+        )
+        cached_response._hidden_params = {"cache_hit": True, "cache_key": "lit8679-key", "response_cost": 0.0}
+        state_before: Final = (
+            logging_obj.cost_breakdown,
+            logging_obj.billed_token_rates,
+            logging_obj.zero_cost_warned,
+            "response_cost_failure_debug_information" in logging_obj.model_call_details,
+        )
+
+        cost: Final = logging_obj._uncached_response_cost(result=cached_response)
+
+        assert cost is not None and cost > 0.0
+        assert (
+            logging_obj.cost_breakdown,
+            logging_obj.billed_token_rates,
+            logging_obj.zero_cost_warned,
+            "response_cost_failure_debug_information" in logging_obj.model_call_details,
+        ) == state_before
+        assert state_before == (None, None, False, False)
+    finally:
+        litellm.model_cost.pop(deployment_id, None)
+
+
 def test_payload_saved_cache_cost_keeps_uncached_price_when_result_stamped_zero():
     """A cache-hit payload still reports what the call would have cost, not the 0.0 stamped on the served response."""
-    from litellm.litellm_core_utils.litellm_logging import (
-        get_standard_logging_object_payload,
-    )
-
     deployment_id: Final = "lit8679-saved-cost-deployment"
     litellm.register_model(
         model_cost={
