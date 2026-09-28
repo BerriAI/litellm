@@ -33,7 +33,11 @@ def reasoning_effort_is_active(
         effort_mapping: Final = cast(  # cast-ok: reasoning payload keys are strings
             Mapping[str, object], reasoning_effort
         )
-        return effort_mapping.get("effort") != "none" or effort_mapping.get("summary") is not None
+        return (
+            effort_mapping.get("effort") != "none"
+            or effort_mapping.get("summary") is not None
+            or supports_none_reasoning_effort is False
+        )
     return reasoning_effort != "none" or supports_none_reasoning_effort is False
 
 

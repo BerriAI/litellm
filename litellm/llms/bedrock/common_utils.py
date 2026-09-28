@@ -826,18 +826,21 @@ def split_bedrock_region_path(model: str) -> tuple[str | None, str]:
     return None, stripped
 
 
-def _bedrock_mantle_price_map_entries(model: str) -> tuple[Mapping[str, object] | None, ...]:
+def _bedrock_mantle_price_map_keys(model: str) -> tuple[str, ...]:
     mantle_model: Final = model.removeprefix("bedrock_mantle/")
     region, model_id = split_bedrock_region_path(mantle_model)
-    candidates: Final = (
+    return (
         f"bedrock_mantle/{mantle_model}",
         f"bedrock_mantle/{region}/{model_id}" if region is not None else f"bedrock_mantle/{model_id}",
         f"bedrock_mantle/{model_id}",
     )
+
+
+def _bedrock_mantle_price_map_entries(model: str) -> tuple[Mapping[str, object] | None, ...]:
     model_cost: Final = cast(  # cast-ok: model price rows use string keys
         Mapping[str, Mapping[str, object]], litellm.model_cost
     )
-    return tuple(model_cost.get(key) for key in candidates)
+    return tuple(model_cost.get(key) for key in _bedrock_mantle_price_map_keys(model))
 
 
 BEDROCK_RUNTIME_PRICE_MAP_PROVIDERS: Final = frozenset(("bedrock", "bedrock_converse"))

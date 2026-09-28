@@ -28,6 +28,7 @@ from litellm.litellm_core_utils.responses_api_utils import has_function_tool, pe
 from litellm.llms.bedrock.base_aws_llm import BaseAWSLLM, SignsRequestsWithAWS
 from litellm.llms.bedrock.common_utils import (
     AmazonBedrockGlobalConfig,
+    _bedrock_mantle_price_map_keys,
     bedrock_chat_completions_serves_tools_with_reasoning,
     bedrock_reasoning_effort_is_active,
     bedrock_supports_web_search,
@@ -146,7 +147,14 @@ def mantle_supports_responses(model: str | None, model_cost: Mapping[str, object
     gpt-oss substring), so a substring gate would be wrong. A model absent from
     model_cost simply has no signal and returns False (chat-completions emulation).
     """
-    entry: Final = model_cost.get(f"bedrock_mantle/{split_mantle_region_prefix(model)[1]}") if model else None
+    if not model:
+        return False
+    return any(
+        _mantle_price_map_entry_supports_responses(model_cost.get(key)) for key in _bedrock_mantle_price_map_keys(model)
+    )
+
+
+def _mantle_price_map_entry_supports_responses(entry: object) -> bool:
     if not isinstance(entry, Mapping):
         return False
     typed_entry: Final = cast(  # cast-ok: the entry passed the Mapping check

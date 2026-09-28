@@ -444,6 +444,26 @@ def test_gpt6_astra_tools_with_reasoning_none_bridge(local_cost_map: None) -> No
     assert bedrock_chat_request_needs_native_responses(model, request_params) is True
 
 
+@pytest.mark.parametrize(
+    "model, expected",
+    [
+        ("us.openai.gpt-6-sol", True),
+        ("us.openai.gpt-5.6-sol", False),
+    ],
+)
+def test_dict_reasoning_effort_none_respects_model_support(
+    local_cost_map: None,
+    model: str,
+    expected: bool,
+) -> None:
+    request_params: Final[dict[str, object]] = {
+        "tools": [GET_WEATHER_TOOL],
+        "reasoning_effort": {"effort": "none"},
+    }
+
+    assert bedrock_chat_request_needs_native_responses(model, request_params) is expected
+
+
 def test_gpt56_legacy_functions_with_reasoning_stay_on_converse(local_cost_map: None) -> None:
     model: Final = "us.openai.gpt-5.6-sol"
     request_params: Final = {"functions": [GET_WEATHER_TOOL["function"]], "reasoning_effort": "medium"}
@@ -566,11 +586,9 @@ def _assert_remote_images_inlined(content):
 
 
 def test_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch):
-    import litellm.litellm_core_utils.prompt_templates.image_handling as image_handling
+    from litellm.litellm_core_utils.prompt_templates import image_handling
 
-    monkeypatch.setattr(
-        image_handling, "convert_url_to_base64", lambda url: f"data:image/png;base64,{url}"
-    )
+    monkeypatch.setattr(image_handling, "convert_url_to_base64", lambda url: f"data:image/png;base64,{url}")
     body = AmazonBedrockRuntimeChatCompletionsConfig().transform_request(
         model="us.xai.grok-4.6",
         messages=IMAGE_MESSAGES,
@@ -583,7 +601,7 @@ def test_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch
 
 
 async def test_async_transform_request_inlines_remote_image_urls(local_cost_map, monkeypatch):
-    import litellm.litellm_core_utils.prompt_templates.image_handling as image_handling
+    from litellm.litellm_core_utils.prompt_templates import image_handling
 
     async def fake_convert(url):
         return f"data:image/png;base64,{url}"
