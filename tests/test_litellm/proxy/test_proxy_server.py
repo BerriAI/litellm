@@ -11944,6 +11944,23 @@ def test_prompt_caching_settings_propagate_on_config_reload(monkeypatch, field_n
     assert getattr(litellm, field_name) == db_value
 
 
+@pytest.mark.parametrize("worker_value, db_value", [(True, False), (False, True)])
+def test_log_auth_failure_key_identity_follows_db_config_reload(monkeypatch, worker_value, db_value):
+    """A /config/update that flips `log_auth_failure_key_identity` lands on the DB row; every
+    worker must take that value on its next config reload, so turning the PII suffix off stops
+    it without a restart."""
+    import litellm.proxy.proxy_server as ps
+
+    monkeypatch.setattr(litellm, "log_auth_failure_key_identity", worker_value)
+
+    pc = ps.ProxyConfig()
+    pc._apply_litellm_settings_db_values(
+        pc._prepared_db_settings_values("litellm_settings", {"log_auth_failure_key_identity": db_value})
+    )
+
+    assert litellm.log_auth_failure_key_identity is db_value
+
+
 @pytest.mark.asyncio
 async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(monkeypatch: pytest.MonkeyPatch):
     """A DB-only litellm_settings row that pairs success_callback: ["datadog"] with
@@ -11978,6 +11995,100 @@ async def test_db_stored_datadog_redaction_settings_apply_before_logger_init(mon
     assert len(datadog_loggers) == 1
     assert datadog_loggers[0].turn_off_message_logging is True
     assert litellm.turn_off_message_logging is True
+
+
+def _reset_runtime_callbacks(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.litellm_core_utils import litellm_logging
+
+    for list_name in ("success_callback", "_async_success_callback", "failure_callback", "_async_failure_callback"):
+        monkeypatch.setattr(litellm, list_name, [])
+    monkeypatch.setattr(litellm, "callbacks", [])
+    monkeypatch.setattr(litellm_logging, "_in_memory_loggers", [])
+    monkeypatch.setenv("LANGFUSE_PUBLIC_KEY", "pk-test")
+    monkeypatch.setenv("LANGFUSE_SECRET_KEY", "sk-test")
+    monkeypatch.setenv("HUMANLOOP_API_KEY", "test-key")
+
+
+def _runtime_callback_names() -> frozenset[str]:
+    manager = litellm.logging_callback_manager
+    return frozenset(manager._get_callback_string(callback) for callback in manager._get_all_callbacks())
+
+
+@pytest.mark.parametrize("setting_key", ["success_callback", "failure_callback", "callbacks"])
+@pytest.mark.parametrize("callback_name", ["langfuse_otel", "helicone"])
+def test_db_config_sync_unregisters_a_callback_the_stored_config_no_longer_lists(
+    monkeypatch: pytest.MonkeyPatch, setting_key: str, callback_name: str
+):
+    import litellm.proxy.proxy_server as ps
+
+    _reset_runtime_callbacks(monkeypatch)
+    pc = ps.ProxyConfig()
+
+    for _ in range(2):
+        pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: [callback_name]}})
+    assert callback_name in _runtime_callback_names()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {setting_key: []}})
+    assert callback_name not in _runtime_callback_names()
+
+
+def test_db_config_sync_keeps_callbacks_it_did_not_register(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as ps
+    from litellm.utils import _add_custom_logger_callback_to_specific_event
+
+    _reset_runtime_callbacks(monkeypatch)
+    _add_custom_logger_callback_to_specific_event("langfuse_otel", "success")
+    litellm.logging_callback_manager.add_litellm_success_callback("helicone")
+    pc = ps.ProxyConfig()
+
+    pc._add_callbacks_from_db_config(
+        {"litellm_settings": {"success_callback": ["langfuse_otel", "helicone", "humanloop", "supabase"]}}
+    )
+    assert {"humanloop", "supabase"} <= _runtime_callback_names()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
+    remaining: Final = _runtime_callback_names()
+    assert {"langfuse_otel", "helicone"} <= remaining
+    assert not {"humanloop", "supabase"} & remaining
+
+
+def test_db_config_sync_restores_a_code_callback_it_replaced(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as ps
+
+    _reset_runtime_callbacks(monkeypatch)
+    litellm.logging_callback_manager.add_litellm_success_callback("langfuse_otel")
+    pc = ps.ProxyConfig()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": ["langfuse_otel"]}})
+    assert "langfuse_otel" not in litellm.success_callback
+    assert "langfuse_otel" in _runtime_callback_names()
+
+    pc._add_callbacks_from_db_config({"litellm_settings": {"success_callback": []}})
+    assert litellm.success_callback == ["langfuse_otel"]
+
+
+@pytest.mark.asyncio
+async def test_failed_config_load_keeps_callbacks_the_stored_config_registered(monkeypatch: pytest.MonkeyPatch):
+    import litellm.proxy.proxy_server as ps
+
+    _reset_runtime_callbacks(monkeypatch)
+    pc = ps.ProxyConfig()
+    monkeypatch.setattr(ps, "proxy_config", pc)
+    monkeypatch.setattr(ps, "llm_router", None)
+    monkeypatch.setattr(ps, "master_key", "sk-1234")
+    monkeypatch.setattr(
+        pc, "get_config", AsyncMock(return_value={"litellm_settings": {"success_callback": ["helicone"]}})
+    )
+    await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
+    assert "helicone" in _runtime_callback_names()
+
+    monkeypatch.setattr(pc, "get_config", AsyncMock(side_effect=TimeoutError("config read timed out")))
+    await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
+    assert "helicone" in _runtime_callback_names()
+
+    monkeypatch.setattr(pc, "get_config", AsyncMock(return_value={"litellm_settings": {"success_callback": []}}))
+    await pc._update_llm_router(new_models=[], proxy_logging_obj=MagicMock())
+    assert "helicone" not in _runtime_callback_names()
 
 
 @pytest.mark.parametrize(

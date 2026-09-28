@@ -15673,53 +15673,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/team/daily/activity/aggregated/search": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Search Team Daily Activity Keys
-         * @description Aggregated daily team activity for the keys matching `search`, across every key the caller may
-         *     see rather than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend.
-         */
-        get: operations["search_team_daily_activity_keys_team_daily_activity_aggregated_search_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/team/daily/activity/export": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Get Team Daily Activity Export
-         * @description Server-side Team Usage export, not subject to USAGE_TOP_API_KEYS_LIMIT.
-         *
-         *     Same scoping as /team/daily/activity/aggregated, answered by one unbounded
-         *     rollup query, returned as CSV or JSON. For daily_with_keys,
-         *     daily_with_users and daily_with_models the PTU sentinel flat-cost rows are
-         *     excluded, so metadata totals under those export types cover request spend
-         *     only; the plain daily export includes them.
-         */
-        get: operations["get_team_daily_activity_export_team_daily_activity_export_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/team/delete": {
         parameters: {
             query?: never;
@@ -17393,29 +17346,6 @@ export interface paths {
          *     to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
          */
         get: operations["get_user_daily_activity_aggregated_user_daily_activity_aggregated_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/user/daily/activity/aggregated/search": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Search User Daily Activity Keys
-         * @description Search verification tokens by exact token hash or by a case-insensitive substring of
-         *     the key alias or owning user ID, then return the aggregated daily activity for the
-         *     matches. Lets the Usage page surface keys that fell outside the top-spend subset
-         *     the aggregated endpoint loads.
-         */
-        get: operations["search_user_daily_activity_keys_user_daily_activity_aggregated_search_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -29509,11 +29439,6 @@ export interface components {
         /** DailySpendMetadata */
         DailySpendMetadata: {
             /**
-             * Api Key Limit
-             * @description When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.
-             */
-            api_key_limit?: number | null;
-            /**
              * Has More
              * @default false
              */
@@ -29523,11 +29448,6 @@ export interface components {
              * @default 1
              */
             page: number;
-            /**
-             * Total Api Keys
-             * @description Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.
-             */
-            total_api_keys?: number | null;
             /**
              * Total Api Requests
              * @default 0
@@ -31622,7 +31542,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/team/daily/activity/export" | "/team/daily/activity/aggregated/search" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -34031,11 +33951,6 @@ export interface components {
              */
             advisory_system_message?: string | null;
             /**
-             * Agent Id
-             * @description Agent identity reported to Agent 365 with every tool evaluation. When unset, the caller's key alias is used.
-             */
-            agent_id?: string | null;
-            /**
              * Akto Account Id
              * @description Akto account ID for multi-tenant deployments. Env: AKTO_ACCOUNT_ID. Default: '1000000'.
              */
@@ -34684,11 +34599,6 @@ export interface components {
              * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.
              */
             realtime_violation_message?: string | null;
-            /**
-             * Resource App Id
-             * @description Application id of the Agent 365 resource the OBO token is minted for. Defaults to the production resource ea9ffc3e-8a23-4a7d-836d-234d7c7565c1; the Test and PreProd environments use a different id. Falls back to the AGENT365_RESOURCE_APP_ID environment variable.
-             */
-            resource_app_id?: string | null;
             /**
              * Rules
              * @description Ordered allow/deny rules. Patterns use regex for tool names/types and optional regex constraints on tool arguments.
@@ -39483,6 +39393,24 @@ export interface components {
             adaptive_eligible: "all" | "classified_tier";
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
+            /**
+             * Cache Aware Routing
+             * @description Opt in to comparing prompt-cache costs after classification. On supported native Anthropic proxy requests, an already warm model in the same or a higher tier may replace the classified model when its estimated input and output cost is lower. Unsupported requests and unavailable estimates keep ordinary routing.
+             * @default false
+             */
+            cache_aware_routing: boolean;
+            /**
+             * Cache Aware Routing Output Tokens
+             * @description Expected output tokens used in cache-aware cost comparisons; capped by each model's effective output limit.
+             * @default 1024
+             */
+            cache_aware_routing_output_tokens: number;
+            /**
+             * Cache Aware Routing Timeout Ms
+             * @description Total time budget for cache-aware predictions; expiry preserves the original routing decision.
+             * @default 2000
+             */
+            cache_aware_routing_timeout_ms: number;
             /** @description Probability threshold policy required when classifier_type is 'capability'. The classifier forecasts p_solve for efficient_tier, adjusts base_threshold using the capability-card boundary, and otherwise routes to capable_tier */
             capability_classifier_config?: components["schemas"]["CapabilityClassifierConfig"] | null;
             /**
@@ -42605,7 +42533,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "prompt_cache_cost" | "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Calibrated Capable P Solve */
             classifier_calibrated_capable_p_solve?: number;
             /** Classifier Calibrated Efficient P Solve */
@@ -43080,87 +43008,6 @@ export interface components {
             success_callbacks: string[];
             /** Team Id */
             team_id: string;
-        };
-        /** TeamDailyActivityExportMetadata */
-        TeamDailyActivityExportMetadata: {
-            /** End Date */
-            end_date: string;
-            /** Export Date */
-            export_date: string;
-            /**
-             * Export Type
-             * @enum {string}
-             */
-            export_type: "daily" | "daily_with_keys" | "daily_with_users" | "daily_with_models";
-            /** Start Date */
-            start_date: string;
-            /** Team Ids */
-            team_ids: string[] | null;
-            /** Total Api Requests */
-            total_api_requests: number;
-            /** Total Failed Requests */
-            total_failed_requests: number;
-            /**
-             * Total Flat Cost
-             * @default 0
-             */
-            total_flat_cost: number;
-            /** Total Spend */
-            total_spend: number;
-            /** Total Successful Requests */
-            total_successful_requests: number;
-            /** Total Tokens */
-            total_tokens: number;
-        };
-        /** TeamDailyActivityExportResponse */
-        TeamDailyActivityExportResponse: {
-            /** Data */
-            data: components["schemas"]["TeamDailyActivityExportRow"][];
-            metadata: components["schemas"]["TeamDailyActivityExportMetadata"];
-        };
-        /** TeamDailyActivityExportRow */
-        TeamDailyActivityExportRow: {
-            /** Api Key */
-            api_key?: string | null;
-            /** Api Requests */
-            api_requests: number;
-            /** Cache Creation Input Tokens */
-            cache_creation_input_tokens: number;
-            /** Cache Read Input Tokens */
-            cache_read_input_tokens: number;
-            /** Completion Tokens */
-            completion_tokens: number;
-            /** Date */
-            date: string;
-            /** Failed Requests */
-            failed_requests: number;
-            /**
-             * Flat Cost
-             * @default 0
-             */
-            flat_cost: number;
-            /** Key Alias */
-            key_alias?: string | null;
-            /** Keys */
-            keys?: number | null;
-            /** Model */
-            model?: string | null;
-            /** Prompt Tokens */
-            prompt_tokens: number;
-            /** Spend */
-            spend: number;
-            /** Successful Requests */
-            successful_requests: number;
-            /** Team Alias */
-            team_alias?: string | null;
-            /** Team Id */
-            team_id: string;
-            /** Total Tokens */
-            total_tokens: number;
-            /** User Email */
-            user_email?: string | null;
-            /** User Id */
-            user_id?: string | null;
         };
         /**
          * TeamListItem
@@ -57063,7 +56910,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Specify the service being hit. */
-                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "ms_teams" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "newrelic" | "pointfive" | "sqs") | string;
+                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "ms_teams" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "newrelic" | "pointfive" | "signoz" | "sqs") | string;
             };
             header?: never;
             path?: never;
@@ -67051,81 +66898,6 @@ export interface operations {
             };
         };
     };
-    search_team_daily_activity_keys_team_daily_activity_aggregated_search_get: {
-        parameters: {
-            query: {
-                /** @description Exact token hash, or a case-insensitive substring of the key alias or owning user id */
-                search: string;
-                team_ids?: string | null;
-                start_date?: string | null;
-                end_date?: string | null;
-                exclude_team_ids?: string | null;
-                timezone?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    get_team_daily_activity_export_team_daily_activity_export_get: {
-        parameters: {
-            query?: {
-                start_date?: string | null;
-                end_date?: string | null;
-                export_type?: "daily" | "daily_with_keys" | "daily_with_users" | "daily_with_models";
-                format?: "csv" | "json";
-                team_id?: string | null;
-                exclude_team_ids?: string | null;
-                timezone?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["TeamDailyActivityExportResponse"];
-                    "text/csv": unknown;
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     delete_team_team_delete_post: {
         parameters: {
             query?: never;
@@ -69223,48 +68995,6 @@ export interface operations {
                 model?: string | null;
                 /** @description Filter by specific API key */
                 api_key?: string | null;
-                /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
-                user_id?: string | null;
-                /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
-                timezone?: number | null;
-                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
-                include_current_utc_day?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    search_user_daily_activity_keys_user_daily_activity_aggregated_search_get: {
-        parameters: {
-            query: {
-                /** @description Matches keys whose hash equals the value, or whose key alias or user ID contains it (case-insensitive) */
-                search: string;
-                /** @description Start date in YYYY-MM-DD format */
-                start_date?: string | null;
-                /** @description End date in YYYY-MM-DD format */
-                end_date?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
                 /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */

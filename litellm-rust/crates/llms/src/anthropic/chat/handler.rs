@@ -1,5 +1,8 @@
 use std::collections::HashMap;
 
+use litellm_types::messages::streaming::{
+    MessagesContentBlock, MessagesContentBlockDelta, MessagesStreamEvent, MessagesStreamUsage,
+};
 use litellm_types::{
     llms::openai::{ChatCompletionThinkingBlock, ChatCompletionToolCallChunk},
     utils::{ChatCompletionChunk, ChatCompletionsUsage},
@@ -8,10 +11,6 @@ use serde_json::Value;
 
 use crate::{
     Error,
-    anthropic::messages::streaming_iterator::{
-        AnthropicContentBlock, AnthropicContentBlockDelta, AnthropicMessagesStreamEvent,
-        AnthropicStreamUsage,
-    },
     base_llm::{base_model_iterator::StreamTransformer, chat::streaming::StreamShape},
 };
 
@@ -36,7 +35,7 @@ pub enum AnthropicContentBlockType {
 #[derive(Clone, Debug, PartialEq)]
 pub struct AnthropicContentBlockDeltaEvent {
     pub index: u64,
-    pub delta: AnthropicContentBlockDelta,
+    pub delta: MessagesContentBlockDelta,
 }
 
 pub struct ModelResponseIterator {
@@ -71,14 +70,14 @@ impl ModelResponseIterator {
         todo!()
     }
 
-    pub fn handle_usage(&mut self, _usage: AnthropicStreamUsage) -> ChatCompletionsUsage {
+    pub fn handle_usage(&mut self, _usage: MessagesStreamUsage) -> ChatCompletionsUsage {
         todo!()
     }
 
     pub fn handle_content_block_delta(
         &mut self,
         _index: u64,
-        _delta: AnthropicContentBlockDelta,
+        _delta: MessagesContentBlockDelta,
     ) -> (
         String,
         Option<ChatCompletionToolCallChunk>,
@@ -92,7 +91,7 @@ impl ModelResponseIterator {
     pub fn handle_content_block_start(
         &mut self,
         _index: u64,
-        _content_block: AnthropicContentBlock,
+        _content_block: MessagesContentBlock,
     ) -> Result<ChatCompletionChunk, Error> {
         todo!()
     }
@@ -115,7 +114,7 @@ impl ModelResponseIterator {
 
     pub fn handle_redacted_thinking_content(
         &mut self,
-        _content_block: &AnthropicContentBlock,
+        _content_block: &MessagesContentBlock,
     ) -> Vec<ChatCompletionThinkingBlock> {
         todo!()
     }
@@ -134,21 +133,21 @@ impl ModelResponseIterator {
 
     pub fn handle_message_delta(
         &mut self,
-        _event: AnthropicMessagesStreamEvent,
+        _event: MessagesStreamEvent,
     ) -> (Option<String>, Option<ChatCompletionsUsage>, Option<Value>) {
         todo!()
     }
 
     pub fn chunk_parser(
         &mut self,
-        _event: AnthropicMessagesStreamEvent,
+        _event: MessagesStreamEvent,
     ) -> Result<ChatCompletionChunk, Error> {
         todo!()
     }
 }
 
 impl StreamTransformer for ModelResponseIterator {
-    type Input = AnthropicMessagesStreamEvent;
+    type Input = MessagesStreamEvent;
     type Output = ChatCompletionChunk;
     type Error = Error;
 
