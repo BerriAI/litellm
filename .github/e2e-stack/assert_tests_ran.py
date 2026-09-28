@@ -1,7 +1,12 @@
+import os
+import re
 import sys
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Final
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tests/e2e"))
+from coverage_registry.management_cases import MANAGEMENT_CASES
 
 
 def main() -> int:
@@ -12,21 +17,47 @@ def main() -> int:
         _ = sys.stdout.write("::error::could not read the test execution report\n")
         return 1
     cases: Final = tuple(report.iter("testcase"))
+    expected_count: Final = os.environ.get("E2E_REQUIRED_TEST_COUNT")
     passed: Final = frozenset(
         case.get("file") for case in cases if all(case.find(tag) is None for tag in ("skipped", "failure", "error"))
     )
     missing: Final = tuple(path for path in selected if path not in passed)
+    required_nodes: Final = frozenset(case.node for case in MANAGEMENT_CASES if case.node.split("::", 1)[0] in selected)
+    passed_nodes: Final = frozenset(
+        prop.get("value")
+        for case in cases
+        if all(case.find(tag) is None for tag in ("skipped", "failure", "error"))
+        for prop in case.findall("./properties/property")
+        if prop.get("name") == "management_node"
+    )
+    missing_nodes: Final = required_nodes - passed_nodes
+    for node in sorted(missing_nodes):
+        _ = sys.stdout.write(f"::error::required management case did not pass: {node}\n")
     for path in selected:
         collected: Final = sum(case.get("file") == path for case in cases)
         skipped: Final = sum(case.get("file") == path and case.find("skipped") is not None for case in cases)
         _ = sys.stdout.write(f"{path}: {collected} collected, {skipped} skipped\n")
         for case in cases:
-            if case.get("file") != path or all(case.find(tag) is None for tag in ("failure", "error")):
+            if case.get("file") != path or all(case.find(tag) is None for tag in ("failure", "error", "skipped")):
                 continue
-            _ = sys.stdout.write(f"  failed: {case.get('classname', '')}::{case.get('name', '')}\n")
+            outcome = "skipped" if case.find("skipped") is not None else "failed"
+            _ = sys.stdout.write(f"  {outcome}: {case.get('classname', '')}::{case.get('name', '')}\n")
+            for prop in case.findall("./properties/property"):
+                name = prop.get("name", "")
+                value = prop.get("value", "")
+                if name in ("oauth_failure_phase", "oauth_exception_type", "oauth_frame") and re.fullmatch(
+                    r"[A-Za-z0-9_.:<>-]{1,240}", value
+                ):
+                    _ = sys.stdout.write(f"    {name}: {value}\n")
+    if expected_count is not None and (
+        len(cases) != int(expected_count) or any(case.find("skipped") is not None for case in cases)
+    ):
+        _ = sys.stdout.write("::error::required test count was not met or a required case was skipped\n")
+        return 1
     if (
         selected
         and not missing
+        and not missing_nodes
         and not any(case.find(tag) is not None for case in cases for tag in ("failure", "error"))
     ):
         return 0

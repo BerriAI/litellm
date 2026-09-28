@@ -17,14 +17,21 @@ fails the test; a pricing or token-count drift does not.
 
 import time
 from collections.abc import Callable
-from concurrent.futures import ThreadPoolExecutor
+from math import isclose
+from typing import Final
 
 import pytest
-
-from e2e_http import Result, Success
+from e2e_http import RateLimitedError, Success
 from lifecycle import ResourceManager
-from models import ChatResponse, LiteLLMParamsBody, SpendLogs, SpendLogsParams
-from spend_e2e_client import SpendClient, SpendLogRow, is_ok, unique_marker, unwrap
+from models import KeyGenerateBody, LiteLLMParamsBody, SpendLogs, SpendLogsParams
+from spend_e2e_client import (
+    ClientAttributionHeaders,
+    SpendClient,
+    SpendLogRow,
+    is_ok,
+    unique_marker,
+    unwrap,
+)
 
 pytestmark = pytest.mark.e2e
 
@@ -43,6 +50,7 @@ def _summarize(rows: list[SpendLogRow]) -> list[dict[str, object]]:
         "cache_hit",
         "call_type",
         "custom_llm_provider",
+        "model_id",
         "prompt_tokens",
         "completion_tokens",
         "total_tokens",
@@ -280,51 +288,22 @@ def test_key_spend_equals_sum_of_logs(client: SpendClient, scoped_key: str) -> N
     ), f"key aggregate {key_spend} != sum of logs {logs_total}; rows: {_summarize(rows)}"
 
 
+@pytest.mark.replayable
 @pytest.mark.covers("quota_management.spend_tracking.concurrent_burst.loses_no_spend")
 def test_burst_of_concurrent_calls_loses_no_spend(
-    client: SpendClient, scoped_key: str
+    client: SpendClient, resources: ResourceManager
 ) -> None:
-    """Six concurrent calls on one key: every call lands its own spend row under a
-    distinct request_id and the key aggregate equals the sum of the rows.
-    Sequential accuracy is covered by test_key_spend_equals_sum_of_logs; this pins
-    the concurrent increment path (parallel writers racing on one key's counter),
-    where a lost update can never be reproduced by sequential calls."""
-    burst = 6
+    from spend_reconciliation import TeamTraffic, assert_logs_match, create_traffic
 
-    def call(idx: int) -> Result[ChatResponse]:
-        return client.chat(
-            scoped_key,
-            "gemini-2.5-flash",
-            f"burst call {idx} {unique_marker()}",
-            max_tokens=16,
-        )
+    traffic: Final = create_traffic(client, resources)
 
-    with ThreadPoolExecutor(max_workers=burst) as pool:
-        results = tuple(pool.map(call, range(burst)))
-    failed = [r for r in results if not is_ok(r)]
-    assert not failed, f"{len(failed)}/{burst} burst calls failed; first: {failed[0]}"
+    def assert_team(team: TeamTraffic) -> None:
+        assert_logs_match(client, team)
+        key_spend: Final = client.poll_key_spend(team.key, minimum=team.spend * 0.999999)
+        assert isclose(key_spend, team.spend, rel_tol=1e-6, abs_tol=1e-9)
 
-    rows = client.poll_logs_for_key(
-        scoped_key,
-        min_rows=burst,
-        predicate=lambda rs: len([r for r in rs if (r.spend or 0) > 0]) >= burst,
-    )
-    costed = [r for r in rows if (r.spend or 0) > 0]
-    assert len(costed) >= burst, (
-        f"only {len(costed)}/{burst} burst calls produced a costed row - "
-        f"rows lost under concurrency: {_summarize(rows)}"
-    )
-    request_ids = [r.request_id for r in costed]
-    assert len(set(request_ids)) == len(request_ids), (
-        f"concurrent rows collapsed onto shared request_ids: {_summarize(rows)}"
-    )
-
-    logs_total = sum((r.spend or 0) for r in rows)
-    key_spend = client.poll_key_spend(scoped_key, minimum=logs_total * 0.999)
-    assert _approx_equal(key_spend, logs_total), (
-        f"key aggregate {key_spend} != sum of {len(rows)} rows {logs_total} - "
-        f"spend increments lost under concurrency: {_summarize(rows)}"
-    )
+    for team in traffic:
+        assert_team(team)
 
 
 @pytest.mark.covers("quota_management.spend_tracking.pagination.keeps_total")
@@ -453,6 +432,41 @@ def test_end_user_spend_attributed_on_row(
     assert (row.spend or 0) > 0, f"end-user row should cost > 0: {_summarize(rows)}"
 
 
+@pytest.mark.covers("quota_management.spend_tracking.end_user.attributes_responses_header")
+@pytest.mark.parametrize("header", ["x-litellm-customer-id", "x-litellm-end-user-id"])
+def test_end_user_header_attributes_responses_row(
+    client: SpendClient, scoped_key: str, resources: ResourceManager, header: str
+) -> None:
+    """Codex CLI has no body field for the end user, so its config.toml http_headers
+    attach the customer header (and x-litellm-tags) to every /v1/responses call.
+    A regression that stops reading either header on the Responses route, drops the
+    tags, costs the row at zero, or leaves the customer's own spend total behind the
+    row fails here."""
+    customer = resources.customer(f"e2e-codex-{unique_marker()}")
+    tag = f"codex-{unique_marker()}"
+    headers = ClientAttributionHeaders.model_validate(
+        {"authorization": f"Bearer {scoped_key}", header: customer, "x-litellm-tags": tag}
+    )
+    sent = client.send_responses_with_headers(
+        headers, "openai-responses-codex", f"one word {unique_marker()}"
+    )
+    assert sent.ok, f"/v1/responses failed with {sent.status_code}: {sent.body[:300]}"
+
+    rows = client.poll_logs_for_key(
+        scoped_key, predicate=lambda rs: any(r.end_user == customer for r in rs)
+    )
+    row = _require_row(
+        rows, lambda r: r.end_user == customer, f"attributed to end_user {customer!r} via {header}"
+    )
+    assert row.call_type == "aresponses", f"row is not a Responses row: {_summarize(rows)}"
+    assert tag in (row.request_tags or []), f"tag {tag!r} missing from {row.request_tags}"
+    assert (row.spend or 0) > 0, f"end-user row should cost > 0: {_summarize(rows)}"
+    customer_total = client.poll_customer_spend(customer)
+    assert _approx_equal(customer_total, row.spend or 0), (
+        f"/customer/info spend {customer_total} != the row's {row.spend}: {_summarize(rows)}"
+    )
+
+
 @pytest.mark.covers("quota_management.spend_tracking.per_model.writes_own_rows")
 def test_each_model_on_a_shared_key_gets_its_own_row(
     client: SpendClient, scoped_key: str
@@ -525,6 +539,88 @@ def test_failure_call_writes_failure_status_row(
         rows, lambda r: r.status == "failure", "with status=failure for the rejected call"
     )
     assert (failure_row.spend or 0) == 0.0, "failed call must not be charged"
+
+
+@pytest.mark.covers("quota_management.spend_tracking.failure.writes_normalized_error")
+def test_failure_rows_share_normalized_error_across_provider_wording(
+    client: SpendClient, resources: ResourceManager, scoped_key: str
+) -> None:
+    """Two upstream auth failures with different provider wording land as failure rows
+    whose metadata.error_information keeps each provider's own error_message and
+    carries the same stable normalized_error cluster key."""
+    marker = unique_marker()
+    deployments: Final = (
+        (f"e2e-norm-openai-{marker}", "openai/gpt-5.5"),
+        (f"e2e-norm-anthropic-{marker}", "anthropic/claude-haiku-4-5"),
+    )
+    for name, provider_model in deployments:
+        model_id = client.proxy.create_model(
+            name, LiteLLMParamsBody(model=provider_model, api_key=f"sk-invalid-{marker}")
+        )
+        resources.defer(lambda model_id=model_id: client.proxy.delete_model(model_id))
+        result = client.chat(scoped_key, name, f"normalize failure {marker}", max_tokens=1)
+        assert not is_ok(result), f"{name}: invalid upstream key must fail the call, got {result}"
+
+    rows = client.poll_logs_for_key(
+        scoped_key,
+        min_rows=2,
+        predicate=lambda rs: sum(1 for r in rs if r.status == "failure") >= 2,
+    )
+    failure_rows = [r for r in rows if r.status == "failure"]
+    assert len(failure_rows) == 2, f"expected one failure row per deployment: {_summarize(rows)}"
+
+    infos = [r.metadata.error_information if r.metadata else None for r in failure_rows]
+    assert all(info is not None for info in infos), (
+        f"failure rows must carry metadata.error_information: {[r.model_dump() for r in failure_rows]}"
+    )
+    messages = {info.error_message for info in infos if info is not None}
+    assert len(messages) == 2, f"provider wording must stay distinct in error_message: {messages}"
+    normalized = {info.normalized_error for info in infos if info is not None}
+    assert normalized == {"401_AUTHENTICATION_FAILED"}, (
+        f"both auth failures must share one normalized_error cluster key; saw {normalized} "
+        f"for messages {messages}"
+    )
+
+
+@pytest.mark.covers("quota_management.spend_tracking.failure.attributes_provider")
+def test_pre_call_rejection_row_attributes_provider_and_model_id(
+    client: SpendClient, resources: ResourceManager
+) -> None:
+    """A request the proxy rejects before the router picks a deployment (here the
+    key's rpm limit, a pre_call_hook 429) never reaches the code that stamps the
+    deployment onto the log. The failure row must still carry the provider and
+    model_id of the model group's only deployment, so per-provider failure reports
+    can count it."""
+    model = f"e2e-spend-precall-{unique_marker()}"
+    model_id = client.proxy.create_model(
+        model, LiteLLMParamsBody(model="openai/gpt-5.5", api_key="os.environ/OPENAI_API_KEY")
+    )
+    resources.defer(lambda: client.proxy.delete_model(model_id))
+    key = client.proxy.generate_key(KeyGenerateBody(models=[model], rpm_limit=1))
+    resources.defer(lambda: client.proxy.delete_key(key))
+
+    unwrap(client.chat(key, model, f"reply with one word {unique_marker()}", max_tokens=8))
+    rejected = client.chat(key, model, f"over the rpm limit {unique_marker()}", max_tokens=8)
+    assert isinstance(rejected, RateLimitedError), (
+        f"the second call on an rpm_limit=1 key must be rejected with 429 before routing, got {rejected}"
+    )
+
+    rows = client.poll_logs_for_key(
+        key,
+        min_rows=2,
+        predicate=lambda rs: {r.status for r in rs} >= {"success", "failure"},
+    )
+    success_row = _require_row(rows, lambda r: r.status == "success", "for the served call")
+    failure_row = _require_row(rows, lambda r: r.status == "failure", "for the rate-limited call")
+
+    assert failure_row.custom_llm_provider == success_row.custom_llm_provider, (
+        f"rejected call lost its provider: failure row {failure_row.custom_llm_provider!r} vs "
+        f"served row {success_row.custom_llm_provider!r}; {_summarize(rows)}"
+    )
+    assert failure_row.model_id == model_id, (
+        f"rejected call lost its deployment: failure row model_id {failure_row.model_id!r} vs "
+        f"registered {model_id!r}; {_summarize(rows)}"
+    )
 
 
 @pytest.mark.covers("quota_management.spend_tracking.spend_calculate.returns_cost")

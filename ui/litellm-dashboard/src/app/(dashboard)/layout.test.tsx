@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor } from "@testing-library/react";
+import { usePathname } from "next/navigation";
 import { AuthProvider } from "@/contexts/AuthContext";
 import Layout from "./layout";
 
@@ -10,7 +11,11 @@ let searchParamsValue = new URLSearchParams();
 vi.mock("next/navigation", () => ({
   useRouter: vi.fn(() => ({ push: vi.fn(), replace: replaceMock })),
   useSearchParams: vi.fn(() => searchParamsValue),
-  usePathname: vi.fn(() => "/ui/guardrails"),
+  usePathname: vi.fn(),
+}));
+
+vi.mock("@/components/liteadmin/LiteAdmin", () => ({
+  default: () => <button>LiteAdmin</button>,
 }));
 
 vi.mock("@/components/DashboardHeader", () => ({
@@ -39,6 +44,10 @@ vi.mock("@/components/LicenseExpiryBanner", () => ({
 
 vi.mock("@/components/UserBanner", () => ({
   UserBanner: () => null,
+}));
+
+vi.mock("@/components/UpgradeBanner", () => ({
+  UpgradeBanner: () => null,
 }));
 
 vi.mock("@/contexts/ThemeContext", () => ({
@@ -75,7 +84,33 @@ describe("(dashboard) Layout", () => {
     vi.clearAllMocks();
     pendingUiConfig = createDeferred();
     searchParamsValue = new URLSearchParams();
+    vi.mocked(usePathname).mockReturnValue("/ui/guardrails");
   });
+
+  it.each(["/ui/playground", "/ui/playground/"])(
+    "hides LiteAdmin on %s and restores it after leaving Playground",
+    async (pathname) => {
+      const dashboard = () => (
+        <AuthProvider>
+          <Layout>
+            <div data-testid="page-content" />
+          </Layout>
+        </AuthProvider>
+      );
+      const { rerender } = render(dashboard());
+      pendingUiConfig.resolve();
+      expect(await screen.findByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
+
+      vi.mocked(usePathname).mockReturnValue(pathname);
+      rerender(dashboard());
+      expect(screen.queryByRole("button", { name: "LiteAdmin" })).not.toBeInTheDocument();
+      expect(screen.getByTestId("page-content")).toBeInTheDocument();
+
+      vi.mocked(usePathname).mockReturnValue("/ui/api-keys");
+      rerender(dashboard());
+      expect(screen.getByRole("button", { name: "LiteAdmin" })).toBeInTheDocument();
+    },
+  );
 
   it("does not mount route content until getUiConfig has resolved", async () => {
     render(

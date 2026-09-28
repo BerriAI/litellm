@@ -798,6 +798,23 @@ def test_dependency_probe_expansion_adds_dependencies_for_a_targeted_router_chec
     assert {d["model_info"]["id"] for d in probes} == {"dead-1", "dead-2", "live-1"}
 
 
+def test_jev_evaluation_is_excluded_from_completion_health_probes_and_status():
+    router = _router_health_fixture()
+    marker = _marker_deployment(router)
+    marker["litellm_params"]["complexity_router_config"].update(
+        classifier_type="jev", jev_classifier_config={"model": "jev-latest"}
+    )
+
+    probes = hc_module._dependency_deployments_to_probe([marker], router.model_list, router)
+    assert {d["model_info"]["id"] for d in probes} == {"dead-1", "dead-2", "live-1"}
+
+    healthy, unhealthy = hc_module._finalize_strategy_router_endpoints(
+        [{"model_id": d["model_info"]["id"]} for d in router.model_list], [], router.model_list, router, ()
+    )
+    assert {endpoint["model_id"] for endpoint in healthy} == {"router-1", "live-1", "dead-1", "dead-2"}
+    assert unhealthy == ()
+
+
 def test_dependency_probes_carry_one_row_per_id():
     """An alias can put the same deployment in the list twice, which is what
     filter_deployments_by_id exists for. Probing it twice doubles the provider spend, and two

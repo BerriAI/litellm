@@ -1,32 +1,23 @@
-//! The `/chat/completions` call, the Rust equivalent of Python's
-//! `litellm.completion()`.
-//!
-//! [`chat_completions`] is the top-level entrypoint: give it a model, the
-//! OpenAI-shaped message list, the provider-mapped optional params, and
-//! credentials, and it resolves the provider, translates the conversation,
-//! calls the provider, and returns a typed OpenAI-shaped response.
-
-use crate::Error;
-mod client;
+pub mod route;
+pub mod types;
+pub use crate::error::RouteError as Error;
 mod common_utils;
-pub mod conversation;
 pub(crate) mod handler;
 mod prepare;
-pub mod response_utils;
-pub mod transformation;
-pub mod types;
-
+use litellm_types::utils::ChatCompletionsResponse;
+use prepare::{parse_messages, prepare_provider_request, resolve_provider_config, resolve_request};
 use serde_json::{Map, Value};
 
-use handler::execute_chat_completions_provider_call;
-use prepare::{parse_messages, resolve_provider_config, resolve_request};
-use types::{ChatCompletionsRequest, ChatCompletionsResponse};
+use crate::chat_completions::types::ChatCompletionsRequest;
+use litellm_auth::AuthServices;
+use litellm_secrets::source::SecretSource;
+use std::sync::Arc;
 
-#[tracing::instrument(target = "litellm::function_trace", level = "trace", skip_all)]
-pub async fn chat_completions(
-    request: ChatCompletionsRequest<'_>,
-) -> Result<ChatCompletionsResponse, Error> {
-    execute_chat_completions_provider_call(resolve_request(request)?).await
+#[derive(Clone)]
+pub struct ChatCompletionsRoute {
+    http: litellm_http::Client,
+    auth: Arc<AuthServices>,
+    secrets: Arc<dyn SecretSource>,
 }
 
 /// Whether the core would accept this request, without resolving credentials or
@@ -41,9 +32,10 @@ pub fn chat_completions_decline_reason(
     messages: Value,
     optional_params: &Map<String, Value>,
 ) -> Option<&'static str> {
-    let Ok((_, config)) = resolve_provider_config(model, custom_llm_provider) else {
+    let Ok(resolved) = resolve_provider_config(model, custom_llm_provider) else {
         return Some("provider is not on the rust chat completions path");
     };
+    let config = resolved.config;
     let Ok(messages) = parse_messages(messages) else {
         return Some("unreadable message list");
     };
@@ -55,5 +47,54 @@ pub fn chat_completions_decline_reason(
         .map(|reason| reason.0)
 }
 
-#[cfg(test)]
-mod tests;
+impl ChatCompletionsRoute {
+    pub fn new(
+        http: litellm_http::Client,
+        auth: Arc<AuthServices>,
+        secrets: Arc<dyn SecretSource>,
+    ) -> Self {
+        Self {
+            http,
+            auth,
+            secrets,
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        request: ChatCompletionsRequest<'_>,
+        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+    ) -> Result<ChatCompletionsResponse, Error> {
+        litellm_host::lifecycle::observe_unary(hooks.observer(), self.run(request, hooks)).await
+    }
+
+    #[tracing::instrument(name = "litellm.route", skip_all, fields(
+        route = "chat_completions",
+        model = %request.model,
+        provider,
+        resolved_model,
+        stream = false,
+        outcome
+    ))]
+    async fn run(
+        &self,
+        request: ChatCompletionsRequest<'_>,
+        hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+    ) -> Result<ChatCompletionsResponse, Error> {
+        crate::diagnostic::unary(async {
+            let resolved = resolve_request(request)?;
+            let snapshot = self
+                .secrets
+                .resolve(&resolved.config.secret_names())
+                .await?;
+            let prepared = prepare_provider_request(resolved, snapshot)?;
+            crate::diagnostic::provider(&prepared.model, &prepared.custom_llm_provider);
+            let execute: futures_util::future::BoxFuture<
+                '_,
+                Result<ChatCompletionsResponse, Error>,
+            > = Box::pin(handler::execute(&self.http, &self.auth, prepared, hooks));
+            execute.await
+        })
+        .await
+    }
+}

@@ -71,6 +71,7 @@ async def test_create_views_creates_view_on_does_not_exist():
     mock_db.execute_raw.assert_called_once()
     created_sql = mock_db.execute_raw.call_args[0][0]
     assert 'CREATE VIEW "LiteLLM_VerificationTokenView"' in created_sql
+    assert "t.model_max_budget AS team_model_max_budget" in created_sql
 
 
 @pytest.mark.asyncio

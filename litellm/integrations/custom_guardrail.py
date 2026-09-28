@@ -3,7 +3,7 @@ import copy
 import hashlib
 import os
 import secrets
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
@@ -34,14 +34,10 @@ from litellm.types.utils import (
     StandardLoggingGuardrailInformation,
 )
 
-try:
-    from fastapi.exceptions import HTTPException
-except ImportError:
-    HTTPException = None
-
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
     from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
+    from litellm.proxy._types import UserAPIKeyAuth
 dc: Final = DualCache()
 
 
@@ -106,9 +102,36 @@ def is_guardrail_intervention(e: Exception) -> bool:
         ),
     ):
         return True
-    if HTTPException is not None and isinstance(e, HTTPException) and e.status_code in _GUARDRAIL_BLOCK_STATUS_CODES:
-        return True
-    return False
+    from litellm.proxy.guardrails.exception_utils import is_fastapi_http_exception
+
+    return is_fastapi_http_exception(e, _GUARDRAIL_BLOCK_STATUS_CODES)
+
+
+def _user_api_key_auth_from_request(request_data: Mapping[str, object]) -> "UserAPIKeyAuth":
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    metadata: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
+    stamped: Final[Mapping[str, object]] = metadata if isinstance(metadata, dict) else {}
+
+    def stamped_str(field: str) -> str | None:
+        value: Final = stamped.get(field)
+        return value if isinstance(value, str) else None
+
+    return UserAPIKeyAuth(
+        user_id=stamped_str("user_api_key_user_id"),
+        team_id=stamped_str("user_api_key_team_id"),
+        end_user_id=stamped_str("user_api_key_end_user_id"),
+        api_key=stamped_str("user_api_key_hash"),
+        request_route=stamped_str("user_api_key_request_route"),
+    )
+
+
+def _unified_hook_fields(guardrail: "CustomGuardrail", request_data: Mapping[str, object]) -> Mapping[str, object]:
+    metadata_bucket: Final = request_data.get(get_metadata_variable_name_from_kwargs(request_data))
+    return {
+        "guardrail_to_apply": guardrail,
+        **({"litellm_metadata": metadata_bucket} if isinstance(metadata_bucket, dict) else {}),
+    }
 
 
 def _strict_guardrail_modes_enabled() -> bool:
@@ -155,7 +178,7 @@ class CustomGuardrail(CustomLogger):
 
     def __init_subclass__(cls, **kwargs: object) -> None:  # kwargs-ok: forwarded to cooperative __init_subclass__ hooks
         super().__init_subclass__(**kwargs)
-        own_apply_guardrail: Final = cls.__dict__.get("apply_guardrail")
+        own_apply_guardrail: Final[object] = cls.__dict__.get("apply_guardrail")
         if own_apply_guardrail is None or LOGS_GUARDRAIL_INFORMATION_MARKER in vars(own_apply_guardrail):
             return
         cls.apply_guardrail = log_guardrail_information(own_apply_guardrail)
@@ -794,8 +817,6 @@ class CustomGuardrail(CustomLogger):
         return unified_guardrail
 
     async def async_pre_call_deployment_hook(self, kwargs: dict[str, Any], call_type: CallTypes | None) -> dict | None:
-        from litellm.proxy._types import UserAPIKeyAuth
-
         # should run guardrail
         litellm_guardrails: Final = kwargs.get("guardrails")
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
@@ -813,13 +834,7 @@ class CustomGuardrail(CustomLogger):
             if target is not self:
                 kwargs["guardrail_to_apply"] = self
             result: Final = await target.async_pre_call_hook(
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_id=kwargs.get("user_api_key_user_id"),
-                    team_id=kwargs.get("user_api_key_team_id"),
-                    end_user_id=kwargs.get("user_api_key_end_user_id"),
-                    api_key=kwargs.get("user_api_key_hash"),
-                    request_route=kwargs.get("user_api_key_request_route"),
-                ),
+                user_api_key_dict=_user_api_key_auth_from_request(kwargs),
                 cache=dc,
                 data=kwargs,
                 call_type="completion" if call_type == CallTypes.completion else "acompletion",
@@ -832,6 +847,52 @@ class CustomGuardrail(CustomLogger):
 
         return kwargs
 
+    async def async_pre_call_hook_on_messages(
+        self,
+        request_data: Mapping[str, object],
+        messages: Sequence[AllMessageValues],
+    ) -> tuple[AllMessageValues, ...]:
+        from litellm.proxy.guardrails.exception_utils import (
+            enrich_http_exception_with_guardrail_context,
+            pre_call_rejection,
+        )
+
+        target: Final = self._deployment_hook_target()
+        scan_request: Final[dict[str, object]] = {  # mutable-ok: async_pre_call_hook writes into the dict it is handed
+            **{key: value for key, value in request_data.items() if key not in _PRE_CALL_CONTENT_KEYS},
+            "messages": list(messages),
+            **({} if target is self else _unified_hook_fields(self, request_data)),
+        }
+        try:
+            result: Final = await target.async_pre_call_hook(
+                user_api_key_dict=_user_api_key_auth_from_request(scan_request),
+                cache=dc,
+                data=scan_request,
+                call_type="acompletion",
+            )
+        except SensitiveDataRouteException as e:
+            unroutable: Final = pre_call_rejection(
+                f"{e.guardrail_name or self.guardrail_name} asked to reroute the request to {e.route_to_model} "
+                "over retrieved content; a request cannot be rerouted after retrieval, so it was blocked",
+                self.guardrail_name,
+            )
+            enrich_http_exception_with_guardrail_context(unroutable, self)
+            raise unroutable from e
+        except Exception as e:
+            enrich_http_exception_with_guardrail_context(e, self)
+            raise
+        if result is None:
+            return tuple(messages)
+        if isinstance(result, dict):
+            scanned: Final = result.get("messages")
+            return tuple(scanned) if isinstance(scanned, list) else tuple(messages)
+        if isinstance(result, str):
+            rejection: Final = pre_call_rejection(result, self.guardrail_name)
+            enrich_http_exception_with_guardrail_context(rejection, self)
+            raise rejection
+        enrich_http_exception_with_guardrail_context(result, self)
+        raise result
+
     async def async_post_call_success_deployment_hook(
         self,
         request_data: dict,
@@ -841,8 +902,6 @@ class CustomGuardrail(CustomLogger):
         """
         Allow modifying / reviewing the response just after it's received from the deployment.
         """
-        from litellm.proxy._types import UserAPIKeyAuth
-
         # should run guardrail
         litellm_guardrails: Final = request_data.get("guardrails")
         if litellm_guardrails is None or not isinstance(litellm_guardrails, list):
@@ -856,13 +915,7 @@ class CustomGuardrail(CustomLogger):
             if target is not self:
                 request_data["guardrail_to_apply"] = self  # rebind-ok: dispatch consumes this key
             result: Final = await target.async_post_call_success_hook(
-                user_api_key_dict=UserAPIKeyAuth(
-                    user_id=request_data.get("user_api_key_user_id"),
-                    team_id=request_data.get("user_api_key_team_id"),
-                    end_user_id=request_data.get("user_api_key_end_user_id"),
-                    api_key=request_data.get("user_api_key_hash"),
-                    request_route=request_data.get("user_api_key_request_route"),
-                ),
+                user_api_key_dict=_user_api_key_auth_from_request(request_data),
                 data=request_data,
                 response=response,
             )
@@ -884,7 +937,9 @@ class CustomGuardrail(CustomLogger):
         """logging_only: run apply_guardrail on copies of the logged request/response and record the verdict."""
         from litellm.llms import get_guardrail_translation_mapping
 
-        if not self.uses_apply_guardrail_interface() or self.use_native_lifecycle_hooks:
+        if not self.uses_apply_guardrail_interface():
+            return kwargs, result
+        if not self._event_hook_is_event_type(GuardrailEventHooks.logging_only):
             return kwargs, result
         try:
             translation: Final = get_guardrail_translation_mapping(CallTypes(call_type))()
@@ -901,8 +956,18 @@ class CustomGuardrail(CustomLogger):
             for key, value in (litellm_params.get("metadata") or {}).items()
             if key != "standard_logging_guardrail_information"
         }
+        response: Final = (
+            kwargs.get("async_complete_streaming_response") or kwargs.get("complete_streaming_response") or result
+        )
+        from litellm.types.utils import ModelResponse
+
+        output_translation: Final = (
+            get_guardrail_translation_mapping(CallTypes.acompletion)()
+            if isinstance(response, ModelResponse)
+            else translation
+        )
         try:
-            await self._scan_logged_call(kwargs, result, translation, scratch_metadata)
+            await self._scan_logged_call(kwargs, response, translation, output_translation, scratch_metadata)
         except Exception as e:
             verbose_logger.warning("Guardrail %s: logging_only scan raised: %s", self.guardrail_name, e)
         recorded: Final = scratch_metadata.get("standard_logging_guardrail_information")
@@ -919,8 +984,9 @@ class CustomGuardrail(CustomLogger):
     async def _scan_logged_call(
         self,
         kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
-        result: object,
+        response: object | None,
         translation: "BaseTranslation",
+        output_translation: "BaseTranslation",
         scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
     ) -> None:
         optional_params: Final = kwargs.get("optional_params") or {}
@@ -934,8 +1000,10 @@ class CustomGuardrail(CustomLogger):
             "metadata": scratch_metadata,
         }
         await translation.process_input_messages(data=scratch_request, guardrail_to_apply=self)
-        await translation.process_output_response(
-            response=copy.deepcopy(result), guardrail_to_apply=self, request_data=scratch_request
+        if response is None:
+            return
+        await output_translation.process_output_response(
+            response=copy.deepcopy(response), guardrail_to_apply=self, request_data=scratch_request
         )
 
     def supports_scan_only_tool_results(self) -> bool:
@@ -1364,8 +1432,9 @@ class CustomGuardrail(CustomLogger):
         raise e
 
     def _inputs_were_modified(self, original_inputs: Mapping[str, object], response: Mapping[str, object]) -> bool:
-        """True when any key of either mapping differs between them (mask), False otherwise (allow)."""
-        return any(original_inputs.get(key) != response.get(key) for key in original_inputs.keys() | response.keys())
+        """True when any content key of either mapping differs between them (mask), False otherwise (allow)."""
+        compared_keys: Final = (original_inputs.keys() | response.keys()) - _STREAM_CONTROL_KEYS
+        return any(original_inputs.get(key) != response.get(key) for key in compared_keys)
 
     def mask_content_in_string(
         self,
@@ -1475,6 +1544,7 @@ def _sync_guardrail_info_to_logging_obj(request_data: dict, logging_obj: object)
 _PRE_CALL_CONTENT_KEYS: Final = frozenset(
     {"messages", "input", "prompt", "system", "instructions", "tools", "functions", "function_call", "tool_choice"}
 )
+_STREAM_CONTROL_KEYS: Final = frozenset({"stream_holdback_chars"})
 
 
 def _original_inputs_for(
@@ -1629,5 +1699,5 @@ def log_guardrail_information(func):
             return async_wrapper(*args, **kwargs)
         return sync_wrapper(*args, **kwargs)
 
-    vars(wrapper)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True  # rebind-ok: stamps the wrapper this call just built
+    vars(wrapper)[LOGS_GUARDRAIL_INFORMATION_MARKER] = True
     return wrapper
