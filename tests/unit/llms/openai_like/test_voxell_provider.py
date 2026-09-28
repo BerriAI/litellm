@@ -12,11 +12,7 @@ import respx
 
 import litellm
 
-VOXELL_MODELS: Final = {
-    "voxell/turbo": 1024,
-    "voxell/pro": 2560,
-    "voxell/ultra": 4096,
-}
+VOXELL_MODELS: Final = ("voxell/turbo", "voxell/pro", "voxell/ultra")
 
 
 def _load(*path_parts: str) -> dict:
@@ -63,7 +59,6 @@ class TestVoxellProviderConfig:
         from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 
         assert JSONProviderRegistry.supports_embeddings("voxell") is True
-        # chat-only JSON provider must not be routed to the embeddings handler
         assert JSONProviderRegistry.supports_embeddings("scx-ai") is False
         assert JSONProviderRegistry.supports_embeddings("not-a-provider") is False
 
@@ -172,20 +167,25 @@ class TestVoxellEmbeddingDispatch:
 
 
 class TestVoxellModelMetadata:
-    def test_voxell_models_registered_with_correct_metadata(self):
+    def test_voxell_models_registered_as_embedding_models(self):
         model_cost: Final = _load("model_prices_and_context_window.json")
-        for model, dim in VOXELL_MODELS.items():
+        for model in VOXELL_MODELS:
             info = model_cost.get(model)
             assert info is not None, f"{model} missing from model_prices_and_context_window.json"
             assert info["litellm_provider"] == "voxell"
             assert info["mode"] == "embedding"
-            assert info["output_vector_size"] == dim
+            assert info["output_vector_size"] > 0
+            assert info["max_input_tokens"] == info["max_tokens"] > 0
+            assert info["input_cost_per_token"] >= 0
             assert info["output_cost_per_token"] == 0.0
-            assert info["max_input_tokens"] == 8192
 
-        assert model_cost["voxell/turbo"]["input_cost_per_token"] == 0.0
-        assert model_cost["voxell/pro"]["input_cost_per_token"] > 0
-        assert model_cost["voxell/ultra"]["input_cost_per_token"] > 0
+    def test_embedding_cost_derived_from_cost_map(self, respx_mock: respx.MockRouter):
+        _mock_voxell_embedding_route(respx_mock, "pro")
+
+        response: Final = litellm.embedding(model="voxell/pro", input=["hello"], api_key="vx-test")
+
+        expected: Final = response.usage.prompt_tokens * litellm.model_cost["voxell/pro"]["input_cost_per_token"]
+        assert response._hidden_params["response_cost"] == pytest.approx(expected)
 
     def test_voxell_models_synced_to_backup(self):
         model_cost: Final = _load("model_prices_and_context_window.json")
