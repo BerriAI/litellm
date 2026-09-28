@@ -1,0 +1,29 @@
+from pydantic import BaseModel
+
+
+class ModelInsightMetric(BaseModel):
+    model_group: str
+    model: str
+    provider: str
+    spend: float
+    prompt_tokens: int
+    completion_tokens: int
+    requests: int
+    successful_requests: int
+    failed_requests: int
+
+
+class ModelInsightDailyMetric(ModelInsightMetric):
+    date: str
+
+
+class ModelInsightTaskMetric(ModelInsightMetric):
+    task_type: str
+
+
+class ModelInsightsResponse(BaseModel):
+    start_date: str
+    end_date: str
+    daily: list[ModelInsightDailyMetric]
+    top_models: list[ModelInsightMetric]
+    by_task: list[ModelInsightTaskMetric]
