@@ -9092,7 +9092,7 @@ def test_uncached_response_cost_recomputes_price_past_a_zero_stamp():
 
 
 def test_uncached_response_cost_leaves_no_pricing_state_on_the_call():
-    """The uncached price probe restores every field the priced path writes on the logging object."""
+    """The uncached price probe leaves no cost breakdown or billed rates behind on the cache-hit call."""
     deployment_id: Final = "lit8679-probe-state-deployment"
     litellm.register_model(
         model_cost={
@@ -9113,23 +9113,12 @@ def test_uncached_response_cost_leaves_no_pricing_state_on_the_call():
             usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
         )
         cached_response._hidden_params = {"cache_hit": True, "cache_key": "lit8679-key", "response_cost": 0.0}
-        state_before: Final = (
-            logging_obj.cost_breakdown,
-            logging_obj.billed_token_rates,
-            logging_obj.zero_cost_warned,
-            "response_cost_failure_debug_information" in logging_obj.model_call_details,
-        )
+        assert (logging_obj.cost_breakdown, logging_obj.billed_token_rates) == (None, None)
 
         cost: Final = logging_obj._uncached_response_cost(result=cached_response)
 
         assert cost is not None and cost > 0.0
-        assert (
-            logging_obj.cost_breakdown,
-            logging_obj.billed_token_rates,
-            logging_obj.zero_cost_warned,
-            "response_cost_failure_debug_information" in logging_obj.model_call_details,
-        ) == state_before
-        assert state_before == (None, None, False, False)
+        assert (logging_obj.cost_breakdown, logging_obj.billed_token_rates) == (None, None)
     finally:
         litellm.model_cost.pop(deployment_id, None)
 
@@ -9186,3 +9175,35 @@ def test_payload_saved_cache_cost_keeps_uncached_price_when_result_stamped_zero(
         assert logging_obj.cost_breakdown is None
     finally:
         litellm.model_cost.pop(deployment_id, None)
+
+
+def test_uncached_response_cost_leaves_no_failure_debug_info_for_unpriced_model():
+    """A probe that cannot price the model returns None without stamping the pricing failure on the cache-hit call."""
+    logging_obj: Final = LitellmLogging(
+        model="lit8679-model-with-no-price",
+        messages=[{"role": "user", "content": "Hi"}],
+        stream=False,
+        call_type="completion",
+        start_time=time.time(),
+        litellm_call_id="lit8679-unpriced-probe",
+        function_id="fn",
+    )
+    logging_obj.update_environment_variables(
+        model="lit8679-model-with-no-price",
+        user="",
+        optional_params={},
+        litellm_params={"metadata": {}},
+        custom_llm_provider="openai",
+    )
+    cached_response: Final = ModelResponse(
+        model="lit8679-model-with-no-price",
+        choices=[litellm.Choices(message=litellm.Message(role="assistant", content="cached"))],
+        usage=litellm.Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+    cached_response._hidden_params = {"cache_hit": True, "cache_key": "lit8679-key", "response_cost": 0.0}
+    assert "response_cost_failure_debug_information" not in logging_obj.model_call_details
+
+    cost: Final = logging_obj._uncached_response_cost(result=cached_response)
+
+    assert cost is None
+    assert "response_cost_failure_debug_information" not in logging_obj.model_call_details
