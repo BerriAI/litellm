@@ -59,7 +59,7 @@ class TestPunctuationOnlyIdentifiers:
                 BlockedWord(keyword="=", action=ContentFilterAction.BLOCK),
                 BlockedWord(keyword=">", action=ContentFilterAction.BLOCK),
                 BlockedWord(keyword="<", action=ContentFilterAction.BLOCK),
-            ]
+            ],
         )
 
         # These should all match (contain the punctuation)
@@ -77,7 +77,7 @@ class TestPunctuationOnlyIdentifiers:
 class TestInflectedFormsKnownLimitation:
     """
     Tests demonstrating the inflected forms limitation.
-    
+
     This is a KNOWN LIMITATION, not a bug. Word boundary matching intentionally
     does not match stemmed/inflected forms. This avoids false positives.
     """
@@ -90,7 +90,7 @@ class TestInflectedFormsKnownLimitation:
             guardrail_name="test-stemming",
             blocked_words=[
                 BlockedWord(keyword="alter", action=ContentFilterAction.BLOCK),
-            ]
+            ],
         )
 
         # Base form should match
@@ -102,10 +102,10 @@ class TestInflectedFormsKnownLimitation:
         """
         Inflected forms (like "alters", "altered") do NOT match
         the base form "alter". This is a KNOWN LIMITATION.
-        
+
         Design choice: We explicitly document this as a limitation rather than
         implementing stemming/lemmatization because:
-        
+
         1. Stemming can cause MORE false positives (e.g., "men" matching within
            "recommend" after stemming)
         2. Word boundaries prevent false positives with substring matches
@@ -113,7 +113,7 @@ class TestInflectedFormsKnownLimitation:
            in their policy YAML (e.g., "alter", "alters", "altered")
         4. Punctuation-only identifiers require substring matching anyway
         5. Adding NLTK/stemming introduces complexity and dependencies
-        
+
         The trade-off is that policy authors may need to be explicit about
         which forms they want to block, but gain more predictable behavior.
         """
@@ -121,7 +121,7 @@ class TestInflectedFormsKnownLimitation:
             guardrail_name="test-stemming-limited",
             blocked_words=[
                 BlockedWord(keyword="alter", action=ContentFilterAction.BLOCK),
-            ]
+            ],
         )
 
         # Infected forms DO NOT match - this is documented behavior
@@ -148,7 +148,7 @@ class TestFalsePositiveAvoidance:
             guardrail_name="test-fp-avoidance",
             blocked_words=[
                 BlockedWord(keyword="alter", action=ContentFilterAction.BLOCK),
-            ]
+            ],
         )
 
         # "alternative" contains "alter" as a substring but word boundary prevents match
@@ -160,7 +160,7 @@ class TestFalsePositiveAvoidance:
             guardrail_name="test-fp-avoidance2",
             blocked_words=[
                 BlockedWord(keyword="exec", action=ContentFilterAction.BLOCK),
-            ]
+            ],
         )
         result = guardrail2._check_blocked_words("The executive summary")
         assert result is None, "executive should not match exec"
@@ -170,7 +170,7 @@ class TestFalsePositiveAvoidance:
             guardrail_name="test-fp-avoidance3",
             blocked_words=[
                 BlockedWord(keyword="select", action=ContentFilterAction.BLOCK),
-            ]
+            ],
         )
         result = guardrail3._check_blocked_words("The selection process")
         assert result is None, "selection should not match select"

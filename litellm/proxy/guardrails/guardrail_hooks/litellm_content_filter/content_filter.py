@@ -72,15 +72,15 @@ SENTENCE_TERMINATORS: Final = re.compile(r"[.!?]+")
 def _is_word_char_pattern(s: str) -> bool:
     """
     Check if a string consists only of word characters (alphanumeric or underscore).
-    
+
     Word boundaries (\\b) only work around word characters [a-zA-Z0-9_].
     Punctuation-only identifiers like ">", "=" require different handling.
-    
+
     This is a module-level helper for consistent keyword matching in content filter.
-    
+
     Args:
         s: String to check
-        
+
     Returns:
         True if all characters in s are word characters, False otherwise
     """
@@ -1000,10 +1000,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         This implements logic like: if text contains both an identifier word (e.g., "minor")
         AND a block word (e.g., "romantic"), then block it.
 
-        NOTE on inflected forms: Word boundary matching means base forms like "alter" 
+        NOTE on inflected forms: Word boundary matching means base forms like "alter"
         will NOT match inflected forms like "alters", "altered", or "altering".
-        This is an intentional trade-off to avoid false positives (e.g., "alter" in 
-        "alternative"). For stronger coverage of SQL keywords, configure multiple 
+        This is an intentional trade-off to avoid false positives (e.g., "alter" in
+        "alternative"). For stronger coverage of SQL keywords, configure multiple
         related keywords in your policy.
 
         Args:
@@ -1261,6 +1261,7 @@ class ContentFilterGuardrail(CustomGuardrail):
 
         text_lower: Final = text.lower()
         import re
+
         for keyword, (action, description) in self.blocked_words.items():
             # Use word boundaries for word-character keywords to prevent false positives
             # (e.g., "alternative" matching "alter")
