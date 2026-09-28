@@ -1865,15 +1865,29 @@ if MCP_AVAILABLE:
                         raw_headers=raw_headers,
                     )
                     for server in eligible
-                )
+                ),
+                return_exceptions=True,
             )
-            if not results or (first := results[0]) is None or any(result is None for result in results):
+            failures: Final = tuple(
+                (server, result) for server, result in zip(eligible, results) if isinstance(result, BaseException)
+            )
+            for server, failure in failures:
+                if not isinstance(failure, Exception):
+                    raise failure
+                if not isinstance(failure, HTTPException) or failure.status_code != 401:
+                    verbose_logger.warning(
+                        "MCP authentication preflight failed for %s (%s)", server.name, type(failure).__name__
+                    )
+            if not failures or len(failures) != len(results):
                 return
+            for _, failure in failures:
+                if not isinstance(failure, HTTPException) or failure.status_code != 401:
+                    raise failure
             if all(server.is_gateway_managed_oauth2 for server in eligible):
                 raise _gateway_dcr_challenge(
                     StarletteRequest(scope), get_route_relative_request_path(scope), None, invalid_token=False
                 )
-            raise first
+            raise failures[0][1]
         for server_name in mcp_servers:
             if (
                 server := operations.global_mcp_server_manager.get_mcp_server_by_name(server_name, client_ip=client_ip)
