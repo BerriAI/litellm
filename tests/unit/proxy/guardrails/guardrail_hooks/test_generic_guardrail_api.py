@@ -26,12 +26,15 @@ from litellm.llms.openai.responses.guardrail_translation.handler import OpenAIRe
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
     GenericGuardrailAPI,
+    initialize_guardrail,
 )
 from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.generic_guardrail_api import (
     _HEADER_PRESENT_PLACEHOLDER,
 )
+from litellm.types.guardrails import LitellmParams
 from litellm.types.llms.anthropic import AllAnthropicMessageValues
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionImageObject
+from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPIRequest
 from litellm.types.utils import Choices, Message
 
 
@@ -2531,3 +2534,38 @@ class TestFailOnError:
                     request_data={},
                     input_type="response",
                 )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("placement", ["top_level", "optional_params"])
+async def test_initialize_guardrail_forwards_send_images_and_exclude_payload_fields(placement):
+    received: Final[list[Mapping[str, JsonValue]]] = []
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        received.append(json.loads(request.content))
+        return httpx.Response(200, json={"action": "NONE"})
+
+    options: Final = {"send_images": False, "exclude_payload_fields": ["request_headers"]}
+    litellm_params: Final = LitellmParams(
+        guardrail="generic_guardrail_api",
+        mode="pre_call",
+        api_base="https://guardrail.test",
+        default_on=True,
+        **(options if placement == "top_level" else {"optional_params": options}),
+    )
+    guardrail: Final = initialize_guardrail(
+        litellm_params,
+        {"guardrail_name": "payload-forwarding"},
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(serve)),
+    )
+    try:
+        await guardrail.apply_guardrail(
+            inputs={"texts": ["hi"], "images": ["data:image/png;base64,SECRETPIXELS"]},
+            request_data={"proxy_server_request": {"headers": {"user-agent": "curl/8"}}},
+            input_type="request",
+        )
+    finally:
+        litellm.logging_callback_manager.remove_callback_from_all_lists(guardrail)
+
+    assert len(received) == 1
+    assert set(GenericGuardrailAPIRequest.model_fields) - set(received[0]) == {"images", "request_headers"}

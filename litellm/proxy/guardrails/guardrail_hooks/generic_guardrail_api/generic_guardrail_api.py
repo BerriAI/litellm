@@ -23,12 +23,21 @@ from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     log_guardrail_information,
 )
+from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
 from litellm.llms.custom_httpx.http_handler import (
     AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
 from litellm.proxy.guardrails._content_utils import same_json_ignoring_nulls
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api.payload_policy import (
+    PayloadLoss,
+    accepted_rewrites,
+    raise_if_intervention_was_refused,
+    resolve_payload_policy,
+    restore_unseen_rows,
+    shape_payload,
+)
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionToolParam
 from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import (
@@ -36,7 +45,6 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GenericGuardrailAPIRequest,
     GenericGuardrailAPIResponse,
     GuardrailToolParam,
-    structured_messages_from_json,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
 
@@ -241,6 +249,8 @@ class GenericGuardrailAPI(CustomGuardrail):
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
+        send_images: bool | None = None,
+        exclude_payload_fields: Sequence[str] | None = None,
         async_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
@@ -289,6 +299,12 @@ class GenericGuardrailAPI(CustomGuardrail):
         # "incremental_diff" emits them as synthetic deltas.
         self.streaming_transform_mode: Literal["block_only", "incremental_diff"] = (
             "block_only" if streaming_transform_mode is None else streaming_transform_mode
+        )
+
+        self._payload_policy: Final = resolve_payload_policy(
+            send_images=send_images,
+            exclude_payload_fields=exclude_payload_fields,
+            guardrail_name=kwargs.get("guardrail_name"),
         )
 
         # Set supported event hooks
@@ -385,23 +401,42 @@ class GenericGuardrailAPI(CustomGuardrail):
         structured_messages: Sequence[AllMessageValues] | None,
         shown_messages: Sequence[AllMessageValues] | None,
         guardrail_response: GenericGuardrailAPIResponse,
+        loss: PayloadLoss,
+        posted: Mapping[str, JsonValue],
+        input_type: Literal["request", "response"],
     ) -> GenericGuardrailAPIInputs:
         # Action is NONE or no modifications needed
         return_inputs: Final = GenericGuardrailAPIInputs(texts=texts)
-        if guardrail_response.texts:
-            return_inputs["texts"] = guardrail_response.texts
-        if guardrail_response.images:
-            return_inputs["images"] = guardrail_response.images
+        name: Final = self.guardrail_name
+        accepted: Final = accepted_rewrites(guardrail_response, loss, guardrail_name=name)
+        if accepted.texts:
+            return_inputs["texts"] = accepted.texts
+        if accepted.images:
+            return_inputs["images"] = accepted.images
         elif images:
             return_inputs["images"] = images
-        if guardrail_response.tools:
-            return_inputs["tools"] = guardrail_response.tools
+        if accepted.tools:
+            return_inputs["tools"] = accepted.tools
         elif tools:
             return_inputs["tools"] = tools
         rows_to_write_back: Final = (
-            _structured_rows_to_write_back(structured_messages, shown_messages, guardrail_response.structured_messages)
-            if guardrail_response.structured_messages
+            restore_unseen_rows(
+                rows=_structured_rows_to_write_back(structured_messages, shown_messages, accepted.rows),
+                caller=structured_messages,
+                sent=shown_messages,
+                loss=loss,
+                guardrail_name=name,
+            )
+            if accepted.rows
             else None
+        )
+        raise_if_intervention_was_refused(
+            action=guardrail_response.action,
+            accepted=accepted,
+            posted=posted,
+            rows_written_back=rows_to_write_back is not None,
+            input_type=input_type,
+            guardrail_name=name,
         )
         if rows_to_write_back is not None:
             return_inputs["structured_messages"] = list(rows_to_write_back)
@@ -514,10 +549,11 @@ class GenericGuardrailAPI(CustomGuardrail):
             dumped: Final[Mapping[str, JsonValue]] = guardrail_request.model_dump(mode="json")
             sent_messages: Final = _rows_as_sent(dumped.get("structured_messages"), structured_messages)
             request_json: Final = {**dumped, "structured_messages": sent_messages}
+            payload: Final = shape_payload(request_json, self._payload_policy)
 
             response: Final = await self.async_handler.post(
                 url=self.api_base,
-                json=request_json,
+                json=payload.body,
                 headers=headers,
                 timeout=self.timeout,
             )
@@ -546,11 +582,14 @@ class GenericGuardrailAPI(CustomGuardrail):
                 images=images,
                 tools=tools,
                 structured_messages=structured_messages,
-                shown_messages=structured_messages_from_json(sent_messages),
+                shown_messages=payload.sent_messages,
                 guardrail_response=guardrail_response,
+                loss=payload.loss,
+                posted=payload.body,
+                input_type=input_type,
             )
 
-        except GuardrailRaisedException:
+        except (GuardrailRaisedException, UnappliableRequestRewrite):
             raise
         except Timeout as e:
             return self._handle_guardrail_request_error(e, inputs, input_type, logging_obj)

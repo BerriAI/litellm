@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from typing import Final, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor across roles
+from typing import Final, Literal, TypeVar, cast  # noqa: TID251  # a rebuilt chat row has no typed constructor
 
 from pydantic import BaseModel
 
@@ -418,13 +418,15 @@ def message_with_slot_texts(message: AllMessageValues, texts: Sequence[str]) -> 
 
 
 class UnappliableRequestRewrite(Exception):
-    def __init__(self, guardrail_name: str) -> None:
+    def __init__(self, guardrail_name: str, *, input_type: Literal["request", "response"] = "request") -> None:
         super().__init__(
-            f"Guardrail '{guardrail_name}' rewrote the request in a way this endpoint cannot apply, "
-            "so the request was rejected rather than sent unrewritten"
+            f"Guardrail '{guardrail_name}' rewrote the {input_type} in a way this endpoint cannot apply, "
+            f"so the {input_type} was rejected rather than sent unrewritten"
         )
         self.guardrail_name: Final = guardrail_name
 
 
-def unappliable_request_rewrite(guardrail_name: str | None) -> UnappliableRequestRewrite:
-    return UnappliableRequestRewrite(guardrail_name or "unknown")
+def unappliable_request_rewrite(
+    guardrail_name: str | None, *, input_type: Literal["request", "response"] = "request"
+) -> UnappliableRequestRewrite:
+    return UnappliableRequestRewrite(guardrail_name or "unknown", input_type=input_type)
