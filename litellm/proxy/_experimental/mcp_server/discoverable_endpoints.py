@@ -108,7 +108,8 @@ _OAUTH_METADATA_CACHE_MAX_SIZE: Final = 128
 # coalesce onto a single upstream fetch instead of issuing N parallel calls.
 _OAUTH_METADATA_FETCH_LOCKS: Final[dict[tuple[str, str], asyncio.Lock]] = {}
 # Per-server_id generation, bumped on invalidation so a fetch that started before the server
-# definition changed cannot repopulate the cache with the stale reply.
+# definition changed cannot repopulate the cache with the stale reply. Only servers with a fetch
+# in flight carry an entry; the rest are pruned with the cache.
 _OAUTH_METADATA_GENERATIONS: Final[dict[str, int]] = {}
 
 router: Final = APIRouter(
@@ -143,10 +144,20 @@ def _prune_oauth_metadata_cache(now: float | None = None) -> None:
             continue
         _OAUTH_METADATA_FETCH_LOCKS.pop(cache_key, None)
 
+    for server_id in [sid for sid in _OAUTH_METADATA_GENERATIONS if not _oauth_metadata_fetch_in_flight(sid)]:
+        _OAUTH_METADATA_GENERATIONS.pop(server_id, None)
+
+
+def _oauth_metadata_fetch_in_flight(server_id: str) -> bool:
+    return any(lock.locked() for cache_key, lock in _OAUTH_METADATA_FETCH_LOCKS.items() if cache_key[0] == server_id)
+
 
 def invalidate_oauth_metadata_cache(server_id: str) -> None:
     """Drop cached upstream IdP metadata for a server whose definition changed."""
-    _OAUTH_METADATA_GENERATIONS[server_id] = _OAUTH_METADATA_GENERATIONS.get(server_id, 0) + 1
+    if _oauth_metadata_fetch_in_flight(server_id):
+        _OAUTH_METADATA_GENERATIONS[server_id] = _OAUTH_METADATA_GENERATIONS.get(server_id, 0) + 1
+    else:
+        _OAUTH_METADATA_GENERATIONS.pop(server_id, None)
     for cache_key in [key for key in _OAUTH_METADATA_CACHE if key[0] == server_id]:
         del _OAUTH_METADATA_CACHE[cache_key]
     for cache_key in [key for key in _OAUTH_METADATA_FETCH_LOCKS if key[0] == server_id]:

@@ -12686,6 +12686,22 @@ async def test_metadata_fetched_before_invalidation_does_not_repopulate_the_cach
             release.set()
             assert await in_flight == {"authorization_servers": ["old-idp"]}
         assert cache_key not in discoverable_endpoints._OAUTH_METADATA_CACHE
+        discoverable_endpoints._prune_oauth_metadata_cache()
+        assert server.server_id not in discoverable_endpoints._OAUTH_METADATA_GENERATIONS
     finally:
         discoverable_endpoints._OAUTH_METADATA_CACHE.pop(cache_key, None)
         discoverable_endpoints._OAUTH_METADATA_GENERATIONS.pop(server.server_id, None)
+
+
+def test_invalidating_an_idle_server_leaves_no_generation_behind():
+    from litellm.proxy._experimental.mcp_server import discoverable_endpoints
+    from litellm.proxy._experimental.mcp_server.discoverable_endpoints import invalidate_oauth_metadata_cache
+
+    server_ids: Final = tuple(f"churned-server-{i}" for i in range(50))
+    try:
+        for server_id in server_ids:
+            invalidate_oauth_metadata_cache(server_id)
+        assert not set(server_ids) & set(discoverable_endpoints._OAUTH_METADATA_GENERATIONS)
+    finally:
+        for server_id in server_ids:
+            discoverable_endpoints._OAUTH_METADATA_GENERATIONS.pop(server_id, None)
