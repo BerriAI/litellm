@@ -3591,21 +3591,36 @@ def _restore_redacted_pass_through_headers(
 
 
 def _endpoint_key(endpoint: Mapping[str, object]) -> object:
-    return endpoint.get("id") or endpoint.get("path")
+    endpoint_id = endpoint.get("id")
+    if endpoint_id:
+        return ("id", endpoint_id)
+    methods = endpoint.get("methods")
+    method_key = (
+        tuple(sorted(str(method).upper() for method in cast("list[object]", methods)))  # cast-ok: JSON list
+        if isinstance(methods, list)
+        else None
+    )
+    return ("path", endpoint.get("path"), method_key)
 
 
 def restore_redacted_pass_through_endpoint_headers(incoming: object, stored: object) -> object:
-    """Restore redacted header values in a ``pass_through_endpoints`` list from the stored entry with the same id or path."""
+    """Restore redacted header values in a ``pass_through_endpoints`` list from the stored entry with the same id, or else the same path and methods; a key shared by several stored entries restores nothing."""
     if not isinstance(incoming, list):
         return incoming
     stored_headers: Final[dict[object, Mapping[str, object]]] = {}
+    ambiguous_keys: Final[set[object]] = set()
     for stored_endpoint in cast("list[object]", stored) if isinstance(stored, list) else []:  # cast-ok: JSON list
         if isinstance(stored_endpoint, dict):
             endpoint_map = cast("Mapping[str, object]", stored_endpoint)  # cast-ok: JSON object
             headers = endpoint_map.get("headers")
-            stored_headers[_endpoint_key(endpoint_map)] = (
+            key = _endpoint_key(endpoint_map)
+            if key in stored_headers:
+                ambiguous_keys.add(key)
+            stored_headers[key] = (
                 cast("Mapping[str, object]", headers) if isinstance(headers, dict) else {}  # cast-ok: JSON object
             )
+    for key in ambiguous_keys:
+        del stored_headers[key]
     restored: Final[list[object]] = []
     for endpoint in cast("list[object]", incoming):  # cast-ok: JSON list
         if not isinstance(endpoint, dict):

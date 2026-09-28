@@ -7836,6 +7836,33 @@ def test_restore_redacted_pass_through_endpoint_headers_matches_stored_entry_by_
     ]
 
 
+def test_restore_redacted_pass_through_endpoint_headers_keeps_same_path_entries_apart():
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        restore_redacted_pass_through_endpoint_headers,
+    )
+
+    stored = [
+        {"path": "/shared", "methods": ["GET"], "headers": {"Authorization": "Bearer read-secret"}},
+        {"path": "/shared", "methods": ["post"], "headers": {"Authorization": "Bearer write-secret"}},
+        {"path": "/dup", "headers": {"Authorization": "Bearer dup-one"}},
+        {"path": "/dup", "headers": {"Authorization": "Bearer dup-two"}},
+    ]
+    incoming = [
+        {"path": "/shared", "methods": ["GET"], "headers": {"Authorization": "REDACTED_BY_LITELM"}},
+        {"path": "/shared", "methods": ["POST"], "headers": {"Authorization": "REDACTED_BY_LITELM"}},
+    ]
+
+    assert restore_redacted_pass_through_endpoint_headers(incoming, stored) == [
+        {"path": "/shared", "methods": ["GET"], "headers": {"Authorization": "Bearer read-secret"}},
+        {"path": "/shared", "methods": ["POST"], "headers": {"Authorization": "Bearer write-secret"}},
+    ]
+    with pytest.raises(HTTPException) as exc_info:
+        restore_redacted_pass_through_endpoint_headers(
+            [{"path": "/dup", "headers": {"Authorization": "REDACTED_BY_LITELM"}}], stored
+        )
+    assert exc_info.value.status_code == 400
+
+
 def test_restore_redacted_pass_through_endpoint_headers_rejects_placeholder_without_stored_entry():
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         restore_redacted_pass_through_endpoint_headers,
