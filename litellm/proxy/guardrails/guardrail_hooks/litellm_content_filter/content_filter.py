@@ -1050,26 +1050,12 @@ class ContentFilterGuardrail(CustomGuardrail):
                 if not sentence_lower:
                     continue
 
-                # Check if sentence contains ANY identifier word (with word boundaries)
+                # Check if sentence contains ANY identifier word
                 identifier_found = None
                 for identifier in identifier_words:
-                    # Use word boundary to avoid false positives (e.g., "alter" in "alternative")
-                    if " " in identifier:
-                        # Multi-word phrase - use simple substring matching
-                        if identifier in sentence_lower:
-                            identifier_found = identifier
-                            break
-                    else:
-                        # Single word - use word boundary for alphanumeric words
-                        # Punctuation-only identifiers (e.g., ">", "=", "!=") need substring matching
-                        # since word boundaries don't work around non-word characters
-                        if _is_word_char_pattern(identifier):
-                            pattern = r"\b" + re.escape(identifier) + r"\b"
-                        else:
-                            pattern = re.escape(identifier)
-                        if re.search(pattern, sentence_lower):
-                            identifier_found = identifier
-                            break
+                    if identifier in sentence_lower:
+                        identifier_found = identifier
+                        break
 
                 if not identifier_found:
                     continue
@@ -2058,22 +2044,10 @@ class ContentFilterGuardrail(CustomGuardrail):
         cut_sentence: Final = (
             SENTENCE_TERMINATORS.split(head.lower())[-1] + SENTENCE_TERMINATORS.split(tail_lower, maxsplit=1)[0]
         )
-        # Use word boundary matching for single-word conditional words to match _check_conditional_categories behavior
+        # Check if any conditional word appears in the cut_sentence
         for word in plan.conditional_words:
-            if " " in word:
-                # Multi-word phrase - use substring matching
-                if word in cut_sentence:
-                    return True
-            else:
-                # Single word - use word boundary matching
-                if _is_word_char_pattern(word):
-                    pattern = r"\b" + re.escape(word) + r"\b"
-                    if re.search(pattern, cut_sentence):
-                        return True
-                else:
-                    # Punctuation-only words use substring matching
-                    if word in cut_sentence:
-                        return True
+            if word in cut_sentence:
+                return True
         return False
 
     def _trim_streamed_choice_buffer(
