@@ -2733,10 +2733,9 @@ async def test_responses_websocket_handshake_uses_deployment_key_before_environm
 ) -> None:
     from collections.abc import Mapping
     from datetime import datetime, timezone
+    from types import SimpleNamespace
     from typing import Final, NoReturn
-    from unittest.mock import patch
-
-    from fastapi import WebSocket
+    from unittest.mock import AsyncMock, patch
 
     from litellm.litellm_core_utils.litellm_logging import Logging
     from litellm.responses.main import _aresponses_websocket
@@ -2763,7 +2762,7 @@ async def test_responses_websocket_handshake_uses_deployment_key_before_environm
     with patch("websockets.connect", new=capture_handshake):
         await _aresponses_websocket.__wrapped__(
             model=model,
-            websocket=MagicMock(spec=WebSocket),
+            websocket=SimpleNamespace(close=AsyncMock()),
             api_base="https://provider.example/v1",
             api_key=api_key,
             litellm_logging_obj=logging_obj,
