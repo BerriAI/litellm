@@ -21,6 +21,7 @@ from pydantic import BaseModel, JsonValue
 
 import litellm
 from litellm import _custom_logger_compatible_callbacks_literal
+from litellm._internal_context import post_response_phase
 from litellm._logging import (
     _is_debugging_on,
     _redact_string,
@@ -59,6 +60,7 @@ from litellm.integrations.arize.arize import ArizeLogger
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.deepeval.deepeval import DeepEvalLogger
+from litellm.integrations.langtrace import langtrace_trace_endpoint
 from litellm.integrations.mlflow import MlflowLogger
 from litellm.integrations.sqs import SQSLogger
 from litellm.litellm_core_utils.classifier_logging import (
@@ -638,8 +640,8 @@ class Logging(LiteLLMLoggingBaseClass):
         self._own_session_id: str = session_id_var.get()
 
         self.function_id = function_id
-        self.streaming_chunks: list[Any] = []  # for generating complete stream response
-        self.sync_streaming_chunks: list[Any] = []  # for generating complete stream response
+        self.streaming_chunks: list[object] = []
+        self.sync_streaming_chunks: list[object] = []
         self.log_raw_request_response = log_raw_request_response
         self.raw_request_only = raw_request_only
 
@@ -691,7 +693,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.response_timing_metrics: Mapping[str, float] = {}  # mutable-ok: kept deep-copyable
 
         # Passthrough endpoint guardrails config for field targeting
-        self.passthrough_guardrails_config: dict[str, Any] | None = None
+        self.passthrough_guardrails_config: dict[str, object] | None = None
 
         self.model_call_details: dict[str, Any] = {
             "litellm_trace_id": self.litellm_trace_id,
@@ -2285,7 +2287,7 @@ class Logging(LiteLLMLoggingBaseClass):
         self.completion_start_time = completion_start_time
         self.model_call_details["completion_start_time"] = self.completion_start_time
 
-    def normalize_logging_result(self, result: Any) -> object:
+    def normalize_logging_result(self, result: object) -> object:
         """
         Some endpoints return a different type of result than what is expected by the logging system.
         This function is used to normalize the result to the expected type.
@@ -2734,14 +2736,15 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
-        **kwargs: Any,  # kwargs-ok: forwarded to _success_handler_body
+        **kwargs: object,  # kwargs-ok: forwarded to _success_handler_body
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            return self._success_handler_body(
-                result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
-            )
+            with post_response_phase():
+                return self._success_handler_body(
+                    result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
+                )
         finally:
             self._restore_correlation_context()
 
@@ -3172,14 +3175,15 @@ class Logging(LiteLLMLoggingBaseClass):
         start_time: datetime.datetime | None = None,
         end_time: datetime.datetime | None = None,
         cache_hit: bool | None = None,
-        **kwargs: Any,  # kwargs-ok: forwarded to _async_success_handler_body
+        **kwargs: object,  # kwargs-ok: forwarded to _async_success_handler_body
     ) -> None:
         """Restores trace_id/session_id contextvars once this attempt's own success
         logging (including any nested calls its callbacks trigger) is fully done."""
         try:
-            return await self._async_success_handler_body(
-                result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
-            )
+            with post_response_phase():
+                return await self._async_success_handler_body(
+                    result=result, start_time=start_time, end_time=end_time, cache_hit=cache_hit, **kwargs
+                )
         finally:
             self._restore_correlation_context()
 
@@ -3550,7 +3554,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
                 self._handle_callback_failure(callback=callback)
 
-    def _handle_callback_failure(self, callback: Any):
+    def _handle_callback_failure(self, callback: object):
         """
         Handle callback logging failures by incrementing Prometheus metrics.
 
@@ -3955,10 +3959,10 @@ class Logging(LiteLLMLoggingBaseClass):
 
     def handle_sync_success_callbacks_for_async_calls(
         self,
-        result: Any,
+        result: object,
         start_time: datetime.datetime,
         end_time: datetime.datetime,
-        cache_hit: Any | None = None,
+        cache_hit: object | None = None,
     ) -> None:
         """
         Handles calling success callbacks for Async calls.
@@ -4128,10 +4132,10 @@ class Logging(LiteLLMLoggingBaseClass):
         response so cost calculation and spend tracking see one shape.
         """
         if result.event_type == "interaction.completed" and result.interaction is not None:
-            return InteractionsAPIResponse(**result.interaction)
+            return InteractionsAPIResponse.model_validate(result.interaction)
         if result.status == "completed":
-            return InteractionsAPIResponse(
-                **result.model_dump(
+            return InteractionsAPIResponse.model_validate(
+                result.model_dump(
                     exclude={  # mutable-ok: pydantic types exclude as set[str], which a frozenset does not satisfy
                         "event_type",
                         "delta",
@@ -4161,7 +4165,7 @@ class Logging(LiteLLMLoggingBaseClass):
             return logged
         return logged.model_copy(update={"id": streamed_message_id})
 
-    def _handle_anthropic_messages_response_logging(self, result: Any) -> ModelResponse:
+    def _handle_anthropic_messages_response_logging(self, result: object) -> ModelResponse:
         """
         Handles logging for Anthropic messages responses.
 
@@ -4270,7 +4274,7 @@ class Logging(LiteLLMLoggingBaseClass):
                 )
             return model_response
 
-    def _handle_non_streaming_google_genai_generate_content_response_logging(self, result: Any) -> ModelResponse:
+    def _handle_non_streaming_google_genai_generate_content_response_logging(self, result: object) -> ModelResponse:
         """
         Handles logging for Google GenAI generate content responses.
         """
@@ -4345,7 +4349,7 @@ def _get_masked_values(
         "passwd",
     ]
 
-    def _mask_value(v: Any) -> Any:
+    def _mask_value(v: object) -> object:
         if isinstance(v, dict):
             if _depth >= _max_depth:
                 return v
@@ -4475,7 +4479,7 @@ def set_callbacks(callback_list, function_id=None):
 def _init_custom_logger_compatible_class(
     logging_integration: _custom_logger_compatible_callbacks_literal,
     internal_usage_cache: DualCache | None,
-    llm_router: Any | None,  # expect litellm.Router, but typing errors due to circular import
+    llm_router: object,  # expect litellm.Router, but typing errors due to circular import
     custom_logger_init_args: dict | None = {},
 ) -> CustomLogger | None:
     """
@@ -4917,15 +4921,47 @@ def _init_custom_logger_compatible_class(
 
             otel_config = OpenTelemetryConfig(
                 exporter="otlp_http",
-                endpoint="https://langtrace.ai/api/trace",
+                endpoint=langtrace_trace_endpoint(os.getenv("LANGTRACE_API_HOST")),
+                headers=f"x-api-key={os.environ['LANGTRACE_API_KEY']}",
             )
-            os.environ["OTEL_EXPORTER_OTLP_TRACES_HEADERS"] = f"api_key={os.getenv('LANGTRACE_API_KEY')}"
             for callback in _in_memory_loggers:
                 if isinstance(callback, OpenTelemetry) and callback.callback_name == "langtrace":
                     return callback
             _otel_logger = OpenTelemetry(config=otel_config, callback_name="langtrace")
             _in_memory_loggers.append(_otel_logger)
             return _otel_logger
+
+        elif logging_integration == "signoz":
+            from litellm.integrations.otel.presets.signoz import (
+                SIGNOZ_INGESTION_ENDPOINT_ENV,
+            )
+
+            _signoz_endpoint: Final = os.getenv(SIGNOZ_INGESTION_ENDPOINT_ENV)
+            if not _signoz_endpoint:
+                raise ValueError(f"{SIGNOZ_INGESTION_ENDPOINT_ENV} not found in environment variables")
+
+            _signoz_v2: Final = _maybe_construct_otel_v2("signoz", _in_memory_loggers)
+            if _signoz_v2 is not None:
+                return _signoz_v2
+
+            from litellm.integrations.opentelemetry import (
+                OpenTelemetry,
+                OpenTelemetryConfig,
+            )
+
+            _signoz_base: Final = _signoz_endpoint.rstrip("/")
+            _signoz_key: Final = os.getenv("SIGNOZ_INGESTION_KEY")
+            _signoz_config: Final = OpenTelemetryConfig(
+                exporter="otlp_http",
+                endpoint=(_signoz_base if _signoz_base.endswith("/v1/traces") else f"{_signoz_base}/v1/traces"),
+                headers=(f"signoz-ingestion-key={_signoz_key}" if _signoz_key else None),
+            )
+            for callback in _in_memory_loggers:
+                if isinstance(callback, OpenTelemetry) and callback.callback_name == "signoz":
+                    return callback
+            _signoz_logger: Final = OpenTelemetry(config=_signoz_config, callback_name="signoz")
+            _in_memory_loggers.append(_signoz_logger)
+            return _signoz_logger
 
         elif logging_integration == "mlflow":
             for callback in _in_memory_loggers:
@@ -6403,7 +6439,7 @@ def _autorouter_savings_for_payload(
 
 def get_standard_logging_object_payload(
     kwargs: dict | None,
-    init_response_obj: Any | BaseModel | dict,
+    init_response_obj: object,
     start_time: dt_object,
     end_time: dt_object,
     logging_obj: Logging,

@@ -69,6 +69,7 @@ from litellm.constants import (
     RUNTIME_UPDATABLE_ROUTER_SETTINGS,
     SESSION_DEPLOYMENT_AFFINITY_TTL_METADATA_KEY,
 )
+from litellm.integrations.custom_guardrail import is_guardrail_intervention
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.asyncify import run_async_function
 from litellm.litellm_core_utils.core_helpers import (
@@ -432,6 +433,7 @@ def model_info_is_active_for_environment(model_info: Mapping[str, object] | None
 
 
 _PreRoutingStrategyT = TypeVar("_PreRoutingStrategyT")
+_CallbackT = TypeVar("_CallbackT")
 
 _ALIAS_PARAMS_NEVER_FORWARDED: Final = frozenset({"model", "api_base", "api_key", "api_version"})
 _ALIAS_MARKER_FORWARDED_PARAMS_KWARG: Final = "_alias_marker_forwarded_params"
@@ -525,7 +527,7 @@ MAX_BUFFERED_PRE_CONTENT_ANTHROPIC_CHUNKS: Final = 200
 def _anthropic_stream_should_drop_pre_content_ping(chunk: object, has_generated_content: bool) -> bool:
     """A `ping` keepalive seen before any real content is dropped outright - it recurs indefinitely on a
     slow-starting connection and carries nothing worth buffering toward a possible fallback."""
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
 
     if has_generated_content:
         return False
@@ -536,7 +538,7 @@ def _anthropic_stream_forwards_ping_live(chunk: object, has_generated_content: b
     """A `ping` that no lifecycle frame precedes reaches the client live: a fallback's own message_start can still
     follow it without overlapping lifecycles, and AgenticAnthropicStreamingIterator's hold-back keepalive is exactly
     such a ping."""
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import is_anthropic_ping_chunk
 
     if has_generated_content or buffered_chunk_count:
         return False
@@ -550,7 +552,7 @@ def _is_retriable_anthropic_status(status_code: int) -> bool:
 def _anthropic_stream_error_is_gateway_verdict(chunk: object) -> bool:
     """AgenticAnthropicStreamingIterator's own retrieval-failure frame is the gateway's verdict, not a provider
     failure: another deployment would rerun the same failed hook, so it reaches the client instead of falling back."""
-    from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+    from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
         is_server_fulfilled_tool_leak_error,
     )
 
@@ -605,7 +607,7 @@ def _anthropic_stream_commits_now(chunk: object, has_generated_content: bool, bu
     pre-content buffer cap was hit) rather than keep buffering lifecycle
     frames toward a possible fallback.
     """
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
         is_anthropic_content_delta_chunk,
     )
 
@@ -2216,8 +2218,8 @@ class Router:
 
     def _add_encrypted_content_affinity_check(self, enable_global_affinity: bool) -> None:
         def _move_before_deployment_affinity(
-            callback_list: list[Any],
-            callback_to_move: EncryptedContentAffinityCheck,
+            callback_list: list[_CallbackT],
+            callback_to_move: _CallbackT,
         ) -> None:
             if callback_to_move not in callback_list:
                 return
@@ -5354,7 +5356,7 @@ class Router:
                 response=response,
                 kwargs=kwargs,
             ):
-                from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+                from litellm.llms.anthropic.pass_through.messages.utils import (
                     safeguard_refusal_error,
                 )
 
@@ -5464,12 +5466,12 @@ class Router:
         anyway) or once the stream ends without ever producing content or
         an error.
         """
-        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             aclose_if_supported,
             parse_anthropic_error_event,
             parse_anthropic_refusal_stop_details,
         )
-        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+        from litellm.llms.anthropic.pass_through.messages.utils import (
             safeguard_refusal_error,
         )
 
@@ -5626,7 +5628,7 @@ class Router:
         budget.
         """
         from litellm.exceptions import MidStreamFallbackError
-        from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+        from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
             aclose_if_supported,
             anthropic_messages_response_as_sse_events,
         )
@@ -7247,7 +7249,7 @@ class Router:
         hop_depth: Final = kwargs.get("fallback_depth")
         nested_fallback_hop: Final = isinstance(hop_depth, int) and hop_depth > 0
 
-        if disable_fallbacks is True or original_model_group is None:
+        if disable_fallbacks is True or original_model_group is None or is_guardrail_intervention(e):
             raise e
 
         input_kwargs: Final = {
@@ -7661,6 +7663,8 @@ class Router:
             response = add_retry_headers_to_response(response=response, attempted_retries=0, max_retries=None)
             return response
         except Exception as e:
+            if is_guardrail_intervention(e):
+                raise
             current_attempt = None
             original_exception = e
             deployment_num_retries: Final = getattr(e, "num_retries", None)
@@ -8466,7 +8470,7 @@ class Router:
         when a content-policy fallback is configured; a plain refusal without stop_details, or
         any response with nothing configured, is returned to the client unchanged.
         """
-        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+        from litellm.llms.anthropic.pass_through.messages.utils import (
             get_safeguard_refusal_stop_details,
         )
 
@@ -12206,7 +12210,7 @@ class Router:
         `tools` (Chat Completions, Responses and Anthropic Messages shapes) and the
         Anthropic Messages top-level `system` block.
         """
-        from litellm.llms.anthropic.experimental_pass_through.messages.utils import (
+        from litellm.llms.anthropic.pass_through.messages.utils import (
             anthropic_system_to_openai_message,
         )
 

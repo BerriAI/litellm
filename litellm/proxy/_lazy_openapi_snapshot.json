@@ -11368,18 +11368,6 @@
               "description": "Custom advisory message template used when on_flagged='inject_system_message'. Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.",
               "title": "Advisory System Message"
             },
-            "agent_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Agent identity reported to Agent 365 with every tool evaluation. When unset, the caller's key alias is used.",
-              "title": "Agent Id"
-            },
             "akto_account_id": {
               "anyOf": [
                 {
@@ -12950,18 +12938,6 @@
               ],
               "description": "The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
               "title": "Realtime Violation Message"
-            },
-            "resource_app_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Application id of the Agent 365 resource the OBO token is minted for. Defaults to the production resource ea9ffc3e-8a23-4a7d-836d-234d7c7565c1; the Test and PreProd environments use a different id. Falls back to the AGENT365_RESOURCE_APP_ID environment variable.",
-              "title": "Resource App Id"
             },
             "rules": {
               "anyOf": [
@@ -32168,6 +32144,7 @@
                 {
                   "enum": [
                     "healthy",
+                    "reachable",
                     "unhealthy",
                     "unknown"
                   ],
@@ -32178,7 +32155,7 @@
                 }
               ],
               "default": "unknown",
-              "description": "Health status: 'healthy', 'unhealthy', 'unknown'",
+              "description": "Health status: 'healthy', 'unhealthy', 'unknown', or 'reachable' (requires include_reachability=true; authentication and tools unchecked)",
               "title": "Status"
             },
             "subject_token_type": {
@@ -35224,6 +35201,7 @@
                 {
                   "enum": [
                     "healthy",
+                    "reachable",
                     "unhealthy",
                     "unknown"
                   ],
@@ -35234,7 +35212,7 @@
                 }
               ],
               "default": "unknown",
-              "description": "Health status: 'healthy', 'unhealthy', 'unknown'",
+              "description": "Health status: 'healthy', 'unhealthy', 'unknown', or 'reachable' (requires include_reachability=true; authentication and tools unchecked)",
               "title": "Status"
             },
             "subject_token_type": {
@@ -38095,6 +38073,18 @@
                 "description": "Server IDs to check. If not provided, checks all accessible servers.",
                 "title": "Server Ids"
               }
+            },
+            {
+              "description": "Allow the 'reachable' status for responding servers whose authentication is unchecked.",
+              "in": "query",
+              "name": "include_reachability",
+              "required": false,
+              "schema": {
+                "default": false,
+                "description": "Allow the 'reachable' status for responding servers whose authentication is unchecked.",
+                "title": "Include Reachability",
+                "type": "boolean"
+              }
             }
           ],
           "responses": {
@@ -38388,6 +38378,18 @@
               "schema": {
                 "title": "Server Id",
                 "type": "string"
+              }
+            },
+            {
+              "description": "Allow the 'reachable' status for responding servers whose authentication is unchecked.",
+              "in": "query",
+              "name": "include_reachability",
+              "required": false,
+              "schema": {
+                "default": false,
+                "description": "Allow the 'reachable' status for responding servers whose authentication is unchecked.",
+                "title": "Include Reachability",
+                "type": "boolean"
               }
             }
           ],
