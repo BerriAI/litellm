@@ -199,20 +199,20 @@ fn decoded_chunks(
 }
 
 fn log_request_body(provider: &str, stream: bool, body: &serde_json::Value) {
-    litellm_tracing::debug!(provider, stream, body = %body, "provider request");
+    tracing::debug!(provider, stream, body = %body, "provider request");
 }
 
 fn log_response_body(body: &str) {
-    litellm_tracing::debug!(body, "provider response body");
+    tracing::debug!(body, "provider response body");
 }
 
 fn log_error_body(status: u16, body: &str) {
-    litellm_tracing::debug!(status, body, "provider error body");
+    tracing::debug!(status, body, "provider error body");
 }
 
 fn log_chunk(provider: &str, stage: &str, data: &bytes::Bytes) {
     let chunk = ByteChunk::new(data);
-    litellm_tracing::debug!(provider, stage, encoding = chunk.encoding(), chunk = %chunk, "stream chunk");
+    tracing::debug!(provider, stage, encoding = chunk.encoding(), chunk = %chunk, "stream chunk");
 }
 
 #[cfg(test)]
