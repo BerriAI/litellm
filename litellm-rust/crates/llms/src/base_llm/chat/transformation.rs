@@ -1,7 +1,13 @@
 use litellm_types::{
-    llms::openai::{ChatMessage, ChatMessageContent},
+    chat_completions::ChatCompletionsRequest,
+    llms::{
+        anthropic_messages::anthropic_request::AnthropicMessagesRequest,
+        openai::{ChatMessage, ChatMessageContent},
+    },
+    messages::converse::ConverseRequest,
     utils::ChatCompletionsResponse,
 };
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::{
@@ -9,12 +15,38 @@ use crate::{
     base_llm::chat::streaming::{ChatStream, StreamShape},
 };
 
-/// The provider-shaped request body a config produces. Named rather than a bare
-/// `Value` so the transform contract stays a typed one, mirroring
-/// [`crate::base_llm::audio_transcription::transformation::AudioTranscriptionRequestData`].
 pub struct ProviderChatRequestData {
-    pub body: Value,
+    pub body: ProviderChatRequestBody,
     pub stream_shape: StreamShape,
+}
+
+#[derive(Serialize)]
+#[serde(untagged)]
+pub enum ProviderChatRequestBody {
+    ChatCompletions(ChatCompletionsRequest),
+    Messages(Box<AnthropicMessagesRequest>),
+    Converse(ConverseRequest),
+}
+
+impl ProviderChatRequestBody {
+    pub fn validate_replacement(&self, body: &Value) -> Result<(), Error> {
+        let stream = match self {
+            Self::ChatCompletions(_) => {
+                ChatCompletionsRequest::deserialize(body).map(|request| request.stream)
+            }
+            Self::Messages(_) => {
+                AnthropicMessagesRequest::deserialize(body).map(|request| request.params.stream)
+            }
+            Self::Converse(_) => ConverseRequest::deserialize(body).map(|_| None),
+        }
+        .map_err(|error| {
+            Error::InvalidRequest(crate::ErrorDetail::invalid("provider request", error))
+        })?;
+        if stream == Some(true) {
+            return Err(Error::Unsupported("streaming"));
+        }
+        Ok(())
+    }
 }
 
 /// The raw provider response body handed back to a config for normalization.

@@ -50,11 +50,19 @@ pub(super) async fn execute(
             WireRequest {
                 url,
                 headers: authenticated.headers,
-                body,
-            },
+                body: &body,
+            }
+            .into_json()
+            .map_err(|error| {
+                Error::InvalidRequest(litellm_llms::ErrorDetail::invalid(
+                    "provider request",
+                    error,
+                ))
+            })?,
             context,
         )
         .await?;
+    body.validate_replacement(&wire.body)?;
     let outbound = outbound_request(
         Authenticated {
             headers: wire.headers,

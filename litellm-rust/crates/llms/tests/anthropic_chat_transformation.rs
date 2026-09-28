@@ -22,10 +22,13 @@ fn params(value: Value) -> Map<String, Value> {
 }
 
 fn transform(model: &str, msgs: Value, opts: Value) -> Value {
-    ANTHROPIC_CHAT_COMPLETIONS_CONFIG
-        .transform_request(model, messages(msgs), params(opts))
-        .expect("request transforms")
-        .body
+    serde_json::to_value(
+        ANTHROPIC_CHAT_COMPLETIONS_CONFIG
+            .transform_request(model, messages(msgs), params(opts))
+            .expect("request transforms")
+            .body,
+    )
+    .unwrap()
 }
 
 fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {
@@ -452,4 +455,18 @@ fn resolves_the_messages_url_and_x_api_key_auth() {
             ("content-type", "application/json"),
         ]
     );
+}
+
+#[rstest]
+#[case::nulls(json!({"temperature":null, "stream":null, "future_option":null}))]
+#[case::extensions(json!({"future_option":{"nested":true}}))]
+fn typed_request_preserves_passthrough_params(#[case] options: Value) {
+    let body = transform(
+        "test-model",
+        json!([{"role":"user", "content":"hello"}]),
+        options.clone(),
+    );
+    for (name, value) in options.as_object().unwrap() {
+        assert_eq!(body.as_object().unwrap().get(name), Some(value));
+    }
 }

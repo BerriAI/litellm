@@ -25,8 +25,9 @@ use crate::{
         chat::{
             streaming::StreamShape,
             transformation::{
-                BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-                Unsupported, ValidatedEnvironment, unsupported_message, unsupported_param,
+                BaseConfig, Headers, ProviderChatRequestBody, ProviderChatRequestData,
+                ProviderChatResponseData, Unsupported, ValidatedEnvironment, unsupported_message,
+                unsupported_param,
             },
         },
     },
@@ -216,7 +217,15 @@ impl BaseConfig for AmazonConverseConfig {
         optional_params: Map<String, Value>,
     ) -> Result<ProviderChatRequestData, Error> {
         Ok(ProviderChatRequestData {
-            body: converse_body(&build_conversation(&messages), &optional_params),
+            body: ProviderChatRequestBody::Converse(
+                serde_json::from_value(converse_body(
+                    &build_conversation(&messages),
+                    &optional_params,
+                ))
+                .map_err(|error| {
+                    Error::InvalidRequest(crate::ErrorDetail::invalid("provider request", error))
+                })?,
+            ),
             stream_shape: StreamShape::default(),
         })
     }

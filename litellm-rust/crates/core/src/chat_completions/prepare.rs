@@ -191,7 +191,7 @@ mod tests {
             .expect("request preparation should fail")
     }
 
-    #[test]
+    #[rstest::rstest]
     fn resolves_the_provider_from_the_model_prefix() {
         let prepared = prepare_chat_completions_call(request(
             "anthropic/claude-sonnet-4-5",
@@ -202,7 +202,10 @@ mod tests {
         .expect("prepares");
         assert_eq!(prepared.model, "claude-sonnet-4-5");
         assert_eq!(prepared.url, "https://api.anthropic.com/v1/messages");
-        assert_eq!(prepared.body["model"], json!("claude-sonnet-4-5"));
+        assert_eq!(
+            serde_json::to_value(&prepared.body).unwrap()["model"],
+            json!("claude-sonnet-4-5")
+        );
     }
 
     #[test]
@@ -414,7 +417,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest::rstest]
     fn prepares_a_bedrock_call_without_resolving_credentials() {
         let mut call = request(
             "bedrock/us-east-1/anthropic.claude-v2",
@@ -441,9 +444,13 @@ mod tests {
                 .iter()
                 .any(|(name, _)| name.eq_ignore_ascii_case("authorization"))
         );
-        assert_eq!(prepared.body["inferenceConfig"], json!({"maxTokens": 16}));
+        assert_eq!(
+            serde_json::to_value(&prepared.body).unwrap()["inferenceConfig"],
+            json!({"maxTokens": 16})
+        );
     }
 
+    #[rstest::rstest]
     #[tokio::test]
     async fn a_forwarded_client_header_does_not_enter_the_bedrock_signature() {
         // Python signs only the AWS header set and reattaches the rest, so a header
@@ -476,7 +483,7 @@ mod tests {
         let signed = crate::chat_completions::handler::outbound_request(
             authenticated,
             prepared.url,
-            &prepared.body,
+            &serde_json::to_value(&prepared.body).unwrap(),
             prepared.timeout,
         )
         .expect("signs");
@@ -535,7 +542,7 @@ mod tests {
         let error = crate::chat_completions::handler::outbound_request(
             authenticated,
             prepared.url,
-            &prepared.body,
+            &serde_json::to_value(&prepared.body).unwrap(),
             prepared.timeout,
         )
         .expect_err("conflicting signing headers must fail");

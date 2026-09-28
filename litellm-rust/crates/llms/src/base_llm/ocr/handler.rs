@@ -210,12 +210,12 @@ pub fn transport_error(error: reqwest::Error) -> Error {
     transport::Error::from(error).into()
 }
 
-pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
+pub async fn transform_request_body<C: BaseOcrConfig>(
     config: &C,
     request: &PreparedOcrRequest,
     url: &str,
     headers: &[(String, String)],
-    body: B,
+    body: C::ProviderRequest,
     signer: Option<&dyn RequestSigner>,
     hooks: &dyn CallHooks<Error>,
 ) -> Result<OutboundRequest, Error> {
@@ -233,6 +233,9 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
             path: "guardrail.body".into(),
         });
     }
+    let _: C::ProviderRequest = changed.decode_body().map_err(|_| Error::RequestField {
+        path: "guardrail.body".into(),
+    })?;
     config.validate_request_body(&changed.body)?;
     let timeout = Some(request.connection.timeout);
     Ok(match signer {

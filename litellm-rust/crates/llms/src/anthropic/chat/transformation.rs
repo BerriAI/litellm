@@ -3,6 +3,9 @@ use litellm_core_utils::{
     core_helpers::{finish_reason_for, unix_now, usage_from_parts},
     prompt_templates::factory::{Conversation, build_conversation},
 };
+use litellm_types::llms::anthropic_messages::anthropic_request::{
+    AnthropicMessagesOptionalParams, AnthropicMessagesRequest,
+};
 use litellm_types::{
     llms::openai::ChatMessage,
     utils::{ChatCompletionsChoice, ChatCompletionsChoiceMessage, ChatCompletionsResponse},
@@ -24,8 +27,9 @@ use crate::{
         chat::{
             streaming::{ChatStream, StreamShape},
             transformation::{
-                BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-                Unsupported, ValidatedEnvironment, unsupported_message, unsupported_param,
+                BaseConfig, Headers, ProviderChatRequestBody, ProviderChatRequestData,
+                ProviderChatResponseData, Unsupported, ValidatedEnvironment, unsupported_message,
+                unsupported_param,
             },
         },
         messages::streaming::anthropic_sse_event_stream,
@@ -113,8 +117,28 @@ impl BaseConfig for AnthropicConfig {
         messages: Vec<ChatMessage>,
         optional_params: Map<String, Value>,
     ) -> Result<ProviderChatRequestData, Error> {
+        let null_fields: Map<String, Value> = optional_params
+            .iter()
+            .filter(|(_, value)| value.is_null())
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        let body: AnthropicMessagesRequest = serde_json::from_value(anthropic_body(
+            model,
+            &build_conversation(&messages),
+            optional_params,
+        ))
+        .map_err(|error| {
+            Error::InvalidRequest(crate::ErrorDetail::invalid("provider request", error))
+        })?;
+        let params = AnthropicMessagesOptionalParams {
+            extra: body.params.extra.into_iter().chain(null_fields).collect(),
+            ..body.params
+        };
         Ok(ProviderChatRequestData {
-            body: anthropic_body(model, &build_conversation(&messages), optional_params),
+            body: ProviderChatRequestBody::Messages(Box::new(AnthropicMessagesRequest {
+                params,
+                ..body
+            })),
             stream_shape: StreamShape::default(),
         })
     }

@@ -440,3 +440,81 @@ async fn websocket_operations_trace_outcomes_without_capturing_frames_or_credent
     );
     assert!(!format!("{:?}", traces.records()).contains("private-"));
 }
+
+struct RewriteRequest(serde_json::Value);
+
+impl litellm_host::hooks::RouteHooks<litellm_core::RouteError> for RewriteRequest {
+    async fn before_provider_request(
+        &self,
+        wire: litellm_host::event::WireRequest,
+        _: litellm_host::event::RequestContext,
+    ) -> Result<litellm_host::event::WireRequest, litellm_core::RouteError> {
+        Ok(litellm_host::event::WireRequest {
+            body: self.0.clone(),
+            ..wire
+        })
+    }
+
+    async fn on_event(
+        &self,
+        _: litellm_host::event::MachineEvent,
+    ) -> Result<(), litellm_core::RouteError> {
+        Ok(())
+    }
+}
+
+#[rstest]
+#[case::model(json!({"model": 42, "input": "hello"}))]
+#[case::input(json!({"model": "test-model", "input": {}}))]
+#[case::missing_input(json!({"model": "test-model"}))]
+#[case::stream(json!({"model": "test-model", "input": "hello", "stream": "true"}))]
+#[case::null_stream(json!({"model": "test-model", "input": "hello", "stream": null}))]
+#[tokio::test]
+async fn malformed_hook_requests_fail_before_sending(
+    call: ResponsesCall,
+    #[case] body: serde_json::Value,
+) {
+    let upstream = upstream([]).await;
+    let result = responses_route(no_secrets())
+        .execute(
+            ResponsesCall {
+                api_base: Some(upstream.uri()),
+                ..call
+            },
+            &RewriteRequest(body),
+        )
+        .await;
+    assert!(matches!(
+        result,
+        Err(litellm_core::RouteError::InvalidRequest(_))
+    ));
+    assert!(received(&upstream).await.is_empty());
+}
+
+#[rstest]
+#[case::complete(false)]
+#[case::stream(true)]
+#[tokio::test]
+async fn hook_edits_preserve_fields_and_control_streaming(
+    call: ResponsesCall,
+    #[case] stream: bool,
+) {
+    let upstream = upstream([json_response(
+        json!({"id":"response-1", "model":"changed", "output":[]}),
+    )])
+    .await;
+    let body = json!({"model":"changed", "input":[{"type":"future_item", "payload":42}], "stream":stream, "future_option":{"nested":true}});
+    let output = responses_route(no_secrets())
+        .execute(
+            ResponsesCall {
+                api_base: Some(upstream.uri()),
+                optional_params: json!({"stream":!stream}).as_object().unwrap().clone(),
+                ..call
+            },
+            &RewriteRequest(body.clone()),
+        )
+        .await
+        .unwrap();
+    assert_eq!(matches!(output, ResponsesOutput::Stream { .. }), stream);
+    assert_eq!(only_request(&upstream).await.json(), body);
+}

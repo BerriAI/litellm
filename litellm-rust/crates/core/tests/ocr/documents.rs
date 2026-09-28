@@ -230,3 +230,28 @@ async fn configured_client_preserves_document_url_policy(#[case] allowed: bool) 
         )
     );
 }
+
+#[rstest]
+#[case::model(json!({"model":42, "document":{"type":"document_url", "document_url":"https://example.com/scan.pdf"}}))]
+#[case::document(json!({"model":"test-model", "document":42}))]
+#[tokio::test]
+async fn malformed_hook_body_is_rejected_before_ocr_send(#[case] body: Value) {
+    let upstream = upstream([]).await;
+    let host = LocalOcrHost::new(ocr_request_with_document(
+        "mistral/model",
+        &upstream.uri(),
+        json!({"type":"document_url", "document_url":"https://example.com/scan.pdf"}),
+        json!({}),
+    ))
+    .with_before_send(move |wire, _| {
+        Ok(WireRequest {
+            body: body.clone(),
+            ..wire
+        })
+    });
+    assert!(matches!(
+        perform_with(host).await,
+        Err(Error::RequestField { .. })
+    ));
+    assert!(received(&upstream).await.is_empty());
+}

@@ -18,10 +18,26 @@ pub struct Timing {
 
 /// The provider request as it is about to leave, offered to the host for rewriting.
 #[derive(Clone, Debug, PartialEq)]
-pub struct WireRequest {
+pub struct WireRequest<B = Value> {
     pub url: String,
     pub headers: Vec<(String, String)>,
-    pub body: Value,
+    pub body: B,
+}
+
+impl<B: serde::Serialize> WireRequest<B> {
+    pub fn into_json(self) -> Result<WireRequest, serde_json::Error> {
+        Ok(WireRequest {
+            url: self.url,
+            headers: self.headers,
+            body: serde_json::to_value(self.body)?,
+        })
+    }
+}
+
+impl WireRequest {
+    pub fn decode_body<'a, B: serde::Deserialize<'a>>(&'a self) -> Result<B, serde_json::Error> {
+        B::deserialize(&self.body)
+    }
 }
 
 /// What the route knows about the request it is sending, for a host that logs it. The

@@ -23,14 +23,17 @@ fn params(value: Value) -> Map<String, Value> {
 }
 
 fn transform(msgs: Value, opts: Value) -> Value {
-    BEDROCK_CHAT_COMPLETIONS_CONFIG
-        .transform_request(
-            "anthropic.claude-sonnet-4-5-v1:0",
-            messages(msgs),
-            params(opts),
-        )
-        .expect("request transforms")
-        .body
+    serde_json::to_value(
+        BEDROCK_CHAT_COMPLETIONS_CONFIG
+            .transform_request(
+                "anthropic.claude-sonnet-4-5-v1:0",
+                messages(msgs),
+                params(opts),
+            )
+            .expect("request transforms")
+            .body,
+    )
+    .unwrap()
 }
 
 fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {
@@ -606,4 +609,19 @@ fn host_supplied_credentials_outrank_ambient_profile_and_role_state() {
         .is_none()
     );
     assert!(host_supplied_credentials(&Map::new()).is_none());
+}
+
+#[rstest]
+#[case::invalid_message(json!({"messages":[{"role":"user", "content":"invalid"}]}), false)]
+#[case::wrong_protocol(json!({"model":"test-model", "messages":[{"role":"user", "content":"hello"}]}), false)]
+#[case::extension(json!({"messages":[{"role":"user", "content":[{"future_block":{"nested":true}}]}], "future_option":null}), true)]
+fn hook_replacements_keep_the_converse_schema(#[case] body: Value, #[case] valid: bool) {
+    let request = BEDROCK_CHAT_COMPLETIONS_CONFIG
+        .transform_request(
+            "test-model",
+            messages(json!([{"role":"user", "content":"hello"}])),
+            Map::new(),
+        )
+        .unwrap();
+    assert_eq!(request.body.validate_replacement(&body).is_ok(), valid);
 }

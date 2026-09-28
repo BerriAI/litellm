@@ -17,8 +17,8 @@ use crate::{
     base_llm::{
         auth::AuthScheme,
         chat::transformation::{
-            BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-            ValidatedEnvironment,
+            BaseConfig, Headers, ProviderChatRequestBody, ProviderChatRequestData,
+            ProviderChatResponseData, ValidatedEnvironment,
         },
     },
     openai_like::common_utils::{complete_openai_like_url, openai_compatible_provider_info},
@@ -110,8 +110,22 @@ impl BaseConfig for OpenAILikeChatConfig {
             .into_iter()
             .chain(params),
         );
+        let null_stream = body.get("stream").filter(|value| value.is_null()).cloned();
+        let request: litellm_types::chat_completions::ChatCompletionsRequest =
+            serde_json::from_value(Value::Object(body)).map_err(|error| {
+                Error::InvalidRequest(crate::ErrorDetail::invalid("provider request", error))
+            })?;
         Ok(ProviderChatRequestData {
-            body: Value::Object(body),
+            body: ProviderChatRequestBody::ChatCompletions(
+                litellm_types::chat_completions::ChatCompletionsRequest {
+                    extra: request
+                        .extra
+                        .into_iter()
+                        .chain(null_stream.map(|value| ("stream".into(), value)))
+                        .collect(),
+                    ..request
+                },
+            ),
             stream_shape: Default::default(),
         })
     }

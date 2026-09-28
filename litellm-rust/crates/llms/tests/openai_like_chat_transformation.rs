@@ -30,10 +30,13 @@ fn env_with<'a>(name: &'a str, value: &'a str) -> impl Fn(&str) -> Option<String
 }
 
 fn transform(model: &str, msgs: Value, opts: Value) -> Value {
-    OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
-        .transform_request(model, messages(msgs), params(opts))
-        .expect("request transforms")
-        .body
+    serde_json::to_value(
+        OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
+            .transform_request(model, messages(msgs), params(opts))
+            .expect("request transforms")
+            .body,
+    )
+    .unwrap()
 }
 
 fn transform_response(body: Value) -> Result<ChatCompletionsResponse, Error> {
@@ -340,4 +343,18 @@ fn tool_parameters_decline_before_the_call() {
         ),
         Some(Unsupported("unrecognized request parameter"))
     );
+}
+
+#[rstest]
+#[case::null_stream(json!({"stream":null}))]
+#[case::extensions(json!({"future_option":{"nested":true}}))]
+fn typed_request_preserves_passthrough_params(#[case] options: Value) {
+    let body = transform(
+        "test-model",
+        json!([{"role":"user", "content":"hello"}]),
+        options.clone(),
+    );
+    for (name, value) in options.as_object().unwrap() {
+        assert_eq!(body.as_object().unwrap().get(name), Some(value));
+    }
 }

@@ -1,11 +1,13 @@
 use std::sync::Mutex;
 
+use litellm_core::messages::MessagesResponse;
 use litellm_core::messages::route::Messages;
 use litellm_host::event::{CallEvent, MachineEvent, RequestContext, WireRequest};
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
-use rstest::rstest;
+use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesOptionalParams;
 
 use super::*;
+use rstest::rstest;
 
 type Rewrite = Box<dyn Fn(WireRequest) -> Result<WireRequest, Error> + Send + Sync>;
 
@@ -218,4 +220,75 @@ async fn the_request_context_carries_the_shaped_params_without_model_or_messages
     let [optional_params] = <[Value; 1]>::try_from(host.optional_params.into_inner().unwrap())
         .unwrap_or_else(|seen| panic!("before_provider_request runs once, saw {}", seen.len()));
     assert_eq!(optional_params, json!({"max_tokens": 16}));
+}
+
+#[rstest]
+#[case::model(json!({"model":42, "messages":[]}))]
+#[case::messages(json!({"model":"test-model", "messages":"invalid"}))]
+#[case::stream(json!({"model":"test-model", "messages":[], "stream":"true"}))]
+#[tokio::test]
+async fn malformed_hook_body_never_reaches_provider(call: MessagesCall, #[case] body: Value) {
+    let upstream = upstream([]).await;
+    let host = RecordingHost::new(
+        authenticated(call, upstream.uri()),
+        Box::new(move |wire| {
+            Ok(WireRequest {
+                body: body.clone(),
+                ..wire
+            })
+        }),
+    );
+    assert!(matches!(
+        run_through(&host).await,
+        Err(Error::InvalidRequest(_))
+    ));
+    assert!(received(&upstream).await.is_empty());
+}
+
+#[rstest]
+#[case::complete(false)]
+#[case::stream(true)]
+#[tokio::test]
+async fn streaming_uses_the_hook_modified_body(call: MessagesCall, #[case] stream: bool) {
+    let upstream = upstream([message_response()]).await;
+    let host = RecordingHost::new(
+        authenticated(
+            MessagesCall {
+                body: AnthropicMessagesRequest {
+                    params: AnthropicMessagesOptionalParams {
+                        stream: Some(!stream),
+                        ..call.body.params
+                    },
+                    ..call.body
+                },
+                ..call
+            },
+            upstream.uri(),
+        ),
+        Box::new(move |wire| {
+            let body = Value::Object(
+                wire.body
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .chain([
+                        ("stream".into(), json!(stream)),
+                        ("future_option".into(), json!({"nested":true})),
+                    ])
+                    .collect(),
+            );
+            Ok(WireRequest { body, ..wire })
+        }),
+    );
+    let output = messages_route(Arc::new(RecordingSecrets::empty()))
+        .execute(host.request().unwrap(), &host)
+        .await;
+    assert_eq!(
+        matches!(output.unwrap(), MessagesResponse::Stream { .. }),
+        stream
+    );
+    let sent = only_request(&upstream).await.json();
+    assert_eq!(sent["stream"], stream);
+    assert_eq!(sent["future_option"], json!({"nested":true}));
 }

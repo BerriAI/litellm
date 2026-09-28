@@ -16,7 +16,9 @@ use litellm_llms::base_llm::{
     },
 };
 use litellm_tracing::ByteChunk;
-use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+use litellm_types::llms::anthropic_messages::{
+    anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
+};
 use serde_json::Value;
 
 use super::{
@@ -38,7 +40,6 @@ pub(super) async fn execute(
         timeout,
         api_key,
     } = request;
-    let stream = body.params.stream == Some(true);
     let context = RequestContext {
         model: body.model.clone(),
         custom_llm_provider: provider.as_str().to_string(),
@@ -52,11 +53,24 @@ pub(super) async fn execute(
             WireRequest {
                 url,
                 headers: authenticated.headers,
-                body: serde_json::to_value(&body).map_err(serialize_failure)?,
-            },
+                body: &body,
+            }
+            .into_json()
+            .map_err(serialize_failure)?,
             context,
         )
         .await?;
+    let stream = wire
+        .decode_body::<AnthropicMessagesRequest>()
+        .map_err(|error| {
+            Error::InvalidRequest(litellm_llms::ErrorDetail::invalid(
+                "messages request",
+                error,
+            ))
+        })?
+        .params
+        .stream
+        == Some(true);
     let provider_name = provider.as_str();
     log_request_body(provider_name, stream, &wire.body);
     let response = send(

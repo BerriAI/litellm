@@ -1,11 +1,12 @@
+use futures_util::StreamExt;
 use std::time::Duration;
 
-use futures_util::StreamExt;
 use litellm_host::{
     event::{MachineEvent, RawResponse, WireRequest},
     hooks::RouteHooks,
 };
 use litellm_llms::base_llm::auth::{Authenticated, resolve_auth};
+use litellm_types::responses::main::ResponsesApiRequest;
 
 use super::{
     Error,
@@ -25,15 +26,17 @@ pub(super) async fn execute(
                 url: request.url,
                 headers: authenticated.headers,
                 body: request.body,
-            },
+            }
+            .into_json()
+            .map_err(request_body_error)?,
             request.context,
         )
         .await?;
-    let stream = match wire.body.get("stream") {
-        None => false,
-        Some(serde_json::Value::Bool(value)) => *value,
-        Some(_) => return Err(Error::InvalidRequest("stream must be a boolean".into())),
-    };
+    let stream = wire
+        .decode_body::<ResponsesApiRequest>()
+        .map_err(request_body_error)?
+        .stream
+        .unwrap_or(false);
     let outbound = crate::outbound::outbound_request(
         Authenticated {
             headers: wire.headers,
@@ -88,4 +91,11 @@ pub(super) async fn execute(
 
 fn network(error: reqwest::Error) -> Error {
     litellm_http::transport::Error::Network(error.to_string()).into()
+}
+
+fn request_body_error(error: serde_json::Error) -> Error {
+    Error::InvalidRequest(litellm_llms::ErrorDetail::invalid(
+        "responses request",
+        error,
+    ))
 }

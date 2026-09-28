@@ -1,4 +1,4 @@
-use litellm_types::responses::main::ResponsesApiResponse;
+use litellm_types::responses::main::{ResponsesApiRequest, ResponsesApiResponse, ResponsesInput};
 use litellm_types::responses::streaming_websocket::ResponsesWsEvent;
 use serde_json::{Map, Value};
 
@@ -163,27 +163,30 @@ impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
         model: &str,
         input: Value,
         params: Map<String, Value>,
-    ) -> Result<Value, Error> {
-        if !input.is_string() && !input.is_array() {
-            return Err(Error::InvalidRequest(
-                "responses input must be a string or an array".into(),
-            ));
-        }
-        if params
-            .get("stream")
-            .is_some_and(|stream| !stream.is_boolean())
-        {
-            return Err(Error::InvalidRequest("stream must be a boolean".into()));
-        }
-        Ok(Value::Object(
-            params
+    ) -> Result<ResponsesApiRequest, Error> {
+        let input = match input {
+            Value::String(text) => ResponsesInput::Text(text),
+            Value::Array(items) => ResponsesInput::Items(items),
+            _ => {
+                return Err(Error::InvalidRequest(
+                    "responses input must be a string or an array".into(),
+                ));
+            }
+        };
+        let stream = match params.get("stream") {
+            None => None,
+            Some(Value::Bool(stream)) => Some(*stream),
+            Some(_) => return Err(Error::InvalidRequest("stream must be a boolean".into())),
+        };
+        Ok(ResponsesApiRequest {
+            model: model.into(),
+            input,
+            stream,
+            extra: params
                 .into_iter()
-                .chain([
-                    ("model".into(), Value::String(model.into())),
-                    ("input".into(), input),
-                ])
+                .filter(|(name, _)| !matches!(name.as_str(), "model" | "input" | "stream"))
                 .collect(),
-        ))
+        })
     }
 
     fn transform_response_api_response(&self, body: Value) -> Result<ResponsesApiResponse, Error> {
@@ -195,6 +198,28 @@ impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[rstest::rstest]
+    #[case::text(serde_json::json!("hello"))]
+    #[case::items(serde_json::json!([{"type":"future_item", "payload":42}]))]
+    fn request_transformation_preserves_extensions_and_overrides_reserved_fields(
+        #[case] input: Value,
+    ) {
+        let params = serde_json::json!({"model":"ignored", "input":"ignored", "stream":false, "future_option":{"nested":true}});
+        let request = OpenAiResponsesApiConfig
+            .transform_responses_api_request(
+                "test-model",
+                input.clone(),
+                params.as_object().unwrap().clone(),
+            )
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(request).unwrap(),
+            serde_json::json!({
+                "model":"test-model", "input":input, "stream":false, "future_option":{"nested":true},
+            })
+        );
+    }
 
     #[rstest::rstest]
     #[case::default(None)]

@@ -3,6 +3,7 @@ use litellm_core_utils::{
     serde_compat::LaxI64,
     url_utils::ApiUrl,
 };
+use litellm_types::recognized::Recognized;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use serde_with::serde_as;
@@ -41,7 +42,7 @@ pub struct CohereOptions {
 pub struct CohereRequest {
     pub model: String,
     pub document: CohereParseDocument,
-    pub output_format: String,
+    pub output_format: Recognized<OutputFormat>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -265,11 +266,7 @@ fn build_request(model: &str, image_url: String, params: &CohereOptions) -> Cohe
     CohereRequest {
         model: model.into(),
         document: CohereParseDocument::ImageUrl { image_url },
-        output_format: match params.output_format.unwrap_or_default() {
-            OutputFormat::Markdown => "markdown",
-            OutputFormat::Blocks => "blocks",
-        }
-        .into(),
+        output_format: Recognized::Known(params.output_format.unwrap_or_default()),
     }
 }
 

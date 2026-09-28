@@ -1,4 +1,4 @@
-use litellm_types::responses::main::ResponsesApiResponse;
+use litellm_types::responses::main::{ResponsesApiRequest, ResponsesApiResponse};
 use litellm_types::responses::streaming_websocket::ResponsesWsEvent;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -30,7 +30,7 @@ pub trait BaseResponsesApiConfig: Sync {
         model: &str,
         input: Value,
         params: Map<String, Value>,
-    ) -> Result<Value, Error>;
+    ) -> Result<ResponsesApiRequest, Error>;
 
     fn transform_response_api_response(&self, body: Value) -> Result<ResponsesApiResponse, Error>;
 }

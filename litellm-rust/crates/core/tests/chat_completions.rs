@@ -383,3 +383,65 @@ async fn completed_chat_records_route_and_resolved_provider(
     assert_eq!(summaries[0]["outcome"], "success");
     assert_eq!(summaries[0]["stream"], false);
 }
+
+struct RewriteRequest(Value);
+
+impl litellm_host::hooks::RouteHooks<Error> for RewriteRequest {
+    async fn before_provider_request(
+        &self,
+        wire: litellm_host::event::WireRequest,
+        _: litellm_host::event::RequestContext,
+    ) -> Result<litellm_host::event::WireRequest, Error> {
+        Ok(litellm_host::event::WireRequest {
+            body: self.0.clone(),
+            ..wire
+        })
+    }
+
+    async fn on_event(&self, _: litellm_host::event::MachineEvent) -> Result<(), Error> {
+        Ok(())
+    }
+}
+
+#[rstest]
+#[case::anthropic("anthropic/test-model", json!({"model":"test-model", "messages":"invalid"}))]
+#[case::openai_like("openai_like/test-model", json!({"model":42, "messages":[]}))]
+#[tokio::test]
+async fn malformed_hook_requests_fail_before_sending(
+    request: ChatCompletionsRequest<'static>,
+    #[case] model: &str,
+    #[case] body: Value,
+) {
+    let upstream = upstream([]).await;
+    let base = upstream.uri();
+    let result = chat_completions_route()
+        .execute(
+            ChatCompletionsRequest {
+                model,
+                api_base: Some(&base),
+                ..request
+            },
+            &RewriteRequest(body),
+        )
+        .await;
+    assert!(matches!(result, Err(Error::InvalidRequest(_))));
+    assert!(received(&upstream).await.is_empty());
+}
+
+#[rstest]
+#[case::anthropic("anthropic/test-model")]
+#[case::openai_like("openai_like/test-model")]
+#[tokio::test]
+async fn hooks_cannot_enable_unsupported_chat_streaming(
+    request: ChatCompletionsRequest<'static>,
+    #[case] model: &str,
+) {
+    let upstream = upstream([]).await;
+    let base = upstream.uri();
+    let result = chat_completions_route().execute(
+        ChatCompletionsRequest { model, api_base: Some(&base), ..request },
+        &RewriteRequest(json!({"model":"test-model", "messages":[{"role":"user", "content":"hello"}], "stream":true})),
+    ).await;
+    assert!(matches!(result, Err(Error::Unsupported("streaming"))));
+    assert!(received(&upstream).await.is_empty());
+}

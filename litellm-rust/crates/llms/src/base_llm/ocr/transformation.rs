@@ -426,7 +426,7 @@ pub struct OcrResponseContext<'a> {
 
 pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
     type OcrParams: Send + Sync;
-    type ProviderRequest: Serialize + Send;
+    type ProviderRequest: Serialize + DeserializeOwned + Send;
     type Environment: OcrEnvironment;
 
     fn get_supported_ocr_params(&self, _model: &str) -> &'static [&'static str] {
