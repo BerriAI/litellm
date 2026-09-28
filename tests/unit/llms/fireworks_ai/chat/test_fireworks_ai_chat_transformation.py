@@ -1,6 +1,8 @@
 import json
+from typing import Final
 from unittest.mock import MagicMock, patch
 
+import httpx
 import pytest
 
 import litellm
@@ -1804,35 +1806,40 @@ def test_listed_router_short_name_resolves_to_its_catalog_row_and_accepts_tool_c
     assert {"tools", "tool_choice", "reasoning_effort"} <= set(params), params
 
 
+class _RecordingChatHandler:
+    def __init__(self, reply: dict[str, object]) -> None:
+        self.reply: Final = reply
+        self.request_body: dict[str, object] | None = None
+
+    def __call__(self, request: httpx.Request) -> httpx.Response:
+        self.request_body = json.loads(request.content)
+        return httpx.Response(200, json=self.reply, request=request)
+
+
 @pytest.mark.parametrize("router", _LISTED_ROUTERS)
 def test_listed_router_request_is_sent_to_the_router_resource_and_billed_at_the_served_models_rate(router: str) -> None:
-    served_model = "glm-5p3-flash"
-    body = {
-        "id": f"chat-{router}",
-        "object": "chat.completion",
-        "created": 1,
-        "model": served_model,
-        "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
-        "usage": {"prompt_tokens": 23, "completion_tokens": 41, "total_tokens": 64},
-    }
-    raw_response = MagicMock()
-    raw_response.status_code = 200
-    raw_response.headers = {}
-    raw_response.text = json.dumps(body)
-    raw_response.json = lambda: body
-    client = MagicMock(spec=HTTPHandler)
-    client.post.return_value = raw_response
+    served_model: Final = "glm-5p3-flash"
+    handler: Final = _RecordingChatHandler(
+        {
+            "id": f"chat-{router}",
+            "object": "chat.completion",
+            "created": 1,
+            "model": served_model,
+            "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+            "usage": {"prompt_tokens": 23, "completion_tokens": 41, "total_tokens": 64},
+        }
+    )
 
-    response = litellm.completion(
+    response: Final = litellm.completion(
         model=f"fireworks_ai/{router}",
         messages=[{"role": "user", "content": "ping"}],
         api_key="fw-test-key",
-        client=client,
+        client=HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(handler))),
     )
 
-    sent_body = json.loads(client.post.call_args.kwargs["data"])
-    served_info = litellm.model_cost[f"fireworks_ai/{served_model}"]
-    expected_cost = 23 * served_info["input_cost_per_token"] + 41 * served_info["output_cost_per_token"]
-    assert sent_body["model"] == f"accounts/fireworks/routers/{router}"
+    served_info: Final = litellm.model_cost[f"fireworks_ai/{served_model}"]
+    expected_cost: Final = 23 * served_info["input_cost_per_token"] + 41 * served_info["output_cost_per_token"]
+    assert handler.request_body is not None
+    assert handler.request_body["model"] == f"accounts/fireworks/routers/{router}"
     assert expected_cost > 0
     assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
