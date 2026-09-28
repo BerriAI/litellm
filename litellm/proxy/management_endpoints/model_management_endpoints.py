@@ -401,9 +401,7 @@ def _raise_on_unroutable_model_deployment(
     incoming_params: GenericLiteLLMParams | None,
     existing_params: GenericLiteLLMParams | None = None,
 ) -> None:
-    violation = _validate_routable_model_deployment(
-        incoming_params=incoming_params, existing_params=existing_params
-    )
+    violation = _validate_routable_model_deployment(incoming_params=incoming_params, existing_params=existing_params)
     if violation is None:
         return
     raise ProxyException(
