@@ -978,6 +978,25 @@ def _reasoning_chunk(reasoning: str, finish_reason: str | None = None) -> ModelR
     )
 
 
+def _signature_only_thinking_chunk(signature: str) -> ModelResponseStream:
+    return ModelResponseStream(
+        id=CHAT_COMPLETION_ID,
+        created=1748575031,
+        model="claude-haiku-4-5",
+        object="chat.completion.chunk",
+        choices=[
+            StreamingChoices(
+                index=0,
+                delta=Delta(
+                    role="assistant",
+                    thinking_blocks=[{"type": "thinking", "thinking": "", "signature": signature}],
+                ),
+                finish_reason=None,
+            )
+        ],
+    )
+
+
 async def _collect_events(
     iterator: LiteLLMCompletionStreamingIterator, sync_mode: bool
 ) -> list[BaseLiteLLMOpenAIResponseObject]:
@@ -1013,6 +1032,27 @@ async def test_tool_only_stream_emits_no_message_item_events(sync_mode: bool):
         in (ResponsesAPIStreamEvents.CONTENT_PART_ADDED, ResponsesAPIStreamEvents.CONTENT_PART_DONE)
     ] == []
     assert any(getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED for event in events)
+
+
+@pytest.mark.parametrize("sync_mode", [True, False])
+@pytest.mark.asyncio
+async def test_signature_only_thinking_streams_a_replayable_reasoning_item(sync_mode: bool):
+    iterator: Final = _build_iterator([_signature_only_thinking_chunk("sig_only"), _chunk("4", finish_reason="stop")])
+
+    events: Final = await _collect_events(iterator, sync_mode)
+
+    added_item_types: Final = [
+        event.item.type
+        for event in events
+        if getattr(event, "type", None) == ResponsesAPIStreamEvents.OUTPUT_ITEM_ADDED
+    ]
+    completed: Final = next(
+        event for event in events if getattr(event, "type", None) == ResponsesAPIStreamEvents.RESPONSE_COMPLETED
+    )
+    reasoning_items: Final = [item for item in completed.response.output if getattr(item, "type", None) == "reasoning"]
+    assert added_item_types[0] == "reasoning"
+    assert len(reasoning_items) == 1
+    assert json.loads(reasoning_items[0].encrypted_content)[0]["signature"] == "sig_only"
 
 
 @pytest.mark.parametrize("sync_mode", [True, False])

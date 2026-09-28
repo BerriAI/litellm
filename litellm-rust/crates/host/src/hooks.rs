@@ -1,145 +1,75 @@
-use std::future::Future;
-
 use crate::{
-    event::{MachineEvent, RequestContext, WireRequest},
-    machine::{HostChannel, MachineFault},
-    protocol::Protocol,
+    interceptors::{RawResponse, RequestContext, WireRequest},
+    lifecycle::{CallEvent, Timing},
 };
 
-/// What a route reaches for mid-call: the send-time rewrite and the events it reports.
-/// Python's `logging_obj.pre_call` and `post_call`, in that order.
-pub trait RouteHooks<E>: Send + Sync {
-    fn before_send(
-        &self,
-        wire: WireRequest,
-        context: RequestContext,
-    ) -> impl Future<Output = Result<WireRequest, E>> + Send;
+pub trait HookRuntime {
+    type Context<'a>;
+    type Arguments;
+    type Response;
+    type Chunk;
+    type Error;
+    type Step<H, T>;
 
-    fn emit(&self, event: MachineEvent) -> impl Future<Output = Result<(), E>> + Send;
+    fn ready<H, T>(value: T) -> Self::Step<H, T>;
 }
 
-/// No host: the wire request goes out as prepared and nothing observes the call.
-impl<E> RouteHooks<E> for () {
-    async fn before_send(&self, wire: WireRequest, _: RequestContext) -> Result<WireRequest, E> {
-        Ok(wire)
+pub type RuntimeCallEvent<'a, R> =
+    CallEvent<&'a <R as HookRuntime>::Response, &'a <R as HookRuntime>::Error, &'a RawResponse>;
+
+pub trait CallHooks<R: HookRuntime>: Sized {
+    fn prepare_arguments(
+        &mut self,
+        _runtime: R::Context<'_>,
+        arguments: R::Arguments,
+        _started_at: f64,
+    ) -> Result<R::Step<Self, R::Arguments>, R::Error> {
+        Ok(R::ready(arguments))
     }
 
-    async fn emit(&self, _: MachineEvent) -> Result<(), E> {
+    fn arguments_prepared(
+        &mut self,
+        _runtime: R::Context<'_>,
+        _arguments: &R::Arguments,
+    ) -> Result<(), R::Error> {
         Ok(())
     }
-}
 
-impl<R: Protocol> RouteHooks<R::Error> for HostChannel<R>
-where
-    R::Error: From<MachineFault>,
-{
-    async fn before_send(
-        &self,
-        wire: WireRequest,
-        context: RequestContext,
-    ) -> Result<WireRequest, R::Error> {
-        HostChannel::before_send(self, wire, context).await
+    fn before_provider_request(
+        &mut self,
+        _runtime: R::Context<'_>,
+        wire: Box<WireRequest>,
+        _context: &RequestContext,
+    ) -> Result<R::Step<Self, Box<WireRequest>>, R::Error> {
+        Ok(R::ready(wire))
     }
 
-    async fn emit(&self, event: MachineEvent) -> Result<(), R::Error> {
-        HostChannel::emit(self, event).await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use std::convert::Infallible;
-
-    use serde_json::json;
-
-    use super::*;
-    use crate::{
-        event::RawResponse,
-        host::HostOp,
-        machine::{CallMachine, Machine, MachineStep},
-    };
-
-    struct Unit;
-
-    #[derive(Clone, Debug)]
-    struct Fault;
-
-    impl Protocol for Unit {
-        type Response = (WireRequest, ());
-        type Error = Fault;
-        type Projection = ();
-        type Op = Infallible;
-        type Chunk = Infallible;
-        type StreamHead = Infallible;
+    fn transform_response(
+        &mut self,
+        _runtime: R::Context<'_>,
+        response: R::Response,
+        _timing: Timing,
+    ) -> Result<R::Step<Self, R::Response>, R::Error> {
+        Ok(R::ready(response))
     }
 
-    impl From<MachineFault> for Fault {
-        fn from(_: MachineFault) -> Self {
-            Fault
-        }
+    fn on_event(
+        &mut self,
+        _runtime: R::Context<'_>,
+        _event: RuntimeCallEvent<'_, R>,
+    ) -> Result<R::Step<Self, ()>, R::Error> {
+        Ok(R::ready(()))
     }
 
-    fn wire(url: &str) -> WireRequest {
-        WireRequest {
-            url: url.into(),
-            headers: Vec::new(),
-            body: json!({}),
-        }
+    fn on_stream_open(&mut self, _runtime: R::Context<'_>) -> Result<(), R::Error> {
+        Ok(())
     }
 
-    fn context() -> RequestContext {
-        RequestContext {
-            model: "m".into(),
-            custom_llm_provider: "p".into(),
-            optional_params: json!({}),
-            secret_fields: Vec::new(),
-            api_key: None,
-        }
-    }
-
-    #[tokio::test]
-    async fn the_channel_yields_each_hook_as_its_op_and_returns_the_answer() {
-        let mut machine = CallMachine::<Unit>::new(|channel| {
-            Box::pin(async move {
-                let sent = RouteHooks::before_send(&channel, wire("prepared"), context()).await?;
-                RouteHooks::emit(
-                    &channel,
-                    MachineEvent::ResponseReceived {
-                        raw: RawResponse { body: "raw".into() },
-                    },
-                )
-                .await?;
-                Ok((sent, ()))
-            })
-        });
-
-        let Ok(MachineStep::Host(HostOp::BeforeSend { wire, reply, .. })) = machine.resume().await
-        else {
-            panic!("before_send yields BeforeSend");
-        };
-        assert_eq!(wire.url, "prepared");
-        reply.send(WireRequest {
-            url: "rewritten".into(),
-            ..*wire
-        });
-
-        let Ok(MachineStep::Host(HostOp::Emit(event, reply))) = machine.resume().await else {
-            panic!("emit yields Emit");
-        };
-        assert!(matches!(event, MachineEvent::ResponseReceived { .. }));
-        reply.send(());
-
-        let Ok(MachineStep::Complete((sent, ()))) = machine.resume().await else {
-            panic!("the call completes with the answers");
-        };
-        assert_eq!(sent.url, "rewritten");
-    }
-
-    #[tokio::test]
-    async fn no_hooks_pass_the_wire_request_through() {
-        let sent = RouteHooks::<Fault>::before_send(&(), wire("prepared"), context())
-            .await
-            .unwrap();
-        assert_eq!(sent.url, "prepared");
+    fn on_stream_chunk(
+        &mut self,
+        _runtime: R::Context<'_>,
+        _chunk: &R::Chunk,
+    ) -> Result<(), R::Error> {
+        Ok(())
     }
 }
