@@ -1,10 +1,9 @@
-from unittest.mock import MagicMock, patch
-import json
-import datetime
 import asyncio
+import datetime
+import json
+from unittest.mock import MagicMock, patch
 
 import pytest
-
 
 from litellm.caching.s3_cache import S3Cache
 
@@ -341,3 +340,26 @@ async def test_s3_cache_async_disconnect(mock_s3_dependencies):
 
     # Should not raise any exceptions
     await cache.disconnect()
+
+
+@pytest.mark.parametrize("stored", [b"(1, {'role': 'assistant'})", "(1, {'role': 'assistant'})"])
+def test_s3_cache_get_cache_treats_non_json_stored_values_as_misses(mock_s3_dependencies, stored):
+    """A stored value that is not JSON is a cache miss instead of being parsed as a Python literal"""
+    cache = S3Cache("test-bucket")
+
+    mock_response = {"Body": MagicMock()}
+    mock_response["Body"].read.return_value = stored
+    cache.s3_client.get_object.return_value = mock_response
+
+    assert cache.get_cache("test_key") is None
+
+
+@pytest.mark.parametrize("stored", [b'{"key": "value"}', '{"key": "value"}'])
+def test_s3_cache_get_cache_parses_json_stored_values(mock_s3_dependencies, stored):
+    cache = S3Cache("test-bucket")
+
+    mock_response = {"Body": MagicMock()}
+    mock_response["Body"].read.return_value = stored
+    cache.s3_client.get_object.return_value = mock_response
+
+    assert cache.get_cache("test_key") == {"key": "value"}

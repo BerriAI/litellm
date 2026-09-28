@@ -1556,3 +1556,14 @@ async def test_async_rpush_and_trim_runs_push_and_trim_in_one_transaction(monkey
     assert pushed_len == 4
     assert rows == ["b", "c", "d"]
     assert pipe.queued == [("rpush", "ns:buf", "c", "d"), ("ltrim", "ns:buf", "-3", "-1")]
+
+
+@pytest.mark.parametrize("stored", [b"(1, {'role': 'assistant'})", "(1, {'role': 'assistant'})"])
+def test_get_cache_logic_treats_non_json_stored_values_as_misses(stored, redis_no_ping: None):
+    with patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
+        "litellm._redis.get_redis_client", return_value=MagicMock()
+    ):
+        cache = RedisCache(host="127.0.0.1", port=6379)
+
+    assert cache._get_cache_logic(stored) is None
+    assert cache._get_cache_logic(b'{"role": "assistant"}') == {"role": "assistant"}

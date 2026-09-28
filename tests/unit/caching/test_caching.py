@@ -1,8 +1,9 @@
 import asyncio
 import logging
 import re
+import time
 from typing import Final
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 import pytest
 
@@ -403,3 +404,21 @@ def test_provider_specific_cache_key_ignores_litellm_owned_kwargs(monkeypatch: p
     assert cache.get_cache_key(**request, _litellm_control={"stream_chunk_size": 64}) == base_key
     assert cache.get_cache_key(**request, litellm_trace_id="trace-1") == base_key
     assert cache.get_cache_key(**{**request, "top_k": 6}) != base_key
+
+
+@pytest.mark.parametrize(
+    ("stored_response", "expected"),
+    [
+        ('{"role": "assistant", "content": "hi"}', {"role": "assistant", "content": "hi"}),
+        ("(1, {'role': 'assistant'})", None),
+    ],
+)
+def test_get_cache_parses_json_hits_and_treats_non_json_values_as_misses(
+    stored_response: str, expected: dict[str, str] | None
+) -> None:
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+
+    with patch.object(cache.cache, "get_cache", return_value={"timestamp": time.time(), "response": stored_response}):
+        result = cache.get_cache(cache_key="k", model="gpt-4.1-mini", messages=[{"role": "user", "content": "hi"}])
+
+    assert result == expected

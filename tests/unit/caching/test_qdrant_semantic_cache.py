@@ -1061,3 +1061,32 @@ async def test_qdrant_async_embedding_truncates_off_the_event_loop(monkeypatch):
     assert response["data"][0]["embedding"] == [0.1, 0.2]
     assert _token_count("sem-embed", router.aembedding.call_args.kwargs["input"]) == 5
     assert_loop_stayed_free(took, lags)
+
+
+def test_qdrant_semantic_cache_get_cache_treats_non_json_payload_as_miss(monkeypatch):
+    """A stored value that is not JSON is a cache miss instead of being parsed as a Python literal"""
+    with (
+        patch(
+            "litellm.llms.custom_httpx.http_handler._get_httpx_client"
+        ) as mock_sync_client,
+        patch("litellm.llms.custom_httpx.http_handler.get_async_httpx_client"),
+    ):
+        mock_response = MagicMock()
+        mock_response.status_code = 200
+        mock_response.json.return_value = {"result": {"exists": True}}
+
+        mock_sync_client_instance = MagicMock()
+        mock_sync_client_instance.get.return_value = mock_response
+        mock_sync_client.return_value = mock_sync_client_instance
+
+        from litellm.caching.qdrant_semantic_cache import QdrantSemanticCache
+
+        qdrant_cache = QdrantSemanticCache(
+            collection_name="test_collection",
+            qdrant_api_base="http://test.qdrant.local",
+            qdrant_api_key="test_key",
+            similarity_threshold=0.8,
+        )
+
+        assert qdrant_cache._get_cache_logic(cached_response="(1, {'role': 'assistant'})") is None
+        assert qdrant_cache._get_cache_logic(cached_response='{"id": "test-123"}') == {"id": "test-123"}

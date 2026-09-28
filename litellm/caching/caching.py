@@ -7,7 +7,6 @@
 #
 #  Thank you users! We ❤️ you! - Krrish & Ishaan
 
-import ast
 import hashlib
 import json
 import logging
@@ -568,7 +567,7 @@ class Cache:
                 else:
                     cached_response = json.loads(cached_response)  # Convert string to dictionary
             except Exception:
-                cached_response = ast.literal_eval(cached_response)
+                return None
             return cached_response
         return cached_result
 

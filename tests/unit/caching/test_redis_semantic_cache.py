@@ -1416,3 +1416,21 @@ async def test_redis_async_embedding_truncates_off_the_event_loop(monkeypatch):
     assert embedding == [0.1, 0.2]
     assert _token_count("sem-embed", router.aembedding.call_args.kwargs["input"]) == 5
     assert_loop_stayed_free(took, lags)
+
+
+def test_redis_semantic_cache_get_cache_treats_non_json_response_as_miss(monkeypatch):
+    """A stored value that is not JSON is a cache miss instead of being parsed as a Python literal"""
+    semantic_cache_mock = MagicMock()
+    custom_vectorizer_mock = MagicMock()
+
+    with _fake_redisvl_modules(semantic_cache_mock, custom_vectorizer_mock):
+        from litellm.caching.redis_semantic_cache import RedisSemanticCache
+
+        monkeypatch.setenv("REDIS_HOST", "localhost")
+        monkeypatch.setenv("REDIS_PORT", "6379")
+        monkeypatch.setenv("REDIS_PASSWORD", "test_password")
+
+        redis_semantic_cache = RedisSemanticCache(similarity_threshold=0.8)
+
+        assert redis_semantic_cache._get_cache_logic(cached_response="(1, {'role': 'assistant'})") is None
+        assert redis_semantic_cache._get_cache_logic(cached_response='{"content": "Paris"}') == {"content": "Paris"}

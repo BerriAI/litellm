@@ -8,7 +8,6 @@ Has 4 primary methods:
     - async_get_cache
 """
 
-import ast
 import asyncio
 import functools
 import hashlib
@@ -1534,8 +1533,8 @@ class RedisCache(BaseCache):
         decoded: Final = cached_response.decode("utf-8") if isinstance(cached_response, bytes) else cached_response
         try:
             return json.loads(decoded)
-        except Exception:
-            return ast.literal_eval(decoded)
+        except (TypeError, ValueError):
+            return None
 
     @_redis_circuit_breaker_guard_sync
     def get_cache(self, key, parent_otel_span: Span | None = None, **kwargs):

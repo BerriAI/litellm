@@ -8,7 +8,6 @@ Has 4 methods:
     - async_get_cache
 """
 
-import ast
 import asyncio
 import json
 import os
@@ -178,7 +177,7 @@ class QdrantSemanticCache(BaseCache):
         try:
             cached_response = json.loads(cached_response)  # Convert string to dictionary
         except Exception:
-            cached_response = ast.literal_eval(cached_response)
+            return None
         return cached_response
 
     def _get_qdrant_cache_key_filter(self, key: str) -> dict:

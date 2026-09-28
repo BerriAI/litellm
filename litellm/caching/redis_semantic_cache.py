@@ -9,7 +9,6 @@ This implementation uses RedisVL's SemanticCache to find semantically similar pr
 and their cached responses.
 """
 
-import ast
 import asyncio
 import json
 import os
@@ -395,11 +394,7 @@ class RedisSemanticCache(BaseCache):
         try:
             cached_response = json.loads(cached_response)
         except json.JSONDecodeError:
-            try:
-                cached_response = ast.literal_eval(cached_response)
-            except (ValueError, SyntaxError) as e:
-                print_verbose(f"Error parsing cached response: {e}")
-                return None
+            return None
 
         return cached_response
 

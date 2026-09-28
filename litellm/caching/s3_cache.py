@@ -8,7 +8,6 @@ Has 4 methods:
     - async_get_cache (uses run_in_executor)
 """
 
-import ast
 import asyncio
 import json
 from datetime import datetime, timedelta, timezone
@@ -135,7 +134,7 @@ class S3Cache(BaseCache):
                 try:
                     cached_response = json.loads(cached_response)  # Convert string to dictionary
                 except Exception:
-                    cached_response = ast.literal_eval(cached_response)
+                    return None
             if not isinstance(cached_response, dict):
                 cached_response = dict(cached_response)
             verbose_logger.debug(
