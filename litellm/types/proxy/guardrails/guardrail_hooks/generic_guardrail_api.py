@@ -103,6 +103,31 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         ),
     )
 
+    run_only_on_call_types: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "If set, the guardrail runs only for these call types and every other call type is passed "
+            "through without calling the guardrail endpoint. Takes precedence over skip_call_types. "
+            "Values are CallTypes values, the strings logged as call_type (e.g. ['acompletion', "
+            "'anthropic_messages', 'aresponses']). Unknown values and call_mcp_tool are rejected at "
+            "startup. The call type comes from the authenticated request route: /anthropic/v1/messages "
+            "pass-through calls are anthropic_messages, other pass-through calls are "
+            "pass_through_endpoint, and a batch-file record is classified by its own endpoint when Bedrock "
+            "and Vertex, which run record urls themselves, run it as that call type and its body agrees. "
+            "A call whose type cannot be resolved, including any other batch-file record, still runs "
+            "the guardrail."
+        ),
+    )
+
+    skip_call_types: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Call types that are passed through without calling the guardrail endpoint, e.g. "
+            "['aembedding', 'aimage_generation']. Same values and resolution as run_only_on_call_types. "
+            "Ignored when run_only_on_call_types is set."
+        ),
+    )
+
 
 class GenericGuardrailAPIConfigModel(
     GuardrailConfigModel[GenericGuardrailAPIOptionalParams],

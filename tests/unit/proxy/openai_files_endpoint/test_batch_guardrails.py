@@ -1186,3 +1186,85 @@ async def test_a_dropped_record_without_a_named_guardrail_reports_none():
     result = await _scan_full(_jsonl(_record("b", content="tripwire")), FakeProxyLogging(_hook))
 
     assert result.changes == (RecordDropped(line_number=1, custom_id="b", guardrail=None),)
+
+
+_CHAT_BODY = {"messages": [{"role": "user", "content": "x"}]}
+
+
+@pytest.mark.asyncio
+async def test_a_record_carrying_its_own_logging_obj_is_still_scanned_when_the_guardrail_fails_open(monkeypatch):
+    """A caller's litellm_logging_obj used to crash the guardrail call, which fail_on_error=False then let through."""
+    import httpx
+
+    import litellm
+    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
+    from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
+
+    received = []
+
+    def _respond(request):
+        received.append(json.loads(request.content))
+        return httpx.Response(200, json={"action": "BLOCKED", "blocked_reason": "blocked by test endpoint"})
+
+    guardrail = GenericGuardrailAPI(
+        api_base="https://guardrail.test",
+        guardrail_name="fail-open-guard",
+        event_hook="pre_call",
+        default_on=True,
+        fail_on_error=False,
+        async_handler=AsyncHTTPHandler(transport=httpx.MockTransport(_respond)),
+    )
+    monkeypatch.setattr(litellm, "callbacks", [guardrail])
+    ProxyLogging._callback_capabilities_cache.clear()
+    record = _record("carrier", content="carried chat")
+    record["body"]["litellm_logging_obj"] = {"a": 1}
+
+    result = await _scan_full(_jsonl(record), ProxyLogging(user_api_key_cache=DualCache()))
+
+    assert len(received) == 1, "the record reached the guardrail endpoint"
+    assert result.changes == (RecordDropped(line_number=1, custom_id="carrier", guardrail="generic_guardrail_api"),)
+    ProxyLogging._callback_capabilities_cache.clear()
+
+
+class RouteRecordingProxyLogging(FakeProxyLogging):
+    async def pre_call_hook(self, user_api_key_dict, data, call_type, guardrails_only=False):
+        self.seen.append((call_type, user_api_key_dict.request_route))
+        return data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("url", "body", "expected"),
+    [
+        ("/v1/chat/completions", _CHAT_BODY, ("acompletion", "/v1/chat/completions")),
+        ("/v1/embeddings", {"input": "x"}, ("aembedding", "/v1/embeddings")),
+        ("/custom/unmapped", _CHAT_BODY, ("acompletion", "/chat/completions")),
+        ("/v1/rerank", _CHAT_BODY, ("acompletion", "/chat/completions")),
+        ("", _CHAT_BODY, ("acompletion", "/chat/completions")),
+        ("/v1/messages", _CHAT_BODY, ("anthropic_messages", None)),
+        ("/anthropic/v1/messages", _CHAT_BODY, ("anthropic_messages", None)),
+        ("https://api.openai.com/v1/embeddings", {"input": "x"}, ("aembedding", None)),
+        ("/embeddings", {"input": "x"}, ("aembedding", None)),
+        ("/v1/embeddings", _CHAT_BODY, ("aembedding", None)),
+        ("", {"input": "x"}, ("aembedding", None)),
+        ("/v1/responses", {"input": "x"}, ("aresponses", None)),
+        ("/v1/completions", {"prompt": "x"}, ("atext_completion", None)),
+    ],
+)
+async def test_each_record_is_scanned_under_the_route_every_provider_runs_it_as(url, body, expected):
+    """
+    Guardrails that classify by the key's route see the record's endpoint, not the upload route, and no
+    route at all when some batch provider would run the record as a different call type than its url says
+    """
+    upload_key = UserAPIKeyAuth(api_key="sk-test", request_route="/v1/files")
+    logging_obj = RouteRecordingProxyLogging()
+
+    await scan_batch_input_file(
+        file_source=_jsonl({"custom_id": "r", "method": "POST", "url": url, "body": {"model": "m", **body}}),
+        request_metadata={},
+        user_api_key_dict=upload_key,
+        proxy_logging_obj=logging_obj,
+    )
+
+    assert logging_obj.seen == [expected]
+    assert upload_key.request_route == "/v1/files", "the upload's own key must not be rewritten"

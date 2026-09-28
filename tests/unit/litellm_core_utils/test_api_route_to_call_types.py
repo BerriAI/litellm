@@ -8,8 +8,11 @@ Regression coverage for the guardrail route table bugs:
   take call_types[0] to a handler-less type
 """
 
+import pytest
+
 from litellm.litellm_core_utils.api_route_to_call_types import (
     get_call_types_for_route,
+    get_primary_call_type_for_route,
 )
 from litellm.types.utils import API_ROUTE_TO_CALL_TYPES, CallTypes
 
@@ -110,3 +113,15 @@ class TestExistingRouteResolutionUnchanged:
 
     def test_unknown_route_returns_none(self):
         assert get_call_types_for_route("/not/a/real/route") is None
+
+
+@pytest.mark.parametrize("route", ["/v1/chat/completions", "/v1/embeddings", "/v1/messages", "/v1/realtime"])
+def test_primary_call_type_is_the_first_call_type_of_the_route(route):
+    call_types = get_call_types_for_route(route)
+    assert call_types is not None
+    assert get_primary_call_type_for_route(route) is call_types[0]
+
+
+@pytest.mark.parametrize("route", [None, "", "/not/a/real/route"])
+def test_primary_call_type_is_none_without_a_mapped_route(route):
+    assert get_primary_call_type_for_route(route) is None

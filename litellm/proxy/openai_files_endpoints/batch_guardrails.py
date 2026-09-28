@@ -23,7 +23,11 @@ from typing_extensions import assert_never
 
 from litellm.exceptions import GuardrailRaisedException
 from litellm.integrations.custom_guardrail import is_guardrail_intervention
-from litellm.litellm_core_utils.api_route_to_call_types import get_call_types_for_route
+from litellm.litellm_core_utils.api_route_to_call_types import (
+    get_call_types_for_route,
+    get_primary_call_type_for_route,
+    get_routes_for_call_type,
+)
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.types.llms.openai import BatchGuardrailRecord, BatchGuardrailReport
 from litellm.types.utils import CallTypes, CallTypesLiteral
@@ -56,7 +60,8 @@ _ROUTE_APPLIED_KEY: Final = "sensitive_data_routing_applied"
 # online path either. `guardrails` is dropped because guardrail selection reads it ahead of the
 # proxy-injected list, so leaving it would let a record's own body opt out of the chain its key
 # and team selected; online that key can only add to the list, never replace it.
-_INJECTED_KEYS: Final = frozenset({_SCAN_METADATA_KEY, "metadata", "guardrails"})
+# `litellm_logging_obj` is dropped because guardrails read it as the proxy's own logging object.
+_INJECTED_KEYS: Final = frozenset({_SCAN_METADATA_KEY, "metadata", "guardrails", "litellm_logging_obj"})
 
 # Only what guardrail dispatch reads. The parent OTel span is deliberately left out: parenting one
 # guardrail span per record would put tens of thousands of spans on a single upload's trace.
@@ -280,22 +285,26 @@ def _iter_records(source: BinaryIO) -> Iterator[_ParsedRecord]:
         yield _ParsedRecord(line_number=line_number, payload=json.loads(raw_line))
 
 
-def _call_type_from_url(url: str) -> CallTypesLiteral | None:
+def _url_path(url: str) -> str | None:
     """
-    Resolve the route a record names, tolerating how callers actually write it.
+    The route a record names, tolerating how callers actually write it.
 
     An absolute url has to reduce to its path or nothing matches, and a record naming
     ``/v1/responses`` in full would fall through to its body, where ``input`` reads as an
     embedding and the record gets scanned as the wrong call type rather than the right one.
     """
     try:
-        path: Final = urlsplit(url).path.split("?")[0].rstrip("/")
+        return urlsplit(url).path.split("?")[0].rstrip("/")
     except ValueError:
         # urlsplit rejects a few malformed authorities outright, and the validation that ran
         # before this only checks the key is present. An unreadable url is one we do not
         # recognize, which is what falling back to the body shape already handles.
         return None
-    call_types: Final = get_call_types_for_route(path)
+
+
+def _call_type_from_url(url: str) -> CallTypesLiteral | None:
+    path: Final = _url_path(url)
+    call_types: Final = get_call_types_for_route(path) if path else None
     if call_types is None:
         return None
     scannable: Final = next((c for c in call_types if c in _SCANNABLE_CALL_TYPES), None)
@@ -317,6 +326,61 @@ def _scannable_call_type(url: object, body: Mapping[str, object]) -> CallTypesLi
     """
     from_url: Final = _call_type_from_url(url) if isinstance(url, str) and url else None
     return from_url if from_url is not None else _call_type_from_body(body)
+
+
+def _route_runs_as(route: str, call_type: CallTypesLiteral) -> bool:
+    primary: Final = get_primary_call_type_for_route(route)
+    return primary is not None and primary.value == call_type
+
+
+def _record_route(url: object, call_type: CallTypesLiteral) -> str | None:
+    """
+    The endpoint route a record is scanned as, so guardrails that read the key's route see the
+    record's endpoint rather than the upload route (``/v1/files``), which names no scannable call.
+    """
+    path: Final = _url_path(url) if isinstance(url, str) and url else None
+    candidates: Final = (*((path,) if path else ()), *get_routes_for_call_type(CallTypes(call_type)))
+    return next((route for route in candidates if _route_runs_as(route, call_type)), None)
+
+
+def _executed_call_types(payload: Mapping[str, object]) -> frozenset[str]:
+    """
+    The call types Bedrock and Vertex run this record as, from their own record classifiers. OpenAI and
+    Azure run the record's url, which is already the scan's call type whenever the url is recognized.
+    """
+    from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+    from litellm.llms.vertex_ai.files.transformation import (
+        _is_embeddings_batch_entry,  # pyright: ignore[reportPrivateUsage]  # Vertex's runtime rule
+    )
+    from litellm.types.llms.bedrock import BedrockBatchRecordKind
+
+    bedrock_call_types: Final = MappingProxyType(
+        {
+            BedrockBatchRecordKind.CHAT: CallTypes.acompletion,
+            BedrockBatchRecordKind.TEXT_COMPLETION: CallTypes.atext_completion,
+            BedrockBatchRecordKind.RESPONSES: CallTypes.aresponses,
+            BedrockBatchRecordKind.EMBEDDING: CallTypes.aembedding,
+        }
+    )
+    classify: Final = BedrockFilesConfig._classify_batch_record  # pyright: ignore[reportPrivateUsage]  # its own rule
+    bedrock_kind: Final = classify(payload)  # pyright: ignore[reportArgumentType]  # reads only url and body
+    vertex_embeds: Final = _is_embeddings_batch_entry(payload)
+    return frozenset(
+        {
+            bedrock_call_types[bedrock_kind].value,
+            (CallTypes.aembedding if vertex_embeds else CallTypes.acompletion).value,
+        }
+    )
+
+
+def _filter_route(payload: Mapping[str, object], body: Mapping[str, object], call_type: CallTypesLiteral) -> str | None:
+    """
+    The route call-type filters see for a record, or None when the scan's call type is not the one every
+    provider would run it as or disagrees with the body, so a relabeled record is scanned rather than skipped.
+    """
+    if _call_type_from_body(body) != call_type or _executed_call_types(payload) != frozenset({call_type}):
+        return None
+    return _record_route(payload.get("url"), call_type)
 
 
 def _custom_id_of(payload: Mapping[str, object]) -> str | None:
@@ -394,7 +458,9 @@ async def _scan_record(
         # The chain hands back the body it produced, which may be a replacement for the dict it was
         # given rather than that same dict mutated, so this is what gets compared.
         scanned: Final[dict] = await proxy_logging_obj.pre_call_hook(  # mutable-ok: the guardrails' own dict
-            user_api_key_dict=user_api_key_dict,
+            user_api_key_dict=user_api_key_dict.model_copy(
+                update={"request_route": _filter_route(record.payload, body, call_type)}
+            ),
             data=scan_input,
             call_type=call_type,
             guardrails_only=True,
