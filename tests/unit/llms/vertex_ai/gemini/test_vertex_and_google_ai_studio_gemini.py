@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse, completion
-from litellm.llms.anthropic.experimental_pass_through.messages import handler as anthropic_messages_handler
+from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
@@ -6157,7 +6157,7 @@ def test_gemini_candidate_with_finish_reason_no_content_chat_completion():
 
 
 def test_gemini_candidate_with_finish_reason_no_content_anthropic_messages():
-    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.pass_through.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
 
@@ -6230,7 +6230,7 @@ def test_gemini_candidate_with_finish_reason_no_content_responses_api():
 
 
 def test_gemini_candidate_other_finish_reasons_no_content():
-    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.pass_through.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
     from litellm.responses.litellm_completion_transformation.transformation import (

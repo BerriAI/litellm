@@ -125,6 +125,7 @@ def test_sync_first_event_emitted_after_a_single_frame():
     response = httpx.Response(200, stream=stream)
 
     wrapper = SagemakerChatConfig().get_sync_custom_stream_wrapper(
+        litellm_params={},
         model="phi-4",
         custom_llm_provider="sagemaker_chat",
         logging_obj=MagicMock(),
@@ -147,6 +148,7 @@ def test_sync_events_emitted_incrementally_without_bursting():
     response = httpx.Response(200, stream=stream)
 
     wrapper = SagemakerChatConfig().get_sync_custom_stream_wrapper(
+        litellm_params={},
         model="phi-4",
         custom_llm_provider="sagemaker_chat",
         logging_obj=MagicMock(),
@@ -171,6 +173,7 @@ async def test_async_first_event_emitted_after_a_single_frame():
     response = httpx.Response(200, stream=stream)
 
     wrapper = await SagemakerChatConfig().get_async_custom_stream_wrapper(
+        litellm_params={},
         model="phi-4",
         custom_llm_provider="sagemaker_chat",
         logging_obj=MagicMock(),

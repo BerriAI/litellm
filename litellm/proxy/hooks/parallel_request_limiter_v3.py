@@ -6,6 +6,7 @@ This is currently in development and not yet ready for production.
 
 import asyncio
 import binascii
+import itertools
 import logging
 import os
 import uuid
@@ -25,7 +26,9 @@ from typing import (
     TypedDict,
 )
 
-from pydantic import TypeAdapter
+from fastapi import HTTPException
+from pydantic import TypeAdapter, ValidationError
+from starlette.status import HTTP_503_SERVICE_UNAVAILABLE
 from typing_extensions import NotRequired, ReadOnly
 
 from litellm import DualCache
@@ -112,6 +115,44 @@ def _resolve_model_group_alias_via_proxy_router(model: str) -> str | None:
     return resolve_model_group_alias(llm_router.model_group_alias, model)
 
 
+FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING: Final = "fail_closed_rate_limit_enforcement"
+RATE_LIMIT_UNVERIFIABLE_MESSAGE: Final = (
+    "Rate limit enforcement unavailable: request counters could not be verified against Redis, and "
+    "fail_closed_rate_limit_enforcement is enabled, so the request was rejected to avoid exceeding the "
+    "configured rate limit. Retry shortly."
+)
+
+
+class RateLimitUnverifiableError(HTTPException):
+    def __init__(self) -> None:
+        super().__init__(
+            status_code=HTTP_503_SERVICE_UNAVAILABLE,
+            detail={"error": RATE_LIMIT_UNVERIFIABLE_MESSAGE},
+        )
+
+
+_FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG: Final = TypeAdapter(bool | None)
+
+
+def fail_closed_rate_limit_enforcement_enabled(general_settings: Mapping[str, object]) -> bool:
+    raw_value: Final = general_settings.get(FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING)
+    try:
+        return _FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_FLAG.validate_python(raw_value) is True
+    except ValidationError:
+        verbose_proxy_logger.warning(
+            "general_settings.%s=%r is not a boolean, treating it as disabled",
+            FAIL_CLOSED_RATE_LIMIT_ENFORCEMENT_SETTING,
+            raw_value,
+        )
+        return False
+
+
+def _fail_closed_rate_limit_enforcement_from_general_settings() -> bool:
+    from litellm.proxy.proxy_server import general_settings
+
+    return fail_closed_rate_limit_enforcement_enabled(general_settings)
+
+
 def _sibling_counter_keys(window_key: str) -> tuple[str, str]:
     prefix: Final = window_key.removesuffix(":window")
     return f"{prefix}:requests", f"{prefix}:tokens"
@@ -155,6 +196,8 @@ end
 
 return results
 """
+
+BATCH_COUNTER_READ_SCRIPT: Final = "return redis.call('MGET', unpack(KEYS))"
 
 CHECK_AND_INCREMENT_BY_N_SCRIPT: Final = """
 -- Atomic check-and-increment-by-N across one or more descriptors.
@@ -588,6 +631,14 @@ class RequestRateLimiterStash:
 
 
 @dataclass(frozen=True, slots=True)
+class CounterRefund:
+    window_key: str
+    counter_key: str
+    window_start: str
+    increment: int
+
+
+@dataclass(frozen=True, slots=True)
 class TagRateLimit:
     rpm_limit: int | None
     tpm_limit: int | None
@@ -679,6 +730,7 @@ def _parse_output_cap_value(raw_value: object) -> int | None:
 
 class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
     batch_rate_limiter_script: _AsyncLuaScript | None
+    batch_counter_read_script: _AsyncLuaScript | None
     token_increment_script: _AsyncLuaScript | None
     check_and_increment_by_n_script: _AsyncLuaScript | None
     window_guarded_token_increment_script: _AsyncLuaScript | None
@@ -692,14 +744,19 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         time_provider: Callable[[], datetime] | None = None,
         tag_rate_limit_resolver: TagRateLimitResolver = resolve_tag_rate_limits_from_db,
         model_group_resolver: Callable[[str], str | None] = _resolve_model_group_alias_via_proxy_router,
+        fail_closed_resolver: Callable[[], bool] = _fail_closed_rate_limit_enforcement_from_general_settings,
     ):
         self.internal_usage_cache = internal_usage_cache
         self._time_provider = time_provider or datetime.now
         self._tag_rate_limit_resolver = tag_rate_limit_resolver
         self._model_group_resolver = model_group_resolver
+        self._fail_closed_resolver = fail_closed_resolver
         if self.internal_usage_cache.dual_cache.redis_cache is not None:
             self.batch_rate_limiter_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 BATCH_RATE_LIMITER_SCRIPT
+            )
+            self.batch_counter_read_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
+                BATCH_COUNTER_READ_SCRIPT
             )
             self.token_increment_script = self.internal_usage_cache.dual_cache.redis_cache.async_register_script(
                 TOKEN_INCREMENT_SCRIPT
@@ -723,6 +780,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
         else:
             self.batch_rate_limiter_script = None
+            self.batch_counter_read_script = None
             self.token_increment_script = None
             self.check_and_increment_by_n_script = None
             self.window_guarded_token_increment_script = None
@@ -1188,10 +1246,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         keys_to_fetch: list[str],
         cache_values: CacheCounterValues,
         key_metadata: dict[str, WindowKeyMetadata],
+        read_only: bool = False,
     ) -> RateLimitResponse:
         """
         Check if the cache values are over the limit.
         """
+        pending_increment: Final = 1 if read_only else 0
         statuses: Final[list[RateLimitStatus]] = []
         overall_code = "OK"
 
@@ -1216,7 +1276,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             if current_limit is None or rate_limit_type is None:
                 continue
 
-            if counter_value is not None and int(counter_value) > current_limit:
+            if counter_value is not None and int(counter_value) + pending_increment > current_limit:
                 overall_code = "OVER_LIMIT"
                 item_code = "OVER_LIMIT"
 
@@ -1312,6 +1372,50 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             local_only=True,
         )
 
+    async def _read_counter_values_from_redis(self, keys: list[str]) -> CacheCounterValues:
+        read_script: Final = self.batch_counter_read_script
+        if read_script is None:
+            return []
+        key_groups: Final = self._group_keys_by_hash_tag(keys)
+        group_values: Final[Sequence[CacheCounterValues]] = [
+            await read_script(keys=group_keys, args=[]) for group_keys in key_groups.values()
+        ]
+        values_by_key: Final = dict(
+            zip(
+                itertools.chain.from_iterable(key_groups.values()),
+                itertools.chain.from_iterable(group_values),
+            )
+        )
+        return [values_by_key.get(key) for key in keys]
+
+    async def _read_counter_values_without_incrementing(
+        self,
+        keys: list[str],
+        parent_otel_span: Span | None,
+    ) -> CacheCounterValues | None:
+        if self.batch_counter_read_script is None:
+            return await self._batch_get_counter_values(keys=keys, parent_otel_span=parent_otel_span, local_only=False)
+        try:
+            return await self._read_counter_values_from_redis(keys)
+        except Exception as e:  # noqa: BLE001  # any Redis/Lua failure degrades to the local mirror unless fail-closed rejects
+            self._reject_if_rate_limit_unverifiable("batch_counter_read_script", e)
+            log_redis_failure(
+                verbose_proxy_logger, logging.WARNING, "batch_counter_read_script failed, using local mirror", e
+            )
+            return await self._batch_get_counter_values(keys=keys, parent_otel_span=parent_otel_span, local_only=True)
+
+    def _reject_if_rate_limit_unverifiable(self, failed_operation: str, error: Exception) -> None:
+        if not self._fail_closed_resolver():
+            return
+        log_redis_failure(
+            verbose_proxy_logger,
+            logging.WARNING,
+            f"fail_closed_rate_limit_enforcement: rejecting request, {failed_operation} could not verify the "
+            "counters against Redis",
+            error,
+        )
+        raise RateLimitUnverifiableError()
+
     async def _execute_redis_batch_rate_limiter_script(
         self,
         keys_to_fetch: list[str],
@@ -1330,10 +1434,10 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
         if self.batch_rate_limiter_script is None:
             return []
 
-        key_groups: Final = self._group_keys_by_hash_tag(keys_to_fetch)
+        key_groups: Final = list(self._group_keys_by_hash_tag(keys_to_fetch).items())
         all_cache_values: Final[list[CacheCounterValue | None]] = []
 
-        for hash_tag, group_keys in key_groups.items():
+        for index, (hash_tag, group_keys) in enumerate(key_groups):
             try:
                 group_cache_values: CacheCounterValues = await self.batch_rate_limiter_script(
                     keys=group_keys,
@@ -1341,6 +1445,12 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 )
                 all_cache_values.extend(group_cache_values)
             except Exception as e:
+                if self._fail_closed_resolver():
+                    applied_keys = tuple(itertools.chain.from_iterable(keys for _tag, keys in key_groups[:index]))
+                    await self._refund_counter_increments(
+                        self._counter_refunds_from_batch_values(applied_keys, all_cache_values)
+                    )
+                self._reject_if_rate_limit_unverifiable("batch_rate_limiter_script", e)
                 log_redis_failure(
                     verbose_proxy_logger, logging.WARNING, f"Redis Lua script failed for hash tag {hash_tag}", e
                 )
@@ -1408,17 +1518,18 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
             )
 
             if cache_values is not None:
-                rate_limit_response: Final = self.is_cache_list_over_limit(keys_to_fetch, cache_values, key_metadata)
+                rate_limit_response: Final = self.is_cache_list_over_limit(
+                    keys_to_fetch, cache_values, key_metadata, read_only=read_only
+                )
                 if rate_limit_response["overall_code"] == "OVER_LIMIT":
                     return rate_limit_response
 
             ## IF under limit in-memory, check Redis
             if read_only:
                 # READ-ONLY MODE: Just read current values without incrementing
-                cache_values = await self._batch_get_counter_values(  # rebind-ok: read-only mode replaces the in-memory snapshot with Redis values
+                cache_values = await self._read_counter_values_without_incrementing(  # rebind-ok: read-only mode replaces the in-memory snapshot with Redis values
                     keys=keys_to_fetch,
                     parent_otel_span=parent_otel_span,
-                    local_only=False,  # Check Redis too
                 )
 
                 # For keys that don't exist yet, set them to 0
@@ -1462,7 +1573,9 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     window_size=self.window_size,
                 )
 
-            windowed_response = self.is_cache_list_over_limit(keys_to_fetch, cache_values, key_metadata)
+            windowed_response = self.is_cache_list_over_limit(
+                keys_to_fetch, cache_values, key_metadata, read_only=read_only
+            )
             if windowed_response["overall_code"] == "OVER_LIMIT":
                 return windowed_response
 
@@ -1590,7 +1703,8 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                         args=[PARALLEL_REQUEST_SLOT_TTL_SECONDS for _ in gauges],
                     )
                     counts = [max(0, int(value)) for value in raw_counts]
-                except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the local mirror, never a 500
+                except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to the local mirror unless fail-closed rejects
+                    self._reject_if_rate_limit_unverifiable("parallel_count_script", e)
                     log_redis_failure(
                         verbose_proxy_logger, logging.WARNING, "parallel_count_script failed, using local mirror", e
                     )
@@ -1623,6 +1737,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                     ],
                 )
             except Exception as e:  # noqa: BLE001 - any Redis/Lua failure degrades to in-memory enforcement, never a 500
+                self._reject_if_rate_limit_unverifiable("parallel_acquire_script", e)
                 log_redis_failure(
                     verbose_proxy_logger,
                     logging.WARNING,
@@ -1941,7 +2056,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 overall_code="OK",
                 statuses=[],  # mutable-ok: response contract requires a status list
             )
-        applied: Final[list[list[AtomicCounterMeta]]] = []
+        applied: Final[list[tuple[CounterRefund, ...]]] = []
         statuses: Final[list[RateLimitStatus]] = []
         reservation_windows: Final[set[ReservationWindowIdentity]] = set()  # mutable-ok: filled by the group loop
         raw: list[CacheCounterValue]
@@ -1957,15 +2072,16 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 # state ambiguous. Refund any prior groups so Redis returns
                 # to its pre-call state, then fall back to in-memory for the
                 # whole call (counters there are independent of Redis).
+                await self._refund_applied_descriptor_groups(applied)
+                self._reject_if_rate_limit_unverifiable("check_and_increment_by_n_script", e)
                 log_redis_failure(
                     verbose_proxy_logger,
                     logging.ERROR,
-                    f"atomic_check_and_increment_by_n: Redis Lua execution failed ({type(e).__name__}). Refunding "
+                    f"atomic_check_and_increment_by_n: Redis Lua execution failed ({type(e).__name__}). Refunded "
                     f"{len(applied)} prior descriptors and falling back to in-memory enforcement, counters will "
                     f"diverge from Redis until window expires (window_size={self.window_size}s)",
                     e,
                 )
-                await self._refund_applied_descriptor_groups(applied)
                 flat_meta: list[AtomicCounterMeta] = [m for _k, _a, group_meta in descriptor_groups for m in group_meta]
                 async with self._check_and_increment_lock:
                     return await self._atomic_check_and_increment_in_memory(
@@ -1979,7 +2095,7 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
                 return response
             if len(descriptor_groups) == 1:
                 return response
-            applied.append(meta)
+            applied.append(self._counter_refunds_from_atomic_response(raw, meta))
             statuses.extend(response["statuses"])
             reservation_windows.update(response.get("reservation_windows", frozenset()))
 
@@ -1991,32 +2107,63 @@ class _PROXY_MaxParallelRequestsHandler_v3(CustomLogger):
 
     async def _refund_applied_descriptor_groups(
         self,
-        applied: list[list[AtomicCounterMeta]],
+        applied: Sequence[Sequence[CounterRefund]],
     ) -> None:
         """
         Decrement counters for descriptor groups already applied via Lua.
         Best-effort: refund failures are logged but not raised — the original
         OVER_LIMIT / fallback decision is what matters to the caller.
         """
-        if not applied:
+        await self._refund_counter_increments(tuple(itertools.chain.from_iterable(applied)))
+
+    @staticmethod
+    def _counter_refunds_from_atomic_response(
+        raw: Sequence[CacheCounterValue],
+        per_counter_meta: Sequence[AtomicCounterMeta],
+    ) -> tuple[CounterRefund, ...]:
+        return tuple(
+            CounterRefund(
+                window_key=meta["window_key"],
+                counter_key=meta["counter_key"],
+                window_start=str(int(raw[2 + index * 2])),
+                increment=meta["increment"],
+            )
+            for index, meta in enumerate(per_counter_meta)
+        )
+
+    @staticmethod
+    def _counter_refunds_from_batch_values(
+        applied_keys: Sequence[str],
+        applied_values: Sequence[CacheCounterValue | None],
+    ) -> tuple[CounterRefund, ...]:
+        pairs: Final = tuple(zip(range(0, len(applied_keys), 2), applied_values[::2]))
+        return tuple(
+            CounterRefund(
+                window_key=applied_keys[offset],
+                counter_key=applied_keys[offset + 1],
+                window_start=str(int(window_start)),
+                increment=1,
+            )
+            for offset, window_start in pairs
+            if window_start is not None
+        )
+
+    async def _refund_counter_increments(self, refunds: Sequence[CounterRefund]) -> None:
+        if self.window_guarded_token_increment_script is None:
             return
-        redis_cache: Final = self.internal_usage_cache.dual_cache.redis_cache
-        if redis_cache is None:
-            return
-        for group_meta in applied:
-            for entry in group_meta:
-                try:
-                    await redis_cache.async_increment(
-                        key=entry["counter_key"],
-                        value=-entry["increment"],
-                    )
-                except Exception as e:
-                    log_redis_failure(
-                        verbose_proxy_logger,
-                        logging.WARNING,
-                        f"Failed to refund {entry['counter_key']} on cross-descriptor rollback",
-                        e,
-                    )
+        for refund in refunds:
+            try:
+                await self.window_guarded_token_increment_script(
+                    keys=[refund.window_key, refund.counter_key],  # mutable-ok: Redis script API takes a list
+                    args=[refund.window_start, -refund.increment, 0],  # mutable-ok: Redis script API takes a list
+                )
+            except Exception as e:  # noqa: BLE001  # best-effort rollback, the rejection already decided the request
+                log_redis_failure(
+                    verbose_proxy_logger,
+                    logging.WARNING,
+                    f"Failed to refund {refund.counter_key} on rollback",
+                    e,
+                )
 
     def _build_atomic_response(
         self,
