@@ -25,6 +25,7 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
+from litellm.utils import get_requester_metadata
 from pydantic import ValidationError
 
 pytestmark = pytest.mark.xdist_group("proxy_heavy")
@@ -99,12 +100,28 @@ async def test_add_litellm_data_to_request_snapshots_requester_metadata(mock_req
     assert empty_snapshot["litellm_metadata"]["requester_metadata"] == {}
 
     mock_request.url.path = "/chat/completions"
+    mock_request.headers = {}
     caller_metadata = {"trace_id": "trace-1"}
     snapshot: Final = await add_litellm_data_to_request(
         {"metadata": caller_metadata}, mock_request, user_api_key_dict, proxy_config
     )
     caller_metadata["trace_id"] = "changed"
     assert snapshot["metadata"]["requester_metadata"]["trace_id"] == "trace-1"
+
+    mock_request.headers = {
+        "x-litellm-trace-id": "t-hdr",
+        "x-litellm-agent-id": "a-hdr",
+    }
+    header_snapshot: Final = await add_litellm_data_to_request(
+        {"metadata": {"completion_window": "flex"}},
+        mock_request,
+        user_api_key_dict,
+        proxy_config,
+        general_settings={"missing_session_id": "generate"},
+    )
+    assert header_snapshot["metadata"]["requester_metadata"] == {"completion_window": "flex"}
+    assert get_requester_metadata(header_snapshot["metadata"]) == {"completion_window": "flex"}
+    assert header_snapshot["metadata"]["trace_id"] == "t-hdr"
 
 
 # test adding traceparent

@@ -33,6 +33,7 @@ from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator imp
     SERVER_FULFILLED_TOOL_LEAK_ERROR_SSE_BYTES,
 )
 from litellm.llms.bedrock.common_utils import BedrockError
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.models.access_group import LiteLLM_AccessGroupTable
 from litellm.proxy._types import LiteLLM_TeamTable, LitellmUserRoles, Member, ProxyException, UserAPIKeyAuth
 from litellm.router import (
@@ -7531,6 +7532,62 @@ def test_update_kwargs_before_fallbacks_snapshots_requester_metadata():
     proxy_kwargs: Final[dict[str, object]] = {"metadata": {"requester_metadata": proxy_snapshot}}
     router._update_kwargs_before_fallbacks(model="gpt-4o-mini", kwargs=proxy_kwargs)
     assert proxy_kwargs["metadata"]["requester_metadata"] is proxy_snapshot
+
+
+def test_router_vertex_labels_use_caller_metadata():
+    captured: dict[str, object] = {}
+
+    def capture_request(request: httpx.Request) -> httpx.Response:
+        captured["body"] = json.loads(request.content)
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {
+                        "content": {
+                            "parts": [{"text": "ok"}],
+                            "role": "model",
+                        },
+                        "finishReason": "STOP",
+                    }
+                ],
+                "usageMetadata": {
+                    "promptTokenCount": 1,
+                    "candidatesTokenCount": 1,
+                },
+            },
+        )
+
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(capture_request)))
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "vertex_ai/gemini-2.5-flash",
+                "litellm_params": {
+                    "model": "vertex_ai/gemini-2.5-flash",
+                    "vertex_project": "p",
+                },
+            }
+        ]
+    )
+
+    with patch(
+        "litellm.llms.vertex_ai.gemini.vertex_and_google_ai_studio_gemini.VertexLLM._ensure_access_token",
+        return_value=("token", "p"),
+    ):
+        router.completion(
+            model="vertex_ai/gemini-2.5-flash",
+            messages=[{"role": "user", "content": "hi"}],
+            metadata={"team": "abc"},
+            client=client,
+        )
+
+    body: Final = captured["body"]
+    assert isinstance(body, dict)
+    labels: Final = body["labels"]
+    assert labels == {"team": "abc"}
+    assert isinstance(labels, dict)
+    assert "model_group" not in labels
 
 
 def test_update_kwargs_with_deployment_merges_tags_without_duplicates():
