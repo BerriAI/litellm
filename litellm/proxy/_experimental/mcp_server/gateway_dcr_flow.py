@@ -108,6 +108,7 @@ handle carried in the connect-page URL (the same handle-plus-cookie pattern as t
 ``mcp_oauth_state_`` upstream relay, for the same reasons: replica-safe with no
 server-side session store, and the sealed value never appears in a URL)."""
 
+UPSTREAM_AUTHORIZATION_SCOPE_PREFIX: Final = "litellm:mcp:connect:"
 CONNECT_FLOW_TTL_SECONDS: Final = 600
 GATEWAY_AUTH_CODE_TTL_SECONDS: Final = 120
 MANUAL_DELIVERY_AUTH_CODE_TTL_SECONDS: Final = 300
@@ -286,6 +287,13 @@ class GatewayDcrClient(BaseModel):
     iat: int
 
 
+class _UpstreamAuthorizationRequirement(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+    server_id: str = Field(min_length=1)
+    user_id: str | None = None
+    exp: int
+
+
 class _ConnectFlow(BaseModel):
     """One in-flight authorize: the SSO user it belongs to and the client parameters
     needed to mint the code at the finish step. Sealed into the per-flow cookie. ``jti``
@@ -301,6 +309,7 @@ class _ConnectFlow(BaseModel):
     jti: str = Field(min_length=1)
     exp: int
     resource_server_id: str | None = None
+    required_upstream_server_id: str | None = None
     audience: SessionAudience | None = None
 
 
@@ -502,6 +511,17 @@ def resolve_scoped_resource_server(request: Request, resource: str | None) -> MC
     return server
 
 
+def upstream_authorization_scope(server_id: str, user_id: str | None) -> str:
+    return _seal(
+        UPSTREAM_AUTHORIZATION_SCOPE_PREFIX,
+        _UpstreamAuthorizationRequirement(
+            server_id=server_id,
+            user_id=user_id,
+            exp=int(datetime.now(timezone.utc).timestamp()) + CONNECT_FLOW_TTL_SECONDS,
+        ),
+    )
+
+
 def aggregate_authorize(
     request: Request,
     client_id: str,
@@ -537,6 +557,30 @@ def aggregate_authorize(
     if session_user_id is None:
         return _login_redirect(base_url, request)
     scoped_server: Final = resolve_scoped_resource_server(request, resource)
+    requested: Final = tuple(
+        value
+        for value in request.query_params.get("scope", "").split()
+        if value.startswith(UPSTREAM_AUTHORIZATION_SCOPE_PREFIX)
+    )
+    if len(requested) > 1:
+        return _oauth_error(400, "invalid_scope", "only one upstream authorization requirement is supported")
+    requirement: Final = (
+        _open_sealed(
+            requested[0],
+            UPSTREAM_AUTHORIZATION_SCOPE_PREFIX,
+            _UpstreamAuthorizationRequirement,
+            "mcp_upstream_authorization",
+        )
+        if requested
+        else None
+    )
+    if requested and (requirement is None or datetime.now(timezone.utc).timestamp() >= requirement.exp):
+        return _oauth_error(400, "invalid_scope", "invalid or expired upstream authorization requirement; reconnect")
+    if requirement is not None:
+        if requirement.user_id is not None and requirement.user_id != session_user_id:
+            return _oauth_error(403, "access_denied", "sign in as the user that requested this MCP connection")
+        if scoped_server is not None and scoped_server.server_id != requirement.server_id:
+            return _oauth_error(400, "invalid_scope", "upstream authorization requirement does not match the resource")
     handle: Final = secrets.token_urlsafe(24)
     flow: Final = _new_connect_flow(
         session_user_id=session_user_id,
@@ -546,6 +590,7 @@ def aggregate_authorize(
         code_challenge=code_challenge or "",
         resource_server_id=scoped_server.server_id if scoped_server is not None else None,
         audience=None,
+        required_upstream_server_id=requirement.server_id if requirement is not None else None,
     )
     connect_url: Final = _append_query_params(f"{base_url}/ui/connect", (("connect_flow", handle),))
     response: Final = RedirectResponse(connect_url, status_code=303)
@@ -705,6 +750,7 @@ def _new_connect_flow(
     code_challenge: str,
     resource_server_id: str | None,
     audience: SessionAudience | None,
+    required_upstream_server_id: str | None = None,
 ) -> _ConnectFlow:
     now: Final = datetime.now(timezone.utc)
     return _ConnectFlow(
@@ -716,6 +762,7 @@ def _new_connect_flow(
         jti=secrets.token_urlsafe(24),
         exp=int(now.timestamp()) + CONNECT_FLOW_TTL_SECONDS,
         resource_server_id=resource_server_id,
+        required_upstream_server_id=required_upstream_server_id,
         audience=audience,
     )
 
@@ -773,14 +820,15 @@ def _open_flow_for(
 async def _flow_target(
     flow: _ConnectFlow, lookup_server_reachability: LookupServerReachability
 ) -> tuple[Literal["unscoped", "interactive", "m2m", "stale"], MCPServer | None]:
-    if flow.resource_server_id is None:
+    target_id: Final = flow.required_upstream_server_id or flow.resource_server_id
+    if target_id is None:
         return "unscoped", None
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (  # noqa: PLC0415  # import cycle
         MCPServerManager,
         global_mcp_server_manager,
     )
 
-    server: Final = global_mcp_server_manager.get_mcp_server_by_id(flow.resource_server_id)
+    server: Final = global_mcp_server_manager.get_mcp_server_by_id(target_id)
     if (
         server is None
         or not (server.is_gateway_managed_oauth2 or server.advertises_gateway_authorization_server)

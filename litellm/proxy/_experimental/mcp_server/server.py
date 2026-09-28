@@ -48,6 +48,7 @@ from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (
 from litellm.proxy._experimental.mcp_server.exceptions import (
     MCPUpstreamAuthError,
 )
+from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import upstream_authorization_scope
 from litellm.proxy._experimental.mcp_server.mcp_context import (
     _mcp_active_toolset_id,
     _mcp_gateway_initialize_instructions,
@@ -1728,7 +1729,13 @@ if MCP_AVAILABLE:
             if results and all(isinstance(result, HTTPException) and result.status_code == 401 for result in results):
                 if all(server.is_gateway_managed_oauth2 for server in eligible):
                     raise _gateway_dcr_challenge(
-                        StarletteRequest(scope), get_route_relative_request_path(scope), None, invalid_token=False
+                        StarletteRequest(scope),
+                        get_route_relative_request_path(scope),
+                        None,
+                        invalid_token=False,
+                        oauth_scope=upstream_authorization_scope(
+                            eligible[0].server_id, user_api_key_auth.user_id if user_api_key_auth is not None else None
+                        ),
                     )
                 first: Final = results[0]
                 if isinstance(first, HTTPException):

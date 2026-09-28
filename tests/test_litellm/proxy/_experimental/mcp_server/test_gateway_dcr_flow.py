@@ -2354,3 +2354,113 @@ async def test_token_exchange_relays_a_mint_refusal(failure, status, error):
     response = await _exchange_native(client_id, _Minter(failure), _Exchanger())
     assert response.status_code == status
     assert json.loads(response.body)["error"] == error
+
+
+@pytest.mark.asyncio
+async def test_unified_challenge_requires_upstream_consent_without_narrowing_gateway_token(monkeypatch) -> None:
+    from unittest.mock import AsyncMock
+    from urllib.parse import urlencode
+    from fastapi import HTTPException
+    from litellm.proxy._experimental.mcp_server import operations, server
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    github = _scoped_mcp_server(oauth2_flow="authorization_code")
+    manager = operations.global_mcp_server_manager
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[github]))
+    monkeypatch.setattr(manager, "get_mcp_server_by_name", lambda *args, **kwargs: github)
+    monkeypatch.setattr(manager, "ensure_oauth_metadata_discovered", AsyncMock(return_value=github))
+    monkeypatch.setattr(manager, "has_user_oauth_token", AsyncMock(return_value=False))
+    with pytest.raises(HTTPException) as challenged:
+        await server._raise_preemptive_401_for_unauthenticated_servers(
+            scope=_request("/mcp").scope, mcp_servers=None, oauth2_headers=None,
+            mcp_server_auth_headers=None, user_api_key_auth=UserAPIKeyAuth(user_id="u1", api_key="test-key"),
+            client_ip=None,
+        )
+    headers = {k.lower(): v for k, v in (challenged.value.headers or {}).items()}
+    requested = re.search(r'scope="([^"]+)"', headers["www-authenticate"])
+    assert requested is not None, "The challenge must carry the upstream authorization requirement"
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    response = aggregate_authorize(
+        request=_request("/authorize/mcp-session", query=urlencode({"scope": requested.group(1)})),
+        client_id=client_id, redirect_uri=REDIRECT_URI, state="client-state", code_challenge=CODE_CHALLENGE,
+        code_challenge_method="S256", response_type="code", session_user_id="u1",
+        resource="https://llm.example.com/mcp",
+    )
+    assert response.status_code == 303
+    described = await _describe_page(response, scoped_server=github, vendor=_VendorCredential("absent"))
+    assert json.loads(described.body) == {
+        "state": "interactive", "client_origin": "https://claude.ai",
+        "server_id": "github-id", "server_name": "github", "connected": False,
+    }
+    cache = DualCache()
+    premature = await _complete_page(response, scoped_server=github, vendor=_VendorCredential("absent"), cache=cache)
+    assert premature.status_code == 400
+    assert "location" not in premature.headers
+    vendor = _VendorCredential("present")
+    completed = await _complete_page(response, scoped_server=github, vendor=vendor, cache=cache)
+    assert completed.status_code == 303
+    assert vendor.calls == [("u1", "github-id")]
+    code = parse_qs(urlparse(completed.headers["location"]).query)["code"][0]
+    tokens = await _redeem(code, client_id, resource="https://llm.example.com/mcp")
+    assert tokens.status_code == 200
+    assert _opened_principal(json.loads(tokens.body)).resource_server_id is None
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("invalid", ("tampered", "expired", "duplicate", "other_user", "other_resource"))
+async def test_upstream_authorization_requirement_rejects_invalid_binding(invalid: str, monkeypatch) -> None:
+    from urllib.parse import urlencode
+    from litellm.proxy._experimental.mcp_server import gateway_dcr_flow as flow
+    from litellm.proxy._experimental.mcp_server.mcp_server_manager import global_mcp_server_manager
+
+    hint = flow.upstream_authorization_scope("github-id", "u2" if invalid == "other_user" else "u1")
+    if invalid == "tampered":
+        hint = flow.UPSTREAM_AUTHORIZATION_SCOPE_PREFIX + "invalid-ciphertext"
+    elif invalid == "expired":
+        hint = flow._seal(flow.UPSTREAM_AUTHORIZATION_SCOPE_PREFIX, flow._UpstreamAuthorizationRequirement(
+            server_id="github-id", user_id="u1", exp=int(datetime.now(timezone.utc).timestamp()) - 1,
+        ))
+    elif invalid == "duplicate":
+        hint = f"{hint} {hint}"
+    monkeypatch.setattr(global_mcp_server_manager, "get_mcp_server_by_name", lambda *args, **kwargs: _scoped_mcp_server("other"))
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    response = aggregate_authorize(
+        request=_request(query=urlencode({"scope": hint})),
+        client_id=client_id, redirect_uri=REDIRECT_URI, state="client-state", code_challenge=CODE_CHALLENGE,
+        code_challenge_method="S256", response_type="code", session_user_id="u1",
+        resource="https://llm.example.com/mcp/other" if invalid == "other_resource" else "https://llm.example.com/mcp",
+    )
+    assert response.status_code == (403 if invalid == "other_user" else 400)
+    assert json.loads(response.body)["error"] == ("access_denied" if invalid == "other_user" else "invalid_scope")
+    assert "location" not in response.headers
+    assert "set-cookie" not in response.headers
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("condition", ("deleted", "revoked", "vault_unavailable", "cancelled"))
+async def test_required_upstream_completion_preserves_failure_and_cancellation_guards(condition: str) -> None:
+    from urllib.parse import urlencode
+    from litellm.proxy._experimental.mcp_server.gateway_dcr_flow import upstream_authorization_scope
+
+    client_id = (await _register([REDIRECT_URI]))["client_id"]
+    hint = upstream_authorization_scope("github-id", "u1")
+    response = aggregate_authorize(
+        request=_request(query=urlencode({"scope": hint})), client_id=client_id, redirect_uri=REDIRECT_URI,
+        state="client-state", code_challenge=CODE_CHALLENGE, code_challenge_method="S256",
+        response_type="code", session_user_id="u1", resource="https://llm.example.com/mcp",
+    )
+    assert response.status_code == 303
+    vendor = _VendorCredential("unavailable" if condition == "vault_unavailable" else "absent")
+    completed = await _complete_page(
+        response, scoped_server=None if condition == "deleted" else _scoped_mcp_server(),
+        reachable=_ServerReachability(condition != "revoked"), vendor=vendor,
+        decision="deny" if condition == "cancelled" else None,
+    )
+    if condition == "cancelled":
+        assert completed.status_code == 303
+        assert parse_qs(urlparse(completed.headers["location"]).query) == {"error": ["access_denied"], "state": ["client-state"]}
+        assert vendor.calls == []
+    else:
+        assert completed.status_code == (503 if condition == "vault_unavailable" else 400)
+        assert "location" not in completed.headers
+        assert vendor.calls == ([("u1", "github-id")] if condition == "vault_unavailable" else [])

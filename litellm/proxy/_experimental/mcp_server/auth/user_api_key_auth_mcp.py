@@ -280,6 +280,7 @@ def _gateway_dcr_challenge(
     route: str,
     mcp_servers: list[str] | None,
     invalid_token: bool,
+    oauth_scope: str | None = None,
 ) -> HTTPException:
     """The RFC 9728 challenge pointing the client at the protected-resource metadata
     matching the scope it requested: the per-server document (same URL spelling the
@@ -298,13 +299,14 @@ def _gateway_dcr_challenge(
         else f"{get_request_base_url(request)}/.well-known/oauth-protected-resource{well_known_root_suffix()}/mcp"
     )
     error_attr: Final = 'error="invalid_token", ' if invalid_token else ""
+    scope_attr: Final = f', scope="{oauth_scope}"' if oauth_scope else ""
     return HTTPException(
         status_code=401,
         detail={
             "error": "authentication_required",
             "message": "Authenticate with the gateway to use the MCP endpoint.",
         },
-        headers={"WWW-Authenticate": f'Bearer {error_attr}resource_metadata="{resource_metadata_url}"'},
+        headers={"WWW-Authenticate": f'Bearer {error_attr}resource_metadata="{resource_metadata_url}"{scope_attr}'},
     )
 
 
