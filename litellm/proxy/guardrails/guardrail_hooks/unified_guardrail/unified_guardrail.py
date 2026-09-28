@@ -155,16 +155,25 @@ def _a2a_jsonrpc_error_chunk(exc: HTTPException, request_id: str | None) -> Mapp
     }
 
 
-def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
-    """Populate data['litellm_metadata'] from user_api_key_dict if absent."""
-    if "litellm_metadata" not in data:
-        from litellm.llms.base_llm.guardrail_translation.base_translation import (
-            BaseTranslation,
-        )
+_PROXY_ENRICHED_IDENTITY_FIELDS: Final = frozenset({"user_api_key_auth_metadata"})
 
-        user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
-        if user_metadata:
-            data["litellm_metadata"] = user_metadata
+
+def _ensure_litellm_metadata(data: dict, user_api_key_dict: UserAPIKeyAuth) -> None:
+    """Overwrite the identity fields of data['litellm_metadata'] from the authenticated key, in place."""
+    from litellm.llms.base_llm.guardrail_translation.base_translation import (
+        BaseTranslation,
+    )
+    from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
+
+    existing: Final = data.get("litellm_metadata")
+    if isinstance(existing, dict):
+        identity: Final = LiteLLMProxyRequestSetup.get_authenticated_identity_metadata(user_api_key_dict)
+        existing.update({key: value for key, value in identity.items() if key not in _PROXY_ENRICHED_IDENTITY_FIELDS})
+        existing.pop("user_api_key_token", None)
+        return
+    user_metadata: Final = BaseTranslation.transform_user_api_key_dict_to_metadata(user_api_key_dict)
+    if user_metadata:
+        data["litellm_metadata"] = user_metadata
 
 
 class UnifiedLLMGuardrails(CustomLogger):

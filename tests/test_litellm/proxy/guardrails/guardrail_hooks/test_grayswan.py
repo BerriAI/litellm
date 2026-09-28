@@ -582,15 +582,20 @@ def test_ensure_litellm_metadata_populates_from_user_api_key_dict() -> None:
     assert data["litellm_metadata"]["user_api_key_team_id"] == "t1"
 
 
-def test_ensure_litellm_metadata_noop_when_already_present() -> None:
-    """Verify _ensure_litellm_metadata does not overwrite existing litellm_metadata."""
+def test_ensure_litellm_metadata_overrides_caller_identity_in_existing_bucket() -> None:
+    """An existing litellm_metadata keeps its other keys, but its identity comes from the authenticated key."""
     from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
         _ensure_litellm_metadata,
     )
 
-    user_auth = UserAPIKeyAuth(user_id="should-not-appear")
-    data: dict = {"litellm_metadata": {"existing": "value"}}
+    user_auth = UserAPIKeyAuth(user_id="auth-user", key_alias="auth-alias", team_id="auth-team")
+    bucket: dict = {"existing": "value", "user_api_key_alias": "batch-worker", "user_api_key_team_id": "team-exempt"}
+    data: dict = {"litellm_metadata": bucket}
 
     _ensure_litellm_metadata(data, user_auth)
 
-    assert data["litellm_metadata"] == {"existing": "value"}
+    assert data["litellm_metadata"] is bucket
+    assert bucket["existing"] == "value"
+    assert bucket["user_api_key_alias"] == "auth-alias"
+    assert bucket["user_api_key_team_id"] == "auth-team"
+    assert bucket["user_api_key_user_id"] == "auth-user"

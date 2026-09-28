@@ -20,6 +20,8 @@ if TYPE_CHECKING:
     from litellm.proxy._types import UserAPIKeyAuth
     from litellm.proxy.utils import ProxyLogging
 
+_PROXY_OWNED_PAYLOAD_KEYS: Final = frozenset({"metadata", "litellm_metadata", "litellm_logging_obj"})
+
 
 class PassThroughEndpointHandler(BaseTranslation):
     """
@@ -80,7 +82,7 @@ class PassThroughEndpointHandler(BaseTranslation):
         from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 
         payload_to_check: Final = {
-            k: v for k, v in data.items() if not k.startswith("_") and k not in ("metadata", "litellm_logging_obj")
+            k: v for k, v in data.items() if not k.startswith("_") and k not in _PROXY_OWNED_PAYLOAD_KEYS
         }
         verbose_proxy_logger.debug("PassThroughEndpointHandler: Using full payload for guardrail")
         return safe_dumps(payload_to_check)

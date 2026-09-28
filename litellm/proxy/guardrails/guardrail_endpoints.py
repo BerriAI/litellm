@@ -34,6 +34,7 @@ from litellm.proxy.guardrails.guardrail_hooks.custom_code.sandbox import (
 )
 from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
 from litellm.proxy.guardrails.usage_endpoints import router as guardrails_usage_router
+from litellm.proxy.litellm_pre_call_utils import caller_metadata_with_authenticated_identity
 from litellm.proxy.management_endpoints.common_utils import _user_has_admin_view
 from litellm.repositories.prisma_protocols import TableActions
 from litellm.repositories.table_repositories import GuardrailsRepository
@@ -2404,9 +2405,14 @@ async def apply_guardrail(
         if litellm_logging_obj is not None:
             _patch_logging_obj_for_guardrail(litellm_logging_obj, request)
 
+        processed_metadata: Final = data.get("metadata")
+        inbound_headers: Final = processed_metadata.get("headers") if isinstance(processed_metadata, dict) else None
         request_data: Final[dict] = {
             **({"messages": request.messages} if request.messages is not None else {}),
-            **({"metadata": request.metadata} if request.metadata is not None else {}),
+            "metadata": {
+                **caller_metadata_with_authenticated_identity(request.metadata, user_api_key_dict),
+                **({"headers": inbound_headers} if inbound_headers is not None else {}),
+            },
         }
         _input_type: Final = _resolve_guardrail_input_type(active_guardrail, request.input_type)
         guardrailed_inputs: Final = await active_guardrail.apply_guardrail(

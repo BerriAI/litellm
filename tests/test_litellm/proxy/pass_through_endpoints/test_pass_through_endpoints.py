@@ -7622,3 +7622,81 @@ def test_passthrough_attributes_a_cli_session_to_its_alias_not_the_login_token()
     metadata = kwargs["litellm_params"]["metadata"]
     assert metadata["user_api_key"] == "cli-session-alice"
     assert _get_spend_logs_metadata(metadata)["user_api_key"] == "cli-session-alice"
+
+
+@pytest.mark.asyncio
+async def test_pass_through_request_strips_caller_identity_before_guardrail_hooks():
+    """
+    Regression: a pass-through body skips add_litellm_data_to_request, so forged user_api_key_* fields, guardrail
+    control fields and inbound headers reached pre_call_hook guardrails as the caller's identity. The upstream body
+    is unchanged because these keys never reach it.
+    """
+    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
+    from litellm.types.llms.custom_http import httpxSpecialProvider
+
+    upstream_bodies = []
+
+    def transport_handler(upstream_request: httpx.Request) -> httpx.Response:
+        upstream_bodies.append(json.loads(upstream_request.content))
+        return httpx.Response(200, json={"ok": True})
+
+    real_handler = get_async_httpx_client(
+        llm_provider=httpxSpecialProvider.PassThroughEndpoint,
+        params={"timeout": resolve_pass_through_request_timeout(None)},
+    )
+    cache_dict = litellm.in_memory_llm_clients_cache.cache_dict
+    cache_key = next(key for key, cached in cache_dict.items() if cached is real_handler)
+    cache_dict[cache_key] = SimpleNamespace(client=httpx.AsyncClient(transport=httpx.MockTransport(transport_handler)))
+
+    hook_data = []
+
+    def record_hook_data(user_api_key_dict, data, call_type):
+        hook_data.append({key: value for key, value in data.items() if key != "litellm_logging_obj"})
+        return data
+
+    mock_proxy_logging = MagicMock()
+    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=record_hook_data)
+    mock_proxy_logging.post_call_failure_hook = AsyncMock()
+    mock_proxy_logging.post_call_response_headers_hook = AsyncMock(return_value={})
+
+    forged = {
+        "user_api_key_alias": "batch-worker",
+        "user_api_key_team_id": "team-exempt",
+        "user_api_key_token": "forged-hash",
+        "user_api_key_request_route": "/v1/embeddings",
+        "disable_global_guardrails": True,
+        "headers": {"x-authenticated-user": "admin@corp"},
+        "trace_label": "nightly",
+    }
+    forged_headers = {"x-authenticated-user": "admin@corp", "x-litellm-end-user-id": "victim"}
+    body = {
+        "prompt": "hello",
+        "metadata": forged,
+        "litellm_metadata": forged,
+        "headers": forged_headers,
+        "proxy_server_request": {"headers": forged_headers},
+    }
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.headers = Headers({"content-type": "application/json"})
+    mock_request.query_params = QueryParams({})
+    mock_request.body = AsyncMock(return_value=json.dumps(body).encode())
+
+    try:
+        with patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj", mock_proxy_logging
+        ):  # test-quality-ok: read at call time
+            response = await pass_through_request(
+                request=mock_request,
+                target="https://upstream.test/v1/generate",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-real-caller-key", key_alias="prod-app"),
+            )
+    finally:
+        cache_dict[cache_key] = real_handler
+
+    assert response.status_code == 200
+    assert hook_data == [
+        {"prompt": "hello", "metadata": {"trace_label": "nightly"}, "litellm_metadata": {"trace_label": "nightly"}}
+    ]
+    assert upstream_bodies == [{"prompt": "hello"}]
