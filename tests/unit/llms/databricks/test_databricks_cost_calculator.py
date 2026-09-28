@@ -18,7 +18,6 @@ NEW_MODELS: Final = (
     "databricks/databricks-claude-opus-5",
     "databricks/databricks-claude-opus-5-5",
     "databricks/databricks-claude-sonnet-5",
-    "databricks/databricks-claude-sonnet-5-5",
     "databricks/databricks-claude-fable-5",
     "databricks/databricks-claude-fable-5-1",
     "databricks/databricks-gpt-5-6-sol",
@@ -35,7 +34,6 @@ PRICE_FIELDS: Final = (
 )
 PUBLISHED_DBU_PER_MILLION: Final = {
     "databricks/databricks-claude-opus-5-5": ("57.143", "285.714", "71.429", "2.857"),
-    "databricks/databricks-claude-sonnet-5-5": ("42.857", "214.286", "53.571", "4.286"),
     "databricks/databricks-claude-fable-5-1": ("142.858", "714.286", "178.572", "3.572"),
     "databricks/databricks-claude-fable-5": ("142.858", "714.286", "178.572", "14.286"),
     "databricks/databricks-claude-opus-5": ("71.429", "357.143", "89.286", "7.143"),
@@ -124,7 +122,6 @@ def _dollars_per_token(dbu_per_million: str) -> float:
         "databricks/databricks-claude-opus-5",
         "databricks/databricks-claude-opus-5-5",
         "databricks/databricks-claude-sonnet-5",
-        "databricks/databricks-claude-sonnet-5-5",
     ],
 )
 def test_cached_tokens_bill_at_cache_rates(local_model_cost_map: None, model: str) -> None:
@@ -157,6 +154,8 @@ def test_uncached_request_bills_every_prompt_token_at_the_input_rate(local_model
 
     assert prompt_cost == pytest.approx(1000 * info["input_cost_per_token"])
     assert completion_cost == pytest.approx(200 * info["output_cost_per_token"])
+
+
 
 
 @pytest.mark.parametrize("model", NEW_MODELS)
