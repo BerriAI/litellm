@@ -9,6 +9,7 @@ from litellm.integrations.custom_guardrail import (
     DEFAULT_ADVISORY_MESSAGE,
     CustomGuardrail,
     log_guardrail_information,
+    skip_guardrail_success_record,
 )
 from litellm.litellm_core_utils.litellm_logging import Logging
 from litellm.proxy._types import CallTypes, UserAPIKeyAuth
@@ -2205,6 +2206,100 @@ class TestRecordsOwnGuardrailInformation:
         )
 
         assert _guardrail_entries(request_data) == []
+
+
+def _skip_success_record_then(inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
+    from litellm.exceptions import GuardrailRaisedException
+
+    texts: Final = inputs.get("texts") or []
+    if "skip" in texts:
+        skip_guardrail_success_record()
+    if "raise" in texts:
+        raise GuardrailRaisedException(guardrail_name="skipper", message="blocked")
+    return inputs
+
+
+class _SuccessRecordSkippingGuardrail(CustomGuardrail):
+    @log_guardrail_information
+    async def check_async(self, inputs: GenericGuardrailAPIInputs, request_data: dict) -> GenericGuardrailAPIInputs:
+        return _skip_success_record_then(inputs)
+
+    @log_guardrail_information
+    def check_sync(self, inputs: GenericGuardrailAPIInputs, request_data: dict) -> GenericGuardrailAPIInputs:
+        return _skip_success_record_then(inputs)
+
+    @log_guardrail_information
+    async def outer_check_async(
+        self, inputs: GenericGuardrailAPIInputs, request_data: dict
+    ) -> GenericGuardrailAPIInputs:
+        return await self.check_async(inputs=inputs, request_data=request_data)
+
+    @log_guardrail_information
+    def outer_check_sync(self, inputs: GenericGuardrailAPIInputs, request_data: dict) -> GenericGuardrailAPIInputs:
+        return self.check_sync(inputs=inputs, request_data=request_data)
+
+
+async def _recorded_after_check(branch: Literal["async", "sync"], texts: list[str]) -> list[str]:
+    from litellm.exceptions import GuardrailRaisedException
+
+    guardrail: Final = _SuccessRecordSkippingGuardrail(guardrail_name="skipper")
+    request_data: Final[dict] = {"metadata": {}}
+    inputs: Final = GenericGuardrailAPIInputs(texts=texts)
+    try:
+        if branch == "async":
+            await guardrail.check_async(inputs=inputs, request_data=request_data)
+        else:
+            guardrail.check_sync(inputs=inputs, request_data=request_data)
+    except GuardrailRaisedException:
+        pass
+    return [entry["guardrail_status"] for entry in _guardrail_entries(request_data)]
+
+
+class TestSkipGuardrailSuccessRecord:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("branch", ["async", "sync"])
+    @pytest.mark.parametrize(
+        ("texts", "expected"),
+        [
+            (["ok"], ["success"]),
+            (["skip"], []),
+            (["skip", "raise"], ["guardrail_intervened"]),
+        ],
+    )
+    async def test_skips_only_the_success_entry(
+        self, branch: Literal["async", "sync"], texts: list[str], expected: list[str]
+    ) -> None:
+        assert await _recorded_after_check(branch, texts) == expected
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("branch", ["async", "sync"])
+    async def test_skip_does_not_leak_into_the_next_call(self, branch: Literal["async", "sync"]) -> None:
+        skipped: Final = await _recorded_after_check(branch, ["skip"])
+
+        assert (skipped, await _recorded_after_check(branch, ["ok"])) == ([], ["success"])
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("branch", ["async", "sync"])
+    async def test_skip_outside_a_guardrail_call_does_not_leak_into_it(self, branch: Literal["async", "sync"]) -> None:
+        async def skip_then_check() -> list[str]:
+            skip_guardrail_success_record()
+            return await _recorded_after_check(branch, ["ok"])
+
+        assert await asyncio.create_task(skip_then_check()) == ["success"]
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("branch", ["async", "sync"])
+    async def test_inner_skip_does_not_skip_the_outer_entry(self, branch: Literal["async", "sync"]) -> None:
+        guardrail: Final = _SuccessRecordSkippingGuardrail(guardrail_name="skipper")
+        request_data: Final[dict] = {"metadata": {}}
+        inputs: Final = GenericGuardrailAPIInputs(texts=["skip"])
+
+        if branch == "async":
+            await guardrail.outer_check_async(inputs=inputs, request_data=request_data)
+        else:
+            guardrail.outer_check_sync(inputs=inputs, request_data=request_data)
+
+        assert [entry["guardrail_status"] for entry in _guardrail_entries(request_data)] == ["success"]
 
 
 class _UndecoratedGuardrail(CustomGuardrail):

@@ -11,6 +11,8 @@ from litellm.types.llms.openai import (
 from litellm.types.proxy.guardrails.guardrail_hooks.base import GuardrailConfigModel
 from litellm.types.utils import ChatCompletionMessageToolCall
 
+GuardrailInformationScope = Literal["per_call", "per_session", "off"]
+
 
 class GuardrailToolParam(BaseModel):
     """A tool forwarded verbatim to the guardrail for inspection.
@@ -100,6 +102,23 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
             "ignored when streaming_end_of_stream_only is True except for a single "
             "post-stream synthetic chunk. Defaults to 'block_only' in "
             "GenericGuardrailAPI.__init__ when None."
+        ),
+    )
+
+    guardrail_information_scope: GuardrailInformationScope | None = Field(
+        default=None,
+        description=(
+            "How often a call that allows the content unchanged records its guardrail information entry (spend "
+            "logs, OTEL, logging callbacks). 'per_call' (default) records every call, so with pre_call and "
+            "post_call a session grows by a request and a response entry per turn, plus one per sampled "
+            "streaming check. 'per_session' records the first unchanged allow of each session once on the "
+            "request side and once on the response side. Sessions are keyed by the authenticated key hash, "
+            "falling back to the team id (callers with neither share one namespace), and the session id "
+            "(litellm_session_id or metadata.session_id). A call without a session id records as 'per_call'. "
+            "Seen sessions are remembered per proxy process for an hour. 'off' records no unchanged allows. "
+            "Blocks, rewrites (GUARDRAIL_INTERVENED, or returned content that differs from what was sent), "
+            "errors, fail-open passthroughs and not_run entries are recorded under every scope and never count "
+            "as a session's first call. Defaults to 'per_call' when None."
         ),
     )
 
