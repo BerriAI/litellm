@@ -4600,7 +4600,7 @@ class MCPServerManager:
             sort_keys=True,
             separators=(",", ":"),
         )
-        return server.server_id, hashlib.sha256(material.encode(), usedforsecurity=False).hexdigest()
+        return server.server_id, hashlib.sha256(material.encode()).hexdigest()
 
     async def get_prompts_from_server(
         self,
