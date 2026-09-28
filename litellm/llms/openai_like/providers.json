@@ -201,6 +201,12 @@
     },
     "supported_endpoints": ["/v1/chat/completions"]
   },
+  "sail": {
+    "base_url": "https://api.sailresearch.com/v1",
+    "api_key_env": "SAIL_API_KEY",
+    "api_base_env": "SAIL_API_BASE",
+    "supported_endpoints": ["/v1/chat/completions", "/v1/responses", "/v1/messages"]
+  },
   "topxai": {
     "base_url": "https://ai.topxea.com/v1",
     "api_key_env": "TOPXAI_API_KEY",

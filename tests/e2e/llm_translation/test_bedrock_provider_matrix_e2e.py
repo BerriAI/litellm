@@ -8,7 +8,8 @@ caller can hand AWS support the request id behind a completion. Regional
 inference-profile ids are the deployment shape most Bedrock customers run; a
 v1.90.0 regression timed them out, and the Converse route keeps them covered in
 test_chat_completions_regression_e2e.py, so the invoke route carries its own
-rows here.
+rows here. The file also covers Bedrock-native OpenAI model ids taking the
+default (Converse) route with max_tokens.
 """
 
 from __future__ import annotations
@@ -26,6 +27,7 @@ pytestmark = pytest.mark.e2e
 
 CONVERSE_REGIONAL_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
 INVOKE_REGIONAL_BACKEND = "bedrock/invoke/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+OPENAI_FAMILY_BACKEND = "bedrock/global.openai.gpt-6-sol"
 PROVIDER_HEADER_PREFIX = "llm_provider-"
 BEDROCK_REQUEST_ID_HEADER = "llm_provider-x-amzn-requestid"
 
@@ -199,3 +201,18 @@ class TestBedrockInvokeRegionalModelIds:
         )
 
         _assert_streamed_completion(result)
+
+
+class TestBedrockOpenAIFamilyDefaultRoute:
+    @pytest.mark.covers("llm.chat_completions.bedrock_converse.basic.nonstream.works", exercised_on=[])
+    def test_openai_family_model_id_completes_with_max_tokens(
+        self, client: PassthroughClient, resources: ResourceManager
+    ) -> None:
+        model = _register_bedrock_model(
+            client, resources, "e2e-bedrock-openai-family", OPENAI_FAMILY_BACKEND
+        )
+        key = resources.key()
+
+        response = unwrap(client.proxy.chat(key, ChatBody(model=model, messages=_prompt(), max_tokens=64)))
+
+        _assert_completion(response)

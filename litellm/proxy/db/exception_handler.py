@@ -1,5 +1,6 @@
 import re
 from collections.abc import Awaitable, Callable, Iterator
+from http import HTTPStatus
 from typing import Final, Protocol, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
@@ -10,6 +11,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
 )
+from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.secret_managers.main import str_to_bool
 
 # Bounds the __cause__/__context__ walk in find_database_service_unavailable_error_in_chain.
@@ -103,7 +105,7 @@ class PrismaDBExceptionHandler:
         """
         import prisma.engine.errors
 
-        if isinstance(e, DB_CONNECTION_ERROR_TYPES):
+        if isinstance(e, (*DB_CONNECTION_ERROR_TYPES, DBLookupDeadlineExceeded)):
             return True
         if isinstance(e, _exception_types(prisma.engine.errors.EngineConnectionError)):
             return True
@@ -376,6 +378,15 @@ class PrismaDBExceptionHandler:
             "Service Unavailable, the authentication database query engine reported "
             f"{type(fault).__name__}, which is not a transient outage and will not clear by retrying. "
             "The proxy deployment needs attention."
+        )
+
+    @staticmethod
+    def service_unavailable_proxy_exception(e: Exception) -> ProxyException:
+        return ProxyException(
+            message=PrismaDBExceptionHandler.database_unavailable_message(e),
+            type=ProxyErrorTypes.no_db_connection,
+            param="None",
+            code=HTTPStatus.SERVICE_UNAVAILABLE.value,
         )
 
     @staticmethod

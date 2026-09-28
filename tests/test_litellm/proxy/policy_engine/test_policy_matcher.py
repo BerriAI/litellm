@@ -6,14 +6,23 @@ Tests:
 - Scope matching via attachments (teams, keys, models)
 """
 
+import logging
+from typing import Final
+
 import pytest
+from hypothesis import given, settings
+from hypothesis import strategies as st
 
 import litellm.proxy.policy_engine.attachment_registry as attachment_registry_module
 import litellm.proxy.policy_engine.policy_registry as policy_registry_module
 from litellm.proxy.policy_engine.attachment_registry import AttachmentRegistry
 from litellm.proxy.policy_engine.policy_matcher import PolicyMatcher
 from litellm.proxy.policy_engine.policy_registry import PolicyRegistry
+from litellm.proxy.policy_engine.policy_resolver import PolicyResolver
 from litellm.types.proxy.policy_engine import (
+    Policy,
+    PolicyCondition,
+    PolicyGuardrails,
     PolicyMatchContext,
     PolicyScope,
 )
@@ -221,6 +230,34 @@ def _global_registries(monkeypatch):
     return policies
 
 
+def _inherited_registries(monkeypatch, parent_condition=None):
+    policies = PolicyRegistry()
+    policies.load_policies(
+        {
+            "parent": {
+                "guardrails": {"add": ["y"]},
+                **({"condition": parent_condition} if parent_condition else {}),
+            },
+            "child": {
+                "inherit": "parent",
+                "guardrails": {"add": ["x"]},
+                "condition": {"model": "claude.*"},
+            },
+            "fallback": {"guardrails": {"add": ["z"]}},
+        }
+    )
+    attachments = AttachmentRegistry()
+    attachments.load_attachments(
+        [
+            {"policy": "child", "scope": "*"},
+            {"policy": "fallback", "scope": "*", "default": True},
+        ]
+    )
+    monkeypatch.setattr(policy_registry_module, "get_policy_registry", lambda: policies)
+    monkeypatch.setattr(attachment_registry_module, "get_attachment_registry", lambda: attachments)
+    return policies
+
+
 class TestGetMatchingPoliciesFallback:
     def test_condition_failing_opt_in_falls_back_to_default(self, monkeypatch):
         _global_registries(monkeypatch)
@@ -244,3 +281,154 @@ class TestGetMatchingPoliciesFallback:
         PolicyMatcher.get_matching_policies(context=context)
 
         assert len(calls) == 1
+
+    def test_condition_missing_child_with_unconditional_parent_still_matches(self, monkeypatch):
+        _inherited_registries(monkeypatch)
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.5")
+
+        assert PolicyMatcher.get_matching_policies(context=context) == ["child"]
+
+    def test_child_whose_whole_chain_misses_falls_back_to_default(self, monkeypatch):
+        _inherited_registries(monkeypatch, parent_condition={"model": "claude.*"})
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.5")
+
+        assert PolicyMatcher.get_matching_policies(context=context) == ["fallback"]
+
+    def test_get_policies_with_matching_conditions_keeps_missing_policy_out(self):
+        policies = {
+            "real": Policy(
+                guardrails=PolicyGuardrails(add=["g"]),
+                condition=PolicyCondition(model="claude.*"),
+            ),
+        }
+        context = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.5")
+
+        assert (
+            PolicyMatcher.get_policies_with_matching_conditions(
+                policy_names=["nope"], context=context, policies=policies
+            )
+            == []
+        )
+
+
+_MODELS: Final = ("gpt-4o", "gpt-5.5", "claude-opus-4-1")
+
+
+def _policy_forest(draw: st.DrawFn) -> dict[str, Policy]:  # mutable-ok: PolicyResolver takes dict[str, Policy]
+    names: Final = tuple(f"p{i}" for i in range(draw(st.integers(min_value=1, max_value=6))))
+    return {  # mutable-ok: PolicyResolver takes dict[str, Policy]
+        name: Policy(
+            inherit=draw(st.sampled_from((None, *names[:i]))),
+            guardrails=PolicyGuardrails(add=[f"g-{name}"]),  # mutable-ok: pydantic list field
+            condition=draw(st.sampled_from((None, *(PolicyCondition(model=m) for m in _MODELS)))),
+        )
+        for i, name in enumerate(names)
+    }
+
+
+@st.composite
+def _forest_and_request(
+    draw: st.DrawFn,
+) -> tuple[dict[str, Policy], tuple[str, ...], PolicyMatchContext]:  # mutable-ok: PolicyResolver takes dict
+    policies: Final = _policy_forest(draw)
+    attached: Final = tuple(draw(st.lists(st.sampled_from(sorted(policies)), unique=True)))
+    context: Final = PolicyMatchContext(team_alias="t", key_alias="k", model=draw(st.sampled_from(_MODELS)))
+    return policies, attached, context
+
+
+def _own_condition_applies(policy: Policy, context: PolicyMatchContext) -> bool:
+    return policy.condition is None or policy.condition.model == context.model
+
+
+def _applicable_chain(
+    policies: dict[str, Policy],  # mutable-ok: PolicyResolver takes dict[str, Policy]
+    name: str,
+    context: PolicyMatchContext,
+) -> tuple[str, ...]:
+    chain: Final = PolicyResolver.resolve_inheritance_chain(policy_name=name, policies=policies)
+    return tuple(member for member in chain if _own_condition_applies(policies[member], context))
+
+
+class TestChainMatchingProperties:
+    @given(_forest_and_request())
+    @settings(max_examples=400, deadline=None)
+    def test_chain_matching_only_widens_to_applicable_ancestor_guardrails(
+        self,
+        case: tuple[dict[str, Policy], tuple[str, ...], PolicyMatchContext],  # mutable-ok: PolicyResolver takes dict
+    ):
+        policies, attached, context = case
+        head: Final = tuple(
+            PolicyMatcher.get_policies_with_matching_conditions(
+                policy_names=attached, context=context, policies=policies
+            )
+        )
+        base: Final = tuple(name for name in attached if _own_condition_applies(policies[name], context))
+        expected_head: Final = tuple(name for name in attached if _applicable_chain(policies, name, context))
+
+        assert head == expected_head, "a policy applies exactly when some chain member's own condition applies"
+        assert frozenset(base) <= frozenset(head), "head must never drop a policy base applied"
+
+        for name in head:
+            resolved = PolicyResolver.resolve_policy_guardrails(policy_name=name, policies=policies, context=context)
+            assert sorted(resolved.guardrails) == sorted(
+                f"g-{member}" for member in _applicable_chain(policies, name, context)
+            )
+            if name not in base:
+                assert f"g-{name}" not in resolved.guardrails, "a condition-missed child must not add its own guardrail"
+
+
+class TestAncestorAdmissionLogging:
+    @staticmethod
+    def _chain() -> dict[str, Policy]:  # mutable-ok: PolicyResolver takes dict[str, Policy]
+        return {  # mutable-ok: PolicyResolver takes dict[str, Policy]
+            "parent": Policy(guardrails=PolicyGuardrails(add=["g-parent"])),  # mutable-ok: pydantic list field
+            "child": Policy(
+                inherit="parent",
+                guardrails=PolicyGuardrails(add=["g-child"]),  # mutable-ok: pydantic list field
+                condition=PolicyCondition(model="gpt-5.5"),
+            ),
+        }
+
+    def test_logs_when_admitted_through_ancestor_only(self, caplog):
+        context: Final = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-4o")
+        with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+            result: Final = PolicyMatcher.policy_applies(context, self._chain())("child")
+        records: Final = [r for r in caplog.records if "applied through ancestor" in r.getMessage()]
+        assert result is True
+        assert len(records) == 1
+        assert "applied through ancestor 'parent'" in records[0].getMessage()
+        assert "'child'" in records[0].getMessage()
+
+    def test_no_log_when_own_condition_matches(self, caplog):
+        context: Final = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-5.5")
+        with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+            result: Final = PolicyMatcher.policy_applies(context, self._chain())("child")
+        assert result is True
+        assert not [r for r in caplog.records if "applied through ancestor" in r.getMessage()]
+
+    def test_no_log_when_no_chain_member_applies(self, caplog):
+        policies: Final = {  # mutable-ok: PolicyResolver takes dict[str, Policy]
+            "parent": Policy(
+                guardrails=PolicyGuardrails(add=["g-parent"]),  # mutable-ok: pydantic list field
+                condition=PolicyCondition(model="claude-opus-4-1"),
+            ),
+            "child": Policy(
+                inherit="parent",
+                guardrails=PolicyGuardrails(add=["g-child"]),  # mutable-ok: pydantic list field
+                condition=PolicyCondition(model="gpt-5.5"),
+            ),
+        }
+        context: Final = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-4o")
+        with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+            result: Final = PolicyMatcher.policy_applies(context, policies)("child")
+        assert result is False
+        assert not [r for r in caplog.records if "applied through ancestor" in r.getMessage()]
+
+    def test_condition_filter_logs_nothing(self, caplog):
+        context: Final = PolicyMatchContext(team_alias="t", key_alias="k", model="gpt-4o")
+        with caplog.at_level(logging.INFO, logger="LiteLLM Proxy"):
+            result: Final = PolicyMatcher.get_policies_with_matching_conditions(
+                policy_names=["child"], context=context, policies=self._chain()
+            )
+        assert result == ["child"]
+        assert not [r for r in caplog.records if "applied through ancestor" in r.getMessage()]

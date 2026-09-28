@@ -1,6 +1,4 @@
-
 import pytest
-
 
 from litellm.llms.fireworks_ai.common_utils import resolve_fireworks_resource_name
 
@@ -16,6 +14,10 @@ from litellm.llms.fireworks_ai.common_utils import resolve_fireworks_resource_na
         ("glm-4p6", "accounts/fireworks/models/glm-4p6"),
         ("fireworks_ai/glm-4p6", "accounts/fireworks/models/glm-4p6"),
         ("kimi-k2p6-fast", "accounts/fireworks/routers/kimi-k2p6-fast"),
+        ("firerouter", "accounts/fireworks/routers/firerouter"),
+        ("fireworks_ai/firerouter", "accounts/fireworks/routers/firerouter"),
+        ("firerouter/kimi-k3/deepseek-v4", "accounts/fireworks/routers/firerouter/kimi-k3/deepseek-v4"),
+        ("firerouter-v2", "accounts/fireworks/models/firerouter-v2"),
         (
             "accounts/fireworks/routers/glm-latest",
             "accounts/fireworks/routers/glm-latest",

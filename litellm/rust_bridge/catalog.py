@@ -7,7 +7,7 @@ admission separately decides whether the selected implementation can execute.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import Enum, auto
+from enum import Enum
 from typing import Final, TypeAlias
 
 from litellm.rust_bridge.configuration import Decision, Rollout
@@ -18,6 +18,7 @@ from litellm.types.secret_managers.main import KeyManagementSystem
 
 class Route(str, Enum):
     CHAT_COMPLETIONS = "chat_completions"
+    EMBEDDINGS = "embeddings"
     MESSAGES = "messages"
     RESPONSES = "responses"
     TRANSCRIPTION = "transcription"
@@ -26,18 +27,11 @@ class Route(str, Enum):
     TOKENIZER = "tokenizer"
 
 
-class Delivery(Enum):
-    COMPLETED = auto()
-    STREAMING = auto()
-    WEBSOCKET = auto()
-
-
 @dataclass(frozen=True, slots=True)
 class RouteContext:
     route: Route
     provider: str | None = None
     model: str | None = None
-    delivery: Delivery = Delivery.COMPLETED
 
 
 @dataclass(frozen=True, slots=True)
@@ -46,7 +40,6 @@ class RouteRule:
     rollout: Rollout
     providers: frozenset[str] | None = None
     models: frozenset[str] | None = None
-    deliveries: frozenset[Delivery] | None = None
 
     def matches(self, context: Context) -> bool:
         return (
@@ -54,7 +47,6 @@ class RouteRule:
             and context.route is self.route
             and (self.providers is None or context.provider in self.providers)
             and (self.models is None or context.model in self.models)
-            and (self.deliveries is None or context.delivery in self.deliveries)
         )
 
 
@@ -86,16 +78,33 @@ class SecretManagerRule:
         return isinstance(context, SecretManagerContext) and (self.systems is None or context.system in self.systems)
 
 
-Context: TypeAlias = RouteContext | CacheContext | SecretManagerContext
-Rule: TypeAlias = RouteRule | CacheRule | SecretManagerRule
+@dataclass(frozen=True, slots=True)
+class LoggerContext:
+    pass
+
+
+@dataclass(frozen=True, slots=True)
+class LoggerRule:
+    rollout: Rollout
+
+    def matches(self, context: Context) -> bool:
+        return isinstance(context, LoggerContext)
+
+
+Context: TypeAlias = RouteContext | CacheContext | SecretManagerContext | LoggerContext
+Rule: TypeAlias = RouteRule | CacheRule | SecretManagerRule | LoggerRule
 Rules: TypeAlias = tuple[Rule, ...]
 
 RULES: Final[Rules] = (
-    RouteRule(Route.OCR, Rollout.RUST_REQUIRED, providers=frozenset({"aws_textract"})),
-    RouteRule(Route.OCR, Rollout.RUST_OPT_OUT),
-    RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN),
-    RouteRule(Route.TOKEN_COUNTER, Rollout.RUST_OPT_IN),
-    RouteRule(Route.TOKENIZER, Rollout.RUST_OPT_IN),
+    LoggerRule(Rollout.RUST_OPT_IN),
+    RouteRule(Route.CHAT_COMPLETIONS, Rollout.PYTHON_ONLY),
+    RouteRule(Route.EMBEDDINGS, Rollout.PYTHON_ONLY),
+    RouteRule(Route.OCR, Rollout.RUST_REQUIRED),
+    RouteRule(Route.MESSAGES, Rollout.RUST_OPT_IN, providers=frozenset({"anthropic"})),
+    RouteRule(Route.MESSAGES, Rollout.PYTHON_ONLY),
+    RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
+    RouteRule(Route.TOKEN_COUNTER, Rollout.PYTHON_ONLY),
+    RouteRule(Route.TOKENIZER, Rollout.PYTHON_ONLY),
     RouteRule(Route.TRANSCRIPTION, Rollout.RUST_REQUIRED, providers=frozenset({"bedrock"})),
     CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.LOCAL})),
     CacheRule(Rollout.PYTHON_ONLY, backends=frozenset({LiteLLMCacheType.REDIS})),

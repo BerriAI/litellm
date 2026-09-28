@@ -1,6 +1,6 @@
 # litellm/proxy/guardrails/guardrail_hooks/pangea.py
 import os
-from typing import TYPE_CHECKING, Any, Final, cast
+from typing import TYPE_CHECKING, Final
 
 from fastapi import HTTPException
 
@@ -230,7 +230,7 @@ class PangeaHandler(CustomGuardrail):
             messages: Final = data.get("messages")
             if messages is None:
                 return  # No messages to check
-            input_messages = cast(list[dict[Any, Any]], messages)
+            input_messages = messages
         else:
             return
 

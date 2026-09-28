@@ -84,6 +84,7 @@ describe("RequestLogsFilters", () => {
 
     for (const label of [
       "Team ID",
+      "Span Type",
       "Status",
       "Cache",
       "Key Alias",
@@ -284,6 +285,38 @@ describe("RequestLogsFilters", () => {
     renderFilters(cacheState === "" ? {} : { [LOG_FILTER_IDS.CACHE_STATUS]: cacheState });
 
     expect(await screen.findByText(label)).toBeInTheDocument();
+  });
+
+  it.each([
+    ["", "All Types"],
+    ["llm", "LLM"],
+    ["agent", "Agent"],
+    ["mcp", "MCP"],
+    ["batch", "Batch"],
+  ])("shows the human label on the Span Type trigger for %s", async (spanType, label) => {
+    renderFilters(spanType === "" ? {} : { [LOG_FILTER_IDS.SPAN_TYPE]: spanType });
+
+    expect(await screen.findByText(label)).toBeInTheDocument();
+  });
+
+  it("selecting Batch sets the span_type filter", async () => {
+    const user = userEvent.setup();
+    const { set } = renderFilters();
+
+    await user.click(await screen.findByText("All Types"));
+    await user.click(await screen.findByRole("option", { name: "Batch" }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.SPAN_TYPE, "batch");
+  });
+
+  it("selecting All Types clears the span_type filter", async () => {
+    const user = userEvent.setup();
+    const { set } = renderFilters({ [LOG_FILTER_IDS.SPAN_TYPE]: "batch" });
+
+    await user.click(await screen.findByText("Batch"));
+    await user.click(await screen.findByRole("option", { name: "All Types" }));
+
+    expect(set).toHaveBeenCalledWith(LOG_FILTER_IDS.SPAN_TYPE, undefined);
   });
 
   it.each([

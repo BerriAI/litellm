@@ -15,7 +15,7 @@ import { changePasswordCall, getProxyBaseUrl } from "@/components/networking";
 import { extractProxyErrorMessage } from "@/lib/http/client";
 import { useZodForm } from "@/lib/forms/useZodForm";
 import { toast } from "@/lib/toast";
-import { clearTokenCookies } from "@/utils/cookieUtils";
+import { revokeSessionAndClearClientState } from "@/app/(dashboard)/hooks/useLogout";
 import { getLoginUrl } from "@/utils/returnUrlUtils";
 
 const changePasswordSchema = z
@@ -47,8 +47,10 @@ export function ChangePasswordForm() {
       await changePasswordCall(accessToken, values.currentPassword, values.newPassword);
       if (passwordResetRequired) {
         // The session key was minted restricted; only a fresh login lifts it.
+        // Revoke it server-side too (best-effort) so it doesn't sit valid
+        // until the expiry reaper gets to it.
         toast.success("Password updated. Please log in with your new password.");
-        clearTokenCookies();
+        await revokeSessionAndClearClientState(accessToken);
         window.location.replace(getLoginUrl(getProxyBaseUrl()));
         return;
       }
