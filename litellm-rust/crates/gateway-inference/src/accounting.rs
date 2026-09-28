@@ -122,44 +122,63 @@ impl ResponsesAccounting {
         let (ready, admitted) = oneshot::channel();
         let service = self.service.clone();
         let callback = self.callback.clone();
-        tokio::spawn(async move {
-            let _token = token;
-            let admission = match service.admit(request).await {
-                Ok(admission) => admission,
-                Err(error) => {
-                    let _ = ready.send(Err(AccountingError::Admission(error)));
-                    return;
-                }
-            };
-            let mut session = Session::new(BudgetAdmission::new(admission.budget_receipt));
-            let mut backend = admission.backend;
-            let delivered = ready.send(Ok(())).is_ok();
-            let (outcome, reply, assessment_error) = if delivered {
-                collect(receiver, backend.as_mut()).await
-            } else {
-                (Outcome::Cancelled, None, None)
-            };
-            let result = settle(&mut session, backend.as_mut(), admission.call_id, outcome, assessment_error).await;
-            match result {
-                Ok(report) => {
-                    if let Some(callback) = callback
-                        && callback.completed(report.clone()).await.is_err() {
-                        tracing::warn!("accounting terminal callback failed");
+        tokio::spawn(
+            async move {
+                let _token = token;
+                let admission = match service.admit(request).await {
+                    Ok(admission) => admission,
+                    Err(error) => {
+                        let _ = ready.send(Err(AccountingError::Admission(error)));
+                        return;
                     }
-                    let delivery = report_result(&report);
-                    if delivery.is_err() {
-                        tracing::error!(status = ?report.status, "call accounting needs attention");
+                };
+                let mut session = Session::new(BudgetAdmission::new(admission.budget_receipt));
+                let mut backend = admission.backend;
+                let delivered = ready.send(Ok(())).is_ok();
+                let (outcome, reply, assessment_error) = if delivered {
+                    collect(receiver, backend.as_mut()).await
+                } else {
+                    (Outcome::Cancelled, None, None)
+                };
+                let result = settle(
+                    &mut session,
+                    backend.as_mut(),
+                    admission.call_id,
+                    outcome,
+                    assessment_error,
+                )
+                .await;
+                match result {
+                    Ok(report) => {
+                        if let Some(callback) = callback
+                            && callback.completed(report.clone()).await.is_err()
+                        {
+                            tracing::warn!("accounting terminal callback failed");
+                        }
+                        let delivery = report_result(&report);
+                        if let Err(error) = &delivery {
+                            tracing::error!(
+                                call_id = %report.call_id,
+                                progress = ?report.progress,
+                                error = %error,
+                                "call accounting needs attention"
+                            );
+                        }
+                        if let Some(reply) = reply {
+                            let _ = reply.send(delivery);
+                        }
                     }
-                    if let Some(reply) = reply {
-                        let _ = reply.send(delivery);
+                    Err(error) => {
+                        tracing::error!("accounting session contract failed");
+                        if let Some(reply) = reply {
+                            let _ = reply.send(Err(error));
+                        }
                     }
-                }
-                Err(error) => {
-                    tracing::error!("accounting session contract failed");
-                    if let Some(reply) = reply { let _ = reply.send(Err(error)); }
                 }
             }
-        }.with_current_subscriber().in_current_span());
+            .with_current_subscriber()
+            .in_current_span(),
+        );
         admitted.await.map_err(|_| AccountingError::Closed)??;
         Ok(Call {
             sender: Some(sender),

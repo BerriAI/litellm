@@ -119,7 +119,7 @@ impl<E> From<ApplyResult<E>> for EffectState<E> {
     }
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Progress<E> {
     effects: [EffectState<E>; 3],
 }
