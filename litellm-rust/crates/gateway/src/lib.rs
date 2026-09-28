@@ -34,14 +34,18 @@ pub fn build_inference(config: &Config) -> Result<Arc<Gateway>, litellm_http::Er
     )?))
 }
 
-pub fn router(inference: Arc<Gateway>, config: &Config) -> Router {
+pub fn router(inference: Arc<Gateway>, config: &Config, ui: Option<Router>) -> Router {
     let auth = Auth::from_config(config, inference.secrets.clone());
-    litellm_gateway_inference::router(inference)
+    let inference = litellm_gateway_inference::router(inference)
         .route_layer(axum::middleware::from_fn_with_state(
             auth,
             litellm_gateway_auth::authenticate,
         ))
-        .layer(axum::middleware::from_fn(log_request))
+        .layer(axum::middleware::from_fn(log_request));
+    match ui {
+        Some(ui) => inference.merge(ui),
+        None => inference,
+    }
 }
 
 async fn log_request(request: Request, next: Next) -> Response {
