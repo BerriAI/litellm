@@ -17,4 +17,5 @@ litellm-cache-memory.workspace = true
 litellm-cache-redis.workspace = true
 redis = "1.7.0"
 redis-test = "1.0.4"
+rstest.workspace = true
 tokio.workspace = true

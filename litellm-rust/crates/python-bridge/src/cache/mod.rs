@@ -1,3 +1,4 @@
+mod activation;
 mod binding;
 mod callback;
 mod config;
@@ -17,9 +18,7 @@ use pyo3::{
     prelude::*,
 };
 
-pub(crate) use self::{
-    binding::ResolvedCache, handle::CacheTestHandle, resolver::CacheTestResolver,
-};
+pub(crate) use self::{binding::ResolvedCache, handle::CacheTestHandle, resolver::CacheResolver};
 
 fn cache_error(error: Error) -> PyErr {
     match error {

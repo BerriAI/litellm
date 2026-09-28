@@ -12,14 +12,13 @@ from typing_extensions import ReadOnly, TypedDict
 import litellm
 from litellm import Router
 from litellm.constants import INITIAL_RETRY_DELAY, MAX_RETRY_DELAY
-from litellm.llms.vertex_ai.common_utils import get_vertex_base_url
+from litellm.llms.vertex_ai.common_utils import _get_gemini_url, get_vertex_base_url
 from litellm.llms.vertex_ai.vertex_llm_base import VertexBase
 
 CONFIG_PATH: Final = Path(__file__).parent / "google_genai_proxy_test_config.yaml"
-GEMINI_DEPLOYMENT: Final = "gemini-2.5-flash-lite"
-VERTEX_DEPLOYMENT: Final = "vertex-gemini-2.5-flash-lite"
-GEMINI_HOST: Final = "generativelanguage.googleapis.com"
-GEMINI_GENERATE_CONTENT_PATH: Final = "/v1beta/models/gemini-2.5-flash-lite:generateContent"
+GEMINI_DEPLOYMENT: Final = "gemini-3.5-flash-lite"
+VERTEX_DEPLOYMENT: Final = "vertex-gemini-3.5-flash-lite"
+GEMINI_GENERATE_CONTENT_URL: Final = _get_gemini_url(mode="chat", model=GEMINI_DEPLOYMENT, stream=False)[0]
 VERTEX_GLOBAL_BASE_URL: Final = "https://aiplatform.googleapis.com"
 RESOURCE_EXHAUSTED: Final = {
     "error": {"code": 429, "message": "Resource exhausted. Please try again later.", "status": "RESOURCE_EXHAUSTED"}
@@ -81,7 +80,7 @@ async def test_ci_proxy_config_rides_out_consecutive_429s_with_backoff(
 ) -> None:
     monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
     litellm.in_memory_llm_clients_cache.flush_cache()
-    route: Final = respx_mock.post(host=GEMINI_HOST, path=GEMINI_GENERATE_CONTENT_PATH).mock(
+    route: Final = respx_mock.post(GEMINI_GENERATE_CONTENT_URL).mock(
         side_effect=[httpx.Response(429, json=RESOURCE_EXHAUSTED)] * CONSECUTIVE_RATE_LIMITS
         + [httpx.Response(200, json=PONG)]
     )

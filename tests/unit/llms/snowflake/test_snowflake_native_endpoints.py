@@ -7,7 +7,7 @@ Covers:
     - Claude models → /messages (Anthropic format)
 
 Run:
-    pytest tests/test_litellm/llms/snowflake/test_snowflake_native_endpoints.py -v
+    pytest tests/unit/llms/snowflake/test_snowflake_native_endpoints.py -v
 """
 
 import json

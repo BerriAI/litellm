@@ -5,7 +5,7 @@ from collections.abc import Iterator, Mapping
 import pytest
 
 from litellm.proxy import proxy_server
-from litellm.proxy.bug_report_config import build_proxy_bug_report, safe_config_lines
+from litellm.proxy.bug_report_config import build_proxy_bug_report, build_proxy_environment_report, safe_config_lines
 
 CUSTOMER_STRINGS = (
     "acme",
@@ -124,6 +124,50 @@ def test_secrets_numbers_and_unknown_values_leave_no_line():
     assert safe_config_lines({}, general_settings) == ("general_settings.background_health_checks = false",)
 
 
+def test_credential_keys_never_render_even_when_the_secret_equals_a_litellm_token():
+    config: Mapping[str, object] = {
+        "litellm_settings": {
+            "openai_key": "openai",
+            "token": "langfuse",
+            "api_base": "azure",
+            "callbacks": ["langfuse"],
+            "cache_params": {"type": "redis", "password": "redis", "host": "openai", "qdrant_api_key": "qdrant"},
+        },
+        "router_settings": {
+            "routing_strategy": "simple-shuffle",
+            "redis_password": "simple-shuffle",
+            "redis_url": "redis",
+        },
+        "guardrails": [
+            {
+                "litellm_params": {
+                    "guardrail": "presidio",
+                    "api_key": "presidio",
+                    "auth_token": "pre_call",
+                    "client_secret": "openai",
+                    "credentials": ["openai", "azure"],
+                }
+            }
+        ],
+    }
+    general_settings: Mapping[str, object] = {
+        "master_key": "redis",
+        "database_url": "openai",
+        "alert_to_webhook_url": "langfuse",
+        "key_management_system": "aws_secret_manager",
+        "use_azure_key_vault": True,
+    }
+
+    assert safe_config_lines(config, general_settings) == (
+        "general_settings.key_management_system = aws_secret_manager",
+        "general_settings.use_azure_key_vault = true",
+        "litellm_settings.callbacks = [langfuse]",
+        "litellm_settings.cache_params.type = redis",
+        "router_settings.routing_strategy = simple-shuffle",
+        "guardrails[0].litellm_params.guardrail = presidio",
+    )
+
+
 def test_malformed_sections_produce_no_lines():
     config: Mapping[str, object] = {
         "litellm_settings": "acme",
@@ -149,6 +193,14 @@ def loaded_proxy_config(monkeypatch: pytest.MonkeyPatch) -> Iterator[None]:
 def test_build_proxy_bug_report_reads_the_loaded_proxy_config():
     report = build_proxy_bug_report(RuntimeError("boom"), stream=False)
 
-    assert report.surface == "proxy"
+    assert report.environment.surface == "proxy"
     assert report.stream is False
-    assert report.config_lines == safe_config_lines(CUSTOMER_CONFIG, CUSTOMER_GENERAL_SETTINGS)
+    assert report.environment.config_lines == safe_config_lines(CUSTOMER_CONFIG, CUSTOMER_GENERAL_SETTINGS)
+
+
+@pytest.mark.usefixtures("loaded_proxy_config")
+def test_proxy_environment_report_matches_the_bug_report_environment():
+    environment = build_proxy_environment_report()
+
+    assert environment == build_proxy_bug_report(RuntimeError("boom")).environment
+    assert environment.config_lines == safe_config_lines(CUSTOMER_CONFIG, CUSTOMER_GENERAL_SETTINGS)
