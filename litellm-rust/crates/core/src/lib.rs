@@ -5,6 +5,8 @@ pub mod error;
 pub mod messages;
 pub mod ocr;
 mod outbound;
+mod provider;
+pub mod resources;
 pub mod responses;
 
-pub use error::Error;
+pub use error::{Phase, RouteError};

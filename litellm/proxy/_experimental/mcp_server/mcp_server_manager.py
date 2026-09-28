@@ -193,6 +193,7 @@ from litellm.types.mcp import (
     MCPAuth,
     MCPStdioConfig,
     MCPTokenEndpointAuthMethod,
+    MCPUpstreamProtocol,
     has_header,
     without_header,
 )
@@ -340,6 +341,7 @@ class MCPServerConfig(TypedDict, total=False):
     whatever the admin wrote, and each read applies its own default."""
 
     server_id: ReadOnly[str]
+    protocol_version: ReadOnly[MCPUpstreamProtocol]
     alias: str
     description: str
     mcp_info: MCPInfo
@@ -893,6 +895,41 @@ def _redacted_origin_list(urls: Sequence[str]) -> str:
 
 def _sanitized_error_text(exc: Exception) -> str:
     return re.sub(r"https?://\S+", "<url>", str(exc))[:200]
+
+
+async def _mcp_server_reachability(
+    server: MCPServer, *, timeout: float
+) -> tuple[Literal["reachable", "unhealthy", "unknown"], str | None]:
+    if server.transport not in (MCPTransport.http, MCPTransport.sse) or not server.url:
+        return "unknown", "Server reachability requires an HTTP or SSE URL"
+    try:
+        url: Final = httpx.URL(server.url)
+    except (httpx.InvalidURL, ValueError):
+        return "unknown", "Server reachability requires an HTTP URL without embedded credentials"
+    if url.scheme not in ("http", "https") or not url.host or url.userinfo:
+        return "unknown", "Server reachability requires an HTTP URL without embedded credentials"
+
+    async def probe() -> None:
+        handler: Final = get_async_httpx_client(llm_provider="mcp_reachability")
+        async with handler.client.stream(
+            "GET",
+            url,
+            headers={"Accept": "text/event-stream, application/json"},
+            auth=None,
+            follow_redirects=False,
+            timeout=timeout,
+        ):
+            pass
+
+    try:
+        await asyncio.wait_for(probe(), timeout=timeout)
+    except (asyncio.TimeoutError, httpx.TimeoutException):
+        return "unhealthy", f"Reachability check timed out after {timeout} seconds"
+    except asyncio.CancelledError:
+        return "unknown", "Reachability check was cancelled"
+    except Exception as exc:
+        return "unhealthy", f"Reachability check failed ({type(exc).__name__})"
+    return "reachable", None
 
 
 async def _openapi_spec_health(
@@ -2549,6 +2586,9 @@ class MCPServerManager:
             new_server = MCPServer(
                 server_id=server_id,
                 name=name_for_prefix,
+                protocol_version=TypeAdapter(MCPUpstreamProtocol).validate_python(
+                    server_config.get("protocol_version", mcp_info.get("protocol_version", "auto"))
+                ),
                 alias=alias,
                 server_name=server_name,
                 spec_path=server_config.get("spec_path", None),
@@ -3109,6 +3149,9 @@ class MCPServerManager:
         new_server: Final = MCPServer(
             server_id=mcp_server.server_id,
             name=name_for_prefix,
+            protocol_version=TypeAdapter(MCPUpstreamProtocol).validate_python(
+                _mcp_info.get("protocol_version", "auto")
+            ),
             alias=getattr(mcp_server, "alias", None),
             server_name=getattr(mcp_server, "server_name", None),
             url=mcp_server.url,
@@ -4145,6 +4188,7 @@ class MCPServerManager:
         cred_provider: UpstreamCredentialProvider | None = None,
         raw_headers: Mapping[str, str] | None = None,
         client_ip: str | None = None,
+        protocol_version_override: MCPUpstreamProtocol | None = None,
     ) -> MCPClient:
         """
         Create an MCPClient instance for the given server.
@@ -4168,6 +4212,9 @@ class MCPServerManager:
         """
         record_auth_resolution(server.server_id, AuthResolution.unresolved)
         resolved_server: Final = await self.ensure_oauth_metadata_discovered(server)
+        protocol_version: Final = (
+            protocol_version_override if protocol_version_override is not None else resolved_server.protocol_version
+        )
         transport: Final = resolved_server.transport or MCPTransport.sse
         spec = None if transport == MCPTransport.stdio else _to_server_spec_fail_closed(resolved_server)
         provider: Final = cred_provider or self._cred_provider
@@ -4249,6 +4296,7 @@ class MCPServerManager:
             return MCPClient(
                 server_url="",  # Not used for stdio
                 transport_type=transport,
+                protocol_version=protocol_version,
                 auth_type=resolved_server.auth_type,
                 auth_value=auth_value,
                 timeout=(resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT),
@@ -4281,6 +4329,7 @@ class MCPServerManager:
                     MCPClient(
                         server_url=server_url,
                         transport_type=transport,
+                        protocol_version=protocol_version,
                         auth_type=resolved_server.auth_type,
                         timeout=(
                             resolved_server.timeout if resolved_server.timeout is not None else MCP_CLIENT_TIMEOUT
@@ -4324,6 +4373,7 @@ class MCPServerManager:
                 MCPClient(
                     server_url=server_url,
                     transport_type=transport,
+                    protocol_version=protocol_version,
                     auth_type=resolved_server.auth_type,
                     auth_value=auth_value,
                     auth_header_name=auth_header_name,
@@ -6749,6 +6799,16 @@ class MCPServerManager:
                 return server
         return None
 
+    @staticmethod
+    def _is_public_mcp_server(server: MCPServer, public_ids: Container[str]) -> bool:
+        return server.server_id in public_ids or (
+            not litellm.public_mcp_hub_strict_whitelist and server.available_on_public_internet
+        )
+
+    def is_mcp_server_public(self, server_id: str) -> bool:
+        server: Final = self.registry.get(server_id) or self.config_mcp_servers.get(server_id)
+        return server is not None and self._is_public_mcp_server(server, litellm.public_mcp_servers or ())
+
     def get_public_mcp_servers(self) -> list[MCPServer]:
         """
         Return the MCP servers published to the AI Hub via /v1/mcp/make_public.
@@ -6766,18 +6826,8 @@ class MCPServerManager:
         deployments that relied on the OR-with-default semantics; will be
         removed in a future release.
         """
-        if litellm.public_mcp_hub_strict_whitelist:
-            if litellm.public_mcp_servers is None:
-                return []
-            public_ids = set(litellm.public_mcp_servers)
-            return [server for server in self.get_registry().values() if server.server_id in public_ids]
-
-        public_ids = set(litellm.public_mcp_servers or [])
-        return [
-            server
-            for server in self.get_registry().values()
-            if server.available_on_public_internet or server.server_id in public_ids
-        ]
+        public_ids: Final = frozenset(litellm.public_mcp_servers or ())
+        return [server for server in self.get_registry().values() if self._is_public_mcp_server(server, public_ids)]
 
     def expand_permission_list(self, identifiers: list[str]) -> list[str]:
         """
@@ -6840,12 +6890,13 @@ class MCPServerManager:
         if not tool_permissions:
             return {}
         expanded: Final = tuple(
-            (server_id, tuple(tools or ()))
-            for key, tools in tool_permissions.items()
-            for server_id in self.expand_permission_list([key])
+            chain.from_iterable(
+                ((server_id, tuple(tools or ())) for server_id in self.expand_permission_list([key]))
+                for key, tools in tool_permissions.items()
+            )
         )
         return {
-            server_id: list(dict.fromkeys(tool for _, tools in group for tool in tools))
+            server_id: list(dict.fromkeys(chain.from_iterable(tools for _, tools in group)))
             for server_id, group in groupby(sorted(expanded, key=itemgetter(0)), key=itemgetter(0))
         }
 
@@ -6970,13 +7021,9 @@ class MCPServerManager:
                 )
             )
 
-        status: Literal["healthy", "unhealthy", "unknown"] = "unknown"
+        status: Literal["healthy", "reachable", "unhealthy", "unknown"] = "unknown"
         health_check_error = None
 
-        # Check if we should skip health check based on auth configuration
-        should_skip_health_check = False
-
-        # Skip if server requires per-user authentication (OAuth2 or passthrough auth)
         if (
             server.requires_per_user_auth
             or (
@@ -6987,9 +7034,8 @@ class MCPServerManager:
             )
             or self._references_per_user_env_var(server)
         ):
-            should_skip_health_check = True
-
-        if not should_skip_health_check:
+            status, health_check_error = await _mcp_server_reachability(server, timeout=MCP_HEALTH_CHECK_TIMEOUT)
+        else:
             try:
                 resolved_static_headers: Final = await self._resolve_static_headers_with_env_vars(
                     server=server,
@@ -7065,6 +7111,8 @@ class MCPServerManager:
         self,
         user_api_key_auth: UserAPIKeyAuth | None = None,
         server_ids: list[str] | None = None,
+        *,
+        checked_server_ids: frozenset[str] = frozenset(),
     ) -> list[LiteLLM_MCPServerTable]:
         """
         Get all MCP servers that the user has access to, with health status and team information.
@@ -7089,7 +7137,7 @@ class MCPServerManager:
             # Check all accessible servers
             target_server_ids = allowed_server_ids
 
-        return await self._run_health_checks(target_server_ids)
+        return await self._run_health_checks([sid for sid in target_server_ids if sid not in checked_server_ids])
 
     async def get_all_allowed_mcp_servers(
         self,
@@ -7220,9 +7268,15 @@ class MCPServerManager:
         if not target_server_ids:
             return []
 
-        tasks: Final = [self.health_check_server(server_id) for server_id in target_server_ids]
-        results: Final = await asyncio.gather(*tasks)
-        return [server for server in results if server is not None]
+        unique_server_ids: Final = tuple(dict.fromkeys(target_server_ids))
+        batch_size: Final = 10
+        batches: Final = [
+            await asyncio.gather(
+                *(self.health_check_server(server_id) for server_id in unique_server_ids[offset : offset + batch_size])
+            )
+            for offset in range(0, len(unique_server_ids), batch_size)
+        ]
+        return [server for batch in batches for server in batch if server is not None]
 
 
 global_mcp_server_manager: Final[MCPServerManager] = MCPServerManager()

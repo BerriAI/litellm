@@ -1,26 +1,37 @@
-use litellm_http::request::truncate_error_body;
+use std::time::Duration;
+
+use litellm_http::{Client, request::truncate_error_body};
+use litellm_llms::base_llm::auth::resolve_auth;
 use serde_json::Value;
 
-use super::{Error, client::http_client};
-use crate::audio_transcription::types::ProviderAudioTranscriptionRequest;
+use super::Error;
+use crate::{
+    audio_transcription::types::ProviderAudioTranscriptionRequest,
+    constants::AUDIO_TRANSCRIPTION_TIMEOUT_SECS,
+};
 
 pub async fn execute_audio_transcription_provider_call(
+    http: &Client,
+    auth: &litellm_auth::AuthServices,
     request: ProviderAudioTranscriptionRequest,
 ) -> Result<Value, Error> {
-    let response = crate::outbound::outbound_request::<Error>(
-        &request.auth,
+    let env_lookup = |key: &str| request.secrets.get(key);
+    let authenticated = resolve_auth(auth, request.environment.clone(), &env_lookup).await?;
+    let outbound = crate::outbound::outbound_request(
+        authenticated,
         request.url.clone(),
-        request.upstream_headers.clone(),
         &request.body,
-        request.timeout,
-        &request.optional_params,
-    )
-    .await?
-    .send(http_client())
-    .await
-    .map_err(|error| {
-        Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
-    })?;
+        Some(
+            request
+                .timeout
+                .unwrap_or(Duration::from_secs(AUDIO_TRANSCRIPTION_TIMEOUT_SECS)),
+        ),
+    )?;
+    let response = crate::outbound::send(outbound, http)
+        .await
+        .map_err(|error| {
+            Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
+        })?;
     let status = response.status();
     let text = response.text().await.map_err(|error| {
         Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
@@ -31,8 +42,12 @@ pub async fn execute_audio_transcription_provider_call(
             body: truncate_error_body(&text),
         }));
     }
-    let response_json = serde_json::from_str(&text)
-        .map_err(|error| Error::InvalidResponse(format!("invalid audio response JSON: {error}")))?;
+    let response_json = serde_json::from_str(&text).map_err(|error| {
+        Error::InvalidResponse(litellm_llms::ErrorDetail::invalid(
+            "audio response JSON",
+            error,
+        ))
+    })?;
     Ok(request
         .config
         .transform_audio_transcription_response(&request.model, response_json)?

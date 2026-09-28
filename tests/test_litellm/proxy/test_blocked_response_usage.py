@@ -4,7 +4,7 @@ proxy endpoints (/v1/chat/completions, /v1/completions, and /v1/responses).
 
 A post-call block replaces the LLM response with the violation message, but the
 upstream call already consumed tokens. `_blocked_response_usage` (and its
-Responses API counterpart `_blocked_responses_api_usage`) reports that real
+Responses API counterpart `blocked_responses_api_usage`) reports that real
 usage (carried on `ModifyResponseException.original_response`) rather than
 zero; a pre-call block never invoked the LLM, so usage is zero.
 """
@@ -91,8 +91,8 @@ def test_responses_api_blocked_reply_carries_real_usage():
     """
     import time
 
-    from litellm.proxy.response_api_endpoints.endpoints import (
-        _blocked_responses_api_usage,
+    from litellm.llms.base_llm.guardrail_translation.utils import (
+        blocked_responses_api_usage,
     )
 
     original_response = ResponsesAPIResponse(
@@ -105,7 +105,7 @@ def test_responses_api_blocked_reply_carries_real_usage():
         usage=ResponseAPIUsage(input_tokens=14, output_tokens=20, total_tokens=34),
     )
 
-    usage = _blocked_responses_api_usage(original_response)
+    usage = blocked_responses_api_usage(original_response)
 
     assert usage.input_tokens == 14
     assert usage.output_tokens == 20
@@ -114,11 +114,11 @@ def test_responses_api_blocked_reply_carries_real_usage():
 
 def test_responses_api_blocked_reply_zero_usage_when_no_original_response():
     """Pre-call block has no original_response, so usage must be zero."""
-    from litellm.proxy.response_api_endpoints.endpoints import (
-        _blocked_responses_api_usage,
+    from litellm.llms.base_llm.guardrail_translation.utils import (
+        blocked_responses_api_usage,
     )
 
-    usage = _blocked_responses_api_usage(None)
+    usage = blocked_responses_api_usage(None)
 
     assert usage.input_tokens == 0
     assert usage.output_tokens == 0
@@ -128,14 +128,14 @@ def test_responses_api_blocked_reply_zero_usage_when_no_original_response():
 def test_responses_api_blocked_reply_maps_bridged_chat_usage():
     """A chat model bridged through /v1/responses blocks with a ModelResponse whose
     Usage fields must map prompt_tokens -> input_tokens and completion_tokens -> output_tokens."""
-    from litellm.proxy.response_api_endpoints.endpoints import (
-        _blocked_responses_api_usage,
+    from litellm.llms.base_llm.guardrail_translation.utils import (
+        blocked_responses_api_usage,
     )
 
     resp = litellm.ModelResponse()
     resp.usage = litellm.Usage(prompt_tokens=14, completion_tokens=18, total_tokens=32)
 
-    usage = _blocked_responses_api_usage(resp)
+    usage = blocked_responses_api_usage(resp)
 
     assert usage.input_tokens == 14
     assert usage.output_tokens == 18

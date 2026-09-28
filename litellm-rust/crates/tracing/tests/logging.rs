@@ -4,7 +4,9 @@ use std::sync::{
     mpsc,
 };
 
-use litellm_tracing::{Level, Logger, Metadata, Record, Sink, info, warn};
+use base64::{Engine, engine::general_purpose::STANDARD};
+use litellm_tracing::{ByteChunk, Level, Logger, Metadata, Record, Sink, info, warn};
+use rstest::rstest;
 use serde_json::{Value, json};
 
 struct Output {
@@ -119,4 +121,19 @@ fn nested_scopes_restore_the_previous_sink() {
         inner.try_iter().map(|event| event.0).collect::<Vec<_>>(),
         ["inside"]
     );
+}
+
+#[rstest]
+#[case::utf8(b"event: message_stop\n\n", "utf8")]
+#[case::binary(&[0xff, 0x00, 0x80], "base64")]
+fn byte_chunk_logging_preserves_exact_bytes(#[case] bytes: &[u8], #[case] encoding: &str) {
+    let chunk = ByteChunk::new(bytes);
+    assert_eq!(chunk.encoding(), encoding);
+    let text = chunk.to_string();
+    let recovered = match encoding {
+        "utf8" => text.into_bytes(),
+        "base64" => STANDARD.decode(text).unwrap(),
+        _ => unreachable!(),
+    };
+    assert_eq!(recovered, bytes);
 }

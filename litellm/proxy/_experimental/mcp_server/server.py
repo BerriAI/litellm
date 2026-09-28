@@ -125,12 +125,14 @@ def unsupported_protocol_version(scope: Scope) -> str | None:
     ``HANDSHAKE_PROTOCOL_VERSIONS`` to the modern single-exchange path, which
     bypasses litellm's session/auth model, so the ASGI entry rejects it.
     """
+    from litellm.proxy._experimental.mcp_server.capabilities import configured_versions
+
     headers: Final[Iterable[tuple[bytes, bytes]]] = scope.get("headers") or ()
     values: Final = tuple(
         raw.decode("latin-1").strip() for key, raw in headers if key.lower() == _MCP_PROTOCOL_VERSION_HEADER
     )
     for value in values:
-        if value and value not in HANDSHAKE_PROTOCOL_VERSIONS:
+        if value and value not in configured_versions():
             return value
     return None
 
@@ -149,7 +151,10 @@ try:
     from mcp.server.session import ServerSession as _McpServerSession
     from mcp.types import (
         BlobResourceContents,
+        DiscoverRequest,
+        DiscoverResult,
         GetPromptResult,
+        RequestParams,
         ResourceTemplate,
         TextResourceContents,
     )
@@ -526,11 +531,11 @@ if MCP_AVAILABLE:
         PaginatedRequestParams,
         ReadResourceRequestParams,
     )
-    from mcp_types.version import HANDSHAKE_PROTOCOL_VERSIONS
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
         MCPAuthenticatedUser,
     )
+    from litellm.proxy._experimental.mcp_server.capabilities import GatewayVersionPolicy, configured_versions
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
         MCPServerManager,
         global_mcp_server_manager,
@@ -585,6 +590,7 @@ if MCP_AVAILABLE:
         name=LITELLM_MCP_SERVER_NAME,
         version=LITELLM_MCP_SERVER_VERSION,
     )
+    server.middleware.append(GatewayVersionPolicy())
     server.create_initialization_options = types.MethodType(_gateway_create_initialization_options, server)
     sse: Final[SseServerTransport] = SseServerTransport("/sse/messages")
 
@@ -830,6 +836,7 @@ if MCP_AVAILABLE:
                 client_ip,
                 _mcp_proxy_mode.get(),
                 wire_compat_for(ctx.protocol_version),
+                ctx.protocol_version,
             )
 
     async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListToolsResult:
@@ -948,6 +955,11 @@ if MCP_AVAILABLE:
                 ReadResourceRequest(params=params), context
             )
 
+    async def discover(ctx: ServerRequestContext, params: RequestParams) -> DiscoverResult:
+        async with _legacy_operation_context(ctx, trace=False) as context:
+            return await operations.GatewayOperations().execute(DiscoverRequest(params=params), context)
+
+    server.add_request_handler("server/discover", RequestParams, discover)
     server.add_request_handler("tools/list", PaginatedRequestParams, handle_list_tools)
     server.add_request_handler("tools/call", CallToolRequestParams, mcp_server_tool_call)
     server.add_request_handler("prompts/list", PaginatedRequestParams, list_prompts)
@@ -1954,7 +1966,7 @@ if MCP_AVAILABLE:
             reject_disallowed_mcp_origin(StarletteRequest(scope))
             bad_version: Final = unsupported_protocol_version(scope)
             if bad_version is not None:
-                supported: Final = ", ".join(sorted(HANDSHAKE_PROTOCOL_VERSIONS))
+                supported: Final = ", ".join(configured_versions())
                 await JSONResponse(
                     status_code=400,
                     content={  # mutable-ok: JSON-RPC error payload
@@ -2299,7 +2311,7 @@ if MCP_AVAILABLE:
             reject_disallowed_mcp_origin(StarletteRequest(scope))
             bad_version: Final = unsupported_protocol_version(scope)
             if bad_version is not None:
-                supported: Final = ", ".join(sorted(HANDSHAKE_PROTOCOL_VERSIONS))
+                supported: Final = ", ".join(configured_versions())
                 await JSONResponse(
                     status_code=400,
                     content={  # mutable-ok: JSON-RPC error payload

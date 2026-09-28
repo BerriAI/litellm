@@ -10444,11 +10444,12 @@ async def test_active_request_ctx_var_feeds_auth_resolution_recording(_mcp_reque
 )
 @pytest.mark.parametrize("handler", ("handle_streamable_http_mcp", "handle_sse_mcp"))
 async def test_streamable_http_rejects_modern_protocol_version(
-    header_value: str, expected_rejected: bool, handler: str
+    header_value: str, expected_rejected: bool, handler: str, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     from litellm.proxy._experimental.mcp_server import server as mcp_module
     from litellm.proxy._experimental.mcp_server.server import unsupported_protocol_version
 
+    monkeypatch.setattr("litellm.proxy.proxy_server.general_settings", {})
     scope: Scope = {
         "type": "http",
         "method": "POST",
@@ -10659,3 +10660,32 @@ async def test_legacy_sse_mount_emits_message_endpoint(
             await incoming.put({"type": "http.disconnect"})
             await asyncio.wait_for(task, 2)
         assert await post(initialization) == 404
+
+
+@pytest.mark.parametrize("revision,rejected", [("2024-11-05", False), ("2025-11-25", True), ("2026-07-28", True)])
+def test_protocol_header_respects_configured_advertisement(revision, rejected):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._experimental.mcp_server.server import unsupported_protocol_version
+
+    with patch.dict(proxy_server.general_settings, {"mcp_advertised_versions": ["2024-11-05"]}):
+        result = unsupported_protocol_version({"headers": [(b"mcp-protocol-version", revision.encode())]})
+    assert result == (revision if rejected else None)
+
+
+@pytest.mark.asyncio
+async def test_discovery_adapter_preserves_authenticated_context(_mcp_request_ctx):
+    from mcp.types import DiscoverResult, RequestParams, ServerCapabilities
+    from litellm.proxy._experimental.mcp_server import server
+
+    expected = DiscoverResult(supported_versions=["2025-11-25"], capabilities=ServerCapabilities())
+    dispatched = AsyncMock(return_value=expected)
+    auth = UserAPIKeyAuth(user_id="discover-caller")
+    with (
+        patch.object(server, "get_or_extract_auth_context", AsyncMock(return_value=(auth, None, ["allowed"], None, None, None, None))),
+        patch.object(server.operations.GatewayOperations, "execute", dispatched),
+    ):
+        result = await server.discover(_mcp_request_ctx(), RequestParams())
+    assert result is expected
+    context = dispatched.await_args.args[1]
+    assert context.user_api_key_auth.user_id == "discover-caller"
+    assert context.mcp_servers == ("allowed",)

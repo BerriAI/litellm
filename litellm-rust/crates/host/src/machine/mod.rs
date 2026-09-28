@@ -5,13 +5,14 @@ use std::future::Future;
 use std::pin::Pin;
 
 pub use auth::{HostTokenProvider, TokenProtocol};
-pub use call_machine::{CallMachine, ExecuteFuture, HostChannel, MachineFault};
+pub use call_machine::{
+    CallContext, CallMachine, ChannelHooks, ExecuteFuture, HostServices, MachineFault, StreamSender,
+};
 
-use crate::host::HostOp;
-use crate::protocol::Protocol;
+use crate::protocol::{Protocol, Suspension};
 
 pub enum MachineStep<R: Protocol, C> {
-    Host(HostOp<R>),
+    Suspended(Suspension<R>),
     Complete(C),
 }
 

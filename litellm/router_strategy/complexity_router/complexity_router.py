@@ -29,6 +29,7 @@ from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, NamedTuple, cast
 
 from pydantic import BaseModel, TypeAdapter, ValidationError, create_model
+from pydantic_core import ErrorDetails
 
 from litellm._logging import verbose_router_logger
 from litellm.caching.affinity_cache import claim_affinity_pin
@@ -85,8 +86,8 @@ from .capability_classifier import (
     CapabilityClassifierForecast,
     capability_classifier_response_format,
     capability_classifier_system_prompt,
+    extract_classifier_json,
     parse_capability_classifier_verdict,
-    unwrap_classifier_json,
 )
 from .classification_rubrics import BUSINESS_TIER_CRITERIA, calibration_examples_section
 from .config import (
@@ -425,6 +426,41 @@ def _effective_turn_off_message_logging(request_kwargs: Mapping[str, object] | N
     return initialize_standard_callback_dynamic_params(dict(request_kwargs) if request_kwargs else {}).get(
         "turn_off_message_logging"
     )
+
+
+def _classifier_reply_is_private(request_kwargs: Mapping[str, object] | None) -> bool:
+    from litellm.litellm_core_utils.initialize_dynamic_callback_params import (
+        initialize_standard_callback_dynamic_params,
+    )
+    from litellm.litellm_core_utils.redact_messages import should_redact_message_logging
+
+    kwargs: Final = dict(request_kwargs) if request_kwargs else {}
+    try:
+        return should_redact_message_logging(
+            {
+                "litellm_params": kwargs,
+                "standard_callback_dynamic_params": initialize_standard_callback_dynamic_params(kwargs),
+            }
+        )
+    except AttributeError:
+        return True
+
+
+def _validation_problem(detail: ErrorDetails) -> str:
+    location: Final = ".".join(str(part) for part in detail["loc"])
+    return f"{location}: {detail['msg']}" if location else detail["msg"]
+
+
+def _log_rejected_classifier_verdict(
+    error: ValidationError, content: str, request_kwargs: Mapping[str, object] | None
+) -> None:
+    problems: Final = "; ".join(_validation_problem(detail) for detail in error.errors())
+    reply: Final = (
+        "raw reply withheld (message logging is off)"
+        if _classifier_reply_is_private(request_kwargs)
+        else f"raw reply: {content!r}"
+    )
+    verbose_router_logger.warning("ComplexityRouter: classifier verdict rejected (%s); %s", problems, reply)
 
 
 _REMINDER_OPEN: Final = "<system-reminder>"
@@ -2040,7 +2076,7 @@ class ComplexityRouter(CustomLogger):
         except Exception as e:  # noqa: BLE001 -- every unavailable or invalid judge verdict must fail closed
             if breaker is not None and permit is not None:
                 breaker.record_failure(permit, is_timeout=_is_classifier_timeout(e))
-            return self._capability_classifier_failure_outcome(f"capability classifier failed ({e})")
+            return self._capability_classifier_failure_outcome(f"capability classifier failed ({type(e).__name__})")
 
     def _capability_classifier_failure_outcome(self, reason: str, signal: str | None = None) -> ClassificationOutcome:
         """Fail closed to the configured capable tier without consulting another taxonomy."""
@@ -2449,7 +2485,11 @@ class ComplexityRouter(CustomLogger):
         content, classifier_cost = await self._call_classifier_model(
             messages_for_call, request_kwargs, encrypted_task=encrypted_task
         )
-        raw_tier: Final = _LabeledTierClassification.model_validate_json(content).tier
+        try:
+            raw_tier: Final = _LabeledTierClassification.model_validate_json(extract_classifier_json(content)).tier
+        except ValidationError as error:
+            _log_rejected_classifier_verdict(error, content, request_kwargs)
+            raise
         tier: Final = self.config.resolve_classified_tier(raw_tier)
         if tier is None:
             raise ValueError(f"LLM classifier returned an unrecognized tier: {raw_tier!r}")
@@ -2508,7 +2548,11 @@ class ComplexityRouter(CustomLogger):
             max_output_tokens=capability.max_output_tokens,
             encrypted_task=encrypted_task,
         )
-        verdict: Final = parse_capability_classifier_verdict(content)
+        try:
+            verdict: Final = parse_capability_classifier_verdict(content)
+        except ValidationError as error:
+            _log_rejected_classifier_verdict(error, content, request_kwargs)
+            raise
         threshold: Final = verdict.routing_threshold(capability.base_threshold, capability.threshold_step)
         calibration: Final = capability.calibration
         forecast: Final = CapabilityClassifierForecast(
@@ -2563,8 +2607,9 @@ class ComplexityRouter(CustomLogger):
             messages_for_call, request_kwargs, encrypted_task=encrypted, max_output_tokens=v2.max_output_tokens
         )
         try:
-            verdict: Final = LLMV2Verdict.model_validate_json(unwrap_classifier_json(content))
-        except ValidationError:
+            verdict: Final = LLMV2Verdict.model_validate_json(extract_classifier_json(content))
+        except ValidationError as error:
+            _log_rejected_classifier_verdict(error, content, request_kwargs)
             return self._classifier_failure_outcome("Invalid LLM V2 forecast", prompt, system_prompt)._replace(
                 classifier_cost=classifier_cost
             )
@@ -4345,10 +4390,13 @@ class ComplexityRouter(CustomLogger):
             resolved_messages=resolved_messages,
             context_fit=context_fit,
         )
+        cache_adjusted_response: Final = await self._apply_prompt_cache_routing(
+            routed_response, messages, request_kwargs, context_fit
+        )
         response: Final = (
             await self._gate_response_health(
                 await self._gate_response_modality(
-                    routed_response, messages, resolved_messages, request_kwargs, context_fit
+                    cache_adjusted_response, messages, resolved_messages, request_kwargs, context_fit
                 ),
                 messages,
                 input,
@@ -4356,7 +4404,7 @@ class ComplexityRouter(CustomLogger):
                 request_kwargs,
                 context_fit,
             )
-            if routed_response is not None
+            if cache_adjusted_response is not None
             else None
         )
         # Sentinel presence, not the plan_mode cause, gates the pin write: a plan-mode turn
@@ -4379,6 +4427,53 @@ class ComplexityRouter(CustomLogger):
                 ttl=self.config.session_affinity_ttl_seconds,
             )
         return self._with_session_deployment_affinity(response)
+
+    async def _apply_prompt_cache_routing(
+        self,
+        response: PreRoutingHookResponse | None,
+        messages: Sequence[Mapping[str, object]] | None,
+        request_kwargs: Mapping[str, object],
+        context_fit: _RequestContextFit,
+    ) -> PreRoutingHookResponse | None:
+        if not self.config.cache_aware_routing or response is None or response.routing_decision is None:
+            return response
+        from litellm.proxy.common_utils.cache_aware_routing import choose_cached_model
+
+        choice: Final = await choose_cached_model(
+            router=self.litellm_router_instance,
+            config=self.config,
+            params_for_model=self._litellm_params_for_model,
+            response=response,
+            request_kwargs=request_kwargs,
+            messages=messages,
+        )
+        if choice is None or not context_fit.accepts(choice.model):
+            return response
+        params: Final = self._litellm_params_for_model(choice.tier, choice.model)
+        decision: Final[StandardLoggingRoutingDecision] = {
+            **response.routing_decision,
+            "routed_model": choice.model,
+            "cause": "prompt_cache_cost",
+            "tier": choice.tier,
+            "tier_label": (self.config.tier_labels or {}).get(choice.tier, choice.tier),
+            "tier_litellm_params": params,
+            "signals": (
+                *(response.routing_decision.get("signals") or ()),
+                f"cache-aware:classified-model={response.model}",
+                f"cache-aware:classification-cause={response.routing_decision.get('cause')}",
+                f"cache-aware:estimated-cost={choice.estimated_cost:.8f};original-cost={choice.original_cost:.8f}",
+            ),
+        }
+        verbose_router_logger.info(
+            "ComplexityRouter: cache-aware choice model=%s original=%s estimated_cost=%s original_cost=%s",
+            choice.model,
+            response.model,
+            choice.estimated_cost,
+            choice.original_cost,
+        )
+        return response.model_copy(
+            update=MappingProxyType({"model": choice.model, "litellm_params": params, "routing_decision": decision})
+        )
 
     async def _classify_and_route(
         self,
