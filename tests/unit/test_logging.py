@@ -9,7 +9,7 @@ import sys
 import time
 from io import StringIO
 from pathlib import Path
-from typing import List
+from typing import Final, List
 
 import pytest
 from pydantic import BaseModel, computed_field
@@ -1584,6 +1584,8 @@ def _emit_access_line(full_path: str) -> str:
     handler = logging.StreamHandler(stream)
     handler.setFormatter(AccessFormatter('%(client_addr)s - "%(request_line)s" %(status_code)s', use_colors=False))
     saved_level, saved_propagate = logger.level, logger.propagate
+    saved_filters: Final = logger.filters[:]
+    logger.filters = [f for f in saved_filters if type(f).__module__.split(".")[0] == "litellm"]
     logger.addHandler(handler)
     logger.setLevel(logging.INFO)
     logger.propagate = False
@@ -1593,6 +1595,7 @@ def _emit_access_line(full_path: str) -> str:
         logger.removeHandler(handler)
         logger.setLevel(saved_level)
         logger.propagate = saved_propagate
+        logger.filters = saved_filters
     return stream.getvalue()
 
 

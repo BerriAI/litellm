@@ -11,7 +11,7 @@ from pydantic import BaseModel
 
 import litellm
 from litellm import ModelResponse, completion
-from litellm.llms.anthropic.experimental_pass_through.messages import handler as anthropic_messages_handler
+from litellm.llms.anthropic.pass_through.messages import handler as anthropic_messages_handler
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.gemini.chat.transformation import GoogleAIStudioGeminiConfig
 from litellm.llms.vertex_ai.common_utils import VertexAIError
@@ -3413,6 +3413,34 @@ def test_google_ai_studio_presence_penalty_supported():
     assert "presence_penalty" in supported_params
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("drop_params", [False, True])
+async def test_google_ai_studio_forwards_seed_to_generation_config(drop_params: bool):
+    def echo_seed_sent_upstream(request: httpx.Request) -> httpx.Response:
+        seed_sent: Final = json.loads(request.content).get("generationConfig", {}).get("seed")
+        return httpx.Response(
+            200,
+            json={
+                "candidates": [
+                    {"content": {"parts": [{"text": f"seed={seed_sent}"}], "role": "model"}, "finishReason": "STOP"}
+                ],
+                "usageMetadata": {"promptTokenCount": 1, "candidatesTokenCount": 1, "totalTokenCount": 2},
+            },
+            request=request,
+        )
+
+    response: Final = await litellm.acompletion(
+        model="gemini/gemini-3.8-flash",
+        messages=[{"role": "user", "content": "hi"}],
+        seed=42,
+        drop_params=drop_params,
+        api_key="fake-gemini-key",
+        client=AsyncHTTPHandler(transport=httpx.MockTransport(echo_seed_sent_upstream)),
+    )
+
+    assert response.choices[0].message.content == "seed=42"
+
+
 # ==================== Tool Type Separation Tests ====================
 # These tests verify that each Tool object contains exactly one type per Vertex AI API spec
 # Ref: https://cloud.google.com/vertex-ai/generative-ai/docs/reference/rest/v1beta1/Tool
@@ -6157,7 +6185,7 @@ def test_gemini_candidate_with_finish_reason_no_content_chat_completion():
 
 
 def test_gemini_candidate_with_finish_reason_no_content_anthropic_messages():
-    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.pass_through.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
 
@@ -6230,7 +6258,7 @@ def test_gemini_candidate_with_finish_reason_no_content_responses_api():
 
 
 def test_gemini_candidate_other_finish_reasons_no_content():
-    from litellm.llms.anthropic.experimental_pass_through.adapters.transformation import (
+    from litellm.llms.anthropic.pass_through.adapters.transformation import (
         LiteLLMAnthropicMessagesAdapter,
     )
     from litellm.responses.litellm_completion_transformation.transformation import (
