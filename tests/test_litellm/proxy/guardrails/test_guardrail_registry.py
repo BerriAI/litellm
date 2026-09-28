@@ -1239,3 +1239,57 @@ async def test_rotate_guardrail_params_master_key_reencrypts_under_the_new_key(m
     assert rotated["api_key"] != stored["api_key"]
     monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-new-master")
     assert decrypt_guardrail_litellm_params(rotated)["api_key"] == "vendor-key"
+
+
+@pytest.mark.asyncio
+async def test_rotate_guardrail_params_keeps_salt_key_encryption_when_salt_key_is_set(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_registry import (
+        decrypt_guardrail_litellm_params,
+        encrypt_guardrail_litellm_params,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-guardrail-test")
+    stored = encrypt_guardrail_litellm_params({"guardrail": "bedrock", "api_key": "vendor-key"})
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(
+        return_value=[_Row(guardrail_id="g-1", updated_at="t1", litellm_params=stored)]
+    )
+    prisma_client.db.litellm_guardrailstable.update_many = AsyncMock(return_value=1)
+
+    await GuardrailRegistry.rotate_guardrail_params_master_key(prisma_client=prisma_client, new_master_key="sk-new")
+
+    rotated = _stored_params(prisma_client.db.litellm_guardrailstable.update_many)
+    assert decrypt_guardrail_litellm_params(rotated)["api_key"] == "vendor-key"
+
+
+@pytest.mark.asyncio
+async def test_rotate_guardrail_params_retries_a_row_edited_during_rotation(monkeypatch):
+    from litellm.proxy.guardrails.guardrail_registry import (
+        decrypt_guardrail_litellm_params,
+        encrypt_guardrail_litellm_params,
+    )
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master")
+    snapshot = _Row(
+        guardrail_id="g-1", updated_at="t1", litellm_params=encrypt_guardrail_litellm_params({"api_key": "old-key"})
+    )
+    edited = _Row(
+        guardrail_id="g-1", updated_at="t2", litellm_params=encrypt_guardrail_litellm_params({"api_key": "edited-key"})
+    )
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[snapshot])
+    prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=edited)
+    prisma_client.db.litellm_guardrailstable.update_many = AsyncMock(side_effect=[0, 1])
+
+    rows_updated = await GuardrailRegistry.rotate_guardrail_params_master_key(
+        prisma_client=prisma_client, new_master_key="sk-new-master"
+    )
+
+    last_call = prisma_client.db.litellm_guardrailstable.update_many.call_args
+    assert rows_updated == 1
+    assert last_call.kwargs["where"] == {"guardrail_id": "g-1", "updated_at": "t2"}
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-new-master")
+    assert decrypt_guardrail_litellm_params(_stored_params(prisma_client.db.litellm_guardrailstable.update_many)) == {
+        "api_key": "edited-key"
+    }
