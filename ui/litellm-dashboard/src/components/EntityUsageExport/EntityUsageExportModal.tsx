@@ -10,7 +10,7 @@ import ExportFormatSelector from "./ExportFormatSelector";
 import ExportSummary from "./ExportSummary";
 import ExportTypeSelector from "./ExportTypeSelector";
 import type { EntityUsageExportModalProps, ExportFormat, ExportScope } from "./types";
-import { handleExportCSV, handleExportJSON, handleServerExport } from "./utils";
+import { handleExportCSV, handleExportJSON } from "./utils";
 
 const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   isOpen,
@@ -20,7 +20,6 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
   dateRange,
   selectedFilters,
   customTitle,
-  serverExport,
 }) => {
   const [exportFormat, setExportFormat] = useState<ExportFormat>("csv");
   const [exportScope, setExportScope] = useState<ExportScope>("daily");
@@ -36,10 +35,7 @@ const EntityUsageExportModal: React.FC<EntityUsageExportModalProps> = ({
     const formatToUse = format || exportFormat;
     setIsExporting(true);
     try {
-      if (serverExport) {
-        await handleServerExport(serverExport, exportScope, entityType, formatToUse);
-        toast.success(`${entityLabel} usage data exported successfully as ${formatToUse.toUpperCase()}`);
-      } else if (formatToUse === "csv") {
+      if (formatToUse === "csv") {
         handleExportCSV(spendData, exportScope, entityLabel, entityType, teamAliasMap);
         toast.success(`${entityLabel} usage data exported successfully as CSV`);
       } else {
