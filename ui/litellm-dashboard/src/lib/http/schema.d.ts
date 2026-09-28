@@ -15673,27 +15673,6 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
-    "/team/daily/activity/aggregated/search": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Search Team Daily Activity Keys
-         * @description Aggregated daily team activity for the keys matching `search`, across every key the caller may
-         *     see rather than only the top USAGE_TOP_API_KEYS_LIMIT keys by spend.
-         */
-        get: operations["search_team_daily_activity_keys_team_daily_activity_aggregated_search_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
     "/team/delete": {
         parameters: {
             query?: never;
@@ -17367,29 +17346,6 @@ export interface paths {
          *     to zero (or to the overage above `max_budget` when `budget_rollover` is enabled).
          */
         get: operations["get_user_daily_activity_aggregated_user_daily_activity_aggregated_get"];
-        put?: never;
-        post?: never;
-        delete?: never;
-        options?: never;
-        head?: never;
-        patch?: never;
-        trace?: never;
-    };
-    "/user/daily/activity/aggregated/search": {
-        parameters: {
-            query?: never;
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        /**
-         * Search User Daily Activity Keys
-         * @description Search verification tokens by exact token hash or by a case-insensitive substring of
-         *     the key alias or owning user ID, then return the aggregated daily activity for the
-         *     matches. Lets the Usage page surface keys that fell outside the top-spend subset
-         *     the aggregated endpoint loads.
-         */
-        get: operations["search_user_daily_activity_keys_user_daily_activity_aggregated_search_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -29483,11 +29439,6 @@ export interface components {
         /** DailySpendMetadata */
         DailySpendMetadata: {
             /**
-             * Api Key Limit
-             * @description When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.
-             */
-            api_key_limit?: number | null;
-            /**
              * Has More
              * @default false
              */
@@ -29497,11 +29448,6 @@ export interface components {
              * @default 1
              */
             page: number;
-            /**
-             * Total Api Keys
-             * @description Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.
-             */
-            total_api_keys?: number | null;
             /**
              * Total Api Requests
              * @default 0
@@ -31596,7 +31542,7 @@ export interface components {
          * @description Enum for key management routes
          * @enum {string}
          */
-        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/team/daily/activity/aggregated/search" | "/spend/logs" | "/spend/logs/v2";
+        KeyManagementRoutes: "/key/generate" | "/key/update" | "/key/delete" | "/key/regenerate" | "/key/service-account/generate" | "/key/{key_id}/regenerate" | "/key/block" | "/key/unblock" | "/key/bulk_update" | "/team/key/bulk_update" | "/key/{key_id}/reset_spend" | "/key/access_group_assignment" | "/auto_router/manage" | "/key/info" | "/key/health" | "/key/list" | "/key/aliases" | "/team/daily/activity" | "/team/daily/activity/aggregated" | "/spend/logs" | "/spend/logs/v2";
         /**
          * KeyManagementSystem
          * @enum {string}
@@ -66952,43 +66898,6 @@ export interface operations {
             };
         };
     };
-    search_team_daily_activity_keys_team_daily_activity_aggregated_search_get: {
-        parameters: {
-            query: {
-                /** @description Exact token hash, or a case-insensitive substring of the key alias or owning user id */
-                search: string;
-                team_ids?: string | null;
-                start_date?: string | null;
-                end_date?: string | null;
-                exclude_team_ids?: string | null;
-                timezone?: number | null;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
     delete_team_team_delete_post: {
         parameters: {
             query?: never;
@@ -69086,48 +68995,6 @@ export interface operations {
                 model?: string | null;
                 /** @description Filter by specific API key */
                 api_key?: string | null;
-                /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
-                user_id?: string | null;
-                /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
-                timezone?: number | null;
-                /** @description When the range ends on the caller's current local day, extend it to today's UTC bucket so spend written after the caller's local midnight (in UTC terms) is included. Requires the timezone parameter. Historical ranges are never extended. */
-                include_current_utc_day?: boolean;
-            };
-            header?: never;
-            path?: never;
-            cookie?: never;
-        };
-        requestBody?: never;
-        responses: {
-            /** @description Successful Response */
-            200: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["SpendAnalyticsPaginatedResponse"];
-                };
-            };
-            /** @description Validation Error */
-            422: {
-                headers: {
-                    [name: string]: unknown;
-                };
-                content: {
-                    "application/json": components["schemas"]["HTTPValidationError"];
-                };
-            };
-        };
-    };
-    search_user_daily_activity_keys_user_daily_activity_aggregated_search_get: {
-        parameters: {
-            query: {
-                /** @description Matches keys whose hash equals the value, or whose key alias or user ID contains it (case-insensitive) */
-                search: string;
-                /** @description Start date in YYYY-MM-DD format */
-                start_date?: string | null;
-                /** @description End date in YYYY-MM-DD format */
-                end_date?: string | null;
                 /** @description Filter by specific user ID. Admins can filter by any user or omit for global view. Non-admins must provide their own user_id. */
                 user_id?: string | null;
                 /** @description Timezone offset in minutes from UTC (e.g., 480 for PST). Matches JavaScript's Date.getTimezoneOffset() convention. */
