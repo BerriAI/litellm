@@ -4,7 +4,6 @@ use host::MessagesPythonHost;
 use litellm_callbacks_legacy_python::{
     LegacySurface, PassThroughStream, PublicCall, run_legacy_call,
 };
-use litellm_core::messages::route::messages_machine;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
@@ -26,15 +25,17 @@ fn run_messages(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let secrets = crate::secrets::source(py)?;
-    let config = crate::http::call_config(py, &kwargs, asynchronous)?;
-    let machine = messages_machine(crate::http::pool(), &config, secrets)
-        .map_err(crate::http::client_error)?;
+    let route = litellm_core::messages::MessagesRoute::new(
+        crate::http::provider_client(py, &kwargs, asynchronous)?
+            .map_err(crate::http::client_error)?,
+        crate::http::resources().auth.clone(),
+        crate::secrets::source(py)?,
+    );
     run_legacy_call(
         py,
         SURFACE,
         PublicCall::capture(&request, &args, &kwargs)?,
-        crate::logger::LoggedMachine::new(machine),
+        move |request| crate::logger::LoggedMachine::new(route.machine(request)),
         MessagesPythonHost::new(request.unbind()),
         crate::preflight::sdk_preflight,
         asynchronous,

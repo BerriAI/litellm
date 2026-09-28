@@ -326,7 +326,7 @@ def stream_success(
     end: datetime.datetime,
     first_chunk: datetime.datetime | None,
 ) -> None:
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
         GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
     )
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler

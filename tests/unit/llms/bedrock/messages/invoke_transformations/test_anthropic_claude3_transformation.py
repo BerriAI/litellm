@@ -29,7 +29,7 @@ from litellm.constants import (
     DEFAULT_REASONING_EFFORT_MEDIUM_THINKING_BUDGET,
     DEFAULT_REASONING_EFFORT_XHIGH_THINKING_BUDGET,
 )
-from litellm.llms.anthropic.experimental_pass_through.messages.mid_conversation_system import (
+from litellm.llms.anthropic.pass_through.messages.mid_conversation_system import (
     as_system_content_blocks,
 )
 from litellm.llms.bedrock.messages.invoke_transformations.anthropic_claude3_transformation import (

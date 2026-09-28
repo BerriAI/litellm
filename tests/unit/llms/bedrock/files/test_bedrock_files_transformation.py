@@ -84,6 +84,29 @@ class TestBedrockFilesTransformation:
                     "max_tokens" in model_input
                 ), f"Record {i+1} should have max_tokens"
 
+    def test_batch_keeps_an_internal_prefixed_key_out_of_the_bedrock_model_input(self):
+        from litellm.llms.bedrock.files.transformation import BedrockFilesConfig
+
+        result: Final = BedrockFilesConfig()._transform_openai_jsonl_content_to_bedrock_jsonl_content(
+            [
+                {
+                    "custom_id": "internal-key-1",
+                    "method": "POST",
+                    "url": "/v1/chat/completions",
+                    "body": {
+                        "model": "anthropic.claude-3-5-sonnet-20240620-v1:0",
+                        "messages": [{"role": "user", "content": "hi"}],
+                        "max_tokens": 10,
+                        "_litellm_undeclared_sentinel": "internal",
+                    },
+                }
+            ]
+        )
+
+        model_input: Final = json.dumps(result[0]["modelInput"])
+        assert "_litellm_undeclared_sentinel" not in model_input, model_input
+        assert result[0]["modelInput"]["max_tokens"] == 10
+
     def test_nova_text_only_uses_converse_format(self):
         """
         Test that Nova models produce Converse API format in batch modelInput.

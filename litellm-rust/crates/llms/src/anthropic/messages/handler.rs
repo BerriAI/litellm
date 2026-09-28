@@ -1,14 +1,18 @@
-use litellm_types::llms::anthropic_messages::anthropic_request::{
-    AnthropicMessage, AnthropicMessagesRequest,
+use litellm_types::{
+    llms::anthropic_messages::anthropic_request::{
+        AdaptiveThinking, AnthropicMessage, AnthropicMessagesOptionalParams,
+        AnthropicMessagesRequest, EnabledThinking, ThinkingConfig, ThinkingDisplay,
+    },
+    recognized::Recognized,
 };
 use serde_json::{Value, json};
 
 use crate::{
+    Error,
     anthropic::common_utils::{
         flatten_unencrypted_web_search_results, sanitize_tool_use_ids, strip_empty_content_blocks,
         strip_provider_specific_fields,
     },
-    base_llm::chat::transformation::Error,
 };
 
 pub fn shape_anthropic_messages_request(
@@ -17,12 +21,16 @@ pub fn shape_anthropic_messages_request(
 ) -> Result<AnthropicMessagesRequest, Error> {
     Ok(AnthropicMessagesRequest {
         messages: sanitize_anthropic_messages(request.messages),
-        metadata: request
-            .metadata
-            .as_ref()
-            .map(validate_anthropic_api_metadata)
-            .transpose()?,
-        thinking: with_reasoning_auto_summary(request.thinking, reasoning_auto_summary),
+        params: AnthropicMessagesOptionalParams {
+            metadata: request
+                .params
+                .metadata
+                .as_ref()
+                .map(validate_anthropic_api_metadata)
+                .transpose()?,
+            thinking: with_reasoning_auto_summary(request.params.thinking, reasoning_auto_summary),
+            ..request.params
+        },
         ..request
     })
 }
@@ -35,33 +43,55 @@ fn sanitize_anthropic_messages(messages: Vec<AnthropicMessage>) -> Vec<Anthropic
 
 fn validate_anthropic_api_metadata(metadata: &Value) -> Result<Value, Error> {
     let Value::Object(fields) = metadata else {
-        return Err(Error::InvalidRequest(format!(
-            "metadata must be an object, got {metadata}"
-        )));
+        return Err(Error::InvalidRequest(crate::ErrorDetail::InvalidValue {
+            field: "metadata",
+            expected: "an object",
+            actual: metadata.clone(),
+        }));
     };
     match fields.get("user_id") {
         None | Some(Value::Null) => Ok(json!({})),
         Some(Value::String(user_id)) => Ok(json!({"user_id": user_id})),
-        Some(other) => Err(Error::InvalidRequest(format!(
-            "metadata.user_id must be a string, got {other}"
-        ))),
+        Some(other) => Err(Error::InvalidRequest(crate::ErrorDetail::InvalidValue {
+            field: "metadata.user_id",
+            expected: "a string",
+            actual: other.clone(),
+        })),
     }
 }
 
-fn with_reasoning_auto_summary(thinking: Option<Value>, enabled: bool) -> Option<Value> {
-    let Some(Value::Object(thinking)) = thinking else {
+fn with_reasoning_auto_summary(
+    thinking: Option<Recognized<ThinkingConfig>>,
+    enabled: bool,
+) -> Option<Recognized<ThinkingConfig>> {
+    if !enabled {
         return thinking;
-    };
-    if !enabled || thinking.get("type").and_then(Value::as_str) == Some("disabled") {
-        return Some(Value::Object(thinking));
     }
-    Some(Value::Object(
-        thinking
-            .into_iter()
-            .filter(|(key, _)| key != "display")
-            .chain([("display".to_string(), json!("summarized"))])
-            .collect(),
-    ))
+    let summarized = Some(Recognized::Known(ThinkingDisplay::Summarized));
+    match thinking {
+        Some(Recognized::Known(ThinkingConfig::Enabled(enabled))) => Some(Recognized::Known(
+            ThinkingConfig::Enabled(EnabledThinking {
+                display: summarized,
+                ..enabled
+            }),
+        )),
+        Some(Recognized::Known(ThinkingConfig::Adaptive(adaptive))) => Some(Recognized::Known(
+            ThinkingConfig::Adaptive(AdaptiveThinking {
+                display: summarized,
+                ..adaptive
+            }),
+        )),
+        Some(Recognized::Unrecognized(Value::Object(fields))) => {
+            Some(Recognized::Unrecognized(Value::Object(
+                fields
+                    .into_iter()
+                    .filter(|(key, _)| key != "display")
+                    .chain([("display".to_string(), json!("summarized"))])
+                    .collect(),
+            )))
+        }
+        other => other,
+    }
 }
 
 #[cfg(test)]
@@ -178,21 +208,24 @@ mod tests {
     #[case::empty(json!({}), Ok(json!({})))]
     #[case::numeric_user_id(
         json!({"user_id": 123}),
-        Err(Error::InvalidRequest("metadata.user_id must be a string, got 123".to_string())),
+        Err(Error::InvalidRequest("metadata.user_id must be a string, got 123".to_string().into())),
     )]
     #[case::boolean_user_id(
         json!({"user_id": true}),
-        Err(Error::InvalidRequest("metadata.user_id must be a string, got true".to_string())),
+        Err(Error::InvalidRequest("metadata.user_id must be a string, got true".to_string().into())),
     )]
     #[case::not_an_object(
         json!(["u-1"]),
-        Err(Error::InvalidRequest(r#"metadata must be an object, got ["u-1"]"#.to_string())),
+        Err(Error::InvalidRequest(r#"metadata must be an object, got ["u-1"]"#.to_string().into())),
     )]
     fn validate_anthropic_api_metadata_passes_only_a_string_user_id(
         #[case] metadata: Value,
         #[case] expected: Result<Value, Error>,
     ) {
-        assert_eq!(validate_anthropic_api_metadata(&metadata), expected);
+        assert_eq!(
+            validate_anthropic_api_metadata(&metadata).map_err(|error| error.to_string()),
+            expected.map_err(|error| error.to_string()),
+        );
     }
 
     #[rstest]
@@ -230,12 +263,22 @@ mod tests {
     )]
     #[case::no_thinking(None, true, None)]
     #[case::non_object_thinking(Some(json!("enabled")), true, Some(json!("enabled")))]
+    #[case::unknown_type(
+        Some(json!({"type": "future"})),
+        true,
+        Some(json!({"type": "future", "display": "summarized"})),
+    )]
     fn reasoning_auto_summary_marks_active_thinking_as_summarized(
         #[case] thinking: Option<Value>,
         #[case] enabled: bool,
         #[case] expected: Option<Value>,
     ) {
-        assert_eq!(with_reasoning_auto_summary(thinking, enabled), expected);
+        let thinking = thinking.map(|thinking| serde_json::from_value(thinking).unwrap());
+        assert_eq!(
+            with_reasoning_auto_summary(thinking, enabled)
+                .map(|thinking| serde_json::to_value(thinking).unwrap()),
+            expected
+        );
     }
 
     #[test]

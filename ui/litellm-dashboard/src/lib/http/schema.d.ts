@@ -28222,6 +28222,11 @@ export interface components {
              */
             enforce_fallback_model_access?: boolean | null;
             /**
+             * Fail Closed Rate Limit Enforcement
+             * @description reject requests with a 503 while the rate limit counters in Redis are unreachable, instead of enforcing tpm/rpm/max_parallel_requests limits per pod from memory (which admits up to N times the limit across N pods)
+             */
+            fail_closed_rate_limit_enforcement?: boolean | null;
+            /**
              * Failed Login Block Seconds
              * @description How long a blocked source address, or source address and username, stays blocked. Every attempt from a blocked key, right or wrong, is refused with 429 before the password is checked; the block is not extended by refused attempts. Set under `general_settings` in config.yaml. Defaults to 300
              */
@@ -28327,6 +28332,11 @@ export interface components {
              * @description Maximum retention period for auto-router benchmark session rollup rows (e.g., '365d'). Rows whose last turn is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rollup rows are never deleted.
              */
             maximum_autorouter_session_retention_period?: string | null;
+            /**
+             * Maximum Daily Tag Spend Retention Period
+             * @description Maximum retention period for per-day tag spend aggregate rows (e.g., '90d'). Rows whose day is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. Only historical tag usage analytics are affected; tag budgets read the lifetime counter.
+             */
+            maximum_daily_tag_spend_retention_period?: string | null;
             /**
              * Maximum Health Check Retention Period
              * @description Maximum retention period for health-check rows (e.g., '30d'). Rows whose checked_at is older than this are deleted by the spend log cleanup job, on that job's schedule. Unset means rows are never deleted. Set this well above health_check_interval because /health and the UI read the latest row per model.
@@ -32501,10 +32511,10 @@ export interface components {
             } | null;
             /**
              * Status
-             * @description Health status: 'healthy', 'unhealthy', 'unknown'
+             * @description Health status: 'healthy', 'unhealthy', 'unknown', or 'reachable' (requires include_reachability=true; authentication and tools unchecked)
              * @default unknown
              */
-            status: ("healthy" | "unhealthy" | "unknown") | null;
+            status: ("healthy" | "reachable" | "unhealthy" | "unknown") | null;
             /** Subject Token Type */
             subject_token_type?: string | null;
             /** Submitted At */
@@ -33004,6 +33014,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
+            /** Cache Read Input Token Cost Balanced */
+            cache_read_input_token_cost_balanced?: number | null;
             /** Cache Read Input Token Cost Batches */
             cache_read_input_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost Flex */
@@ -33084,6 +33096,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
+            /** Input Cost Per Token Balanced */
+            input_cost_per_token_balanced?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -33209,6 +33223,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
+            /** Output Cost Per Token Balanced */
+            output_cost_per_token_balanced?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -39481,6 +39497,24 @@ export interface components {
             adaptive_eligible: "all" | "classified_tier";
             /** @description Quality vs cost weights for adaptive selection (used when adaptive=True) */
             adaptive_weights?: components["schemas"]["AdaptiveRouterWeights"];
+            /**
+             * Cache Aware Routing
+             * @description Opt in to comparing prompt-cache costs after classification. On supported native Anthropic proxy requests, an already warm model in the same or a higher tier may replace the classified model when its estimated input and output cost is lower. Unsupported requests and unavailable estimates keep ordinary routing.
+             * @default false
+             */
+            cache_aware_routing: boolean;
+            /**
+             * Cache Aware Routing Output Tokens
+             * @description Expected output tokens used in cache-aware cost comparisons; capped by each model's effective output limit.
+             * @default 1024
+             */
+            cache_aware_routing_output_tokens: number;
+            /**
+             * Cache Aware Routing Timeout Ms
+             * @description Total time budget for cache-aware predictions; expiry preserves the original routing decision.
+             * @default 2000
+             */
+            cache_aware_routing_timeout_ms: number;
             /** @description Probability threshold policy required when classifier_type is 'capability'. The classifier forecasts p_solve for efficient_tier, adjusts base_threshold using the capability-card boundary, and otherwise routes to capable_tier */
             capability_classifier_config?: components["schemas"]["CapabilityClassifierConfig"] | null;
             /**
@@ -42603,7 +42637,7 @@ export interface components {
              * Cause
              * @enum {string}
              */
-            cause?: "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
+            cause?: "prompt_cache_cost" | "heuristic_scorer" | "heuristic_v2" | "reasoning_override" | "llm_classifier" | "capability_classifier" | "jev_classifier" | "llm_v2_classifier" | "llm_v2_fallback" | "heuristic_first_short_circuit" | "hybrid_short_circuit" | "classifier_plugin" | "classifier_fallback" | "capability_classifier_fallback" | "default_model_fallback" | "literal_keyword_match" | "semantic_keyword_match" | "plan_mode" | "housekeeping" | "modality_escalation" | "modality_pin_override" | "health_failover" | "health_default_fallback" | "session_affinity_pin" | "session_affinity_escalation" | "user_turn_continuation" | "default_fallback" | "keyword" | "quality_tier" | "bandit";
             /** Classifier Calibrated Capable P Solve */
             classifier_calibrated_capable_p_solve?: number;
             /** Classifier Calibrated Efficient P Solve */
@@ -46806,6 +46840,8 @@ export interface components {
             cache_read_input_token_cost_above_272k_tokens_priority?: number | null;
             /** Cache Read Input Token Cost Above 512K Tokens */
             cache_read_input_token_cost_above_512k_tokens?: number | null;
+            /** Cache Read Input Token Cost Balanced */
+            cache_read_input_token_cost_balanced?: number | null;
             /** Cache Read Input Token Cost Batches */
             cache_read_input_token_cost_batches?: number | null;
             /** Cache Read Input Token Cost Flex */
@@ -46886,6 +46922,8 @@ export interface components {
             input_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Input Cost Per Token Above 512K Tokens */
             input_cost_per_token_above_512k_tokens?: number | null;
+            /** Input Cost Per Token Balanced */
+            input_cost_per_token_balanced?: number | null;
             /** Input Cost Per Token Batches */
             input_cost_per_token_batches?: number | null;
             /** Input Cost Per Token Cache Hit */
@@ -47011,6 +47049,8 @@ export interface components {
             output_cost_per_token_above_272k_tokens_priority?: number | null;
             /** Output Cost Per Token Above 512K Tokens */
             output_cost_per_token_above_512k_tokens?: number | null;
+            /** Output Cost Per Token Balanced */
+            output_cost_per_token_balanced?: number | null;
             /** Output Cost Per Token Batches */
             output_cost_per_token_batches?: number | null;
             /** Output Cost Per Token Flex */
@@ -57055,7 +57095,7 @@ export interface operations {
         parameters: {
             query: {
                 /** @description Specify the service being hit. */
-                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "ms_teams" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "newrelic" | "pointfive" | "sqs") | string;
+                service: ("slack_budget_alerts" | "langfuse" | "langfuse_otel" | "slack" | "ms_teams" | "openmeter" | "webhook" | "email" | "braintrust" | "datadog" | "datadog_llm_observability" | "generic_api" | "arize" | "galileo" | "newrelic" | "pointfive" | "signoz" | "sqs") | string;
             };
             header?: never;
             path?: never;
@@ -72204,6 +72244,8 @@ export interface operations {
             query?: {
                 /** @description Server IDs to check. If not provided, checks all accessible servers. */
                 server_ids?: string[] | null;
+                /** @description Allow the 'reachable' status for responding servers whose authentication is unchecked. */
+                include_reachability?: boolean;
             };
             header?: never;
             path?: never;
@@ -72355,7 +72397,10 @@ export interface operations {
     };
     fetch_mcp_server_v1_mcp_server__server_id__get: {
         parameters: {
-            query?: never;
+            query?: {
+                /** @description Allow the 'reachable' status for responding servers whose authentication is unchecked. */
+                include_reachability?: boolean;
+            };
             header?: never;
             path: {
                 server_id: string;

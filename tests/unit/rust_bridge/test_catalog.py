@@ -10,7 +10,6 @@ from litellm.rust_bridge.catalog import (
     CacheContext,
     CacheRule,
     Context,
-    Delivery,
     LoggerContext,
     Route,
     RouteContext,
@@ -34,28 +33,27 @@ def isolated_configuration(monkeypatch: pytest.MonkeyPatch) -> Generator[None]:
 
 @pytest.mark.parametrize("route", tuple(Route))
 @pytest.mark.parametrize("provider", (None, "bedrock", "mistral", "anthropic", "openai", "azure_ai", "unknown"))
-@pytest.mark.parametrize("delivery", tuple(Delivery))
 @pytest.mark.parametrize("process", (None, False, True))
 @pytest.mark.parametrize("environment", (None, "0", "1"))
 def test_shipped_decisions(
     monkeypatch: pytest.MonkeyPatch,
     route: Route,
     provider: str | None,
-    delivery: Delivery,
     process: bool | None,
     environment: str | None,
 ) -> None:
     configuration.rust(process)
     if environment is not None:
         monkeypatch.setenv("LITELLM_RUST", environment)
-    context: Final = RouteContext(route, provider=provider, model="test-model", delivery=delivery)
+    context: Final = RouteContext(route, provider=provider, model="test-model")
 
-    if route is Route.OCR:
+    if route is Route.OCR or (route is Route.TRANSCRIPTION and provider == "bedrock"):
         assert catalog.rollout(context) is Rollout.RUST_REQUIRED
         assert catalog.decision(context) is Decision.RUST_REQUIRED
-    elif route is Route.TRANSCRIPTION and provider == "bedrock":
-        assert catalog.rollout(context) is Rollout.RUST_REQUIRED
-        assert catalog.decision(context) is Decision.RUST_REQUIRED
+    elif route is Route.MESSAGES and provider == "anthropic":
+        assert catalog.rollout(context) is Rollout.RUST_OPT_IN
+        opted_in: Final = environment == "1" or (environment is None and process is True)
+        assert catalog.decision(context) is (Decision.RUST_WITH_FALLBACK if opted_in else Decision.PYTHON)
     else:
         assert catalog.rollout(context) is Rollout.PYTHON_ONLY
         assert catalog.decision(context) is Decision.PYTHON
@@ -110,14 +108,12 @@ def test_response_cache_rules_select_the_whole_backend_runtime() -> None:
     ("context", "expected"),
     (
         (
-            RouteContext(Route.RESPONSES, provider="openai", model="m", delivery=Delivery.WEBSOCKET),
+            RouteContext(Route.RESPONSES, provider="openai", model="m"),
             Decision.RUST_REQUIRED,
         ),
-        (RouteContext(Route.RESPONSES, provider="openai", model="m"), Decision.PYTHON),
-        (RouteContext(Route.RESPONSES, provider="openai", model="m", delivery=Delivery.STREAMING), Decision.PYTHON),
-        (RouteContext(Route.RESPONSES, provider="openai", model="other", delivery=Delivery.WEBSOCKET), Decision.PYTHON),
-        (RouteContext(Route.RESPONSES, provider="anthropic", model="m", delivery=Delivery.WEBSOCKET), Decision.PYTHON),
-        (RouteContext(Route.MESSAGES, provider="openai", model="m", delivery=Delivery.WEBSOCKET), Decision.PYTHON),
+        (RouteContext(Route.RESPONSES, provider="openai", model="other"), Decision.PYTHON),
+        (RouteContext(Route.RESPONSES, provider="anthropic", model="m"), Decision.PYTHON),
+        (RouteContext(Route.MESSAGES, provider="openai", model="m"), Decision.PYTHON),
     ),
 )
 def test_first_matching_rule_respects_every_constraint(context: RouteContext, expected: Decision) -> None:
@@ -127,7 +123,6 @@ def test_first_matching_rule_respects_every_constraint(context: RouteContext, ex
             Rollout.RUST_REQUIRED,
             providers=frozenset({"openai"}),
             models=frozenset({"m"}),
-            deliveries=frozenset({Delivery.WEBSOCKET}),
         ),
         RouteRule(Route.RESPONSES, Rollout.PYTHON_ONLY),
     )
@@ -145,10 +140,7 @@ def test_ocr_has_no_python_path_to_opt_out_to(
         monkeypatch.setenv("LITELLM_RUST", environment)
 
     assert catalog.decision(RouteContext(Route.OCR, model="m")) is Decision.RUST_REQUIRED
-    assert (
-        catalog.decision(RouteContext(Route.OCR, provider="aws_textract", model="m"))
-        is Decision.RUST_REQUIRED
-    )
+    assert catalog.decision(RouteContext(Route.OCR, provider="aws_textract", model="m")) is Decision.RUST_REQUIRED
 
 
 @pytest.mark.parametrize(

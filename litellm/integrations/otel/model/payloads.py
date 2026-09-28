@@ -309,6 +309,7 @@ class GuardrailSpanData:
 class ServiceSpanData:
     service_name: str
     call_type: str | None = None
+    caller: str | None = None
     error: SpanError | None = None
     # Caller-supplied attributes to stamp on the service span, passed through
     # from ``async_service_*_hook(event_metadata=...)``. The mapper owns how
@@ -330,6 +331,7 @@ class ServiceSpanData:
         return cls(
             service_name=payload.service.value,
             call_type=payload.call_type,
+            caller=payload.caller,
             error=SpanError(message=payload.error) if payload.error else None,
             event_metadata=sanitize_event_metadata(event_metadata),
         )
