@@ -273,40 +273,66 @@ fn duration(seconds: f64) -> PyResult<Duration> {
         .ok_or_else(|| PyValueError::new_err("cache durations must be finite and positive"))
 }
 
-pub(crate) fn configured(
-    py: Python<'_>,
-    kwargs: &Bound<'_, PyDict>,
-) -> PyResult<(
-    Option<Arc<dyn ResponseCacheService>>,
-    litellm_cache_response::CacheOptions,
-)> {
+fn selected_cache<'py>(
+    py: Python<'py>,
+    kwargs: &Bound<'py, PyDict>,
+    call_type: &str,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
     let configured = py.import("litellm")?.getattr("cache")?;
     if configured.is_none()
         || kwargs
             .get_item("caching")?
             .is_some_and(|value| value.is(pyo3::types::PyBool::new(py, false)))
     {
-        return Ok((
-            None,
-            litellm_cache_response::CacheOptions::new(litellm_cache_response::CacheScope::Shared),
-        ));
+        return Ok(None);
     }
-    let handle = configured
+    let supported = configured.getattr("supported_call_types")?;
+    if supported.is_none() || !supported.contains(call_type)? {
+        return Ok(None);
+    }
+    Ok(Some(configured))
+}
+
+fn native_handle<'py>(configured: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
+    Ok(configured
         .getattr_opt("cache")?
         .map(|backend| backend.getattr_opt("native_handle"))
         .transpose()?
         .flatten()
-        .ok_or_else(|| {
-            crate::errors::RustBridgeDeclined::new_err(
-                "the configured cache requires Python inference",
-            )
-        })?;
-    let Ok(cache) = handle.extract::<PyRef<'_, NativeCacheHandle>>() else {
+        .filter(|handle| handle.is_instance_of::<NativeCacheHandle>()))
+}
+
+pub(crate) fn admit(py: Python<'_>, kwargs: &Bound<'_, PyDict>, call_type: &str) -> PyResult<()> {
+    if let Some(configured) = selected_cache(py, kwargs, call_type)?
+        && native_handle(&configured)?.is_none()
+    {
+        return Err(crate::errors::RustBridgeDeclined::new_err(
+            "the configured cache requires Python inference",
+        ));
+    }
+    Ok(())
+}
+
+pub(crate) fn configured(
+    py: Python<'_>,
+    kwargs: &Bound<'_, PyDict>,
+    call_type: &str,
+) -> PyResult<(
+    Option<Arc<dyn ResponseCacheService>>,
+    litellm_cache_response::CacheOptions,
+)> {
+    let Some(configured) = selected_cache(py, kwargs, call_type)? else {
         return Ok((
             None,
             litellm_cache_response::CacheOptions::new(litellm_cache_response::CacheScope::Shared),
         ));
     };
+    let handle = native_handle(&configured)?.ok_or_else(|| {
+        pyo3::exceptions::PyRuntimeError::new_err(
+            "the configured cache changed to a Python cache after native admission",
+        )
+    })?;
+    let cache = handle.extract::<PyRef<'_, NativeCacheHandle>>()?;
     cache.check_process()?;
     let controls = kwargs.get_item("cache")?.filter(|value| !value.is_none());
     let controls = controls

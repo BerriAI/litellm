@@ -14,6 +14,8 @@ fn run_messages(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
+    let cache_call_type = "anthropic_messages";
+    crate::cache::v2::admit(py, &kwargs, cache_call_type)?;
     let (arguments, hooks) = crate::routes::call_hooks(
         py,
         Operation::Messages,
@@ -33,7 +35,8 @@ fn run_messages(
                 )
                 .with_auth(crate::http::resources().auth.clone())
                 .with_secrets(crate::secrets::source(py)?);
-            let (cache, cache_options) = crate::cache::v2::configured(py, arguments)?;
+            let (cache, cache_options) =
+                crate::cache::v2::configured(py, arguments, cache_call_type)?;
             let builder = match cache {
                 Some(cache) => builder.with_cache(litellm_cache_response::ScopedCache::new(
                     cache,

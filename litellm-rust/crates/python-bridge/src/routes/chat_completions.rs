@@ -142,6 +142,12 @@ fn run_public(
         request.clone().unbind(),
         "litellm.rust_bridge.chat_completions.route_host",
     );
+    let cache_call_type = if asynchronous {
+        "acompletion"
+    } else {
+        "completion"
+    };
+    crate::cache::v2::admit(py, &kwargs, cache_call_type)?;
     let (arguments, hooks) = crate::routes::call_hooks(
         py,
         Operation::Completion,
@@ -160,7 +166,8 @@ fn run_public(
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );
-            let (cache, cache_options) = crate::cache::v2::configured(py, arguments)?;
+            let (cache, cache_options) =
+                crate::cache::v2::configured(py, arguments, cache_call_type)?;
             let route = match cache {
                 Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
                     cache,

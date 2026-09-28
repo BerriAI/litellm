@@ -27,6 +27,7 @@ from litellm.rust_bridge.configuration import Rollout
 from litellm.rust_bridge.dispatch import call_hook
 from litellm.rust_bridge.messages.entrypoints import NATIVE_AMESSAGES, LiteLLMMessagesRequest
 from litellm.rust_bridge.responses.entrypoints import NATIVE_ARESPONSES, LiteLLMResponsesRequest
+from litellm.types.caching import CachingSupportedCallTypes
 from litellm.types.utils import ModelResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger, drain_logging
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
@@ -482,6 +483,8 @@ async def test_rust_messages_fallback_honors_a_legacy_cache(
 
     monkeypatch.setenv("LITELLM_RUST", "1")
     litellm.cache = Cache()
+    logger: Final = RecordingLogger()
+    litellm.callbacks = [logger]
     recording_server.default_response = ResponseSpec(body=MESSAGES_RESPONSE)
     parameters: Final = {
         "model": MESSAGES_MODEL,
@@ -495,3 +498,40 @@ async def test_rust_messages_fallback_honors_a_legacy_cache(
     second: Final = await litellm.anthropic_messages(**parameters)
     assert payload(first) == payload(second)
     assert len(recording_server.requests) == 1
+
+    await logger.wait_for_async("async_log_success_event", count=2)
+    assert logger.names.count("async_log_success_event") == 2
+    assert "log_failure_event" not in logger.names
+    assert "async_log_failure_event" not in logger.names
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("route", ("chat", "messages", "responses"))
+@pytest.mark.parametrize("native", (False, True))
+@pytest.mark.parametrize("excluded", (None, [], ["embedding"]))
+async def test_v2_cache_honors_supported_call_types_for_reads_and_writes(
+    recording_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    route: Literal["chat", "messages", "responses"],
+    native: bool,
+    excluded: list[CachingSupportedCallTypes] | None,
+) -> None:
+    monkeypatch.setenv("LITELLM_RUST", "1" if native else "0")
+    litellm.cache = _v2.Cache.memory()
+    call_type: Final[CachingSupportedCallTypes] = (
+        "acompletion" if route == "chat" else "anthropic_messages" if route == "messages" else "aresponses"
+    )
+    recording_server.expected_requests = 4
+    litellm.cache.supported_call_types = excluded
+    await invoke(route, recording_server, {}, native=native)
+    await invoke(route, recording_server, {}, native=native)
+    assert len(recording_server.requests) == 2
+    litellm.cache.supported_call_types = [call_type]
+    await invoke(route, recording_server, {}, native=native)
+    assert len(recording_server.requests) == 3
+    await asyncio.gather(*tuple(_PENDING_CACHE_WRITES))
+    await invoke(route, recording_server, {}, native=native)
+    assert len(recording_server.requests) == 3
+    litellm.cache.supported_call_types = excluded
+    await invoke(route, recording_server, {}, native=native)
+    assert len(recording_server.requests) == 4
