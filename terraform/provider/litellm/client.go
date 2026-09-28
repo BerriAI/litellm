@@ -143,10 +143,10 @@ func (c *Client) UpdateKey(key *Key) (*Key, error) {
 		updateData["model_tpm_limit"] = key.ModelTPMLimit
 	}
 
-	// The proxy rejects an empty team_id with a 500 ("Team object not found"),
-	// so only send it when set.
 	if key.TeamID != "" {
 		updateData["team_id"] = key.TeamID
+	} else if key.clearTeamID {
+		updateData["team_id"] = nil
 	}
 
 	// The proxy rejects an empty-string budget_duration with a 400, so only
