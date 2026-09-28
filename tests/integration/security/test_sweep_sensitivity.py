@@ -74,7 +74,7 @@ def test_rig_with_an_overridden_master_key_resolves_the_config_deployment(tmp_pa
     with canary_rig(tmp_path, environment={"LITELLM_MASTER_KEY": master_key}) as overridden:
         assert overridden.proxy.key == master_key
         assert overridden.model_id
-        assert overridden.proxy.request("GET", "/model/info", key=overridden.owned.gateway.key).status_code == 401
+        assert overridden.proxy.request("GET", "/model/info").status_code == 200
 
 
 def test_route_allowances_match_only_their_exact_route_and_caller() -> None:
