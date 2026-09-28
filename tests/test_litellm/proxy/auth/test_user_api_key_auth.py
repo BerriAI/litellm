@@ -29,6 +29,7 @@ from litellm.proxy._types import (
     LiteLLM_OrganizationTable,
     LiteLLM_TeamTableCachedObj,
     LiteLLM_UserTable,
+    Litellm_EntityType,
     LitellmUserRoles,
     ProxyErrorTypes,
     ProxyException,
@@ -8053,6 +8054,152 @@ async def test_cached_key_team_member_budget_honours_temp_increase(expiry_offset
 
     assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
     assert "Max budget: 2.0" in exc_info.value.message
+
+
+async def _authenticate_and_authorize(mock_request, api_key):
+    """Builder then the single common_checks gate, the same sequence user_api_key_auth runs."""
+    from litellm.proxy.auth.user_api_key_auth import _authorize_authenticated_request
+
+    request_data = {"model": "claude-sonnet-5", "messages": [{"role": "user", "content": "hi"}]}
+    auth_obj = await _user_api_key_auth_builder(
+        request=mock_request,
+        api_key=f"Bearer {api_key}",
+        azure_api_key_header="",
+        anthropic_api_key_header=None,
+        google_ai_studio_api_key_header=None,
+        azure_apim_header=None,
+        request_data=request_data,
+    )
+    recovered = await _authorize_authenticated_request(
+        user_api_key_auth_obj=auth_obj,
+        request=mock_request,
+        request_data=request_data,
+        route="/v1/messages",
+        api_key=f"Bearer {api_key}",
+    )
+    return recovered or auth_obj
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "team_member_spend, expect_blocked, expected_alerts",
+    [
+        (1.1, False, 0),
+        (1.2, False, 1),
+        (2.4, True, 1),
+    ],
+)
+async def test_cached_key_team_member_budget_emails_configured_thresholds(
+    team_member_spend, expect_blocked, expected_alerts
+):
+    """The team's team_member_max_budget_alert_emails thresholds fire from the cached-key auth path,
+    including on the request that trips the hard cap, and stay silent below the lowest threshold."""
+    from litellm.proxy._types import LiteLLM_TeamMembership, LiteLLM_TeamTableCachedObj
+    from litellm.proxy.common_utils.user_api_key_cache import (
+        team_membership_auth_cache_key,
+        team_membership_reservation_cache_key,
+    )
+    from litellm.proxy.utils import hash_token
+
+    api_key = "sk-team-member-alert-thresholds"
+    hashed_token = hash_token(api_key)
+    team_id = "team-alert-thresholds"
+    user_id = "user-alert-thresholds"
+    alert_emails = {"50": [], "100": ["finance@example.com"]}
+
+    user_api_key_cache = DualCache()
+    await _cache_key_object(
+        hashed_token=hashed_token,
+        user_api_key_obj=UserAPIKeyAuth(
+            token=hashed_token,
+            team_id=team_id,
+            team_alias="platform",
+            team_metadata={"team_member_max_budget_alert_emails": alert_emails},
+            user_id=user_id,
+            team_member_spend=team_member_spend,
+        ),
+        user_api_key_cache=user_api_key_cache,
+        proxy_logging_obj=None,
+    )
+    await user_api_key_cache.async_set_cache(
+        key=f"team_id:{team_id}",
+        value=LiteLLM_TeamTableCachedObj(
+            team_id=team_id,
+            team_alias="platform",
+            metadata={"team_member_max_budget_alert_emails": alert_emails},
+        ),
+    )
+    await user_api_key_cache.async_set_cache(
+        key=user_id,
+        value=LiteLLM_UserTable(
+            user_id=user_id, user_email="member@example.com", user_role=LitellmUserRoles.INTERNAL_USER
+        ),
+    )
+    membership = LiteLLM_TeamMembership(
+        user_id=user_id,
+        team_id=team_id,
+        spend=team_member_spend,
+        budget_id="budget-alert-thresholds",
+        litellm_budget_table=LiteLLM_BudgetTable(max_budget=2.4),
+    )
+    # A live proxy holds the row under both keys, so any second team-member check in the
+    # auth flow would find it too and send a duplicate alert.
+    for membership_cache_key in (
+        team_membership_reservation_cache_key(team_id=team_id, user_id=user_id),
+        team_membership_auth_cache_key(team_id=team_id, user_id=user_id),
+    ):
+        await user_api_key_cache.async_set_cache(key=membership_cache_key, value=membership)
+
+    mock_request = MagicMock()
+    mock_request.url.path = "/v1/messages"
+    mock_request.method = "POST"
+    mock_request.headers = {"authorization": f"Bearer {api_key}"}
+    mock_request.query_params = {}
+    mock_request.state = SimpleNamespace()
+
+    proxy_logging_obj = MagicMock()
+    proxy_logging_obj.budget_alerts = AsyncMock()
+    proxy_logging_obj.post_call_failure_hook = AsyncMock(return_value=None)
+    proxy_logging_obj.service_logging_obj.async_service_success_hook = AsyncMock(return_value=None)
+
+    async def _auth():
+        return await _authenticate_and_authorize(mock_request, api_key)
+
+    with (
+        patch(  # test-quality-ok: the builder reads proxy settings from module globals, no injection seam
+            "litellm.proxy.proxy_server.general_settings", {"disable_budget_reservation": True}
+        ),
+        patch("litellm.proxy.proxy_server.master_key", "sk-master"),  # test-quality-ok: module-global proxy state
+        patch("litellm.proxy.proxy_server.prisma_client", MagicMock()),  # test-quality-ok: module-global proxy state
+        patch(  # test-quality-ok: seed the cached key, team and membership without a DB
+            "litellm.proxy.proxy_server.user_api_key_cache", user_api_key_cache
+        ),
+        patch(  # test-quality-ok: module-global proxy state
+            "litellm.proxy.proxy_server.proxy_logging_obj", proxy_logging_obj
+        ),
+        patch(  # test-quality-ok: the live counter needs Redis or a DB; pin the spend the check compares
+            "litellm.proxy.proxy_server.get_current_spend",
+            new=AsyncMock(return_value=team_member_spend),
+        ),
+    ):
+        if expect_blocked:
+            with pytest.raises(ProxyException) as exc_info:
+                await _auth()
+            assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
+        else:
+            await _auth()
+        await asyncio.sleep(0)
+
+    assert proxy_logging_obj.budget_alerts.await_count == expected_alerts
+    if expected_alerts == 0:
+        return
+    call_info = proxy_logging_obj.budget_alerts.await_args.kwargs["user_info"]
+    assert proxy_logging_obj.budget_alerts.await_args.kwargs["type"] == "max_budget_alert"
+    assert call_info.event_group == Litellm_EntityType.TEAM_MEMBER
+    assert (call_info.spend, call_info.max_budget) == (team_member_spend, 2.4)
+    assert (call_info.user_id, call_info.user_email) == (user_id, "member@example.com")
+    assert (call_info.team_id, call_info.team_alias) == (team_id, "platform")
+    assert call_info.max_budget_alert_emails == alert_emails
 
 
 async def _proxy_exception_for_key(
