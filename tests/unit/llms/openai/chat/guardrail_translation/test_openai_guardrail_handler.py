@@ -1400,6 +1400,45 @@ class TestOpenAIChatCompletionsHandlerStreamingOutput:
         ] == [[("call_1", '{"fruit": "persimmon"}')], [("call_2", '{"fruit": "durian"}')]]
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize("transform", [False, True])
+    async def test_each_choice_refreshes_shared_guardrail_response_context(self, transform: bool) -> None:
+        from fastapi import HTTPException
+        from litellm.llms.base_llm.guardrail_translation.base_translation import StreamTransformSink
+        from litellm.types.utils import Delta, ModelResponseStream, StreamingChoices
+
+        class ContextGuardrail(CustomGuardrail):
+            async def apply_guardrail(
+                self, inputs: GenericGuardrailAPIInputs, request_data: dict[str, object],
+                input_type: Literal["request", "response"], logging_obj: object = None,
+            ) -> GenericGuardrailAPIInputs:
+                response: Final = request_data["response"]
+                assert isinstance(response, ModelResponse)
+                request_data["visited_choices"] = (*request_data.get("visited_choices", ()), response.choices[0].index)
+                if response.choices[0].message.content == "forbidden":
+                    raise HTTPException(status_code=400, detail="later choice blocked")
+                return inputs
+
+        chunks: Final = [ModelResponseStream(choices=[StreamingChoices(
+            index=index, delta=Delta(content=text, tool_calls=[{
+                "index": 0, "id": f"call_{index}", "type": "function",
+                "function": {"name": "contact", "arguments": "{}"},
+            }]), finish_reason="tool_calls",
+        ) for index, text in enumerate(("allowed", "forbidden"))])]
+        request_data: Final = {"metadata": {"trace": "retained"}}
+        with pytest.raises(HTTPException, match="later choice blocked"):
+            await OpenAIChatCompletionsHandler().process_output_streaming_response(
+                responses_so_far=chunks, guardrail_to_apply=ContextGuardrail(guardrail_name="context"),
+                request_data=request_data, deliver_ended_stream_rewrites=True,
+                stream_transform_sink=StreamTransformSink() if transform else None,
+            )
+        assert request_data["visited_choices"] == (0, 1)
+        assert request_data["metadata"]["trace"] == "retained"
+        assert request_data["responses"] is chunks
+        restored: Final = request_data["response"]
+        assert isinstance(restored, ModelResponse)
+        assert tuple(choice.index for choice in restored.choices) == (0, 1)
+
+    @pytest.mark.asyncio
     async def test_deliver_ended_stream_tool_rewrites_keep_choice_indices(self) -> None:
         handler: Final = OpenAIChatCompletionsHandler()
         chunks: Final = self._two_choice_tool_call_stream_chunks()
