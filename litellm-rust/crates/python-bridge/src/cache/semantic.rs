@@ -207,5 +207,5 @@ impl ExecutionBody for SemanticExecution {
 }
 
 pub(super) fn drive(py: Python<'_>, body: SemanticExecution) -> PyResult<Bound<'_, PyAny>> {
-    Execution::new(body).into_coroutine(py)
+    Execution::new(body, crate::lifecycle::binding).into_coroutine(py)
 }

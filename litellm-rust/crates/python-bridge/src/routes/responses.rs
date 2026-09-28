@@ -33,36 +33,36 @@ fn run_public(
     {
         return Err(RustBridgeDeclined::new_err(reason));
     }
-    let admission = host::project(&host, py, &kwargs)?;
-    if admission
-        .custom_llm_provider
+    let model = host
+        .argument(py, &kwargs, "model")?
+        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("model is required"))?
+        .extract::<String>()?;
+    let provider = host
+        .argument(py, &kwargs, "custom_llm_provider")?
+        .map(|value| value.extract::<String>())
+        .transpose()?;
+    if provider
         .as_deref()
         .is_some_and(|provider| provider != "openai")
-        || admission
-            .model
+        || model
             .strip_prefix("openai/")
-            .unwrap_or(&admission.model)
+            .unwrap_or(&model)
             .contains('/')
     {
         return Err(RustBridgeDeclined::new_err(
             "native HTTP responses provider",
         ));
     }
-    if admission
-        .optional_params
-        .get("stream")
-        .is_some_and(|value| value == &serde_json::Value::Bool(true))
+    if host
+        .argument(py, &kwargs, "stream")?
+        .map(|value| litellm_host_python::from_py::<Value>(&value))
+        .transpose()?
+        .is_some_and(|value| value == Value::Bool(true))
     {
         return Err(RustBridgeDeclined::new_err(
             "native Python responses streaming",
         ));
     }
-    let route = litellm_core::responses::ResponsesRoute::new(
-        crate::http::provider_client(py, &kwargs, asynchronous)?
-            .map_err(crate::http::client_error)?,
-        crate::http::resources().auth.clone(),
-        crate::secrets::source(py)?,
-    );
     run_legacy_call(
         py,
         LegacySurface {
@@ -75,10 +75,20 @@ fn run_public(
             stream: None,
         },
         PublicCall::capture(&request, &args, &kwargs)?,
-        move |request| crate::logger::LoggedMachine::new(route.machine(request, None)),
+        move |py, arguments, request| {
+            let route = litellm_core::responses::ResponsesRoute::new(
+                crate::http::provider_client(py, arguments, asynchronous)?
+                    .map_err(crate::http::client_error)?,
+                crate::http::resources().auth.clone(),
+                crate::secrets::source(py)?,
+            );
+            Ok(crate::logger::LoggedMachine::new(
+                route.machine(request, None),
+            ))
+        },
         host::ResponsesPythonHost(host),
         crate::preflight::sdk_preflight,
-        asynchronous,
+        crate::lifecycle::call_options(asynchronous),
     )
 }
 

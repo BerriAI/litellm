@@ -25,20 +25,24 @@ fn run_messages(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let route = litellm_core::messages::MessagesRoute::new(
-        crate::http::provider_client(py, &kwargs, asynchronous)?
-            .map_err(crate::http::client_error)?,
-        crate::http::resources().auth.clone(),
-        crate::secrets::source(py)?,
-    );
     run_legacy_call(
         py,
         SURFACE,
         PublicCall::capture(&request, &args, &kwargs)?,
-        move |request| crate::logger::LoggedMachine::new(route.machine(request, None)),
+        move |py, arguments, request| {
+            let route = litellm_core::messages::MessagesRoute::new(
+                crate::http::provider_client(py, arguments, asynchronous)?
+                    .map_err(crate::http::client_error)?,
+                crate::http::resources().auth.clone(),
+                crate::secrets::source(py)?,
+            );
+            Ok(crate::logger::LoggedMachine::new(
+                route.machine(request, None),
+            ))
+        },
         MessagesPythonHost::new(request.unbind()),
         crate::preflight::sdk_preflight,
-        asynchronous,
+        crate::lifecycle::call_options(asynchronous),
     )
 }
 

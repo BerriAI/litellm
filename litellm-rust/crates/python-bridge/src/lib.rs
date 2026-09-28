@@ -1,9 +1,11 @@
 mod cache;
+mod callable;
 mod coercion;
 mod credentials;
 mod diagnostics;
 mod errors;
 mod http;
+mod lifecycle;
 mod logger;
 mod marshal;
 mod preflight;

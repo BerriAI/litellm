@@ -73,17 +73,23 @@ pub fn run_legacy_call<H, M>(
     py: Python<'_>,
     surface: LegacySurface,
     call: PublicCall,
-    start: impl FnOnce(<H::Protocol as Protocol>::Request) -> M + Send + Sync + 'static,
+    start: impl FnOnce(
+        Python<'_>,
+        &Bound<'_, PyDict>,
+        <H::Protocol as Protocol>::Request,
+    ) -> PyResult<M>
+    + Send
+    + Sync
+    + 'static,
     host: H,
     preflight: Preflight,
-    options: impl Into<CallOptions>,
+    options: CallOptions,
 ) -> PyResult<Py<PyAny>>
 where
     H: PythonBinding + PythonHostCalls<H::Protocol> + 'static,
     M: Machine<Protocol = H::Protocol> + 'static,
     M::Complete: Into<HostedCompletion<<H::Protocol as Protocol>::Response>>,
 {
-    let options = options.into();
     let arguments = call.kwargs.clone_ref(py);
     run_call(
         py,

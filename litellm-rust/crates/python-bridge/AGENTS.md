@@ -6,7 +6,7 @@ Keep domain composition here and execution mechanics in `litellm-host-python`. A
 
 The bridge supplies the Python lifecycle binding and public stream construction to the runtime adapter. Preserve the single inline coroutine driver; removing the host's hardcoded import must not introduce another driver or a separate asyncio task for caller hooks
 
-Move `litellm-host-python::wrap_failure` here with its existing exception behavior. Move resolved-Future construction from `src/cache/future.rs` into `litellm-host-python`, passing an already constructed Python value. Keep cache-specific serialization and disabled-cache results here
+`src/callable.rs::wrap_failure` owns callable exception policy here. Resolved-Future construction uses `litellm-host-python::ready_future`, passing an already constructed Python value. Keep cache-specific serialization and disabled-cache results here
 
 Implement the migration in separate steps that preserve public API contracts: first defer route resource setup until prepared arguments and preflight are available, then supply the lifecycle binding and separate public stream construction, then relocate the two helpers. Change the host interface and its consumers together in each step. The `native.rs` rename is optional and comes last
 

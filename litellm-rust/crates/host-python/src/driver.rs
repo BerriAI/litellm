@@ -15,7 +15,7 @@ use litellm_host::{
 };
 
 use crate::PythonHostCalls;
-use crate::handle::{Execution, ExecutionBody, ExecutionStep};
+use crate::handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle};
 use crate::hooks::{HookResume, HookStep, Preflight, PythonCallEvent, PythonCallHooks};
 use crate::native::{NativeMachine, NativePoll};
 use crate::{InvokeError, PythonBinding, missing_state};
@@ -26,17 +26,23 @@ type ResponseOf<H> = <ProtocolOf<H> as Protocol>::Response;
 type NativeStep<H> = MachineStep<ProtocolOf<H>, HostedCompletion<ResponseOf<H>>>;
 type NativeResult<H> = Result<NativeStep<H>, ErrorOf<H>>;
 type Interruption<H> = Option<HostFailure<ErrorOf<H>>>;
-type StartMachine<P, M> = Box<dyn FnOnce(<P as Protocol>::Request) -> M + Send + Sync>;
+type StartMachine<P, M> = Box<
+    dyn FnOnce(Python<'_>, &Bound<'_, PyDict>, <P as Protocol>::Request) -> PyResult<M>
+        + Send
+        + Sync,
+>;
 
 pub struct CallOptions {
     pub asynchronous: bool,
+    pub lifecycle: PythonLifecycle,
     pub observers: Option<ObservationSender>,
 }
 
-impl From<bool> for CallOptions {
-    fn from(asynchronous: bool) -> Self {
+impl CallOptions {
+    pub fn new(asynchronous: bool, lifecycle: PythonLifecycle) -> Self {
         Self {
             asynchronous,
+            lifecycle,
             observers: None,
         }
     }
@@ -110,12 +116,19 @@ where
 /// the hooks' `prepare_arguments` returned, before the binding decodes the request.
 pub fn run_call<H, M, L>(
     py: Python<'_>,
-    start: impl FnOnce(<H::Protocol as Protocol>::Request) -> M + Send + Sync + 'static,
+    start: impl FnOnce(
+        Python<'_>,
+        &Bound<'_, PyDict>,
+        <H::Protocol as Protocol>::Request,
+    ) -> PyResult<M>
+    + Send
+    + Sync
+    + 'static,
     binding: H,
     hooks: L,
     preflight: Preflight,
     arguments: Py<PyDict>,
-    options: impl Into<CallOptions>,
+    options: CallOptions,
 ) -> PyResult<Py<PyAny>>
 where
     L: PythonCallHooks + 'static,
@@ -123,7 +136,6 @@ where
     M: Machine<Protocol = H::Protocol> + 'static,
     M::Complete: Into<HostedCompletion<ResponseOf<H>>>,
 {
-    let options = options.into();
     let mut driver = PythonDriver {
         binding,
         hooks,
@@ -142,11 +154,13 @@ where
         terminal_observation: None,
     };
     if options.asynchronous {
-        return Execution::new(driver).into_coroutine(py).map(Bound::unbind);
+        return Execution::new(driver, options.lifecycle)
+            .into_coroutine(py)
+            .map(Bound::unbind);
     }
     match driver.resume(None)? {
         ExecutionStep::Return(value) => Ok(value),
-        ExecutionStep::Open(head) => Execution::suspended(driver)
+        ExecutionStep::Open(head) => Execution::suspended(driver, options.lifecycle)
             .into_sync_stream(py, head)
             .map(Bound::unbind),
         ExecutionStep::Await(_) | ExecutionStep::Yield(_) => {
@@ -260,7 +274,12 @@ where
                     }
                 };
                 let start = self.start.take().ok_or_else(missing_state)?;
-                self.native.start(start(request));
+                let arguments = self.arguments.as_ref().ok_or_else(missing_state)?;
+                let machine = match start(py, arguments.bind(py), request) {
+                    Ok(machine) => machine,
+                    Err(error) => return self.failure(py, error, FailureOrigin::Host),
+                };
+                self.native.start(machine);
                 self.stage = Stage::Call;
                 self.resume_machine(py, None)
             }
@@ -672,21 +691,15 @@ mod tests {
 
     static PYTHON_GLOBALS: Mutex<()> = Mutex::new(());
 
-    fn install_lifecycle_module(py: Python<'_>) -> Bound<'_, PyModule> {
-        py.run(
-            pyo3::ffi::c_str!(
-                r#"
-import sys
-import types
+    fn lifecycle_binding(py: Python<'_>) -> PyResult<Bound<'_, PyModule>> {
+        py.import("host_test_lifecycle")
+    }
 
-sys.modules.setdefault('litellm', types.ModuleType('litellm'))
-sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bridge'))
-"#
-            ),
-            None,
-            None,
-        )
-        .unwrap();
+    fn call_options(asynchronous: bool) -> CallOptions {
+        CallOptions::new(asynchronous, lifecycle_binding)
+    }
+
+    fn install_lifecycle_module(py: Python<'_>) -> Bound<'_, PyModule> {
         let source =
             std::ffi::CString::new(include_str!("../../../../litellm/rust_bridge/lifecycle.py"))
                 .unwrap();
@@ -694,7 +707,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             py,
             &source,
             pyo3::ffi::c_str!("lifecycle.py"),
-            pyo3::ffi::c_str!("litellm.rust_bridge.lifecycle"),
+            pyo3::ffi::c_str!("host_test_lifecycle"),
         )
         .unwrap()
     }
@@ -874,6 +887,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
     #[derive(Clone, Copy)]
     enum HookScript {
         Plain,
+        RewriteArguments,
         FailBegin,
         ReplaceResponse,
         FailAfterSuccess,
@@ -896,6 +910,15 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             self.log.push("begin");
             if matches!(self.script, HookScript::FailBegin) {
                 return Err(PyValueError::new_err("begin failed"));
+            }
+            if matches!(self.script, HookScript::RewriteArguments) {
+                let prepared = Python::attach(|py| -> PyResult<Py<PyDict>> {
+                    let prepared = arguments.bind(py).copy()?;
+                    prepared.set_item("prepared", "hook")?;
+                    prepared.set_item("api_key", "hook-key")?;
+                    Ok(prepared.unbind())
+                })?;
+                return Ok(HookStep::Ready(prepared));
             }
             Ok(HookStep::Ready(arguments))
         }
@@ -926,6 +949,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 )),
                 HookScript::FailAfterSuccess => Err(PyValueError::new_err("after_success failed")),
                 HookScript::Plain
+                | HookScript::RewriteArguments
                 | HookScript::FailBegin
                 | HookScript::CancelTerminal
                 | HookScript::FailTerminal => Ok(HookStep::Ready(response)),
@@ -1018,7 +1042,14 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         script: HookScript,
         asynchronous: bool,
     ) -> (PyResult<Py<PyAny>>, Vec<String>) {
-        run_preflighted(py, machine, host, script, no_preflight, asynchronous)
+        run_preflighted(
+            py,
+            machine,
+            host,
+            script,
+            no_preflight,
+            call_options(asynchronous),
+        )
     }
 
     fn no_preflight(_: Python<'_>, _: &Bound<'_, PyDict>) -> PyResult<()> {
@@ -1031,9 +1062,8 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         host: SyntheticBinding,
         script: HookScript,
         preflight: Preflight,
-        options: impl Into<CallOptions>,
+        options: CallOptions,
     ) -> (PyResult<Py<PyAny>>, Vec<String>) {
-        let options = options.into();
         let asynchronous = options.asynchronous;
         let log = Log(host.log.0.clone());
         let adapter = SyntheticHooks {
@@ -1044,7 +1074,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
         arguments.set_item("model", "m").unwrap();
         let result = run_call(
             py,
-            machine,
+            move |_, _, request| Ok(machine(request)),
             host,
             adapter,
             preflight,
@@ -1127,6 +1157,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 no_preflight,
                 CallOptions {
                     asynchronous,
+                    lifecycle: lifecycle_binding,
                     observers: Some(sender.clone()),
                 },
             );
@@ -1185,6 +1216,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 no_preflight,
                 CallOptions {
                     asynchronous,
+                    lifecycle: lifecycle_binding,
                     observers: Some(sender),
                 },
             );
@@ -1431,7 +1463,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             );
             let handed = run_call(
                 py,
-                streaming_machine(),
+                |_, _, request| Ok(streaming_machine()(request)),
                 StreamingBinding,
                 SyntheticHooks {
                     log: Log(log.0.clone()),
@@ -1441,6 +1473,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 PyDict::new(py).unbind(),
                 CallOptions {
                     asynchronous,
+                    lifecycle: lifecycle_binding,
                     observers: Some(sender),
                 },
             )
@@ -1516,7 +1549,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
     }
 
     #[rstest::rstest]
-    fn a_stream_carries_its_head_as_hidden_params_before_the_first_chunk() {
+    fn a_stream_carries_its_head_before_the_first_chunk() {
         let _guard = PYTHON_GLOBALS
             .lock()
             .unwrap_or_else(|error| error.into_inner());
@@ -1531,12 +1564,12 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 };
                 let handed = run_call(
                     py,
-                    streaming_machine(),
+                    |_, _, request| Ok(streaming_machine()(request)),
                     StreamingBinding,
                     adapter,
                     no_preflight,
                     PyDict::new(py).unbind(),
-                    asynchronous,
+                    call_options(asynchronous),
                 )
                 .unwrap();
                 let stream = if asynchronous {
@@ -1548,7 +1581,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                 let hidden: std::collections::HashMap<
                     String,
                     std::collections::HashMap<String, String>,
-                > = stream.getattr("_hidden_params").unwrap().extract().unwrap();
+                > = stream.getattr("head").unwrap().extract().unwrap();
                 assert_eq!(
                     hidden["additional_headers"],
                     std::collections::HashMap::from([(
@@ -1754,6 +1787,140 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
     }
 
     #[rstest::rstest]
+    #[case::sync_success(false, false)]
+    #[case::async_success(true, false)]
+    #[case::sync_failure(false, true)]
+    #[case::async_failure(true, true)]
+    fn resource_setup_uses_prepared_arguments_and_failures_are_terminal(
+        #[case] asynchronous: bool,
+        #[case] fail_setup: bool,
+    ) {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            let log = Log::default();
+            let setup_log = Log(log.0.clone());
+            let error = PyValueError::new_err("setup failed").into_value(py);
+            let setup_error = error.clone_ref(py);
+            let arguments = PyDict::new(py);
+            arguments.set_item("api_key", "original").unwrap();
+            let result = run_call(
+                py,
+                move |py, prepared, request| {
+                    let source: String = prepared.get_item("prepared")?.unwrap().extract()?;
+                    let key: String = prepared.get_item("api_key")?.unwrap().extract()?;
+                    setup_log.push(format!("setup:{source}:{key}"));
+                    if fail_setup {
+                        return Err(PyErr::from_value(setup_error.into_bound(py).into_any()));
+                    }
+                    Ok(success_machine()(request))
+                },
+                SyntheticBinding {
+                    log: Log(log.0.clone()),
+                    op: OpScript::Answer,
+                    classifier_fails: false,
+                },
+                SyntheticHooks {
+                    log: Log(log.0.clone()),
+                    script: HookScript::RewriteArguments,
+                },
+                inheriting_preflight,
+                arguments.clone().unbind(),
+                call_options(asynchronous),
+            );
+            let settled = if asynchronous {
+                assert!(log.entries().is_empty());
+                let completion = result
+                    .unwrap()
+                    .call_method1(py, "send", (py.None(),))
+                    .unwrap_err();
+                if completion.is_instance_of::<pyo3::exceptions::PyStopIteration>(py) {
+                    completion.value(py).getattr("value").map(Bound::unbind)
+                } else {
+                    Err(completion)
+                }
+            } else {
+                result
+            };
+            assert_eq!(
+                arguments
+                    .get_item("api_key")
+                    .unwrap()
+                    .unwrap()
+                    .extract::<String>()
+                    .unwrap(),
+                "original"
+            );
+            assert_eq!(
+                &log.entries()[..4],
+                ["started", "begin", "project", "setup:hook:inherited"]
+            );
+            if fail_setup {
+                assert!(settled.unwrap_err().value(py).is(error.bind(py)));
+                assert_eq!(
+                    log.entries(),
+                    [
+                        "started",
+                        "begin",
+                        "project",
+                        "setup:hook:inherited",
+                        "failed:Host:setup failed",
+                        "adapter.close",
+                        "host.close",
+                    ]
+                );
+            } else {
+                assert!(settled.is_ok());
+                assert!(
+                    log.entries()
+                        .iter()
+                        .any(|entry| entry.starts_with("succeeded:"))
+                );
+            }
+        });
+    }
+
+    #[rstest::rstest]
+    fn closing_an_unstarted_call_never_initializes_resources() {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            let log = Log::default();
+            let setup_log = Log(log.0.clone());
+            let pending = run_call(
+                py,
+                move |_, _, request| {
+                    setup_log.push("setup");
+                    Ok(success_machine()(request))
+                },
+                SyntheticBinding {
+                    log: Log(log.0.clone()),
+                    op: OpScript::Answer,
+                    classifier_fails: false,
+                },
+                SyntheticHooks {
+                    log: Log(log.0.clone()),
+                    script: HookScript::Plain,
+                },
+                no_preflight,
+                PyDict::new(py).unbind(),
+                call_options(true),
+            )
+            .unwrap();
+            assert!(log.entries().is_empty());
+            pending.call_method0(py, "close").unwrap();
+            drop(pending);
+            assert_eq!(log.entries(), ["adapter.close", "host.close"]);
+        });
+    }
+
+    #[rstest::rstest]
     fn a_preflight_rejection_is_the_callers_error_and_the_machine_never_starts() {
         let _guard = PYTHON_GLOBALS
             .lock()
@@ -1772,7 +1939,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                     },
                     HookScript::Plain,
                     rejecting_preflight,
-                    asynchronous,
+                    call_options(asynchronous),
                 );
                 let error = result.unwrap_err();
                 let raised = REJECTION.lock().unwrap().take().unwrap();
@@ -1810,7 +1977,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
                     },
                     HookScript::Plain,
                     inheriting_preflight,
-                    asynchronous,
+                    call_options(asynchronous),
                 );
                 assert_eq!(
                     result.unwrap().extract::<String>(py).unwrap(),
@@ -1945,12 +2112,12 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
             };
             let error = run_call(
                 py,
-                success_machine(),
+                |_, _, request| Ok(success_machine()(request)),
                 host,
                 adapter,
                 no_preflight,
                 PyDict::new(py).unbind(),
-                false,
+                call_options(false),
             )
             .unwrap_err();
             assert!(!error.is_instance_of::<pyo3::exceptions::PyException>(py));
@@ -2008,9 +2175,12 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
     fn retaining_coroutine(py: Python<'_>, retained: Py<PyAny>) -> PyResult<Py<Execution>> {
         Py::new(
             py,
-            Execution::new(RetainingHost {
-                retained: Some(retained),
-            }),
+            Execution::new(
+                RetainingHost {
+                    retained: Some(retained),
+                },
+                lifecycle_binding,
+            ),
         )
     }
 
@@ -2033,7 +2203,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
 
     #[pyfunction]
     fn await_execution(awaitable: Py<PyAny>) -> Execution {
-        Execution::new(AwaitBody(Some(awaitable)))
+        Execution::new(AwaitBody(Some(awaitable)), lifecycle_binding)
     }
 
     struct CallingBody(Py<PyAny>);
@@ -2050,7 +2220,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
 
     #[pyfunction]
     fn calling_execution(callback: Py<PyAny>) -> Execution {
-        Execution::new(CallingBody(callback))
+        Execution::new(CallingBody(callback), lifecycle_binding)
     }
 
     struct ErrorBody(Option<Py<PyBaseException>>);
@@ -2071,7 +2241,7 @@ sys.modules.setdefault('litellm.rust_bridge', types.ModuleType('litellm.rust_bri
 
     #[pyfunction]
     fn error_execution(error: Bound<'_, PyBaseException>) -> Execution {
-        Execution::new(ErrorBody(Some(error.unbind())))
+        Execution::new(ErrorBody(Some(error.unbind())), lifecycle_binding)
     }
 
     #[rstest::rstest]

@@ -171,30 +171,34 @@ fn run_public(
     {
         return Err(RustBridgeDeclined::new_err(reason));
     }
-    let admission = host::project(&host, py, &kwargs)?;
+    let model = host
+        .argument(py, &kwargs, "model")?
+        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("model is required"))?
+        .extract::<String>()?;
+    let provider = host
+        .argument(py, &kwargs, "custom_llm_provider")?
+        .map(|value| value.extract::<String>())
+        .transpose()?;
+    let messages = host
+        .argument(py, &kwargs, "messages")?
+        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("messages is required"))?;
+    let params = host.parameters(py, &kwargs)?;
     if let Some(reason) = chat_completions_decline_reason(
-        &admission.model,
-        admission.custom_llm_provider.as_deref(),
-        admission.messages,
-        &admission.optional_params,
+        &model,
+        provider.as_deref(),
+        litellm_host_python::from_py(&messages)?,
+        &params,
     ) {
         return Err(RustBridgeDeclined::new_err(reason));
     }
-    if admission
-        .optional_params
+    if params
         .get("stream")
-        .is_some_and(|value| value == &serde_json::Value::Bool(true))
+        .is_some_and(|value| value == &Value::Bool(true))
     {
         return Err(RustBridgeDeclined::new_err(
             "native Python chat_completions streaming",
         ));
     }
-    let route = ChatCompletionsRoute::new(
-        crate::http::provider_client(py, &kwargs, asynchronous)?
-            .map_err(crate::http::client_error)?,
-        crate::http::resources().auth.clone(),
-        crate::secrets::source(py)?,
-    );
     run_legacy_call(
         py,
         LegacySurface {
@@ -207,10 +211,20 @@ fn run_public(
             stream: None,
         },
         PublicCall::capture(&request, &args, &kwargs)?,
-        move |request| crate::logger::LoggedMachine::new(route.machine(request, None)),
+        move |py, arguments, request| {
+            let route = ChatCompletionsRoute::new(
+                crate::http::provider_client(py, arguments, asynchronous)?
+                    .map_err(crate::http::client_error)?,
+                crate::http::resources().auth.clone(),
+                crate::secrets::source(py)?,
+            );
+            Ok(crate::logger::LoggedMachine::new(
+                route.machine(request, None),
+            ))
+        },
         host::ChatCompletionsPythonHost(host),
         crate::preflight::sdk_preflight,
-        asynchronous,
+        crate::lifecycle::call_options(asynchronous),
     )
 }
 

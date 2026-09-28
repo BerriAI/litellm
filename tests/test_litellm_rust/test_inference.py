@@ -13,7 +13,7 @@ from litellm.rust_bridge import _native
 from litellm.rust_bridge.chat_completions.entrypoints import LiteLLMChatCompletionsRequest
 from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import ModelResponse
+from litellm.types.utils import CallTypes, ModelResponse
 from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE, request_body
@@ -138,6 +138,27 @@ async def test_native_inference_pre_call_edits_reach_the_provider(
 
 
 @pytest.mark.asyncio
+async def test_native_resource_setup_uses_deployment_hook_arguments(
+    route: Route, recording_server: RecordingServer
+) -> None:
+    class Prepare(CustomLogger):
+        async def async_pre_call_deployment_hook(
+            self, kwargs: dict[str, object], call_type: CallTypes | None
+        ) -> dict[str, object]:
+            return {**kwargs, "ssl_verify": object()}
+
+    litellm.callbacks.append(Prepare())
+    recorder: Final = RecordingLogger()
+    recording_server.expected_requests = 0
+    with pytest.raises(ValueError, match=r"request\.ssl_verify") as caught:
+        await execute(route, True, recording_server, {"callbacks": [recorder]})
+    failure: Final = await recorder.wait_for_async("async_log_failure_event")
+    assert len(failure) == 1
+    assert _OBJECT.validate_python(failure[0].kwargs)["exception"] is caught.value
+    assert not recording_server.requests
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("asynchronous", (False, True))
 async def test_native_inference_provider_failure_is_terminal_and_shared_with_callbacks(
     route: Route,
@@ -162,9 +183,11 @@ async def test_native_inference_provider_failure_is_terminal_and_shared_with_cal
 async def test_unstarted_native_inference_has_no_provider_or_callback_effects(
     route: Route,
     recording_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     recorder: Final = RecordingLogger()
     recording_server.expected_requests = 0
+    monkeypatch.setattr(litellm, "ssl_verify", object())
     pending: Final = native_call(route, True, recording_server, {"callbacks": [recorder]})
     assert asyncio.iscoroutine(pending)
     pending.close()

@@ -1,6 +1,6 @@
 # Route boundary
 
-These are target invariants; current entrypoints may still perform setup too early
+These invariants apply to lifecycle-bearing public calls; value-oriented APIs that return an already running Future retain their explicit contract
 
 Route modules own public argument projection, route-specific host operations, response and error construction, and composition of the core route with the Python host. Provider dispatch, transport execution and normalization belong to core and provider crates. Runtime waiting, cancellation mechanics and execution state validation belong to `litellm-host-python`
 
