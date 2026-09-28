@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import ConnectFlowSurface from "./ConnectFlowSurface";
 import { fetchConnectFlow } from "@/components/networking";
@@ -23,7 +23,12 @@ vi.mock("@/components/networking", async (importOriginal) => ({
 }));
 vi.mock("@/components/chat/MCPAppsPanel", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/components/chat/MCPAppsPanel")>()),
-  default: () => <div data-testid="mcp-apps-panel" />,
+  default: ({ selectedServers, onChange }: { selectedServers: string[]; onChange: (ids: string[]) => void }) => (
+    <div data-testid="mcp-apps-panel">
+      <span data-testid="selected-servers">{selectedServers.join(",")}</span>
+      <button onClick={() => onChange(["github-id", "slack-id"])}>Select upstreams</button>
+    </div>
+  ),
 }));
 vi.mock("@/hooks/useUserMcpOAuthFlow", () => ({
   useUserMcpOAuthFlow: ({ onSuccess: success }: { onSuccess: () => void }) => {
@@ -40,12 +45,16 @@ const flow = (state: "unscoped" | "interactive" | "m2m" | "stale", connected: bo
   connected,
 });
 
-const renderSurface = (selectedServers: string[] = []) =>
-  render(
-    <QueryClientProvider client={new QueryClient({ defaultOptions: { queries: { retry: false } } })}>
-      <ConnectFlowSurface accessToken="token-123" selectedServers={selectedServers} onChange={vi.fn()} />
-    </QueryClientProvider>,
+const renderSurface = (selectedServers: string[] = [], onChange = vi.fn()) => {
+  const client = new QueryClient({ defaultOptions: { queries: { retry: false } } });
+  const surface = () => (
+    <QueryClientProvider client={client}>
+      <ConnectFlowSurface accessToken="token-123" selectedServers={selectedServers} onChange={onChange} />
+    </QueryClientProvider>
   );
+  const result = render(surface());
+  return { ...result, refresh: () => result.rerender(surface()) };
+};
 
 afterEach(() => {
   state.oauthReturn = null;
@@ -80,11 +89,44 @@ describe("ConnectFlowSurface", () => {
   it("submits the selected upstreams with the protected flow", async () => {
     state.connectFlow = "flow-handle-123";
     vi.mocked(fetchConnectFlow).mockResolvedValue(flow("unscoped"));
-    renderSurface(["github", "slack"]);
+    const chatSelectionChanged = vi.fn();
+    renderSurface(["github", "slack"], chatSelectionChanged);
+    await screen.findByRole("button", { name: "Select upstreams" });
+    expect(screen.queryByRole("button", { name: /finish connecting/i })).not.toBeInTheDocument();
+    expect(screen.getByTestId("selected-servers")).toBeEmptyDOMElement();
+    fireEvent.click(screen.getByRole("button", { name: "Select upstreams" }));
     const finish = await screen.findByRole("button", { name: /finish connecting/i });
     const submitted = new FormData((finish as HTMLButtonElement).form!);
     expect(submitted.get("flow")).toBe("flow-handle-123");
-    expect(submitted.getAll("selected_servers")).toEqual(["github", "slack"]);
+    expect(submitted.getAll("selected_servers")).toEqual(["github-id", "slack-id"]);
+    expect(chatSelectionChanged).not.toHaveBeenCalled();
+  });
+
+  it("isolates selections between flow handles and preserves ordinary chat selections", async () => {
+    const chatSelectionChanged = vi.fn();
+    vi.mocked(fetchConnectFlow).mockResolvedValue(flow("unscoped"));
+    const view = renderSurface(["github"], chatSelectionChanged);
+    expect(screen.getByTestId("selected-servers")).toHaveTextContent("github");
+
+    state.connectFlow = "first-flow";
+    view.refresh();
+    await screen.findByRole("button", { name: "Select upstreams" });
+    expect(screen.getByTestId("selected-servers")).toBeEmptyDOMElement();
+    fireEvent.click(screen.getByRole("button", { name: "Select upstreams" }));
+    await screen.findByRole("button", { name: /finish connecting/i });
+
+    state.connectFlow = "second-flow";
+    view.refresh();
+    await screen.findByRole("button", { name: "Select upstreams" });
+    expect(screen.getByTestId("selected-servers")).toBeEmptyDOMElement();
+    expect(screen.queryByRole("button", { name: /finish connecting/i })).not.toBeInTheDocument();
+
+    state.connectFlow = null;
+    view.refresh();
+    expect(screen.getByTestId("selected-servers")).toHaveTextContent("github");
+    expect(chatSelectionChanged).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Select upstreams" }));
+    expect(chatSelectionChanged).toHaveBeenCalledWith(["github-id", "slack-id"]);
   });
 
   it("keeps the grid and Finish hidden until the gateway accepts a handle", () => {
