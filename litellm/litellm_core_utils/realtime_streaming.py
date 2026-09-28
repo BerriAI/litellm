@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from websockets.asyncio.client import ClientConnection
     from websockets.exceptions import ConnectionClosed
 
+    from litellm.proxy._types import UserAPIKeyAuth
     from litellm.types.guardrails import GuardrailEventHooks
 
     CLIENT_CONNECTION_CLASS = ClientConnection
@@ -121,6 +122,12 @@ DefaultLoggedRealTimeEventTypes: Final = [
     "conversation.item.added",  # GA
     "conversation.item.done",  # GA
 ]
+
+
+def _as_user_api_key_auth(user_api_key_dict: object) -> "UserAPIKeyAuth | None":
+    from litellm.proxy._types import UserAPIKeyAuth
+
+    return user_api_key_dict if isinstance(user_api_key_dict, UserAPIKeyAuth) else None
 
 
 class RealTimeStreaming:
@@ -831,6 +838,7 @@ class RealTimeStreaming:
         typed user messages and tool outputs use ``pre_call``.
         """
         from litellm.integrations.custom_guardrail import CustomGuardrail
+        from litellm.llms.base_llm.guardrail_translation.base_translation import BaseTranslation
         from litellm.types.guardrails import GuardrailEventHooks
 
         if event_hooks is None:
@@ -852,7 +860,12 @@ class RealTimeStreaming:
             try:
                 await callback.apply_guardrail(
                     inputs={"texts": [transcript], "images": []},
-                    request_data={"user_api_key_dict": self.user_api_key_dict},
+                    request_data={
+                        "user_api_key_dict": self.user_api_key_dict,
+                        "litellm_metadata": BaseTranslation.transform_user_api_key_dict_to_metadata(
+                            _as_user_api_key_auth(self.user_api_key_dict)
+                        ),
+                    },
                     input_type="request",
                 )
             except Exception as e:

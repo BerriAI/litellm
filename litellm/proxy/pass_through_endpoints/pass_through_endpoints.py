@@ -110,6 +110,8 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,  # pyright: ignore[reportPrivateUsage]  # shared proxy helper, same import style as _read_request_body above
     _key_or_team_allows_client_pricing_override,  # pyright: ignore[reportPrivateUsage]  # reuse the proxy's pricing trust policy
     _strip_client_pricing_overrides,  # pyright: ignore[reportPrivateUsage]  # sanitize before trusted hooks add guardrail costs
+    key_or_team_allows_client_message_redaction_opt_out,
+    strip_untrusted_caller_metadata,
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.utils import normalize_route_for_root_path
@@ -1156,6 +1158,18 @@ async def pass_through_request(
             _parsed_body = {}
         else:
             _parsed_body = await _read_request_body(request)
+        strip_untrusted_caller_metadata(
+            _parsed_body,
+            allow_client_message_redaction_opt_out=key_or_team_allows_client_message_redaction_opt_out(
+                user_api_key_dict
+            ),
+        )
+        # Guardrails forward these to vendors as the inbound request headers; all are popped before the upstream send.
+        _parsed_body.pop("proxy_server_request", None)
+        _parsed_body.pop("headers", None)
+        for _caller_bucket in (_parsed_body.get("metadata"), _parsed_body.get("litellm_metadata")):
+            if isinstance(_caller_bucket, dict):
+                _caller_bucket.pop("headers", None)
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
