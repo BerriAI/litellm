@@ -30,8 +30,8 @@ import hmac
 import json
 import uuid
 from collections.abc import Callable, Iterator, Mapping, Sequence
-from pathlib import Path
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Final
 from urllib.parse import parse_qs
 
@@ -55,16 +55,16 @@ from integration.security._sinks import (
     settle,
 )
 from integration.security._sweeps import (
+    SweepReport,
     assert_marker_seen,
     assert_no_hits,
-    SweepReport,
     record_route_sweep,
     sweep_all,
     sweep_sink,
 )
 
 OUTCOMES: Final = ("success", "provider_4xx")
-BEDROCK_MODEL: Final = "bedrock/converse/anthropic.claude-3-haiku-20240307-v1:0"
+BEDROCK_MODEL: Final = "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0"
 AWS_ACCESS_KEY: Final = "AKIACANARYINTEGRATION"
 GUARDRAIL_PATH: Final = "/beta/litellm_basic_guardrail_api"
 GUARDRAIL_SINK: Final = "guardrail"
