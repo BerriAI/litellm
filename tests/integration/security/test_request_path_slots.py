@@ -130,8 +130,8 @@ def _forward_client_headers(config: dict[str, object]) -> None:
 
 
 OPENAI_ROUTES: Final = ("chat", "chat_stream", "messages", "responses", "embeddings")
-# Slots carried by a forwarded provider auth header run on the chat-family routes.
-FORWARDED_HEADER_ROUTES: Final = ("chat", "chat_stream", "messages", "responses")
+# The client-header forwarding slot (forward_client_headers_to_llm_api) runs on the chat-family routes.
+CLIENT_HEADER_ROUTES: Final = ("chat", "chat_stream", "messages", "responses")
 ANTHROPIC_ROUTES: Final = ("messages", "messages_stream", "chat", "responses")
 
 REQUEST_SLOTS: Final = MappingProxyType(
@@ -147,7 +147,7 @@ REQUEST_SLOTS: Final = MappingProxyType(
         ),
         "D2": RequestSlot(
             OPENAI_MODEL,
-            FORWARDED_HEADER_ROUTES,
+            OPENAI_ROUTES,
             _no_body,
             lambda value, key: {"Authorization": f"Bearer {key}", "x-api-key": value.value},
             _authorization,
@@ -156,7 +156,7 @@ REQUEST_SLOTS: Final = MappingProxyType(
         ),
         "D3": RequestSlot(
             OPENAI_MODEL,
-            FORWARDED_HEADER_ROUTES,
+            CLIENT_HEADER_ROUTES,
             _no_body,
             lambda value, key: {"Authorization": f"Bearer {key}", FORWARDED_HEADER: value.value},
             lambda request: request.headers.get(FORWARDED_HEADER),
