@@ -14,9 +14,7 @@ use crate::{
     HookStep, PythonCallEvent, PythonCallHooks, PythonOwned, PythonRuntime, missing_state,
 };
 
-mod adapter;
-
-use adapter::{ChainHooks, ChainStep, HookAdapter};
+use super::adapter::{ChainHooks, ChainStep, HookAdapter};
 
 type OwnedEvent = CallEvent<Py<PyAny>, Py<PyBaseException>, RawResponse>;
 
