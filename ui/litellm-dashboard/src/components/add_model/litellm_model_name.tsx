@@ -8,9 +8,9 @@ import { MountedFormField, type MountedFormValues } from "../common_components/M
 import { Providers } from "../provider_info_helpers";
 
 interface LiteLLMModelNameFieldProps {
-  selectedProvider: Providers;
+  selectedProvider: string | null;
   providerModels: string[];
-  getPlaceholder: (provider: Providers) => string;
+  getPlaceholder: (provider: string) => string;
 }
 
 const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
@@ -123,7 +123,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               id={control.id}
               value={(control.value as string | undefined) ?? ""}
               onBlur={control.onBlur}
-              placeholder={getPlaceholder(selectedProvider)}
+              placeholder={selectedProvider === null ? "Select a provider first" : getPlaceholder(selectedProvider)}
               onChange={(event) => {
                 control.onChange(event);
                 if (selectedProvider === Providers.Azure) {
@@ -147,7 +147,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
                   value: "custom",
                 },
                 {
-                  label: `All ${selectedProvider} Models (Wildcard)`,
+                  label: `All ${selectedProvider ?? "provider"} Models (Wildcard)`,
                   value: "all-wildcard",
                 },
                 ...providerModels.map((model) => ({
@@ -163,7 +163,7 @@ const LiteLLMModelNameField: React.FC<LiteLLMModelNameFieldProps> = ({
               value={(control.value as string | undefined) ?? ""}
               onChange={control.onChange}
               onBlur={control.onBlur}
-              placeholder={getPlaceholder(selectedProvider)}
+              placeholder={selectedProvider === null ? "Select a provider first" : getPlaceholder(selectedProvider)}
             />
           )
         }

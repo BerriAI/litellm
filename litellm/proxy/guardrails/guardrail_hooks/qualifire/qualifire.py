@@ -383,7 +383,7 @@ class QualifireGuardrail(CustomGuardrail):
             result: Final = response.json()
 
             # Extract response info for logging
-            qualifire_response: Final = {
+            qualifire_response: Final[dict[str, object]] = {
                 "score": result.get("score"),
                 "status": result.get("status"),
             }

@@ -250,8 +250,7 @@ class FireworksAIRerankConfig(FireworksAIMixin, BaseRerankConfig):
 
             rerank_results.append(rerank_result)
 
-        # Use model name as id if no id is provided
-        response_id: Final = raw_response_json.get("id") or raw_response_json.get("model") or str(uuid.uuid4())
+        response_id: Final = raw_response_json.get("id") or str(uuid.uuid4())
 
         return RerankResponse(
             id=response_id,

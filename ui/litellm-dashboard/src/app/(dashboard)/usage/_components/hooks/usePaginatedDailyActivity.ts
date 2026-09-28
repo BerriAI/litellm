@@ -30,6 +30,8 @@ const SUMMABLE_METADATA_KEYS = [
   "total_cache_read_input_tokens",
   "total_cache_creation_input_tokens",
   "total_flat_cost",
+  "total_response_time_ms",
+  "total_timed_requests",
 ] as const;
 
 interface DailyActivityResponse {
@@ -61,6 +63,8 @@ interface UsePaginatedDailyActivityReturn {
   isFetchingMore: boolean;
   progress: PaginationProgress;
   cancelled: boolean;
+  failed: boolean;
+  coversRange: boolean;
   cancel: () => void;
 }
 
@@ -76,6 +80,8 @@ const EMPTY_DATA: DailyActivityResponse = {
     total_failed_requests: 0,
     total_cache_read_input_tokens: 0,
     total_cache_creation_input_tokens: 0,
+    total_response_time_ms: 0,
+    total_timed_requests: 0,
     total_pages: 1,
     has_more: false,
     page: 1,
@@ -200,6 +206,8 @@ export function usePaginatedDailyActivity({
     totalPages: 0,
   });
   const [cancelled, setCancelled] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const [completedKey, setCompletedKey] = useState<string | null>(null);
 
   const fetchIdRef = useRef(0);
   const cancelledRef = useRef(false);
@@ -212,6 +220,11 @@ export function usePaginatedDailyActivity({
 
   // Stable serialised key so the effect only re-runs when the arg *values* change.
   const argsKey = JSON.stringify(args);
+
+  // Stamped like the data itself and compared during render, so the render that follows an arg
+  // change already reports the new range as uncovered. Clearing it inside the fetch effect would
+  // be one render too late, leaving a paint where an export reads the previous range's rows.
+  const coversRange = enabled && completedKey === argsKey;
 
   const cancel = useCallback(() => {
     cancelledRef.current = true;
@@ -230,12 +243,15 @@ export function usePaginatedDailyActivity({
       setIsFetchingMore(false);
       setProgress({ currentPage: 0, totalPages: 0 });
       setCancelled(false);
+      setFailed(false);
+      setCompletedKey(null);
       return;
     }
 
     const currentFetchId = ++fetchIdRef.current;
     cancelledRef.current = false;
     setCancelled(false);
+    setFailed(false);
 
     const isStale = () => fetchIdRef.current !== currentFetchId || cancelledRef.current;
 
@@ -252,7 +268,7 @@ export function usePaginatedDailyActivity({
       const currentArgs = argsRef.current;
       setLoading(true);
       setIsFetchingMore(false);
-      setProgress({ currentPage: 1, totalPages: 1 });
+      setProgress({ currentPage: 0, totalPages: 0 });
 
       if (aggregatedFetchFn) {
         try {
@@ -261,6 +277,7 @@ export function usePaginatedDailyActivity({
           setData(aggregated);
           setProgress({ currentPage: 1, totalPages: 1 });
           setLoading(false);
+          setCompletedKey(argsKey);
           return;
         } catch (error) {
           if (isStale()) return;
@@ -283,6 +300,7 @@ export function usePaginatedDailyActivity({
 
         if (totalPages <= 1) {
           setLoading(false);
+          setCompletedKey(argsKey);
           return;
         }
 
@@ -328,11 +346,13 @@ export function usePaginatedDailyActivity({
         }
 
         setIsFetchingMore(false);
+        setCompletedKey(argsKey);
       } catch (error) {
         if (!isStale()) {
           console.error("Error fetching daily activity:", error);
           setLoading(false);
           setIsFetchingMore(false);
+          setFailed(true);
         }
       }
     };
@@ -350,5 +370,5 @@ export function usePaginatedDailyActivity({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [enabled, fetchFn, aggregatedFetchFn, argsKey]);
 
-  return { data, loading, isFetchingMore, progress, cancelled, cancel };
+  return { data, loading, isFetchingMore, progress, cancelled, failed, coversRange, cancel };
 }

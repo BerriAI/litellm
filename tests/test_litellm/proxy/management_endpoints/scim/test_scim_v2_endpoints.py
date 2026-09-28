@@ -1,3 +1,4 @@
+import json
 import logging
 import time
 from collections.abc import Callable, Mapping, Sequence
@@ -7,7 +8,8 @@ from typing import Final
 from unittest.mock import AsyncMock, MagicMock, call
 
 import pytest
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from httpx import ASGITransport, AsyncClient
 from pytest_mock import MockerFixture
 
 from litellm.proxy._types import (
@@ -31,6 +33,7 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     _handle_group_membership_changes,
     _handle_team_membership_changes,
     _parse_member_entries,
+    _premium_user_check,
     _process_group_patch_operations,
     _recompute_scim_member_roles,
     _resolve_group_member_ids,
@@ -45,8 +48,10 @@ from litellm.proxy.management_endpoints.scim.scim_v2 import (
     patch_group,
     patch_team_membership,
     patch_user,
+    scim_router,
     update_group,
     update_user,
+    user_api_key_auth,
 )
 from litellm.types.proxy.management_endpoints.scim_v2 import (
     SCIM_ENTERPRISE_USER_SCHEMA,
@@ -482,6 +487,48 @@ async def test_scim_create_user_respects_default_role_set_via_ui(mocker, monkeyp
         f"{LitellmUserRoles.INTERNAL_USER}. The default_internal_user_params "
         f"in-memory variable was not updated by _update_litellm_setting."
     )
+
+
+@pytest.fixture
+def scim_test_client():
+    """An in-process SCIM application with authorization dependencies bypassed."""
+    app = FastAPI()
+    app.dependency_overrides[_premium_user_check] = lambda: None
+    app.dependency_overrides[user_api_key_auth] = lambda: UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+    app.include_router(scim_router)
+    return AsyncClient(transport=ASGITransport(app=app), base_url="http://test")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("endpoint", ["Users", "Groups"])
+@pytest.mark.parametrize(("requested_count", "effective_count"), [(0, 0), (200, 100), (1000, 100)])
+async def test_scim_collection_endpoints_clamp_requested_page_size(
+    scim_test_client, endpoint, requested_count, effective_count, mocker
+):
+    """SCIM list endpoints accept zero and cap larger client page requests."""
+    mock_prisma_client = MagicMock()
+    mock_prisma_client.db = MagicMock()
+    table = MagicMock()
+    table.find_many = AsyncMock(return_value=[])
+    table.count = AsyncMock(return_value=0)
+    mock_prisma_client.db.litellm_usertable = table
+    mock_prisma_client.db.litellm_teamtable = table
+    mocker.patch(  # test-quality-ok: HTTP validation requires an in-memory database boundary.
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+
+    async with scim_test_client as client:
+        response = await client.get(f"/scim/v2/{endpoint}?startIndex=1&count={requested_count}")
+
+    assert response.status_code == 200
+    table.find_many.assert_awaited_once_with(
+        where={},
+        skip=0,
+        take=effective_count,
+        order={"created_at": "desc"},
+    )
+    assert response.json()["itemsPerPage"] == 0
 
 
 @pytest.mark.asyncio
@@ -1255,6 +1302,75 @@ async def test_update_user_success(mocker):
     assert call_args[1]["where"] == {"user_id": "test-user"}
     assert call_args[1]["data"]["user_email"] == "updated@example.com"
     assert call_args[1]["data"]["teams"] == ["new-team"]
+
+
+@pytest.mark.asyncio
+async def test_update_user_put_with_valueless_entitlements_deactivates_user(scim_test_client, mocker):
+    existing_user = mocker.MagicMock()
+    existing_user.teams = []
+    existing_user.metadata = {"scim_active": True}
+
+    updated_user = {
+        "user_id": "suspend-me",
+        "user_email": "suspend@example.com",
+        "user_alias": None,
+        "teams": [],
+        "metadata": "{}",
+    }
+    response_scim_user = SCIMUser(
+        schemas=["urn:ietf:params:scim:schemas:core:2.0:User"],
+        id="suspend-me",
+        userName="suspend-me",
+        active=False,
+    )
+
+    mock_prisma_client = mocker.MagicMock()
+    mock_prisma_client.db = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable = mocker.MagicMock()
+    mock_prisma_client.db.litellm_usertable.update = AsyncMock(return_value=updated_user)
+
+    mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
+        "litellm.proxy.management_endpoints.scim.scim_v2._get_prisma_client_or_raise_exception",
+        AsyncMock(return_value=mock_prisma_client),
+    )
+    mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
+        "litellm.proxy.management_endpoints.scim.scim_v2._check_user_exists",
+        AsyncMock(return_value=existing_user),
+    )
+    mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
+        "litellm.proxy.management_endpoints.scim.scim_v2._handle_team_membership_changes",
+        AsyncMock(),
+    )
+    set_keys_blocked_mock = mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
+        "litellm.proxy.management_endpoints.scim.scim_v2._set_user_keys_blocked",
+        AsyncMock(return_value=1),
+    )
+    mocker.patch(  # test-quality-ok: endpoint collaborators are module-level, not injectable
+        "litellm.proxy.management_endpoints.scim.scim_v2.ScimTransformations.transform_litellm_user_to_scim_user",
+        AsyncMock(return_value=response_scim_user),
+    )
+
+    async with scim_test_client as client:
+        response = await client.put(
+            "/scim/v2/Users/suspend-me",
+            json={
+                "schemas": ["urn:ietf:params:scim:schemas:core:2.0:User"],
+                "userName": "suspend-me",
+                "emails": [{"value": "suspend@example.com", "primary": True}],
+                "entitlements": [{"groups": ["S0506MKA55L", "S0506MKA56M"]}],
+                "roles": [{"display": "Viewer"}],
+                "active": False,
+            },
+        )
+
+    assert response.status_code == 200, response.text
+    assert response.json()["active"] is False
+
+    written_metadata = json.loads(mock_prisma_client.db.litellm_usertable.update.call_args.kwargs["data"]["metadata"])
+    assert written_metadata["scim_active"] is False
+    assert written_metadata["scim_entitlements"] == [{"groups": ["S0506MKA55L", "S0506MKA56M"]}]
+    assert written_metadata["scim_roles"] == [{"display": "Viewer"}]
+    set_keys_blocked_mock.assert_awaited_once_with(user_id="suspend-me", blocked=True)
 
 
 @pytest.mark.asyncio

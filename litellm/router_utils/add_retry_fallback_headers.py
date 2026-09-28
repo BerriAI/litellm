@@ -1,7 +1,10 @@
 import json
+import math
+from collections.abc import Mapping
+from types import MappingProxyType
 from typing import Any, Final, Protocol, TypedDict, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, TypeAdapter, ValidationError
 
 
 class FallbackErrorInfo(TypedDict):
@@ -13,6 +16,68 @@ class FallbackErrorInfo(TypedDict):
 
 class _HiddenParamsHost(Protocol):
     _hidden_params: dict[str, object]
+
+
+_EMPTY_OBJECT_MAPPING: Final[Mapping[str, object]] = MappingProxyType({})
+_ROUTING_HEADER_MAPPING: Final = TypeAdapter(Mapping[str, object])
+_COMPLEXITY_ROUTER_HEADER_PREFIX: Final = "x-litellm-complexity-router-"
+
+
+def _routing_header_mapping(value: object) -> Mapping[str, object]:
+    try:
+        mapping: Final[Mapping[str, object]] = _ROUTING_HEADER_MAPPING.validate_python(value, strict=True)
+        return mapping
+    except ValidationError:
+        return _EMPTY_OBJECT_MAPPING
+
+
+def _header_string(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    normalized: Final = value.strip()
+    return normalized if normalized and all(" " <= character <= "~" for character in normalized) else None
+
+
+def complexity_router_decision_headers(request_kwargs: object) -> Mapping[str, str]:
+    data: Final = _routing_header_mapping(request_kwargs)
+    metadata_key: Final = "litellm_metadata" if "litellm_metadata" in data else "metadata"
+    decision: Final = _routing_header_mapping(_routing_header_mapping(data.get(metadata_key)).get("routing_decision"))
+    if decision.get("router_type") != "complexity":
+        return MappingProxyType({})
+    score: Final = decision.get("score")
+    values: Final = (
+        ("tier", decision.get("tier")),
+        ("cause", decision.get("cause")),
+        (
+            "score",
+            str(score)
+            if isinstance(score, (int, float)) and not isinstance(score, bool) and math.isfinite(score)
+            else None,
+        ),
+        (
+            "reasoning-effort",
+            _routing_header_mapping(decision.get("tier_litellm_params")).get("reasoning_effort"),
+        ),
+    )
+    return MappingProxyType(
+        {
+            f"{_COMPLEXITY_ROUTER_HEADER_PREFIX}{key}": header_value
+            for key, value in values
+            if (header_value := _header_string(value)) is not None
+        }
+    )
+
+
+def replace_complexity_router_headers(
+    existing_headers: Mapping[str, object], new_headers: Mapping[str, object]
+) -> Mapping[str, object]:
+    return MappingProxyType(
+        {
+            key: value
+            for key, value in (*existing_headers.items(), *new_headers.items())
+            if key in new_headers or not key.startswith(_COMPLEXITY_ROUTER_HEADER_PREFIX)
+        }
+    )
 
 
 class HiddenParamsAsyncIteratorWrapper:
@@ -66,6 +131,19 @@ def ensure_response_additional_headers(response: object) -> dict[str, object]:
     return additional_headers
 
 
+def apply_response_model_id(response: object, request_metadata: Mapping[str, object] | None) -> None:
+    if request_metadata is None:
+        return
+    model_id: Final = _routing_header_mapping(request_metadata.get("model_info")).get("id")
+    if not isinstance(model_id, str) or not model_id:
+        return
+    hidden_params: Final = get_hidden_params_dict(response, create=isinstance(response, dict))
+    if hidden_params.get("model_id"):
+        return
+    hidden_params["model_id"] = model_id
+    _write_hidden_params(response, hidden_params)
+
+
 def apply_quality_router_decision_headers(
     additional_headers: dict[str, object],
     request_kwargs: object,
@@ -86,7 +164,7 @@ def apply_quality_router_decision_headers(
             additional_headers[header] = str(decision[field])
 
 
-def response_in_flight_token_count(response: object) -> int:
+def response_total_token_count(response: object) -> int:
     usage: Final = response.get("usage") if isinstance(response, dict) else getattr(response, "usage", None)
     if usage is None:
         return 0
@@ -101,15 +179,10 @@ def response_in_flight_token_count(response: object) -> int:
 def apply_remaining_usage_headers(
     additional_headers: dict[str, object],
     remaining_usage: dict[str, int],
-    in_flight_tokens: int,
 ) -> None:
-    in_flight_delta: Final = {
-        "x-ratelimit-remaining-tokens": in_flight_tokens,
-        "x-ratelimit-remaining-requests": 1,
-    }
     for header, value in remaining_usage.items():
         if value is not None and header not in additional_headers:
-            additional_headers[header] = value - in_flight_delta.get(header, 0)
+            additional_headers[header] = value
 
 
 def _normalize_hidden_params(hidden_params: object) -> dict[str, object]:

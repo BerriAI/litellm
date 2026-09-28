@@ -4,7 +4,7 @@ import {
   type Locator,
   type Page as PlaywrightPage,
 } from "@playwright/test";
-import { ADMIN_STORAGE_PATH } from "../../constants";
+import { ADMIN_STORAGE_PATH, PROPAGATION_TIMEOUT_MS } from "../../constants";
 import { Page } from "../../fixtures/pages";
 import { navigateToPage } from "../../helpers/navigation";
 import { readBack } from "../../helpers/roundTrip";
@@ -145,6 +145,23 @@ async function withDeployment(
         timeout: 60_000,
       })
       .toBe(true);
+    await expect
+      .poll(
+        async () => {
+          const response = await page.request.get("/v1/models", {
+            headers: { Authorization: `Bearer ${masterKey()}` },
+          });
+          expect(response.ok(), `/v1/models failed: ${response.status()}`).toBe(true);
+          const body: { data: { id: string }[] } = await response.json();
+          return body.data.some((model) => model.id === name);
+        },
+        {
+          message: `deployment ${name} never appeared on the serving path`,
+          timeout: PROPAGATION_TIMEOUT_MS,
+          intervals: [2_000],
+        },
+      )
+      .toBe(true);
     await use(name);
   } finally {
     await deleteDeployment(page, id);
@@ -161,6 +178,7 @@ const test = base.extend<{ reachableName: string; unreachableName: string }>({
 });
 
 test.describe("Model health status", () => {
+  test.describe.configure({ timeout: 8 * 60_000 });
   test.use({ storageState: ADMIN_STORAGE_PATH });
 
   test("Run Health Check reports a reachable deployment healthy and an unreachable one unhealthy", async ({

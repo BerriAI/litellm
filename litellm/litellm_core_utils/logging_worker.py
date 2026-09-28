@@ -18,9 +18,14 @@ from litellm.constants import (
     LOGGING_WORKER_CONCURRENCY,
     LOGGING_WORKER_MAX_QUEUE_SIZE,
     LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
+    LOGGING_WORKER_TIMEOUT_SUMMARY_WINDOW_SECONDS,
     MAX_ITERATIONS_TO_CLEAR_QUEUE,
     MAX_TIME_TO_CLEAR_QUEUE,
 )
+
+
+def _coroutine_name(coroutine: Coroutine) -> str:
+    return getattr(coroutine, "__qualname__", None) or getattr(coroutine, "__name__", None) or type(coroutine).__name__
 
 
 class LoggingTask(TypedDict):
@@ -47,10 +52,12 @@ class LoggingWorker:
         timeout: float = LOGGING_WORKER_MAX_TIME_PER_COROUTINE,
         max_queue_size: int = LOGGING_WORKER_MAX_QUEUE_SIZE,
         concurrency: int = LOGGING_WORKER_CONCURRENCY,
+        timeout_summary_window: float = LOGGING_WORKER_TIMEOUT_SUMMARY_WINDOW_SECONDS,
     ):
         self.timeout = timeout
         self.max_queue_size = max_queue_size
         self.concurrency = concurrency
+        self.timeout_summary_window = timeout_summary_window
         self._queue: asyncio.Queue[LoggingTask] | None = None
         self._worker_task: asyncio.Task | None = None
         self._running_tasks: set[asyncio.Task] = set()
@@ -59,6 +66,10 @@ class LoggingWorker:
         self._bound_loop: asyncio.AbstractEventLoop | None = None
         self._last_aggressive_clear_time: float = 0.0
         self._aggressive_clear_in_progress: bool = False
+        self._timeout_total: int = 0
+        self._timeout_burst_count: int = 0
+        self._timeout_last_callback: str | None = None
+        self._timeout_summary_task: asyncio.Task | None = None
 
         # Register cleanup handler to flush remaining events on exit
         atexit.register(self._flush_on_exit)
@@ -136,6 +147,8 @@ class LoggingWorker:
             self._sem = None
             self._worker_task = None
             self._running_tasks.clear()
+            self._timeout_summary_task = None
+            self._timeout_burst_count = 0
             self._queue = new_queue
             self._bound_loop = current_loop
             return
@@ -152,29 +165,64 @@ class LoggingWorker:
         if self._worker_task is None or self._worker_task.done():
             self._worker_task = asyncio.create_task(self._worker_loop())
 
-    async def _process_log_task(self, task: LoggingTask, sem: asyncio.Semaphore):
+    async def _process_log_task(
+        self, task: LoggingTask, sem: asyncio.Semaphore, queue: "asyncio.Queue[LoggingTask]"
+    ) -> None:
         """Runs the logging task and handles cleanup. Releases semaphore when done."""
         try:
             if self._queue is not None:
+                # Run the coroutine in its original context
+                callback_task: Final = task["context"].run(asyncio.create_task, task["coroutine"])
                 try:
-                    # Run the coroutine in its original context
-                    await asyncio.wait_for(
-                        task["context"].run(asyncio.create_task, task["coroutine"]),
-                        timeout=self.timeout,
-                    )
+                    await asyncio.wait_for(callback_task, timeout=self.timeout)
+                except asyncio.TimeoutError as e:
+                    if callback_task.cancelled():
+                        self._record_callback_timeout(task["coroutine"])
+                    else:
+                        verbose_logger.exception("LoggingWorker error: %s", e)
                 except Exception as e:
                     verbose_logger.exception("LoggingWorker error: %s", e)
                 finally:
                     self._untrack_dequeued(task)
-                    self._queue.task_done()
+                    queue.task_done()
         finally:
             # Always release semaphore, even if queue is None
             sem.release()
 
+    def _record_callback_timeout(self, coroutine: Coroutine) -> None:
+        """Count a callback timeout and arm a debounced summary, so a burst of timeouts
+        (e.g. a slow Redis timing out many callbacks at once) logs one bounded line rather
+        than a full ERROR stacktrace per callback."""
+        self._timeout_total += 1
+        self._timeout_burst_count += 1
+        self._timeout_last_callback = _coroutine_name(coroutine)
+        if self._timeout_summary_task is None or self._timeout_summary_task.done():
+            self._timeout_summary_task = asyncio.create_task(self._flush_timeout_summary())
+
+    async def _flush_timeout_summary(self) -> None:
+        """After the burst settles, log one bounded summary covering every timeout in it."""
+        await asyncio.sleep(self.timeout_summary_window)
+        self._emit_timeout_summary()
+
+    def _emit_timeout_summary(self) -> None:
+        """Log one bounded summary for the current burst and reset the burst counter."""
+        burst_count: Final = self._timeout_burst_count
+        self._timeout_burst_count = 0
+        if burst_count <= 0:
+            return
+        verbose_logger.warning(
+            "LoggingWorker: %d callback(s) timed out after %ss (callback: %s); %d timed out since start",
+            burst_count,
+            self.timeout,
+            self._timeout_last_callback,
+            self._timeout_total,
+        )
+
     async def _worker_loop(self) -> None:
         """Main worker loop that gets tasks and schedules them to run concurrently."""
         try:
-            if self._queue is None or self._sem is None:
+            queue: Final = self._queue
+            if queue is None or self._sem is None:
                 return
 
             while True:
@@ -182,10 +230,10 @@ class LoggingWorker:
                 # unbounded growth of waiting tasks
                 await self._sem.acquire()
                 try:
-                    task = await self._queue.get()
+                    task = await queue.get()
                     self._track_dequeued(task)
                     # Track each spawned coroutine so we can cancel on shutdown.
-                    processing_task = asyncio.create_task(self._process_log_task(task, self._sem))
+                    processing_task = asyncio.create_task(self._process_log_task(task, self._sem, queue))
                     self._running_tasks.add(processing_task)
                     processing_task.add_done_callback(self._running_tasks.discard)
                 except Exception:
@@ -406,6 +454,11 @@ class LoggingWorker:
 
     async def stop(self) -> None:
         """Stop the logging worker and clean up resources."""
+        if self._timeout_summary_task is not None:
+            self._timeout_summary_task.cancel()
+            self._timeout_summary_task = None
+        self._emit_timeout_summary()
+
         if self._worker_task is None and not self._running_tasks:
             # No worker launched and no in-flight tasks to drain.
             return
@@ -434,16 +487,21 @@ class LoggingWorker:
         so it correctly handles items that have been dequeued but whose
         callback hasn't finished yet — ``queue.empty()`` would return True in
         that window and cause us to skip the wait.
+
+        ``start()`` runs first so a queue left behind by a previous event loop
+        is carried onto this one and drained here instead of joined forever.
         """
         if self._queue is None:
             return
+        self.start()
         await self._queue.join()
 
     async def clear_queue(self):
         """
         Clear the queue with a maximum time limit.
         """
-        if self._queue is None:
+        queue: Final = self._queue
+        if queue is None:
             return
 
         start_time: Final = asyncio.get_event_loop().time()
@@ -455,7 +513,7 @@ class LoggingWorker:
                 break
 
             try:
-                task = self._queue.get_nowait()
+                task = queue.get_nowait()
                 # Await the coroutine to properly execute and avoid "never awaited" warnings
                 try:
                     await asyncio.wait_for(
@@ -468,7 +526,7 @@ class LoggingWorker:
                 finally:
                     # Clear reference to prevent memory leaks
                     task = None
-                self._queue.task_done()  # If you're using join() elsewhere
+                queue.task_done()
             except asyncio.QueueEmpty:
                 break
 

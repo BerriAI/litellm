@@ -4,6 +4,7 @@ templates:
   - gateway/configmap.yaml
   - backend/deployment.yaml
   - backend/configmap.yaml
+  - migrations-job.yaml
 values:
   - ./values/required.yaml
 tests:
@@ -66,6 +67,82 @@ tests:
             name: AZURE_POSTGRESQL_AUTH
             value: "true"
           any: true
+
+  - it: emits no TLS env by default
+    template: gateway/deployment.yaml
+    asserts:
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SSLMODE
+          any: true
+      - notContains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SSLROOTCERT
+          any: true
+
+  - it: writer sslMode and sslRootCert reach gateway and backend as DATABASE_SSLMODE and DATABASE_SSLROOTCERT
+    templates:
+      - gateway/deployment.yaml
+      - backend/deployment.yaml
+    set:
+      database.writer.useIAMAuth: true
+      database.writer.sslMode: verify-full
+      database.writer.sslRootCert: /etc/ssl/certs/ca-certificates.crt
+    asserts:
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SSLMODE
+            value: verify-full
+          any: true
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SSLROOTCERT
+            value: /etc/ssl/certs/ca-certificates.crt
+          any: true
+
+  - it: writer sslMode and sslRootCert reach the collector sidecar and the migrations job, which dial Postgres themselves
+    set:
+      gateway.collector.enabled: true
+      database.connectionPool.enabled: true
+      database.writer.sslMode: verify-full
+      database.writer.sslRootCert: /etc/ssl/certs/ca-certificates.crt
+    asserts:
+      - equal:
+          path: spec.template.spec.containers[1].name
+          value: collector
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DATABASE_SSLMODE
+            value: verify-full
+          any: true
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[1].env
+          content:
+            name: DATABASE_SSLROOTCERT
+            value: /etc/ssl/certs/ca-certificates.crt
+          any: true
+        template: gateway/deployment.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SSLMODE
+            value: verify-full
+          any: true
+        template: migrations-job.yaml
+      - contains:
+          path: spec.template.spec.containers[0].env
+          content:
+            name: DATABASE_SSLROOTCERT
+            value: /etc/ssl/certs/ca-certificates.crt
+          any: true
+        template: migrations-job.yaml
 
   - it: writer rejects both token sources at once
     template: gateway/deployment.yaml
