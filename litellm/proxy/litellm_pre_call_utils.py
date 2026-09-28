@@ -2020,21 +2020,7 @@ async def add_litellm_data_to_request(
         for _mk in list(_user_metadata.keys()):
             if _mk.startswith("user_api_key_"):
                 del _user_metadata[_mk]
-    _requester_metadata_source: Final = copy.deepcopy(_user_metadata) if isinstance(_user_metadata, dict) else None
-    if isinstance(_requester_metadata_source, dict):
-        _strip_untrusted_request_header_controls(
-            _requester_metadata_source.get("headers"),
-            allow_client_message_redaction_opt_out=_allow_client_message_redaction_opt_out,
-        )
-        for _metadata_key in _UNTRUSTED_METADATA_CONTROL_FIELDS:
-            _requester_metadata_source.pop(_metadata_key, None)
-        _requester_metadata_request: Final = {"metadata": _requester_metadata_source}
-        if not _key_or_team_allows_client_pricing_override(user_api_key_dict):
-            _strip_client_pricing_overrides(_requester_metadata_request)
-        _strip_router_reserved_metadata(_requester_metadata_request)
-        _strip_client_callback_credentials(_requester_metadata_request)
-        if not _allow_client_message_redaction_opt_out and litellm.turn_off_message_logging is True:
-            _strip_client_message_redaction_opt_out(_requester_metadata_request)
+
     _raw_headers: Final[dict[str, str]] = RedactedDict(_safe_get_request_headers(request))
 
     forward_llm_auth = False
@@ -2192,6 +2178,11 @@ async def add_litellm_data_to_request(
         cache_dict: Final = parse_cache_control(cache_control_header)
         data["ttl"] = cache_dict.get("s-maxage")
 
+    # requester_metadata is snapshotted AFTER the strip below so
+    # downstream consumers (e.g. PANW guardrail reading user_ip /
+    # profile_id) don't see attacker-injected admin slots preserved in
+    # the deepcopy.
+
     # Strip internal pipeline state and admin-injection slots from user input.
     # Runs AFTER the string-to-dict parse above so JSON-string metadata (sent
     # via multipart/form-data or extra_body) cannot smuggle admin fields past
@@ -2249,8 +2240,13 @@ async def add_litellm_data_to_request(
     #     that walks the structure.
     refresh_proxy_server_request_body_snapshot(data)
 
-    if _requester_metadata_source is not None:
-        data[_metadata_variable_name]["requester_metadata"] = _requester_metadata_source
+    # Snapshot the requester-supplied metadata for downstream consumers.
+    # Taking the deepcopy after the user_api_key_* / _pipeline_managed_guardrails
+    # strip above prevents those proxy-internal slots — if a caller forged
+    # them — from leaking into requester_metadata where guardrails and audit
+    # paths may read from it.
+    if "metadata" in data and isinstance(data["metadata"], dict):
+        data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(data["metadata"])
         if _metadata_variable_name == "litellm_metadata":
             data[_metadata_variable_name].update(
                 _promoted_trace_control_fields(

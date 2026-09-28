@@ -152,6 +152,7 @@ from litellm.utils import (
     TranscriptionResponse,
     Usage,
     _get_model_info_helper,
+    add_openai_metadata,
     add_provider_specific_params_to_optional_params,
     async_mock_completion_streaming_obj,
     convert_to_model_response_object,
@@ -5575,9 +5576,10 @@ def completion(
             if bridges_to_responses_api
             else kwargs.get("allowed_openai_params")
         )
+        requester_metadata_snapshot: Final = metadata.get("requester_metadata") if isinstance(metadata, dict) else None
         caller_metadata: Final = (
-            get_requester_metadata(metadata)
-            if isinstance(metadata, dict) and "requester_metadata" in metadata
+            add_openai_metadata(requester_metadata_snapshot) or None
+            if isinstance(requester_metadata_snapshot, dict)
             else None
         )
         optional_param_args: Final = {

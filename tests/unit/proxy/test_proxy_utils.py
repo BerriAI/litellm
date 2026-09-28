@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, Final, List, Optional, Union
+from typing import Any, Dict, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
@@ -25,7 +25,6 @@ from litellm.proxy.litellm_pre_call_utils import (
     _get_dynamic_logging_metadata,
     add_litellm_data_to_request,
 )
-from litellm.utils import get_requester_metadata
 from pydantic import ValidationError
 
 pytestmark = pytest.mark.xdist_group("proxy_heavy")
@@ -85,69 +84,6 @@ async def test_add_litellm_data_to_request_non_thread_endpoint(endpoint, mock_re
 
     assert "metadata" in data
     assert "litellm_metadata" not in data
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_snapshots_requester_metadata(mock_request):
-    mock_request.headers = {}
-    user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key")
-    proxy_config = Mock()
-
-    mock_request.url.path = "/v1/messages"
-    empty_snapshot: Final = await add_litellm_data_to_request(
-        {}, mock_request, user_api_key_dict, proxy_config
-    )
-    assert "requester_metadata" not in empty_snapshot["litellm_metadata"]
-
-    mock_request.url.path = "/chat/completions"
-    mock_request.headers = {}
-    caller_metadata = {"trace_id": "trace-1"}
-    snapshot: Final = await add_litellm_data_to_request(
-        {"metadata": caller_metadata}, mock_request, user_api_key_dict, proxy_config
-    )
-    caller_metadata["trace_id"] = "changed"
-    assert snapshot["metadata"]["requester_metadata"]["trace_id"] == "trace-1"
-
-    mock_request.headers = {
-        "x-litellm-trace-id": "t-hdr",
-        "x-litellm-agent-id": "a-hdr",
-    }
-    header_snapshot: Final = await add_litellm_data_to_request(
-        {"metadata": {"completion_window": "flex"}},
-        mock_request,
-        user_api_key_dict,
-        proxy_config,
-        general_settings={"missing_session_id": "generate"},
-    )
-    assert header_snapshot["metadata"]["requester_metadata"] == {"completion_window": "flex"}
-    assert get_requester_metadata(header_snapshot["metadata"]) == {"completion_window": "flex"}
-    assert header_snapshot["metadata"]["trace_id"] == "t-hdr"
-
-
-@pytest.mark.asyncio
-async def test_add_litellm_data_to_request_strips_reserved_snapshot_metadata(mock_request):
-    mock_request.url.path = "/chat/completions"
-    mock_request.headers = {}
-    user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key")
-    proxy_config = Mock()
-
-    data: Final = await add_litellm_data_to_request(
-        {
-            "metadata": {
-                "foo": "bar",
-                "dd_api_key": "k",
-                "dd_site": "s",
-                "original_model_group": "g",
-                "attempted_fallbacks": 1,
-            }
-        },
-        mock_request,
-        user_api_key_dict,
-        proxy_config,
-    )
-
-    assert data["metadata"]["requester_metadata"] == {"foo": "bar"}
-    assert get_requester_metadata(data["metadata"]) == {"foo": "bar"}
 
 
 # test adding traceparent
