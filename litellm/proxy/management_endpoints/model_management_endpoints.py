@@ -24,7 +24,6 @@ from typing import TYPE_CHECKING, Annotated, Final, Literal, Protocol, TypeAlias
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Request, status
 from pydantic import BaseModel, ConfigDict, Field, TypeAdapter, ValidationError, field_validator
-from typing_extensions import ReadOnly, TypedDict
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -99,6 +98,7 @@ from litellm.proxy.spend_tracking.ptu_feature_flag import (
     is_ptu_cost_attribution_enabled,
 )
 from litellm.proxy.utils import PrismaClient, ProxyLogging
+from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.credentials_repository import CredentialsRepository
 from litellm.repositories.model_repository import ModelRepository
 from litellm.repositories.prisma_protocols import TableActions
@@ -247,14 +247,10 @@ class _TeamRow(Protocol):
     def model_dump(self) -> Mapping[str, object]: ...
 
 
-class _TeamIdsWhere(TypedDict):
-    team_id: ReadOnly[Mapping[Literal["in"], Sequence[str]]]
-
-
 class _TeamLookupTable(Protocol):
     def find_unique(self, *, where: Mapping[str, object]) -> Awaitable[_TeamRow | None]: ...
 
-    def find_many(self, *, where: Mapping[str, object]) -> Awaitable[Sequence[_TeamRow]]: ...
+    async def find_many(self, *, where: Mapping[str, object]) -> Sequence[_TeamRow]: ...
 
 
 class _TeamTable(_TeamLookupTable, Protocol):
@@ -798,8 +794,7 @@ async def _raise_if_ptu_share_teams_missing(
     shares: Final = parsed_ptu_shares(model_info.get("ptu_shares"))
     if shares is None:
         return
-    where: Final[_TeamIdsWhere] = {"team_id": {"in": tuple(shares)}}
-    rows: Final = await team_table().find_many(where=where)
+    rows: Final = await find_many_in(team_table(), "team_id", shares.keys())
     found: Final = frozenset(row.team_id for row in rows)
     missing: Final = tuple(team_id for team_id in shares if team_id not in found)
     if not missing:

@@ -38,6 +38,7 @@ from litellm.proxy.management_endpoints.model_management_endpoints import (
     update_db_model,
 )
 from litellm.proxy.spend_tracking.ptu_feature_flag import PTU_COST_ATTRIBUTION_ENV_VAR
+from litellm.repositories.chunked_in import IN_LIST_CHUNK_SIZE
 from litellm.router import Router
 from litellm.types.router import (
     SPECIAL_MODEL_INFO_PARAMS,
@@ -1337,6 +1338,7 @@ class _TeamLookup:
     def __init__(self, existing: frozenset[str]) -> None:
         self.existing: Final = existing
         self.looked_up: tuple[str, ...] = ()
+        self.batch_sizes: tuple[int, ...] = ()
 
     async def find_unique(self, *, where: Mapping[str, object]) -> LiteLLM_TeamTable | None:
         raise AssertionError(f"one lookup per team is what the review asked to avoid: {where}")
@@ -1346,6 +1348,7 @@ class _TeamLookup:
         assert isinstance(team_filter, Mapping)
         requested: Final = tuple(str(team_id) for team_id in cast(Sequence[object], team_filter["in"]))
         self.looked_up = (*self.looked_up, *requested)
+        self.batch_sizes = (*self.batch_sizes, len(requested))
         return tuple(LiteLLM_TeamTable(team_id=team_id) for team_id in requested if team_id in self.existing)
 
 
@@ -1373,6 +1376,15 @@ async def test_share_team_check_accepts_shares_naming_existing_teams():
     lookup: Final = _TeamLookup(frozenset({"team-a", "team-b"}))
     await _raise_if_ptu_share_teams_missing(_shared_model_info({"team-a": 3, "team-b": 2}), lambda: lookup)
     assert lookup.looked_up == ("team-a", "team-b")
+
+
+@pytest.mark.asyncio
+async def test_share_team_check_splits_a_share_list_longer_than_one_in_list_chunk():
+    team_ids: Final = tuple(f"team-{index}" for index in range(IN_LIST_CHUNK_SIZE + 1))
+    lookup: Final = _TeamLookup(frozenset(team_ids))
+    await _raise_if_ptu_share_teams_missing(_shared_model_info(dict.fromkeys(team_ids, 1)), lambda: lookup)
+    assert lookup.looked_up == team_ids
+    assert max(lookup.batch_sizes) <= IN_LIST_CHUNK_SIZE
 
 
 @pytest.mark.asyncio
@@ -1406,7 +1418,7 @@ async def test_model_new_refuses_shares_naming_a_team_that_does_not_exist(monkey
             await add_new_model(model_params=shared, user_api_key_dict=admin)
 
     assert exc.value.code == "400"
-    prisma_client.db.litellm_teamtable.find_many.assert_awaited_once_with(where={"team_id": {"in": ("ghost-team",)}})
+    prisma_client.db.litellm_teamtable.find_many.assert_awaited_once_with(where={"team_id": {"in": ["ghost-team"]}})
     add_model_to_db.assert_not_called()
     add_team_model_to_db.assert_not_called()
 
