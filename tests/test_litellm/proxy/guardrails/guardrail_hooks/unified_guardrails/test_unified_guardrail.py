@@ -41,7 +41,14 @@ from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrai
 )
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
-from litellm.types.utils import CallTypes, Delta, GenericGuardrailAPIInputs, ModelResponseStream, StreamingChoices
+from litellm.types.utils import (
+    CallTypes,
+    CallTypesLiteral,
+    Delta,
+    GenericGuardrailAPIInputs,
+    ModelResponseStream,
+    StreamingChoices,
+)
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -2400,11 +2407,11 @@ class TestTranslationMappingsAreReadLive:
 class AttachmentScanningGuardrail(RecordingGuardrail):
     """Records the raw request it is handed for an attachment scan."""
 
-    def __init__(self):
+    def __init__(self) -> None:
         super().__init__()
-        self.attachment_scans = []
+        self.attachment_scans: list[dict[str, object]] = []
 
-    async def async_scan_request_attachments(self, data, call_type):
+    async def async_scan_request_attachments(self, data: dict, call_type: CallTypesLiteral) -> None:
         self.attachment_scans.append({"call_type": call_type, "apply_calls_so_far": len(self.apply_calls)})
 
 
