@@ -551,10 +551,7 @@ async def get_api_key_metadata(
     metadata_with_owners: Final[Mapping[str, _KeyMetadataDict]] = MappingProxyType(
         {
             **combined,
-            **{
-                key: _metadata_with_recovered_owner(combined, key, owner)
-                for key, owner in owners.items()
-            },
+            **{key: _metadata_with_recovered_owner(combined, key, owner) for key, owner in owners.items()},
         }
     )
     return await attach_user_details(prisma_client, metadata_with_owners)
