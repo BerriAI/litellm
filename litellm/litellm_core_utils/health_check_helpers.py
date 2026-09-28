@@ -193,6 +193,13 @@ class HealthCheckHelpers:
         from litellm.litellm_core_utils.health_check_utils import _filter_model_params
         from litellm.realtime_api.main import _realtime_health_check
 
+        async def audio_transcription_health_check():
+            with get_audio_file_for_health_check() as audio_file:
+                return await litellm.atranscription(
+                    **_filter_model_params(model_params=model_params),
+                    file=audio_file,
+                )
+
         return {
             "chat": lambda: litellm.acompletion(
                 **model_params,
@@ -212,10 +219,7 @@ class HealthCheckHelpers:
                 },
                 input=prompt or "test",
             ),
-            "audio_transcription": lambda: litellm.atranscription(
-                **_filter_model_params(model_params=model_params),
-                file=get_audio_file_for_health_check(),
-            ),
+            "audio_transcription": audio_transcription_health_check,
             "image_generation": lambda: litellm.aimage_generation(
                 **_filter_model_params(model_params=model_params),
                 prompt=prompt,
