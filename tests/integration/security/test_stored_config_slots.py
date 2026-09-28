@@ -194,7 +194,13 @@ def _finish(
         (marker, *secrets),
         responses=(response, *reads),
         sinks=sinks,
-        ids={"request_id": request_id, "team_id": caller.team_id, "user_id": caller.user_id, **ids},
+        ids={
+            "request_id": request_id,
+            "team_id": caller.team_id,
+            "user_id": caller.user_id,
+            "model_id": rig.model_id,
+            **ids,
+        },
         callers={"admin": gateway.key, "internal_user": caller.key, **(extra_callers or {})},
         own_headers={**rig.own_headers, **(own_headers or {})},
         since=since,
@@ -274,7 +280,8 @@ def test_master_key_from_env_authorizes_admin_calls_only(
     a2: Final = canary("A2")
     marker: Final = canary(MARKER)
     with canary_rig(tmp_path, environment={"LITELLM_MASTER_KEY": a2.value}) as owned:
-        admin: Final = Gateway(owned.proxy.client, a2.value, owned.proxy.upstream_url)
+        admin: Final = owned.proxy
+        assert admin.key == a2.value
         with admin.scenario() as scenario:
             caller: Final = _caller(scenario, models=[CONFIG_MODEL])
             assert admin.request("GET", "/key/list").status_code == 200, "Positive control: A2 is not the admin key"
