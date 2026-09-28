@@ -150,6 +150,51 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
         yield from _iter_text_parts_in_content(message.get("content"))
 
 
+def image_part_url(part: JsonValue) -> str | None:
+    """The URL of a Chat Completions ``image_url`` part, in either its object or bare-string form."""
+    if not isinstance(part, dict) or part.get("type") != "image_url":
+        return None
+    image_url: Final = part.get("image_url")
+    if isinstance(image_url, str):
+        return image_url
+    url: Final = image_url.get("url") if isinstance(image_url, dict) else None
+    return url if isinstance(url, str) else None
+
+
+def map_content_image_urls(content: JsonValue, transform: Callable[[str], str]) -> JsonValue:
+    """Return a copy of ``content`` with every ``image_url`` part's URL replaced by ``transform(url)``."""
+    if not isinstance(content, list):
+        return content
+    return [_image_part_with_mapped_url(part, transform) for part in content]  # mutable-ok: JSON content is an array
+
+
+def _image_part_with_mapped_url(part: JsonValue, transform: Callable[[str], str]) -> JsonValue:
+    if not isinstance(part, dict) or part.get("type") != "image_url":
+        return part
+    image_url: Final = part.get("image_url")
+    if isinstance(image_url, str):
+        return {**part, "image_url": transform(image_url)}  # mutable-ok: JSON parts are objects
+    if not isinstance(image_url, dict):
+        return part
+    url: Final = image_url.get("url")
+    if not isinstance(url, str):
+        return part
+    return {**part, "image_url": {**image_url, "url": transform(url)}}  # mutable-ok: JSON parts are objects
+
+
+def map_messages_image_urls(messages: JsonValue, transform: Callable[[str], str]) -> JsonValue:
+    """Return a new message list with :func:`map_content_image_urls` applied to every ``content``."""
+    if not isinstance(messages, list):
+        return messages
+    return [_message_with_mapped_image_urls(message, transform) for message in messages]  # mutable-ok: JSON array
+
+
+def _message_with_mapped_image_urls(message: JsonValue, transform: Callable[[str], str]) -> JsonValue:
+    if not isinstance(message, dict) or not isinstance(message.get("content"), list):
+        return message
+    return {**message, "content": map_content_image_urls(message["content"], transform)}  # mutable-ok: JSON object
+
+
 def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
     """Rewrite every text fragment in place via ``visit``.
 

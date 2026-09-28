@@ -103,6 +103,30 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         ),
     )
 
+    send_images: bool | None = Field(
+        default=None,
+        description=(
+            "If False, the top-level images field is not sent, and every inline image_url part in "
+            "structured_messages keeps its place but has its URL replaced by '[omitted]'. File, "
+            "audio and video parts are still sent as they are. Saves payload size for guardrails "
+            "that only inspect text. The guardrail cannot replace the caller's images: a rewritten "
+            "message gets the caller's image back in each part still holding '[omitted]', and a "
+            "rewrite that changes or moves an image part is rejected. Defaults to True in "
+            "GenericGuardrailAPI.__init__ when None."
+        ),
+    )
+
+    exclude_payload_fields: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Top-level guardrail request fields to leave out of the payload, e.g. "
+            "['request_headers', 'tools'], for guardrails that do not use them. Unknown fields "
+            "are ignored with a warning at init, and input_type and litellm_call_id are always "
+            "sent. A field that is not sent (texts, structured_messages, images or tools) cannot "
+            "be rewritten by the guardrail response."
+        ),
+    )
+
 
 class GenericGuardrailAPIConfigModel(
     GuardrailConfigModel[GenericGuardrailAPIOptionalParams],
