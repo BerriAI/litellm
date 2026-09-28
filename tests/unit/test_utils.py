@@ -3342,6 +3342,18 @@ class TestCallbackAsyncSyncSeparation:
 
         assert litellm._async_input_callback == [my_async_cb]
 
+    @pytest.mark.asyncio
+    async def test_directly_appended_async_input_callback_is_moved_to_async_list(self):
+        async def my_async_cb(*args, **kwargs):
+            pass
+
+        litellm.input_callback.append(my_async_cb)
+
+        await litellm.acompletion(model="openai/test-model", messages=[], mock_response="ok")
+
+        assert my_async_cb in litellm._async_input_callback
+        assert my_async_cb not in litellm.input_callback
+
     def test_sync_input_callback_stays_in_sync_list(self):
         def my_sync_cb(*args, **kwargs):
             pass

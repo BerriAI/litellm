@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.litellm_logging import (
     _extract_response_obj_and_hidden_params,
     _get_status_fields,
     _warn_async_input_callbacks_skipped_for_sync_call,
+    run_async_input_callbacks,
     set_callbacks,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRUsageInfo
@@ -107,6 +108,36 @@ async def test_async_input_callback_failure_does_not_stop_later_callbacks(loggin
 
     assert calls == ["failing", "succeeding"]
     assert "callback failed" in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_run_async_input_callbacks_ignores_mock_logging_objects():
+    logging_obj = MagicMock(spec=LitellmLogging)
+
+    await run_async_input_callbacks(logging_obj)
+
+    logging_obj.async_input_callback.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_async_input_callback_supports_custom_logger(logging_obj, monkeypatch):
+    calls: Final[list[tuple[str, list[dict[str, str]]]]] = []
+
+    class AsyncInputLogger(CustomLogger):
+        async def async_log_pre_api_call(self, model, messages, kwargs):
+            calls.append((model, messages))
+
+    monkeypatch.setattr(litellm, "input_callback", [])
+    monkeypatch.setattr(litellm, "_async_input_callback", [AsyncInputLogger()])
+    logging_obj._is_async_call = True
+
+    await logging_obj.async_pre_call(
+        input=[{"role": "user", "content": "hello"}],
+        api_key="test-key",
+        additional_args={},
+    )
+
+    assert calls == [(logging_obj.model, logging_obj.messages)]
 
 
 @pytest.mark.asyncio
