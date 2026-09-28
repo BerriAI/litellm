@@ -2,27 +2,21 @@ import { formatNumberWithCommas } from "@/utils/dataUtils";
 import type { DateRangePickerValue } from "@/components/shared/date_picker_types";
 import Papa from "papaparse";
 import { keyActivityLabel } from "@/components/UsagePage/keyActivityLabel";
-import type {
-  EntityBreakdown,
-  EntitySpendData,
-  EntityType,
-  ExportFormat,
-  ExportMetadata,
-  ExportScope,
-  ServerExport,
-} from "./types";
+import type { EntityBreakdown, EntitySpendData, EntityType, ExportMetadata, ExportScope } from "./types";
 
 const resolveEntityDisplay = (
   entity: string,
   teamAliasMap: Record<string, string>,
   entityMetadata?: Record<string, any>,
-): { id: string; alias: string } => {
-  const alias =
-    [teamAliasMap[entity], entityMetadata?.team_alias, entityMetadata?.user_email, entityMetadata?.user_alias].find(
-      Boolean,
-    ) ?? entity;
-  return { id: entity, alias };
-};
+): { id: string; alias: string } => ({
+  id: entity,
+  alias:
+    teamAliasMap[entity] ||
+    entityMetadata?.team_alias ||
+    entityMetadata?.user_email ||
+    entityMetadata?.user_alias ||
+    entity,
+});
 
 // Mirrors backend SpendMetrics fields (litellm/types/activity_tracking.py).
 // If the backend adds a field, add it here too.
@@ -381,7 +375,7 @@ export const generateDailyWithModelsData = (
       const { id, alias } = resolveEntityDisplay(entity, teamAliasMap, dailyEntityMetadata[entity]);
 
       Object.entries(models).forEach(([model, metrics]: [string, any]) => {
-        const row = {
+        dailyModelBreakdown.push({
           Date: day.date,
           [entityLabel]: alias,
           [`${entityLabel} ID`]: id,
@@ -395,8 +389,7 @@ export const generateDailyWithModelsData = (
           "Completion Tokens": metrics.completionTokens,
           "Cache Read Input Tokens": metrics.cacheReadInputTokens,
           "Cache Creation Input Tokens": metrics.cacheCreationInputTokens,
-        };
-        dailyModelBreakdown.push(row);
+        });
       });
     });
   });
@@ -456,28 +449,6 @@ export const generateMetadata = (
   };
 };
 
-export const downloadBlob = (blob: Blob, fileName: string): void => {
-  const url = window.URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = fileName;
-  document.body.appendChild(a);
-  a.click();
-  document.body.removeChild(a);
-  window.URL.revokeObjectURL(url);
-};
-
-export const handleServerExport = async (
-  serverExport: ServerExport,
-  exportScope: ExportScope,
-  entityType: EntityType,
-  format: ExportFormat,
-): Promise<void> => {
-  const blob = await serverExport(exportScope, format);
-  const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.${format}`;
-  downloadBlob(blob, fileName);
-};
-
 export const handleExportCSV = (
   spendData: EntitySpendData,
   exportScope: ExportScope,
@@ -488,8 +459,15 @@ export const handleExportCSV = (
   const data = generateExportData(spendData, exportScope, entityLabel, teamAliasMap);
   const csv = Papa.unparse(data);
   const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
   const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.csv`;
-  downloadBlob(blob, fileName);
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
 };
 
 export const handleExportJSON = (
@@ -509,6 +487,13 @@ export const handleExportJSON = (
   };
   const jsonString = JSON.stringify(exportObject, null, 2);
   const blob = new Blob([jsonString], { type: "application/json" });
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
   const fileName = `${entityType}_usage_${exportScope}_${new Date().toISOString().split("T")[0]}.json`;
-  downloadBlob(blob, fileName);
+  a.download = fileName;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
 };
