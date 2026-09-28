@@ -128,7 +128,6 @@ class CohereV2ChatConfig(OpenAIGPTConfig):
             "stop",
             "n",
             "tools",
-            "tool_choice",
             "seed",
             "extra_headers",
         ]
