@@ -3,12 +3,14 @@ Tests for the TopxAI provider configuration and integration.
 """
 
 import json
+from datetime import datetime, timezone
 from typing import Final
 
 import httpx
 import pytest
 
 import litellm
+from litellm._internal_context import pinned_billing_time
 from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 # Provider endpoint: https://ai.topxea.com/docs (verified 2026-09-19)
@@ -72,7 +74,7 @@ class TestTopxAIProviderConfig:
         from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
 
         model, provider, api_key, api_base = get_llm_provider(
-            model="gpt-5.6-sol",
+            model="gpt-6-sol",
             custom_llm_provider=None,
             api_base=TOPXAI_BASE_URL,
             api_key=None,
@@ -121,7 +123,7 @@ class TestTopxAIProviderConfig:
             assert str(request.url) == f"{expected_base}/responses"
             assert request.headers["Authorization"] == "Bearer sk-topxai-test"
             payload: Final = json.loads(request.content)
-            assert payload["model"] == "gpt-5.6-sol"
+            assert payload["model"] == "gpt-6-sol"
             assert payload["input"] == "Reply with OK"
             return httpx.Response(
                 200,
@@ -129,22 +131,24 @@ class TestTopxAIProviderConfig:
                     "id": "resp_topxai_test",
                     "object": "response",
                     "created_at": 1,
-                    "model": "gpt-5.6-sol",
+                    "model": "gpt-6-sol",
                     "status": "completed",
-                    "output": [{
-                        "type": "message",
-                        "id": "msg_test",
-                        "role": "assistant",
-                        "status": "completed",
-                        "content": [{"type": "output_text", "text": "OK", "annotations": []}],
-                    }],
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_test",
+                            "role": "assistant",
+                            "status": "completed",
+                            "content": [{"type": "output_text", "text": "OK", "annotations": []}],
+                        }
+                    ],
                     "usage": {"input_tokens": 4, "output_tokens": 1, "total_tokens": 5},
                 },
             )
 
         with httpx.Client(transport=httpx.MockTransport(respond)) as client:
             response: Final = litellm.responses(
-                model="topxai/gpt-5.6-sol",
+                model="topxai/gpt-6-sol",
                 input="Reply with OK",
                 api_base=api_base,
                 client=HTTPHandler(client=client),
@@ -175,27 +179,57 @@ class TestTopxAIProviderConfig:
 
 
 class TestTopxAIModelMetadata:
-    # Catalog and capabilities: https://ai.topxea.com/pricing (verified 2026-09-19)
+    # Catalog and capabilities: https://ai.topxea.com/api/pricing (verified 2026-09-28)
     TOPXAI_MODELS: Final = (
         "topxai/claude-sonnet-5",
-        "topxai/claude-opus-5",
+        "topxai/claude-opus-5-5",
         "topxai/claude-fable-5-1",
-        "topxai/claude-fable-5",
-        "topxai/gpt-5.6-sol",
+        "topxai/gpt-6-sol",
         "topxai/gpt-6-astra",
-        "topxai/grok-4.6",
+        "topxai/grok-4.7",
         "topxai/kimi-k3",
         "topxai/GLM-5.3-Abliterated",
+        "topxai/deepseek-flash",
+        "topxai/deepseek-v4-pro",
     )
-    TEXT_ONLY_MODELS: Final = ("topxai/GLM-5.3-Abliterated",)
-    # First premium token and output multiplier, verified 2026-09-19:
-    # https://ai.topxea.com/pricing/gpt-5.6-sol
+    TEXT_ONLY_MODELS: Final = ("topxai/GLM-5.3-Abliterated", "topxai/deepseek-v4-pro")
+    # Only these routes publish a cache-write price; the rest bill cache writes as input
+    CACHE_WRITE_MODELS: Final = (
+        "topxai/claude-sonnet-5",
+        "topxai/claude-opus-5-5",
+        "topxai/claude-fable-5-1",
+        "topxai/gpt-6-sol",
+        "topxai/gpt-6-astra",
+        "topxai/kimi-k3",
+    )
+    # The catalogue publishes no output limit for these
+    NO_OUTPUT_LIMIT_MODELS: Final = ("topxai/grok-4.7",)
+    # First premium token and output multiplier, verified 2026-09-28:
+    # https://ai.topxea.com/pricing/gpt-6-sol
     # https://ai.topxea.com/pricing/gpt-6-astra
-    # https://ai.topxea.com/pricing/grok-4.6
+    # https://ai.topxea.com/pricing/grok-4.7
     TIERED_MODELS: Final = (
-        ("topxai/gpt-5.6-sol", 272_001, 1.5),
+        ("topxai/gpt-6-sol", 272_001, 1.5),
         ("topxai/gpt-6-astra", 272_001, 1.5),
-        ("topxai/grok-4.6", 200_000, 2.0),
+        ("topxai/grok-4.7", 200_000, 2.0),
+    )
+    # USD for 1M prompt tokens (400K of them cache reads) and 1M completion tokens at the
+    # deepseek-official peak lanes, verified 2026-09-28: flash $0.24 in, $0.0048 cached, $0.96 out;
+    # v4-pro $1.056 in, $0.0352 cached, $3.168 out. Off-peak lanes are half.
+    # https://ai.topxea.com/pricing/deepseek-flash
+    # https://ai.topxea.com/pricing/deepseek-v4-pro
+    DEEPSEEK_PEAK_COSTS: Final = (
+        ("topxai/deepseek-flash", 1.10592),
+        ("topxai/deepseek-v4-pro", 3.81568),
+    )
+    # Peak hours are 01:00-04:00 and 06:00-10:00 UTC, Monday to Friday
+    DEEPSEEK_MOMENTS: Final = (
+        pytest.param(datetime(2026, 9, 28, 1, 0, tzinfo=timezone.utc), 1.0, id="monday-01:00"),
+        pytest.param(datetime(2026, 9, 28, 9, 59, tzinfo=timezone.utc), 1.0, id="monday-09:59"),
+        pytest.param(datetime(2026, 9, 28, 0, 59, tzinfo=timezone.utc), 0.5, id="monday-00:59"),
+        pytest.param(datetime(2026, 9, 28, 4, 0, tzinfo=timezone.utc), 0.5, id="monday-04:00"),
+        pytest.param(datetime(2026, 9, 28, 10, 0, tzinfo=timezone.utc), 0.5, id="monday-10:00"),
+        pytest.param(datetime(2026, 9, 27, 8, 0, tzinfo=timezone.utc), 0.5, id="sunday-08:00"),
     )
 
     @staticmethod
@@ -224,9 +258,14 @@ class TestTopxAIModelMetadata:
 
             assert info["supports_prompt_caching"] is True
             assert 0 < info["cache_read_input_token_cost"] < info["input_cost_per_token"]
-            assert info["cache_creation_input_token_cost"] >= info["input_cost_per_token"]
+            assert ("cache_creation_input_token_cost" in info) is (model in self.CACHE_WRITE_MODELS)
+            assert (
+                info.get("cache_creation_input_token_cost", info["input_cost_per_token"])
+                >= info["input_cost_per_token"]
+            )
 
-            assert info["max_tokens"] == info["max_output_tokens"]
+            assert ("max_output_tokens" in info) is (model not in self.NO_OUTPUT_LIMIT_MODELS)
+            assert info.get("max_tokens") == info.get("max_output_tokens")
             assert info["max_input_tokens"] >= 500_000
             assert info["source"].startswith("https://ai.topxea.com/pricing/")
 
@@ -247,12 +286,13 @@ class TestTopxAIModelMetadata:
         monkeypatch.setitem(litellm.model_cost, model, info)
         prompt_tokens: Final = first_premium_token + offset
         completion_tokens: Final = 17
-        # Whole-request input/cache rates double at these boundaries; sources above
+        # Whole-request input/cache rates double at these boundaries; sources above.
+        # Without a published cache-write price a cache write bills as input.
         input_multiplier: Final = 2 if offset >= 0 else 1
         expected_input: Final = input_multiplier * (
             (prompt_tokens - cached_tokens - cache_write_tokens) * info["input_cost_per_token"]
             + cached_tokens * info["cache_read_input_token_cost"]
-            + cache_write_tokens * info["cache_creation_input_token_cost"]
+            + cache_write_tokens * info.get("cache_creation_input_token_cost", info["input_cost_per_token"])
         )
         expected_output: Final = (
             completion_tokens * info["output_cost_per_token"] * (output_multiplier if offset >= 0 else 1)
@@ -266,6 +306,26 @@ class TestTopxAIModelMetadata:
         )
         assert prompt_cost == pytest.approx(expected_input)
         assert completion_cost == pytest.approx(expected_output)
+
+    @pytest.mark.parametrize("model,peak_cost", DEEPSEEK_PEAK_COSTS)
+    @pytest.mark.parametrize("moment,rate_share", DEEPSEEK_MOMENTS)
+    def test_topxai_deepseek_bills_peak_lanes_only_in_weekday_peak_hours(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        model: str,
+        peak_cost: float,
+        moment: datetime,
+        rate_share: float,
+    ) -> None:
+        monkeypatch.setitem(litellm.model_cost, model, self._load(("model_prices_and_context_window.json",))[model])
+        with pinned_billing_time(moment):
+            prompt_cost, completion_cost = litellm.cost_per_token(
+                model=model,
+                prompt_tokens=1_000_000,
+                completion_tokens=1_000_000,
+                cache_read_input_tokens=400_000,
+            )
+        assert prompt_cost + completion_cost == pytest.approx(peak_cost * rate_share)
 
     def test_topxai_models_synced_to_backup(self):
         model_cost = self._load(("model_prices_and_context_window.json",))

@@ -45502,18 +45502,18 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "topxai/claude-opus-5": {
-        "cache_creation_input_token_cost": 3.125e-06,
-        "cache_creation_input_token_cost_above_1hr": 5e-06,
-        "cache_read_input_token_cost": 2.5e-07,
-        "input_cost_per_token": 2.5e-06,
+    "topxai/claude-opus-5-5": {
+        "cache_creation_input_token_cost": 2.5e-06,
+        "cache_creation_input_token_cost_above_1hr": 4e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "input_cost_per_token": 2e-06,
         "litellm_provider": "topxai",
         "max_input_tokens": 1000000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 1.25e-05,
-        "source": "https://ai.topxea.com/pricing/claude-opus-5",
+        "output_cost_per_token": 1e-05,
+        "source": "https://ai.topxea.com/pricing/claude-opus-5-5",
         "supports_adaptive_thinking": true,
         "supports_function_calling": true,
         "supports_pdf_input": true,
@@ -45544,42 +45544,21 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "topxai/claude-fable-5": {
-        "cache_creation_input_token_cost": 6.25e-06,
-        "cache_creation_input_token_cost_above_1hr": 1e-05,
-        "cache_read_input_token_cost": 5e-07,
-        "input_cost_per_token": 5e-06,
+    "topxai/gpt-6-sol": {
+        "cache_creation_input_token_cost": 1.25e-06,
+        "cache_creation_input_token_cost_above_272k_tokens": 2.5e-06,
+        "cache_read_input_token_cost": 1e-07,
+        "cache_read_input_token_cost_above_272k_tokens": 2e-07,
+        "input_cost_per_token": 1e-06,
+        "input_cost_per_token_above_272k_tokens": 2e-06,
         "litellm_provider": "topxai",
-        "max_input_tokens": 1000000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
-        "output_cost_per_token": 2.5e-05,
-        "source": "https://ai.topxea.com/pricing/claude-fable-5",
-        "supports_adaptive_thinking": true,
-        "supports_function_calling": true,
-        "supports_pdf_input": true,
-        "supports_prompt_caching": true,
-        "supports_reasoning": true,
-        "supports_response_schema": true,
-        "supports_tool_choice": true,
-        "supports_vision": true
-    },
-    "topxai/gpt-5.6-sol": {
-        "cache_creation_input_token_cost": 2.5e-06,
-        "cache_creation_input_token_cost_above_272k_tokens": 5e-06,
-        "cache_read_input_token_cost": 2e-07,
-        "cache_read_input_token_cost_above_272k_tokens": 4e-07,
-        "input_cost_per_token": 2e-06,
-        "input_cost_per_token_above_272k_tokens": 4e-06,
-        "litellm_provider": "topxai",
-        "max_input_tokens": 1000000,
-        "max_output_tokens": 128000,
-        "max_tokens": 128000,
-        "mode": "chat",
-        "output_cost_per_token": 1e-05,
-        "output_cost_per_token_above_272k_tokens": 1.5e-05,
-        "source": "https://ai.topxea.com/pricing/gpt-5.6-sol",
+        "output_cost_per_token": 5e-06,
+        "output_cost_per_token_above_272k_tokens": 7.5e-06,
+        "source": "https://ai.topxea.com/pricing/gpt-6-sol",
         "supports_function_calling": true,
         "supports_pdf_input": true,
         "supports_prompt_caching": true,
@@ -45596,7 +45575,7 @@
         "input_cost_per_token": 5e-06,
         "input_cost_per_token_above_272k_tokens": 1e-05,
         "litellm_provider": "topxai",
-        "max_input_tokens": 1000000,
+        "max_input_tokens": 1050000,
         "max_output_tokens": 128000,
         "max_tokens": 128000,
         "mode": "chat",
@@ -45611,17 +45590,14 @@
         "supports_tool_choice": true,
         "supports_vision": true
     },
-    "topxai/grok-4.6": {
-        "cache_creation_input_token_cost": 1e-06,
+    "topxai/grok-4.7": {
         "cache_read_input_token_cost": 2.5e-07,
         "input_cost_per_token": 1e-06,
         "litellm_provider": "topxai",
         "max_input_tokens": 500000,
-        "max_output_tokens": 128000,
-        "max_tokens": 128000,
         "mode": "chat",
         "output_cost_per_token": 3e-06,
-        "source": "https://ai.topxea.com/pricing/grok-4.6",
+        "source": "https://ai.topxea.com/pricing/grok-4.7",
         "supports_function_calling": true,
         "supports_pdf_input": false,
         "supports_prompt_caching": true,
@@ -45631,7 +45607,6 @@
         "supports_vision": true,
         "tiered_pricing": [
             {
-                "cache_creation_input_token_cost": 1e-06,
                 "cache_read_input_token_cost": 2.5e-07,
                 "input_cost_per_token": 1e-06,
                 "output_cost_per_token": 3e-06,
@@ -45641,7 +45616,6 @@
                 ]
             },
             {
-                "cache_creation_input_token_cost": 2e-06,
                 "cache_read_input_token_cost": 5e-07,
                 "input_cost_per_token": 2e-06,
                 "output_cost_per_token": 6e-06,
@@ -45672,7 +45646,6 @@
         "supports_vision": true
     },
     "topxai/GLM-5.3-Abliterated": {
-        "cache_creation_input_token_cost": 4e-06,
         "cache_read_input_token_cost": 4e-07,
         "input_cost_per_token": 4e-06,
         "litellm_provider": "topxai",
@@ -45682,6 +45655,98 @@
         "mode": "chat",
         "output_cost_per_token": 7e-06,
         "source": "https://ai.topxea.com/pricing/glm-5.3-abliterated",
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": false
+    },
+    "topxai/deepseek-flash": {
+        "cache_read_input_token_cost": 4.8e-09,
+        "input_cost_per_token": 2.4e-07,
+        "litellm_provider": "topxai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 2.4e-09,
+            "input_cost_per_token": 1.2e-07,
+            "output_cost_per_token": 4.8e-07,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
+        "output_cost_per_token": 9.6e-07,
+        "source": "https://ai.topxea.com/pricing/deepseek-flash",
+        "supports_function_calling": true,
+        "supports_pdf_input": false,
+        "supports_prompt_caching": true,
+        "supports_reasoning": true,
+        "supports_response_schema": true,
+        "supports_tool_choice": true,
+        "supports_vision": true
+    },
+    "topxai/deepseek-v4-pro": {
+        "cache_read_input_token_cost": 3.52e-08,
+        "input_cost_per_token": 1.056e-06,
+        "litellm_provider": "topxai",
+        "max_input_tokens": 1048576,
+        "max_output_tokens": 393216,
+        "max_tokens": 393216,
+        "mode": "chat",
+        "off_peak_pricing": {
+            "cache_read_input_token_cost": 1.76e-08,
+            "input_cost_per_token": 5.28e-07,
+            "output_cost_per_token": 1.584e-06,
+            "windows": [
+                {
+                    "hours_utc": [
+                        "00:00-01:00",
+                        "04:00-06:00",
+                        "10:00-00:00"
+                    ],
+                    "weekdays": [
+                        1,
+                        2,
+                        3,
+                        4,
+                        5
+                    ]
+                },
+                {
+                    "hours_utc": "00:00-00:00",
+                    "weekdays": [
+                        6,
+                        7
+                    ]
+                }
+            ]
+        },
+        "output_cost_per_token": 3.168e-06,
+        "source": "https://ai.topxea.com/pricing/deepseek-v4-pro",
         "supports_function_calling": true,
         "supports_pdf_input": false,
         "supports_prompt_caching": true,
