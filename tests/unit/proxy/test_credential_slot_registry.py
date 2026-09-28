@@ -7,6 +7,9 @@ These tests fail until a param is classified below as one of:
 - ``Secret(UNPLANTED)``: the param can carry a credential, but no integration test plants a canary
   in it yet. This is a classification only.
 - ``NotSecret(<reason>)``: the param cannot carry a credential.
+
+``CANARY_SLOTS`` mirrors ``SLOTS`` in ``tests/integration/security/_canary.py``, limited to the ids
+whose test plants a canary in one of these params.
 """
 
 import re
@@ -19,8 +22,6 @@ from litellm.proxy.auth.auth_utils import is_request_body_safe
 from litellm.types.router import LiteLLM_Params, LiteLLMParamsTypedDict
 from litellm.types.utils import CustomPricingLiteLLMParams, StandardCallbackDynamicParams
 
-# Must stay in sync with SLOTS in tests/integration/security/_canary.py. Only ids whose test plants
-# a canary in one of the params below belong here.
 CANARY_SLOTS: Final[Mapping[str, str]] = MappingProxyType(
     {
         "B1": "deployment api_key in config.yaml",
