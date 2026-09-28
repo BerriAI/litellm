@@ -124,6 +124,22 @@ class LLMUsage:
     total_tokens: int | None = None
     cache_creation_input_tokens: int | None = None
     cache_read_input_tokens: int | None = None
+    reasoning_tokens: int | None = None
+
+    @property
+    def uncached_input_tokens(self) -> int | None:
+        """``input_tokens`` minus cache reads and writes, which litellm's normalized prompt count includes."""
+        if self.input_tokens is None:
+            return None
+        cached: Final = (self.cache_read_input_tokens or 0) + (self.cache_creation_input_tokens or 0)
+        return max(self.input_tokens - cached, 0)
+
+    @property
+    def non_reasoning_output_tokens(self) -> int | None:
+        """``output_tokens`` minus reasoning tokens, which litellm's normalized completion count includes."""
+        if self.output_tokens is None:
+            return None
+        return max(self.output_tokens - (self.reasoning_tokens or 0), 0)
 
     @classmethod
     def from_standard_logging_payload(cls, payload: StandardLoggingPayload) -> LLMUsage:
@@ -134,6 +150,10 @@ class LLMUsage:
         raw_details: Final = usage_object.get("prompt_tokens_details")
         prompt_details: Final[Mapping[str, object]] = (
             raw_details if isinstance(raw_details, Mapping) else MappingProxyType({})
+        )
+        raw_completion_details: Final = usage_object.get("completion_tokens_details")
+        completion_details: Final[Mapping[str, object]] = (
+            raw_completion_details if isinstance(raw_completion_details, Mapping) else MappingProxyType({})
         )
         return cls(
             input_tokens=as_int(payload.get("prompt_tokens")),
@@ -150,6 +170,7 @@ class LLMUsage:
                 prompt_details.get("cached_tokens"),
                 usage_object.get("prompt_cache_hit_tokens"),
             ),
+            reasoning_tokens=_cache_token_value(completion_details.get("reasoning_tokens")),
         )
 
 

@@ -56,9 +56,13 @@ class LangfuseMapper:
         "presence_penalty": lambda rp: rp.presence_penalty,
         "seed": lambda rp: rp.seed,
     }
+    # Langfuse prices each key separately, so input/output exclude the cache and reasoning buckets.
     _USAGE_FIELDS: dict[str, Callable[[LLMUsage], AttrValue | None]] = {
-        "input": lambda u: u.input_tokens,
-        "output": lambda u: u.output_tokens,
+        "input": lambda u: u.uncached_input_tokens,
+        "input_cached_tokens": lambda u: u.cache_read_input_tokens or None,
+        "input_cache_creation": lambda u: u.cache_creation_input_tokens or None,
+        "output": lambda u: u.non_reasoning_output_tokens,
+        "output_reasoning_tokens": lambda u: u.reasoning_tokens or None,
         "total": lambda u: u.total_tokens,
     }
 
