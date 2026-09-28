@@ -10,9 +10,10 @@
 | `contract.rs` | `Machine`, its step and interruption futures, and host failure values |
 | `coroutine.rs` | `CallMachine`, coroutine state conversion, execution futures, and machine faults |
 | `context.rs` | The route's services, hooks, and stream handles, sharing one coroutine channel |
-| `auth.rs` | The token-provider adapter that requests credentials through host services |
 
 Keep the contract independent of the coroutine implementation. Drivers and wrappers can implement `Machine` without constructing a coroutine. Keep existing public imports through `litellm_host::machine` stable when reorganizing private modules
+
+Credential acquisition contracts and reusable adapters belong in `litellm-auth-types`. A route can use `TokenProviderHandle::from_callback` to request a credential through `HostServices::call`. Keep authentication policy and token-specific traits out of the machine layer
 
 ## Execution and replies
 

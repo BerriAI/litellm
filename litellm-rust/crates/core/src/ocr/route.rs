@@ -1,7 +1,7 @@
-use litellm_auth::ResolvedCredential;
+use litellm_auth::{ResolvedCredential, TokenProviderHandle};
 use litellm_host::{
     call::{CallOutput, HostedMachine, hosted_call},
-    machine::{HostTokenProvider, TokenProtocol},
+    machine::HostServices,
     protocol::Protocol,
     protocol::Reply,
 };
@@ -31,13 +31,21 @@ impl Protocol for Ocr {
     type StreamHead = std::convert::Infallible;
 }
 
-impl TokenProtocol for Ocr {
-    fn acquire_token_op(reply: Reply<ResolvedCredential>) -> OcrOp {
-        OcrOp::AcquireAzureAdToken(reply)
-    }
-}
-
 pub type OcrMachine = HostedMachine<Ocr>;
+
+fn caller_token_provider(services: HostServices<Ocr>) -> TokenProviderHandle {
+    TokenProviderHandle::from_callback(move || {
+        let services = services.clone();
+        async move {
+            services
+                .call(OcrOp::AcquireAzureAdToken)
+                .await
+                .map_err(|error| {
+                    litellm_auth::Error::CredentialAcquisition(error.to_string().into())
+                })
+        }
+    })
+}
 
 impl crate::ocr::OcrRoute {
     pub fn machine(self, request: OcrCall) -> OcrMachine {
@@ -47,7 +55,7 @@ impl crate::ocr::OcrRoute {
                 let request = LiteLLMOcrRequest {
                     azure_ad_token_provider: projection
                         .caller_token
-                        .then(|| HostTokenProvider::handle(services))
+                        .then(|| caller_token_provider(services))
                         .or(projection.request.azure_ad_token_provider),
                     ..projection.request
                 };
