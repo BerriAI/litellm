@@ -29,6 +29,7 @@ from litellm.proxy.hooks.parallel_request_limiter_v3 import (
     RateLimitedModel,
     RateLimitResponse,
     RequestRateLimiterStash,
+    TagRateLimit,
     _request_stash,
     get_or_create_request_stash,
     get_request_stash,
@@ -5006,6 +5007,158 @@ async def test_per_tag_untagged_request_governed_by_key_limit_v3(monkeypatch):
     assert "tag_per_key" not in str(exc_info.value.detail)
 
 
+def _static_tag_limits(limits: dict[str, TagRateLimit]):
+    calls: list[tuple[str, ...]] = []
+
+    async def resolver(tag_names: Sequence[str]):
+        calls.append(tuple(tag_names))
+        return {name: limits[name] for name in tag_names if name in limits}
+
+    return resolver, calls
+
+
+@pytest.mark.asyncio
+async def test_tag_object_rpm_limit_enforced_v3(monkeypatch):
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    _request_stash.set(None)
+    resolver, calls = _static_tag_limits({"cell-1": TagRateLimit(rpm_limit=2, tpm_limit=None)})
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        tag_rate_limit_resolver=resolver,
+    )
+
+    async def call(api_key: str, tags: list[str]) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=UserAPIKeyAuth(api_key=hash_token(api_key)),
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo", "metadata": {"tags": tags}},
+            call_type="",
+        )
+
+    await call("sk-a", ["cell-1"])
+    await call("sk-b", ["cell-1", "cell-2"])
+    with pytest.raises(HTTPException) as exc_info:
+        await call("sk-a", ["cell-1"])
+    assert exc_info.value.status_code == 429
+    assert "tag" in str(exc_info.value.detail)
+
+    for _ in range(3):
+        await call("sk-a", ["cell-2"])
+        await call("sk-a", [])
+    assert calls == [("cell-1",), ("cell-1", "cell-2"), ("cell-1",), ("cell-2",), ("cell-2",), ("cell-2",)]
+
+
+@pytest.mark.asyncio
+async def test_tag_429_names_the_tag_that_is_over_its_limit(monkeypatch):
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    _request_stash.set(None)
+    resolver, _ = _static_tag_limits(
+        {
+            "cell-ok": TagRateLimit(rpm_limit=100, tpm_limit=None),
+            "cell-blocked": TagRateLimit(rpm_limit=1, tpm_limit=None),
+        }
+    )
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        tag_rate_limit_resolver=resolver,
+    )
+    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-tag-order"))
+
+    async def call(tags: list[str]) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo", "metadata": {"tags": tags}},
+            call_type="",
+        )
+
+    await call(["cell-blocked"])
+    with pytest.raises(HTTPException) as exc_info:
+        await call(["cell-ok", "cell-blocked"])
+    assert exc_info.value.status_code == 429
+    assert "cell-blocked" in str(exc_info.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_tag_object_tpm_limit_enforced_v3(monkeypatch):
+    monkeypatch.setenv("LITELLM_RATE_LIMIT_WINDOW_SIZE", "60")
+    monkeypatch.setenv("LITELLM_TPM_TOKEN_RESERVATION_ENABLED", "false")
+    _request_stash.set(None)
+    resolver, _ = _static_tag_limits({"cell-1": TagRateLimit(rpm_limit=None, tpm_limit=100)})
+    local_cache = DualCache()
+    handler = _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=InternalUsageCache(local_cache),
+        tag_rate_limit_resolver=resolver,
+    )
+    monkeypatch.setattr(handler, "get_rate_limit_type", lambda: "total")
+    user_api_key_dict = UserAPIKeyAuth(api_key=hash_token("sk-tag-tpm"))
+
+    async def call(tags: list[str]) -> None:
+        await handler.async_pre_call_hook(
+            user_api_key_dict=user_api_key_dict,
+            cache=local_cache,
+            data={"model": "gpt-3.5-turbo", "metadata": {"tags": tags}},
+            call_type="",
+        )
+
+    await call(["cell-1"])
+    tokens_before_success = await local_cache.async_get_cache("{tag:cell-1}:tokens") or 0
+    await handler.async_log_success_event(
+        kwargs={
+            "standard_logging_object": {"metadata": {"user_api_key_hash": user_api_key_dict.api_key}},
+            "model": "gpt-3.5-turbo",
+        },
+        response_obj=ModelResponse(usage=Usage(prompt_tokens=60, completion_tokens=60, total_tokens=120)),
+        start_time=datetime.now(),
+        end_time=datetime.now(),
+    )
+    assert await local_cache.async_get_cache("{tag:cell-1}:tokens") == tokens_before_success + 120
+
+    with pytest.raises(HTTPException) as exc_info:
+        await call(["cell-1"])
+    assert exc_info.value.status_code == 429
+    await call([])
+
+
+@pytest.mark.asyncio
+async def test_resolve_tag_rate_limits_from_db_reads_budget_row(monkeypatch):
+    from litellm.models.budget import LiteLLM_BudgetTable
+    from litellm.models.tag import LiteLLM_TagTable
+    from litellm.proxy import proxy_server
+    from litellm.proxy.auth import auth_checks
+    from litellm.proxy.hooks.parallel_request_limiter_v3 import resolve_tag_rate_limits_from_db
+    from litellm.proxy.utils import PrismaClient
+
+    async def fake_batch(
+        tag_names: Sequence[str],
+        prisma_client: PrismaClient | None,
+        user_api_key_cache: DualCache,
+    ) -> dict[str, LiteLLM_TagTable]:
+        return {
+            "limited": LiteLLM_TagTable(
+                tag_name="limited",
+                litellm_budget_table=LiteLLM_BudgetTable(rpm_limit=3, tpm_limit=None),
+            ),
+            "spend-only": LiteLLM_TagTable(
+                tag_name="spend-only",
+                litellm_budget_table=LiteLLM_BudgetTable(max_budget=5.0),
+            ),
+            "bare": LiteLLM_TagTable(tag_name="bare"),
+        }
+
+    monkeypatch.setattr(proxy_server, "prisma_client", object())
+    monkeypatch.setattr(auth_checks, "get_tag_objects_batch", fake_batch)
+
+    assert dict(await resolve_tag_rate_limits_from_db(["limited", "spend-only", "bare"])) == {
+        "limited": TagRateLimit(rpm_limit=3, tpm_limit=None)
+    }
+
+    monkeypatch.setattr(proxy_server, "prisma_client", None)
+    assert dict(await resolve_tag_rate_limits_from_db(["limited"])) == {}
+
+
 # --------------------------------------------------------------------------
 # Streaming success logging mirrors x-ratelimit-* remaining values into
 # standard_logging_object.hidden_params.additional_headers so Prometheus /
@@ -6563,6 +6716,262 @@ async def test_an_open_circuit_breaker_reads_the_sliding_window_locally_without_
     assert isinstance(values, list)
     assert [record.getMessage() for record in caplog.records if record.levelno >= logging.WARNING] == []
     assert any("circuit breaker is open" in record.getMessage() for record in caplog.records)
+
+
+class _UnreachableRedis:
+    def async_register_script(self, script: str):
+        async def refused(keys, args):
+            raise ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused.")
+
+        return refused
+
+
+class _ScriptedRedis:
+    def __init__(
+        self,
+        failing_script: str | None = None,
+        failing_batch_call: int | None = None,
+        stored_counter_value: int = 0,
+    ):
+        self.failing_script = failing_script
+        self.failing_batch_call = failing_batch_call
+        self.stored_counter_value = stored_counter_value
+        self.released_slots: list[tuple[list[str], list[str]]] = []
+        self.batch_calls = 0
+        self.batch_call_keys: list[list[str]] = []
+        self.batch_call_args: list[list[object]] = []
+        self.increments: list[tuple[str, float]] = []
+        self.guarded_increments: list[tuple[list[str], list[object]]] = []
+
+    async def async_increment(self, key: str, value: float, **kwargs):
+        self.increments.append((key, value))
+        return value
+
+    def async_register_script(self, script: str):
+        from litellm.proxy.hooks import parallel_request_limiter_v3 as v3
+
+        async def run(keys, args):
+            if script == self.failing_script:
+                raise ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused.")
+            if script == v3.WINDOW_GUARDED_TOKEN_INCREMENT_SCRIPT:
+                self.guarded_increments.append((list(keys), list(args)))
+                return [1, 0] * (len(keys) // 2)
+            if script == v3.BATCH_RATE_LIMITER_SCRIPT:
+                self.batch_calls += 1
+                self.batch_call_keys.append(list(keys))
+                self.batch_call_args.append(list(args))
+                if self.batch_calls == self.failing_batch_call:
+                    raise ConnectionError("Error 61 connecting to 127.0.0.1:6379. Connection refused.")
+                return [args[0], self.batch_calls] * (len(keys) // 2)
+            if script == v3.BATCH_COUNTER_READ_SCRIPT:
+                return [int(time.time()) if key.endswith(":window") else self.stored_counter_value for key in keys]
+            if script == v3.PARALLEL_COUNT_SCRIPT:
+                return [0 for _ in keys]
+            if script == v3.PARALLEL_ACQUIRE_SCRIPT:
+                return [0, *[1 for _ in keys]]
+            if script == v3.PARALLEL_RELEASE_SCRIPT:
+                self.released_slots.append((list(keys), list(args)))
+                return [0 for _ in keys]
+            raise AssertionError(f"unexpected script: {script[:60]}")
+
+        return run
+
+
+def _handler_with_redis(redis, fail_closed: bool | None = None):
+    internal_usage_cache = InternalUsageCache(DualCache(redis_cache=redis))  # pyright: ignore[reportArgumentType]  # duck-typed Redis double
+    if fail_closed is None:
+        return _PROXY_MaxParallelRequestsHandler(internal_usage_cache=internal_usage_cache)
+    return _PROXY_MaxParallelRequestsHandler(
+        internal_usage_cache=internal_usage_cache,
+        fail_closed_resolver=lambda: fail_closed,
+    )
+
+
+async def _admit(handler, auth, data=None):
+    await handler.async_pre_call_hook(
+        user_api_key_dict=auth,
+        cache=handler.internal_usage_cache.dual_cache,
+        data=data if data is not None else {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]},
+        call_type="acompletion",
+    )
+
+
+async def _read_only_check(handler, auth):
+    descriptors = handler._create_rate_limit_descriptors(
+        user_api_key_dict=auth,
+        data={"model": "test-model"},
+        rpm_limit_type=None,
+        tpm_limit_type=None,
+        model_has_failures=False,
+    )
+    return await handler.should_rate_limit(descriptors=descriptors, read_only=True)
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [{"rpm_limit": 2}, {"max_parallel_requests": 1}, {"tpm_limit": 1000}],
+    ids=["rpm_window", "parallel_gauge", "tpm_reservation"],
+)
+@pytest.mark.asyncio
+async def test_fail_closed_rejects_with_503_when_redis_counters_are_unreachable(limits):
+    handler = _handler_with_redis(_UnreachableRedis(), fail_closed=True)
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed"), **limits)
+
+    with pytest.raises(HTTPException) as exc:
+        await _admit(handler, auth)
+
+    assert exc.value.status_code == 503
+    assert not isinstance(exc.value, ProxyRateLimitError)
+    assert "fail_closed_rate_limit_enforcement" in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_fail_open_default_keeps_enforcing_per_pod_from_memory_when_redis_counters_are_unreachable():
+    handler = _handler_with_redis(_UnreachableRedis(), fail_closed=False)
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-open"), rpm_limit=2)
+
+    await _admit(handler, auth)
+    await _admit(handler, auth)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _admit(handler, auth)
+
+    assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_is_a_no_op_while_redis_answers():
+    handler = _handler_with_redis(_ScriptedRedis(), fail_closed=True)
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-healthy"), rpm_limit=2)
+
+    await _admit(handler, auth)
+    await _admit(handler, auth)
+    with pytest.raises(ProxyRateLimitError) as exc:
+        await _admit(handler, auth)
+
+    assert exc.value.status_code == 429
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_tpm_rejection_releases_the_parallel_slot_it_acquired():
+    from litellm.proxy.hooks import parallel_request_limiter_v3 as v3
+
+    redis = _ScriptedRedis(failing_script=v3.CHECK_AND_INCREMENT_BY_N_SCRIPT)
+    handler = _handler_with_redis(redis, fail_closed=True)
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-slot"), max_parallel_requests=1, tpm_limit=1000)
+    data = {"model": "test-model", "messages": [{"role": "user", "content": "hi"}]}
+
+    with pytest.raises(HTTPException) as exc:
+        await _admit(handler, auth, data)
+    assert exc.value.status_code == 503
+    acquired = get_or_create_request_stash().parallel_slot
+    assert acquired is not None
+
+    await handler.async_post_call_failure_hook(
+        request_data=data, original_exception=exc.value, user_api_key_dict=auth
+    )
+
+    assert redis.released_slots == [(list(acquired["counter_keys"]), [acquired["slot_id"]])]
+    assert get_or_create_request_stash().parallel_slot is None
+
+
+@pytest.mark.asyncio
+async def test_fail_closed_rate_limit_enforcement_is_read_from_general_settings(monkeypatch):
+    import litellm.proxy.proxy_server as proxy_server
+
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-settings"), rpm_limit=2)
+
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", True)
+    with pytest.raises(HTTPException) as exc:
+        await _admit(_handler_with_redis(_UnreachableRedis()), auth)
+    assert exc.value.status_code == 503
+
+    monkeypatch.delitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement")
+    await _admit(_handler_with_redis(_UnreachableRedis()), auth)
+
+
+@pytest.mark.parametrize(
+    "configured_value, rejects",
+    [(True, True), ("true", True), (False, False), ("false", False), ("sometimes", False)],
+    ids=["bool_true", "string_true", "bool_false", "string_false", "not_a_boolean"],
+)
+@pytest.mark.asyncio
+async def test_fail_closed_rate_limit_enforcement_coerces_the_general_settings_value(
+    monkeypatch, configured_value, rejects
+):
+    import litellm.proxy.proxy_server as proxy_server
+
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-coerced"), rpm_limit=2)
+    monkeypatch.setitem(proxy_server.general_settings, "fail_closed_rate_limit_enforcement", configured_value)
+
+    if not rejects:
+        await _admit(_handler_with_redis(_UnreachableRedis()), auth)
+        return
+    with pytest.raises(HTTPException) as exc:
+        await _admit(_handler_with_redis(_UnreachableRedis()), auth)
+    assert exc.value.status_code == 503
+
+
+@pytest.mark.parametrize(
+    "limits",
+    [{"rpm_limit": 2}, {"max_parallel_requests": 1}],
+    ids=["rpm_window", "parallel_gauge"],
+)
+@pytest.mark.asyncio
+async def test_fail_closed_read_only_check_rejects_with_503_when_redis_counters_are_unreachable(limits):
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-fail-closed-read-only"), **limits)
+
+    with pytest.raises(HTTPException) as exc:
+        await _read_only_check(_handler_with_redis(_UnreachableRedis(), fail_closed=True), auth)
+    assert exc.value.status_code == 503
+
+    response = await _read_only_check(_handler_with_redis(_UnreachableRedis(), fail_closed=False), auth)
+    assert response["overall_code"] == "OK"
+
+
+@pytest.mark.parametrize("stored_counter_value, expected_code", [(1, "OK"), (2, "OVER_LIMIT"), (3, "OVER_LIMIT")])
+@pytest.mark.asyncio
+async def test_read_only_check_reports_the_redis_counters_without_incrementing_them(
+    stored_counter_value, expected_code
+):
+    redis = _ScriptedRedis(stored_counter_value=stored_counter_value)
+    auth = UserAPIKeyAuth(api_key=hash_token("sk-read-only-counters"), rpm_limit=2)
+
+    response = await _read_only_check(_handler_with_redis(redis, fail_closed=True), auth)
+
+    assert response["overall_code"] == expected_code
+    assert redis.batch_calls == 0
+    assert redis.increments == []
+
+
+@pytest.mark.parametrize("fail_closed", [True, False], ids=["fail_closed", "fail_open"])
+@pytest.mark.asyncio
+async def test_batch_increment_refunds_counters_already_applied_when_a_later_cluster_slot_fails(fail_closed):
+    from unittest.mock import patch
+
+    redis = _ScriptedRedis(failing_batch_call=2)
+    handler = _handler_with_redis(redis, fail_closed=fail_closed)
+    auth = UserAPIKeyAuth(
+        api_key=hash_token("sk-cluster-partial"), rpm_limit=5, user_id="cluster-user", user_rpm_limit=5
+    )
+
+    with patch.object(handler, "_is_redis_cluster", return_value=True):
+        if fail_closed:
+            with pytest.raises(HTTPException) as exc:
+                await _admit(handler, auth)
+            assert exc.value.status_code == 503
+        else:
+            await _admit(handler, auth)
+
+    assert len(redis.batch_call_keys) == 2
+    applied_keys = redis.batch_call_keys[0]
+    assert applied_keys
+    window_start_at_increment = str(redis.batch_call_args[0][0])
+    expected_refunds = [
+        ([applied_keys[offset], applied_keys[offset + 1]], [window_start_at_increment, -1, 0])
+        for offset in range(0, len(applied_keys), 2)
+    ]
+    assert redis.guarded_increments == (expected_refunds if fail_closed else [])
+    assert redis.increments == []
 
 
 @pytest.mark.parametrize(

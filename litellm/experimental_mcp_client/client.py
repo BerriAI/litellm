@@ -10,6 +10,7 @@ import os
 from collections.abc import AsyncIterator, Awaitable, Callable, Generator, Sequence
 from contextlib import AbstractAsyncContextManager
 from functools import partial
+from importlib.metadata import version
 from types import MappingProxyType
 from typing import Final, TypeAlias, TypeVar, cast
 
@@ -34,8 +35,17 @@ _TransportContext: TypeAlias = AbstractAsyncContextManager[_TransportStreams]
 from mcp.types import (
     METHOD_NOT_FOUND,
     REQUEST_TIMEOUT,
+    ClientCapabilities,
+    ElicitationCapability,
+    FormElicitationCapability,
     GetPromptRequestParams,
     GetPromptResult,
+    Implementation,
+    InitializedNotification,
+    InitializeRequest,
+    InitializeRequestParams,
+    InitializeResult,
+    InputRequiredResult,
     ListPromptsResult,
     ListResourcesResult,
     ListResourceTemplatesResult,
@@ -43,13 +53,14 @@ from mcp.types import (
     PaginatedResult,
     Prompt,
     ResourceTemplate,
+    SamplingCapability,
     ServerNotification,
-    TextContent,
+    UrlElicitationCapability,
 )
 from mcp.types import CallToolRequestParams as MCPCallToolRequestParams
 from mcp.types import CallToolResult as MCPCallToolResult
 from mcp.types import Tool as MCPTool
-from pydantic import AnyUrl
+from pydantic import AnyUrl, TypeAdapter
 
 from litellm._logging import verbose_logger
 from litellm.constants import (
@@ -61,13 +72,16 @@ from litellm.constants import (
 from litellm.experimental_mcp_client.tools import list_tools_with_pagination
 from litellm.llms.custom_httpx.http_handler import get_ssl_configuration
 from litellm.proxy._experimental.mcp_server.mcp_debug import capture_upstream_error_response
+from litellm.proxy._experimental.mcp_server.result_conversion import error_text_result
 from litellm.types.llms.custom_http import VerifyTypes
 from litellm.types.mcp import (
+    MCP_LEGACY_VERSIONS,
     MCPAuth,
     MCPAuthType,
     MCPStdioConfig,
     MCPTransport,
     MCPTransportType,
+    MCPUpstreamProtocol,
     credential_redirect_hook,
     has_header,
     without_header,
@@ -385,7 +399,9 @@ class MCPClient:
         sampling_callback: Callable | None = None,
         elicitation_callback: Callable | None = None,
         logging_callback: Callable | None = None,
+        protocol_version: MCPUpstreamProtocol = "auto",
     ):
+        self.protocol_version: MCPUpstreamProtocol = TypeAdapter(MCPUpstreamProtocol).validate_python(protocol_version)
         self.server_url: str = server_url
         self.transport_type: MCPTransport = transport_type
         self.auth_type: MCPAuthType = auth_type
@@ -524,6 +540,35 @@ class MCPClient:
 
         return safe_env
 
+    async def _initialize_session(self, session: ClientSession) -> InitializeResult:
+        if self.protocol_version == "auto":
+            automatic: Final = await session.initialize()
+            if automatic.protocol_version not in MCP_LEGACY_VERSIONS:
+                raise MCPError(code=-32022, message="Upstream selected an unsupported MCP protocol version")
+            return automatic
+        result: Final = await session.send_request(
+            InitializeRequest(
+                params=InitializeRequestParams(
+                    protocol_version=self.protocol_version,
+                    client_info=Implementation(name="litellm", version=version("litellm")),
+                    capabilities=ClientCapabilities(
+                        sampling=SamplingCapability() if self._sampling_callback is not None else None,
+                        elicitation=ElicitationCapability(
+                            form=FormElicitationCapability(), url=UrlElicitationCapability()
+                        )
+                        if self._elicitation_callback is not None
+                        else None,
+                    ),
+                )
+            ),
+            InitializeResult,
+        )
+        if result.protocol_version != self.protocol_version:
+            raise MCPError(code=-32022, message="Upstream did not accept the configured MCP protocol version")
+        session.adopt(result)
+        await session.send_notification(InitializedNotification())
+        return result
+
     async def _execute_session_operation(
         self,
         transport_ctx: _TransportContext,
@@ -578,7 +623,7 @@ class MCPClient:
                     )
                     session: Final = await session_ctx.__aenter__()
                     try:
-                        init_result: Final = await session.initialize()
+                        init_result: Final = await self._initialize_session(session)
                         instructions: Final = getattr(init_result, "instructions", None)
                         self._last_initialize_instructions = (
                             instructions.strip() or None if isinstance(instructions, str) else None
@@ -764,7 +809,7 @@ class MCPClient:
                 follow_redirects=True,
                 event_hooks=MappingProxyType(
                     {"response": [capture_upstream_error_response], "request": [guard] if guard else []}
-                ),  # mutable-ok: httpx types require lists of hooks
+                ),
             )
 
         return factory
@@ -828,17 +873,15 @@ class MCPClient:
     @staticmethod
     def error_tool_result(exc: Exception) -> MCPCallToolResult:
         """The error result ``call_tool`` returns when it swallows a failure (no re-execution)."""
-        return MCPCallToolResult(
-            content=[TextContent(type="text", text=f"{type(exc).__name__}: {exc}")],
-            is_error=True,
-        )
+        return error_text_result(exc)
 
     async def call_tool(
         self,
         call_tool_request_params: MCPCallToolRequestParams,
         host_progress_callback: Callable | None = None,
         raise_on_error: bool = False,
-    ) -> MCPCallToolResult:
+        allow_input_required: bool = False,
+    ) -> MCPCallToolResult | InputRequiredResult:
         """
         Call an MCP Tool.
 
@@ -847,6 +890,9 @@ class MCPClient:
                 ``isError=True`` result. The token-exchange (OBO) tool-call path uses this to detect
                 an upstream 401 so it can re-mint the exchanged token and retry once; every other
                 caller keeps the default and gets graceful ``isError`` degradation.
+            allow_input_required: When True, a 2026-07-28 upstream may answer with an interim
+                ``InputRequiredResult`` and it is returned as is. The SDK rejects it otherwise, so
+                callers only opt in when the downstream side can carry it.
         """
         verbose_logger.info("MCP client calling tool '%s'", call_tool_request_params.name)
 
@@ -869,6 +915,7 @@ class MCPClient:
                 name=call_tool_request_params.name,
                 arguments=call_tool_request_params.arguments,
                 progress_callback=on_progress,
+                allow_input_required=allow_input_required,
             )
 
         try:
@@ -921,9 +968,7 @@ class MCPClient:
         with anyio.fail_after(max(self.timeout, MCP_TOOL_LISTING_TIMEOUT)):
             for page_index in range(MCP_TOOL_LISTING_MAX_PAGES):
                 try:
-                    page = await fetch_page(  # rebind-ok: each SDK page replaces the previous one
-                        None if cursor is None else PaginatedRequestParams(cursor=cursor)
-                    )
+                    page = await fetch_page(None if cursor is None else PaginatedRequestParams(cursor=cursor))
                 except MCPError as error:
                     if page_index > 0 and error.error.code == METHOD_NOT_FOUND:
                         raise RuntimeError("MCP list operation became unavailable during pagination") from error

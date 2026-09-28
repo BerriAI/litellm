@@ -163,7 +163,10 @@ def test_deployment_named_like_the_first_native_segment_keeps_its_deployment_roo
         litellm_params={"litellm_metadata": {"model_group": "aoai-chat"}},
     )
 
-    assert str(url) == "https://my-resource.openai.azure.com/openai/deployments/chat/chat/completions?api-version=2024-10-21"
+    assert (
+        str(url)
+        == "https://my-resource.openai.azure.com/openai/deployments/chat/chat/completions?api-version=2024-10-21"
+    )
     assert base == "https://my-resource.openai.azure.com/openai/deployments/chat"
 
 
@@ -393,87 +396,86 @@ MISTRAL_OCR_BODY = {
 }
 
 
-def test_mistral_document_ai_relay_is_costed_per_page():
+def _passthrough_ocr(result):
+    calls = []
+
+    def run(model, endpoint, body):
+        calls.append((model, endpoint, body))
+        return result
+
+    return run, calls
+
+
+def test_ocr_result_routes_the_relay_to_per_page_ocr_costing():
+    passthrough_ocr, _ = _passthrough_ocr(MISTRAL_OCR_BODY)
     result, logging_obj = _relay_logging_result(
-        AzureAIPassthroughConfig(), "mistral-document-ai-2512", "providers/mistral/azure/ocr", MISTRAL_OCR_BODY
+        AzureAIPassthroughConfig(passthrough_ocr=passthrough_ocr),
+        "mistral-document-ai-2512",
+        "providers/mistral/azure/ocr",
+        MISTRAL_OCR_BODY,
     )
     per_page = litellm.get_model_info("azure_ai/mistral-document-ai-2512")["ocr_cost_per_page"]
 
     assert isinstance(result, OCRResponse)
-    assert result.usage_info.pages_processed == 2
+    assert logging_obj.call_type == "aocr"
     assert per_page > 0
     assert logging_obj._response_cost_calculator(result=result) == pytest.approx(2 * per_page)
 
 
-def test_ocr_route_under_a_models_api_base_is_still_recognised():
-    result, _ = _relay_logging_result(
-        AzureAIPassthroughConfig(),
+def test_ocr_binding_receives_the_endpoint_without_the_model_segment():
+    passthrough_ocr, calls = _passthrough_ocr(MISTRAL_OCR_BODY)
+    _relay_logging_result(
+        AzureAIPassthroughConfig(passthrough_ocr=passthrough_ocr),
         "mistral-document-ai-2512",
         "providers/mistral/azure/ocr",
         MISTRAL_OCR_BODY,
         api_base=f"{FOUNDRY_BASE}/models",
     )
 
-    assert isinstance(result, OCRResponse)
+    (model, endpoint, body) = calls[0]
+    assert model == "mistral-document-ai-2512"
+    assert endpoint == "providers/mistral/azure/ocr"
+    assert json.loads(body) == MISTRAL_OCR_BODY
 
 
-def test_relay_to_a_non_ocr_route_keeps_the_passthrough_object_and_call_type():
+def test_relay_the_binding_declines_keeps_the_passthrough_object_and_call_type():
+    passthrough_ocr, _ = _passthrough_ocr(None)
     result, logging_obj = _relay_logging_result(
-        AzureAIPassthroughConfig(), "mistral-document-ai-2512", "models/info", {"name": "mistral-document-ai-2512"}
+        AzureAIPassthroughConfig(passthrough_ocr=passthrough_ocr),
+        "mistral-document-ai-2512",
+        "models/info",
+        {"name": "mistral-document-ai-2512"},
     )
 
     assert result == {"response": {"name": "mistral-document-ai-2512"}}
     assert logging_obj.call_type == "allm_passthrough_route"
 
 
-COHERE_PARSE_BODY = {"id": "parse-1", "pages": [], "meta": {"billed_units": {"pages": 3}}}
-
-
-def test_cohere_parse_relay_is_costed_per_billed_page():
-    result, logging_obj = _relay_logging_result(
-        AzureAIPassthroughConfig(), "Cohere-parse-v5", "providers/cohere/v2/parse", COHERE_PARSE_BODY
-    )
-    per_page = litellm.get_model_info("azure_ai/Cohere-parse-v5")["ocr_cost_per_page"]
-
-    assert isinstance(result, OCRResponse)
-    assert result.usage_info.pages_processed == 3
-    assert logging_obj.call_type == "aocr"
-    assert per_page > 0
-    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(3 * per_page)
-
-
-def test_deployment_without_an_ocr_config_is_never_costed_as_ocr():
-    config = AzureAIPassthroughConfig(ocr_config_for=lambda model: None)
-    result, logging_obj = _relay_logging_result(
-        config, "mistral-document-ai-2512", "providers/mistral/azure/ocr", MISTRAL_OCR_BODY
-    )
-
-    assert result == {"response": MISTRAL_OCR_BODY}
-    assert logging_obj.call_type == "allm_passthrough_route"
-
-
 def test_accepted_ocr_job_without_a_result_body_is_not_costed():
+    passthrough_ocr, calls = _passthrough_ocr(MISTRAL_OCR_BODY)
     result, logging_obj = _relay_logging_result(
-        AzureAIPassthroughConfig(),
+        AzureAIPassthroughConfig(passthrough_ocr=passthrough_ocr),
         "mistral-document-ai-2512",
         "providers/mistral/azure/ocr",
         {"status": "running"},
         status_code=202,
     )
 
+    assert calls == []
     assert result == {"response": {"status": "running"}}
     assert logging_obj.call_type == "allm_passthrough_route"
 
 
-def test_unparseable_ocr_body_falls_back_to_the_passthrough_object():
+def test_binding_result_that_is_not_an_ocr_response_falls_back_to_the_passthrough_object():
+    passthrough_ocr, _ = _passthrough_ocr({"pages": "not a list"})
     result, logging_obj = _relay_logging_result(
-        AzureAIPassthroughConfig(),
+        AzureAIPassthroughConfig(passthrough_ocr=passthrough_ocr),
         "mistral-document-ai-2512",
         "providers/mistral/azure/ocr",
-        ["not", "an", "ocr", "body"],
+        MISTRAL_OCR_BODY,
     )
 
-    assert result == {"response": '["not", "an", "ocr", "body"]'}
+    assert result == {"response": MISTRAL_OCR_BODY}
     assert logging_obj.call_type == "allm_passthrough_route"
 
 

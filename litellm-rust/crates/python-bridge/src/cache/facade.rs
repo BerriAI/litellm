@@ -472,7 +472,7 @@ impl FacadeGuard {
         })
     }
 
-    fn matches(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<bool> {
+    pub(super) fn matches(&self, py: Python<'_>, facade: &Bound<'_, PyAny>) -> PyResult<bool> {
         if !self.outer.matches(py, facade)? {
             return Ok(false);
         }

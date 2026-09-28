@@ -16,7 +16,7 @@ from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 class _FakeRedisCache:
     namespace = None
 
-    def init_async_client(self) -> object:
+    def init_pubsub_client(self) -> object:
         return object()
 
 

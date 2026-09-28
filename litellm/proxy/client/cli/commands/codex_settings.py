@@ -106,7 +106,6 @@ def _with(document: TOMLDocument, path: str, snapshot: str | None) -> TOMLDocume
     if section and section not in document and snapshot is not None:
         contents: Final = tomlkit.parse(tomlkit.dumps(MappingProxyType({key: tomlkit.parse(snapshot).item("value")})))
         return tomlkit.parse(document.as_string() + "\n" + tomlkit.dumps(MappingProxyType({section: contents})))
-    # mutable-ok: TOMLKit editing requires private node mutation to preserve comments and order
     updated: Final = tomlkit.parse(document.as_string())
     parent: Final = _table(_mapping(updated).get(section)) if section else updated
     if parent is None:

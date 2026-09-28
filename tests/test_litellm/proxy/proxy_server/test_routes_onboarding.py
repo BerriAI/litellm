@@ -317,6 +317,25 @@ def test_claim_onboarding_link_missing_field_422(client, monkeypatch, mock_prism
     assert any("password" in str(item) for item in body["detail"])
 
 
+def test_claim_onboarding_link_422_never_echoes_the_submitted_password(client):
+    """A body that fails validation is answered with the field path and message only;
+    pydantic's ``input`` (the whole submitted body for a missing field, password
+    included) must never come back to the caller or land in whatever logs the response."""
+    password = "hunter2-Sup3rSecret!"
+
+    response = client.post(
+        "/onboarding/claim_token",
+        json={"invitation_link": "abc", "password": password},
+    )
+
+    assert response.status_code == 422
+    assert password.encode() not in response.content
+    detail = response.json()["detail"]
+    assert detail[0]["loc"] == ["body", "user_id"]
+    assert detail[0]["msg"]
+    assert set(detail[0]) == {"type", "loc", "msg"}
+
+
 def test_claim_onboarding_link_bad_onboarding_jwt_401(
     client, monkeypatch, mock_prisma
 ):

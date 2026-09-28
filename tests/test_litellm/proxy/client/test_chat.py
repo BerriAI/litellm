@@ -13,7 +13,7 @@ from litellm.proxy.client.exceptions import UnauthorizedError
 
 def _load_http_mocking_responses():
     """Load the third-party `responses` package even if test collection creates
-    a top-level `responses` namespace package from `tests/test_litellm/responses`.
+    a top-level `responses` namespace package from `tests/unit/responses`.
     """
     module = importlib.import_module("responses")
     if hasattr(module, "activate"):

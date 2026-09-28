@@ -250,6 +250,7 @@ async def test_azure_image_edit_litellm_sdk():
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
+            self.headers = {}
 
         def json(self):
             return self._json_data
@@ -370,6 +371,7 @@ async def test_openai_image_edit_cost_tracking():
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
+            self.headers = {}
 
         def json(self):
             return self._json_data
@@ -460,6 +462,7 @@ async def test_azure_image_edit_cost_tracking():
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
+            self.headers = {}
 
         def json(self):
             return self._json_data
@@ -737,6 +740,7 @@ async def test_image_edit_array_handling():
             self._json_data = json_data
             self.status_code = status_code
             self.text = json.dumps(json_data)
+            self.headers = {}
 
         def json(self):
             return self._json_data

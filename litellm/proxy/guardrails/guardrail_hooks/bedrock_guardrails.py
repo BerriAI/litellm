@@ -1218,7 +1218,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
         bedrock_request_data: Final = {  # mutable-ok: outbound JSON request body
             **base_request_data,
             "content": content,
-        }  # mutable-ok: outbound JSON request body
+        }
         prepared_request: Final = await run_aws_signing(
             self._prepare_request,
             credentials=credentials,
@@ -1266,9 +1266,7 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 )
             response_usage: Final = bedrock_guardrail_response.get("usage")
             if isinstance(response_usage, dict):
-                completed_chunk_usages.append(
-                    response_usage
-                )  # rebind-ok: accumulator threaded from make_bedrock_api_request, recording this billed call
+                completed_chunk_usages.append(response_usage)
             return bedrock_guardrail_response
 
         status_code, detail_message = self._parse_bedrock_guardrail_error_response(httpx_response)
@@ -2860,9 +2858,9 @@ class BedrockGuardrail(CustomGuardrail, BaseAWSLLM):
                 return
             except ModifyResponseException as e:
                 if raw_sse:
-                    e.model = _pre_block_response.model or e.model  # rebind-ok: exc.model defaults to the guardrail
+                    e.model = _pre_block_response.model or e.model
                     if e.original_response is None:
-                        e.original_response = _pre_block_response  # rebind-ok: the block builder reads usage off this
+                        e.original_response = _pre_block_response
                     for block_chunk in AnthropicMessagesHandler().build_block_sse_chunks(e, stream_started=False):
                         yield block_chunk
                     return

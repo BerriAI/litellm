@@ -198,10 +198,6 @@ async def _scan_pending(prisma_client: "PrismaClient") -> _PendingScan:
     return _PendingScan(marker, db_now.now, tuple(_DateRow.model_validate(row).date for row in rows))
 
 
-async def pending_days(prisma_client: "PrismaClient") -> tuple[str, ...]:
-    return (await _scan_pending(prisma_client)).days
-
-
 async def reconcile_day(prisma_client: "PrismaClient", day: str) -> None:
     """Rewrite one day of the global table from the per-key sums. Idempotent: a rerun
     overwrites every group with the same totals."""

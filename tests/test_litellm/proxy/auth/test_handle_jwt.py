@@ -5324,15 +5324,21 @@ def test_build_decode_kwargs_warns_for_unscoped_global_fallback_in_mixed_deploym
 
 
 @pytest.mark.asyncio
-async def test_resolve_team_from_header_defers_to_db_membership_only_without_jwt_claims():
+async def test_resolve_team_from_header_accepts_db_teams_provisionally_under_fallback_even_with_jwt_claims():
     """With fallback_to_db_teams=True, an x-litellm-team-id header naming an existing
-    team is accepted provisionally only when the JWT carries no team claims (allowed
-    set empty). When the JWT does carry team claims, the header must still be validated
-    against them, and the flag-off behavior must keep rejecting unknown teams."""
+    team is accepted provisionally whether or not the JWT carries team claims; the
+    union of JWT teams and DB memberships is enforced by auth_builder's later
+    membership check. Unknown values still 403, and the flag-off behavior keeps
+    rejecting teams outside the JWT's allowed set."""
     known_ids = frozenset({"team-from-db"})
 
     deferred, _, _ = await _resolve_header("team-from-db", set(), True, _teams_by_id(known_ids), _team_alias_lookup_404)
     assert deferred == HeaderTeam(header_value="team-from-db", team_id="team-from-db")
+
+    deferred_with_claims, _, _ = await _resolve_header(
+        "team-from-db", {"team-1"}, True, _teams_by_id(known_ids), _team_alias_lookup_404
+    )
+    assert deferred_with_claims == HeaderTeam(header_value="team-from-db", team_id="team-from-db")
 
     with pytest.raises(HTTPException) as exc_info:
         await _resolve_header("team-x", {"team-1", "team-2"}, True, _teams_by_id(known_ids), _team_alias_lookup_404)
@@ -5849,6 +5855,7 @@ async def _run_auth_builder_with_header_team(
     allowed_team_ids: set,
     fake_get_team_by_alias=_team_alias_lookup_404,
     route: str = "/chat/completions",
+    send_header: bool = True,
 ):
     jwt_handler = JWTHandler()
     jwt_handler.litellm_jwtauth = jwt_auth_config
@@ -5909,7 +5916,7 @@ async def _run_auth_builder_with_header_team(
             user_api_key_cache=None,
             parent_otel_span=None,
             proxy_logging_obj=None,
-            request_headers={"x-litellm-team-id": header_team_id},
+            request_headers={"x-litellm-team-id": header_team_id} if send_header else {},
         )
 
 
@@ -7281,6 +7288,130 @@ async def test_auth_builder_header_alias_under_db_fallback_keeps_the_team_allowe
         route="/chat/completions",
     )
     assert allowed["team_id"] == "team_member"
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_header_selects_db_membership_team_when_jwt_also_carries_a_team_claim() -> None:
+    """Under fallback_to_db_teams, x-litellm-team-id may name a DB-membership
+    team the JWT does not claim (LIT-8656): the allowed set is the JWT teams
+    union the user's DB memberships, not the JWT teams alone. The flag-off
+    path keeps rejecting the same header against the JWT's allowed teams."""
+    user_object = LiteLLM_UserTable(
+        user_id="u_mixed",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_member"],
+    )
+    config = LiteLLM_JWTAuth(fallback_to_db_teams=True, team_id_jwt_field="appid")
+    token = {"sub": "u_mixed", "scope": "", "appid": "team_claimed"}
+    fake_get_team = _teams_by_id(frozenset({"team_claimed", "team_member"}))
+
+    by_membership = await _run_auth_builder_with_header_team(
+        config, token, "team_member", user_object, fake_get_team, {"team_claimed"}
+    )
+    assert by_membership["team_id"] == "team_member"
+    assert by_membership["team_object"].team_id == "team_member"
+
+    by_claim = await _run_auth_builder_with_header_team(
+        config, token, "team_claimed", user_object, fake_get_team, {"team_claimed"}
+    )
+    assert by_claim["team_id"] == "team_claimed"
+
+    flag_off = LiteLLM_JWTAuth(fallback_to_db_teams=False, team_id_jwt_field="appid")
+    with pytest.raises(HTTPException) as exc_info:
+        await _run_auth_builder_with_header_team(
+            flag_off, token, "team_member", user_object, fake_get_team, {"team_claimed"}
+        )
+    assert exc_info.value.status_code == 403
+    assert "JWT's allowed teams" in exc_info.value.detail
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_header_non_member_team_is_denied_when_jwt_also_carries_a_team_claim() -> None:
+    """A header naming a team the user does not belong to stays a membership
+    denial even when the JWT carries a team claim, and an existing but
+    non-member team produces the exact same 403 shape as a nonexistent one so
+    the response is no oracle for which team ids exist."""
+    user_object = LiteLLM_UserTable(
+        user_id="u_mixed",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_member"],
+    )
+    config = LiteLLM_JWTAuth(fallback_to_db_teams=True, team_id_jwt_field="appid")
+    token = {"sub": "u_mixed", "scope": "", "appid": "team_claimed"}
+    fake_get_team = _teams_by_id(frozenset({"team_claimed", "team_member", "team_other"}))
+
+    with pytest.raises(HTTPException) as outsider_exc:
+        await _run_auth_builder_with_header_team(
+            config, token, "team_other", user_object, fake_get_team, {"team_claimed"}
+        )
+    with pytest.raises(HTTPException) as missing_exc:
+        await _run_auth_builder_with_header_team(
+            config, token, "team_ghost", user_object, fake_get_team, {"team_claimed"}
+        )
+
+    assert outsider_exc.value.status_code == 403
+    assert missing_exc.value.status_code == 403
+    assert outsider_exc.value.detail == (
+        "x-litellm-team-id 'team_other' does not resolve to a team id or a unique team alias among your "
+        "team memberships."
+    )
+    assert missing_exc.value.detail.replace("team_ghost", "<team>") == outsider_exc.value.detail.replace(
+        "team_other", "<team>"
+    )
+    assert "exist" not in missing_exc.value.detail
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_no_header_keeps_the_jwt_team_when_fallback_to_db_teams_is_on() -> None:
+    """With no x-litellm-team-id header, fallback_to_db_teams must not disturb
+    the claim path: the JWT's own team claim still binds the request."""
+    user_object = LiteLLM_UserTable(
+        user_id="u_mixed",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_member"],
+    )
+    config = LiteLLM_JWTAuth(fallback_to_db_teams=True, team_id_jwt_field="appid")
+    token = {"sub": "u_mixed", "scope": "", "appid": "team_claimed"}
+
+    result = await _run_auth_builder_with_header_team(
+        config,
+        token,
+        "team_member",
+        user_object,
+        _teams_by_id(frozenset({"team_claimed", "team_member"})),
+        {"team_claimed"},
+        send_header=False,
+    )
+    assert result["team_id"] == "team_claimed"
+
+
+@pytest.mark.asyncio
+async def test_auth_builder_team_id_default_does_not_widen_the_header_allowed_set() -> None:
+    """team_id_default fills in a team for claimless tokens but must not widen
+    the header's allowed set: a header naming the default team is still held
+    to DB membership under fallback_to_db_teams."""
+    user_object = LiteLLM_UserTable(
+        user_id="u_default",
+        user_role=LitellmUserRoles.INTERNAL_USER,
+        teams=["team_member"],
+    )
+    config = LiteLLM_JWTAuth(fallback_to_db_teams=True, team_id_default="team_default")
+    token = {"sub": "u_default", "scope": ""}
+
+    with pytest.raises(HTTPException) as exc_info:
+        await _run_auth_builder_with_header_team(
+            config,
+            token,
+            "team_default",
+            user_object,
+            _teams_by_id(frozenset({"team_default", "team_member"})),
+            set(),
+        )
+    assert exc_info.value.status_code == 403
+    assert exc_info.value.detail == (
+        "x-litellm-team-id 'team_default' does not resolve to a team id or a unique team alias among your "
+        "team memberships."
+    )
 
 
 @pytest.mark.asyncio

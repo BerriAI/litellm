@@ -60,10 +60,13 @@ fn disabled_kms_loader_does_not_require_environment_configuration(#[case] enable
 }
 
 #[rstest]
-#[case::settings(Some("configured-region"), None)]
-#[case::environment(None, Some("environment-region"))]
-fn enabled_kms_loader_accepts_either_region_source(
+#[case::settings(Some("configured-region"), None, None)]
+#[case::region_name(None, Some("AWS_REGION_NAME"), Some("environment-region"))]
+#[case::region(None, Some("AWS_REGION"), Some("environment-region"))]
+#[case::default_region(None, Some("AWS_DEFAULT_REGION"), Some("environment-region"))]
+fn enabled_kms_loader_accepts_supported_region_sources(
     #[case] configured_region: Option<&'static str>,
+    #[case] environment_region_name: Option<&'static str>,
     #[case] environment_region: Option<&'static str>,
 ) {
     use std::sync::Arc;
@@ -72,7 +75,7 @@ fn enabled_kms_loader_accepts_either_region_source(
         ..KeyManagementSettings::default()
     };
     let environment = Arc::new(move |name: &str| {
-        (name == "AWS_REGION_NAME")
+        (Some(name) == environment_region_name)
             .then(|| environment_region.map(str::to_owned))
             .flatten()
     });

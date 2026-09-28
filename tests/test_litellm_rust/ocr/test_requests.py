@@ -244,6 +244,21 @@ def test_native_ocr_maps_provider_400_with_public_provider_details(ocr_server: R
     assert "invalid OCR request" in str(caught.value)
 
 
+def test_native_ocr_encodes_python_file_input_and_drops_unknown_arguments(ocr_server: RecordingServer) -> None:
+    response: Final = call_native_ocr(
+        ocr_server,
+        document={"type": "file", "file": BytesIO(b"abc"), "mime_type": "image/png"},
+        opaque_extension=object(),
+    )
+
+    assert response.pages[0].markdown == "native OCR response"
+    assert_native_request(ocr_server)
+    assert ocr_server.requests[0].body == {
+        "model": "mistral-ocr-latest",
+        "document": {"type": "image_url", "image_url": "data:image/png;base64,YWJj"},
+    }
+
+
 class TokenAbort(BaseException):
     pass
 

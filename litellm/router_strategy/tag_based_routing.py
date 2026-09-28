@@ -217,9 +217,7 @@ def _strip_routing_prefix(tags: Sequence[str], prefix: str) -> tuple[tuple[str, 
 
 def _split_tags(tags: Sequence[str]) -> tuple[tuple[str, ...], list[str], tuple[str, ...]]:
     required: Final = tuple(tag[1:] for tag in tags if tag.startswith("&") and len(tag) > 1)
-    positive: Final = [
-        t for t in tags if not t.startswith("!") and not t.startswith("&")
-    ]  # mutable-ok: feeds _match_deployment's existing list[str]-typed request_tags param
+    positive: Final = [t for t in tags if not t.startswith("!") and not t.startswith("&")]
     excluded: Final = tuple(tag[1:] for tag in tags if tag.startswith("!") and len(tag) > 1)
     return required, positive, excluded
 

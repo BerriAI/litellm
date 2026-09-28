@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from collections.abc import Awaitable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
+from types import MappingProxyType
 from typing import Final, Protocol, cast  # noqa: TID251  # validates dynamically loaded native callables
 
 from litellm.rust_bridge.bindings import NativeBinding
@@ -18,6 +19,7 @@ class LiteLLMChatCompletionsRequest:
     custom_llm_provider: str | None
     extra_headers: Mapping[str, object] | None
     kwargs: Mapping[str, object]
+    parameters: Mapping[str, object] = field(default_factory=lambda: MappingProxyType({}))
 
 
 class NativeCompletion(Protocol):

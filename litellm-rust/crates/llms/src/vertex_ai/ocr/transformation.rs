@@ -130,7 +130,8 @@ impl VertexAiOcrConfig {
     ) -> Result<vertex::VertexEnvironment, Error> {
         validate_destination(connection)?;
         client
-            .vertex_auth()
+            .auth()
+            .gcp
             .validate_environment(
                 connection.extra_headers.clone(),
                 connection

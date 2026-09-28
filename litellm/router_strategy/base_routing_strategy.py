@@ -40,10 +40,24 @@ class BaseRoutingStrategy(ABC):
             self.periodic_sync_in_memory_spend_with_redis(default_sync_interval=default_sync_interval)
         )
 
+    def cancel_sync_task(self) -> None:
+        if self._sync_task is not None:
+            self._sync_task.cancel()
+
+    def retire(self) -> None:
+        self.cancel_sync_task()
+        if not self.redis_increment_operation_queue:
+            return
+        try:
+            loop: Final = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        loop.create_task(self._push_in_memory_increments_to_redis())
+
     async def cleanup(self):
         """Cleanup method to be called when shutting down"""
         if self._sync_task is not None:
-            self._sync_task.cancel()
+            self.cancel_sync_task()
             try:
                 await self._sync_task
             except asyncio.CancelledError:

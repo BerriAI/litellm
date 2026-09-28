@@ -1,7 +1,7 @@
 """Pin behavior of top-of-file and bottom-of-region helpers.
 
 Covers ``print_verbose``, ``_get_email_logger_class``,
-``_accepts_litellm_call_info``, ``_enrich_http_exception_with_guardrail_context``,
+``_accepts_litellm_call_info``, ``enrich_http_exception_with_guardrail_context``,
 ``on_backoff``, ``jsonify_object``, ``_lookup_deprecated_key``.
 """
 
@@ -15,9 +15,11 @@ from fastapi import HTTPException
 
 import litellm
 from litellm.proxy import utils as utils_mod
+from litellm.proxy.guardrails.exception_utils import (
+    enrich_http_exception_with_guardrail_context,
+)
 from litellm.proxy.utils import (
     _accepts_litellm_call_info,
-    _enrich_http_exception_with_guardrail_context,
     _get_email_logger_class,
     _lookup_deprecated_key,
     jsonify_object,
@@ -168,7 +170,7 @@ def test_accepts_litellm_call_info_error_on_callback_without_hook_raises(monkeyp
 
 
 # ---------------------------------------------------------------------------
-# _enrich_http_exception_with_guardrail_context
+# enrich_http_exception_with_guardrail_context
 # ---------------------------------------------------------------------------
 
 
@@ -179,7 +181,7 @@ def test_enrich_http_exception_adds_guardrail_name_and_mode():
     cb.guardrail_name = "presidio"
     cb.event_hook = "pre_call"
 
-    _enrich_http_exception_with_guardrail_context(exc, cb)
+    enrich_http_exception_with_guardrail_context(exc, cb)
     snapshot = {
         "error": detail["error"],
         "guardrail_name": detail["guardrail_name"],
@@ -198,31 +200,31 @@ def test_enrich_http_exception_does_not_overwrite_existing_keys():
     cb = MagicMock()
     cb.guardrail_name = "should-not-overwrite"
     cb.event_hook = "should-not-overwrite"
-    _enrich_http_exception_with_guardrail_context(exc, cb)
+    enrich_http_exception_with_guardrail_context(exc, cb)
     assert detail == {"error": "blocked", "guardrail_name": "explicit", "guardrail_mode": "during_call"}
 
 
 def test_enrich_http_exception_no_op_for_non_http_exception():
     other = ValueError("not http")
-    _enrich_http_exception_with_guardrail_context(other, MagicMock(guardrail_name="g"))
+    enrich_http_exception_with_guardrail_context(other, MagicMock(guardrail_name="g"))
 
 
 def test_enrich_http_exception_no_op_for_non_dict_detail():
     exc = HTTPException(status_code=400, detail="just a string")
-    _enrich_http_exception_with_guardrail_context(exc, MagicMock(guardrail_name="g"))
+    enrich_http_exception_with_guardrail_context(exc, MagicMock(guardrail_name="g"))
     assert exc.detail == "just a string"
 
 
 def test_enrich_http_exception_error_handling_does_not_raise():
-    """``_enrich_http_exception_with_guardrail_context`` swallows mismatched
+    """``enrich_http_exception_with_guardrail_context`` swallows mismatched
     inputs (non-HTTPException, non-dict detail, no guardrail_name) and never
     raises — verified by passing each pathological input in turn."""
     # Bare exception with no detail at all should not blow up.
     bare = Exception("bare")
-    _enrich_http_exception_with_guardrail_context(bare, MagicMock(guardrail_name=None))
+    enrich_http_exception_with_guardrail_context(bare, MagicMock(guardrail_name=None))
     # HTTPException with non-dict detail.
     s = HTTPException(status_code=500, detail="str-detail")
-    _enrich_http_exception_with_guardrail_context(s, MagicMock(guardrail_name="g"))
+    enrich_http_exception_with_guardrail_context(s, MagicMock(guardrail_name="g"))
     assert s.detail == "str-detail"
 
 
@@ -232,7 +234,7 @@ def test_enrich_http_exception_with_falsy_attrs_does_not_set():
     cb = MagicMock()
     cb.guardrail_name = None
     cb.event_hook = None
-    _enrich_http_exception_with_guardrail_context(exc, cb)
+    enrich_http_exception_with_guardrail_context(exc, cb)
     assert detail == {"error": "blocked"}
 
 

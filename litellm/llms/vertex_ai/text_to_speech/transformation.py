@@ -43,9 +43,7 @@ else:
     LiteLLMLoggingObj = Any
     HttpxBinaryResponseContent = Any
 
-_LyriaVoice: TypeAlias = (
-    str | dict | None
-)  # mutable-ok: inherited interface supports structured provider voice dictionaries
+_LyriaVoice: TypeAlias = str | dict | None
 
 
 class VertexAITextToSpeechConfig(BaseTextToSpeechConfig, VertexBase):
@@ -664,21 +662,15 @@ class VertexAILyriaTextToSpeechConfig(VertexAITextToSpeechConfig):
         if model_info["vertex_ai_audio_api"] == "lyria_predict":
             predictions: Final = response_json.get("predictions") or ()
             if predictions:
-                audio_data = predictions[0].get("audioContent") or predictions[0].get(
-                    "bytesBase64Encoded"
-                )  # rebind-ok: predict response supplies the generated audio value
+                audio_data = predictions[0].get("audioContent") or predictions[0].get("bytesBase64Encoded")
                 mime_type = predictions[0].get("mimeType")  # rebind-ok: predict response supplies its audio MIME type
         else:
             for step in response_json.get("steps") or response_json.get("outputs") or ():
                 content_items = step.get("content") or () if step.get("type") == "model_output" else (step,)
                 for content in content_items:
                     if content.get("type") == "audio" and content.get("data"):
-                        audio_data = content[
-                            "data"
-                        ]  # rebind-ok: interactions response supplies the generated audio value
-                        mime_type = content.get(
-                            "mime_type"
-                        )  # rebind-ok: interactions response supplies its audio MIME type
+                        audio_data = content["data"]
+                        mime_type = content.get("mime_type")
         if audio_data is None:
             raise ValueError(f"No generated audio found in Vertex AI {base_model} response")
         binary_data: Final = base64.b64decode(audio_data)

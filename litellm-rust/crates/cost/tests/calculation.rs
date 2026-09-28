@@ -2,6 +2,7 @@ use litellm_cost::{
     OffPeakRates, Pricing, PricingError, PromptConvention, Rate, Rates, Request, ServiceTier,
     ThresholdPolicy, ThresholdRates, TierRates, Usage, calculate, compile,
 };
+use rstest::rstest;
 
 fn rates(input: Rate, output: Rate) -> Rates {
     Rates {
@@ -54,27 +55,24 @@ fn breakdown_and_total_agree() {
     assert_eq!(result.rates.cache_read, 0.5);
 }
 
-#[test]
-fn absent_null_and_zero_cache_rates_are_distinct() {
+#[rstest]
+#[case::missing(Rate::Missing, Rate::Missing, 200.0)]
+#[case::null(Rate::Null, Rate::Missing, 200.0)]
+#[case::zero(Rate::Value(0.0), Rate::Value(0.0), 130.0)]
+fn absent_null_and_zero_cache_rates_are_distinct(
+    #[case] cache_read: Rate,
+    #[case] cache_write: Rate,
+    #[case] expected_input: f64,
+) {
     let base = rates(Rate::Value(2.0), Rate::Value(4.0));
-    for read in [Rate::Missing, Rate::Null] {
-        let standard = Rates {
-            cache_read: read,
-            ..base
-        };
-        assert_eq!(
-            calculate(&pricing(standard), &request()).unwrap().input(),
-            200.0
-        );
-    }
     let standard = Rates {
-        cache_read: Rate::Value(0.0),
-        cache_write: Rate::Value(0.0),
+        cache_read,
+        cache_write,
         ..base
     };
     assert_eq!(
         calculate(&pricing(standard), &request()).unwrap().input(),
-        130.0
+        expected_input
     );
 }
 

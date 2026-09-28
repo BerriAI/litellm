@@ -297,6 +297,7 @@ def run_claude(
     }
     env["ANTHROPIC_BASE_URL"] = base_url
     env["ANTHROPIC_AUTH_TOKEN"] = api_key
+    env["DISABLE_AUTOUPDATER"] = "1"
     # Hand the CLI a fresh empty HOME so a compromised claude package
     # or a model-directed Read tool call can't see the runtime user's
     # real dotfiles. Created here, removed in the `finally` below

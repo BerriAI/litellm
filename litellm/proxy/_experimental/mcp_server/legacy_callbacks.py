@@ -55,9 +55,7 @@ def create_sampling_callback(
             params=params,
             default_model=getattr(litellm, "default_mcp_sampling_model", None),
             user_api_key_auth=captured.user_api_key_auth,
-            raw_headers=dict(captured.raw_headers)
-            if captured.raw_headers is not None
-            else None,  # mutable-ok: handler consumes an owned request header dict
+            raw_headers=dict(captured.raw_headers) if captured.raw_headers is not None else None,
             client_ip=captured.client_ip,
         )
 

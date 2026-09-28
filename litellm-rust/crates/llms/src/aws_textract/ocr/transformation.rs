@@ -48,9 +48,14 @@ impl BaseOcrConfig for TextractDetectTextConfig {
     async fn validate_environment(
         &self,
         request: &PreparedOcrRequest,
-        _client: &OcrClient,
+        client: &OcrClient,
     ) -> Result<TextractEnvironment, Error> {
-        environment(request, TextractOperation::DetectDocumentText).await
+        environment(
+            &client.auth().aws,
+            request,
+            TextractOperation::DetectDocumentText,
+        )
+        .await
     }
 
     fn get_complete_url(

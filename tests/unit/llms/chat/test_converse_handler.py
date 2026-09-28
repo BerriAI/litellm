@@ -1,4 +1,7 @@
 import json
+from collections.abc import AsyncIterator, Mapping
+from types import MappingProxyType
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock
 
 import httpx
@@ -9,7 +12,7 @@ from litellm.llms.bedrock.chat import BedrockConverseLLM
 from litellm.llms.bedrock.chat.converse_handler import make_sync_call
 from litellm.llms.bedrock.common_utils import _get_all_bedrock_regions
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
-
+from tests._support.stream_chunk_size import DEFAULT_CHUNKING_REQUESTS, ROUTER_CHUNK_SIZE_CASES, keys_at_every_depth
 
 
 def test_encode_model_id_with_inference_profile():
@@ -68,8 +71,8 @@ class TestBedrockRegionInModelPath:
         ],
     )
     def test_region_and_model_id_extraction(
-        self, model, expected_model_id, expected_region
-    ):
+        self, model: str, expected_model_id: str, expected_region: str | None
+    ) -> None:
         """
         Verify that completion() correctly extracts both modelId and aws_region_name
         from the bedrock/{region}/{model} path format.
@@ -139,11 +142,11 @@ class TestBedrockRegionInModelPath:
         assert optional_params["aws_region_name"] == "eu-west-1"
 
 
-def _stream_completion_with_spied_iter_bytes(model: str, **kwargs) -> MagicMock:
-    mock_response = MagicMock()
+def _stream_completion_with_spied_iter_bytes(model: str, stream_chunk_size: int | None = None) -> MagicMock:
+    mock_response: Final = MagicMock()
     mock_response.status_code = 200
     mock_response.iter_bytes = MagicMock(return_value=iter([]))
-    client = HTTPHandler()
+    client: Final = HTTPHandler()
     client.post = MagicMock(return_value=mock_response)
 
     litellm.completion(
@@ -154,7 +157,7 @@ def _stream_completion_with_spied_iter_bytes(model: str, **kwargs) -> MagicMock:
         aws_access_key_id="fake",
         aws_secret_access_key="fake",
         aws_region_name="us-east-1",
-        **kwargs,
+        stream_chunk_size=stream_chunk_size,
     )
     return mock_response.iter_bytes
 
@@ -276,7 +279,7 @@ async def test_async_converse_completion_forwards_bedrock_response_headers():
 
 @pytest.mark.asyncio
 async def test_async_converse_streaming_forwards_bedrock_response_headers():
-    async def _no_bytes(chunk_size=None):
+    async def _no_bytes(chunk_size: int | None = None) -> AsyncIterator[bytes]:
         return
         yield b""
 
@@ -300,7 +303,7 @@ async def test_async_converse_streaming_forwards_bedrock_response_headers():
     assert response._hidden_params["additional_headers"]["llm_provider-x-amzn-requestid"] == "req-def"
 
 
-def test_completion_plumbs_stream_chunk_size_through_converse():
+def test_completion_plumbs_stream_chunk_size_through_converse() -> None:
     iter_bytes_spy = _stream_completion_with_spied_iter_bytes(
         model="bedrock/anthropic.claude-3-5-sonnet-20240620-v1:0"
     )
@@ -311,6 +314,142 @@ def test_completion_plumbs_stream_chunk_size_through_converse():
         stream_chunk_size=2048,
     )
     iter_bytes_spy.assert_called_once_with(chunk_size=2048)
+
+
+def _stream_converse_completion_with_spied_client(**request: object) -> tuple[MagicMock, MagicMock]:
+    mock_response: Final = MagicMock()
+    mock_response.status_code = 200
+    mock_response.iter_bytes = MagicMock(return_value=iter([]))
+    client: Final = HTTPHandler()
+    client.post = MagicMock(return_value=mock_response)
+
+    litellm.completion(
+        model="bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **request,
+    )
+    return mock_response.iter_bytes, client.post
+
+
+def test_completion_stream_chunk_size_reaches_iter_bytes_but_not_converse_body() -> None:
+    iter_bytes_spy, post_spy = _stream_converse_completion_with_spied_client(stream_chunk_size=64)
+
+    iter_bytes_spy.assert_called_once_with(chunk_size=64)
+    data: Final = post_spy.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
+
+
+@pytest.mark.parametrize("request_kwargs", DEFAULT_CHUNKING_REQUESTS)
+def test_completion_uses_default_chunking_unless_a_valid_size_is_requested(
+    request_kwargs: Mapping[str, object],
+) -> None:
+    iter_bytes_spy, _ = _stream_converse_completion_with_spied_client(**request_kwargs)
+
+    iter_bytes_spy.assert_called_once_with(chunk_size=None)
+
+
+async def _astream_converse_completion_with_spied_client(**request: object) -> tuple[MagicMock, AsyncMock]:
+    async def _no_bytes(chunk_size: int | None = None) -> AsyncIterator[bytes]:
+        return
+        yield b""
+
+    mock_response: Final = MagicMock()
+    mock_response.status_code = 200
+    mock_response.aiter_bytes = MagicMock(return_value=_no_bytes())
+    aiter_bytes_spy: Final = mock_response.aiter_bytes
+    client: Final = AsyncHTTPHandler()
+    client.post = AsyncMock(return_value=mock_response)
+
+    await litellm.acompletion(
+        model="bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+        aws_access_key_id="fake",
+        aws_secret_access_key="fake",
+        aws_region_name="us-east-1",
+        **request,
+    )
+    return aiter_bytes_spy, client.post
+
+
+@pytest.mark.asyncio
+async def test_acompletion_stream_chunk_size_reaches_aiter_bytes_but_not_converse_body() -> None:
+    aiter_bytes_spy, post_spy = await _astream_converse_completion_with_spied_client(stream_chunk_size=64)
+
+    aiter_bytes_spy.assert_called_once_with(chunk_size=64)
+    data: Final = post_spy.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("request_kwargs", DEFAULT_CHUNKING_REQUESTS)
+async def test_acompletion_uses_default_chunking_unless_a_valid_size_is_requested(
+    request_kwargs: Mapping[str, object],
+) -> None:
+    aiter_bytes_spy, _ = await _astream_converse_completion_with_spied_client(**request_kwargs)
+
+    aiter_bytes_spy.assert_called_once_with(chunk_size=None)
+
+
+CONVERSE_DEPLOYMENT: Final = MappingProxyType(
+    {
+        "model": "bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+        "aws_access_key_id": "fake",
+        "aws_secret_access_key": "fake",
+        "aws_region_name": "us-east-1",
+    }
+)
+
+
+@pytest.mark.parametrize("deployment_extras,expected_chunk_size", ROUTER_CHUNK_SIZE_CASES)
+def test_router_deployment_stream_chunk_size_reaches_iter_bytes(
+    deployment_extras: Mapping[str, object], expected_chunk_size: int | None
+) -> None:
+    mock_response: Final = MagicMock()
+    mock_response.status_code = 200
+    mock_response.iter_bytes = MagicMock(return_value=iter([]))
+    client: Final = HTTPHandler()
+    client.post = MagicMock(return_value=mock_response)
+    router: Final = litellm.Router(
+        model_list=[{"model_name": "converse-chunked", "litellm_params": {**CONVERSE_DEPLOYMENT, **deployment_extras}}]
+    )
+
+    router.completion(
+        model="converse-chunked",
+        messages=[{"role": "user", "content": "hi"}],
+        stream=True,
+        client=client,
+    )
+
+    mock_response.iter_bytes.assert_called_once_with(chunk_size=expected_chunk_size)
+    data: Final = client.post.call_args.kwargs["data"]
+    assert "stream_chunk_size" not in keys_at_every_depth(json.loads(data)), data
+
+
+@pytest.mark.parametrize("stream", [True, False], ids=["stream", "non_stream"])
+def test_converse_rejects_non_int_stream_chunk_size_before_calling_bedrock(stream: bool) -> None:
+    send: Final = MagicMock(return_value=httpx.Response(200))
+    client: Final = HTTPHandler(client=httpx.Client(transport=httpx.MockTransport(send)))
+
+    with pytest.raises(litellm.BadRequestError):
+        litellm.completion(
+            model="bedrock/converse/anthropic.claude-haiku-4-5-20251001-v1:0",
+            messages=[{"role": "user", "content": "hi"}],
+            stream=stream,
+            client=client,
+            aws_access_key_id="fake",
+            aws_secret_access_key="fake",
+            aws_region_name="us-east-1",
+            stream_chunk_size="sixty-four",
+        )
+
+    send.assert_not_called()
 
 
 def _bedrock_error_response(status_code: int, request_id: str) -> httpx.Response:

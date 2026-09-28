@@ -489,9 +489,7 @@ class BedrockRealtime(BaseAWSLLM):
                 parsed_client_message = _parse_client_message(message)
                 is_session_update = _json_str(parsed_client_message.get("type")) == "session.update"
                 if is_session_update:
-                    client_ws.scope[BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY] = (
-                        message  # rebind-ok: scope outlives the attempt
-                    )
+                    client_ws.scope[BEDROCK_REALTIME_PENDING_SESSION_UPDATE_SCOPE_KEY] = message
 
                 transformed_messages = transformation_config.transform_realtime_request(
                     message=message,

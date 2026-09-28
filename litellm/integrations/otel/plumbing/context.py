@@ -9,6 +9,7 @@ from opentelemetry import baggage
 from opentelemetry.context import Context, get_current
 from opentelemetry.sdk.trace import ReadableSpan
 from opentelemetry.trace import (
+    INVALID_SPAN,
     Link,
     NonRecordingSpan,
     Span,
@@ -20,6 +21,7 @@ from opentelemetry.trace.propagation.tracecontext import (
     TraceContextTextMapPropagator,
 )
 
+from litellm._internal_context import in_post_response_phase
 from litellm.integrations.otel.model.semconv import HTTP
 
 if TYPE_CHECKING:
@@ -223,6 +225,35 @@ def resolve_parent_context(threaded: Span | None = None) -> Context:
     if is_recordable_span(threaded) and not is_recordable_span(get_current_span(ctx)):
         ctx = context_from_span(threaded, context=ctx)
     return ctx
+
+
+def resolve_service_span_context(
+    threaded: Span | None = None, end_time_ns: int | None = None
+) -> tuple[Context, tuple[Link, ...]]:
+    """Parent context + links for a service/DB span that ended at ``end_time_ns``.
+
+    Work the caller did not wait for starts its own root trace with a span link
+    back to the parent instead of stretching the parent's trace: anything logged
+    from the post-response phase (success callbacks, the response-cache write,
+    see :func:`litellm._internal_context.post_response_phase`), whether or not
+    the server span has closed yet, and anything that finished after its parent
+    ended. Baggage stays on the returned context.
+    """
+    ctx: Final = resolve_parent_context(threaded)
+    parent: Final = get_current_span(ctx)
+    if not _is_post_response(parent, end_time_ns):
+        return ctx, ()
+    return set_span_in_context(INVALID_SPAN, ctx), (Link(parent.get_span_context()),)
+
+
+def _is_post_response(parent: Span, end_time_ns: int | None) -> bool:
+    if not isinstance(parent, ReadableSpan):
+        return False
+    if in_post_response_phase():
+        return True
+    if parent.end_time is None:
+        return False
+    return end_time_ns is None or end_time_ns > parent.end_time
 
 
 def resolve_request_span_context() -> Context:

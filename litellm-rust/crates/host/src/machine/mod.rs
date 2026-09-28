@@ -1,17 +1,18 @@
 mod auth;
-mod route_machine;
+mod call_machine;
 
 use std::future::Future;
 use std::pin::Pin;
 
-pub use auth::{HostTokenProvider, TokenRoute};
-pub use route_machine::{ExecuteFuture, HostChannel, MachineFault, RouteMachine};
+pub use auth::{HostTokenProvider, TokenProtocol};
+pub use call_machine::{
+    CallContext, CallMachine, ChannelHooks, ExecuteFuture, HostServices, MachineFault, StreamSender,
+};
 
-use crate::host::{HostOp, HostResult};
-use crate::route::Route;
+use crate::protocol::{Protocol, Suspension};
 
-pub enum MachineStep<R: Route, C> {
-    Host(HostOp<R>),
+pub enum MachineStep<R: Protocol, C> {
+    Suspended(Suspension<R>),
     Complete(C),
 }
 
@@ -19,8 +20,8 @@ pub type Step<'a, M> = Pin<
     Box<
         dyn Future<
                 Output = Result<
-                    MachineStep<<M as Machine>::Route, <M as Machine>::Complete>,
-                    <<M as Machine>::Route as Route>::Error,
+                    MachineStep<<M as Machine>::Protocol, <M as Machine>::Complete>,
+                    <<M as Machine>::Protocol as Protocol>::Error,
                 >,
             > + Send
             + 'a,
@@ -30,7 +31,10 @@ pub type Step<'a, M> = Pin<
 pub type Interrupted<'a, M> = Pin<
     Box<
         dyn Future<
-                Output = Result<<M as Machine>::Complete, <<M as Machine>::Route as Route>::Error>,
+                Output = Result<
+                    <M as Machine>::Complete,
+                    <<M as Machine>::Protocol as Protocol>::Error,
+                >,
             > + Send
             + 'a,
     >,
@@ -51,19 +55,18 @@ impl<E> HostFailure<E> {
 }
 
 /// A resumable call. Core implements it per route; a host drives it. Every suspension
-/// point is an op the host performs and answers with a result.
+/// point is an op the host performs and answers through the op's own reply before it
+/// resumes the call again.
 pub trait Machine: Send {
-    type Route: Route;
+    type Protocol: Protocol;
     type Complete: Send + 'static;
 
-    /// `None` on the first call and whenever the previous step completed without
-    /// yielding an op; otherwise the result of the op last yielded.
-    fn resume(&mut self, result: Option<HostResult<Self::Route>>) -> Step<'_, Self>;
+    fn resume(&mut self) -> Step<'_, Self>;
 
     /// The host failed to perform the pending op, or the caller cancelled. The call
     /// yields no further ops.
     fn interrupt(
         &mut self,
-        failure: HostFailure<<Self::Route as Route>::Error>,
+        failure: HostFailure<<Self::Protocol as Protocol>::Error>,
     ) -> Interrupted<'_, Self>;
 }

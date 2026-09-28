@@ -14,6 +14,7 @@ import {
   getEntityBreakdown,
   handleExportCSV,
   handleExportJSON,
+  handleServerExport,
   resolveEntities,
 } from "./utils";
 
@@ -3003,6 +3004,42 @@ describe("EntityUsageExport utils", () => {
         "Cache Read Input Tokens",
         "Cache Creation Input Tokens",
       ]);
+    });
+  });
+
+  describe("handleServerExport", () => {
+    beforeEach(() => {
+      document.body.innerHTML = "";
+      window.URL.createObjectURL = vi.fn(() => "blob:mock-url");
+      window.URL.revokeObjectURL = vi.fn();
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    it("passes the chosen scope and format to the server export and downloads the returned blob", async () => {
+      const serverBlob = new Blob(["payload"], { type: "text/csv" });
+      const serverExport = vi.fn(async () => serverBlob);
+      const createObjectURLSpy = vi.spyOn(window.URL, "createObjectURL");
+      const appendChildSpy = vi.spyOn(document.body, "appendChild");
+
+      await handleServerExport(serverExport, "daily_with_keys", "team", "csv");
+
+      expect(serverExport).toHaveBeenCalledWith("daily_with_keys", "csv");
+      expect(createObjectURLSpy).toHaveBeenCalledWith(serverBlob);
+      const attached = appendChildSpy.mock.calls[0][0] as HTMLAnchorElement;
+      const today = new Date().toISOString().split("T")[0];
+      expect(attached.download).toBe(`team_usage_daily_with_keys_${today}.csv`);
+    });
+
+    it("lets a server failure propagate so the modal can toast it instead of downloading nothing", async () => {
+      const serverExport = vi.fn(async () => {
+        throw new Error("upstream 500");
+      });
+
+      await expect(handleServerExport(serverExport, "daily", "team", "json")).rejects.toThrow("upstream 500");
+      expect(document.body.querySelector("a")).toBeNull();
     });
   });
 });

@@ -11,7 +11,7 @@ test-support = ["litellm-http/test-support"]
 [dependencies]
 litellm-types.workspace = true
 litellm-core-utils.workspace = true
-litellm-auth.workspace = true
+litellm-auth = { workspace = true, features = ["aws", "azure", "gcp"] }
 litellm-auth-aws.workspace = true
 litellm-auth-azure.workspace = true
 litellm-auth-gcp.workspace = true
@@ -19,6 +19,7 @@ litellm-host.workspace = true
 litellm-framing.workspace = true
 litellm-http.workspace = true
 litellm-secrets.workspace = true
+litellm-python-compat.workspace = true
 base64.workspace = true
 bytes.workspace = true
 data-url = "0.3.2"
@@ -35,6 +36,7 @@ tokio = { workspace = true, features = ["sync"] }
 url.workspace = true
 
 [dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
 aws-smithy-eventstream = "=0.61.4"
 aws-smithy-types = "1.6.1"
 rstest.workspace = true

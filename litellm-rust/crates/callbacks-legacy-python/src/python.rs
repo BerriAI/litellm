@@ -19,18 +19,12 @@ pub(crate) enum LegacyPython {
     Streaming(Streaming),
 }
 
-/// The `@client` wrapper around the call: `function_setup`, limits, credentials,
-/// response metadata and the correlation context.
+/// The `@client` wrapper around the call: `function_setup`, response metadata and the
+/// correlation context.
 #[derive(Clone, Copy, Debug, IntoStaticStr, PartialEq, Eq, VariantArray)]
 pub(crate) enum Wrapper {
     #[strum(serialize = "setup")]
     Setup,
-    #[strum(serialize = "check_limits")]
-    CheckLimits,
-    #[strum(serialize = "credential_list")]
-    CredentialList,
-    #[strum(serialize = "warn_unknown_credential")]
-    WarnUnknownCredential,
     #[strum(serialize = "is_internal_call")]
     IsInternalCall,
     #[strum(serialize = "finalize")]

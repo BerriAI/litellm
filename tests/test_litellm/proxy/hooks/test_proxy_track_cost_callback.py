@@ -5,12 +5,14 @@ from datetime import datetime
 from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
+import httpx
 import pytest
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.internal_call_metadata import MODEL_ACCESS_GROUP_METADATA_KEY
 from litellm.proxy._types import SpendLogsPayload, UserAPIKeyAuth
 from litellm.proxy.collector import SpendEventConsumer
+from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.proxy.db.db_spend_update_writer import DBSpendUpdateWriter
 from litellm.proxy.db.spend_log_tool_index import response_tool_call_names
 from litellm.proxy.hooks.proxy_track_cost_callback import (
@@ -1680,6 +1682,92 @@ async def test_async_post_call_failure_hook_enriches_auth_error_metadata():
 
 
 @pytest.mark.asyncio
+async def test_async_post_call_failure_hook_skips_the_key_lookup_when_the_failure_is_a_db_stall():
+    logger = _ProxyDBLogger()
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed_key")
+    request_data = {
+        "model": "gpt-5.6",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "litellm_params": {},
+    }
+
+    with (
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+        ) as mock_get_key_object,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+        ) as mock_get_team_object,
+    ):
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=DBLookupDeadlineExceeded("key", 10.0),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    mock_get_key_object.assert_not_called()
+    mock_get_team_object.assert_not_called()
+    mock_update_database.assert_called_once()
+    metadata = mock_update_database.call_args[1]["kwargs"]["litellm_params"]["metadata"]
+    assert metadata["status"] == "failure"
+    assert metadata["user_api_key"] == "hashed_key"
+    assert metadata["user_api_key_alias"] is None
+
+
+@pytest.mark.asyncio
+async def test_async_post_call_failure_hook_still_enriches_metadata_for_a_non_stall_failure():
+    """Only a DBLookupDeadlineExceeded skips the key lookup; a transport error
+    from the provider call must still resolve the key's alias for the failure row."""
+    logger = _ProxyDBLogger()
+    user_api_key_dict = UserAPIKeyAuth(api_key="hashed_key")
+    request_data = {
+        "model": "gpt-5.6",
+        "messages": [{"role": "user", "content": "Hello"}],
+        "metadata": {},
+        "litellm_params": {},
+    }
+
+    mock_key_obj = MagicMock()
+    mock_key_obj.key_alias = "my-key-alias"
+    mock_key_obj.user_id = "my-user-id"
+    mock_key_obj.team_id = "my-team-id"
+    mock_key_obj.org_id = None
+    mock_key_obj.project_id = None
+
+    with (
+        patch(
+            "litellm.proxy.db.db_spend_update_writer.DBSpendUpdateWriter.update_database",
+            new_callable=AsyncMock,
+        ) as mock_update_database,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_key_object",
+            new_callable=AsyncMock,
+            return_value=mock_key_obj,
+        ) as mock_get_key_object,
+        patch(
+            "litellm.proxy.hooks.proxy_track_cost_callback.get_team_object",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await logger.async_post_call_failure_hook(
+            request_data=request_data,
+            original_exception=httpx.ConnectError("boom"),
+            user_api_key_dict=user_api_key_dict,
+        )
+
+    mock_get_key_object.assert_called_once()
+    metadata = mock_update_database.call_args[1]["kwargs"]["litellm_params"]["metadata"]
+    assert metadata["user_api_key_alias"] == "my-key-alias"
+
+
+@pytest.mark.asyncio
 async def test_async_post_call_failure_hook_enriches_missing_team_alias():
     """
     When user_api_key_dict has a team_id but no team_alias, async_post_call_failure_hook
@@ -2035,9 +2123,15 @@ async def test_track_cost_callback_keeps_guardrail_cost_on_cache_hit():
     }
 
     with (
-        patch("litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock) as mock_increment,  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
-        patch("litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock),  # test-quality-ok: same function-body import, no injection seam
-        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,  # test-quality-ok: same function-body import, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.increment_spend_counters", new_callable=AsyncMock
+        ) as mock_increment,  # test-quality-ok: the callback imports this from proxy_server inside its body, so there is no injection seam
+        patch(
+            "litellm.proxy.proxy_server.update_cache", new_callable=AsyncMock
+        ),  # test-quality-ok: same function-body import, no injection seam
+        patch(
+            "litellm.proxy.proxy_server.proxy_logging_obj"
+        ) as mock_proxy_logging,  # test-quality-ok: same function-body import, no injection seam
     ):
         mock_proxy_logging.db_spend_update_writer.update_database = AsyncMock()
         mock_proxy_logging.slack_alerting_instance.customer_spend_alert = AsyncMock()

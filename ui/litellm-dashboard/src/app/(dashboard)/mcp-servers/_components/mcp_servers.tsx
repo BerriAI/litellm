@@ -61,7 +61,8 @@ const SORT_OPTIONS: { value: SortKey; label: string }[] = [
 const HEALTH_RANK: Record<string, number> = {
   unhealthy: 0,
   unknown: 1,
-  healthy: 2,
+  reachable: 2,
+  healthy: 3,
 };
 
 const compareByName = (a: MCPServer, b: MCPServer): number => {
@@ -191,7 +192,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
       const healthStatus = healthMap.get(server.server_id);
       return {
         ...server,
-        status: healthStatus ? (healthStatus as "healthy" | "unhealthy" | "unknown") : server.status,
+        status: healthStatus ? (healthStatus as MCPServer["status"]) : server.status,
       };
     });
   }, [mcpServers, healthStatuses]);
@@ -240,6 +241,12 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
     }
     return map;
   }, [envVarStatuses]);
+
+  const serversWithUserFields = useMemo(
+    () =>
+      new Set((envVarStatuses ?? []).filter((status) => (status.required ?? []).length > 0).map((s) => s.server_id)),
+    [envVarStatuses],
+  );
 
   // Deep-link via ?fill_env_vars=<server_id> — the link users follow from the
   // friendly error the proxy returns when a per-user var is missing. The id is
@@ -491,6 +498,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
           isModalVisible={isModalVisible}
           setModalVisible={setModalVisible}
           availableAccessGroups={uniqueMcpAccessGroups}
+          existingServers={mcpServers}
           prefillData={prefillData}
           onBackToDiscovery={() => {
             setModalVisible(false);
@@ -604,6 +612,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                 userRole={userRole}
                 isViewOnly={isViewOnly}
                 availableAccessGroups={uniqueMcpAccessGroups}
+                existingServers={mcpServers}
                 initialTabIndex={selectedServerId === toolsTabServerId ? 1 : 0}
               />
             ) : (
@@ -730,6 +739,7 @@ const MCPServers: React.FC<MCPServerProps> = ({ accessToken, userRole, userID, i
                           key={server.server_id}
                           server={server}
                           missingUserFields={missingFieldsByServer[server.server_id]}
+                          hasUserFields={serversWithUserFields.has(server.server_id)}
                           isLoadingHealth={isLoadingHealth}
                           isRechecking={recheckingServerIds?.has(server.server_id)}
                           onClick={() => {

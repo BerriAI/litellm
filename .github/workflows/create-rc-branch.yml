@@ -1,0 +1,66 @@
+name: Create RC Branch
+
+on:
+  schedule:
+    - cron: "0 3 * * 5"
+      timezone: "America/Los_Angeles"
+  workflow_dispatch:
+
+permissions: {}
+
+jobs:
+  create-rc-branch:
+    name: Create RC Branch
+    if: github.event_name != 'schedule' || github.repository == 'BerriAI/litellm'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Require main
+        env:
+          REF: ${{ github.ref }}
+        run: |
+          if [ "$REF" != "refs/heads/main" ]; then
+            echo "::error::rc branches are cut from refs/heads/main only, got $REF"
+            exit 1
+          fi
+
+      - uses: actions/checkout@08eba0b27e820071cde6df949e0beb9ba4906955 # v4.3.0
+        with:
+          persist-credentials: false
+
+      - name: Read release version
+        id: version
+        run: python3 .github/scripts/read_rc_version.py >> "$GITHUB_OUTPUT"
+
+      - name: Create rc branch
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            const branchName = `rc/${process.env.VERSION}`;
+            const ref = `heads/${branchName}`;
+
+            const existing = await github.rest.git.getRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref,
+            }).catch((error) => {
+              if (error.status === 404) {
+                return null;
+              }
+              throw error;
+            });
+            if (existing !== null) {
+              core.setFailed(`Branch ${branchName} already exists at ${existing.data.object.sha}; leaving it untouched`);
+              return;
+            }
+
+            await github.rest.git.createRef({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              ref: `refs/${ref}`,
+              sha: context.sha,
+            });
+            core.info(`Created branch ${branchName} at ${context.sha}`);

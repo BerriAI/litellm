@@ -22,5 +22,7 @@ aws-types = "1.4.0"
 aws-smithy-runtime-api = "1.13.0"
 
 [dev-dependencies]
+rstest.workspace = true
+litellm-http = { workspace = true, features = ["test-support"] }
 reqwest.workspace = true
 tokio.workspace = true

@@ -1591,7 +1591,7 @@ def _flatten_web_search_results_in_message(message: object) -> object:
     return {**message, "content": [b for b in rewritten if b is not None]}  # mutable-ok: JSON wire format
 
 
-def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok: as sibling sanitizers
+def flatten_unencrypted_web_search_results_in_anthropic_messages(
     messages: list[Any],
 ) -> list[Any]:
     """

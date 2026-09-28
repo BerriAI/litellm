@@ -106,10 +106,7 @@ export default function TeamMemberTab({
   const getUserBudget = (userId: string | null): number | null => {
     if (!userId) return null;
     const membership = teamData.team_memberships.find((tm) => tm.user_id === userId);
-    return (
-      membership?.litellm_budget_table?.max_budget ??
-      (membership?.budget_source === "team_default" ? teamDefaultBudget : null)
-    );
+    return membership?.litellm_budget_table?.max_budget ?? teamDefaultBudget;
   };
 
   // Helper function to get rate limits for a user

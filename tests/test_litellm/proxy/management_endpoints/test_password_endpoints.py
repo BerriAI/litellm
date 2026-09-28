@@ -1,17 +1,19 @@
 """
 Tests for POST /user/password/change (litellm/proxy/management_endpoints/password_endpoints.py).
 
-HIBP traffic is intercepted with respx; no test here touches the network.
+HIBP is served by an AsyncHTTPHandler wrapping an httpx.MockTransport that is
+injected straight into change_password; no test here touches the network.
 """
 
 import hashlib
+from typing import Final
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import httpx
 import pytest
-import respx
 from fastapi import HTTPException
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import UI_TEAM_ID, LitellmTableNames, ProxyErrorTypes, ProxyException, UserAPIKeyAuth
 from litellm.proxy.auth.login_utils import PASSWORD_SESSION_METADATA
 from litellm.proxy.management_endpoints.password_endpoints import change_password
@@ -49,13 +51,27 @@ def _virtual_key_caller() -> UserAPIKeyAuth:
     return UserAPIKeyAuth(user_id="user-123", team_id="team-abc", metadata=dict(PASSWORD_SESSION_METADATA))
 
 
-def _hibp_url_for(password: str) -> str:
-    sha1 = hashlib.sha1(password.encode(), usedforsecurity=False).hexdigest().upper()
-    return f"https://api.pwnedpasswords.com/range/{sha1[:5]}"
-
-
 def _hibp_suffix_for(password: str) -> str:
     return hashlib.sha1(password.encode(), usedforsecurity=False).hexdigest().upper()[5:]
+
+
+def _hibp_client_returning(body: str) -> AsyncHTTPHandler:
+    return AsyncHTTPHandler(transport=httpx.MockTransport(lambda request: httpx.Response(200, text=body)))
+
+
+def _hibp_client_never_called() -> AsyncHTTPHandler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise AssertionError(f"unexpected HIBP call to {request.url}")
+
+    return AsyncHTTPHandler(transport=httpx.MockTransport(handler))
+
+
+def _hibp_client_recording(calls: list[httpx.Request]) -> AsyncHTTPHandler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        calls.append(request)
+        return httpx.Response(200, text="")
+
+    return AsyncHTTPHandler(transport=httpx.MockTransport(handler))
 
 
 @pytest.mark.asyncio
@@ -75,6 +91,7 @@ async def test_change_password_success_writes_new_scrypt_hash():
         response = await change_password(
             data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=NEW_PASSWORD),
             user_api_key_dict=_caller(),
+            hibp_client=_hibp_client_never_called(),
         )
 
     assert response.user_id == "user-123"
@@ -107,6 +124,7 @@ async def test_change_password_rejects_wrong_current_password():
             await change_password(
                 data=ChangePasswordRequest(current_password="not-the-password", new_password=NEW_PASSWORD),
                 user_api_key_dict=_caller(),
+                hibp_client=_hibp_client_never_called(),
             )
 
     assert exc_info.value.status_code == 400
@@ -132,6 +150,7 @@ async def test_change_password_rejects_unchanged_password():
             await change_password(
                 data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=CURRENT_PASSWORD),
                 user_api_key_dict=_caller(),
+                hibp_client=_hibp_client_never_called(),
             )
 
     assert exc_info.value.status_code == 400
@@ -167,6 +186,7 @@ async def test_change_password_rejects_non_password_login_session(caller: UserAP
             await change_password(
                 data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=NEW_PASSWORD),
                 user_api_key_dict=caller,
+                hibp_client=_hibp_client_never_called(),
             )
 
     assert exc_info.value.status_code == 403
@@ -193,6 +213,7 @@ async def test_change_password_rejects_session_without_user():
             await change_password(
                 data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=NEW_PASSWORD),
                 user_api_key_dict=_caller(user_id=None),
+                hibp_client=_hibp_client_never_called(),
             )
 
     assert exc_info.value.status_code == 400
@@ -219,6 +240,7 @@ async def test_change_password_rejects_account_without_password():
             await change_password(
                 data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=NEW_PASSWORD),
                 user_api_key_dict=_caller(),
+                hibp_client=_hibp_client_never_called(),
             )
 
     assert exc_info.value.status_code == 400
@@ -244,6 +266,7 @@ async def test_change_password_enforces_min_length():
             await change_password(
                 data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password="Short1!"),
                 user_api_key_dict=_caller(),
+                hibp_client=_hibp_client_never_called(),
             )
 
     assert exc_info.value.code == "400"
@@ -254,15 +277,11 @@ async def test_change_password_enforces_min_length():
 
 
 @pytest.mark.asyncio
-@respx.mock
 async def test_change_password_rejects_breached_password():
     """With the default policy, the new password is screened against HIBP."""
     from litellm.proxy._types import ChangePasswordRequest
 
     breached_password = "Password123!"
-    respx.get(_hibp_url_for(breached_password)).mock(
-        return_value=httpx.Response(200, text=f"{_hibp_suffix_for(breached_password)}:1")
-    )
     prisma = _make_prisma(_make_user_row(hash_password(CURRENT_PASSWORD)))
 
     with (
@@ -277,6 +296,7 @@ async def test_change_password_rejects_breached_password():
             await change_password(
                 data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=breached_password),
                 user_api_key_dict=_caller(),
+                hibp_client=_hibp_client_returning(f"{_hibp_suffix_for(breached_password)}:1"),
             )
 
     assert exc_info.value.code == "400"
@@ -287,16 +307,14 @@ async def test_change_password_rejects_breached_password():
 
 
 @pytest.mark.asyncio
-@respx.mock
 async def test_change_password_verifies_current_password_before_hibp_lookup():
     """A caller who fails current-password verification must not trigger any
-    HIBP traffic. The HIBP check fails open on errors, so an unmocked lookup
-    could not prove ordering; instead the route is registered and asserted
-    uncalled."""
+    HIBP traffic: the injected client records each request it serves and the
+    test asserts none were made."""
     from litellm.proxy._types import ChangePasswordRequest
 
-    hibp_route = respx.get(_hibp_url_for(NEW_PASSWORD)).mock(return_value=httpx.Response(200, text=""))
     prisma = _make_prisma(_make_user_row(hash_password(CURRENT_PASSWORD)))
+    hibp_calls: Final[list[httpx.Request]] = []
 
     with (
         patch(  # test-quality-ok: change_password reads proxy_server module globals; no injection seam
@@ -310,11 +328,12 @@ async def test_change_password_verifies_current_password_before_hibp_lookup():
             await change_password(
                 data=ChangePasswordRequest(current_password="not-the-password", new_password=NEW_PASSWORD),
                 user_api_key_dict=_caller(),
+                hibp_client=_hibp_client_recording(hibp_calls),
             )
 
     assert exc_info.value.status_code == 400
     assert "Current password is incorrect" in exc_info.value.detail["error"]
-    assert not hibp_route.called
+    assert hibp_calls == []
     prisma.db.litellm_usertable.update.assert_not_called()
 
 
@@ -341,6 +360,7 @@ async def test_change_password_success_emits_redacted_audit_log():
         await change_password(
             data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=NEW_PASSWORD),
             user_api_key_dict=_caller(),
+            hibp_client=_hibp_client_never_called(),
         )
 
     audit_mock.assert_awaited_once()
@@ -375,6 +395,7 @@ async def test_change_password_failure_emits_no_audit_log():
             await change_password(
                 data=ChangePasswordRequest(current_password="not-the-password", new_password=NEW_PASSWORD),
                 user_api_key_dict=_caller(),
+                hibp_client=_hibp_client_never_called(),
             )
 
     audit_mock.assert_not_awaited()
@@ -411,6 +432,7 @@ async def test_change_password_revokes_other_sessions_keeping_callers():
         await change_password(
             data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=NEW_PASSWORD),
             user_api_key_dict=caller,
+            hibp_client=_hibp_client_never_called(),
         )
 
     revoke_mock.assert_awaited_once()
@@ -442,6 +464,7 @@ async def test_change_password_failure_revokes_no_sessions():
             await change_password(
                 data=ChangePasswordRequest(current_password="not-the-password", new_password=NEW_PASSWORD),
                 user_api_key_dict=_caller(),
+                hibp_client=_hibp_client_never_called(),
             )
 
     revoke_mock.assert_not_awaited()
@@ -463,6 +486,7 @@ async def test_change_password_requires_db():
             await change_password(
                 data=ChangePasswordRequest(current_password=CURRENT_PASSWORD, new_password=NEW_PASSWORD),
                 user_api_key_dict=_caller(),
+                hibp_client=_hibp_client_never_called(),
             )
 
     assert exc_info.value.status_code == 500

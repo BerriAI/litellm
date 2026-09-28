@@ -1,0 +1,13 @@
+[package]
+name = "litellm-router"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+litellm-config.workspace = true
+litellm-core.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true

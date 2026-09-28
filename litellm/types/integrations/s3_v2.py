@@ -9,3 +9,6 @@ class s3BatchLoggingElement(BaseModel):
     payload: dict
     s3_object_key: str
     s3_object_download_filename: str
+    body: str | None = None
+    content_type: str = "application/json"
+    retrying_since: float | None = None

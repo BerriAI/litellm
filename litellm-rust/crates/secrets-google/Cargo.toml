@@ -6,14 +6,17 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-http.workspace = true
+moka.workspace = true
+tokio.workspace = true
 litellm-auth-gcp = { workspace = true, features = ["google-sdk"] }
 litellm-secrets-types.workspace = true
 litellm-auth-types.workspace = true
 litellm-core-utils.workspace = true
 base64.workspace = true
+crc32c = "0.6.8"
 serde_json.workspace = true
 thiserror.workspace = true
-moka.workspace = true
 veil.workspace = true
 google-cloud-kms-v1 = "1.14.0"
 google-cloud-gax = { version = "1.14.0", default-features = false }
@@ -22,7 +25,7 @@ serde.workspace = true
 reqwest.workspace = true
 
 [dev-dependencies]
+litellm-http = { workspace = true, features = ["test-support"] }
 google-cloud-auth.workspace = true
 rstest.workspace = true
-tokio.workspace = true
 wiremock = "0.6.5"

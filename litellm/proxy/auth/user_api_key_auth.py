@@ -50,6 +50,7 @@ from litellm.proxy.auth.auth_checks import (
     _get_user_role,
     _is_model_cost_zero,
     _is_user_proxy_admin,
+    _team_member_max_budget_alert_check,
     _virtual_key_max_budget_alert_check,
     _virtual_key_max_budget_check,
     _virtual_key_soft_budget_check,
@@ -66,6 +67,7 @@ from litellm.proxy.auth.auth_checks import (
     get_user_object,
     is_valid_fallback_model,
     jwt_key_mapping_cache_key,
+    key_model_aliases_for_auth_check,
     resolve_and_validate_end_user_id,
     resolve_default_end_user_budget,
 )
@@ -120,6 +122,7 @@ from litellm.proxy.common_utils.user_api_key_cache import (
     UserApiKeyCache,
     team_membership_auth_cache_key,
 )
+from litellm.proxy.db.db_lookup_gate import bounded_db_lookup
 from litellm.proxy.db.exception_handler import PrismaDBExceptionHandler
 from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup
 from litellm.proxy.spend_tracking.carried_budget_state import carry_team_and_user_budget_state
@@ -468,6 +471,7 @@ async def _check_key_model_budget_with_fallback(
                     models=valid_token.team_models,
                     team_model_aliases=valid_token.team_model_aliases,
                     team_id=valid_token.team_id,
+                    key_model_aliases=key_model_aliases_for_auth_check(valid_token),
                     object_type="team",
                 )
         except ProxyException:
@@ -735,8 +739,9 @@ async def _fetch_global_spend_with_event_coordination(
     """
 
     async def _load_global_spend() -> float | None:
-        proxy_budget_row: Final = await prisma_client.db.litellm_usertable.find_unique(
-            where={"user_id": LITELLM_PROXY_BUDGET_NAME}
+        proxy_budget_row: Final = await bounded_db_lookup(
+            prisma_client.db.litellm_usertable.find_unique(where={"user_id": LITELLM_PROXY_BUDGET_NAME}),
+            name="proxy_budget",
         )
         return float(proxy_budget_row.spend) if proxy_budget_row is not None else None
 
@@ -2283,6 +2288,19 @@ async def _user_api_key_auth_builder(
                                     max_budget=team_member_budget,
                                 )
                             if team_member_spend >= team_member_budget:
+                                # common_checks sends this alert on requests that get past here, so only the
+                                # request rejected here sends it from the builder.
+                                _team_member_max_budget_alert_check(
+                                    team_id=_team_id,
+                                    team_alias=valid_token.team_alias,
+                                    team_metadata=valid_token.team_metadata,
+                                    organization_id=valid_token.org_id,
+                                    user_id=_user_id,
+                                    user_email=user_obj.user_email if user_obj is not None else None,
+                                    proxy_logging_obj=proxy_logging_obj,
+                                    spend=team_member_spend,
+                                    max_budget=team_member_budget,
+                                )
                                 _entity_id: Final = f"{valid_token.user_id}:{valid_token.team_id}"
                                 raise litellm.BudgetExceededError(
                                     current_cost=team_member_spend,

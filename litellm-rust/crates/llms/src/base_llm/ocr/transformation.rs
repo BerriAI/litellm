@@ -7,6 +7,7 @@ use litellm_core_utils::{
     settings::ProcessEnvironment,
 };
 use litellm_http::outbound::{OutboundRequest, RequestSigner};
+use litellm_secrets::source::Secrets;
 use serde::{
     Deserialize, Serialize,
     de::{DeserializeOwned, IntoDeserializer},
@@ -14,13 +15,10 @@ use serde::{
 use serde_json::{Map, Value};
 use serde_with::serde_as;
 
-use crate::base_llm::{
-    inference::secrets::Secrets,
-    ocr::{
-        error::Error,
-        handler::{CallHooks, OcrClient, read_response_bytes, transform_request_body},
-        settings::OcrSettings,
-    },
+use crate::base_llm::ocr::{
+    error::Error,
+    handler::{CallHooks, OcrClient, read_response_bytes, transform_request_body},
+    settings::OcrSettings,
 };
 
 pub const OCR_RESPONSE_MAX_BYTES: usize = 64 * 1024 * 1024;

@@ -110,7 +110,7 @@ class NvidiaNimPassthroughConfig(BasePassthroughConfig):
         return {
             **headers,
             "Authorization": f"Bearer {api_key}",
-        }  # mutable-ok: base class contract returns dict for httpx
+        }
 
     @staticmethod
     def get_api_base(api_base: str | None = None) -> str | None:

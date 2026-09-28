@@ -1511,7 +1511,7 @@ mod tests {
                     path_service_account: Some("credentials.json".into()),
                     endpoint: litellm_cache_gcs::DEFAULT_ENDPOINT.into(),
                 },
-                reqwest::Client::new(),
+                litellm_http::Client::plain_for_test(),
                 Some("token".into()),
             );
             let matching_config = NativeCacheConfig {

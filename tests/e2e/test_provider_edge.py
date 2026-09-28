@@ -54,11 +54,13 @@ from provider_edge import (
     EdgeBackend,
     EdgeReply,
     EdgeStream,
+    LiveEdge,
     ProviderEdge,
     ProviderRequestObservation,
     RecordEdge,
     ReplayEdge,
     ReplaySource,
+    StreamCut,
     edge_request,
     handle_edge_request,
     observed_provider_edge,
@@ -998,6 +1000,36 @@ def recorded_stream(root: Path) -> RecordedStreamedResponse:
 
 def stream_chunks(response: RecordedStreamedResponse) -> list[bytes]:
     return [base64.b64decode(chunk) for chunk in response.chunks_b64]
+
+
+SECOND_DATA_LINE: Final = b'data: {"type":"content_block_delta","delta":{"text":" two"}}'
+SPLIT_MARKER_CHUNKS: tuple[bytes, ...] = (
+    b'data: {"type":"content_block_delta","delta":{"text":"one"}}\n\nda',
+    b"ta" + SECOND_DATA_LINE[4:] + b"\n\nda",
+    b'ta: {"type":"message_delta","usage":{"output_tokens":7}}\n\nda',
+    b"ta: [DONE]\n\n",
+)
+
+
+class TestStreamCut:
+    def test_a_mid_frame_cut_tears_a_data_line_whose_marker_is_split_across_chunks(self) -> None:
+        """Every ``data:`` marker after the first content delta straddles a transfer
+        chunk boundary, so a tearer that inspects each chunk on its own never finds
+        one and lets the stream finish cleanly instead of cutting it."""
+        backend: Final = LiveEdge(cut=StreamCut(after_content=True, mid_chunk=True))
+        with chunked_provider(chunks=SPLIT_MARKER_CHUNKS) as provider:
+            with running_edge(backend, {"openai": provider_url(provider)}) as edge:
+                head, chunks, ending = raw_stream_post(edge.port, STREAM_PATH, STREAM_BODY)
+
+        assert head.startswith("HTTP/1.1 200 OK")
+        assert ending == "truncated"
+        relayed: Final = b"".join(chunks)
+        whole: Final = b"".join(SPLIT_MARKER_CHUNKS)
+        assert whole.startswith(relayed) and relayed != whole
+        assert relayed.startswith(SPLIT_MARKER_CHUNKS[0])
+        torn_line: Final = relayed.rsplit(b"\n", 1)[-1]
+        assert torn_line and SECOND_DATA_LINE.startswith(torn_line) and torn_line != SECOND_DATA_LINE
+        assert b"[DONE]" not in relayed
 
 
 class TestStreamingFidelity:

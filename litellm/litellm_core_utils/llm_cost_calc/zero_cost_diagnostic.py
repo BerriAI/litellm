@@ -5,7 +5,12 @@ from typing import Final
 from pydantic import TypeAdapter, ValidationError
 from typing_extensions import assert_never
 
-from litellm.types.utils import StandardLoggingZeroCostDiagnostic, Usage
+from litellm.types.utils import (
+    CompletionTokensDetailsWrapper,
+    PromptTokensDetailsWrapper,
+    StandardLoggingZeroCostDiagnostic,
+    Usage,
+)
 
 ZERO_COST_COUNTER_NAME: Final = "litellm_zero_cost_requests_total"
 
@@ -18,8 +23,8 @@ _NESTED_PRICING: Final = TypeAdapter(Mapping[str, object] | tuple[object, ...])
 _MAX_PRICING_DEPTH: Final = 4
 
 
-def _audio_tokens(details: object) -> int:
-    audio_tokens: Final = getattr(details, "audio_tokens", None)
+def _audio_tokens(details: PromptTokensDetailsWrapper | CompletionTokensDetailsWrapper | None) -> int:
+    audio_tokens: Final = details.audio_tokens if details is not None else None
     return audio_tokens if isinstance(audio_tokens, int) and audio_tokens > 0 else 0
 
 

@@ -682,6 +682,44 @@ describe("TeamMembersComponent", () => {
       expect(inheritedRow).toHaveTextContent("$25.00");
     });
 
+    it("caps a Custom member at the team default when the private row has no budget limit", () => {
+      const base = createMockTeamData();
+      renderTab(
+        createMockTeamData({
+          team_info: {
+            ...base.team_info,
+            team_member_budget_table: { max_budget: 20, budget_duration: null, tpm_limit: null, rpm_limit: null },
+          },
+          team_memberships: [
+            {
+              user_id: "user2@test.com",
+              team_id: "team-123",
+              budget_id: "budget2",
+              budget_source: "custom",
+              spend: 0,
+              total_spend: 0,
+              litellm_budget_table: {
+                budget_id: "budget3",
+                soft_budget: null,
+                max_budget: null,
+                max_parallel_requests: null,
+                tpm_limit: null,
+                rpm_limit: 100,
+                model_max_budget: null,
+                budget_duration: null,
+                budget_reset_at: null,
+              },
+            },
+          ],
+        }),
+      );
+
+      const row = screen.getByRole("row", { name: /user2@test\.com/ });
+      expect(within(row).getByTestId("member-budget-source")).toHaveTextContent("Custom");
+      expect(row).toHaveTextContent("$20.00");
+      expect(row).not.toHaveTextContent("Unlimited");
+    });
+
     it("shows no source label for a member with neither a custom nor a team budget", () => {
       renderTab(createMockTeamData({ team_memberships: [] }));
 

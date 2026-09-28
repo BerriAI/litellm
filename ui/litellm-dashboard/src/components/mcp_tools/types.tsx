@@ -321,6 +321,8 @@ export interface MCPServerCostInfo {
 // Define MCP provider info
 export interface MCPInfo {
   server_name: string;
+  is_public?: boolean;
+  is_public_explicit?: boolean;
   description?: string;
   logo_url?: string;
   mcp_server_cost_info?: MCPServerCostInfo | null;
@@ -405,6 +407,8 @@ export interface MCPToolsViewerProps {
   extraHeaders?: string[] | null;
 }
 
+export const MCP_REACHABLE_DESCRIPTION = "Server responded. Authentication and tools were not checked";
+
 export interface MCPServer {
   server_id: string;
   is_config?: boolean;
@@ -435,7 +439,7 @@ export interface MCPServer {
   updated_by: string;
   extra_headers?: string[] | null;
   static_headers?: Record<string, string> | null;
-  status?: "healthy" | "unhealthy" | "unknown";
+  status?: "healthy" | "reachable" | "unhealthy" | "unknown";
   last_health_check?: string | null;
   health_check_error?: string | null;
   teams?: Team[];

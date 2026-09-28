@@ -112,7 +112,7 @@ class ArizeLogger(OpenTelemetry):
         if value is None or value in ("", "None"):
             return None
         try:
-            rate = float(value)
+            rate: Final = float(value)
         except (TypeError, ValueError):
             verbose_logger.warning(
                 "ArizeLogger: %s value %r is not a number; exporting the request",

@@ -1930,12 +1930,12 @@ class JWTAuthManager:
     ) -> HeaderTeam | None:
         """
         The team named by x-litellm-team-id, which may carry a team id or a team
-        alias. A value that is already an allowed team id (or, under the DB
-        fallback, an existing team id) never costs an alias lookup; an alias is
-        accepted only when the team it names would have been accepted by id.
-        Under the DB fallback only a team row that is provably absent falls
-        through to the alias lookup; a read that failed for any other reason
-        keeps the membership denial the id path already gives.
+        alias. A value that is already an allowed team id never costs a lookup;
+        under the DB fallback any other value is accepted provisionally, by id
+        or alias, for the membership check auth_builder runs later. Under the
+        DB fallback only a team row that is provably absent falls through to
+        the alias lookup; a read that failed for any other reason keeps the
+        membership denial the id path already gives.
 
         Raises:
             HTTPException: 403 when neither the value nor the team it aliases is
@@ -1948,7 +1948,11 @@ class JWTAuthManager:
         if not header_value:
             return None
 
-        if fallback_to_db_teams and not allowed_team_ids:
+        if header_value in allowed_team_ids:
+            verbose_proxy_logger.debug("Using team_id from x-litellm-team-id header: %s", header_value)
+            return HeaderTeam(header_value=header_value, team_id=header_value)
+
+        if fallback_to_db_teams:
             try:
                 await get_team_object(
                     team_id=header_value,
@@ -1967,10 +1971,6 @@ class JWTAuthManager:
                 return HeaderTeam(header_value=header_value, team_id=aliased_team_id)
             except HTTPException:
                 JWTAuthManager._raise_header_team_membership_denial(header_value)
-            return HeaderTeam(header_value=header_value, team_id=header_value)
-
-        if header_value in allowed_team_ids:
-            verbose_proxy_logger.debug("Using team_id from x-litellm-team-id header: %s", header_value)
             return HeaderTeam(header_value=header_value, team_id=header_value)
 
         team_id_by_alias: Final = await JWTAuthManager._team_id_by_alias(
@@ -2353,9 +2353,9 @@ class JWTAuthManager:
         header_value: str,
     ) -> None:
         """
-        A provisional team_id from the x-litellm-team-id header (accepted without
-        JWT-team validation when the JWT carries no team claims) must exist in the
-        user's DB team memberships before it becomes request context. The denial
+        A provisional team_id from the x-litellm-team-id header (accepted under
+        fallback_to_db_teams because it is outside the JWT's teams) must exist in
+        the user's DB team memberships before it becomes request context. The denial
         names `header_value`, the id or alias the caller sent, not `team_id`.
         """
         user_team_ids: Final = user_object.teams if user_object else []
@@ -2587,22 +2587,30 @@ class JWTAuthManager:
         if specific_team_id and not db_team_fallback:
             all_team_ids.add(specific_team_id)
 
+        header_db_fallback: Final = handler.litellm_jwtauth.fallback_to_db_teams and team_id is None
+
         header_team: Final = await JWTAuthManager.resolve_team_from_header(
             request_headers=request_headers,
             allowed_team_ids=all_team_ids,
-            fallback_to_db_teams=db_team_fallback,
+            fallback_to_db_teams=header_db_fallback,
             prisma_client=prisma_client,
             user_api_key_cache=user_api_key_cache,
             parent_otel_span=parent_otel_span,
             proxy_logging_obj=proxy_logging_obj,
         )
+        provisional_header_team: Final = (
+            header_team
+            if header_team is not None and header_db_fallback and header_team.team_id not in all_team_ids
+            else None
+        )
         if header_team:
             team_id = header_team.team_id
-            # A provisional header team (accepted only because the JWT carries no
-            # team claims) is validated against DB membership further down; never
-            # upsert it here or an attacker-supplied x-litellm-team-id would create
-            # an orphaned team row before that check runs. A genuine membership team
-            # already exists, so suppressing the upsert in that case costs nothing.
+            # A provisional header team (accepted because it is outside the
+            # JWT's teams under fallback_to_db_teams) is validated against DB
+            # membership further down; never upsert it here or an
+            # attacker-supplied x-litellm-team-id would create an orphaned team
+            # row before that check runs. A genuine membership team already
+            # exists, so suppressing the upsert in that case costs nothing.
             try:
                 team_object = await get_team_object(
                     team_id=team_id,
@@ -2610,10 +2618,10 @@ class JWTAuthManager:
                     user_api_key_cache=user_api_key_cache,
                     parent_otel_span=parent_otel_span,
                     proxy_logging_obj=proxy_logging_obj,
-                    team_id_upsert=(team_id_upsert and not db_team_fallback),
+                    team_id_upsert=(team_id_upsert and provisional_header_team is None),
                 )
             except HTTPException:
-                if not db_team_fallback:
+                if provisional_header_team is None:
                     raise
                 JWTAuthManager._raise_header_team_membership_denial(header_team.header_value)
         elif not team_id and not db_team_fallback:
@@ -2756,11 +2764,11 @@ class JWTAuthManager:
                 proxy_logging_obj=proxy_logging_obj,
                 team_id_upsert=team_id_upsert,
             )
-        elif db_team_fallback and header_team is not None and team_id == header_team.team_id:
+        elif provisional_header_team is not None and team_id == provisional_header_team.team_id:
             JWTAuthManager._validate_header_team_in_db_membership(
                 team_id=team_id,
                 user_object=user_object,
-                header_value=header_team.header_value,
+                header_value=provisional_header_team.header_value,
             )
             if not JWTAuthManager._is_team_route_allowed(
                 route=route,
@@ -2770,7 +2778,7 @@ class JWTAuthManager:
                 raise HTTPException(
                     status_code=403,
                     detail=(
-                        f"Team '{header_team.header_value}' (from x-litellm-team-id header) "
+                        f"Team '{provisional_header_team.header_value}' (from x-litellm-team-id header) "
                         f"is not allowed to access route '{route}'."
                     ),
                 )

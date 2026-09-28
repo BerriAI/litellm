@@ -9,10 +9,10 @@ use super::{
     cache_error,
     config::{CacheBackendConfig, NativeCacheConfig, UnsupportedCacheConfig},
     embedder::PythonEmbedder,
-    host_client,
     native::NativeResponseCache,
 };
 use crate::errors::RustBridgeDeclined;
+use crate::http::host_client;
 
 fn declined(reason: UnsupportedCacheConfig) -> PyErr {
     RustBridgeDeclined::new_err(reason.message())

@@ -265,7 +265,7 @@ def test_close_dangling_otel_server_span_logger_raises_state_cleared_error(monke
 
 @pytest.mark.asyncio
 async def test_otel_request_validation_exception_handler_returns_422_detail():
-    errors = [{"loc": ["body", "model"], "msg": "field required", "type": "missing"}]
+    errors = [{"loc": ["body", "model"], "msg": "field required", "type": "missing", "input": {"messages": []}}]
     exc = RequestValidationError(errors)
     request = _make_request()
 
@@ -273,7 +273,69 @@ async def test_otel_request_validation_exception_handler_returns_422_detail():
     body = json.loads(response.body)
 
     assert response.status_code == 422
-    assert normalize(body) == {"detail": exc.errors()}
+    assert body == {"detail": [{"type": "missing", "loc": ["body", "model"], "msg": "field required"}]}
+
+
+_SUBMITTED_PASSWORD: Final = "hunter2-Sup3rSecret!"
+_PASSWORD_LEAKING_ERRORS: Final = (
+    {
+        "type": "missing",
+        "loc": ["body", "new_password"],
+        "msg": "Field required",
+        "input": {"current_password": _SUBMITTED_PASSWORD},
+    },
+    {
+        "type": "value_error",
+        "loc": ["body", "password"],
+        "msg": "Value error, password cannot be set via /user/new",
+        "input": _SUBMITTED_PASSWORD,
+        "ctx": {"error": ValueError(_SUBMITTED_PASSWORD)},
+    },
+)
+_PUBLIC_ERRORS: Final = (
+    {"type": "missing", "loc": ["body", "new_password"], "msg": "Field required"},
+    {"type": "value_error", "loc": ["body", "password"], "msg": "Value error, password cannot be set via /user/new"},
+)
+
+
+@pytest.mark.asyncio
+async def test_otel_request_validation_exception_handler_never_echoes_the_submitted_body():
+    """A pydantic error carries the offending value as ``input`` (the whole body for a
+    ``missing`` error) and input-derived values in ``ctx``; a caller who mistyped a
+    request holding a password must not get that password back."""
+    exc = RequestValidationError(list(_PASSWORD_LEAKING_ERRORS))
+
+    response = await otel_request_validation_exception_handler(request=_make_request(), exc=exc)
+
+    assert response.status_code == 422
+    assert json.loads(response.body) == {"detail": list(_PUBLIC_ERRORS)}
+    assert _SUBMITTED_PASSWORD.encode() not in response.body
+
+
+@pytest.mark.asyncio
+async def test_otel_request_validation_exception_handler_hands_the_span_only_the_public_errors(monkeypatch):
+    """The OTEL SERVER span's error message is ``str(exc)``, which FastAPI builds from
+    every error dict ``input`` included, so the span gets the same public-only errors
+    the caller does, and keeps the traceback the original carried."""
+    import litellm.proxy.proxy_server as ps
+
+    fake_logger = MagicMock()
+    monkeypatch.setattr(ps, "open_telemetry_logger", fake_logger, raising=False)
+    exc = RequestValidationError(list(_PASSWORD_LEAKING_ERRORS))
+    try:
+        raise exc
+    except RequestValidationError as raised:
+        original_traceback = raised.__traceback__
+    request = _make_request(parent_otel_span=MagicMock())
+
+    await otel_request_validation_exception_handler(request=request, exc=exc)
+
+    (_span, span_exc, status_code) = fake_logger.record_error_attributes_on_span.call_args.args
+    assert status_code == 422
+    assert isinstance(span_exc, RequestValidationError)
+    assert list(span_exc.errors()) == list(_PUBLIC_ERRORS)
+    assert _SUBMITTED_PASSWORD not in str(span_exc)
+    assert span_exc.__traceback__ is original_traceback
 
 
 @pytest.mark.asyncio

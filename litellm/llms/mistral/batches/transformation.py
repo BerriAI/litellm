@@ -33,7 +33,7 @@ OpenAIBatchStatus: TypeAlias = Literal[
     "validating", "failed", "in_progress", "finalizing", "completed", "expired", "cancelling", "cancelled"
 ]
 
-_NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})  # mutable-ok: frozen at module scope
+_NO_HEADERS: Final[Mapping[str, str]] = MappingProxyType({})
 _STATUS_MAP: Final[MappingProxyType[MistralBatchStatus, OpenAIBatchStatus]] = MappingProxyType(
     {
         "QUEUED": "validating",

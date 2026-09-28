@@ -41,6 +41,7 @@ class ExporterOwner(str, Enum):
     LEVO = "levo"
     AGENTOPS = "agentops"
     NEWRELIC = "newrelic"
+    SIGNOZ = "signoz"
 
 
 class _OTelV2Flag(BaseSettings):

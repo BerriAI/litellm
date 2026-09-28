@@ -8,9 +8,32 @@ use pyo3::{
 #[derive(Debug)]
 pub(crate) enum ProjectionError {
     Python(PyErr),
-    InvalidConfiguration(String),
+    InvalidConfiguration(ProjectionDetail),
     UnsupportedLiveObject(String),
-    InternalSchemaFailure(String),
+    InternalSchemaFailure(ProjectionDetail),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub(crate) enum ProjectionDetail {
+    #[error("{0}")]
+    Message(String),
+    #[error("{field}: {source}")]
+    InvalidField {
+        field: &'static str,
+        #[source]
+        source: serde_json::Error,
+    },
+    #[error("{group}.{name}: missing snapshot field")]
+    MissingSnapshotField {
+        group: &'static str,
+        name: &'static str,
+    },
+}
+
+impl From<String> for ProjectionDetail {
+    fn from(message: String) -> Self {
+        Self::Message(message)
+    }
 }
 
 impl From<PyErr> for ProjectionError {
@@ -23,9 +46,13 @@ impl From<ProjectionError> for PyErr {
     fn from(error: ProjectionError) -> Self {
         match error {
             ProjectionError::Python(error) => error,
-            ProjectionError::InvalidConfiguration(message)
-            | ProjectionError::UnsupportedLiveObject(message) => PyValueError::new_err(message),
-            ProjectionError::InternalSchemaFailure(message) => PyRuntimeError::new_err(message),
+            ProjectionError::InvalidConfiguration(detail) => {
+                PyValueError::new_err(detail.to_string())
+            }
+            ProjectionError::UnsupportedLiveObject(message) => PyValueError::new_err(message),
+            ProjectionError::InternalSchemaFailure(detail) => {
+                PyRuntimeError::new_err(detail.to_string())
+            }
         }
     }
 }
@@ -74,9 +101,9 @@ impl<'py> Field<'py> {
             Ok(value) => Ok(Self::new(group, name, value)),
             Err(error) if error.is_instance_of::<PyAttributeError>(snapshot.py()) => {
                 match Self::missing_field(snapshot, name) {
-                    Ok(true) => Err(ProjectionError::InternalSchemaFailure(format!(
-                        "{group}.{name}: missing snapshot field"
-                    ))),
+                    Ok(true) => Err(ProjectionError::InternalSchemaFailure(
+                        ProjectionDetail::MissingSnapshotField { group, name },
+                    )),
                     _ => Err(error.into()),
                 }
             }
@@ -116,7 +143,7 @@ impl<'py> Field<'py> {
 
     pub(crate) fn invalid(&self, expected: &str) -> ProjectionError {
         match self.expected(expected) {
-            Ok(message) => ProjectionError::InvalidConfiguration(message),
+            Ok(message) => ProjectionError::InvalidConfiguration(message.into()),
             Err(error) => error,
         }
     }
@@ -136,7 +163,7 @@ impl<'py> Field<'py> {
     pub(crate) fn schema_bool(&self) -> Result<bool, ProjectionError> {
         if !self.value.is_instance_of::<PyBool>() {
             return Err(ProjectionError::InternalSchemaFailure(
-                self.expected("a Boolean")?,
+                self.expected("a Boolean")?.into(),
             ));
         }
         Ok(self.exact_true())
@@ -153,7 +180,7 @@ impl<'py> Field<'py> {
     pub(crate) fn schema_string(&self) -> Result<String, ProjectionError> {
         if !self.value.is_instance_of::<PyString>() {
             return Err(ProjectionError::InternalSchemaFailure(
-                self.expected("a string")?,
+                self.expected("a string")?.into(),
             ));
         }
         self.strict_string()

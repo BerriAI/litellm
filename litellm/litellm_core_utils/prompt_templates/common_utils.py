@@ -208,7 +208,7 @@ def _content_parts_contain_image(parts: Sequence[object]) -> bool:
     for _ in range(_IMAGE_SCAN_MAX_DEPTH):
         if any(isinstance(part, Mapping) and part.get("type") in _IMAGE_CONTENT_PART_TYPES for part in frontier):
             return True
-        frontier = tuple(  # rebind-ok: depth-bounded frontier walk
+        frontier = tuple(
             nested
             for part in frontier
             if isinstance(part, Mapping)
@@ -1989,6 +1989,32 @@ def is_encrypted_reasoning_block(block: object) -> bool:
     return _carries_encrypted_reasoning(_encrypted_reasoning_field(mapping))
 
 
+def is_unsignable_thinking_block(block: object) -> bool:
+    """A thinking block Anthropic cannot accept on input.
+
+    Anthropic verifies the signature cryptographically, so a block with a null,
+    empty, or missing signature (e.g. from an open-source reasoning model) is
+    rejected with a 400, and so is a block whose signature or data carries
+    another provider's encrypted reasoning. It also rejects a `thinking` block
+    whose text is empty or whitespace-only ("each thinking block must contain
+    thinking"), regardless of signature, e.g. when a `thinking_blocks` history
+    item from a non-Anthropic reasoning provider is replayed through this path.
+    `redacted_thinking` blocks carry no signature and are always kept.
+    """
+    if is_encrypted_reasoning_block(block):
+        return True
+    if not isinstance(block, Mapping):
+        return False
+    mapping: Final = cast(Mapping[str, object], block)  # cast-ok: narrowed by isinstance
+    if mapping.get("type") != "thinking":
+        return False
+    signature: Final = mapping.get("signature")
+    if not (isinstance(signature, str) and len(signature) > 0):
+        return True
+    thinking_text: Final = mapping.get("thinking")
+    return not (isinstance(thinking_text, str) and len(thinking_text.strip()) > 0)
+
+
 def strip_encrypted_reasoning_from_messages(messages: object) -> None:
     """Drop the bridge-tagged reasoning blocks a routed deployment cannot decrypt from
     Anthropic-shaped history.
@@ -2003,11 +2029,11 @@ def strip_encrypted_reasoning_from_messages(messages: object) -> None:
     """
     if not isinstance(messages, list):
         return
-    for content in _anthropic_content_lists(cast(list[object], messages)):  # cast-ok: untyped client json
+    for content in anthropic_content_lists(cast(list[object], messages)):  # cast-ok: untyped client json
         _strip_encrypted_reasoning_from_blocks(content)
 
 
-def _anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
+def anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
     return (
         cast(list[object], content)  # cast-ok: narrowed by isinstance
         for message in messages
@@ -2020,7 +2046,7 @@ def _anthropic_content_lists(messages: Sequence[object]) -> Iterator[object]:
 def _strip_encrypted_reasoning_from_blocks(content: object) -> None:
     blocks: Final = cast(list[object], content)  # cast-ok: narrowed by the caller's isinstance
     kept: Final = tuple(block for block in blocks if not is_encrypted_reasoning_block(block))
-    blocks[:] = kept  # rebind-ok: shared with fallback snapshot
+    blocks[:] = kept
 
 
 def _reasoning_replay_group_key(indexed_block: tuple[int, Mapping[str, object]]) -> str:
@@ -2475,6 +2501,61 @@ def split_concatenated_json_objects(raw: str) -> list[dict[str, object]]:
         idx = end_idx
 
     return results
+
+
+MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS: Final = 8
+
+
+def salvage_concatenated_tool_arguments(raw: str) -> tuple[dict[str, object], ...]:
+    """Return complete concatenated JSON objects that are safe to expand.
+
+    Identical objects collapse to the first one and are not capped. More than
+    ``MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS`` objects that are not all identical
+    returns an empty tuple. Anything that is not a full concatenation of JSON
+    objects returns an empty tuple. Repeated copies of the first object are not
+    retained, and once the cap is passed the rest of the string is only checked.
+    """
+    stripped: Final = raw.strip()
+    if not stripped:
+        return ()
+    decoder: Final = json.JSONDecoder()
+    length: Final = len(stripped)
+    idx = 0  # rebind-ok: cursor walks the concatenated JSON string
+    count = 0  # rebind-ok: counts complete objects without retaining duplicates
+    kept = ()  # rebind-ok: holds at most one object past the salvage cap
+    exceeded = False  # rebind-ok: cap already passed, the tail is only validated
+    while idx < length:
+        while idx < length and stripped[idx] in " \t\n\r":
+            idx += 1
+        if idx >= length:
+            break
+        try:
+            obj, end_idx = decoder.raw_decode(stripped, idx)
+        except json.JSONDecodeError:
+            return ()
+        if not isinstance(obj, dict):
+            return ()
+        idx = end_idx
+        if exceeded:
+            continue
+        count += 1
+        if not kept:
+            kept = (obj,)
+            continue
+        if obj == kept[0] and len(kept) == 1:
+            continue
+        if len(kept) == 1 and count > 2 and count - 1 > MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS:
+            exceeded = True
+            continue
+        if len(kept) == 1 and count > 2:
+            kept = (kept[0],) * (count - 1)
+        if len(kept) >= MAX_SALVAGED_TOOL_ARGUMENT_OBJECTS:
+            exceeded = True
+            continue
+        kept = (*kept, obj)
+    if exceeded:
+        return ()
+    return kept
 
 
 def text_completion_prompt_to_messages(prompt: object) -> tuple[AllMessageValues, ...]:

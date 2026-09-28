@@ -1,14 +1,3 @@
-/**
- * Tests for EntityUsageExportModal component
- *
- * Validates core export functionality:
- * - Renders modal with correct default state (CSV format, daily scope)
- * - User can select export type (daily vs daily_with_models)
- * - User can switch format (CSV vs JSON)
- * - Export button triggers data generation with correct parameters
- * - Modal closes after successful export
- */
-
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import { screen } from "@testing-library/react";
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -20,6 +9,7 @@ vi.mock("./utils", () => {
   return {
     handleExportCSV: vi.fn(),
     handleExportJSON: vi.fn(),
+    handleServerExport: vi.fn(async () => undefined),
     generateExportData: vi.fn(() => [{ Date: "2025-10-01" }]),
     generateMetadata: vi.fn(() => ({ meta: true })),
   };
@@ -112,6 +102,25 @@ describe("EntityUsageExportModal", () => {
     expect(handleExportCSV).toHaveBeenCalledWith(baseProps.spendData, "daily_with_models", "Tag", "tag", {});
 
     // Modal closes after export
+    expect(baseProps.onClose).toHaveBeenCalled();
+  });
+
+  it("routes the export through the server export when one is provided, so truncated key lists still export", async () => {
+    /**
+     * When the spend fetch was capped at the top-N keys, the caller supplies a
+     * serverExport that hits the uncapped export route. The modal must defer to
+     * it instead of generating a CSV from the truncated on-screen data.
+     */
+    const user = userEvent.setup();
+    const { handleExportCSV, handleServerExport } = await import("./utils");
+    const serverExport = vi.fn(async () => new Blob(["csv"]));
+
+    renderWithProviders(<EntityUsageExportModal {...baseProps} entityType="team" serverExport={serverExport} />);
+
+    await user.click(screen.getByRole("button", { name: /Export CSV/i }));
+
+    expect(handleServerExport).toHaveBeenCalledWith(serverExport, "daily", "team", "csv");
+    expect(handleExportCSV).not.toHaveBeenCalled();
     expect(baseProps.onClose).toHaveBeenCalled();
   });
 });

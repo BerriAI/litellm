@@ -3,8 +3,8 @@
 //! lifetime. No other callback host has that obligation, which is why nothing outside
 //! this crate holds them.
 
-use litellm_host::{machine::Machine, route::Route};
-use litellm_host_python::{RouteHost, lookup, run_call};
+use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
+use litellm_host_python::{Preflight, PythonBinding, PythonHostCalls, lookup, run_call};
 use pyo3::{
     gc::{PyTraverseError, PyVisit},
     prelude::*,
@@ -39,7 +39,8 @@ impl PublicCall {
     }
 
     /// The keyword view the legacy path currently reads: the caller's copy until
-    /// `function_setup`, then each rewrite (setup, deployment hook, prepare) in turn.
+    /// `function_setup`, then each rewrite (setup, deployment hook, the driver's preflight)
+    /// in turn.
     pub(crate) fn kwargs(&self) -> &Py<PyDict> {
         &self.kwargs
     }
@@ -63,26 +64,30 @@ impl PublicCall {
     }
 }
 
-/// Runs one native call under the legacy `Logging` contract: the route host projects from
-/// the keyword view the contract prepares, and the contract observes the call.
+/// Runs one native call under the legacy `Logging` contract: the protocol host projects from
+/// the keyword view the contract prepares and `preflight` rewrites, and the contract
+/// observes the call.
 pub fn run_legacy_call<H, M>(
     py: Python<'_>,
     surface: LegacySurface,
     call: PublicCall,
-    machine: M,
-    route: H,
+    start: impl FnOnce(<H::Protocol as Protocol>::Request) -> M + Send + Sync + 'static,
+    host: H,
+    preflight: Preflight,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>>
 where
-    H: RouteHost + 'static,
-    M: Machine<Route = H::Route, Complete = <H::Route as Route>::Response> + 'static,
+    H: PythonBinding + PythonHostCalls<H::Protocol> + 'static,
+    M: Machine<Protocol = H::Protocol> + 'static,
+    M::Complete: Into<HostedCompletion<<H::Protocol as Protocol>::Response>>,
 {
     let arguments = call.kwargs.clone_ref(py);
     run_call(
         py,
-        machine,
-        route,
-        Box::new(LegacyLogging::new(py, surface, call, asynchronous)),
+        start,
+        host,
+        LegacyLogging::new(py, surface, call, asynchronous),
+        preflight,
         arguments,
         asynchronous,
     )
@@ -106,7 +111,7 @@ mod tests {
         (call, locals)
     }
 
-    #[test]
+    #[rstest::rstest]
     fn capture_copies_the_keyword_dict_without_copying_its_values() {
         Python::initialize();
         Python::attach(|py| {

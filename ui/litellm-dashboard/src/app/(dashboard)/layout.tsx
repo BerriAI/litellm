@@ -15,7 +15,7 @@ import { LicenseExpiryBanner } from "@/components/LicenseExpiryBanner";
 import { UserBanner } from "@/components/UserBanner";
 import LiteAdmin from "@/components/liteadmin/LiteAdmin";
 import { UpgradeBanner } from "@/components/UpgradeBanner";
-import { uiHref } from "@/utils/uiHref";
+import { routeSegmentForPathname, uiHref } from "@/utils/uiHref";
 import { PluginModeProvider, usePluginMode } from "@/contexts/PluginModeContext";
 import { createApiClient } from "@/lib/http/client";
 import { getProxyBaseUrl } from "@/components/networking";
@@ -103,6 +103,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
   const { accessToken } = useAuth();
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const { mode } = usePluginMode();
+  const isPlayground = routeSegmentForPathname(usePathname()) === "playground";
 
   const isGateway = mode === "ai-gateway";
 
@@ -142,7 +143,7 @@ function DashboardShell({ children }: { children: React.ReactNode }) {
         <UserBanner accessToken={accessToken} />
         <UpgradeBanner accessToken={accessToken} />
         <main className="min-w-0 flex-1 overflow-y-auto">{children}</main>
-        <LiteAdmin />
+        {!isPlayground && <LiteAdmin />}
       </div>
     </div>
   );

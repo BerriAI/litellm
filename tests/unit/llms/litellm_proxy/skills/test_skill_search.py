@@ -305,6 +305,29 @@ class TestSearchSkills:
         assert metadata["user_api_key_user_id"] == "user-1"
 
     @pytest.mark.asyncio
+    async def test_cli_session_embedding_spend_is_attributed_to_the_per_user_alias_not_the_login_token(self) -> None:
+        router = _embedding_router()
+        session = UserAPIKeyAuth(
+            api_key="cli-session-Qm7xJ2kP9sLw4vT1nR8yAa",
+            user_id="alice",
+            key_alias="cli-session-alice",
+            is_session_token=True,
+        )
+        await search_skills(
+            "language translation",
+            SKILLS,
+            1,
+            router=router,
+            embedding_model="text-embedding-3-small",
+            index=SkillSearchIndex(),
+            user_api_key_dict=session,
+            proxy_logging_obj=_pass_through_key_limits(),
+        )
+        metadata = router.aembedding.await_args.kwargs["metadata"]
+        assert metadata["user_api_key"] == "cli-session-alice"
+        assert metadata["user_api_key_hash"] == "cli-session-alice"
+
+    @pytest.mark.asyncio
     async def test_key_limits_are_checked_against_the_real_embedding_call_before_it_runs(self) -> None:
         router = _embedding_router()
         key_limits = _pass_through_key_limits()

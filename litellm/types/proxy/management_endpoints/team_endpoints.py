@@ -1,6 +1,8 @@
+from collections.abc import Mapping, Sequence
 from typing import Any, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.proxy._types import (
     KeyManagementRoutes,
@@ -11,9 +13,31 @@ from litellm.proxy._types import (
     MemberDeleteRequest,
 )
 from litellm.proxy.common_utils.timezone_utils import budget_duration_error
+from litellm.types.proxy.management_endpoints.internal_user_endpoints import InsensitiveContains
 from litellm.types.proxy.management_endpoints.management_v1 import ResourceResponse
 
 TeamIdSearchMatch = Literal["exact", "prefix"]
+
+
+TeamIdSearchFilter = TypedDict(
+    "TeamIdSearchFilter",
+    {  # mutable-ok: functional TypedDict field map
+        "in": NotRequired[ReadOnly[Sequence[str]]],
+        "notIn": NotRequired[ReadOnly[Sequence[str]]],
+    },
+)
+
+
+class TeamKeyActivitySearchWhere(TypedDict):
+    """Prisma filter behind `/team/daily/activity/aggregated/search`: exact token hash, or key alias
+    or user id containing the term, case-insensitive, narrowed to the teams and keys the caller may see."""
+
+    team_id: NotRequired[ReadOnly[TeamIdSearchFilter]]
+    token: NotRequired[ReadOnly[Mapping[Literal["in"], Sequence[str]]]]
+    OR: ReadOnly[
+        tuple[Mapping[Literal["token"], str] | Mapping[Literal["key_alias", "user_id"], InsensitiveContains], ...]
+    ]
+
 
 MAX_BULK_TEAM_MEMBER_DELETES: Final = 500
 
@@ -253,3 +277,48 @@ class TeamUserSpendResponse(BaseModel):
     start_date: str
     end_date: str
     results: tuple[TeamUserSpendRow, ...]
+
+
+TeamDailyActivityExportType = Literal["daily", "daily_with_keys", "daily_with_users", "daily_with_models"]
+TeamDailyActivityExportFormat = Literal["csv", "json"]
+
+
+class TeamDailyActivityExportRow(BaseModel):
+    date: str
+    team_id: str
+    team_alias: str | None = None
+    api_key: str | None = None
+    key_alias: str | None = None
+    user_id: str | None = None
+    user_email: str | None = None
+    keys: int | None = None
+    model: str | None = None
+    spend: float
+    flat_cost: float = 0.0
+    api_requests: int
+    successful_requests: int
+    failed_requests: int
+    total_tokens: int
+    prompt_tokens: int
+    completion_tokens: int
+    cache_read_input_tokens: int
+    cache_creation_input_tokens: int
+
+
+class TeamDailyActivityExportMetadata(BaseModel):
+    export_date: str
+    export_type: TeamDailyActivityExportType
+    start_date: str
+    end_date: str
+    team_ids: list[str] | None
+    total_spend: float
+    total_flat_cost: float = 0.0
+    total_api_requests: int
+    total_successful_requests: int
+    total_failed_requests: int
+    total_tokens: int
+
+
+class TeamDailyActivityExportResponse(BaseModel):
+    metadata: TeamDailyActivityExportMetadata
+    data: list[TeamDailyActivityExportRow]

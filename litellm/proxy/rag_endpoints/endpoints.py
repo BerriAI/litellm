@@ -824,7 +824,7 @@ async def rag_query(
         merged_retrieval_config: Final = {
             **retrieval_config,
             **store_data,
-        }  # mutable-ok: litellm.aquery requires a plain dict payload
+        }
 
         # Add litellm data
         request_data: dict[str, object] = {}

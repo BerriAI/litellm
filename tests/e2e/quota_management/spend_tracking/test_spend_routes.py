@@ -74,6 +74,8 @@ SPEND_ROUTES = (
 
 _SPEND_PREFIXES = ("/spend", "/global/spend", "/global/activity")
 
+_CAPTURE_RATE_ROUTE: Final = "/spend/capture_rate"
+
 # Served from the MonthlyGlobalSpend / DailyTagSpend / Last30d* views, which the
 # proxy creates in the background once the schema migrations have landed, so on a
 # fresh database they can 500 for a while after the proxy starts serving.
@@ -120,7 +122,7 @@ def test_schema_listed_spend_routes_are_responsive(client: SpendClient) -> None:
         and "{" not in path
         and any(path.startswith(prefix) for prefix in _SPEND_PREFIXES)
     ]
-    extras = [path for path in discovered if path not in SPEND_ROUTES]
+    extras = [path for path in discovered if path not in (*SPEND_ROUTES, _CAPTURE_RATE_ROUTE)]
 
     params = _date_range()
     results = [(path, client.probe(path, params=params)) for path in extras]
@@ -132,3 +134,11 @@ def test_schema_listed_spend_routes_are_responsive(client: SpendClient) -> None:
         if not result.healthy
     ]
     assert not offenders, "non-responsive schema spend routes:\n" + "\n".join(offenders)
+
+
+def test_capture_rate_reports_or_names_the_missing_billing_key(client: SpendClient) -> None:
+    result: Final = client.probe(_CAPTURE_RATE_ROUTE, params=_date_range())
+    print(f"{_CAPTURE_RATE_ROUTE} -> {result.status_code}\n{result.body[:600]}")
+    assert result.status_code == 200 or (result.status_code == 503 and "OPENAI_ADMIN_KEY is not set" in result.body), (
+        f"{_CAPTURE_RATE_ROUTE} -> {result.status_code}\n{result.body[:600]}"
+    )

@@ -20,13 +20,13 @@ import type { ColumnDef } from "@tanstack/react-table";
 import PaginationStatusAlerts from "@/components/shared/PaginationStatusAlerts";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import React, { type ReactNode, useMemo, useState } from "react";
+import React, { type ReactNode, useCallback, useMemo, useState } from "react";
 import TeamMultiSelect from "@/components/common_components/team_multi_select";
 import UserDropdown from "@/components/common_components/UserDropdown";
 import { ActivityMetrics, processActivityData } from "@/components/activity_metrics";
 import { UsageExportHeader } from "@/components/EntityUsageExport";
 import { getApiKeyTruncation, getExportBlockedReason } from "@/components/EntityUsageExport/exportBlockedReason";
-import type { EntityType } from "@/components/EntityUsageExport/types";
+import type { EntityType, ServerExport } from "@/components/EntityUsageExport/types";
 import {
   agentDailyActivityCall,
   customerDailyActivityCall,
@@ -34,6 +34,8 @@ import {
   tagDailyActivityCall,
   teamDailyActivityAggregatedCall,
   teamDailyActivityCall,
+  teamDailyActivityExportCall,
+  teamDailyActivityKeySearchCall,
   userDailyActivityCall,
 } from "@/components/networking";
 import { Logo } from "@/components/molecules/logo/Logo";
@@ -182,6 +184,16 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
   const modelBreakdownKey = modelViewType === "groups" ? "model_groups" : "models";
   const modelMetrics = processActivityData(spendData, modelBreakdownKey, teams || []);
   const keyMetrics = processActivityData(spendData, "api_keys", teams || []);
+  const searchTeamKeys = useCallback(
+    (query: string) => {
+      if (!accessToken || !startTime || !endTime) return Promise.resolve({});
+      const teamIds = Array.isArray(entityFilterArg) ? entityFilterArg : null;
+      return teamDailyActivityKeySearchCall(accessToken, startTime, endTime, query, teamIds).then((data) =>
+        processActivityData(data, "api_keys", teams || []),
+      );
+    },
+    [accessToken, startTime, endTime, entityFilterArg, teams],
+  );
   const agentMetrics = showAgentBreakdown ? processActivityData(agentSpendData, "entities", teams || []) : {};
 
   const getAllTags = () => {
@@ -667,13 +679,27 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
           keyMetrics={keyMetrics}
           hidePromptCachingMetrics={entityType === "agent"}
           apiKeyTruncation={apiKeyTruncation}
+          searchKeys={entityType === "team" ? searchTeamKeys : undefined}
         />
       ),
     },
     { key: "endpoints", label: "Endpoint Activity", content: <EndpointUsage userSpendData={spendData} /> },
   ];
 
-  const spendFetchState = { coversRange, cancelled, failed, apiKeyTruncation };
+  const serverExport: ServerExport | undefined =
+    entityType === "team" && apiKeyTruncation !== undefined && accessToken && startTime && endTime
+      ? (scope, format) =>
+          teamDailyActivityExportCall({
+            accessToken,
+            startTime,
+            endTime,
+            teamIds: entityFilterArg as string[] | null,
+            exportType: scope,
+            format,
+          })
+      : undefined;
+
+  const spendFetchState = { coversRange, cancelled, failed, apiKeyTruncation: serverExport ? null : apiKeyTruncation };
 
   return (
     <div style={{ width: "100%" }} className="relative">
@@ -707,6 +733,7 @@ const EntityUsage: React.FC<EntityUsageProps> = ({
         filterOptions={getAllTags() || undefined}
         teams={teams || []}
         exportBlockedReason={getExportBlockedReason(spendFetchState)}
+        serverExport={serverExport}
       />
       <Tabs defaultValue={tabs[0].key}>
         <TabsList className="mt-1">

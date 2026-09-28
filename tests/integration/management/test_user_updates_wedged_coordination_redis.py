@@ -121,6 +121,7 @@ def test_user_budget_updates_return_promptly_while_coordination_redis_is_wedged(
                         "REDIS_PORT": str(coordination.port),
                     },
                     config=Path("tests/integration/coordination_redis_proxy_config.yaml"),
+                    remove_environment=("DATABASE_URL_READ_REPLICA",),
                     workers=2,
                 ) as candidate,
                 Redis(host=coordination.host, port=coordination.port, socket_timeout=1) as subscriber_client,

@@ -414,6 +414,36 @@ class TestUserKeyObjectPartition:
         assert cache.in_memory_cache_for(HASHED_TOKEN) is cache.key_object_cache.in_memory_cache
         assert cache.in_memory_cache_for(end_user_cache_key("u1")) is cache.in_memory_cache
 
+    def test_update_in_memory_max_size_applies_to_key_object_partition(self):
+        cache = UserApiKeyCache(
+            in_memory_cache=InMemoryCache(max_size_in_memory=2),
+            key_object_in_memory_cache=InMemoryCache(max_size_in_memory=2),
+        )
+        cache.update_in_memory_max_size(3)
+
+        tokens = tuple(hashlib.sha256(f"sk-key-{i}".encode()).hexdigest() for i in range(3))
+        for token in tokens:
+            cache.set_cache(token, _make_key_obj(token), model_type=UserAPIKeyAuth, ttl=100)
+        for i in range(3):
+            cache.set_cache(end_user_cache_key(f"u{i}"), {"user_id": f"u{i}"}, ttl=100)
+
+        first_key = cache.get_cache(tokens[0], model_type=UserAPIKeyAuth)
+        assert first_key is not None, "key partition still evicts at its old capacity"
+        assert first_key.token == tokens[0]
+        assert cache.get_cache(end_user_cache_key("u0")) == {"user_id": "u0"}
+
+    def test_update_in_memory_max_size_none_resets_key_object_partition_to_default(self):
+        cache = UserApiKeyCache(key_object_in_memory_cache=InMemoryCache(max_size_in_memory=1))
+        cache.update_in_memory_max_size(None)
+
+        tokens = tuple(hashlib.sha256(f"sk-key-{i}".encode()).hexdigest() for i in range(2))
+        for token in tokens:
+            cache.set_cache(token, _make_key_obj(token), model_type=UserAPIKeyAuth, ttl=100)
+
+        first_key = cache.get_cache(tokens[0], model_type=UserAPIKeyAuth)
+        assert first_key is not None
+        assert first_key.token == tokens[0]
+
 
 class TestManagementObjectTTL:
     """

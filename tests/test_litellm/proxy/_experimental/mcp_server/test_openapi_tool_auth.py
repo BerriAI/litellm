@@ -9,6 +9,7 @@ from datetime import datetime, timezone
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from mcp.types import CallToolResult
 
 from litellm.proxy._types import (
     LiteLLM_ObjectPermissionTable,
@@ -46,7 +47,7 @@ async def test_openapi_local_tool_runs_pre_call_tool_check():
     fake_tool.name = "list_pets"
 
     pre_call = AsyncMock(return_value={})
-    handle_local = AsyncMock(return_value=[])
+    handle_local = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
 
     with (
         patch.object(
@@ -131,7 +132,7 @@ async def test_openapi_local_tool_blocked_when_pre_call_check_raises():
     pre_call = AsyncMock(
         side_effect=HTTPException(status_code=403, detail="not allowed")
     )
-    handle_local = AsyncMock(return_value=[])
+    handle_local = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
 
     with (
         patch.object(
@@ -191,7 +192,7 @@ async def test_openapi_local_tool_denied_when_server_not_resolvable():
     fake_tool.name = "list_pets"
 
     pre_call = AsyncMock(return_value={})
-    handle_local = AsyncMock(return_value=[])
+    handle_local = AsyncMock(return_value=CallToolResult(content=[], is_error=False))
     resolve_auth = MagicMock()
 
     # `_get_mcp_server_from_tool_name` returns None — no server context.
@@ -275,9 +276,9 @@ async def test_openapi_local_tool_injects_resolved_oauth_token():
     fake_tool.name = "get_values"
     captured: dict = {}
 
-    async def handle_local(_name, _arguments):
+    async def handle_local(_name, _arguments, _wire_compat):
         captured["resolved"] = _request_resolved_auth_headers.get()
-        return []
+        return CallToolResult(content=[], is_error=False)
 
     with (
         patch.object(
@@ -603,13 +604,13 @@ async def test_per_server_auth_header_reaches_both_openapi_dispatch_arms(dispatc
         captured["resolver_credential"] = kwargs["mcp_auth_header"]
         return None, kwargs["forwarded_headers"]
 
-    async def capture_local(_name, _arguments):
+    async def capture_local(_name, _arguments, _wire_compat):
         captured["injected"] = _request_auth_header.get()
-        return []
+        return CallToolResult(content=[], is_error=False)
 
-    async def capture_openapi_handler(_server, _name, _arguments):
+    async def capture_openapi_handler(_server, _name, _arguments, _wire_compat):
         captured["injected"] = _request_auth_header.get()
-        return []
+        return CallToolResult(content=[], is_error=False)
 
     manager = mcp_operations.global_mcp_server_manager
     with (

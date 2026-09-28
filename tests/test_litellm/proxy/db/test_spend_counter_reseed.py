@@ -12,12 +12,14 @@ from collections.abc import Mapping
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from typing import Final
+from unittest.mock import AsyncMock
 
 import pytest
 
 from litellm.caching.dual_cache import DualCache
 from litellm.caching.in_memory_cache import InMemoryCache
 from litellm.constants import PROXY_DB_LOOKUP_MAX_CONCURRENCY
+from litellm.proxy.db.db_lookup_gate import LoopBoundSemaphore, db_lookup_stall_tracker
 from litellm.proxy.db.spend_counter_reseed import SpendCounterReseed
 
 WINDOW_START = datetime(2026, 8, 1, tzinfo=timezone.utc)
@@ -443,6 +445,31 @@ async def test_from_db_returns_none_for_a_missing_project_row():
     prisma: Final = _FakePrismaClient(project_row=None)
 
     assert await SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:project:proj-1") is None
+
+
+@pytest.mark.asyncio
+async def test_from_db_deadline_covers_the_wait_for_a_gate_slot(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A saturated gate must fail the lookup at the deadline instead of parking
+    the request on a gate slot outside the bounded window."""
+    gate: Final = LoopBoundSemaphore(1)
+    monkeypatch.setattr("litellm.proxy.db.spend_counter_reseed.db_lookup_gate", gate)
+    monkeypatch.setattr("litellm.proxy.db.db_lookup_gate.PROXY_DB_LOOKUP_DEADLINE_SECONDS", 0.05)
+    find_unique: Final = AsyncMock()
+    prisma: Final = SimpleNamespace(
+        db=SimpleNamespace(litellm_verificationtoken=SimpleNamespace(find_unique=find_unique))
+    )
+    db_lookup_stall_tracker.clear()
+    try:
+        async with gate.current():
+            result: Final = await asyncio.wait_for(
+                SpendCounterReseed.from_db(prisma_client=prisma, counter_key="spend:key:abc"),
+                timeout=1.0,
+            )
+        assert result is None
+        assert db_lookup_stall_tracker.stalled_within(60.0)
+        find_unique.assert_not_called()
+    finally:
+        db_lookup_stall_tracker.clear()
 
 
 @pytest.mark.asyncio

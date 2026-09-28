@@ -96,6 +96,7 @@ class GoogleAIStudioGeminiConfig(VertexGeminiConfig):
             "logprobs",
             "frequency_penalty",
             "presence_penalty",
+            "seed",
             "modalities",
             "parallel_tool_calls",
             "web_search_options",

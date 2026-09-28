@@ -96,7 +96,7 @@ async fn cache_exposes_its_configuration(#[future(awt)] server: MockServer) {
             path_service_account: Some("/secrets/sa.json".into()),
             ..support::config(&server, Some("folder"))
         },
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         litellm_cache::JsonCodec::<Value>::new(),
     );
     assert_eq!(cache.bucket_name(), "bucket");

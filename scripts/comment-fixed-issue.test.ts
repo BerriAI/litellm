@@ -263,7 +263,7 @@ describe("fixedBody", () => {
 describe("fixOf", () => {
   test("a merged pull request or a commit is a fix, whatever branch it was merged into", () => {
     expect(fixOf(closure(mergedPr), "BerriAI/litellm")).toEqual({ kind: "pull_request", number: 41767, oid: MERGE_COMMIT });
-    expect(fixOf(closure({ ...mergedPr, baseRefName: "litellm_internal_staging" }), "BerriAI/litellm")).toEqual({ kind: "pull_request", number: 41767, oid: MERGE_COMMIT });
+    expect(fixOf(closure({ ...mergedPr, baseRefName: "release_branch" }), "BerriAI/litellm")).toEqual({ kind: "pull_request", number: 41767, oid: MERGE_COMMIT });
     expect(fixOf(closure(commitCloser), "BerriAI/litellm")).toEqual({ kind: "commit", oid: MERGE_COMMIT });
   });
 
@@ -315,7 +315,7 @@ describe("closeVerdict", () => {
     for (const base of ["release/v1.102.0-rc.2", "stable/v1.83.14", "v_1_83_3_stable_patch"]) {
       expect(closeVerdict(openPr(41760, { baseRefName: base }), config)).toEqual({ kind: "skip", reason: `targets the release line ${base}` });
     }
-    expect(closeVerdict(openPr(41760, { baseRefName: "litellm_internal_staging" }), config).kind).toBe("candidate");
+    expect(closeVerdict(openPr(41760, { baseRefName: "release_branch" }), config).kind).toBe("candidate");
   });
 
   test("a pull request in a fork, one that is not open, or one linking no issue is left alone", () => {
@@ -404,8 +404,8 @@ describe("handleFixedIssue", () => {
   });
 
   test("a fix merged into the retired development branch or pushed as a commit counts once it is on the default branch", async () => {
-    const stagingPr = { ...mergedPr, baseRefName: "litellm_internal_staging" };
-    const staging = openPr(41760, { baseRefName: "litellm_internal_staging", closingIssuesReferences: links(linkedIssue(ISSUE, stagingPr)) });
+    const stagingPr = { ...mergedPr, baseRefName: "release_branch" };
+    const staging = openPr(41760, { baseRefName: "release_branch", closingIssuesReferences: links(linkedIssue(ISSUE, stagingPr)) });
     const byCommit = openPr(41761, { closingIssuesReferences: links(linkedIssue(41751, commitCloser)) });
     const { api, writes } = fakeApi({ issue: closedBy(mergedPr, "CLOSED", [staging, byCommit]) });
     const { pullRequests } = await handleFixedIssue(api, config, ISSUE, noPause);
@@ -426,15 +426,15 @@ describe("handleFixedIssue", () => {
   });
 
   test("the default branch comes from the config for the containment check and the comment alike", async () => {
-    const stagingConfig = { ...config, defaultBranch: "litellm_internal_staging" };
-    const closer = { ...mergedPr, baseRefName: "litellm_internal_staging" };
+    const stagingConfig = { ...config, defaultBranch: "release_branch" };
+    const closer = { ...mergedPr, baseRefName: "release_branch" };
     const { api, writes } = fakeApi({
       issue: closedBy(closer, "CLOSED", [openPr(41760, { closingIssuesReferences: links(linkedIssue(ISSUE, closer)) })]),
-      reachable: { litellm_internal_staging: [MERGE_COMMIT] },
+      reachable: { release_branch: [MERGE_COMMIT] },
     });
     const { pullRequests } = await handleFixedIssue(api, stagingConfig, ISSUE, noPause);
-    expect(pullRequests).toEqual([{ kind: "closed", number: 41760, body: supersededBody([prFix()], "litellm_internal_staging") }]);
-    expect(writes[1]).toContain("on litellm_internal_staging, so this pull request is closed");
+    expect(pullRequests).toEqual([{ kind: "closed", number: 41760, body: supersededBody([prFix()], "release_branch") }]);
+    expect(writes[1]).toContain("on release_branch, so this pull request is closed");
   });
 
   test("the closer sits in the linked list as merged and gets neither a line nor a write", async () => {
@@ -533,11 +533,11 @@ describe("handleFixedIssue", () => {
   });
 
   test("an issue closed from the retired development branch gets no comment but still closes its linked pull requests once the fix is on the default branch", async () => {
-    const stagingPr = { ...mergedPr, baseRefName: "litellm_internal_staging" };
+    const stagingPr = { ...mergedPr, baseRefName: "release_branch" };
     const staging = openPr(41760, { closingIssuesReferences: links(linkedIssue(ISSUE, stagingPr)) });
     const { api, writes } = fakeApi({ issue: closedBy(stagingPr, "CLOSED", [staging]) });
     const { comment, pullRequests } = await handleFixedIssue(api, config, ISSUE, noPause);
-    expect(comment).toEqual({ kind: "skip", reason: "#41767 merged into litellm_internal_staging, not main" });
+    expect(comment).toEqual({ kind: "skip", reason: "#41767 merged into release_branch, not main" });
     expect(pullRequests).toEqual([{ kind: "closed", number: 41760, body: oneFixBody }]);
     expect(writes.map((write) => write.split(" ")[1])).toEqual(["/repos/BerriAI/litellm/issues/41760/comments", "/repos/BerriAI/litellm/pulls/41760"]);
   });

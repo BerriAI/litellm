@@ -86,6 +86,10 @@ class UserApiKeyCache(DualCache):
             default_in_memory_ttl=default_in_memory_ttl, default_redis_ttl=default_redis_ttl
         )
 
+    def update_in_memory_max_size(self, max_size: int | None) -> None:
+        super().update_in_memory_max_size(max_size)
+        self.key_object_cache.update_in_memory_max_size(max_size)
+
     def attach_redis_cache(
         self, redis_cache: RedisCache | None = None, *, default_redis_ttl: float | None = None
     ) -> None:

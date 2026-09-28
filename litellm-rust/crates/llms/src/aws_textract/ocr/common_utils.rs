@@ -1,5 +1,5 @@
 use base64::{Engine, engine::general_purpose::STANDARD};
-use litellm_auth_aws::{SigV4Signer, resolve_aws_region};
+use litellm_auth_aws::{AwsCredentialSource, SigV4Signer, resolve_aws_region};
 use litellm_http::outbound::RequestSigner;
 use serde::{Deserialize, Serialize};
 use strum::{EnumString, IntoStaticStr, VariantNames};
@@ -232,6 +232,7 @@ pub(super) fn health_check_document() -> OcrDocument {
 }
 
 pub(super) async fn environment(
+    auth: &litellm_auth_aws::AwsAuthService,
     request: &PreparedOcrRequest,
     operation: TextractOperation,
 ) -> Result<TextractEnvironment, Error> {
@@ -244,9 +245,10 @@ pub(super) async fn environment(
             )
         })?;
     let signer = SigV4Signer::resolve(
+        auth,
         region.clone(),
         TEXTRACT_SERVICE,
-        &request.optional_params,
+        AwsCredentialSource::from_params(&request.optional_params, &env_lookup),
         &env_lookup,
     )
     .await

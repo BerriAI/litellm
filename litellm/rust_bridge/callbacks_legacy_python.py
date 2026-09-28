@@ -22,7 +22,6 @@ from typing import (
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging
-    from litellm.types.utils import CredentialItem
 
 
 class MetadataUpdater(Protocol):
@@ -70,21 +69,6 @@ def _claim_budget_reservation(call_setup: CallSetup, asynchronous: bool) -> Call
     if asynchronous and not is_internal_call():
         bind_budget_reservation_to_callbacks(call_setup.logger.litellm_params)
     return call_setup
-
-
-def check_limits(kwargs: Mapping[str, object]) -> None:
-    from litellm import (
-        BudgetExceededError,
-        _current_cost,  # pyright: ignore[reportPrivateUsage]  # shared SDK budget counter has no public accessor
-        max_budget,
-        num_retries_per_request,
-    )
-    from litellm.litellm_core_utils.core_helpers import max_retries_per_request_hit
-
-    if max_budget and _current_cost > max_budget:
-        raise BudgetExceededError(current_cost=_current_cost, max_budget=max_budget)
-    if max_retries_per_request_hit(kwargs, num_retries_per_request):
-        raise RuntimeError("Max retries per request hit!")
 
 
 def finalize(
@@ -299,22 +283,6 @@ def is_internal_call() -> bool:
     return internal.get()
 
 
-def credential_list() -> list[CredentialItem]:
-    from litellm import credential_list as credentials
-
-    return credentials
-
-
-def warn_unknown_credential(name: str, loaded: int) -> None:
-    from litellm._logging import verbose_logger
-
-    verbose_logger.warning(
-        "litellm_credential_name=%s matched none of the %d loaded credentials; the request runs without it",
-        name,
-        loaded,
-    )
-
-
 def before_deployment_call(kwargs: dict[str, object], call_type: str) -> Awaitable[object]:
     from litellm import utils
 
@@ -358,7 +326,7 @@ def stream_success(
     end: datetime.datetime,
     first_chunk: datetime.datetime | None,
 ) -> None:
-    from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+    from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
         GLOBAL_PASS_THROUGH_SUCCESS_HANDLER_OBJ,
     )
     from litellm.proxy.pass_through_endpoints.streaming_handler import PassThroughStreamingHandler

@@ -994,7 +994,7 @@ class OpenAIResponsesHandler(BaseTranslation):
 
     def _spread_text_rewrite_over_stream_events(
         self,
-        stream_events: Sequence[Any],
+        stream_events: Sequence[object],
         rewritten_text: str,
         guardrail_name: str,
     ) -> None:
@@ -1540,7 +1540,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         from litellm.responses.streaming_iterator import build_synthetic_response_events
 
         return build_synthetic_response_events(
-            transformed=_blocked_response(exc, response_id=f"resp_{uuid.uuid4()}", model=exc.model),
+            transformed=build_blocked_response(exc),
             logging_obj=None,
             chunk_size=max(len(exc.message), 1),
         )
@@ -1646,6 +1646,10 @@ def _blocked_output_item(exc: "ModifyResponseException") -> GenericResponseOutpu
         "content": ({"type": "output_text", "text": exc.message, "annotations": ()},),
     }
     return GenericResponseOutputItem.model_validate(payload)
+
+
+def build_blocked_response(exc: "ModifyResponseException") -> ResponsesAPIResponse:
+    return _blocked_response(exc, response_id=f"resp_{uuid.uuid4()}", model=exc.model)
 
 
 def _blocked_response(
