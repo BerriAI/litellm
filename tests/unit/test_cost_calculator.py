@@ -186,8 +186,13 @@ def test_response_cost_calculator_keeps_optional_params_out_of_hidden_params():
     assert optional_params["aws_session_token"] == "session-secret"
 
 
-def test_embedding_success_metadata_hidden_params_carry_no_forwarded_credentials():
+def test_embedding_success_logging_and_spend_log_carry_no_forwarded_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy.spend_tracking.spend_tracking_utils import _get_proxy_server_request_for_spend_logs_payload
+
+    monkeypatch.setattr(proxy_server, "general_settings", {"store_prompts_in_spend_logs": True})
     shared_metadata: dict[str, object] = {"user_api_key_alias": "alias"}
+    proxy_server_request: Final = {"body": {"model": "emb", "input": "hi", "metadata": shared_metadata}}
     shared_optional_params: dict[str, object] = {"encoding_format": "float"}
     logging_obj = Logging(
         model="text-embedding-3-small",
@@ -200,7 +205,7 @@ def test_embedding_success_metadata_hidden_params_carry_no_forwarded_credentials
     )
     logging_obj.update_environment_variables(
         model="text-embedding-3-small",
-        litellm_params={"metadata": shared_metadata},
+        litellm_params={"metadata": shared_metadata, "proxy_server_request": proxy_server_request},
         optional_params=shared_optional_params,
         custom_llm_provider="openai",
     )
@@ -212,14 +217,21 @@ def test_embedding_success_metadata_hidden_params_carry_no_forwarded_credentials
         response,
         start_time=datetime.datetime.now(),
         end_time=datetime.datetime.now(),
-        build_logging_payload=False,
     )
 
-    hidden_params = logging_obj.model_call_details["litellm_params"]["metadata"]["hidden_params"]
+    litellm_params = logging_obj.model_call_details["litellm_params"]
+    stored_request: Final = _get_proxy_server_request_for_spend_logs_payload(
+        metadata=shared_metadata,
+        litellm_params=litellm_params,
+        kwargs=logging_obj.model_call_details,
+    )
+    hidden_params = litellm_params["metadata"]["hidden_params"]
     assert isinstance(hidden_params, dict)
     assert "optional_params" not in hidden_params
+    assert '"hidden_params"' in stored_request
+    assert "goog-secret" not in stored_request
+    assert "goog-secret" not in str(logging_obj.model_call_details["standard_logging_object"])
     assert logging_obj.model_call_details["response_cost"] is not None
-    assert "goog-secret" not in str(shared_metadata)
     assert logging_obj.optional_params["extra_headers"] == {"x-goog-api-key": "goog-secret"}
 
 
