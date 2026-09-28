@@ -3517,7 +3517,6 @@ def test_internal_user_still_blocked_from_another_users_info():
     [
         "/user/daily/activity",
         "/user/daily/activity/aggregated",
-        "/user/daily/activity/aggregated/search",
     ],
 )
 @pytest.mark.parametrize(
