@@ -12,7 +12,7 @@ use pyo3::types::PyString;
 /// `__context__`, with the message rendered by Python so the exception's own `__format__`
 /// is honored. A `__format__` that raises surfaces as that failure instead, with the
 /// original attached as its context.
-pub fn wrap_failure<T>(py: Python<'_>, template: &str, result: PyResult<T>) -> PyResult<T> {
+pub(crate) fn wrap_failure<T>(py: Python<'_>, template: &str, result: PyResult<T>) -> PyResult<T> {
     result.map_err(|error| {
         if error.is_instance_of::<PyTypeError>(py) || !error.is_instance_of::<PyException>(py) {
             return error;
@@ -48,9 +48,9 @@ mod tests {
         Err(PyErr::from_value(error.clone()))
     }
 
-    #[test]
+    #[rstest::rstest]
     fn only_ordinary_exceptions_are_reported_under_the_template() {
-        crate::initialize_python();
+        Python::initialize();
         Python::attach(|py| {
             let locals = PyDict::new(py);
             py.run(
@@ -87,9 +87,9 @@ abort = KeyboardInterrupt('cancelled')
         });
     }
 
-    #[test]
+    #[rstest::rstest]
     fn a_raising_format_surfaces_instead_of_the_report_and_keeps_the_original_as_context() {
-        crate::initialize_python();
+        Python::initialize();
         Python::attach(|py| {
             let locals = PyDict::new(py);
             py.run(
@@ -113,9 +113,9 @@ original = Unformattable('cannot render')
         });
     }
 
-    #[test]
+    #[rstest::rstest]
     fn successful_results_pass_through_untouched() {
-        crate::initialize_python();
+        Python::initialize();
         Python::attach(|py| {
             assert_eq!(wrap_failure(py, TEMPLATE, Ok(7)).unwrap(), 7);
         });

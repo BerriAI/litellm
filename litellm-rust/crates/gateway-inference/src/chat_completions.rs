@@ -44,10 +44,8 @@ async fn handle(
     request::authorize_model(identity, deployment, &body).await?;
     let messages = body.get("messages").cloned().unwrap_or_default();
     let response = litellm_host_http::serve_unary(
-        gateway
-            .chat_completions
-            .clone()
-            .machine(ChatCompletionsCall {
+        gateway.chat_completions.clone().machine(
+            ChatCompletionsCall {
                 model: deployment.model.clone(),
                 messages,
                 optional_params: body
@@ -59,10 +57,13 @@ async fn handle(
                 custom_llm_provider: deployment.custom_llm_provider.clone(),
                 extra_headers: None,
                 timeout: deployment.timeout,
-            }),
+            },
+            None,
+        ),
         (),
         (),
         litellm_host_http::Unary::new(Json),
+        None,
     )
     .await?;
     Ok(response)

@@ -12617,8 +12617,7 @@ async def test_identity_bound_authorize_unrelated_bearer_uses_browser_session(
 async def test_update_server_drops_cached_upstream_oauth_metadata():
     from litellm.proxy._experimental.mcp_server import discoverable_endpoints
     from litellm.proxy._experimental.mcp_server.mcp_server_manager import MCPServerManager
-    from litellm.proxy._types import LiteLLM_MCPServerTable
-    from litellm.proxy._types import MCPTransport
+    from litellm.proxy._types import LiteLLM_MCPServerTable, MCPTransport
     from litellm.types.mcp_server.mcp_server_manager import MCPServer
 
     manager = MCPServerManager()
