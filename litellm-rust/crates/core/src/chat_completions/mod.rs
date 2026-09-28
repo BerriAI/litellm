@@ -6,8 +6,7 @@ mod common_utils;
 pub(crate) mod handler;
 mod prepare;
 use litellm_types::utils::ChatCompletionsResponse;
-use prepare::{parse_messages, prepare_provider_request, resolve_provider_config, resolve_request};
-use serde_json::{Map, Value};
+use prepare::{prepare_provider_request, resolve_request};
 
 use crate::chat_completions::types::ChatCompletionsRequest;
 use litellm_auth::AuthServices;
@@ -19,33 +18,6 @@ pub struct ChatCompletionsRoute {
     http: litellm_http::Client,
     auth: Arc<AuthServices>,
     secrets: Arc<dyn SecretSource>,
-}
-
-/// Whether the core would accept this request, without resolving credentials or
-/// touching the network.
-///
-/// A host that keeps the Python implementation asks this first so it can emit
-/// its pre-call logging exactly once, on whichever path is about to run.
-/// Returns the decline reason, or `None` when the request is accepted.
-pub fn chat_completions_decline_reason(
-    model: &str,
-    custom_llm_provider: Option<&str>,
-    messages: Value,
-    optional_params: &Map<String, Value>,
-) -> Option<&'static str> {
-    let Ok(resolved) = resolve_provider_config(model, custom_llm_provider) else {
-        return Some("provider is not on the rust chat completions path");
-    };
-    let config = resolved.config;
-    let Ok(messages) = parse_messages(messages) else {
-        return Some("unreadable message list");
-    };
-    if messages.is_empty() {
-        return Some("empty message list");
-    }
-    config
-        .unsupported_reason(&messages, optional_params)
-        .map(|reason| reason.0)
 }
 
 impl ChatCompletionsRoute {

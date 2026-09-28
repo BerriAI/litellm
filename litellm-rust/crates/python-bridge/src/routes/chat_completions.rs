@@ -2,18 +2,14 @@ mod host;
 
 use pyo3::types::{PyDict, PyTuple};
 
-use crate::errors::RustBridgeDeclined;
 use crate::logger::{run_async, run_sync};
-use litellm_core::chat_completions::{
-    ChatCompletionsRoute, Error, chat_completions_decline_reason, types::ChatCompletionsRequest,
-};
-use litellm_host_python::from_py_argument;
+use litellm_core::chat_completions::{ChatCompletionsRoute, Error, types::ChatCompletionsRequest};
 use litellm_types::utils::ChatCompletionsResponse;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
 use crate::{
-    errors::chat_completions_error_to_pyerr,
+    errors::route_error_to_pyerr,
     marshal::{
         RouteOptions, extra_headers_argument, messages_argument, optional_params_argument,
         optional_timeout,
@@ -54,23 +50,6 @@ async fn execute(
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None))]
-pub(crate) fn chat_completions_decline(
-    model: String,
-    #[pyo3(from_py_with = from_py_argument)] messages: Value,
-    #[pyo3(from_py_with = optional_params_argument)] optional_params: Option<Map<String, Value>>,
-    custom_llm_provider: Option<String>,
-) -> Option<String> {
-    chat_completions_decline_reason(
-        &model,
-        custom_llm_provider.as_deref(),
-        messages,
-        &optional_params.unwrap_or_default(),
-    )
-    .map(str::to_string)
-}
-
-#[pyfunction]
 #[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
 #[expect(
     clippy::too_many_arguments,
@@ -106,7 +85,7 @@ pub(crate) fn chat_completions(
             optional_params.unwrap_or_default(),
             options,
         ),
-        chat_completions_error_to_pyerr,
+        route_error_to_pyerr,
     )
 }
 
@@ -146,7 +125,7 @@ pub(crate) fn achat_completions<'py>(
             optional_params.unwrap_or_default(),
             options,
         ),
-        chat_completions_error_to_pyerr,
+        route_error_to_pyerr,
     )
 }
 
@@ -163,42 +142,6 @@ fn run_public(
         request.clone().unbind(),
         "litellm.rust_bridge.chat_completions.route_host",
     );
-    if let Some(reason) = py
-        .import("litellm.rust_bridge.chat_completions.route_host")?
-        .getattr("decline_reason")?
-        .call1((&request,))?
-        .extract::<Option<String>>()?
-    {
-        return Err(RustBridgeDeclined::new_err(reason));
-    }
-    let model = host
-        .argument(py, &kwargs, "model")?
-        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("model is required"))?
-        .extract::<String>()?;
-    let provider = host
-        .argument(py, &kwargs, "custom_llm_provider")?
-        .map(|value| value.extract::<String>())
-        .transpose()?;
-    let messages = host
-        .argument(py, &kwargs, "messages")?
-        .ok_or_else(|| pyo3::exceptions::PyValueError::new_err("messages is required"))?;
-    let params = host.parameters(py, &kwargs)?;
-    if let Some(reason) = chat_completions_decline_reason(
-        &model,
-        provider.as_deref(),
-        litellm_host_python::from_py(&messages)?,
-        &params,
-    ) {
-        return Err(RustBridgeDeclined::new_err(reason));
-    }
-    if params
-        .get("stream")
-        .is_some_and(|value| value == &Value::Bool(true))
-    {
-        return Err(RustBridgeDeclined::new_err(
-            "native Python chat_completions streaming",
-        ));
-    }
     let (arguments, hooks) = crate::routes::call_hooks(
         py,
         Operation::Completion,
@@ -243,47 +186,4 @@ pub(crate) fn acompletion(
     kwargs: Bound<'_, PyDict>,
 ) -> PyResult<Py<PyAny>> {
     run_public(py, request, args, kwargs, true)
-}
-
-#[cfg(test)]
-mod tests {
-    use pyo3::{prelude::*, types::PyList};
-
-    #[test]
-    fn chat_completions_decline_keeps_existing_reasons() {
-        Python::initialize();
-        Python::attach(|py| {
-            let decline = crate::native_module(py)
-                .getattr("chat_completions_decline")
-                .expect("decline helper should be registered");
-            let empty = PyList::empty(py);
-            let unreadable = py
-                .eval(c"'nope'", None, None)
-                .expect("string messages should convert");
-
-            let unknown: Option<String> = decline
-                .call1(("unknown-model", &empty))
-                .and_then(|value| value.extract())
-                .expect("unknown providers should decline");
-            assert_eq!(
-                unknown.as_deref(),
-                Some("provider is not on the rust chat completions path")
-            );
-
-            let empty_reason: Option<String> = decline
-                .call1(("anthropic/claude-sonnet-4-5", &empty))
-                .and_then(|value| value.extract())
-                .expect("empty lists should decline");
-            assert_eq!(empty_reason.as_deref(), Some("empty message list"));
-
-            let unreadable_reason: Option<String> = decline
-                .call1(("anthropic/claude-sonnet-4-5", unreadable))
-                .and_then(|value| value.extract())
-                .expect("non-list messages should decline");
-            assert_eq!(
-                unreadable_reason.as_deref(),
-                Some("unreadable message list")
-            );
-        });
-    }
 }
