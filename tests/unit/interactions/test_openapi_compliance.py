@@ -89,12 +89,17 @@ class TestRequestCompliance:
     def test_create_model_interaction_request_schema(self, model_request_schema: Mapping[str, object]) -> None:
         config: Final = GoogleAIStudioInteractionsConfig()
         payload: Final = config.transform_request(
-            model="test-model", agent=None, input="test input", optional_params={"stream": True},
+            model="test-model", agent=None, input="test input",
+            optional_params={"stream": True, "response_mime_type": "application/json"},
             litellm_params=GenericLiteLLMParams(api_key="test-key"), headers={},
         )
         properties: Final = TypeAdapter(Mapping[str, object]).validate_python(model_request_schema["properties"])
-        assert payload == {"model": "test-model", "input": "test input", "stream": True}
+        assert payload == {
+            "model": "test-model", "input": "test input", "stream": True,
+            "response_format": {"type": "text", "mime_type": "application/json"},
+        }
         assert payload.keys() <= properties.keys()
+        assert set(config.get_supported_params("test-model")) - {"agent", "response_mime_type"} <= properties.keys()
 
     @pytest.mark.parametrize("input_value", ["test input", [{"type": "text", "text": "test input"}]])
     def test_input_types_match_spec(
