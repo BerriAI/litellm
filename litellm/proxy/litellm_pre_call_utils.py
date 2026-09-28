@@ -2020,10 +2020,6 @@ async def add_litellm_data_to_request(
         for _mk in list(_user_metadata.keys()):
             if _mk.startswith("user_api_key_"):
                 del _user_metadata[_mk]
-    _requester_metadata_source: Final = (
-        copy.deepcopy(_user_metadata) if isinstance(_user_metadata, dict) else {}
-    )
-
     _raw_headers: Final[dict[str, str]] = RedactedDict(_safe_get_request_headers(request))
 
     forward_llm_auth = False
@@ -2248,7 +2244,9 @@ async def add_litellm_data_to_request(
     # strip above prevents those proxy-internal slots — if a caller forged
     # them — from leaking into requester_metadata where guardrails and audit
     # paths may read from it.
-    data[_metadata_variable_name]["requester_metadata"] = copy.deepcopy(_requester_metadata_source)
+    data[_metadata_variable_name]["requester_metadata"] = (
+        copy.deepcopy(data["metadata"]) if isinstance(data.get("metadata"), dict) else {}
+    )
     if _metadata_variable_name == "litellm_metadata":
         data[_metadata_variable_name].update(
             _promoted_trace_control_fields(

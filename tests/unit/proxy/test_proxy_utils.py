@@ -88,22 +88,23 @@ async def test_add_litellm_data_to_request_non_thread_endpoint(endpoint, mock_re
 
 @pytest.mark.asyncio
 async def test_add_litellm_data_to_request_snapshots_requester_metadata(mock_request):
-    mock_request.url.path = "/chat/completions"
     mock_request.headers = {}
     user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key")
     proxy_config = Mock()
 
+    mock_request.url.path = "/v1/messages"
     empty_snapshot: Final = await add_litellm_data_to_request(
         {}, mock_request, user_api_key_dict, proxy_config
     )
-    assert empty_snapshot["metadata"]["requester_metadata"] == {}
+    assert empty_snapshot["litellm_metadata"]["requester_metadata"] == {}
 
+    mock_request.url.path = "/chat/completions"
     caller_metadata = {"trace_id": "trace-1"}
     snapshot: Final = await add_litellm_data_to_request(
         {"metadata": caller_metadata}, mock_request, user_api_key_dict, proxy_config
     )
     caller_metadata["trace_id"] = "changed"
-    assert snapshot["metadata"]["requester_metadata"] == {"trace_id": "trace-1"}
+    assert snapshot["metadata"]["requester_metadata"]["trace_id"] == "trace-1"
 
 
 # test adding traceparent
