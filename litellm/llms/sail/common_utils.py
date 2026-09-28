@@ -16,9 +16,6 @@ _WINDOW_FOR_SERVICE_TIER: Final[Mapping[str, CompletionWindow | None]] = Mapping
 _BILLED_TIER_FOR_WINDOW: Final[Mapping[str, str | None]] = MappingProxyType(
     {"asap": None, "balanced": "balanced", "standard": "balanced", "flex": "flex"}
 )
-_SERVICE_TIER_FOR_WINDOW: Final[Mapping[str, str]] = MappingProxyType(
-    {"asap": "default", "balanced": "balanced", "standard": "balanced", "flex": "flex"}
-)
 _EMPTY: Final[Mapping[str, object]] = MappingProxyType({})
 _DROP_PARAMS_HINT: Final = (
     "To drop it, set `litellm.drop_params=True` or for proxy: `litellm_settings: drop_params: true`"
@@ -58,8 +55,6 @@ def _json_value(value: object) -> object:
 def completion_window_for_service_tier(
     service_tier: object, *, model: str, drop_params: bool
 ) -> CompletionWindow | None:
-    """Sail picks speed and price by ``metadata.completion_window`` and rejects
-    ``service_tier``, so the tier is translated."""
     if service_tier is None:
         return None
     tier: Final = service_tier.lower() if isinstance(service_tier, str) else None
@@ -73,49 +68,18 @@ def completion_window_for_service_tier(
     )
 
 
-def _metadata_without_caller_window(
-    metadata: object, *, field: str, model: str, drop_params: bool
-) -> Mapping[str, object]:
-    """Chat bills from ``service_tier``, so a window written into metadata would
-    run on Sail at a price LiteLLM never charges."""
-    if not isinstance(metadata, Mapping):
-        return _EMPTY
-    if "completion_window" in metadata and not _dropping(drop_params):
-        raise _unsupported(f"sail does not accept {field}.completion_window. Send service_tier instead.", model)
-    return without_keys(metadata, frozenset({"completion_window"}))
-
-
-def _request_metadata_without_window(
-    metadata: object, window: str | None, *, model: str, drop_params: bool
-) -> Mapping[str, object]:
-    """A caller window that selects the same billed tier as ``service_tier`` was
-    already priced, so it is replaced by the tier's window instead of rejected."""
-    caller_window: Final = metadata.get("completion_window") if isinstance(metadata, Mapping) else None
-    if (
-        isinstance(metadata, Mapping)
-        and window is not None
-        and isinstance(caller_window, str)
-        and caller_window.lower() in _BILLED_TIER_FOR_WINDOW
-        and _BILLED_TIER_FOR_WINDOW[caller_window.lower()] == _BILLED_TIER_FOR_WINDOW[window]
-    ):
-        return without_keys(metadata, frozenset({"completion_window"}))
-    return _metadata_without_caller_window(metadata, field="metadata", model=model, drop_params=drop_params)
-
-
 def extra_body_for_sail(
     extra_body: Mapping[str, object], request_metadata: object, *, model: str, drop_params: bool
 ) -> Mapping[str, object]:
-    """``extra_body`` keys are sent over the request body, so its ``metadata``
-    would replace the metadata carrying the window. The two are merged, and a
-    tier or window set in ``extra_body`` is rejected because billing cannot see it."""
     if "service_tier" in extra_body and not _dropping(drop_params):
         raise _unsupported("sail does not accept service_tier inside extra_body. Send service_tier instead.", model)
-    caller_metadata: Final = _metadata_without_caller_window(
-        extra_body.get("metadata"), field="extra_body.metadata", model=model, drop_params=drop_params
+    caller_metadata: Final[Mapping[str, object]] = (
+        extra_body.get("metadata") if isinstance(extra_body.get("metadata"), Mapping) else _EMPTY
     )
-    merged_metadata: Final = MappingProxyType(
-        {**caller_metadata, **(request_metadata if isinstance(request_metadata, Mapping) else _EMPTY)}
+    request_metadata_mapping: Final[Mapping[str, object]] = (
+        request_metadata if isinstance(request_metadata, Mapping) else _EMPTY
     )
+    merged_metadata: Final = MappingProxyType({**caller_metadata, **request_metadata_mapping})
     rest: Final = without_keys(extra_body, frozenset({"service_tier", "metadata"}))
     raw_metadata: Final = extra_body.get("metadata")
     if merged_metadata:
@@ -126,19 +90,15 @@ def extra_body_for_sail(
 
 
 def chat_request_for_sail(request: Mapping[str, object], *, model: str, drop_params: bool) -> Mapping[str, object]:
-    raw_tier: Final = request.get("service_tier")
-    window: Final = completion_window_for_service_tier(raw_tier, model=model, drop_params=drop_params)
-    caller_metadata: Final = _request_metadata_without_window(
-        request.get("metadata"), window, model=model, drop_params=drop_params
-    )
-    metadata: Final = MappingProxyType({**caller_metadata, "completion_window": window}) if window else caller_metadata
     extra_body: Final = request.get("extra_body")
     return MappingProxyType(
         {
-            **without_keys(request, frozenset({"service_tier", "metadata", "extra_body"})),
-            **(_entry("metadata", metadata) if metadata else _EMPTY),
+            **without_keys(request, frozenset({"service_tier", "extra_body"})),
             **(
-                _entry("extra_body", extra_body_for_sail(extra_body, metadata, model=model, drop_params=drop_params))
+                _entry(
+                    "extra_body",
+                    extra_body_for_sail(extra_body, request.get("metadata"), model=model, drop_params=drop_params),
+                )
                 if isinstance(extra_body, Mapping)
                 else _EMPTY
             ),
@@ -158,33 +118,9 @@ def _caller_completion_window(window: object, *, model: str, drop_params: bool) 
     )
 
 
-def service_tier_for_caller_window(
-    service_tier: str | None, metadata: Mapping[str, object] | None, *, model: str, drop_params: bool
-) -> str | None:
-    if metadata is None or "completion_window" not in metadata:
-        return service_tier
-    caller_window: Final = _caller_completion_window(
-        metadata["completion_window"], model=model, drop_params=drop_params
-    )
-    if caller_window is None:
-        return service_tier
-    tier_window: Final = completion_window_for_service_tier(service_tier, model=model, drop_params=drop_params)
-    if tier_window is None:
-        return _SERVICE_TIER_FOR_WINDOW[caller_window]
-    if _BILLED_TIER_FOR_WINDOW[caller_window] != _BILLED_TIER_FOR_WINDOW[tier_window]:
-        raise _unsupported(
-            f"sail got service_tier={service_tier!r} and metadata.completion_window={caller_window!r}, which "
-            "select different completion windows. Send one of them.",
-            model,
-        )
-    return service_tier
-
-
-def responses_params_with_completion_window(
+def params_with_completion_window(
     params: Mapping[str, object], *, model: str, drop_params: bool
 ) -> Mapping[str, object]:
-    """Responses billing reads these mapped params, so ``service_tier`` is kept
-    as the tier whose price columns match the window and stripped from the body later."""
     raw_tier: Final = params.get("service_tier")
     raw_metadata: Final = params.get("metadata")
     metadata: Final[Mapping[str, object]] = raw_metadata if isinstance(raw_metadata, Mapping) else _EMPTY
@@ -217,3 +153,13 @@ def responses_params_with_completion_window(
             **(_entry("service_tier", billed_tier) if billed_tier else _EMPTY),
         }
     )
+
+
+def billed_service_tier(optional_params: Mapping[str, object]) -> str | None:
+    metadata: Final = optional_params.get("metadata")
+    if isinstance(metadata, Mapping):
+        window: Final = metadata.get("completion_window")
+        if isinstance(window, str) and window.lower() in _BILLED_TIER_FOR_WINDOW:
+            return _BILLED_TIER_FOR_WINDOW[window.lower()]
+    service_tier: Final = optional_params.get("service_tier")
+    return service_tier if isinstance(service_tier, str) else None

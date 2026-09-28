@@ -140,24 +140,19 @@ async def test_sail_responses_merge_caller_extra_body_metadata_with_the_tier_win
 
 
 @pytest.mark.parametrize(
-    ("extra_body", "message"),
+    "extra_body",
     [
-        pytest.param(
-            {"metadata": {"completion_window": "flex"}},
-            "extra_body.metadata.completion_window",
-            id="extra-body-window",
-        ),
-        pytest.param({"service_tier": "flex"}, "service_tier inside extra_body", id="extra-body-tier"),
+        pytest.param({"metadata": {"completion_window": "flex"}}, id="extra-body-window"),
+        pytest.param({"service_tier": "flex"}, id="extra-body-tier"),
     ],
 )
 @pytest.mark.asyncio
-async def test_sail_responses_reject_a_window_billing_cannot_see_before_sending(
-    sail_env: None, responses_route: respx.Route, extra_body: dict[str, object], message: str
+async def test_sail_responses_do_not_reject_windows_inside_extra_body(
+    sail_env: None, responses_route: respx.Route, extra_body: dict[str, object]
 ) -> None:
-    with pytest.raises(litellm.UnsupportedParamsError, match=message):
-        await litellm.aresponses(model=MODEL, input=INPUT, extra_body=extra_body)
+    await litellm.aresponses(model=MODEL, input=INPUT, extra_body=extra_body, drop_params=True)
 
-    assert not responses_route.called
+    assert responses_route.called
 
 
 def test_sail_sync_responses_drop_a_window_billing_cannot_see_under_drop_params(
@@ -177,7 +172,7 @@ def test_sail_sync_responses_drop_a_window_billing_cannot_see_under_drop_params(
 
 
 @pytest.mark.asyncio
-async def test_sail_responses_drop_a_lone_caller_window_under_drop_params_and_bill_asap(
+async def test_sail_responses_keep_a_lone_extra_body_window_under_drop_params_and_bill_asap(
     sail_env: None, responses_route: respx.Route, spend_capture: SpendCapture
 ) -> None:
     await litellm.aresponses(
@@ -188,7 +183,7 @@ async def test_sail_responses_drop_a_lone_caller_window_under_drop_params_and_bi
         litellm_call_id=spend_capture.call_id,
     )
 
-    assert "completion_window" not in (sent_body(responses_route).get("metadata") or {})
+    assert sent_body(responses_route)["metadata"] == {"completion_window": "flex"}
     assert await spend_capture.settled_cost() == pytest.approx(cost_at(""))
 
 

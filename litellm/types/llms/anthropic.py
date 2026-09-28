@@ -408,6 +408,7 @@ class AnthropicCompaction(TypedDict, total=False):
 class AnthropicMessagesRequestOptionalParams(TypedDict, total=False):
     max_tokens: int | None
     metadata: AnthropicMetadata | dict | None
+    service_tier: ReadOnly[str]
     stop_sequences: list[str] | None
     stream: bool | None
     system: str | list | None

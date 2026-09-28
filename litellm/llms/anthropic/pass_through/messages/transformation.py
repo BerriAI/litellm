@@ -14,6 +14,7 @@ from litellm.types.llms.anthropic import (
     ANTHROPIC_BETA_HEADER_VALUES,
     AnthropicMessagesRequest,
 )
+from litellm.types.llms.anthropic_messages.anthropic_request import AnthropicMetadata
 from litellm.types.llms.anthropic_messages.anthropic_response import (
     AnthropicMessagesResponse,
 )
@@ -85,6 +86,11 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
             # TODO: Add Anthropic `metadata` support
             # "metadata",
         ]
+
+    def request_metadata(self, metadata: Mapping[str, object] | None) -> Mapping[str, object] | None:
+        if metadata is None:
+            return None
+        return AnthropicMetadata(**metadata).model_dump(exclude_none=True)
 
     def should_filter_anthropic_beta_headers(self) -> bool:
         return self._resolved_provider != "anthropic"

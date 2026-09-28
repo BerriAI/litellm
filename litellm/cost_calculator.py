@@ -1380,7 +1380,13 @@ def completion_cost(
 
         # Extract service_tier from optional_params if not provided directly
         if service_tier is None and optional_params is not None:
-            service_tier = optional_params.get("service_tier")
+            typed_optional_params: Final = cast(Mapping[str, object], optional_params)
+            if custom_llm_provider == "sail":
+                from litellm.llms.sail.common_utils import billed_service_tier
+
+                service_tier = billed_service_tier(typed_optional_params)
+            else:
+                service_tier = typed_optional_params.get("service_tier")
 
         service_tier = _normalize_service_tier(service_tier)
 

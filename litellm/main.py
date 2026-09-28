@@ -2646,7 +2646,7 @@ def _complete_custom_openai(
     if extra_headers is not None and not use_base_llm_http_handler:
         optional_params["extra_headers"] = extra_headers
 
-    if litellm.enable_preview_features and metadata is not None:  # [PREVIEW] allow metadata to be passed to OPENAI
+    if litellm.enable_preview_features and metadata is not None and "metadata" not in optional_params:
         openai_metadata: Final = get_requester_metadata(metadata)
         if openai_metadata is not None:
             optional_params["metadata"] = openai_metadata
@@ -5575,6 +5575,7 @@ def completion(
             if bridges_to_responses_api
             else kwargs.get("allowed_openai_params")
         )
+        caller_metadata: Final = get_requester_metadata(metadata) if metadata is not None else None
         optional_param_args: Final = {
             "functions": functions,
             "function_call": function_call,
@@ -5616,20 +5617,16 @@ def completion(
                 else kwargs.get("include_server_side_tool_invocations")
             ),
             "safety_identifier": safety_identifier,
-            "service_tier": (
-                provider_config.service_tier_from_metadata(
-                    service_tier,
-                    metadata,
-                    model=model,
-                    drop_params=litellm.drop_params is True or normalize_drop_params(kwargs.get("drop_params")) is True,
-                )
-                if provider_config is not None
-                else service_tier
-            ),
+            "service_tier": service_tier,
             "store": store,
             "prompt_cache_key": prompt_cache_key,
             "allowed_openai_params": allowed_openai_params,
             "base_model": base_model,
+            **(
+                {"metadata": caller_metadata}
+                if provider_config is not None and "metadata" in provider_config.get_supported_openai_params(model)
+                else {}
+            ),
         }
         optional_params = get_optional_params(**optional_param_args, **non_default_params)
         processed_non_default_params: Final = pre_process_non_default_params(
