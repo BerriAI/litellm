@@ -1,17 +1,17 @@
-"""Slot G1 through a Datadog intake double: the sink key reaches only its own auth header.
+"""Slot G1d through a Datadog intake double: the sink key reaches only its own auth header.
 
-The owned proxy enables the ``datadog`` callback with ``DD_API_KEY`` set to a fresh G1 canary
+The owned proxy enables the ``datadog`` callback with ``DD_API_KEY`` set to a fresh G1d canary
 and ``DD_BASE_URL`` pointed at a local intake double. Datadog batches are gzip-compressed JSON
 (a single event sent on the sync path is plain JSON), so the double inflates ``Content-Encoding:
 gzip`` bodies, requires JSON log events, answers 202 like the real intake, and records the bytes
 exactly as received for S4 (``find_canary`` inflates them). Events the route sweep itself
 produces are swept again after it.
 
-Positive control: the intake double must receive ``DD-API-KEY: <G1 canary>`` on the batch
+Positive control: the intake double must receive ``DD-API-KEY: <G1d canary>`` on the batch
 carrying the scenario's marker, and the provider double ``Authorization: Bearer <B1 canary>``.
 Sensitivity control: the marker must be found inside the gzip body (encoding ``gzip``), in the
 stored spend row, on the Logs drawer route and in the generic sink. Then S1 to S5 plus the
-intake double may not hold B1 or G1 anywhere, except G1 in the intake's own ``dd-api-key`` and
+intake double may not hold B1 or G1d anywhere, except G1d in the intake's own ``dd-api-key`` and
 on the proxy admin's callback settings route (``ADMIN_ONLY_ALLOWANCES``). That route's gate for
 everyone else is asserted directly: the internal user gets 401, and a ``proxy_admin_viewer``
 must read ``DD_API_KEY`` as ``REDACTED``. Routes are swept as the admin, the internal user and
@@ -71,7 +71,7 @@ def intake() -> Iterator[Recorder]:
 
 @pytest.fixture
 def g1() -> Canary:
-    return canary("G1")
+    return canary("G1d")
 
 
 @pytest.fixture
@@ -102,7 +102,7 @@ def test_datadog_api_key_reaches_only_its_own_header(
         response: Final = rig.proxy.request(
             "POST",
             "/v1/chat/completions",
-            {"model": CONFIG_MODEL, "messages": [{"role": "user", "content": f"slot G1 {marker.value}"}]},
+            {"model": CONFIG_MODEL, "messages": [{"role": "user", "content": f"slot G1d {marker.value}"}]},
             key=caller.key,
         )
         assert response.status_code == 200, response.text
@@ -113,7 +113,7 @@ def test_datadog_api_key_reaches_only_its_own_header(
         settle(rig, request_id, marker)
         batches: Final = eventually(lambda: carrying_inflated(intake, marker), bool, seconds=30)
         assert {batch.headers.get(DATADOG_KEY_HEADER) for batch in batches} == {g1.value}, (
-            "Positive control: the Datadog intake double never received the G1 canary"
+            "Positive control: the Datadog intake double never received the G1d canary"
         )
         assert all(marker.core.encode() not in batch.body for batch in batches), "Datadog body was not compressed"
 
@@ -143,7 +143,7 @@ def test_datadog_api_key_reaches_only_its_own_header(
                 "model": CONFIG_MODEL,
             },
             callers={**caller.callers(rig), "admin_viewer": viewer},
-            own_headers={**rig.own_headers, DATADOG_SINK: (DATADOG_KEY_HEADER, "G1")},
+            own_headers={**rig.own_headers, DATADOG_SINK: (DATADOG_KEY_HEADER, "G1d")},
             since=started,
         )
         record_route_sweep(report.routes, request.node.nodeid)
@@ -164,6 +164,6 @@ def test_datadog_api_key_reaches_only_its_own_header(
             f"{DATADOG_SINK} after the route sweep",
             intake.requests()[len(swept) :],
             (b1, g1),
-            own_header=(DATADOG_KEY_HEADER, "G1"),
+            own_header=(DATADOG_KEY_HEADER, "G1d"),
         )
-        assert_no_hits((*report.credential_hits(), *late), "slots B1 and G1, Datadog intake")
+        assert_no_hits((*report.credential_hits(), *late), "slots B1 and G1d, Datadog intake")
