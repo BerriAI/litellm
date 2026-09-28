@@ -249,14 +249,19 @@ def _normalize_oci_finish_reason(raw: str | None) -> str | None:
     spec only defines ``stop`` / ``length`` / ``tool_calls`` / ... — anything
     else is collapsed to ``"stop"`` so downstream consumers switching on
     ``finish_reason`` keep working. A ``None`` input passes through unchanged.
+
+    Some OCI-hosted vendors (Google's Gemini among them) report the reasons in
+    lowercase (``max_tokens``, ``stop``), so the lookup is case-insensitive:
+    a truncated answer must surface as ``"length"``, not as a normal stop.
     """
     if raw is None:
         return None
-    if raw == "COMPLETE":
+    upper: Final = raw.upper()
+    if upper in ("COMPLETE", "STOP"):
         return "stop"
-    if raw == "MAX_TOKENS":
+    if upper in ("MAX_TOKENS", "LENGTH"):
         return "length"
-    if raw in ("TOOL_CALL", "TOOL_CALLS"):
+    if upper in ("TOOL_CALL", "TOOL_CALLS"):
         return "tool_calls"
     return "stop"
 

@@ -1047,6 +1047,33 @@ class TestOCIDefaultMaxTokens:
         assert chat_request["maxCompletionTokens"] == DEFAULT_OCI_CHAT_MAX_TOKENS
         assert "maxTokens" not in chat_request
 
+    @pytest.mark.parametrize(
+        "model", ["google.gemini-2.5-pro", "google.gemini-2.5-flash", "oci/google.gemini-2.5-pro"]
+    )
+    def test_gemini_keeps_max_tokens_even_when_catalog_says_reasoning(self, model, monkeypatch):
+        """OCI's Gemini endpoint ignores ``maxCompletionTokens`` and truncates at
+        its own ~4k default, so the vendor must stay on ``maxTokens`` no matter
+        what ``supports_reasoning`` says in the catalog."""
+        monkeypatch.setattr(
+            "litellm.llms.oci.chat.transformation.supports_reasoning", lambda **_: True
+        )
+        chat_request = self._chat_request(model, {"max_tokens": 24000})
+        assert chat_request["maxTokens"] == 24000
+        assert "maxCompletionTokens" not in chat_request
+
+    def test_gemini_default_limit_uses_max_tokens(self, monkeypatch):
+        monkeypatch.setattr(
+            "litellm.llms.oci.chat.transformation.supports_reasoning", lambda **_: True
+        )
+        chat_request = self._chat_request("google.gemini-2.5-flash", {})
+        assert chat_request["maxTokens"] == DEFAULT_OCI_CHAT_MAX_TOKENS
+        assert "maxCompletionTokens" not in chat_request
+
+    def test_openai_reasoning_models_still_use_max_completion_tokens(self):
+        chat_request = self._chat_request("openai.gpt-5", {"max_tokens": 24000})
+        assert chat_request["maxCompletionTokens"] == 24000
+        assert "maxTokens" not in chat_request
+
 
 class TestOCIReasoningEffort:
     """

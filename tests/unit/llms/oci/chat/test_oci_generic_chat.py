@@ -269,6 +269,22 @@ class TestHandleGenericStreamChunk:
         result = handle_generic_stream_chunk(chunk)
         assert result.choices[0] is not None
 
+    @pytest.mark.parametrize(
+        "raw, expected",
+        [
+            ("max_tokens", "length"),
+            ("stop", "stop"),
+            ("tool_calls", "tool_calls"),
+            ("complete", "stop"),
+        ],
+    )
+    def test_lowercase_finish_reasons_are_normalized(self, raw, expected):
+        """Gemini on OCI reports finish reasons in lowercase; a truncated answer
+        must surface as ``length`` rather than look like a normal stop."""
+        chunk = {"apiFormat": "GENERIC", "index": 0, "finishReason": raw}
+        result = handle_generic_stream_chunk(chunk)
+        assert result.choices[0].finish_reason == expected
+
     def test_null_index_defaults_to_zero(self):
         chunk = {"apiFormat": "GENERIC", "index": None, "finishReason": None}
         result = handle_generic_stream_chunk(chunk)

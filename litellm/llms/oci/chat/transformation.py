@@ -85,8 +85,13 @@ def _model_uses_max_completion_tokens(model: str) -> bool:
     and accept ``maxCompletionTokens`` everywhere, so route the whole vendor
     prefix to it rather than chasing each new release in
     ``model_prices_and_context_window.json``. The ``openai.gpt-oss-*`` open
-    weights are served by OCI's own stack and keep ``maxTokens``. Any other
-    vendor falls back to the catalog's ``supports_reasoning`` flag.
+    weights are served by OCI's own stack and keep ``maxTokens``.
+
+    Google models on OCI (``google.gemini-*``) are reasoning models in the
+    catalog, but OCI's Gemini endpoint ignores ``maxCompletionTokens`` and
+    falls back to its own ~4k default, silently truncating long answers; it
+    honours ``maxTokens``. Pin the vendor to ``maxTokens`` regardless of the
+    flag. Any other vendor falls back to the catalog's ``supports_reasoning``.
     """
     if not model:
         return False
@@ -94,6 +99,8 @@ def _model_uses_max_completion_tokens(model: str) -> bool:
     lowered: Final = name.lower()
     if lowered.startswith("openai."):
         return not lowered.startswith("openai.gpt-oss")
+    if lowered.startswith("google."):
+        return False
     return supports_reasoning(model=name, custom_llm_provider="oci")
 
 
