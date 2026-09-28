@@ -300,7 +300,19 @@ async def get_mcp_servers():
     )
 
     public_mcp_servers: Final = global_mcp_server_manager.get_public_mcp_servers()
-    return [MCPPublicServer.model_validate(server.model_dump()) for server in public_mcp_servers]
+    return [
+        MCPPublicServer.model_validate(
+            {
+                **server.model_dump(),
+                "mcp_info": {
+                    **(server.mcp_info or {}),
+                    "is_public": True,
+                    "is_public_explicit": server.server_id in (litellm.public_mcp_servers or ()),
+                },
+            }
+        )
+        for server in public_mcp_servers
+    ]
 
 
 @router.get(

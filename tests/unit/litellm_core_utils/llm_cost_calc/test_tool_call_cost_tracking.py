@@ -1,0 +1,955 @@
+
+import pytest
+
+import litellm
+from litellm.litellm_core_utils.llm_cost_calc.tool_call_cost_tracking import (
+    StandardBuiltInToolCostTracking,
+)
+from litellm.types.llms.openai import FileSearchTool, ResponsesAPIResponse, WebSearchOptions
+from litellm.types.utils import ModelResponse, StandardBuiltInToolsParams
+
+
+def test_web_search_cost_low():
+    web_search_options = WebSearchOptions(search_context_size="low")
+    model_info = litellm.get_model_info("gpt-4o-search-preview")
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
+        web_search_options=web_search_options, model_info=model_info
+    )
+
+    assert (
+        cost == model_info["search_context_cost_per_query"]["search_context_size_low"]
+    )
+
+
+def test_web_search_cost_medium():
+    web_search_options = WebSearchOptions(search_context_size="medium")
+    model_info = litellm.get_model_info("gpt-4o-search-preview")
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
+        web_search_options=web_search_options, model_info=model_info
+    )
+
+    assert (
+        cost
+        == model_info["search_context_cost_per_query"]["search_context_size_medium"]
+    )
+
+
+def test_web_search_cost_high():
+    web_search_options = WebSearchOptions(search_context_size="high")
+    model_info = litellm.get_model_info("gpt-4o-search-preview")
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_web_search(
+        web_search_options=web_search_options, model_info=model_info
+    )
+
+    assert (
+        cost == model_info["search_context_cost_per_query"]["search_context_size_high"]
+    )
+
+
+# Test file search cost calculation
+def test_file_search_cost():
+    file_search = FileSearchTool(type="file_search")
+    cost = StandardBuiltInToolCostTracking.get_cost_for_file_search(
+        file_search=file_search
+    )
+    assert cost == 0.0025  # $2.50/1000 calls = 0.0025 per call
+
+
+# Test edge cases
+def test_none_inputs():
+    # Test with None inputs
+    assert (
+        StandardBuiltInToolCostTracking.get_cost_for_web_search(
+            web_search_options=None, model_info=None
+        )
+        == 0.0
+    )
+    assert (
+        StandardBuiltInToolCostTracking.get_cost_for_file_search(file_search=None)
+        == 0.0
+    )
+
+
+# Test the main get_cost_for_built_in_tools method
+def test_get_cost_for_built_in_tools_web_search():
+    model = "gpt-4"
+    standard_built_in_tools_params = StandardBuiltInToolsParams(
+        web_search_options=WebSearchOptions(search_context_size="medium")
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=None,
+        response_object=None,
+        standard_built_in_tools_params=standard_built_in_tools_params,
+    )
+
+    assert isinstance(cost, float)
+
+
+def test_get_cost_for_built_in_tools_file_search():
+    """
+    Test that the cost for a file search is 0.00 when no response object is provided
+    """
+    model = "gpt-4"
+    standard_built_in_tools_params = StandardBuiltInToolsParams(
+        file_search=FileSearchTool(type="file_search")
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=None,
+        usage=None,
+        standard_built_in_tools_params=standard_built_in_tools_params,
+    )
+
+    assert cost == 0.00
+
+
+def test_get_cost_for_anthropic_web_search_with_server_tool_use_dict():
+    """
+    Anthropic-compatible passthrough responses can construct Usage from a raw
+    usage payload. Ensure dict server_tool_use values are normalized before
+    built-in tool cost tracking reads server_tool_use.web_search_requests.
+    """
+    from litellm.types.utils import ServerToolUse, Usage
+
+    usage = Usage(server_tool_use={"web_search_requests": 1})
+
+    assert isinstance(usage.server_tool_use, ServerToolUse)
+    assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=None, usage=usage
+    )
+
+
+def test_anthropic_web_search_zero_requests_from_raw_response_charges_zero():
+    """
+    Regression: a raw Anthropic dict reporting zero web search requests must price
+    the call at zero rather than charging the default medium-tier fee.
+    """
+    model = "claude-3-7-sonnet-20250219"
+    raw_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": model,
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "server_tool_use": {"web_search_requests": 0},
+        },
+    }
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=None,
+        response_object=raw_response,
+        custom_llm_provider="anthropic",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == 0.0
+
+
+def test_anthropic_response_usage_block_preserves_server_tool_use():
+    """
+    Regression: AnthropicResponse.model_validate(...).model_dump() must keep
+    server_tool_use so the /v1/messages logging fallback does not strip the
+    web-search usage before cost tracking sees it.
+    """
+    from litellm.types.llms.anthropic import AnthropicResponse
+
+    raw_response = {
+        "id": "msg_1",
+        "type": "message",
+        "role": "assistant",
+        "model": "claude-3-7-sonnet-20250219",
+        "content": [{"type": "text", "text": "hi"}],
+        "stop_reason": "end_turn",
+        "stop_sequence": None,
+        "usage": {
+            "input_tokens": 100,
+            "output_tokens": 50,
+            "server_tool_use": {"web_search_requests": 2},
+        },
+    }
+
+    dumped_usage = AnthropicResponse.model_validate(raw_response).model_dump()["usage"]
+
+    assert dumped_usage["server_tool_use"] == {"web_search_requests": 2}
+
+
+def test_completion_cost_includes_web_search_without_standard_built_in_tools_params():
+    """
+    Test that completion_cost includes web search cost even when
+    standard_built_in_tools_params is None.
+
+    Regression test: the early-exit guard `if standard_built_in_tools_params:`
+    in completion_cost was skipping get_cost_for_built_in_tools entirely,
+    causing under-counted costs for providers like Vertex AI Gemini that
+    report web search usage via usage.prompt_tokens_details.web_search_requests.
+    """
+    from litellm.types.utils import Choices, Message, PromptTokensDetailsWrapper, Usage
+
+    response = ModelResponse(
+        id="test-id",
+        choices=[
+            Choices(
+                finish_reason="stop",
+                index=0,
+                message=Message(content="test", role="assistant"),
+            )
+        ],
+        created=1234567890,
+        model="gemini-2.5-flash",
+        object="chat.completion",
+    )
+    response.usage = Usage(
+        prompt_tokens=100,
+        completion_tokens=50,
+        total_tokens=150,
+        prompt_tokens_details=PromptTokensDetailsWrapper(web_search_requests=1),
+    )
+
+    cost = litellm.completion_cost(
+        completion_response=response,
+        model="gemini-2.5-flash",
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    web_search_cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gemini-2.5-flash",
+        usage=response.usage,
+        response_object=response,
+        standard_built_in_tools_params=None,
+        custom_llm_provider="vertex_ai",
+    )
+
+    assert web_search_cost > 0, "Web search cost should be non-zero"
+    assert (
+        cost >= web_search_cost
+    ), f"completion_cost ({cost}) should include web search cost ({web_search_cost})"
+
+
+@pytest.mark.parametrize(
+    "model",
+    [
+        "vertex_ai/gemini-3.1-flash-lite",  # resolves directly via get_model_info
+        "gemini/gemini-3.1-flash-lite",  # provider-prefixed, resolves via model_cost fallback
+    ],
+)
+def test_gemini_3x_web_search_billed_per_query(model, local_model_cost_map):
+    """
+    Gemini 3.x bills web search per individual query (web_search_billing_unit == "per_query"),
+    so N searches cost N * $0.014.
+
+    Regression for the bug where the billing unit was dropped between the pricing JSON and the
+    cost calculator: the field was missing from the ModelInfoBase TypedDict and from the
+    ModelInfoBase(...) constructor in _get_model_info_helper, so get_model_info returned it as
+    None and cost_per_web_search_request fell back to the per_prompt clamp, collapsing N queries
+    to a single charge. The "gemini/..." case additionally covers response_cost_calculator
+    resolving a provider-prefixed model name that get_model_info cannot map under vertex_ai.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    web_search_requests = 2
+    model_info = litellm.get_model_info(model)
+    assert model_info["web_search_billing_unit"] == "per_query"
+    per_query_cost = model_info["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+    expected_cost = per_query_cost * web_search_requests
+
+    usage = Usage(
+        prompt_tokens=11,
+        completion_tokens=100,
+        total_tokens=111,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=11, web_search_requests=web_search_requests
+        ),
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(expected_cost), (
+        f"Expected {web_search_requests} x ${per_query_cost} = ${expected_cost} "
+        f"per_query search fee, got ${cost}"
+    )
+
+
+def test_gemini_combined_search_and_maps_costs_are_additive(local_model_cost_map):
+    """A prompt grounded with both Google Search and Google Maps pays both fees."""
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    model = "gemini/gemini-3.5-flash"
+    model_info = litellm.get_model_info(model)
+    search_rate = model_info["search_context_cost_per_query"]["search_context_size_medium"]
+    maps_rate = model_info["google_maps_grounding_cost_per_query"]
+
+    usage = Usage(
+        prompt_tokens=15,
+        completion_tokens=100,
+        total_tokens=115,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=15, web_search_requests=2, google_maps_grounding_requests=1
+        ),
+    )
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        custom_llm_provider="gemini",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == pytest.approx(search_rate * 2 + maps_rate)
+
+
+def test_gemini_2x_web_search_still_billed_per_prompt(local_model_cost_map):
+    """
+    Gemini 2.x bills web search per grounded prompt: multiple internal queries are one flat
+    $0.035 fee. Guards the per_prompt clamp against the per_query plumbing, which makes
+    web_search_billing_unit always present on the resolved ModelInfo (None for 2.x), so the
+    clamp must treat a None billing unit as per_prompt rather than skipping the clamp.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    model = "vertex_ai/gemini-2.5-flash"
+    model_info = litellm.get_model_info(model)
+    assert not model_info.get("web_search_billing_unit")
+    expected_cost = model_info["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+
+    usage = Usage(
+        prompt_tokens=11,
+        completion_tokens=100,
+        total_tokens=111,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=11, web_search_requests=2
+        ),
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(expected_cost), (
+        f"Expected flat ${expected_cost} per_prompt search fee (2 queries clamped to 1), "
+        f"got ${cost}"
+    )
+
+
+def test_web_search_provider_prefix_fallback_does_not_misprice_non_gemini_model(
+    local_model_cost_map,
+):
+    """
+    Regression for the provider-prefix fallback in _handle_web_search_cost. When the initial
+    get_model_info lookup fails for a "/"-containing model, the retry re-resolves model_info from
+    the prefix and must adopt that prefix's provider for routing. Otherwise an unrelated model
+    (here OpenRouter, which carries no web search pricing) is re-resolved but still routed through
+    the request's vertex_ai Gemini calculator, which charges its $0.035 per_prompt default for a
+    model that should cost nothing for web search.
+    """
+    from litellm.types.utils import PromptTokensDetailsWrapper, Usage
+
+    model = "openrouter/google/gemini-3.1-flash-lite"
+    model_info = litellm.get_model_info(model)
+    assert model_info["litellm_provider"] == "openrouter"
+    assert not model_info.get("search_context_cost_per_query")
+
+    usage = Usage(
+        prompt_tokens=11,
+        completion_tokens=100,
+        total_tokens=111,
+        prompt_tokens_details=PromptTokensDetailsWrapper(
+            text_tokens=11, web_search_requests=2
+        ),
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        usage=usage,
+        response_object=None,
+        custom_llm_provider="vertex_ai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == 0.0, (
+        "A non-Gemini provider-prefixed model with no web search pricing must not be charged "
+        f"the vertex_ai per_prompt default via the prefix fallback, got ${cost}"
+    )
+
+
+def _openai_responses_with_web_search_calls(model, num_calls):
+    from openai.types.responses.response_function_web_search import (
+        ActionSearch,
+        ResponseFunctionWebSearch,
+    )
+
+
+    output = [
+        ResponseFunctionWebSearch(
+            id=f"ws_{i}",
+            type="web_search_call",
+            status="completed",
+            action=ActionSearch(type="search", query="latest news"),
+        )
+        for i in range(num_calls)
+    ]
+    return ResponsesAPIResponse(
+        id="resp_1",
+        created_at=0,
+        model=model,
+        object="response",
+        output=output,
+        parallel_tool_calls=False,
+        tool_choice="auto",
+        tools=[],
+    )
+
+
+def test_openai_responses_web_search_multiplied_by_call_count(local_model_cost_map):
+    """
+    Regression for LIT-5013 bug 2: web_search_call detection was binary, so a Responses output with
+    multiple web searches was charged once. gpt-4o-search-preview carries per-call pricing; N calls
+    must bill N times, and a single call must still bill exactly once.
+    """
+    from litellm.types.utils import Usage
+
+    model = "gpt-4o-search-preview"
+    per_call = litellm.get_model_info(model)["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+    usage = Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15)
+
+    for num_calls in (1, 3):
+        response = _openai_responses_with_web_search_calls(model, num_calls=num_calls)
+        cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=response,
+            usage=usage,
+            custom_llm_provider="openai",
+            standard_built_in_tools_params=None,
+        )
+        assert cost == pytest.approx(num_calls * per_call), (
+            f"{num_calls} web searches must bill {num_calls} x ${per_call}, got ${cost}"
+        )
+
+
+def test_web_search_call_count_reads_dict_output_items(local_model_cost_map):
+    """
+    Regression: output items that fail OpenAI SDK validation (e.g. xAI web_search_call
+    items without an "action" field) stay plain dicts in the output union. The per-call
+    counter must read their "type" key like the detection gate does, instead of flooring
+    a multi-search response to a single billable search.
+    """
+    from litellm.types.utils import Usage
+
+    model = "gpt-4o-search-preview"
+    per_call = litellm.get_model_info(model)["search_context_cost_per_query"][
+        "search_context_size_medium"
+    ]
+
+    response = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_1",
+            "created_at": 1754900000,
+            "model": model,
+            "object": "response",
+            "status": "completed",
+            "output": [
+                {"type": "web_search_call", "id": f"ws_{i}", "status": "completed"}
+                for i in range(3)
+            ],
+        }
+    )
+    assert all(isinstance(item, dict) for item in response.output)
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=response,
+        usage=Usage(prompt_tokens=10, completion_tokens=5, total_tokens=15),
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(3 * per_call), (
+        f"3 dict-shaped web searches must bill 3 x ${per_call}, got ${cost}"
+    )
+
+
+# Note: File search integration test removed due to complex annotation detection logic
+# The unit tests in test_azure_assistant_cost_tracking.py provide comprehensive coverage
+
+
+def test_response_includes_output_type_reads_dict_output_items():
+    """
+    Regression: output items that fail OpenAI SDK validation (e.g. xAI web_search_call
+    items without an "action" field) stay plain dicts in the output union. The gate must
+    read their "type" key instead of returning False and skipping the web search fee.
+    """
+
+    response = ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_1",
+            "created_at": 1754900000,
+            "model": "grok-4",
+            "object": "response",
+            "status": "completed",
+            "output": [{"type": "web_search_call", "id": "ws_1", "status": "completed"}],
+        }
+    )
+
+    assert isinstance(response.output[0], dict)
+    assert StandardBuiltInToolCostTracking.response_includes_output_type(
+        response_object=response, output_type="web_search_call"
+    )
+    assert not StandardBuiltInToolCostTracking.response_includes_output_type(
+        response_object=response, output_type="file_search_call"
+    )
+
+
+def test_web_search_gate_reads_server_side_tool_usage_details_without_citations():
+    """
+    Regression: xAI chat responses bridged from the Responses API only carry
+    usage.server_side_tool_usage_details; a searched answer with no url_citation
+    annotations must still be billed for its web search calls.
+    """
+    from litellm.llms.xai.cost_calculator import _DEFAULT_WEB_SEARCH_COST_PER_CALL
+    from litellm.types.utils import Usage
+
+    usage = Usage(
+        prompt_tokens=10,
+        completion_tokens=20,
+        total_tokens=30,
+        server_side_tool_usage_details={"web_search_calls": 3},
+    )
+    response = ModelResponse(model="xai/grok-4.5")
+
+    assert StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=response, usage=usage
+    )
+    assert not StandardBuiltInToolCostTracking.response_object_includes_web_search_call(
+        response_object=response,
+        usage=Usage(prompt_tokens=10, completion_tokens=20, total_tokens=30),
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="xai/grok-4.5",
+        response_object=response,
+        usage=usage,
+        custom_llm_provider="xai",
+        standard_built_in_tools_params=None,
+    )
+    assert cost == 3 * _DEFAULT_WEB_SEARCH_COST_PER_CALL
+
+
+_BEDROCK_MANTLE_WEB_SEARCH_MODELS = (
+    "bedrock_mantle/openai.gpt-5.6-sol",
+    "bedrock_mantle/openai.gpt-5.6-terra",
+    "bedrock_mantle/openai.gpt-5.6-luna",
+    "bedrock_mantle/openai.gpt-5.5",
+    "bedrock_mantle/openai.gpt-5.4",
+)
+
+_BEDROCK_MANTLE_WEB_SEARCH_RATE = 0.012
+
+
+
+
+def _openai_responses_response(model, output, usage=None, tools=None):
+    return ResponsesAPIResponse.model_validate(
+        {
+            "id": "resp_1",
+            "created_at": 1754900000,
+            "model": model,
+            "object": "response",
+            "status": "completed",
+            "output": output,
+            "usage": usage or {"input_tokens": 10, "output_tokens": 5, "total_tokens": 15},
+            **({"tools": tools} if tools is not None else {}),
+        }
+    )
+
+
+_ASSISTANT_MESSAGE_OUTPUT_ITEM = {
+    "type": "message",
+    "id": "msg_1",
+    "role": "assistant",
+    "status": "completed",
+    "content": [{"type": "output_text", "text": "done", "annotations": []}],
+}
+
+_GPT_IMAGE_1_HIGH_1024_COST_KEY = "high/1024-x-1024/gpt-image-1"
+
+
+def test_responses_image_generation_call_billed_as_tool_usage_cost(local_model_cost_map):
+    """A completed image_generation_call in the Responses output bills at the gpt-image-1 rate for its quality/size."""
+    expected_image_cost = litellm.model_cost[_GPT_IMAGE_1_HIGH_1024_COST_KEY]["input_cost_per_image"]
+    response = _openai_responses_response(
+        "gpt-5",
+        [
+            {
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "completed",
+                "quality": "high",
+                "size": "1024x1024",
+                "result": "AAAA",
+            },
+            dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM),
+        ],
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost > 0
+    assert cost == pytest.approx(expected_image_cost)
+
+
+def test_responses_web_search_and_image_generation_costs_are_additive(local_model_cost_map):
+    """A response billed for web search must still also bill its image_generation_call items."""
+    model = "gpt-4o-search-preview"
+    image_cost = litellm.model_cost[_GPT_IMAGE_1_HIGH_1024_COST_KEY]["input_cost_per_image"]
+    image_item = {
+        "type": "image_generation_call",
+        "id": "ig_1",
+        "status": "completed",
+        "quality": "high",
+        "size": "1024x1024",
+        "result": "AAAA",
+    }
+    web_search_item = {"type": "web_search_call", "id": "ws_1", "status": "completed"}
+
+    combined = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=_openai_responses_response(model, [web_search_item, image_item]),
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+    web_search_only = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=_openai_responses_response(model, [web_search_item]),
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+    image_only = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model=model,
+        response_object=_openai_responses_response(model, [image_item]),
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert image_only == pytest.approx(image_cost)
+    assert web_search_only > 0
+    assert combined == pytest.approx(web_search_only + image_only)
+
+
+def test_responses_incomplete_image_generation_call_not_billed(local_model_cost_map):
+    """A failed image_generation_call produced no billable image, so it must cost $0."""
+    response = _openai_responses_response(
+        "gpt-5",
+        [
+            {
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "failed",
+                "quality": "high",
+                "size": "1024x1024",
+                "result": None,
+            },
+            dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM),
+        ],
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == 0.0
+
+
+def test_completion_cost_includes_responses_image_generation_tool_cost(local_model_cost_map):
+    """The image tool fee must flow through completion_cost on top of the token-only baseline."""
+    image_item = {
+        "type": "image_generation_call",
+        "id": "ig_1",
+        "status": "completed",
+        "quality": "high",
+        "size": "1024x1024",
+        "result": "AAAA",
+    }
+    response_with_image = _openai_responses_response("gpt-5", [image_item, dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM)])
+    response_without_image = _openai_responses_response("gpt-5", [dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM)])
+
+    cost_with_image = litellm.completion_cost(
+        completion_response=response_with_image,
+        model="gpt-5",
+        custom_llm_provider="openai",
+        call_type="aresponses",
+    )
+    cost_without_image = litellm.completion_cost(
+        completion_response=response_without_image,
+        model="gpt-5",
+        custom_llm_provider="openai",
+        call_type="aresponses",
+    )
+
+    assert cost_with_image > cost_without_image
+    assert cost_with_image - cost_without_image == pytest.approx(
+        litellm.model_cost[_GPT_IMAGE_1_HIGH_1024_COST_KEY]["input_cost_per_image"]
+    )
+
+
+def test_responses_usage_tool_usage_web_search_billed_without_output_item(local_model_cost_map):
+    """usage.tool_usage.web_search.num_requests bills web search even when no web_search_call item is present."""
+    model = "gpt-5.4-mini"
+    per_call = litellm.get_model_info(model)["search_context_cost_per_query"]["search_context_size_medium"]
+
+    for num_requests in (1, 2):
+        response = _openai_responses_response(
+            model,
+            [dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM)],
+            usage={
+                "input_tokens": 10,
+                "output_tokens": 5,
+                "total_tokens": 15,
+                "tool_usage": {"web_search": {"num_requests": num_requests}},
+            },
+        )
+        cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+            model=model,
+            response_object=response,
+            usage=None,
+            custom_llm_provider="openai",
+            standard_built_in_tools_params=None,
+        )
+        assert cost == pytest.approx(num_requests * per_call)
+
+
+def _image_gen_token_usage(input_text, input_image, output_image, output_text):
+    return {
+        "input_tokens": 10,
+        "output_tokens": 5,
+        "total_tokens": 15,
+        "tool_usage": {
+            "image_gen": {
+                "input_tokens": input_text + input_image,
+                "output_tokens": output_image + output_text,
+                "total_tokens": input_text + input_image + output_image + output_text,
+                "input_tokens_details": {"image_tokens": input_image, "text_tokens": input_text},
+                "output_tokens_details": {"image_tokens": output_image, "text_tokens": output_text},
+            }
+        },
+    }
+
+
+def _expected_image_gen_token_cost(model_info, input_text, input_image, output_image, output_text):
+    return (
+        input_text * (model_info.get("input_cost_per_token") or 0)
+        + input_image * (model_info.get("input_cost_per_image_token") or 0)
+        + output_image * (model_info.get("output_cost_per_image_token") or 0)
+        + output_text * (model_info.get("output_cost_per_token") or 0)
+    )
+
+
+def test_responses_image_tool_model_from_tools_bills_token_usage(local_model_cost_map):
+    """The image tool's tools[].model is used and usage.tool_usage.image_gen tokens bill at that model's rates."""
+    tool_model = "gpt-image-2"
+    model_info = litellm.get_model_info(tool_model, custom_llm_provider="openai")
+    tools = [{"type": "image_generation", "model": tool_model, "quality": "low", "size": "1024x1024"}]
+    output = [
+        {
+            "type": "image_generation_call",
+            "id": "ig_1",
+            "status": "completed",
+            "quality": "low",
+            "size": "1024x1024",
+            "result": "AAAA",
+        },
+        dict(_ASSISTANT_MESSAGE_OUTPUT_ITEM),
+    ]
+
+    response = _openai_responses_response("gpt-5", output, usage=_image_gen_token_usage(10, 0, 50, 0), tools=tools)
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+    assert cost > 0
+    assert cost == pytest.approx(_expected_image_gen_token_cost(model_info, 10, 0, 50, 0))
+
+    response_more_tokens = _openai_responses_response(
+        "gpt-5", output, usage=_image_gen_token_usage(10, 0, 80, 0), tools=tools
+    )
+    cost_more = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response_more_tokens,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+    assert cost_more != cost
+    assert cost_more == pytest.approx(_expected_image_gen_token_cost(model_info, 10, 0, 80, 0))
+
+
+def test_responses_zero_image_gen_tokens_fall_back_to_per_image_pricing(local_model_cost_map):
+    """An all-zero image_gen usage block keeps the per-image path for the tool's model/quality/size."""
+    tool_model = "gpt-image-1"
+    quality = "low"
+    size = "1024x1024"
+    tools = [{"type": "image_generation", "model": tool_model, "quality": quality, "size": size}]
+    response = _openai_responses_response(
+        "gpt-5",
+        [
+            {
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "completed",
+                "quality": quality,
+                "size": size,
+                "result": "AAAA",
+            }
+        ],
+        usage=_image_gen_token_usage(0, 0, 0, 0),
+        tools=tools,
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    from litellm.cost_calculator import default_image_cost_calculator
+
+    assert cost == pytest.approx(
+        default_image_cost_calculator(
+            model=tool_model,
+            custom_llm_provider="openai",
+            quality=quality,
+            n=1,
+            size=size,
+        )
+    )
+    assert cost > 0
+
+
+def test_responses_auto_size_image_generation_call_billed_at_default_size(local_model_cost_map):
+    """An image_generation_call with size "auto" bills at the default size instead of erroring to $0."""
+    from litellm.cost_calculator import default_image_cost_calculator
+
+    response = _openai_responses_response(
+        "gpt-5",
+        [
+            {
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "completed",
+                "quality": "high",
+                "size": "auto",
+                "result": "AAAA",
+            }
+        ],
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    assert cost == pytest.approx(
+        default_image_cost_calculator(
+            model="gpt-image-1",
+            custom_llm_provider="openai",
+            quality="high",
+            n=1,
+            size=None,
+        )
+    )
+    assert cost > 0
+
+
+def test_responses_image_gen_total_without_token_details_falls_back_to_per_image(local_model_cost_map):
+    """A positive image_gen total with no token details falls back to per-image pricing, not $0."""
+    tool_model = "gpt-image-1"
+    quality = "low"
+    size = "1024x1024"
+    response = _openai_responses_response(
+        "gpt-5",
+        [
+            {
+                "type": "image_generation_call",
+                "id": "ig_1",
+                "status": "completed",
+                "quality": quality,
+                "size": size,
+                "result": "AAAA",
+            }
+        ],
+        usage={
+            "input_tokens": 10,
+            "output_tokens": 5,
+            "total_tokens": 15,
+            "tool_usage": {"image_gen": {"input_tokens": 5, "output_tokens": 5, "total_tokens": 10}},
+        },
+        tools=[{"type": "image_generation", "model": tool_model, "quality": quality, "size": size}],
+    )
+
+    cost = StandardBuiltInToolCostTracking.get_cost_for_built_in_tools(
+        model="gpt-5",
+        response_object=response,
+        usage=None,
+        custom_llm_provider="openai",
+        standard_built_in_tools_params=None,
+    )
+
+    from litellm.cost_calculator import default_image_cost_calculator
+
+    assert cost == pytest.approx(
+        default_image_cost_calculator(
+            model=tool_model,
+            custom_llm_provider="openai",
+            quality=quality,
+            n=1,
+            size=size,
+        )
+    )
+    assert cost > 0

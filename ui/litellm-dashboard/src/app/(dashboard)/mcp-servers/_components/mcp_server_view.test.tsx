@@ -4,6 +4,8 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { MCPServerView } from "./mcp_server_view";
 import * as networking from "@/components/networking";
+import { setSecureItem } from "@/utils/secureStorage";
+import { EDIT_OAUTH_UI_STATE_KEY } from "./mcp_server_edit";
 import type { MCPServer } from "@/components/mcp_tools/types";
 
 vi.mock(".", () => ({
@@ -68,6 +70,7 @@ const openUserCredentials = async (props: Record<string, unknown>) => {
 describe("MCPServerView", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    sessionStorage.clear();
   });
 
   // Name, alias and description each label the header and a Settings row, so
@@ -117,14 +120,21 @@ describe("MCPServerView", () => {
   });
 
   it("shows the read-only settings summary before editing", async () => {
-    renderView({ allow_all_keys: true, available_on_public_internet: false });
+    renderView({
+      allow_all_keys: true,
+      available_on_public_internet: false,
+      mcp_info: { server_name: "demo server", is_public: true, is_public_explicit: true },
+    });
 
     await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
 
     expect(await screen.findByText("MCP Server Settings")).toBeInTheDocument();
     expect(screen.getByText("Allow All Keys")).toBeInTheDocument();
     expect(screen.getByText("Enabled")).toBeInTheDocument();
-    expect(screen.getByText("Internal only")).toBeInTheDocument();
+    expect(screen.getByText("Network access")).toBeInTheDocument();
+    expect(screen.getByText("All Networks")).toBeInTheDocument();
+    expect(screen.queryByText("MCP Hub")).not.toBeInTheDocument();
+    expect(screen.queryByText("Listed")).not.toBeInTheDocument();
     expect(screen.queryByText("edit form")).not.toBeInTheDocument();
   });
 
@@ -144,6 +154,37 @@ describe("MCPServerView", () => {
 
     expect(await screen.findByText("edit form")).toBeInTheDocument();
     expect(screen.queryByRole("button", { name: "Edit Settings" })).not.toBeInTheDocument();
+  });
+
+  it.each([false, true])("keeps config settings read-only with isEditing=%s", async (isEditing) => {
+    renderView({ is_config: true }, { isEditing });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+
+    expect(screen.getByRole("button", { name: "Edit Settings" })).toBeDisabled();
+    expect(screen.getByText("Defined in config. Edit your YAML configuration to make changes")).toBeVisible();
+    expect(screen.queryByText("edit form")).not.toBeInTheDocument();
+  });
+
+  it.each([true, false])("honors config read-only state on OAuth return: %s", async (isConfig) => {
+    setSecureItem(EDIT_OAUTH_UI_STATE_KEY, JSON.stringify({ serverId: "srv-1" }));
+    renderView({ is_config: isConfig });
+
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+
+    if (isConfig) {
+      expect(screen.queryByText("edit form")).not.toBeInTheDocument();
+      expect(screen.getByRole("button", { name: "Edit Settings" })).toBeDisabled();
+    } else {
+      expect(screen.getByText("edit form")).toBeVisible();
+    }
+  });
+
+  it("does not open the editor for a view-only admin", async () => {
+    renderView({}, { isViewOnly: true, isEditing: true });
+    await userEvent.click(screen.getByRole("tab", { name: "Settings" }));
+    expect(screen.getByRole("button", { name: "Edit Settings" })).toBeDisabled();
+    expect(screen.queryByText("edit form")).not.toBeInTheDocument();
   });
 
   it("opens on the tab named by initialTabIndex", async () => {

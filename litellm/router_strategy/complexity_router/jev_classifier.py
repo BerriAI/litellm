@@ -1,7 +1,7 @@
 from collections.abc import Mapping
 from datetime import datetime, timezone
 from types import MappingProxyType
-from typing import Annotated, Final, Literal, NamedTuple, Protocol
+from typing import Annotated, Final, Literal, NamedTuple, Protocol, TypeAlias
 from uuid import uuid4
 
 import httpx
@@ -24,7 +24,7 @@ from litellm.proxy.pass_through_endpoints.llm_provider_handlers.typesafe_passthr
 from litellm.router_strategy.complexity_router.config import DEFAULT_JEV_INSTRUCTIONS as _DEFAULT_JEV_INSTRUCTIONS
 from litellm.types.utils import AUTOROUTER_CLASSIFIER_CALL_ORIGIN
 
-JevProbability = Annotated[float, Field(ge=0.0, le=1.0)]
+JevProbability: TypeAlias = Annotated[float, Field(ge=0.0, le=1.0)]
 DEFAULT_JEV_INSTRUCTIONS: Final = _DEFAULT_JEV_INSTRUCTIONS
 
 
@@ -165,6 +165,7 @@ class HttpJevClassifierClient:
             end_time=end_time,
             cache_hit=False,
             request_body=MappingProxyType({"model": request.model}),
+            custom_llm_provider="typesafe",
             litellm_params=params,
         )
         success_handlers: Final = logging_obj.dispatch_success_handlers(

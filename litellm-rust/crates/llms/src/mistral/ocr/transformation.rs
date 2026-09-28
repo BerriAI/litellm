@@ -69,6 +69,14 @@ impl BaseOcrConfig for MistralOcrConfig {
         Some(MISTRAL_OCR_API_KEY_ENV_VAR)
     }
 
+    fn secret_names(&self) -> Vec<&'static str> {
+        vec![
+            MISTRAL_OCR_API_KEY_ENV_VAR,
+            "MISTRAL_AZURE_API_KEY",
+            "MISTRAL_AZURE_API_BASE",
+        ]
+    }
+
     fn map_ocr_params(
         &self,
         non_default_params: &CallArguments,

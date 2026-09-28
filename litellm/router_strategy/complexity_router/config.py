@@ -838,6 +838,15 @@ class CustomDimension(BaseModel):
         )
 
 
+class ContextCompactionConfig(BaseModel):
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    model: str | None = Field(default=None, min_length=1)
+    trigger_ratio: float = Field(default=0.9, gt=0, lt=1)
+    max_tokens: int = Field(default=4096, ge=512)
+    timeout_seconds: float = Field(default=120, gt=0)
+
+
 class ComplexityRouterConfig(BaseModel):
     """Configuration for the ComplexityRouter."""
 
@@ -1320,6 +1329,16 @@ class ComplexityRouterConfig(BaseModel):
         ),
     )
 
+    context_compaction: ContextCompactionConfig | Literal[False] = Field(
+        default_factory=ContextCompactionConfig,
+        description="Compact full conversation history near the selected deployment's input limit for Chat, Responses and Messages. Uses a capable configured tier model unless model is specified. Set false or null to disable. Stored and client-managed native history keep their existing behavior.",
+    )
+
+    @field_validator("context_compaction", mode="before")
+    @classmethod
+    def _normalize_context_compaction(cls, value: object) -> object:
+        return False if value is None else value
+
     enable_context_window_escalation: bool = Field(
         default=False,
         description=(
@@ -1401,6 +1420,25 @@ class ComplexityRouterConfig(BaseModel):
             "tiers between asks. Suppressed when plugins are configured, for the same reason "
             "session_affinity is: a replayed decision would bypass the plugin pipeline."
         ),
+    )
+
+    cache_aware_routing: bool = Field(
+        default=False,
+        description=(
+            "Opt in to comparing prompt-cache costs after classification. On supported native Anthropic proxy requests, "
+            "an already warm model in the same or a higher tier may replace the classified model when its estimated "
+            "input and output cost is lower. Unsupported requests and unavailable estimates keep ordinary routing."
+        ),
+    )
+    cache_aware_routing_output_tokens: int = Field(
+        default=1024,
+        ge=0,
+        description="Expected output tokens used in cache-aware cost comparisons; capped by each model's effective output limit.",
+    )
+    cache_aware_routing_timeout_ms: int = Field(
+        default=2000,
+        gt=0,
+        description="Total time budget for cache-aware predictions; expiry preserves the original routing decision.",
     )
 
     # Session affinity: pin the first turn's routed model for the rest of the session

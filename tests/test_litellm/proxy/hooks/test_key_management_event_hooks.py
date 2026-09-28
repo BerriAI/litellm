@@ -701,3 +701,49 @@ class TestKeyUpdatedAuditLogObjectId:
             assert updated_values["project_id"] is None
             assert json.loads(audit_row.before_value)["project_id"] == "project-orbit"
         assert updated_values["max_budget"] == 2000.0
+
+
+@pytest.mark.asyncio
+async def test_key_deleted_hook_writes_audit_log_for_alias_deletion():
+    from litellm.proxy._types import (
+        KeyRequest,
+        LiteLLM_AuditLogs,
+        LiteLLM_VerificationToken,
+        LitellmTableNames,
+        UserAPIKeyAuth,
+    )
+
+    captured: Final[list[LiteLLM_AuditLogs]] = []
+
+    async def capture_audit_log(request_data: LiteLLM_AuditLogs) -> None:
+        captured.append(request_data)
+
+    with (
+        patch("litellm.store_audit_logs", True),
+        patch(
+            "litellm.proxy.management_helpers.audit_logs.create_audit_log_for_update",
+            new=capture_audit_log,
+        ),
+        patch.object(
+            KeyManagementEventHooks,
+            "_delete_virtual_keys_from_secret_manager",
+            new_callable=AsyncMock,
+        ),
+    ):
+        await KeyManagementEventHooks.async_key_deleted_hook(
+            data=KeyRequest(key_aliases=["a"]),
+            keys_being_deleted=[LiteLLM_VerificationToken(token="hashed", key_alias="a")],
+            response={},
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", token="callertok"),
+        )
+        for _ in range(100):
+            if captured:
+                break
+            await asyncio.sleep(0.01)
+
+    assert len(captured) == 1
+    audit_row = captured[0]
+    assert audit_row.action == "deleted"
+    assert audit_row.object_id == "hashed"
+    assert audit_row.table_name == LitellmTableNames.KEY_TABLE_NAME
+    assert audit_row.changed_by == "admin"

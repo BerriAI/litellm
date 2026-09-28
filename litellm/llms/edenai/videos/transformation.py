@@ -21,6 +21,7 @@ from ..common_utils import EdenAIException, authorized_headers, endpoint_url, re
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
 
 def _usage_with_reported_cost(
@@ -110,6 +111,7 @@ class EdenAIVideoConfig(OpenAIVideoConfig):
         raw_response: httpx.Response,
         logging_obj: "LiteLLMLoggingObj",
         custom_llm_provider: str | None = None,
+        client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         raw_response.raise_for_status()  # the shared GET helpers return error bodies instead of raising
         video: Final = super().transform_video_status_retrieve_response(

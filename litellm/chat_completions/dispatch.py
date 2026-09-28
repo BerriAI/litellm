@@ -4,7 +4,7 @@ from types import MappingProxyType
 from typing import Final, TypeAlias, cast  # noqa: TID251  # native binding selects a sync result or an async awaitable
 
 from litellm import main
-from litellm.rust_bridge.catalog import Context, Delivery, Route
+from litellm.rust_bridge.catalog import Route, RouteContext
 from litellm.rust_bridge.chat_completions.entrypoints import (
     NATIVE_ACOMPLETION,
     NATIVE_COMPLETION,
@@ -69,15 +69,15 @@ def _public_request(
         custom_llm_provider=optional_str(extra.get("custom_llm_provider")),
         extra_headers=optional_mapping(fields.get("extra_headers")),
         kwargs=extra,
+        parameters=MappingProxyType({name: value for name, value in fields.items() if name != "kwargs"}),
     )
 
 
-def _context(request: LiteLLMChatCompletionsRequest) -> Context:
-    return Context(
+def _context(request: LiteLLMChatCompletionsRequest) -> RouteContext:
+    return RouteContext(
         Route.CHAT_COMPLETIONS,
         provider=request.custom_llm_provider,
         model=request.model,
-        delivery=Delivery.STREAMING if request.stream else Delivery.COMPLETED,
     )
 
 

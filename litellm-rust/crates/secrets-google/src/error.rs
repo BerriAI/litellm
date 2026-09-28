@@ -1,5 +1,9 @@
 #[derive(thiserror::Error, veil::Redact)]
 pub enum Error {
+    #[error(transparent)]
+    Operation(#[from] litellm_secrets_types::Error),
+    #[error("secret manager operation timed out")]
+    Timeout,
     #[error("Google KMS client configuration failed")]
     Client(
         #[from]
@@ -34,6 +38,8 @@ pub enum Error {
     RefreshInterval,
     #[error("payload is not valid base64")]
     Base64(#[from] base64::DecodeError),
+    #[error("Google Secret Manager payload checksum mismatch")]
+    Checksum,
     #[error("decrypted value is not UTF-8")]
     Utf8,
     #[error("invalid Google Secret Manager endpoint")]

@@ -26,6 +26,7 @@ BACKEND_PATH_PREFIXES: tuple[str, ...] = (
     "/v2/login",
     "/v3/login",
     "/logout",
+    "/session/logout",
     "/token",
     "/onboarding/",
     "/audit",

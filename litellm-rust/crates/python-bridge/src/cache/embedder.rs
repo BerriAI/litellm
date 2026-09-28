@@ -9,6 +9,8 @@ tokio::task_local! {
     static PREPARED_EMBEDDING: Result<Vec<f32>, Error>;
 }
 
+/// Runs `future` with the vector the Python embedder already produced, so the backend's
+/// `async_embed` never has to call back into Python from the runtime.
 pub(super) fn with_prepared_embedding<F: Future>(
     vector: Result<Vec<f32>, Error>,
     future: F,
@@ -16,6 +18,7 @@ pub(super) fn with_prepared_embedding<F: Future>(
     PREPARED_EMBEDDING.scope(vector, future)
 }
 
+/// The Python object that owns embedding for a semantic backend.
 pub(super) struct PythonEmbedder(Py<PyAny>);
 
 impl Clone for PythonEmbedder {
@@ -29,28 +32,12 @@ impl PythonEmbedder {
         Self(object)
     }
 
-    pub(super) fn from_backend(backend: &Bound<'_, PyAny>) -> PyResult<Self> {
-        Ok(Self(backend.clone().unbind()))
-    }
-
     pub(super) fn object(&self) -> &Py<PyAny> {
         &self.0
     }
 
     pub(super) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
         visit.call(&self.0)
-    }
-
-    pub(super) fn async_embed_awaitable<'py>(
-        &self,
-        py: Python<'py>,
-        prompt: &str,
-        metadata: &Option<Value>,
-    ) -> PyResult<Bound<'py, PyAny>> {
-        let metadata = to_py(py, metadata)?;
-        self.0
-            .bind(py)
-            .call_method1("_get_async_embedding", (prompt, metadata))
     }
 
     fn metadata_kwargs<'py>(
@@ -62,7 +49,8 @@ impl PythonEmbedder {
         Ok(kwargs)
     }
 
-    pub(super) fn async_embedding_coroutine(
+    /// The awaitable of `_get_async_embedding(prompt, metadata=...)`, to run in the caller's loop.
+    pub(super) fn async_embedding(
         &self,
         py: Python<'_>,
         prompt: &str,
@@ -82,35 +70,8 @@ impl PythonEmbedder {
             .map(|value| value as f32)
             .collect())
     }
-}
 
-impl litellm_cache_valkey_semantic::Embedder for PythonEmbedder {
-    fn embed(&self, prompt: &str, metadata: Option<&Value>) -> Result<Vec<f32>, Error> {
-        let result = Python::attach(|py| -> PyResult<Vec<f64>> {
-            let metadata = to_py(py, &metadata)?;
-            self.0
-                .bind(py)
-                .call_method1("_get_embedding", (prompt, metadata))?
-                .extract()
-        })
-        .map_err(|_| Error::Unavailable)?;
-        Ok(result.into_iter().map(|value| value as f32).collect())
-    }
-
-    fn async_embed(
-        &self,
-        _prompt: &str,
-        _metadata: Option<&Value>,
-    ) -> impl Future<Output = Result<Vec<f32>, Error>> + Send {
-        let seeded = PREPARED_EMBEDDING
-            .try_with(Clone::clone)
-            .unwrap_or(Err(Error::Unavailable));
-        std::future::ready(seeded)
-    }
-}
-
-impl litellm_cache_redis_semantic::Embedder for PythonEmbedder {
-    fn embed(&self, prompt: &str, metadata: Option<&Value>) -> Result<Vec<f32>, Error> {
+    fn embed_sync(&self, prompt: &str, metadata: Option<&Value>) -> Result<Vec<f32>, Error> {
         Python::attach(|py| {
             let kwargs = Self::metadata_kwargs(py, metadata)?;
             Self::extract(self.0.bind(py).call_method(
@@ -122,15 +83,24 @@ impl litellm_cache_redis_semantic::Embedder for PythonEmbedder {
         .map_err(|_| Error::Unavailable)
     }
 
+    fn seeded_embedding() -> Result<Vec<f32>, Error> {
+        PREPARED_EMBEDDING
+            .try_with(Clone::clone)
+            .unwrap_or(Err(Error::Unavailable))
+    }
+}
+
+impl litellm_cache::semantic::Embedder for PythonEmbedder {
+    fn embed(&self, prompt: &str, metadata: Option<&Value>) -> Result<Vec<f32>, Error> {
+        self.embed_sync(prompt, metadata)
+    }
+
     fn async_embed(
         &self,
         _prompt: &str,
         _metadata: Option<&Value>,
     ) -> impl Future<Output = Result<Vec<f32>, Error>> + Send {
-        let seeded = PREPARED_EMBEDDING
-            .try_with(Clone::clone)
-            .unwrap_or(Err(Error::Unavailable));
-        std::future::ready(seeded)
+        std::future::ready(Self::seeded_embedding())
     }
 }
 
@@ -145,12 +115,15 @@ mod tests {
         let embedder = PythonEmbedder::new(object);
         let scoped_embedder = embedder.clone();
         let scoped = with_prepared_embedding(Ok(vec![0.25]), async move {
-            litellm_cache_redis_semantic::Embedder::async_embed(&scoped_embedder, "prompt", None)
-                .await
+            litellm_cache::semantic::Embedder::async_embed(&scoped_embedder, "prompt", None).await
         });
         assert_eq!(scoped.await, Ok(vec![0.25]));
         let unscoped =
-            litellm_cache_redis_semantic::Embedder::async_embed(&embedder, "prompt", None).await;
+            litellm_cache::semantic::Embedder::async_embed(&embedder, "prompt", None).await;
         assert_eq!(unscoped, Err(Error::Unavailable));
+        let valkey = with_prepared_embedding(Ok(vec![0.5]), async move {
+            litellm_cache::semantic::Embedder::async_embed(&embedder, "prompt", None).await
+        });
+        assert_eq!(valkey.await, Ok(vec![0.5]));
     }
 }

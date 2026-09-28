@@ -79,6 +79,27 @@ _CLAUDE_CODE_OBJECT_LIST_ADAPTER: Final = TypeAdapter(list[object])
 _CLAUDE_CODE_USER_AGENT_PREFIXES: Final = ("claude-cli/", "claude-code/")
 
 
+def requires_native_compaction_beta(
+    custom_llm_provider: str,
+    optional_params: Mapping[str, object],
+    messages: Sequence[object],
+) -> bool:
+    return custom_llm_provider == "anthropic" and (
+        optional_params.get("compaction") is not None
+        or any(
+            isinstance(block, Mapping)
+            and block.get("type") == "compaction"
+            and isinstance(block.get("signature"), str)
+            and bool(block.get("signature"))
+            for message in messages
+            if isinstance(message, Mapping)
+            for content in (message.get("content"),)
+            if isinstance(content, (list, tuple))
+            for block in content
+        )
+    )
+
+
 def supports_anthropic_cache_control(model: str, custom_llm_provider: str | None) -> bool:
     from litellm.litellm_core_utils.get_llm_provider_logic import get_llm_provider
     from litellm.utils import supports_prompt_caching
@@ -293,7 +314,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
             _message_content = message.get("content")
             if _message_content is not None and isinstance(_message_content, list):
                 for content in _message_content:
-                    if "cache_control" in content:
+                    if isinstance(content, dict) and "cache_control" in content:
                         return True
 
         return False
@@ -338,7 +359,7 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         for message in messages:
             if "content" in message and message["content"] is not None and isinstance(message["content"], list):
                 for content in message["content"]:
-                    if "type" in content and content["type"] != "text":
+                    if isinstance(content, dict) and "type" in content and content["type"] != "text":
                         return True
         return False
 
@@ -1570,7 +1591,7 @@ def _flatten_web_search_results_in_message(message: object) -> object:
     return {**message, "content": [b for b in rewritten if b is not None]}  # mutable-ok: JSON wire format
 
 
-def flatten_unencrypted_web_search_results_in_anthropic_messages(  # mutable-ok: as sibling sanitizers
+def flatten_unencrypted_web_search_results_in_anthropic_messages(
     messages: list[Any],
 ) -> list[Any]:
     """
