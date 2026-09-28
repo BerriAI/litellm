@@ -9428,7 +9428,12 @@ class Router:
                     if isinstance(v, str) and v.startswith("os.environ/"):
                         _litellm_params[k] = get_secret(v)
 
-            _model_info: dict = model.pop("model_info", {})
+            _raw_model_info = model.pop("model_info", {})
+            _model_info: dict = (
+                _raw_model_info.model_dump(exclude_none=True)
+                if hasattr(_raw_model_info, "model_dump")
+                else (_raw_model_info or {})
+            )
 
             declared_id = None if _model_info.get("id") is None else str(_model_info["id"])
 
