@@ -7863,6 +7863,27 @@ def test_restore_redacted_pass_through_endpoint_headers_keeps_same_path_entries_
     assert exc_info.value.status_code == 400
 
 
+def test_restore_redacted_pass_through_endpoint_headers_follows_methods_edit_on_id_less_entry():
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        restore_redacted_pass_through_endpoint_headers,
+    )
+
+    stored = [
+        {"path": "/solo", "methods": ["GET"], "headers": {"Authorization": "Bearer solo-secret"}},
+        {"path": "/pair", "methods": ["GET"], "headers": {"Authorization": "Bearer pair-get"}},
+        {"path": "/pair", "methods": ["POST"], "headers": {"Authorization": "Bearer pair-post"}},
+    ]
+
+    assert restore_redacted_pass_through_endpoint_headers(
+        [{"path": "/solo", "methods": ["GET", "POST"], "headers": {"Authorization": "REDACTED_BY_LITELM"}}], stored
+    ) == [{"path": "/solo", "methods": ["GET", "POST"], "headers": {"Authorization": "Bearer solo-secret"}}]
+    with pytest.raises(HTTPException) as exc_info:
+        restore_redacted_pass_through_endpoint_headers(
+            [{"path": "/pair", "methods": ["PUT"], "headers": {"Authorization": "REDACTED_BY_LITELM"}}], stored
+        )
+    assert exc_info.value.status_code == 400
+
+
 def test_restore_redacted_pass_through_endpoint_headers_rejects_placeholder_without_stored_entry():
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         restore_redacted_pass_through_endpoint_headers,

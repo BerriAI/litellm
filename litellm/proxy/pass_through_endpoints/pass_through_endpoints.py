@@ -5,6 +5,7 @@ import json
 import posixpath
 import traceback
 from base64 import b64encode
+from collections import Counter
 from collections.abc import AsyncGenerator, AsyncIterator, Callable, Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
@@ -3603,44 +3604,48 @@ def _endpoint_key(endpoint: Mapping[str, object]) -> object:
     return ("path", endpoint.get("path"), method_key)
 
 
+def _path_key(endpoint: Mapping[str, object]) -> object:
+    return None if endpoint.get("id") else ("path", endpoint.get("path"))
+
+
+def _unique_lookup(
+    entries: Sequence[tuple[object, Mapping[str, object]]],
+) -> Mapping[object, Mapping[str, object]]:
+    counts: Final = Counter(key for key, _ in entries)
+    return {key: headers for key, headers in entries if key is not None and counts[key] == 1}
+
+
+def _as_mappings(value: object) -> list[Mapping[str, object]]:
+    items: Final = cast("list[object]", value) if isinstance(value, list) else []  # cast-ok: JSON list
+    return [cast("Mapping[str, object]", item) for item in items if isinstance(item, dict)]  # cast-ok: JSON object
+
+
+def _headers_of(endpoint: Mapping[str, object]) -> Mapping[str, object]:
+    headers: Final = endpoint.get("headers")
+    return cast("Mapping[str, object]", headers) if isinstance(headers, dict) else {}  # cast-ok: JSON object
+
+
 def restore_redacted_pass_through_endpoint_headers(incoming: object, stored: object) -> object:
-    """Restore redacted header values in a ``pass_through_endpoints`` list from the stored entry with the same id, or else the same path and methods; a key shared by several stored entries restores nothing."""
+    """Restore redacted header values in a ``pass_through_endpoints`` list from the stored entry with the same id; an entry without an id uses the stored entry with the same path and methods, else the only id-less stored entry on that path. A key several stored entries share restores nothing."""
     if not isinstance(incoming, list):
         return incoming
-    stored_headers: Final[dict[object, Mapping[str, object]]] = {}
-    ambiguous_keys: Final[set[object]] = set()
-    for stored_endpoint in cast("list[object]", stored) if isinstance(stored, list) else []:  # cast-ok: JSON list
-        if isinstance(stored_endpoint, dict):
-            endpoint_map = cast("Mapping[str, object]", stored_endpoint)  # cast-ok: JSON object
-            headers = endpoint_map.get("headers")
-            key = _endpoint_key(endpoint_map)
-            if key in stored_headers:
-                ambiguous_keys.add(key)
-            stored_headers[key] = (
-                cast("Mapping[str, object]", headers) if isinstance(headers, dict) else {}  # cast-ok: JSON object
-            )
-    for key in ambiguous_keys:
-        del stored_headers[key]
-    restored: Final[list[object]] = []
-    for endpoint in cast("list[object]", incoming):  # cast-ok: JSON list
+    stored_endpoints: Final = _as_mappings(stored)
+    by_key: Final = _unique_lookup([(_endpoint_key(ep), _headers_of(ep)) for ep in stored_endpoints])
+    by_path: Final = _unique_lookup([(_path_key(ep), _headers_of(ep)) for ep in stored_endpoints])
+
+    def restore(endpoint: object) -> object:
         if not isinstance(endpoint, dict):
-            restored.append(endpoint)
-            continue
-        endpoint_map = cast("Mapping[str, object]", endpoint)  # cast-ok: JSON object
-        headers = endpoint_map.get("headers")
-        if not isinstance(headers, dict):
-            restored.append(endpoint_map)
-            continue
-        restored.append(
-            {
-                **endpoint_map,
-                "headers": _restore_redacted_pass_through_headers(
-                    cast("Mapping[str, object]", headers),  # cast-ok: JSON object
-                    stored_headers.get(_endpoint_key(endpoint_map), {}),
-                ),
-            }
-        )
-    return restored
+            return endpoint
+        endpoint_map: Final = cast("Mapping[str, object]", endpoint)  # cast-ok: JSON object
+        if not isinstance(endpoint_map.get("headers"), dict):
+            return endpoint_map
+        stored_headers: Final = by_key.get(_endpoint_key(endpoint_map)) or by_path.get(_path_key(endpoint_map), {})
+        return {
+            **endpoint_map,
+            "headers": _restore_redacted_pass_through_headers(_headers_of(endpoint_map), stored_headers),
+        }
+
+    return [restore(endpoint) for endpoint in cast("list[object]", incoming)]  # cast-ok: JSON list
 
 
 @router.get(
