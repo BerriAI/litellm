@@ -1202,6 +1202,42 @@ def test_cache_control_hook_counts_pydantic_message_tool_call_marks():
     assert AnthropicCacheControlHook.count_request_cache_breakpoints(cast(list[AllMessageValues], [message])) == 1
 
 
+def test_injection_adds_message_mark_without_overwriting_tool_call_ttl():
+    hook: Final = AnthropicCacheControlHook()
+    tool_call_ttl: Final = {"type": "ephemeral", "ttl": "1h"}
+    messages: Final = [
+        {
+            "role": "assistant",
+            "content": "ok",
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {"name": "lookup", "arguments": "{}"},
+                    "cache_control": tool_call_ttl,
+                }
+            ],
+        }
+    ]
+
+    _, processed, _ = hook.get_chat_completion_prompt(
+        model="bedrock/us.anthropic.claude-opus-4-6-v1:0",
+        messages=messages,
+        non_default_params={"cache_control_injection_points": [{"location": "message", "index": -1}]},
+        prompt_id=None,
+        prompt_variables=None,
+        dynamic_callback_params={},
+    )
+
+    assistant_message: Final = processed[0]
+    assistant_tool_calls: Final = assistant_message.get("tool_calls")
+    assert assistant_message.get("cache_control") == {"type": "ephemeral"}
+    assert isinstance(assistant_tool_calls, list)
+    tool_call: Final = assistant_tool_calls[0]
+    assert tool_call.get("cache_control") == tool_call_ttl
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints(processed) == 2
+
+
 def test_cache_control_hook_caps_at_four_blocks_with_client_cache_control():
     """Regression for LIT-3667 / Anthropic 'A maximum of 4 blocks ... Found 5'.
 

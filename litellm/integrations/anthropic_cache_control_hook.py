@@ -518,22 +518,26 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         return []
 
     @staticmethod
-    def _count_cache_control_blocks(message: object) -> int:
+    def _count_message_and_content_breakpoints(message: object) -> int:
         message_count: Final = 1 if _carries_cache_breakpoint(message) else 0
         content: Final = _as_object_list(_attribute_or_key(message, "content"))
         content_count: Final = sum(1 for block in content if _carries_cache_breakpoint(block)) if content else 0
+        return message_count + content_count
+
+    @staticmethod
+    def _count_cache_control_blocks(message: object) -> int:
         tool_calls: Final = _as_object_list(_attribute_or_key(message, "tool_calls"))
         tool_call_count: Final = (
             sum(1 for tool_call in tool_calls if _tool_call_cache_control_is_forwarded(tool_call, message))
             if tool_calls
             else 0
         )
-        return message_count + content_count + tool_call_count
+        return AnthropicCacheControlHook._count_message_and_content_breakpoints(message) + tool_call_count
 
     @staticmethod
     def _message_has_cache_control(message: AllMessageValues) -> bool:
-        """Return True if the message already carries any cache_control."""
-        return AnthropicCacheControlHook._count_cache_control_blocks(message) > 0
+        """Return True if message-level or content-block cache_control is present."""
+        return AnthropicCacheControlHook._count_message_and_content_breakpoints(message) > 0
 
     @staticmethod
     def _safe_insert_cache_control_in_message(
