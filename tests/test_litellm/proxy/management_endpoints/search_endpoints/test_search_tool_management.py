@@ -1359,3 +1359,21 @@ async def test_master_key_rotation_keeps_an_edit_made_while_it_runs(salt_key):
     rotated = table.rows["edited-id"].litellm_params
     assert decrypt_if_encrypted_with(rotated["api_key"], new_key) == "tvly-after-edit"
     assert rotated["max_results"] == 3
+
+
+class _TableWhoseConditionalWritesNeverMatch(_InMemorySearchToolsTable):
+    async def update_many(self, where, data):
+        return 0
+
+
+@pytest.mark.asyncio
+async def test_master_key_rotation_leaves_a_row_that_never_matches_and_finishes(salt_key):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
+
+    stored = {"api_key": encrypt_value_helper("tvly-unmatched")}
+    table = _TableWhoseConditionalWritesNeverMatch([_stored_row("unmatched-id", "unmatched", dict(stored))])
+
+    await rotate_search_tools_master_key(prisma_client=_prisma_client_over(table), new_master_key="sk-new-master-key")
+
+    assert table.rows["unmatched-id"].litellm_params == stored
