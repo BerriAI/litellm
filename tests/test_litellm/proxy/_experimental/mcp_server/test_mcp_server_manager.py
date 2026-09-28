@@ -14058,6 +14058,98 @@ def test_discovery_cache_keys_isolate_user_dependent_auth(auth_type: MCPAuth) ->
     assert "first" not in str(first)
     assert "second" not in str(second)
 
+    from litellm.proxy._types import hash_token
+
+    same_user_other_token: Final = manager._discovery_key(
+        server, UserAPIKeyAuth(user_id="first", token=hash_token("sk-second")), None, None, None, None
+    )
+    same_token_no_key: Final = manager._discovery_key(
+        server, UserAPIKeyAuth(user_id="first", token=hash_token("sk-first")), None, None, None, None
+    )
+    with_key: Final = manager._discovery_key(
+        server, UserAPIKeyAuth(user_id="first", api_key="sk-first"), None, None, None, None
+    )
+    assert same_user_other_token != with_key
+    assert same_token_no_key == with_key
+
+
+@pytest.mark.parametrize(
+    ("signer", "static_headers", "shared"),
+    [
+        pytest.param(MagicMock(), None, False, id="signer-mints-per-caller-authorization"),
+        pytest.param(MagicMock(), {"Authorization": "Bearer admin-token"}, True, id="static-authorization-wins"),
+        pytest.param(None, None, True, id="no-signer-stays-shared"),
+    ],
+)
+def test_jwt_signer_makes_a_shared_server_discover_per_caller(signer, static_headers, shared) -> None:
+    manager: Final = MCPServerManager()
+    server: Final = _discovery_server().model_copy(update={"static_headers": static_headers})
+    alice: Final = UserAPIKeyAuth(user_id="alice", token="hashed-alice")
+    bob: Final = UserAPIKeyAuth(user_id="bob", token="hashed-bob")
+
+    with patch(  # test-quality-ok: the signer is a process-wide singleton the manager reads, no injection seam
+        "litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer.get_mcp_jwt_signer",
+        return_value=signer,
+    ):
+        for_alice: Final = manager._discovery_key(server, alice, None, None, None, None)
+        for_bob: Final = manager._discovery_key(server, bob, None, None, None, None)
+
+    assert (for_alice == for_bob) is shared
+
+
+def _register_local_tool(name: str, description: str) -> None:
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+    async def _handler(**kwargs):
+        return None
+
+    global_mcp_tool_registry.register_tool(
+        name=name, description=description, input_schema={"type": "object"}, handler=_handler
+    )
+
+
+def _openapi_server(name: str) -> MCPServer:
+    return MCPServer(
+        server_id=f"{name}-id", name=name, alias=name, transport=MCPTransport.http, url=None, spec_path="/spec.yaml"
+    )
+
+
+@pytest.mark.asyncio
+async def test_openapi_listing_ignores_overlapping_server_prefix() -> None:
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+    manager: Final = MCPServerManager()
+    manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
+    for prefix in ("pet-", "petstore-"):
+        global_mcp_tool_registry.unregister_tools_with_prefix(prefix)
+    _register_local_tool("pet-list", "Local pet tool")
+    _register_local_tool("petstore-list", "Foreign petstore tool")
+    try:
+        prefixed: Final = await manager._get_tools_from_server(server=_openapi_server("pet"), add_prefix=True)
+        bare: Final = await manager._get_tools_from_server(server=_openapi_server("pet"), add_prefix=False)
+    finally:
+        for prefix in ("pet-", "petstore-"):
+            global_mcp_tool_registry.unregister_tools_with_prefix(prefix)
+
+    assert [t.name for t in prefixed] == ["pet-list"]
+    assert [t.name for t in bare] == ["list"]
+
+
+@pytest.mark.asyncio
+async def test_openapi_listing_finds_tools_registered_under_the_normalized_prefix() -> None:
+    from litellm.proxy._experimental.mcp_server.tool_registry import global_mcp_tool_registry
+
+    manager: Final = MCPServerManager()
+    manager._create_mcp_client = AsyncMock(return_value=AsyncMock())
+    global_mcp_tool_registry.unregister_tools_with_prefix("pet_store-")
+    _register_local_tool("pet_store-list", "Pet store tool")
+    try:
+        listed: Final = await manager._get_tools_from_server(server=_openapi_server("pet store"), add_prefix=False)
+    finally:
+        global_mcp_tool_registry.unregister_tools_with_prefix("pet_store-")
+
+    assert [t.name for t in listed] == ["list"]
+
 
 @pytest.mark.asyncio
 async def test_discovery_cache_retries_cancelled_fetches() -> None:

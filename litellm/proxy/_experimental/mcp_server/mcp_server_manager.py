@@ -2664,7 +2664,7 @@ class MCPServerManager:
             self._assign_unique_short_prefix(new_server)
             _warn_legacy_delegate_auth_if_applicable(new_server, source="config")
             _warn_config_id_jag_server_outruns_sso(new_server)
-            self._invalidate_discovery_lists(server_id)
+            self._invalidate_server_definition_caches(server_id)
             self.config_mcp_servers[server_id] = new_server
             self._set_oauth_discovery_deferred(
                 server_id,
@@ -2868,7 +2868,7 @@ class MCPServerManager:
             global_mcp_tool_registry,
         )
 
-        self._invalidate_discovery_lists(server.server_id)
+        self._invalidate_server_definition_caches(server.server_id)
         prefix_root: Final = normalize_server_name(get_server_prefix(server))
         if server.spec_path and prefix_root:
             openapi_key_prefix: Final = prefix_root + MCP_TOOL_PREFIX_SEPARATOR
@@ -3275,7 +3275,7 @@ class MCPServerManager:
                 # env_vars_are_encrypted=False.
                 new_server: Final = await self.build_mcp_server_from_table(mcp_server, env_vars_are_encrypted=False)
                 self._assign_unique_short_prefix(new_server)
-                self._invalidate_discovery_lists(mcp_server.server_id)
+                self._invalidate_server_definition_caches(mcp_server.server_id)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
                 self.prime_oauth_metadata_discovery(new_server)
@@ -3312,7 +3312,7 @@ class MCPServerManager:
                     previous_server=self.registry[mcp_server.server_id],
                 )
                 self._assign_unique_short_prefix(new_server)
-                self._invalidate_discovery_lists(mcp_server.server_id)
+                self._invalidate_server_definition_caches(mcp_server.server_id)
                 self.registry[mcp_server.server_id] = new_server
                 await self._maybe_register_openapi_tools(new_server)
                 self.prime_oauth_metadata_discovery(new_server)
@@ -4492,24 +4492,16 @@ class MCPServerManager:
             if server.spec_path:
                 # OpenAPI tools were stored in the registry under the prefix
                 # active at registration time — fetch by that same prefix.
-                _tools: Final = global_mcp_tool_registry.list_tools(tool_prefix=get_server_prefix(server))
+                registry_prefix: Final = normalize_server_name(get_server_prefix(server)) + MCP_TOOL_PREFIX_SEPARATOR
+                _tools: Final = global_mcp_tool_registry.list_tools(tool_prefix=registry_prefix)
                 tools = global_mcp_tool_registry.convert_tools_to_mcp_sdk_tool_type(_tools)
                 # OpenAPI tools are stored in the registry with their prefix already
                 # applied (e.g. "test_petstore-getinventory").  Do NOT pass them
                 # through _create_prefixed_tools — that would add the prefix a second
                 # time producing "test_petstore-test_petstore-getinventory".
-                if not add_prefix:
-                    prefix: Final = get_server_prefix(server)
-                    sep: Final = MCP_TOOL_PREFIX_SEPARATOR
-                    tools = [
-                        (
-                            t.model_copy(update={"name": t.name[len(prefix) + len(sep) :]})
-                            if t.name.startswith(f"{prefix}{sep}")
-                            else t
-                        )
-                        for t in tools
-                    ]
-                return tools
+                if add_prefix:
+                    return tools
+                return [t.model_copy(update=MappingProxyType({"name": t.name[len(registry_prefix) :]})) for t in tools]
             else:
                 tools = await self._fetch_tools_with_timeout(client, server.name)
                 self._remember_upstream_initialize_instructions(server, client)
@@ -4558,6 +4550,35 @@ class MCPServerManager:
         self._resource_discovery_cache.invalidate(server_id)
         self._template_discovery_cache.invalidate(server_id)
 
+    def _invalidate_server_definition_caches(self, server_id: str) -> None:
+        from litellm.proxy._experimental.mcp_server.discoverable_endpoints import (  # noqa: PLC0415  # lazy: discoverable_endpoints lazily imports this module's manager singleton
+            invalidate_oauth_metadata_cache,
+        )
+
+        self._invalidate_discovery_lists(server_id)
+        invalidate_oauth_metadata_cache(server_id)
+
+    def _discovers_per_caller(self, server: MCPServer) -> bool:
+        return (
+            server.requires_per_user_auth
+            or self._references_per_user_env_var(server)
+            or server.delegate_auth_to_upstream
+            or server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag)
+            or self._signs_caller_identity_upstream(server)
+        )
+
+    @staticmethod
+    def _signs_caller_identity_upstream(server: MCPServer) -> bool:
+        """Whether MCPJWTSigner mints a per-caller ``Authorization`` for ``server``, so the upstream may
+        tailor its catalog to the caller even though the server itself is configured as shared."""
+        from litellm.proxy.guardrails.guardrail_hooks.mcp_jwt_signer.mcp_jwt_signer import (  # noqa: PLC0415  # lazy: guardrail package imports the proxy server
+            get_mcp_jwt_signer,
+        )
+
+        if get_mcp_jwt_signer() is None:
+            return False
+        return not any(k.lower() == "authorization" for k in (server.static_headers or {}))
+
     def _discovery_key(
         self,
         server: MCPServer,
@@ -4568,25 +4589,18 @@ class MCPServerManager:
         subject_token: str | None,
         credential_fingerprint: str | None = None,
     ) -> _DiscoveryKey:
-        per_user: Final = (
-            server.requires_per_user_auth
-            or self._references_per_user_env_var(server)
-            or server.delegate_auth_to_upstream
-            or server.auth_type in (MCPAuth.oauth2_token_exchange, MCPAuth.oauth2_id_jag)
-        )
+        per_user: Final = self._discovers_per_caller(server)
         if not (per_user or mcp_auth_header or extra_headers or stdio_env or subject_token):
             return server.server_id, None
         identity: Final = (
-            (user_api_key_auth.user_id, user_api_key_auth.api_key)
-            if per_user and user_api_key_auth is not None
-            else None
+            (user_api_key_auth.user_id, user_api_key_auth.token) if per_user and user_api_key_auth is not None else None
         )
         material: Final = json.dumps(
             (identity, mcp_auth_header, extra_headers, stdio_env, subject_token, credential_fingerprint),
             sort_keys=True,
             separators=(",", ":"),
         )
-        return server.server_id, hashlib.sha256(material.encode()).hexdigest()
+        return server.server_id, hashlib.sha256(material.encode(), usedforsecurity=False).hexdigest()
 
     async def get_prompts_from_server(
         self,
@@ -6704,7 +6718,7 @@ class MCPServerManager:
 
         for server_id in previous_registry.keys() | registered_registry.keys():
             if previous_registry.get(server_id) != registered_registry.get(server_id):
-                self._invalidate_discovery_lists(server_id)
+                self._invalidate_server_definition_caches(server_id)
         self.registry = registered_registry
         _warn_on_shared_identifier_prefixes(registered_registry.values())
         # A discovery task may have published into ``previous_registry`` while

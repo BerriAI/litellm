@@ -141,6 +141,17 @@ def _prune_oauth_metadata_cache(now: float | None = None) -> None:
         _OAUTH_METADATA_FETCH_LOCKS.pop(cache_key, None)
 
 
+def invalidate_oauth_metadata_cache(server_id: str) -> None:
+    """Drop cached upstream IdP metadata for a server whose definition changed."""
+    for cache_key in [key for key in _OAUTH_METADATA_CACHE if key[0] == server_id]:
+        del _OAUTH_METADATA_CACHE[cache_key]
+    for cache_key in [key for key in _OAUTH_METADATA_FETCH_LOCKS if key[0] == server_id]:
+        lock = _OAUTH_METADATA_FETCH_LOCKS.get(cache_key)
+        if lock is None or lock.locked():
+            continue
+        _OAUTH_METADATA_FETCH_LOCKS.pop(cache_key, None)
+
+
 def encode_state_with_base_url(
     base_url: str,
     original_state: str,
