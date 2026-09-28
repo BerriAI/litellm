@@ -1567,3 +1567,20 @@ def test_get_cache_logic_treats_non_json_stored_values_as_misses(stored, redis_n
 
     assert cache._get_cache_logic(stored) is None
     assert cache._get_cache_logic(b'{"role": "assistant"}') == {"role": "assistant"}
+
+
+def test_set_cache_writes_json_that_get_cache_parses_back(redis_no_ping: None):
+    with patch(  # test-quality-ok: RedisCache.__init__ builds its client eagerly, with no injection point
+        "litellm._redis.get_redis_client", return_value=MagicMock()
+    ):
+        cache = RedisCache(host="127.0.0.1", port=6379)
+    stored: dict[str, str] = {}
+
+    def _capture_set(name, value, ex=None, **_kwargs):
+        stored["value"] = value
+        return True
+
+    cache.redis_client.set.side_effect = _capture_set
+    cache.set_cache("k", {"role": "assistant", "content": "hi"})
+
+    assert cache._get_cache_logic(stored["value"]) == {"role": "assistant", "content": "hi"}

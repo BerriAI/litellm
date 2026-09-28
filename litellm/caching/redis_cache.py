@@ -832,7 +832,7 @@ class RedisCache(BaseCache):
         key = self.check_and_fix_namespace(key=key)
         try:
             start_time: Final = time.time()
-            self.redis_client.set(name=key, value=str(value), ex=ttl)
+            self.redis_client.set(name=key, value=json.dumps(value), ex=ttl)
             end_time: Final = time.time()
             _duration: Final = end_time - start_time
             self.service_logger_obj.service_success_hook(
