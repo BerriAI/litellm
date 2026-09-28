@@ -6800,7 +6800,7 @@ def test_chat_dummy_tool_result_for_an_orphaned_tool_call_replays_a_byte_identic
     assert requests[0]["messages"][2]["content"][0]["type"] == "tool_result"
 
 
-def test_adaptive_thinking_kept_for_adaptive_model_when_tool_calls_missing_thinking_blocks():
+def test_adaptive_thinking_kept_for_adaptive_model_when_tool_calls_missing_thinking_blocks(monkeypatch):
     """
     modify_params must NOT drop thinking for adaptive-thinking models
     (Claude 4.6+ / Opus 5.x): Anthropic accepts a tool_use-only prior turn
@@ -6811,43 +6811,39 @@ def test_adaptive_thinking_kept_for_adaptive_model_when_tool_calls_missing_think
     """
     import litellm
 
-    original_modify_params = litellm.modify_params
-    litellm.modify_params = True
-    try:
-        messages = [
-            {"role": "user", "content": "Run `echo seed` with bash, then reason."},
-            {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": [
-                    {
-                        "id": "toolu_1",
-                        "type": "function",
-                        "function": {"name": "bash", "arguments": '{"command":"echo seed"}'},
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": "toolu_1", "content": "seed"},
-        ]
-        optional_params = {
-            "thinking": {"type": "adaptive", "display": "summarized"},
-            "output_config": {"effort": "xhigh"},
-        }
-        transformed = AnthropicConfig().transform_request(
-            model="claude-opus-5-5",
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params={},
-            headers={},
-        )
-        assert "thinking" in transformed
-        assert transformed["thinking"] == {"type": "adaptive", "display": "summarized"}
-        assert transformed["output_config"] == {"effort": "xhigh"}
-    finally:
-        litellm.modify_params = original_modify_params
+    monkeypatch.setattr(litellm, "modify_params", True)
+    messages = [
+        {"role": "user", "content": "Run `echo seed` with bash, then reason."},
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {"name": "bash", "arguments": '{"command":"echo seed"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_1", "content": "seed"},
+    ]
+    optional_params = {
+        "thinking": {"type": "adaptive", "display": "summarized"},
+        "output_config": {"effort": "xhigh"},
+    }
+    transformed = AnthropicConfig().transform_request(
+        model="claude-opus-5-5",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert "thinking" in transformed
+    assert transformed["thinking"] == {"type": "adaptive", "display": "summarized"}
+    assert transformed["output_config"] == {"effort": "xhigh"}
 
 
-def test_legacy_budget_thinking_still_dropped_when_tool_calls_missing_thinking_blocks():
+def test_legacy_budget_thinking_still_dropped_when_tool_calls_missing_thinking_blocks(monkeypatch):
     """
     The original guard (#14194 / #18926) must keep working for legacy
     budget-based thinking: a tool_use-only prior turn is rejected by
@@ -6857,32 +6853,40 @@ def test_legacy_budget_thinking_still_dropped_when_tool_calls_missing_thinking_b
     """
     import litellm
 
-    original_modify_params = litellm.modify_params
-    litellm.modify_params = True
-    try:
-        messages = [
-            {"role": "user", "content": "Run `echo seed` with bash, then reason."},
-            {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [
-                    {
-                        "id": "toolu_1",
-                        "type": "function",
-                        "function": {"name": "bash", "arguments": '{"command":"echo seed"}'},
-                    }
-                ],
-            },
-            {"role": "tool", "tool_call_id": "toolu_1", "content": "seed"},
-        ]
-        optional_params = {"thinking": {"type": "enabled", "budget_tokens": 1024}}
-        transformed = AnthropicConfig().transform_request(
-            model="claude-3-5-sonnet-20241022",
-            messages=messages,
-            optional_params=optional_params,
-            litellm_params={},
-            headers={},
-        )
-        assert "thinking" not in transformed
-    finally:
-        litellm.modify_params = original_modify_params
+    monkeypatch.setattr(litellm, "modify_params", True)
+    messages = [
+        {"role": "user", "content": "Run `echo seed` with bash, then reason."},
+        {
+            "role": "assistant",
+            "content": "",
+            "tool_calls": [
+                {
+                    "id": "toolu_1",
+                    "type": "function",
+                    "function": {"name": "bash", "arguments": '{"command":"echo seed"}'},
+                }
+            ],
+        },
+        {"role": "tool", "tool_call_id": "toolu_1", "content": "seed"},
+    ]
+    # Legacy budget-based thinking on an older model: guard still drops.
+    optional_params = {"thinking": {"type": "enabled", "budget_tokens": 1024}}
+    transformed = AnthropicConfig().transform_request(
+        model="claude-3-5-sonnet-20241022",
+        messages=messages,
+        optional_params=optional_params,
+        litellm_params={},
+        headers={},
+    )
+    assert "thinking" not in transformed
+    # Legacy budget-based thinking on an adaptive-capable model (Claude 4.6+):
+    # the exemption is keyed off the parameter shape, so the guard must still drop.
+    optional_params2 = {"thinking": {"type": "enabled", "budget_tokens": 2048}}
+    transformed2 = AnthropicConfig().transform_request(
+        model="claude-opus-5-5",
+        messages=messages,
+        optional_params=optional_params2,
+        litellm_params={},
+        headers={},
+    )
+    assert "thinking" not in transformed2

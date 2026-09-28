@@ -1921,17 +1921,23 @@ class AnthropicConfig(AnthropicModelInfo, BaseConfig):
         # Anthropic errors with: "When thinking is disabled, an assistant message cannot contain thinking"
         # Related issue: https://github.com/BerriAI/litellm/issues/18926
         #
-        # Adaptive-thinking models (Claude 4.6+ / Opus 5.x) are exempt: with
-        # thinking={"type": "adaptive"} Anthropic accepts a tool_use-only prior
-        # turn (adaptive thinking may legitimately decide not to think on a
-        # trivial tool call), so the guard applies only to legacy budget-based
-        # thinking. Dropping it there breaks streaming for effort-configured
-        # models (no reasoning_content deltas until first text/tool token).
+        # Adaptive thinking (thinking={"type": "adaptive"}, Claude 4.6+ / Opus 5.x)
+        # is exempt: Anthropic accepts a tool_use-only prior turn, because adaptive
+        # thinking may legitimately decide not to think on a trivial tool call.
+        # Dropping it breaks streaming for effort-configured models (no
+        # reasoning_content deltas until first text/tool token).
+        #
+        # The exemption is keyed off the *parameter shape*, not the model: a
+        # Claude 4.6+ model explicitly configured with legacy budget-based
+        # thinking ({"type": "enabled", "budget_tokens": N}) still needs the
+        # guard, exactly like older models.
         # Related issue: https://github.com/BerriAI/litellm/issues/43531
+        _thinking_param = optional_params.get("thinking")
+        _is_adaptive_thinking = isinstance(_thinking_param, dict) and _thinking_param.get("type") == "adaptive"
         if (
-            optional_params.get("thinking") is not None
+            _thinking_param is not None
             and messages is not None
-            and not AnthropicConfig._is_adaptive_thinking_model(model, self._resolved_provider)
+            and not _is_adaptive_thinking
             and last_assistant_with_tool_calls_has_no_thinking_blocks(messages)
             and not any_assistant_message_has_thinking_blocks(messages)
         ):
