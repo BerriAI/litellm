@@ -6606,7 +6606,6 @@ async def test_info_key_fn_no_key_returns_400_not_500(monkeypatch):
     with pytest.raises(ProxyException) as exc_info:
         await info_key_fn(key=None, user_api_key_dict=auth)
     assert exc_info.value.code == "400"
-    # The prisma find_unique must never be called with token=None
     mock_prisma_client.db.litellm_verificationtoken.find_unique.assert_not_called()
 
 
