@@ -991,3 +991,23 @@ async def test_external_spend_log_post_error_is_not_replayed(
         )
     writer.post.assert_awaited_once()
     assert mock_prisma_client.spend_log_transactions == []
+
+
+@pytest.mark.asyncio
+async def test_external_spend_log_transport_error_is_not_retried_or_requeued(
+    mock_prisma_client: Any, make_spend_log_row: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    import httpx
+
+    monkeypatch.setenv("SPEND_LOGS_URL", "http://writer.invalid")
+    writer = MagicMock()
+    writer.post = AsyncMock(side_effect=httpx.ReadError("response lost after send"))
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    with pytest.raises(httpx.ReadError):
+        await ProxyUpdateSpend.update_spend_logs(
+            n_retry_times=2, prisma_client=mock_prisma_client, db_writer_client=writer,
+            proxy_logging_obj=proxy_logging, logs_to_process=[make_spend_log_row(request_id="maybe-committed")],
+        )
+    writer.post.assert_awaited_once()
+    assert mock_prisma_client.spend_log_transactions == []

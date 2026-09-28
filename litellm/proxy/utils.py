@@ -7282,6 +7282,7 @@ class ProxyUpdateSpend:
         start_time: Final = time.time()
         try:
             for i in range(n_retry_times + 1):
+                external_post_attempted = False
                 try:
                     base_url = os.getenv("SPEND_LOGS_URL", None)
                     if len(logs_to_process) > 0 and base_url is not None and db_writer_client is not None:
@@ -7294,6 +7295,7 @@ class ProxyUpdateSpend:
                             # No external request has been sent. The batch is safe to replay.
                             await requeue_spend_logs(prisma_client, proxy_logging_obj, logs_to_process)
                             raise
+                        external_post_attempted = True
                         response = await db_writer_client.post(
                             url=base_url + "spend/update",
                             data=json_data,
@@ -7336,6 +7338,10 @@ class ProxyUpdateSpend:
                         )
                     break
                 except Exception as e:
+                    if external_post_attempted:
+                        # Even a transport error can arrive after the remote writer
+                        # committed. Retrying or requeueing could duplicate spend.
+                        raise
                     if not _is_transient_spend_log_write_error(e):
                         if PrismaDBExceptionHandler.is_prisma_error(e):
                             await requeue_spend_logs(prisma_client, proxy_logging_obj, logs_to_process)
