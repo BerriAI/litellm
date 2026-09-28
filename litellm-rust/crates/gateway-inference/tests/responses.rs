@@ -97,3 +97,22 @@ async fn responses_preserve_upstream_errors_without_retry() {
             .contains("slow down")
     );
 }
+
+#[rstest]
+#[tokio::test]
+async fn responses_authorize_the_public_model_before_provider_execution() {
+    let upstream = MockServer::start().await;
+    let app = support::app_with_permissions(
+        "openai/test-model",
+        &upstream.uri(),
+        litellm_gateway_auth::Permissions::None,
+    );
+    let response = support::post(
+        app,
+        "/v1/responses",
+        json!({"model": "public/model", "input": "hello"}),
+    )
+    .await;
+    assert_eq!(response.status(), 403);
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}

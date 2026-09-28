@@ -10,6 +10,7 @@ axum = { workspace = true, features = ["json", "multipart", "original-uri"] }
 base64.workspace = true
 bytes.workspace = true
 litellm-auth.workspace = true
+litellm-gateway-auth.workspace = true
 litellm-core.workspace = true
 litellm-host-http.workspace = true
 litellm-http.workspace = true
