@@ -12,6 +12,8 @@ Streaming routes also import `TestStreamCallbackContract` and provide `callback_
 
 Messages-specific tests run the same active callback against the Python implementation and the native route. Three native cases are strict expected failures: request hooks are omitted, agentic completion hooks are omitted, and pre-API logging has a different input/credential contract. Unexpected exceptions still fail the tests. A fix producing XPASS fails the suite until its expected-failure marker is removed
 
+Python comparisons establish differences, not correctness. When Python has a confirmed callback or logging bug, add a native regression asserting the intended behavior and fix the Rust path. Keep legacy Python unchanged and document the intentional difference instead of requiring parity with the bug
+
 Run the four route suites against a compiled extension with:
 
 ```sh
