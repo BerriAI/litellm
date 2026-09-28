@@ -459,6 +459,28 @@ async def test_scan_covered_tables_classifies_legacy_and_v2(salt_key, monkeypatc
 
 
 @pytest.mark.asyncio
+async def test_scan_covered_tables_classifies_search_tool_params(salt_key, monkeypatch):
+    legacy = _legacy_ct("tvly-legacy", monkeypatch)
+    _enable_aes(monkeypatch)
+    v2 = encrypt_value_helper("tvly-migrated")
+
+    client = MagicMock()
+    _empty_covered_tables(client)
+    client.db.litellm_searchtoolstable.find_many = AsyncMock(
+        return_value=[
+            SimpleNamespace(litellm_params={"api_key": legacy, "timeout": 30}),
+            SimpleNamespace(litellm_params={"api_key": v2, "search_provider": "tavily"}),
+        ]
+    )
+    client.db.litellm_config.find_unique = AsyncMock(return_value=None)
+
+    by_loc = {r.location: r for r in await cm._scan_covered_tables(client)}
+
+    assert (by_loc["search_tools"].legacy, by_loc["search_tools"].already_v2) == (1, 1)
+    assert by_loc["search_tools"].plaintext == 1
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("column", ("static_headers", "env"))
 @pytest.mark.parametrize("algorithm", ("xsalsa20-poly1305", "aes-256-gcm"))
 @pytest.mark.parametrize("as_json", (False, True))

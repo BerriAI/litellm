@@ -8,6 +8,7 @@ from typing import Final, Protocol
 
 from litellm._logging import verbose_proxy_logger
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.db.exception_handler import call_with_db_reconnect_retry
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import SearchToolsRepository
@@ -48,6 +49,55 @@ def _search_tools_table(prisma_client: PrismaClient) -> SearchToolTableClient:
     return _search_tools_table_of(SearchToolsRepository(prisma_client))
 
 
+def encrypt_search_tool_litellm_params(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    """Encrypt every string value of a search tool's litellm_params for storage."""
+    return {
+        key: encrypt_value_helper(value=value) if isinstance(value, str) else value
+        for key, value in litellm_params.items()
+    }
+
+
+def decrypt_search_tool_litellm_params(litellm_params: Mapping[str, object]) -> Mapping[str, object]:
+    """Decrypt stored litellm_params values; values that are not ciphertext are returned unchanged."""
+    return {
+        key: decrypt_value_helper(value=value, key=key, exception_type="debug", return_original_value=True)
+        if isinstance(value, str)
+        else value
+        for key, value in litellm_params.items()
+    }
+
+
+def _reencrypt_search_tool_value(value: object, new_master_key: str) -> object:
+    if not isinstance(value, str):
+        return value
+    plaintext: Final = decrypt_value_helper(value=value, key="search_tool", exception_type="debug")
+    return value if plaintext is None else encrypt_value_helper(value=plaintext, new_encryption_key=new_master_key)
+
+
+async def rotate_search_tools_master_key(prisma_client: PrismaClient, new_master_key: str) -> None:
+    """Re-encrypt the litellm_params values that decrypt under the current key with new_master_key.
+
+    Values that do not decrypt under the current key (plaintext rows written before encryption, or
+    ciphertext under another key) are kept as stored.
+    """
+    table: Final = _search_tools_table(prisma_client)
+    for row in await table.find_many():
+        stored_litellm_params = dict(row).get("litellm_params")
+        if not isinstance(stored_litellm_params, Mapping):
+            continue
+        await table.update(
+            where={"search_tool_id": row.search_tool_id},
+            data={
+                "litellm_params": safe_dumps(
+                    {
+                        key: _reencrypt_search_tool_value(value, new_master_key)
+                        for key, value in stored_litellm_params.items()
+                    }
+                )
+            },
+        )
+
+
 class SearchToolRegistry:
     """
     Handles adding, removing, and getting search tools in DB + in memory.
@@ -59,7 +109,7 @@ class SearchToolRegistry:
     @staticmethod
     def _convert_prisma_to_dict(prisma_obj: SearchToolRecord) -> dict:
         """
-        Convert Prisma result to dict with datetime objects as ISO format strings.
+        Convert Prisma result to dict with decrypted litellm_params and datetime objects as ISO format strings.
 
         Args:
             prisma_obj: Prisma model instance
@@ -68,6 +118,9 @@ class SearchToolRegistry:
             Dict with datetime fields converted to ISO strings
         """
         result: Final = dict(prisma_obj)
+        stored_litellm_params: Final = result.get("litellm_params")
+        if isinstance(stored_litellm_params, Mapping):
+            result["litellm_params"] = decrypt_search_tool_litellm_params(stored_litellm_params)
         # Convert datetime objects to ISO format strings
         if "created_at" in result and result["created_at"]:
             result["created_at"] = prisma_obj.created_at.isoformat()
@@ -92,7 +145,9 @@ class SearchToolRegistry:
         """
         try:
             search_tool_name: Final = search_tool.get("search_tool_name")
-            litellm_params: Final[str] = safe_dumps(dict(search_tool.get("litellm_params", {})))
+            litellm_params: Final[str] = safe_dumps(
+                encrypt_search_tool_litellm_params(search_tool.get("litellm_params", {}))
+            )
             search_tool_info: Final[str] = safe_dumps(search_tool.get("search_tool_info", {}))
 
             # Create search tool in DB
@@ -162,7 +217,9 @@ class SearchToolRegistry:
         """
         try:
             search_tool_name: Final = search_tool.get("search_tool_name")
-            litellm_params: Final[str] = safe_dumps(dict(search_tool.get("litellm_params", {})))
+            litellm_params: Final[str] = safe_dumps(
+                encrypt_search_tool_litellm_params(search_tool.get("litellm_params", {}))
+            )
             search_tool_info: Final[str] = safe_dumps(search_tool.get("search_tool_info", {}))
 
             # Update in DB

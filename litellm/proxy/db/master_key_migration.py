@@ -38,6 +38,7 @@ _SECRET_COLUMNS: Final = (
     _SecretColumn("LiteLLM_MCPUserCredentials", "id", "credential_b64", is_json=False),
     _SecretColumn("LiteLLM_MCPUserEnvVars", "id", "values_b64", is_json=False),
     _SecretColumn("LiteLLM_SSOIdentityAssertion", "user_id", "assertion_b64", is_json=False),
+    _SecretColumn("LiteLLM_SearchToolsTable", "search_tool_id", "litellm_params"),
     _SecretColumn("LiteLLM_TeamTable", "team_id", "metadata", only_rows_with_marked_ciphertexts=True),
     _SecretColumn("LiteLLM_VerificationToken", "token", "metadata", only_rows_with_marked_ciphertexts=True),
     _SecretColumn("LiteLLM_UserTable", "user_id", "metadata", only_rows_with_marked_ciphertexts=True),

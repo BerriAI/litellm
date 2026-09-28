@@ -1,4 +1,5 @@
 import contextlib
+import json
 from datetime import datetime
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -1148,3 +1149,169 @@ async def test_create_search_tool_survives_a_failing_router_refresh():
 
     assert response.status_code == 200
     assert response.json()["search_tool_name"] == "tavily-search"
+
+
+class _StoredSearchToolRow:
+    def __init__(self, **fields):
+        self.__dict__.update(fields)
+
+    def __iter__(self):
+        return iter(self.__dict__.items())
+
+
+class _InMemorySearchToolsTable:
+    """Stands in for prisma's litellm_searchtoolstable: JSON columns are stored parsed, as prisma returns them."""
+
+    def __init__(self, rows=()):
+        self.rows = {row.search_tool_id: row for row in rows}
+
+    async def create(self, data):
+        row = _StoredSearchToolRow(
+            search_tool_id=f"id-{len(self.rows)}",
+            search_tool_name=data["search_tool_name"],
+            litellm_params=json.loads(data["litellm_params"]),
+            search_tool_info=json.loads(data["search_tool_info"]),
+            created_at=data["created_at"],
+            updated_at=data["updated_at"],
+        )
+        self.rows[row.search_tool_id] = row
+        return row
+
+    async def find_unique(self, where):
+        return self.rows.get(where.get("search_tool_id")) or next(
+            (row for row in self.rows.values() if row.search_tool_name == where.get("search_tool_name")),
+            None,
+        )
+
+    async def find_many(self, order=None):
+        return list(self.rows.values())
+
+    async def update(self, where, data):
+        row = self.rows[where["search_tool_id"]]
+        for column, value in data.items():
+            setattr(row, column, json.loads(value) if column in ("litellm_params", "search_tool_info") else value)
+        return row
+
+
+def _stored_row(search_tool_id: str, name: str, litellm_params: dict) -> _StoredSearchToolRow:
+    return _StoredSearchToolRow(
+        search_tool_id=search_tool_id,
+        search_tool_name=name,
+        litellm_params=litellm_params,
+        search_tool_info={},
+        created_at=datetime(2026, 9, 1),
+        updated_at=datetime(2026, 9, 1),
+    )
+
+
+def _prisma_client_over(table: _InMemorySearchToolsTable) -> MagicMock:
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_searchtoolstable = table
+    return prisma_client
+
+
+SALT_KEY = "sk-search-tool-salt"
+SECRET_PARAMS = {
+    "search_provider": "bedrock_agentcore",
+    "api_key": "tvly-secret-api-key-0001",
+    "aws_secret_access_key": "aws-secret-0002",
+    "timeout": 30,
+}
+
+
+@pytest.fixture
+def salt_key(monkeypatch):
+    monkeypatch.setenv("LITELLM_SALT_KEY", SALT_KEY)
+    monkeypatch.setattr(ps, "general_settings", {})
+    return SALT_KEY
+
+
+@pytest.mark.asyncio
+async def test_search_tool_litellm_params_are_encrypted_at_rest_and_decrypted_on_read(salt_key):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_if_encrypted_with
+    from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+
+    table = _InMemorySearchToolsTable()
+    prisma_client = _prisma_client_over(table)
+    registry = SearchToolRegistry()
+
+    created = await registry.add_search_tool_to_db(
+        search_tool={"search_tool_name": "agentcore-search", "litellm_params": SECRET_PARAMS},
+        prisma_client=prisma_client,
+    )
+    await registry.update_search_tool_in_db(
+        search_tool_id=created["search_tool_id"],
+        search_tool={
+            "search_tool_name": "agentcore-search",
+            "litellm_params": {**SECRET_PARAMS, "api_key": "tvly-rotated-api-key-0003"},
+        },
+        prisma_client=prisma_client,
+    )
+
+    stored = table.rows[created["search_tool_id"]].litellm_params
+    assert "tvly-" not in json.dumps(stored)
+    assert "aws-secret-0002" not in json.dumps(stored)
+    assert decrypt_if_encrypted_with(stored["api_key"], salt_key) == "tvly-rotated-api-key-0003"
+    assert decrypt_if_encrypted_with(stored["aws_secret_access_key"], salt_key) == "aws-secret-0002"
+    assert stored["timeout"] == 30
+
+    expected = {**SECRET_PARAMS, "api_key": "tvly-rotated-api-key-0003"}
+    loaded = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
+    assert [tool["litellm_params"] for tool in loaded] == [expected]
+    by_id = await registry.get_search_tool_by_id_from_db(created["search_tool_id"], prisma_client=prisma_client)
+    by_name = await registry.get_search_tool_by_name_from_db("agentcore-search", prisma_client=prisma_client)
+    assert by_id["litellm_params"] == by_name["litellm_params"] == expected
+
+
+@pytest.mark.asyncio
+async def test_plaintext_search_tool_rows_written_before_encryption_still_load(salt_key):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import encrypt_value_helper
+    from litellm.proxy.search_endpoints.search_tool_registry import SearchToolRegistry
+
+    encrypted_row = _stored_row(
+        "encrypted-id",
+        "encrypted",
+        {"search_provider": encrypt_value_helper("tavily"), "api_key": encrypt_value_helper("tvly-new")},
+    )
+    legacy_row = _stored_row(
+        "legacy-id", "legacy", {"search_provider": "perplexity", "api_key": "pplx-legacy", "max_results": 5}
+    )
+    prisma_client = _prisma_client_over(_InMemorySearchToolsTable([encrypted_row, legacy_row]))
+
+    loaded = await SearchToolRegistry.get_all_search_tools_from_db(prisma_client=prisma_client)
+
+    assert [tool["litellm_params"] for tool in loaded] == [
+        {"search_provider": "tavily", "api_key": "tvly-new"},
+        {"search_provider": "perplexity", "api_key": "pplx-legacy", "max_results": 5},
+    ]
+
+
+@pytest.mark.asyncio
+async def test_master_key_rotation_reencrypts_only_values_the_current_key_decrypts(salt_key):
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import (
+        decrypt_if_encrypted_with,
+        encrypt_value_helper,
+    )
+    from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
+
+    new_key = "sk-new-master-key"
+    foreign_ciphertext = encrypt_value_helper("tvly-foreign", new_encryption_key="sk-some-other-key")
+    legacy_params = {"search_provider": "perplexity", "api_key": "pplx-legacy"}
+    table = _InMemorySearchToolsTable(
+        [
+            _stored_row("encrypted-id", "encrypted", {"api_key": encrypt_value_helper("tvly-new"), "timeout": 30}),
+            _stored_row("legacy-id", "legacy", dict(legacy_params)),
+            _stored_row("foreign-id", "foreign", {"api_key": foreign_ciphertext}),
+        ]
+    )
+
+    await rotate_search_tools_master_key(prisma_client=_prisma_client_over(table), new_master_key=new_key)
+    after_first_rotation = json.dumps({row_id: row.litellm_params for row_id, row in table.rows.items()})
+    await rotate_search_tools_master_key(prisma_client=_prisma_client_over(table), new_master_key=new_key)
+
+    encrypted_params = table.rows["encrypted-id"].litellm_params
+    assert decrypt_if_encrypted_with(encrypted_params["api_key"], new_key) == "tvly-new"
+    assert encrypted_params["timeout"] == 30
+    assert table.rows["legacy-id"].litellm_params == legacy_params
+    assert table.rows["foreign-id"].litellm_params == {"api_key": foreign_ciphertext}
+    assert json.dumps({row_id: row.litellm_params for row_id, row in table.rows.items()}) == after_first_rotation

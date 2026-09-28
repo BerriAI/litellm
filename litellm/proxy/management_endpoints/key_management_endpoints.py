@@ -124,6 +124,7 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.search_endpoints.search_tool_registry import rotate_search_tools_master_key
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.utils import (
@@ -5337,6 +5338,12 @@ async def _rotate_master_key(
         )
     except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
         verbose_proxy_logger.warning("Failed to rotate SSO identity assertions: %s", str(e))
+
+    # 4e. process search tools table
+    try:
+        await rotate_search_tools_master_key(prisma_client=prisma_client, new_master_key=new_master_key)
+    except Exception as e:  # noqa: BLE001  # one store's failure must not abort the master-key rotation
+        verbose_proxy_logger.warning("Failed to rotate search tool credentials: %s", str(e))
 
     # 5. process credentials table
     try:
