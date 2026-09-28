@@ -11,9 +11,45 @@ import { dismissFeedbackPopup, navigateToPage } from "../../helpers/navigation";
  * upstream must receive that canary as its bearer (positive control). The request carries a
  * marker in its message content with stored prompts on, and the drawer must render that marker
  * in both its pretty view and its raw request JSON view (sensitivity control: the stored request
- * really reached the page) while the page's DOM holds no copy of the canary core in either view.
+ * really reached the page) while the page's DOM holds no copy of the canary core in either view,
+ * raw or base64-encoded.
  */
 const unhex = (): string => randomUUID().replaceAll("-", "");
+
+/**
+ * The forms the canary core can take on the page: raw (JSON and percent encoding leave a hex
+ * core unchanged), and base64 in the standard and URL-safe alphabets at each of the three byte
+ * alignments it can start at. Each base64 form keeps only the characters that depend on core
+ * bytes alone, so it matches whatever bytes precede or follow the core.
+ */
+const canaryForms = (core: string): ReadonlyMap<string, string> => {
+  const forms = new Map([["raw", core]]);
+  for (let offset = 0; offset < 3; offset++) {
+    const bytes = Buffer.concat([Buffer.alloc(offset), Buffer.from(core)]);
+    const first = offset === 0 ? 0 : 4;
+    const last = Math.floor(bytes.length / 3) * 4;
+    const text = bytes.toString("base64").slice(first, last);
+    forms.set(`base64@${offset}`, text);
+    forms.set(
+      `base64url@${offset}`,
+      text.replaceAll("+", "-").replaceAll("/", "_"),
+    );
+  }
+  return forms;
+};
+
+/** The names of the canary forms found in ``text``; the raw form ignores case. */
+const foundForms = (
+  text: string,
+  forms: ReadonlyMap<string, string>,
+): string[] =>
+  [...forms]
+    .filter(([name, needle]) =>
+      name === "raw"
+        ? text.toLowerCase().includes(needle)
+        : text.includes(needle),
+    )
+    .map(([name]) => name);
 
 test("the Logs drawer renders the stored request without the deployment api_key", async ({
   page,
@@ -26,6 +62,14 @@ test("the Logs drawer renders the stored request without the deployment api_key"
   const auth = { Authorization: `Bearer ${master}` };
   const canaryCore = unhex();
   const deploymentKey = `lkc-B1-${canaryCore}`;
+  const forms = canaryForms(canaryCore);
+  for (const prefix of ["", "k", "k:"]) {
+    const encoded = Buffer.from(`${prefix}${deploymentKey}`).toString("base64");
+    expect(
+      foundForms(`Basic ${encoded}`, forms),
+      `the decoder misses base64 after a ${prefix.length}-byte prefix`,
+    ).not.toEqual([]);
+  }
   const marker = `lkc-M0-${unhex()}`;
   const model = `canary-drawer-${unhex()}`;
 
@@ -149,9 +193,9 @@ test("the Logs drawer renders the stored request without the deployment api_key"
       drawer.getByText(marker, { exact: false }).first(),
     ).toBeVisible({ timeout: 20_000 });
     expect(
-      (await page.content()).includes(canaryCore),
+      foundForms(await page.content(), forms),
       "the drawer's pretty view holds the deployment api_key",
-    ).toBe(false);
+    ).toEqual([]);
 
     await drawer.getByRole("tab", { name: "JSON", exact: true }).click();
     await drawer.getByRole("tab", { name: "Request", exact: true }).click();
@@ -161,9 +205,9 @@ test("the Logs drawer renders the stored request without the deployment api_key"
       .last();
     await expect(requestJson).toBeVisible({ timeout: 20_000 });
     expect(
-      (await page.content()).includes(canaryCore),
+      foundForms(await page.content(), forms),
       "the drawer's request JSON holds the deployment api_key",
-    ).toBe(false);
+    ).toEqual([]);
   } finally {
     if (modelId) await post(request, "/model/delete", { id: modelId });
     if (promptsStored === null) {
