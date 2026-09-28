@@ -13,13 +13,14 @@ Run with: pytest tests/unit/interactions/test_openapi_compliance.py -v
 
 import json
 import re
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any, Dict, Final
-from unittest.mock import patch
 
 import httpx
 import pytest
 from openapi_core import OpenAPI
+from pytest_socket import disable_socket, enable_socket
 
 OPENAPI_SPEC_URL = "https://ai.google.dev/static/api/interactions.openapi.json"
 
@@ -30,8 +31,13 @@ def _load_openapi_spec_dict() -> Dict[str, Any]:
 
 
 def test_spec_loads_without_fetching_the_live_contract() -> None:
-    with patch("httpx.get", side_effect=pytest.fail.Exception("Unit tests must not fetch the live spec")):
+    disable_socket()
+    try:
         spec: Final = _load_openapi_spec_dict()
+    except pytest.skip.Exception:
+        pytest.fail("The pinned contract must load offline without skipping")
+    finally:
+        enable_socket()
 
     assert "post" in spec["paths"]["/{api_version}/interactions"]
 
@@ -288,22 +294,49 @@ class TestEndpointCompliance:
     def test_create_endpoint_exists(self, spec_dict):
         """Verify POST /interactions endpoint exists."""
         assert any(
-            path.endswith("/interactions") and "post" in methods for path, methods in spec_dict["paths"].items()
+            path == "/{api_version}/interactions" and "post" in methods for path, methods in spec_dict["paths"].items()
         ), "POST /interactions endpoint not found"
 
     def test_get_endpoint_exists(self, spec_dict):
         """Verify GET /interactions/{id} endpoint exists."""
         assert any(
-            re.fullmatch(r".*/interactions/\{[^/{}]+\}", path) and "get" in methods
+            re.fullmatch(r"/\{api_version\}/interactions/\{[^/{}]+\}", path) and "get" in methods
             for path, methods in spec_dict["paths"].items()
         ), "GET /interactions/{id} endpoint not found"
 
     def test_delete_endpoint_exists(self, spec_dict):
         """Verify DELETE /interactions/{id} endpoint exists."""
         assert any(
-            re.fullmatch(r".*/interactions/\{[^/{}]+\}", path) and "delete" in methods
+            re.fullmatch(r"/\{api_version\}/interactions/\{[^/{}]+\}", path) and "delete" in methods
             for path, methods in spec_dict["paths"].items()
         ), "DELETE /interactions/{id} endpoint not found"
+
+
+@pytest.mark.parametrize(
+    ("check", "suffix"),
+    (
+        (TestEndpointCompliance().test_create_endpoint_exists, ""),
+        (TestEndpointCompliance().test_get_endpoint_exists, "/{id}"),
+        (TestEndpointCompliance().test_delete_endpoint_exists, "/{id}"),
+    ),
+)
+@pytest.mark.parametrize("prefix", ("/unrelated/nested", "/other", "/{api_version}/nested", ""))
+def test_endpoint_checks_reject_unrelated_paths(
+    check: Callable[[Mapping[str, Mapping[str, Mapping[str, object]]]], None], suffix: str, prefix: str
+) -> None:
+    spec: Final = {"paths": {f"{prefix}/interactions{suffix}": {"post": {}, "get": {}, "delete": {}}}}
+
+    with pytest.raises(AssertionError, match="endpoint not found"):
+        check(spec)
+
+
+@pytest.mark.parametrize("parameter", ("id", "interactionsId", "interaction_id"))
+def test_resource_checks_accept_different_parameter_names(parameter: str) -> None:
+    spec: Final = {"paths": {f"/{{api_version}}/interactions/{{{parameter}}}": {"get": {}, "delete": {}}}}
+    checks: Final = TestEndpointCompliance()
+
+    checks.test_get_endpoint_exists(spec)
+    checks.test_delete_endpoint_exists(spec)
 
 
 if __name__ == "__main__":
