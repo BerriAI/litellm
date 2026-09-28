@@ -3181,6 +3181,7 @@ def _configure_member_preview(
 ) -> UserAPIKeyAuth:
     from litellm.proxy import proxy_server
     from litellm.proxy._types import UI_TEAM_ID, LiteLLM_TeamTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
 
     team: Final = LiteLLM_TeamTable(
         team_id="member-preview-team",
@@ -3192,6 +3193,7 @@ def _configure_member_preview(
     prisma.db.litellm_teamtable.find_unique = AsyncMock(return_value=team)
     prisma.db.litellm_teammembership.find_unique = AsyncMock(return_value=None)
     monkeypatch.setattr(proxy_server, "prisma_client", prisma)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", UserApiKeyCache())
     monkeypatch.setattr(proxy_server, "premium_user", True)
     return UserAPIKeyAuth(
         user_role=LitellmUserRoles.INTERNAL_USER,
