@@ -863,7 +863,9 @@ async def _selected_connections_refusal(
         global_mcp_server_manager,
     )
 
-    for server in (global_mcp_server_manager.get_mcp_server_by_name(name) for name in dict.fromkeys(selected_servers)):
+    for server in (
+        global_mcp_server_manager.get_mcp_server_by_id(server_id) for server_id in dict.fromkeys(selected_servers)
+    ):
         if server is None or not await lookup_server_reachability(flow.user_id, server.server_id):
             return _oauth_error(400, "invalid_request", "a selected MCP server is no longer available")
         if (

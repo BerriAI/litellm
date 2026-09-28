@@ -1258,7 +1258,7 @@ async def _collect_mcp_listing(
             return [], classify_list_exception(exc)
 
     results: Final = await asyncio.gather(*(fetch_one(server) for server in servers))
-    failure: Final = listing_auth_error({server.name: result[1] for server, result in zip(servers, results)})
+    failure: Final = listing_auth_error({server.server_id: result[1] for server, result in zip(servers, results)})
     if failure is not None:
         raise failure
     return list(chain.from_iterable(items for items, _ in results))

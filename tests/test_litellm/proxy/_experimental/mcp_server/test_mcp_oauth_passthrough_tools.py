@@ -798,13 +798,14 @@ async def test_prompt_and_resource_calls_preserve_static_headers_and_non_auth_fa
 
 
 @pytest.mark.asyncio
-async def test_transport_preserves_sse_priming_event_on_success() -> None:
+@pytest.mark.parametrize("preamble", (b"id: resume-token\r\ndata: \r\n\r\n", b": ping\r\n\r\n"))
+async def test_transport_preserves_sse_priming_event_on_success(preamble: bytes) -> None:
     from litellm.proxy._experimental.mcp_server.server import MCPAuthResponse
 
     send: Final = AsyncMock()
     response: Final = MCPAuthResponse(send)
     start: Final = {"type": "http.response.start", "status": 200, "headers": [(b"content-type", b"text/event-stream")]}
-    priming: Final = {"type": "http.response.body", "body": b"id: resume-token\r\ndata: \r\n\r\n", "more_body": True}
+    priming: Final = {"type": "http.response.body", "body": preamble, "more_body": True}
     tools: Final = {
         "type": "http.response.body",
         "body": b'data: {"jsonrpc":"2.0","id":1,"result":{"tools":[]}}\n\n',
@@ -947,3 +948,20 @@ async def test_optional_listing_challenges_auth_when_other_server_times_out(
     assert caught.value.www_authenticate == "Bearer"
     assert caught.value.server_name == "blocked"
     assert create.await_count == 2
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("kind", ("prompts", "resources", "resource_templates"))
+@pytest.mark.parametrize("healthy_first", (False, True))
+async def test_optional_listing_preserves_healthy_duplicate_names(kind: str, healthy_first: bool, monkeypatch: pytest.MonkeyPatch) -> None:
+    from litellm.proxy._experimental.mcp_server import operations
+    healthy: Final = _http_server("healthy-id", "duplicate")
+    blocked: Final = _http_server("blocked-id", "duplicate")
+    manager: Final = MagicMock()
+    fetch: Final = AsyncMock(side_effect=[[], MCPUpstreamAuthError(401, "Bearer", "duplicate")] if healthy_first else [MCPUpstreamAuthError(401, "Bearer", "duplicate"), []])
+    setattr(manager, f"get_{kind}_from_server", fetch)
+    monkeypatch.setattr(operations, "global_mcp_server_manager", manager)
+    monkeypatch.setattr(operations, "_prepare_mcp_server_headers", MagicMock(return_value=(None, None)))
+    monkeypatch.setattr(operations, "_get_allowed_mcp_servers", AsyncMock(return_value=[healthy, blocked] if healthy_first else [blocked, healthy]))
+    assert await getattr(operations, f"_list_mcp_{kind}")() == []
+    assert fetch.await_count == 2

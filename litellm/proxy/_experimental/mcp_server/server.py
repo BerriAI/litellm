@@ -127,8 +127,7 @@ class MCPAuthResponse:
             and message.get("more_body", False)
             and not any(line.startswith(b"data:") and line[5:].strip() for line in body.splitlines())
         ):
-            if not body.startswith(b":"):
-                self._preamble = (*self._preamble, message)
+            self._preamble = (*self._preamble, message)
             return
         self._committed = True
         if self.challenge is not None:
