@@ -18,6 +18,7 @@ from litellm.litellm_core_utils.health_check_helpers import (
     HealthCheckHelpers,
     default_health_check_mode,
     native_health_check_mode,
+    _wildcard_health_check_models,
 )
 from litellm.main import ahealth_check
 from litellm.proxy._types import UserAPIKeyAuth
