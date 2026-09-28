@@ -471,8 +471,8 @@ class LLMCallSpanData:
             trace=trace or TraceControls(),
             session_id=session_id or None,
             embedding_output=embedding_output if capture_content else None,
-            cache_hit=as_bool(payload.get("cache_hit")),  # pyright: ignore[reportUnknownMemberType]  # payload dicts may omit this key
-            saved_cache_cost=as_float(payload.get("saved_cache_cost")),  # pyright: ignore[reportUnknownMemberType]  # payload dicts may omit this key
+            cache_hit=as_bool(payload.get("cache_hit")),  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
+            saved_cache_cost=as_float(payload.get("saved_cache_cost")),  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
         )
 
 

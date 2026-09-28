@@ -246,7 +246,7 @@ class LLMCallEvent:
             auth_metadata=auth_metadata(payload, kwargs),
             is_no_upstream_call=bool(kwargs.get(LITELLM_LOGGING_NO_UPSTREAM_LLM_CALL)),
             upstream_started=kwargs.get("api_call_start_time") is not None,
-            cache_hit=bool(payload.get("cache_hit")) if payload else False,  # pyright: ignore[reportUnknownMemberType]  # payload dicts may omit this key
+            cache_hit=bool(payload.get("cache_hit")) if payload else False,  # pyright: ignore[reportUnknownMemberType]  # TypedDict .get on a str key is partially unknown
             provisional_span_name=f"{operation.value} {model}".strip(),
             time_to_first_chunk_seconds=time_to_first_chunk_seconds(kwargs),
             trace=trace,
