@@ -445,6 +445,24 @@ def test_emits_nothing_when_the_team_label_is_excluded():
         getattr(logger, metric_name).remove.assert_not_called()
 
 
+def test_emits_nothing_when_the_model_label_is_excluded():
+    """
+    These gauges are team-and-model scoped, so without a model label every
+    model for one team collapses to a single sample. A request for a model
+    with no limit would then retire the series a limited model published, and
+    a second limited model would overwrite it -- the same reasoning that drops
+    the gauge when the team label is missing.
+    """
+    logger = _logger_with_mock_team_gauges()
+    logger.get_labels_for_metric = MagicMock(return_value=["team", "team_alias"])
+
+    _set_team_metrics(logger, _payload_with_headers(dict(ALL_TEAM_HEADERS)))
+
+    for metric_name in TEAM_RATE_LIMIT_METRICS:
+        getattr(logger, metric_name).labels.assert_not_called()
+        getattr(logger, metric_name).remove.assert_not_called()
+
+
 def test_excluded_labels_never_reach_team_gauge_labelnames():
     """
     `exclude_labels` is applied inside `get_labels_for_metric`, so the
