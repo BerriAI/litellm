@@ -15,10 +15,11 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
     BedrockImageProcessor,
     _bedrock_converse_messages_pt,
     _bedrock_tools_pt,
-    _rename_duplicate_bedrock_document_names,
     _convert_to_bedrock_tool_call_invoke,
-    _sanitize_anthropic_tool_use_id,
     _convert_to_bedrock_tool_call_result,
+    _rename_duplicate_bedrock_document_names,
+    _sanitize_anthropic_tool_use_id,
+    _sort_bedrock_assistant_content_blocks,
     anthropic_messages_pt,
     convert_to_anthropic_tool_result,
     convert_to_gemini_tool_call_result,
@@ -53,6 +54,31 @@ def test_anthropic_list_content_preserves_message_cache_control(role, block_cach
         },
     ]
     assert result[-1]["content"] == expected
+
+
+def test_anthropic_list_message_cache_control_skips_separate_thinking_blocks():
+    thinking_block: Final = {
+        "type": "thinking",
+        "thinking": "reasoning",
+        "signature": "valid-signature",
+    }
+    cache_control: Final = {"type": "ephemeral"}
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {
+            "role": "assistant",
+            "content": [{"type": "text", "text": "answer"}],
+            "thinking_blocks": [thinking_block],
+            "cache_control": cache_control,
+        },
+    ]
+
+    result: Final = anthropic_messages_pt(messages=messages, model="claude-sonnet-4-6", llm_provider="anthropic")
+
+    assert result[-1]["content"] == [
+        thinking_block,
+        {"type": "text", "text": "answer", "cache_control": cache_control},
+    ]
 
 
 @pytest.mark.parametrize("call_field", ["tool_calls", "function_call"])
@@ -186,6 +212,24 @@ async def test_bedrock_assistant_list_preserves_message_cache_control(block_cach
 
 
 @pytest.mark.asyncio
+async def test_bedrock_assistant_string_preserves_message_cache_control():
+    messages: Final = [
+        {"role": "user", "content": "hi"},
+        {"role": "assistant", "content": "checking", "cache_control": {"type": "ephemeral"}},
+    ]
+    model: Final = "us.anthropic.claude-sonnet-4-5-20250929-v1:0"
+    expected: Final = [{"text": "checking"}, {"cachePoint": {"type": "default"}}]
+
+    sync_result: Final = _bedrock_converse_messages_pt(messages=messages, model=model, llm_provider="bedrock")
+    async_result: Final = await BedrockConverseMessagesProcessor._bedrock_converse_messages_pt_async(
+        messages=messages, model=model, llm_provider="bedrock"
+    )
+
+    assert sync_result[-1]["content"] == expected
+    assert async_result[-1]["content"] == expected
+
+
+@pytest.mark.asyncio
 async def test_bedrock_assistant_message_cache_point_stays_before_following_assistant_text():
     messages: Final = [
         {"role": "user", "content": "hi"},
@@ -210,6 +254,41 @@ async def test_bedrock_assistant_message_cache_point_stays_before_following_assi
 
     assert sync_result[-1]["content"] == expected
     assert async_result[-1]["content"] == expected
+
+
+def test_bedrock_assistant_content_sorting_keeps_cache_point_boundaries():
+    first_cache_point: Final = {"cachePoint": {"type": "default"}}
+    second_cache_point: Final = {"cachePoint": {"type": "default", "ttl": "5m"}}
+    before_cache_point: Final = {"text": "before cache point"}
+    after_first_cache_point: Final = {"text": "after first cache point"}
+    after_second_cache_point: Final = {"text": "after second cache point"}
+    first_tool_use: Final = {"toolUse": {"toolUseId": "call_1", "name": "first"}}
+    second_tool_use: Final = {"toolUse": {"toolUseId": "call_2", "name": "second"}}
+    reasoning: Final = {"reasoningContent": {"reasoningText": {"text": "reasoning"}}}
+
+    result: Final = _sort_bedrock_assistant_content_blocks(
+        [
+            first_tool_use,
+            before_cache_point,
+            first_cache_point,
+            second_tool_use,
+            after_first_cache_point,
+            reasoning,
+            second_cache_point,
+            after_second_cache_point,
+        ]
+    )
+
+    assert result == [
+        before_cache_point,
+        first_tool_use,
+        first_cache_point,
+        reasoning,
+        after_first_cache_point,
+        second_tool_use,
+        second_cache_point,
+        after_second_cache_point,
+    ]
 
 
 def _get_gemini_function_response_inline_data_parts(result):
