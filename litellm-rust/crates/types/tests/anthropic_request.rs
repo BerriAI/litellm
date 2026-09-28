@@ -1,4 +1,6 @@
-use litellm_types::llms::anthropic_messages::anthropic_request::{ContentBlock, ContentBlockType};
+use litellm_types::llms::anthropic_messages::anthropic_request::{
+    AnthropicMessagesRequest, ContentBlock, ContentBlockType,
+};
 use rstest::rstest;
 use serde_json::{Value, json};
 
@@ -46,4 +48,41 @@ fn is_type_matches_the_exact_block_type(
 ) {
     let block: ContentBlock = serde_json::from_value(block).unwrap();
     assert_eq!(block.is_type(block_type), expected);
+}
+
+#[rstest]
+#[case::absent(json!({}), json!({"temperature": 0.5, "metadata": {"old": true}, "future": {"old": true}}))]
+#[case::replace(json!({"temperature": 0, "metadata": {"new": true}, "future": {"new": null}}), json!({"temperature": 0.0, "metadata": {"new": true}, "future": {"new": null}}))]
+#[case::clear(json!({"temperature": null, "future": null}), json!({"metadata": {"old": true}, "future": null}))]
+fn request_overrides_preserve_absent_fields_and_replace_supplied_fields(
+    #[case] overrides: Value,
+    #[case] expected: Value,
+) {
+    let request: AnthropicMessagesRequest = serde_json::from_value(json!({
+        "model": "test-model", "messages": [{"role": "user", "content": "hi"}],
+        "temperature": 0.5, "metadata": {"old": true}, "future": {"old": true}
+    }))
+    .unwrap();
+    let updated = request
+        .clone()
+        .with_overrides(overrides.as_object().unwrap().clone())
+        .unwrap();
+    assert_eq!(updated.model, request.model);
+    assert_eq!(updated.messages, request.messages);
+    assert_eq!(serde_json::to_value(updated.params).unwrap(), expected);
+}
+
+#[rstest]
+#[case::invalid_optional(json!({"temperature": "hot"}))]
+#[case::invalid_required(json!({"messages": null}))]
+fn request_overrides_validate_supplied_fields(#[case] overrides: Value) {
+    let request: AnthropicMessagesRequest = serde_json::from_value(json!({
+        "model": "test-model", "messages": [{"role": "user", "content": "hi"}]
+    }))
+    .unwrap();
+    assert!(
+        request
+            .with_overrides(overrides.as_object().unwrap().clone())
+            .is_err()
+    );
 }

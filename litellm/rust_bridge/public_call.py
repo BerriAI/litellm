@@ -6,6 +6,36 @@ import inspect
 from collections.abc import Callable, Mapping, Sequence
 from typing import Final, cast  # noqa: TID251  # narrows caller-owned containers without copying them
 
+from litellm.types.utils import is_litellm_owned_kwarg
+
+_CONTEXT_ARGUMENTS: Final = frozenset(
+    {
+        "model",
+        "messages",
+        "input",
+        "document",
+        "file",
+        "audio",
+        "api_key",
+        "api_base",
+        "base_url",
+        "custom_llm_provider",
+        "extra_headers",
+        "timeout",
+        "request_timeout",
+        "callbacks",
+        "success_callback",
+        "failure_callback",
+        "metadata",
+        "litellm_metadata",
+        "litellm_call_id",
+        "litellm_trace_id",
+        "litellm_logging_obj",
+        "litellm_credential_name",
+        "proxy_server_request",
+    }
+)
+
 
 def signature(legacy: Callable[..., object]) -> inspect.Signature:
     return inspect.signature(legacy)
@@ -47,33 +77,30 @@ def inference_decline_reason(parameters: tuple[str, ...], kwargs: Mapping[str, o
 
     if litellm.cache is not None or litellm.drop_params or litellm.modify_params:
         return "native inference does not implement the configured cache or parameter rewrites"
-    context: Final = frozenset(
-        {
-            "model",
-            "messages",
-            "input",
-            "api_key",
-            "api_base",
-            "base_url",
-            "custom_llm_provider",
-            "extra_headers",
-            "timeout",
-            "request_timeout",
-            "callbacks",
-            "success_callback",
-            "failure_callback",
-            "metadata",
-            "litellm_metadata",
-            "litellm_call_id",
-            "litellm_trace_id",
-            "litellm_logging_obj",
-            "litellm_credential_name",
-            "proxy_server_request",
-        }
-    )
     for name, value in kwargs.items():
         if value is None:
             continue
-        if name not in parameters and name not in context:
+        if (
+            name not in parameters
+            and name not in _CONTEXT_ARGUMENTS
+            and name != "extra_body"
+            and is_litellm_owned_kwarg(name)
+        ):
             return f"native inference does not implement {name}"
     return None
+
+
+def provider_parameters(
+    parameters: Mapping[str, object],
+    kwargs: Mapping[str, object],
+    arguments: Mapping[str, object],
+    names: tuple[str, ...],
+) -> Mapping[str, object]:
+    supplied: Final = {**parameters, **kwargs, **arguments}
+    return {
+        name: value
+        for name, value in supplied.items()
+        if (name in names and value is not None)
+        or name == "extra_body"
+        or (name not in names and name not in _CONTEXT_ARGUMENTS and not is_litellm_owned_kwarg(name))
+    }

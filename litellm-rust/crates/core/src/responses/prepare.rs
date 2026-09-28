@@ -1,3 +1,4 @@
+use litellm_core_utils::call_arguments::{CallArguments, ProviderParameters};
 use litellm_host::event::RequestContext;
 use litellm_llms::{
     base_llm::responses::transformation::BaseResponsesApiConfig,
@@ -16,6 +17,8 @@ pub(super) async fn prepare(
     call: ResponsesCall,
     secrets: &dyn SecretSource,
 ) -> Result<ProviderResponsesRequest, Error> {
+    let params =
+        ProviderParameters::from_arguments(&CallArguments::from(call.optional_params.clone()))?;
     let provider = call.custom_llm_provider.as_deref().unwrap_or("openai");
     if provider != "openai" {
         return Err(Error::Unsupported("native HTTP responses provider"));
@@ -46,7 +49,10 @@ pub(super) async fn prepare(
             _ => None,
         },
     };
-    let body = config.transform_responses_api_request(model, call.input, call.optional_params)?;
+    let transformed =
+        config.transform_responses_api_request(model, call.input, params.fields().clone())?;
+    let consumed: Vec<&str> = params.fields().keys().map(String::as_str).collect();
+    let body = params.compose(&transformed, &consumed)?;
     Ok(ProviderResponsesRequest {
         url: config.get_complete_url(call.api_base.as_deref(), &lookup),
         config,

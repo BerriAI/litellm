@@ -46,6 +46,20 @@ pub trait BaseConfig: Sync {
     /// Supported OpenAI parameter names paired with their provider names.
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)];
 
+    fn map_openai_params(&self, params: &Map<String, Value>) -> Map<String, Value> {
+        params
+            .iter()
+            .map(|(name, value)| {
+                let mapped = self
+                    .supported_openai_param_mappings()
+                    .iter()
+                    .find(|(source, _)| *source == name)
+                    .map_or(name.as_str(), |(_, target)| *target);
+                (mapped.to_owned(), value.clone())
+            })
+            .collect()
+    }
+
     fn get_complete_url(
         &self,
         api_base: Option<&str>,

@@ -334,6 +334,123 @@ pub struct AnthropicMessagesOptionalParams {
     pub extra: Map<String, Value>,
 }
 
+impl AnthropicMessagesRequest {
+    pub fn with_overrides(self, fields: Map<String, Value>) -> Result<Self, serde_json::Error> {
+        let model = override_field(&fields, "model", self.model)?;
+        let messages = override_field(&fields, "messages", self.messages)?;
+        let params = self.params.with_overrides(
+            fields
+                .into_iter()
+                .filter(|(name, _)| !matches!(name.as_str(), "model" | "messages"))
+                .collect(),
+        )?;
+        Ok(Self {
+            model,
+            messages,
+            params,
+        })
+    }
+}
+
+impl AnthropicMessagesOptionalParams {
+    fn with_overrides(self, fields: Map<String, Value>) -> Result<Self, serde_json::Error> {
+        let patch: Self = serde_json::from_value(Value::Object(fields.clone()))?;
+        Ok(Self {
+            max_tokens: select_override(&fields, "max_tokens", self.max_tokens, patch.max_tokens),
+            system: select_override(&fields, "system", self.system, patch.system),
+            metadata: select_override(&fields, "metadata", self.metadata, patch.metadata),
+            stop_sequences: select_override(
+                &fields,
+                "stop_sequences",
+                self.stop_sequences,
+                patch.stop_sequences,
+            ),
+            stream: select_override(&fields, "stream", self.stream, patch.stream),
+            temperature: select_override(
+                &fields,
+                "temperature",
+                self.temperature,
+                patch.temperature,
+            ),
+            top_p: select_override(&fields, "top_p", self.top_p, patch.top_p),
+            top_k: select_override(&fields, "top_k", self.top_k, patch.top_k),
+            tools: select_override(&fields, "tools", self.tools, patch.tools),
+            tool_choice: select_override(
+                &fields,
+                "tool_choice",
+                self.tool_choice,
+                patch.tool_choice,
+            ),
+            thinking: select_override(&fields, "thinking", self.thinking, patch.thinking),
+            service_tier: select_override(
+                &fields,
+                "service_tier",
+                self.service_tier,
+                patch.service_tier,
+            ),
+            container: select_override(&fields, "container", self.container, patch.container),
+            mcp_servers: select_override(
+                &fields,
+                "mcp_servers",
+                self.mcp_servers,
+                patch.mcp_servers,
+            ),
+            context_management: select_override(
+                &fields,
+                "context_management",
+                self.context_management,
+                patch.context_management,
+            ),
+            output_format: select_override(
+                &fields,
+                "output_format",
+                self.output_format,
+                patch.output_format,
+            ),
+            output_config: select_override(
+                &fields,
+                "output_config",
+                self.output_config,
+                patch.output_config,
+            ),
+            speed: select_override(&fields, "speed", self.speed, patch.speed),
+            inference_geo: select_override(
+                &fields,
+                "inference_geo",
+                self.inference_geo,
+                patch.inference_geo,
+            ),
+            reasoning_effort: select_override(
+                &fields,
+                "reasoning_effort",
+                self.reasoning_effort,
+                patch.reasoning_effort,
+            ),
+            compaction: select_override(&fields, "compaction", self.compaction, patch.compaction),
+            extra: self.extra.into_iter().chain(patch.extra).collect(),
+        })
+    }
+}
+
+fn select_override<T>(fields: &Map<String, Value>, name: &str, original: T, replacement: T) -> T {
+    if fields.contains_key(name) {
+        replacement
+    } else {
+        original
+    }
+}
+
+fn override_field<T: serde::de::DeserializeOwned>(
+    fields: &Map<String, Value>,
+    name: &str,
+    original: T,
+) -> Result<T, serde_json::Error> {
+    match fields.get(name) {
+        Some(value) => serde_json::from_value(value.clone()),
+        None => Ok(original),
+    }
+}
+
 impl AnthropicMessage {
     pub fn blocks(&self) -> &[ContentBlock] {
         match &self.content {

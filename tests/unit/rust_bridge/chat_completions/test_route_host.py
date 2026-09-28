@@ -4,9 +4,36 @@ from typing import Final
 import pytest
 
 import litellm
-from litellm.rust_bridge.chat_completions.route_host import arguments, connection_defaults, response
 from litellm.rust_bridge.chat_completions.entrypoints import LiteLLMChatCompletionsRequest
+from litellm.rust_bridge.chat_completions.route_host import PARAMETERS, arguments, connection_defaults, response
+from litellm.rust_bridge.public_call import provider_parameters
 from litellm.types.utils import ModelResponse
+
+
+@pytest.mark.parametrize("extension", (None, False, 0, "", (), {"timeout": "provider data"}))
+def test_provider_projection_preserves_extensions_and_excludes_internal_objects(extension: object) -> None:
+    callback: Final = object()
+    nested: Final = {"future": extension}
+    original: Final = MappingProxyType({"temperature": 0.2, "future": "default"})
+    kwargs: Final = MappingProxyType(
+        {
+            "future": extension,
+            "callbacks": callback,
+            "litellm_metadata": callback,
+            "extra_body": nested,
+            "api_key": "secret",
+        }
+    )
+    projected: Final = provider_parameters(original, kwargs, {"temperature": 0}, PARAMETERS)
+    assert projected == {"temperature": 0, "future": extension, "extra_body": nested}
+    assert projected["extra_body"] is nested
+    assert original["temperature"] == 0.2
+    assert kwargs["callbacks"] is callback
+
+
+def test_callback_none_suppresses_a_known_parameter_without_restoring_its_previous_value() -> None:
+    projected: Final = provider_parameters({"temperature": 0.2}, {}, {"temperature": None}, PARAMETERS)
+    assert projected == {}
 
 
 def test_response_builds_the_public_model_response() -> None:

@@ -119,11 +119,22 @@ impl MessagesPythonHost {
                 Err(error) => Some(Err(error)),
             })
             .collect::<PyResult<Vec<(String, Value)>>>()?;
+        let extras = py
+            .import("litellm.rust_bridge.public_call")?
+            .getattr("provider_parameters")?
+            .call1((
+                PyDict::new(py),
+                request.getattr("kwargs")?,
+                arguments,
+                BODY_FIELDS.to_vec(),
+            ))?;
+        let extras: Map<String, Value> = from_py(&extras)?;
         let body = [
             ("model".to_string(), Value::String(model.clone())),
             ("messages".to_string(), from_py(&messages)?),
         ]
         .into_iter()
+        .chain(extras)
         .chain(fields)
         .collect::<Map<String, Value>>();
         let timeout = argument("timeout")?

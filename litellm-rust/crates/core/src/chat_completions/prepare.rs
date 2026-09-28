@@ -1,5 +1,8 @@
 use litellm_auth::SecretValue;
-use litellm_core_utils::settings::Lookup;
+use litellm_core_utils::{
+    call_arguments::{CallArguments, ProviderParameters},
+    settings::Lookup,
+};
 use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
 use litellm_secrets::source::Secrets;
@@ -59,7 +62,13 @@ pub(super) fn resolve_request(
             "chat completions requires at least one message".into(),
         ));
     }
-    if let Some(reason) = config.unsupported_reason(&messages, &request.optional_params) {
+    let provider_params =
+        ProviderParameters::from_arguments(&CallArguments::from(request.optional_params.clone()))?;
+    let mapped = config.map_openai_params(provider_params.fields());
+    if let Some(reason) = config.unsupported_reason(&messages, &mapped) {
+        return Err(Error::Unsupported(reason.0));
+    }
+    if let Some(reason) = config.unsupported_reason(&messages, provider_params.overrides()) {
         return Err(Error::Unsupported(reason.0));
     }
     Ok(ResolvedChatCompletionsRequest {
@@ -68,6 +77,7 @@ pub(super) fn resolve_request(
         config,
         messages,
         optional_params: request.optional_params,
+        provider_params,
         api_key: request.api_key,
         api_base: request.api_base,
         extra_headers: request.extra_headers,
@@ -112,15 +122,24 @@ pub(super) fn prepare_provider_request(
         &request.optional_params,
         &env_lookup,
     )?;
-    let transformed =
-        config.transform_request(&model, request.messages, request.optional_params.clone())?;
+    let mapped = config.map_openai_params(request.provider_params.fields());
+    let transformed = config.transform_request(&model, request.messages, mapped)?;
+    let consumed: Vec<&str> = request
+        .provider_params
+        .fields()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    let body = request
+        .provider_params
+        .compose(&transformed.body, &consumed)?;
 
     Ok(ProviderChatCompletionsRequest {
         model,
         custom_llm_provider: request.custom_llm_provider,
         config,
         url,
-        body: transformed.body,
+        body,
         optional_params: request.optional_params,
         environment,
         secrets,

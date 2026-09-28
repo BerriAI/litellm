@@ -117,6 +117,12 @@ impl From<LlmError> for RouteError {
     }
 }
 
+impl From<litellm_core_utils::params::Error> for RouteError {
+    fn from(error: litellm_core_utils::params::Error) -> Self {
+        Self::InvalidRequest(error.into())
+    }
+}
+
 #[derive(Clone, Debug, thiserror::Error)]
 #[error(transparent)]
 pub struct SecretError(Arc<litellm_secrets::Error>);

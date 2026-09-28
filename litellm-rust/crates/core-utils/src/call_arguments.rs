@@ -37,39 +37,87 @@ pub struct ArgumentSpec {
     pub secret: bool,
 }
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProviderParameters {
+    fields: Map<String, Value>,
+    overrides: Map<String, Value>,
+}
+
+impl ProviderParameters {
+    pub fn from_arguments(arguments: &CallArguments) -> Result<Self, crate::params::Error> {
+        let overrides = match arguments.get("extra_body") {
+            None | Some(Value::Null) => Map::new(),
+            Some(Value::Object(fields)) => fields
+                .iter()
+                .filter(|(name, _)| is_provider_field(name))
+                .map(|(name, value)| (name.clone(), value.clone()))
+                .collect(),
+            Some(_) => return Err(crate::params::Error::ExtraBody),
+        };
+        let fields = arguments
+            .iter()
+            .filter(|(name, _)| is_provider_field(name))
+            .map(|(name, value)| (name.clone(), value.clone()))
+            .collect();
+        Ok(Self { fields, overrides })
+    }
+
+    pub fn fields(&self) -> &Map<String, Value> {
+        &self.fields
+    }
+
+    pub fn overrides(&self) -> &Map<String, Value> {
+        &self.overrides
+    }
+
+    pub fn validate_stream(&self, stream: Option<bool>) -> Result<(), crate::params::Error> {
+        if self
+            .overrides
+            .get("stream")
+            .is_some_and(|value| *value != Value::Bool(stream.unwrap_or(false)))
+        {
+            return Err(crate::params::Error::ProtectedField { field: "stream" });
+        }
+        Ok(())
+    }
+
+    pub fn compose<B: Serialize>(
+        &self,
+        body: &B,
+        consumed: &[&str],
+    ) -> Result<Value, crate::params::Error> {
+        let Value::Object(fields) =
+            serde_json::to_value(body).map_err(|_| crate::params::Error::Body)?
+        else {
+            return Err(crate::params::Error::Body);
+        };
+        self.validate_stream(fields.get("stream").and_then(Value::as_bool))?;
+        Ok(Value::Object(
+            fields
+                .into_iter()
+                .chain(
+                    self.fields
+                        .iter()
+                        .filter(|(name, _)| !consumed.contains(&name.as_str()))
+                        .chain(self.overrides.iter())
+                        .filter(|(name, _)| name.as_str() != "model" && is_provider_field(name))
+                        .map(|(name, value)| (name.clone(), value.clone())),
+                )
+                .collect(),
+        ))
+    }
+}
+
+fn is_provider_field(name: &str) -> bool {
+    !matches!(name, "model" | "extra_body") && !crate::params::is_control_param(name)
+}
+
 pub fn compose_body<B: Serialize>(
     arguments: &CallArguments,
     body: &B,
     consumed: &[&str],
 ) -> Result<Value, crate::params::Error> {
-    let Value::Object(fields) =
-        serde_json::to_value(body).map_err(|_| crate::params::Error::Body)?
-    else {
-        return Err(crate::params::Error::Body);
-    };
-    let overrides = match arguments.get("extra_body") {
-        None | Some(Value::Null) => None,
-        Some(Value::Object(fields)) => Some(fields),
-        Some(_) => return Err(crate::params::Error::ExtraBody),
-    };
-    let extensions = arguments
-        .iter()
-        .filter(|(name, _)| !consumed.contains(&name.as_str()));
-    Ok(Value::Object(
-        fields
-            .into_iter()
-            .chain(
-                extensions
-                    .chain(overrides.into_iter().flatten())
-                    .filter(|(name, _)| {
-                        name.as_str() != "model"
-                            && name.as_str() != "extra_body"
-                            && !crate::params::is_control_param(name)
-                    })
-                    .map(|(name, value)| (name.clone(), value.clone())),
-            )
-            .collect(),
-    ))
+    ProviderParameters::from_arguments(arguments)?.compose(body, consumed)
 }
 
 impl Deref for CallArguments {
@@ -113,6 +161,49 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[rstest]
+    #[case::credential("api_key")]
+    #[case::callbacks("callbacks")]
+    #[case::context("proxy_server_request")]
+    #[case::internal("litellm_future_control")]
+    #[case::private("_litellm_future_control")]
+    #[case::endpoint("custom_endpoint")]
+    fn provider_parameters_separate_controls_without_changing_nested_data(#[case] name: &str) {
+        let future = json!({name: "provider-owned", "values": [false, 0, null, "", []]});
+        let arguments: CallArguments = serde_json::from_value(json!({
+            name: "internal", "future": future, "explicit_null": null,
+            "extra_body": {name: "internal override", "future": {"replacement": false}}
+        }))
+        .unwrap();
+        let params = ProviderParameters::from_arguments(&arguments).unwrap();
+        assert_eq!(
+            params.fields(),
+            &json!({"future": future, "explicit_null": null})
+                .as_object()
+                .unwrap()
+                .clone()
+        );
+        assert_eq!(
+            params.compose(&json!({"model": "resolved"}), &[]).unwrap(),
+            json!({
+                "model": "resolved", "future": {"replacement": false}, "explicit_null": null
+            })
+        );
+        assert_eq!(arguments[name], "internal");
+    }
+
+    #[rstest]
+    #[case::enable(json!({}), json!(true))]
+    #[case::disable(json!({"stream": true}), json!(false))]
+    #[case::invalid(json!({"stream": false}), json!("yes"))]
+    fn overrides_cannot_change_the_selected_delivery(#[case] body: Value, #[case] stream: Value) {
+        let arguments = serde_json::from_value(json!({"extra_body": {"stream": stream}})).unwrap();
+        assert_eq!(
+            compose_body(&arguments, &body, &[]),
+            Err(crate::params::Error::ProtectedField { field: "stream" })
+        );
+    }
 
     #[test]
     fn composition_preserves_extensions_and_applies_shallow_explicit_overrides() {

@@ -177,7 +177,6 @@ async def test_unstarted_native_inference_has_no_provider_or_callback_effects(
     "options",
     (
         {"stream": True},
-        {"extra_body": {"provider_option": True}},
         {"mock_response": "mock"},
         {"num_retries": 1},
         {"use_chat_completions_api": True},
@@ -195,6 +194,36 @@ async def test_native_inference_declines_unsupported_requests_before_callbacks(
         native_call(route, True, recording_server, {**options, "callbacks": [recorder]})
     assert not recording_server.requests
     assert not recorder.events
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_native_responses_preserve_provider_extensions_without_serializing_callbacks(
+    asynchronous: bool, recording_server: RecordingServer
+) -> None:
+    recorder: Final = RecordingLogger()
+    extension: Final = {"api_key": "nested provider field", "values": [None, False, 0, "", []]}
+    await execute(
+        "responses",
+        asynchronous,
+        recording_server,
+        {
+            "callbacks": [recorder],
+            "litellm_metadata": {"internal": True},
+            "future": {"old": True},
+            "future_null": None,
+            "nested": extension,
+            "extra_body": {"future": {"new": True}, "api_key": "untrusted", "model": "untrusted"},
+        },
+    )
+    assert len(recording_server.requests) == 1
+    body: Final = _OBJECT.validate_python(recording_server.requests[0].body)
+    assert body["model"] == RESPONSES_MODEL.removeprefix("openai/")
+    assert body["nested"] == extension
+    assert body["future"] == {"new": True}
+    assert "future_null" in body and body["future_null"] is None
+    assert not {"callbacks", "litellm_metadata", "api_key", "extra_body"}.intersection(body)
+    assert len(recorder.wait_for("log_pre_api_call")) == 1
 
 
 @pytest.mark.asyncio

@@ -17,8 +17,8 @@ use crate::{
     base_llm::{
         auth::AuthScheme,
         chat::transformation::{
-            BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData,
-            ValidatedEnvironment,
+            BaseConfig, Headers, ProviderChatRequestData, ProviderChatResponseData, Unsupported,
+            ValidatedEnvironment, unsupported_message,
         },
     },
     openai_like::common_utils::{complete_openai_like_url, openai_compatible_provider_info},
@@ -63,6 +63,25 @@ pub struct OpenAILikeChatConfig;
 pub const OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG: OpenAILikeChatConfig = OpenAILikeChatConfig;
 
 impl BaseConfig for OpenAILikeChatConfig {
+    fn unsupported_reason(
+        &self,
+        messages: &[ChatMessage],
+        params: &Map<String, Value>,
+    ) -> Option<Unsupported> {
+        if params.get("stream").and_then(Value::as_bool) == Some(true) {
+            return Some(Unsupported("streaming"));
+        }
+        if params.keys().any(|name| {
+            matches!(
+                name.as_str(),
+                "tools" | "tool_choice" | "parallel_tool_calls" | "functions" | "function_call"
+            )
+        }) {
+            return Some(Unsupported("unrecognized request parameter"));
+        }
+        messages.iter().find_map(unsupported_message)
+    }
+
     fn secret_names(&self) -> Vec<&'static str> {
         vec!["OPENAI_LIKE_API_KEY", "OPENAI_LIKE_API_BASE"]
     }
