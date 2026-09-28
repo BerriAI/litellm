@@ -7319,6 +7319,34 @@ def embedding(
                 aembedding=aembedding,
                 litellm_params={},
             )
+        elif JSONProviderRegistry.supports_embeddings(custom_llm_provider):
+            if headers is not None and headers != {}:
+                optional_params["extra_headers"] = headers
+
+            json_provider_encoding_format: Final = (
+                encoding_format
+                or optional_params.get("encoding_format")
+                or get_secret_str("LITELLM_DEFAULT_EMBEDDING_ENCODING_FORMAT")
+            )
+            if json_provider_encoding_format is None or json_provider_encoding_format.strip().lower() == "none":
+                optional_params.pop("encoding_format", None)
+            else:
+                optional_params["encoding_format"] = json_provider_encoding_format
+
+            response = openai_chat_completions.embedding(
+                model=model,
+                input=input,
+                api_base=api_base,
+                api_key=api_key,
+                logging_obj=logging,
+                timeout=timeout,
+                model_response=EmbeddingResponse(),
+                optional_params=optional_params,
+                client=client,
+                aembedding=aembedding,
+                max_retries=max_retries,
+                shared_session=shared_session,
+            )
         else:
             raise LiteLLMUnknownProvider(model=model, custom_llm_provider=custom_llm_provider)
         if response is not None and hasattr(response, "_hidden_params") and isinstance(response, EmbeddingResponse):
