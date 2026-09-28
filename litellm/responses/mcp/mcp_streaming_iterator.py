@@ -91,16 +91,6 @@ async def create_mcp_list_tools_events(
         # Use the pre-processed MCP tools that were already fetched, filtered, and deduplicated by the parent
         filtered_mcp_tools: Final = pre_processed_mcp_tools
 
-        # Convert tools to dict format for the event
-        _mcp_tools_dict: Final = [
-            tool.model_dump()
-            if hasattr(tool, "model_dump") and callable(getattr(tool, "model_dump", None))
-            else tool.__dict__
-            if hasattr(tool, "__dict__")
-            else {"name": getattr(tool, "name", str(tool))}
-            for tool in filtered_mcp_tools
-        ]
-
         # Emit list tools completed event
         completed_event: Final = MCPListToolsCompletedEvent(
             type=ResponsesAPIStreamEvents.MCP_LIST_TOOLS_COMPLETED,

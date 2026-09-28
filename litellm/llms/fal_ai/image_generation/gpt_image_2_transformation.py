@@ -101,12 +101,10 @@ class FalAIGPTImage2Config(FalAIBaseConfig):
         endpoint: Final[str] = model if model.startswith(self.MODEL_PREFIX) else f"{self.MODEL_PREFIX}{model}"
         return f"{base_url}/{endpoint}"
 
-    def get_supported_openai_params(  # mutable-ok: base class contract returns a list
-        self, model: str
-    ) -> list[OpenAIImageGenerationOptionalParams]:
+    def get_supported_openai_params(self, model: str) -> list[OpenAIImageGenerationOptionalParams]:
         return list(SUPPORTED_OPENAI_PARAMS)  # mutable-ok: base class contract returns a list
 
-    def map_openai_params(  # mutable-ok: base class contract returns a dict
+    def map_openai_params(
         self,
         non_default_params: Mapping[str, object],
         optional_params: Mapping[str, object],
@@ -138,7 +136,7 @@ class FalAIGPTImage2Config(FalAIBaseConfig):
             return map_gpt_image_quality(value, model)
         return value
 
-    def transform_image_generation_request(  # mutable-ok: base class contract returns a dict
+    def transform_image_generation_request(
         self,
         model: str,
         prompt: str,

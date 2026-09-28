@@ -1,7 +1,20 @@
 import { expect, Page as PwPage } from "@playwright/test";
+import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { navigateToPage } from "./navigation";
 import { Page } from "../fixtures/pages";
 import { masterKey } from "./traffic";
+
+export async function listUpstreamToolNames(url: string): Promise<string[]> {
+  const client = new Client({ name: "litellm-ui-e2e", version: "0.0.0" });
+  await client.connect(new StreamableHTTPClientTransport(new URL(url)));
+  try {
+    const { tools } = await client.listTools();
+    return tools.map((tool) => tool.name);
+  } finally {
+    await client.close();
+  }
+}
 
 /** Creates an MCP server through the UI's discovery to custom-form flow and returns its name. */
 export async function createMcpServer(page: PwPage, url: string): Promise<string> {

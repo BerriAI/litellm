@@ -2,7 +2,7 @@ import type { DateRangePickerValue } from "@/components/shared/date_picker_types
 import type { Team } from "@/components/key_team_helpers/key_list";
 
 export type ExportFormat = "csv" | "json";
-export type ExportScope = "daily" | "daily_with_keys" | "daily_with_models";
+export type ExportScope = "daily" | "daily_with_keys" | "daily_with_models" | "daily_with_users";
 export type EntityType = "tag" | "team" | "organization" | "customer" | "agent" | "user";
 
 export interface EntitySpendData {
@@ -17,6 +17,8 @@ export interface EntitySpendData {
   };
 }
 
+export type ServerExport = (exportScope: ExportScope, format: ExportFormat) => Promise<Blob>;
+
 export interface EntityUsageExportModalProps {
   isOpen: boolean;
   onClose: () => void;
@@ -26,6 +28,7 @@ export interface EntityUsageExportModalProps {
   selectedFilters: string[];
   customTitle?: string;
   teams?: Team[];
+  serverExport?: ServerExport;
 }
 
 export interface ExportMetadata {

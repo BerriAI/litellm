@@ -10,8 +10,7 @@ env) - and assert exactly which seam fired, with what URL/headers, and that the
 parsed result is the LiteLLMBatch the transform produced.
 
 The sync ``retrieve_batch`` dispatch (``_is_async`` true -> coroutine, false ->
-asyncio.run) is exercised directly, mirroring the dispatch-contract discipline in
-tests/test_litellm/batches/test_main.py.
+asyncio.run) is exercised directly.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch

@@ -58,6 +58,8 @@ from litellm.router_utils.auto_router_model_naming import (
 )
 from litellm.types.management_endpoints.auto_router_endpoints import (
     SHADOW_EVAL_TURN_VALVE,
+    AutoRouterAvailabilityRequest,
+    AutoRouterAvailabilityResponse,
     AutoRouterBenchmarkGroup,
     AutoRouterBenchmarksResponse,
     AutoRouterBenchmarkTotals,
@@ -389,6 +391,54 @@ async def validate_complexity_router_config(
             team=member_team,
         )
     return ComplexityRouterConfigValidationResponse(valid=error is None, error=error)
+
+
+@router.post(
+    "/auto_router/availability",
+    tags=["model management"],  # mutable-ok: FastAPI requires a list
+    response_model=AutoRouterAvailabilityResponse,
+)
+async def get_auto_router_availability(
+    data: AutoRouterAvailabilityRequest,
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> AutoRouterAvailabilityResponse:
+    from litellm.proxy.management_helpers.auto_router_availability import auto_router_availability
+    from litellm.proxy.proxy_server import (
+        _license_check,  # pyright: ignore[reportPrivateUsage]  # same entitlement owner as the model write gate
+        heuristic_v1_tuning_baselines,
+        llm_router,
+        proxy_config,
+    )
+
+    member_team: Final = await _authorize_router_dry_run(user_api_key_dict, data.team_id)
+    rows: Final = proxy_config.auto_router_db_catalog
+    if rows is None or llm_router is None:
+        raise HTTPException(status_code=503, detail="Auto-router availability is unavailable")
+    saved: Final = next((row for row in rows if row.model_id == data.saved_model_id), None)
+    if data.saved_model_id is not None:
+        if saved is None:
+            raise HTTPException(status_code=404, detail="Saved auto router is unavailable")
+        if user_api_key_dict.user_role != LitellmUserRoles.PROXY_ADMIN and (
+            saved.team_id != data.team_id or (member_team is not None and saved.created_by != user_api_key_dict.user_id)
+        ):
+            raise HTTPException(status_code=403, detail="Cannot check another user's auto router")
+    existing: Final = saved.deployment if saved is not None else None
+    others: Final = tuple(row.deployment for row in rows if row is not saved) + tuple(llm_router.config_deployments())
+    candidate: Final = MappingProxyType(
+        {
+            "litellm_params": MappingProxyType(
+                {"model": "auto_router/complexity_router", "complexity_router_config": data.complexity_router_config}
+            ),
+            "model_info": MappingProxyType({"id": data.saved_model_id or "availability-new-router", "db_model": True}),
+        }
+    )
+    return auto_router_availability(
+        others=others,
+        existing=existing,
+        candidate=candidate,
+        baselines=heuristic_v1_tuning_baselines,
+        limit=_license_check.auto_router_capability_limit(),
+    )
 
 
 async def _resolve_saved_routing_test(
@@ -789,14 +839,18 @@ async def get_auto_router_benchmarks(
     ] = None,
     end_date: Annotated[str | None, Query(description="YYYY-MM-DD UTC, inclusive (defaults to today)")] = None,
     api_key: Annotated[str | None, Query(description="Filter to one virtual key token hash")] = None,
+    user_id: Annotated[
+        str | None, Query(min_length=1, description="Filter to one canonical internal user recorded on each turn")
+    ] = None,
 ) -> AutoRouterBenchmarksResponse:
     """
     Benchmarks for the auto-router dashboard: session shape, savings against the configured
     baseline, and prompt-caching behaviour bucketed by what the router did.
 
-    Reads the LiteLLM_AutoRouterSession rollup, folded once per request at spend-write time,
-    so this endpoint never scans LiteLLM_SpendLogs. A session is in the window when it
-    overlaps it: its last turn is on or after start_date and its first turn is on or before
+    Reads session rollups folded once per request at spend-write time, so this endpoint
+    never scans LiteLLM_SpendLogs. A user filter selects only turns attributed to that
+    internal user when written; older key-only history remains outside user views. A session
+    is in the window when it overlaps it: its last turn is on or after start_date and its first turn is on or before
     end_date. Overall hit rate is over telemetry-bearing turns; each bucket's hit rate is
     over that bucket's turns.
 
@@ -826,6 +880,7 @@ async def get_auto_router_benchmarks(
         start_day.isoformat(),
         (end_day + timedelta(days=1)).isoformat(),
         api_key,
+        user_id,
     )
     rows: Final = _SESSION_AGG_ROWS.validate_python(raw_rows or ())
     groups: Final = (
@@ -1393,7 +1448,7 @@ def _target_labels(
     """Display labels by (target_type, target_id): a key's (alias, masked name), a
     team's (alias, None), a user's (email, None)."""
     return MappingProxyType(
-        {  # mutable-ok: MappingProxyType needs a dict to wrap
+        {
             key: value
             for key, value in chain(
                 ((("key", row.token), (row.key_alias, row.key_name)) for row in key_rows),
@@ -1493,7 +1548,7 @@ async def _shadow_eval_results(
         await _query_raw(prisma_client, _ATTEMPT_AGG_BY_LEG_SQL, leg_ids) or ()
     )
     verdicts_by_target: Final[Mapping[tuple[str, str], ShadowEvalSlice]] = MappingProxyType(
-        {  # mutable-ok: MappingProxyType needs a dict to wrap
+        {
             target_by_leg[slice.group]: slice.model_copy(
                 update={"group": target_by_leg[slice.group][1]}  # mutable-ok: pydantic update payload
             )
@@ -1705,7 +1760,7 @@ async def start_shadow_eval(
                     "id": leg_id,
                     "target_type": target_type,
                     "target_id": target_id,
-                }  # mutable-ok: Prisma payload
+                }
                 for leg_id, (target_type, target_id) in zip(leg_ids, requested_targets)
             ]
         )

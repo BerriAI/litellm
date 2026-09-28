@@ -986,7 +986,7 @@ def _forwarded_upstream_header_names() -> frozenset[str]:
     )
 
 
-def _upstream_credential_headers(header_names: Iterable[str]) -> frozenset[str]:
+def upstream_credential_headers(header_names: Iterable[str]) -> frozenset[str]:
     """Lowercased names of the headers in ``header_names`` that carry an upstream MCP
     credential rather than request context: the configured client side auth header, any
     header name a configured server forwards upstream via ``extra_headers``, and the
@@ -1038,7 +1038,7 @@ def build_synthetic_mcp_request(
     custom_key_header: Final = _custom_litellm_key_header_name()
     excluded: Final = (
         _SYNTHETIC_REQUEST_EXCLUDED_HEADERS
-        | _upstream_credential_headers(raw_headers.keys() if raw_headers else ())
+        | upstream_credential_headers(raw_headers.keys() if raw_headers else ())
         | (frozenset({custom_key_header.lower()}) if custom_key_header else frozenset())
     )
     forwarded: Final = tuple(
@@ -1086,7 +1086,7 @@ def logging_safe_mcp_headers(raw_headers: Mapping[str, str] | None) -> Mapping[s
     )
 
     excluded: Final = (
-        _upstream_credential_headers(raw_headers.keys() if raw_headers else ())
+        upstream_credential_headers(raw_headers.keys() if raw_headers else ())
         | UNTRUSTED_REQUEST_HEADER_CONTROL_FIELDS
         | frozenset({"host"})
     )

@@ -1,21 +1,23 @@
 use std::{sync::Arc, time::Duration};
 
 use litellm_cache::{
-    BaseCache, BatchCache, BatchEntry, CacheConnectionResult, Error, ExactCacheContext, FlushCache,
+    BaseCache, BatchCache, BatchEntry, CacheConnectionResult, CacheContext, ConnectionCache, Error,
+    FlushCache,
+    semantic::{SemanticCache, SemanticLookup},
 };
 use serde_json::Value;
 
 use crate::{CacheControls, CacheEntry, CacheKeyInput, PartialHits, cache_key};
 
 #[derive(Clone)]
-pub struct ResponseCacheRequest {
+pub struct ResponseCacheRequest<C: CacheContext = litellm_cache::ExactCacheContext> {
     pub key: CacheKeyInput,
     pub controls: CacheControls,
-    pub context: ExactCacheContext,
+    pub context: C,
     pub max_age: Option<Duration>,
 }
 
-impl ResponseCacheRequest {
+impl<C: CacheContext + Default> ResponseCacheRequest<C> {
     pub fn new(key: CacheKeyInput) -> Self {
         Self {
             key,
@@ -26,17 +28,35 @@ impl ResponseCacheRequest {
                 default_on: true,
                 ..Default::default()
             },
-            context: ExactCacheContext::default(),
+            context: C::default(),
             max_age: None,
         }
     }
 }
 
-pub struct ResponseCache<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> {
+impl<C: CacheContext> ResponseCacheRequest<C> {
+    pub fn with_context<D: CacheContext>(self, context: D) -> ResponseCacheRequest<D> {
+        ResponseCacheRequest {
+            key: self.key,
+            controls: self.controls,
+            context,
+            max_age: self.max_age,
+        }
+    }
+}
+
+pub struct ResponseCache<B: BaseCache<Value = CacheEntry>>
+where
+    B::Context: Default + PartialEq,
+{
     backend: Arc<B>,
 }
 
-impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCache<B> {
+impl<B> ResponseCache<B>
+where
+    B: BaseCache<Value = CacheEntry>,
+    B::Context: Default + PartialEq,
+{
     pub fn new(backend: Arc<B>) -> Self {
         Self { backend }
     }
@@ -45,8 +65,12 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
         &self.backend
     }
 
+    pub fn backend_arc(&self) -> &Arc<B> {
+        &self.backend
+    }
+
     pub fn default_ttl(&self) -> Option<Duration> {
-        self.backend.get_ttl(&ExactCacheContext::default())
+        self.backend.get_ttl(&B::Context::default())
     }
 
     pub async fn async_flush(&self) -> Result<(), Error>
@@ -56,13 +80,16 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
         self.backend.async_flush_cache().await
     }
 
-    pub async fn test_connection(&self) -> Result<CacheConnectionResult, Error> {
+    pub async fn test_connection(&self) -> Result<CacheConnectionResult, Error>
+    where
+        B: ConnectionCache,
+    {
         self.backend.test_connection().await
     }
 
     pub fn lookup(
         &self,
-        request: &ResponseCacheRequest,
+        request: &ResponseCacheRequest<B::Context>,
         now: Duration,
     ) -> Result<Option<Value>, Error> {
         if !request.controls.reads() {
@@ -81,7 +108,7 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
 
     pub async fn async_lookup(
         &self,
-        request: &ResponseCacheRequest,
+        request: &ResponseCacheRequest<B::Context>,
         now: Duration,
     ) -> Result<Option<Value>, Error> {
         if !request.controls.reads() {
@@ -99,9 +126,46 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
         Ok(Self::fresh_or_miss(entry, now, request.max_age))
     }
 
+    /// `lookup` plus the similarity the semantic backend reports. Freshness applies to the
+    /// value only: Python stamps the similarity before its max-age check.
+    pub fn lookup_semantic(
+        &self,
+        request: &ResponseCacheRequest<B::Context>,
+        now: Duration,
+    ) -> Result<SemanticLookup<Value>, Error>
+    where
+        B: SemanticCache,
+    {
+        if !request.controls.reads() {
+            return Ok(SemanticLookup::miss(None));
+        }
+        let lookup = self
+            .backend
+            .get_cache_with_similarity(&cache_key(&request.key), &request.context);
+        Self::fresh_semantic(lookup, now, request.max_age)
+    }
+
+    pub async fn async_lookup_semantic(
+        &self,
+        request: &ResponseCacheRequest<B::Context>,
+        now: Duration,
+    ) -> Result<SemanticLookup<Value>, Error>
+    where
+        B: SemanticCache,
+    {
+        if !request.controls.reads() {
+            return Ok(SemanticLookup::miss(None));
+        }
+        let lookup = self
+            .backend
+            .async_get_cache_with_similarity(&cache_key(&request.key), &request.context)
+            .await;
+        Self::fresh_semantic(lookup, now, request.max_age)
+    }
+
     pub fn lookup_batch(
         &self,
-        requests: &[ResponseCacheRequest],
+        requests: &[ResponseCacheRequest<B::Context>],
         now: Duration,
     ) -> Result<PartialHits, Error>
     where
@@ -126,7 +190,7 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
 
     pub async fn async_lookup_batch(
         &self,
-        requests: &[ResponseCacheRequest],
+        requests: &[ResponseCacheRequest<B::Context>],
         now: Duration,
     ) -> Result<PartialHits, Error>
     where
@@ -153,7 +217,7 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
 
     pub fn store(
         &self,
-        request: &ResponseCacheRequest,
+        request: &ResponseCacheRequest<B::Context>,
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
@@ -172,7 +236,7 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
 
     pub async fn async_store(
         &self,
-        request: &ResponseCacheRequest,
+        request: &ResponseCacheRequest<B::Context>,
         response: Value,
         now: Duration,
     ) -> Result<(), Error> {
@@ -193,7 +257,7 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
 
     pub async fn async_store_batch(
         &self,
-        entries: Vec<(ResponseCacheRequest, Value)>,
+        entries: Vec<(ResponseCacheRequest<B::Context>, Value)>,
         now: Duration,
     ) -> Result<(), Error> {
         self.async_store_entries(
@@ -209,7 +273,7 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
     /// the freshness of its original response.
     pub async fn async_store_entries(
         &self,
-        entries: Vec<(ResponseCacheRequest, Value, Duration)>,
+        entries: Vec<(ResponseCacheRequest<B::Context>, Value, Duration)>,
     ) -> Result<(), Error> {
         let writable = entries
             .into_iter()
@@ -249,8 +313,8 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
     }
 
     fn partial_hits(
-        requests: &[ResponseCacheRequest],
-        readable: Vec<(usize, &ResponseCacheRequest)>,
+        requests: &[ResponseCacheRequest<B::Context>],
+        readable: Vec<(usize, &ResponseCacheRequest<B::Context>)>,
         entries: Vec<BatchEntry<CacheEntry>>,
         now: Duration,
     ) -> Result<PartialHits, Error> {
@@ -266,6 +330,21 @@ impl<B: BaseCache<Value = CacheEntry, Context = ExactCacheContext>> ResponseCach
             values[index] = response;
         }
         Ok(PartialHits::new(values))
+    }
+
+    fn fresh_semantic(
+        lookup: Result<SemanticLookup<CacheEntry>, Error>,
+        now: Duration,
+        max_age: Option<Duration>,
+    ) -> Result<SemanticLookup<Value>, Error> {
+        match lookup {
+            Ok(lookup) => Ok(SemanticLookup {
+                value: Self::fresh_or_miss(lookup.value, now, max_age),
+                similarity: lookup.similarity,
+            }),
+            Err(Error::InvalidEntry) => Ok(SemanticLookup::miss(None)),
+            Err(error) => Err(error),
+        }
     }
 
     fn fresh_or_miss(

@@ -131,6 +131,7 @@ EXCEPTION_STATUS: Final = "exception_status"
 EXCEPTION_CLASS: Final = "exception_class"
 RATE_LIMIT_CATEGORY: Final = "rate_limit_category"
 RATE_LIMIT_TYPE: Final = "rate_limit_type"
+ZERO_COST_REASON_LABEL: Final = "reason"
 STATUS_CODE: Final = "status_code"
 EXCEPTION_LABELS: Final = [EXCEPTION_STATUS, EXCEPTION_CLASS]
 LATENCY_BUCKETS: Final = (
@@ -279,6 +280,8 @@ DEFINED_PROMETHEUS_METRICS = Literal[
     "litellm_guardrail_latency_seconds",
     "litellm_guardrail_errors_total",
     "litellm_guardrail_requests_total",
+    "litellm_zero_cost_requests_total",
+    "litellm_spend_capture_rate",
     # Cache metrics
     "litellm_cache_hits_metric",
     "litellm_cache_misses_metric",
@@ -590,6 +593,16 @@ class PrometheusMetricLabels:
         UserAPIKeyLabelNames.SERVICE_TIER.value,
     ]
 
+    litellm_zero_cost_requests_total = (
+        UserAPIKeyLabelNames.REQUESTED_MODEL.value,
+        UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value,
+        UserAPIKeyLabelNames.MODEL_ID.value,
+        UserAPIKeyLabelNames.API_PROVIDER.value,
+        ZERO_COST_REASON_LABEL,
+    )
+
+    litellm_spend_capture_rate = (UserAPIKeyLabelNames.API_PROVIDER.value,)
+
     litellm_input_tokens_metric = [
         UserAPIKeyLabelNames.END_USER.value,
         UserAPIKeyLabelNames.API_KEY_HASH.value,
@@ -654,6 +667,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_deployment_tpm_limit = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
         UserAPIKeyLabelNames.API_BASE.value,
@@ -760,6 +774,7 @@ class PrometheusMetricLabels:
 
     # Add deployment metrics
     litellm_deployment_failure_responses = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,
@@ -776,6 +791,7 @@ class PrometheusMetricLabels:
     ]
 
     litellm_deployment_total_requests = [
+        UserAPIKeyLabelNames.MODEL_GROUP.value,
         UserAPIKeyLabelNames.REQUESTED_MODEL.value,
         UserAPIKeyLabelNames.v2_LITELLM_MODEL_NAME.value,
         UserAPIKeyLabelNames.MODEL_ID.value,

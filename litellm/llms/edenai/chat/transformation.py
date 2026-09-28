@@ -25,9 +25,8 @@ from litellm.types.utils import ModelResponse, ModelResponseStream, Usage
 from ..common_utils import EdenAIException, reported_cost, resolve_api_base, resolve_api_key
 
 if TYPE_CHECKING:
-    import tiktoken
-
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding
 
 _OPTIONAL_MAPPING: Final[TypeAdapter[Mapping[str, object] | None]] = TypeAdapter(Mapping[str, object] | None)
 
@@ -97,7 +96,7 @@ class EdenAIChatConfig(OpenAIGPTConfig):
         messages: list[AllMessageValues],  # mutable-ok: inherited contract
         optional_params: dict[str, object],  # mutable-ok: inherited contract
         litellm_params: dict[str, object],  # mutable-ok: inherited contract
-        encoding: "tiktoken.Encoding | None",
+        encoding: "Encoding | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

@@ -1,5 +1,6 @@
 import re
 from collections.abc import Awaitable, Callable, Iterator
+from http import HTTPStatus
 from typing import Final, Protocol, TypeVar
 
 from pydantic import TypeAdapter, ValidationError
@@ -10,6 +11,7 @@ from litellm.proxy._types import (
     ProxyErrorTypes,
     ProxyException,
 )
+from litellm.proxy.db.db_lookup_gate import DBLookupDeadlineExceeded
 from litellm.secret_managers.main import str_to_bool
 
 # Bounds the __cause__/__context__ walk in find_database_service_unavailable_error_in_chain.
@@ -103,7 +105,7 @@ class PrismaDBExceptionHandler:
         """
         import prisma.engine.errors
 
-        if isinstance(e, DB_CONNECTION_ERROR_TYPES):
+        if isinstance(e, (*DB_CONNECTION_ERROR_TYPES, DBLookupDeadlineExceeded)):
             return True
         if isinstance(e, _exception_types(prisma.engine.errors.EngineConnectionError)):
             return True
@@ -379,6 +381,15 @@ class PrismaDBExceptionHandler:
         )
 
     @staticmethod
+    def service_unavailable_proxy_exception(e: Exception) -> ProxyException:
+        return ProxyException(
+            message=PrismaDBExceptionHandler.database_unavailable_message(e),
+            type=ProxyErrorTypes.no_db_connection,
+            param="None",
+            code=HTTPStatus.SERVICE_UNAVAILABLE.value,
+        )
+
+    @staticmethod
     def find_database_service_unavailable_error_in_chain(e: BaseException) -> Exception | None:
         """The exception in the ``__cause__`` / ``__context__`` chain that
         ``is_database_service_unavailable_error`` accepts, or ``None``. Callers
@@ -398,11 +409,8 @@ class PrismaDBExceptionHandler:
 
         ``is_database_service_unavailable_error`` classifies a single exception
         by type, which a caller that catches a raw DB failure and re-raises a
-        domain exception of a different type defeats. ``get_user_object`` in
-        ``litellm/proxy/auth/auth_checks.py`` is the concrete case: it wraps
-        every DB error, a genuine outage included, in a bare ``ValueError``
-        whose original error survives only as ``__context__``. A type check on
-        the ``ValueError`` misses the outage, so the caller would mistake an
+        domain exception of a different type defeats. A type check on the
+        wrapper misses the outage, so the caller would mistake an
         infrastructure fault for an auth failure. Walking the chain recovers the
         real signal, which is the PEP 3134 way to inspect a wrapped cause.
 

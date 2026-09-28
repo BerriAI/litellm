@@ -1,26 +1,99 @@
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     path::{Path, PathBuf},
     sync::{Arc, LazyLock, Mutex, PoisonError},
 };
 
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_http::{
-    HttpClientConfig, HttpClientPool, HttpSettings, HttpSettingsLayer, Resolution, SslVerify,
-    TlsSource, Unsupported,
+    Client, ClientVariant, HttpClientConfig, HttpClientPool, HttpSettings, HttpSettingsLayer,
+    Resolution, SslVerify, TlsSource, Unsupported,
     media::{PublicDnsResolver, UrlPolicy},
 };
-use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
+use pyo3::{
+    exceptions::PyValueError,
+    prelude::*,
+    types::{PyBool, PyDict, PyString},
+};
 
-use crate::{coercion::Field, python_settings::PythonSettings};
+use crate::{
+    coercion::{Field, FieldSpec, ProjectionError},
+    python_settings::{PythonSettings, Snapshot},
+};
 
-static POOL: LazyLock<HttpClientPool> =
-    LazyLock::new(|| HttpClientPool::new(Arc::new(PublicDnsResolver)));
+const SSL_VERIFY: FieldSpec<Option<SslVerify>> = FieldSpec::new("ssl_verify", decode_ssl_verify);
+const SSL_CERTIFICATE: FieldSpec<Option<String>> =
+    FieldSpec::new("ssl_certificate", |field| field.optional_strict_string());
+const SSL_SECURITY_LEVEL: FieldSpec<Option<String>> =
+    FieldSpec::new("ssl_security_level", |field| field.tuning_string());
+const SSL_ECDH_CURVE: FieldSpec<Option<String>> =
+    FieldSpec::new("ssl_ecdh_curve", |field| field.tuning_string());
+const FORCE_IPV4: FieldSpec<bool> = FieldSpec::new("force_ipv4", |field| field.truthy());
+const HTTP2: FieldSpec<bool> = FieldSpec::new("http2", |field| Ok(field.exact_true()));
+const AIOHTTP_TRUST_ENV: FieldSpec<bool> =
+    FieldSpec::new("aiohttp_trust_env", |field| field.truthy());
+const DISABLE_AIOHTTP_TRUST_ENV: FieldSpec<bool> =
+    FieldSpec::new("disable_aiohttp_trust_env", |field| field.truthy());
+const DISABLE_AIOHTTP_TRANSPORT: FieldSpec<bool> =
+    FieldSpec::new("disable_aiohttp_transport", |field| Ok(field.exact_true()));
+const USER_AGENT: FieldSpec<String> = FieldSpec::new("user_agent", |field| field.schema_string());
+const USER_URL_VALIDATION: FieldSpec<bool> =
+    FieldSpec::new("user_url_validation", |field| field.truthy());
+const USER_URL_ALLOWED_HOSTS: FieldSpec<Vec<String>> =
+    FieldSpec::new("user_url_allowed_hosts", decode_hosts);
+
+fn decode_hosts(field: &Field<'_>) -> Result<Vec<String>, ProjectionError> {
+    Ok(field
+        .string_collection()?
+        .into_iter()
+        .map(|host| litellm_http::media::normalize_host(&host))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .collect())
+}
+
+fn decode_ssl_verify(field: &Field<'_>) -> Result<Option<SslVerify>, ProjectionError> {
+    let value = field.value();
+    if value.is_none() {
+        return Ok(None);
+    }
+    if value.is_instance_of::<PyBool>() {
+        return Ok(Some(if field.exact_true() {
+            SslVerify::Enabled
+        } else {
+            SslVerify::Disabled
+        }));
+    }
+    if value.is_instance_of::<PyString>() {
+        return Ok(Some(match field.str_bool()? {
+            Some(true) => SslVerify::Enabled,
+            Some(false) => SslVerify::Disabled,
+            None => SslVerify::CaBundle(field.strict_string()?.into()),
+        }));
+    }
+    let context = value.py().import("ssl")?.getattr("SSLContext")?;
+    if value.is_instance(&context)? {
+        return Err(ProjectionError::UnsupportedLiveObject(field.expected(
+            "a Boolean, Boolean string, CA path, or None; live SSLContext is unsupported",
+        )?));
+    }
+    Err(field.invalid("a Boolean, Boolean string, CA path, or None"))
+}
+
+static RESOURCES: LazyLock<litellm_core::resources::CoreResources> = LazyLock::new(|| {
+    litellm_core::resources::CoreResources::new(Arc::new(HttpClientPool::new(Arc::new(
+        PublicDnsResolver,
+    ))))
+});
+
+pub(crate) fn resources() -> &'static litellm_core::resources::CoreResources {
+    &RESOURCES
+}
 
 static REPORTED_UNSUPPORTED: LazyLock<Mutex<HashSet<Unsupported>>> = LazyLock::new(Mutex::default);
 
 pub(crate) fn pool() -> &'static HttpClientPool {
-    &POOL
+    &resources().pool
 }
 
 pub(crate) fn call_config(
@@ -31,14 +104,31 @@ pub(crate) fn call_config(
     let settings = HttpSettings::from_layers([
         for_call(call_ssl_verify(kwargs)?, asynchronous),
         HttpSettingsLayer::from_environment(&ProcessEnvironment),
-        configured(&PythonSettings::Http.read(py)?)?,
+        match PythonSettings::Http.read_or_unset(py)? {
+            Some(snapshot) => configured(&snapshot)?,
+            None => HttpSettingsLayer::default(),
+        },
     ])
     .without_missing_files(&|path: &Path| path.exists());
     let resolution = Resolution::from(&settings);
     for unsupported in unreported(&REPORTED_UNSUPPORTED, resolution.unsupported) {
-        PythonSettings::warn(py, &unsupported.to_string())?;
+        crate::logger::capture(py).scope(|| litellm_tracing::warn!("{unsupported}"));
     }
     Ok(resolution.config)
+}
+
+pub(crate) fn provider_client(
+    py: Python<'_>,
+    kwargs: &Bound<'_, PyDict>,
+    asynchronous: bool,
+) -> PyResult<Result<Client, litellm_http::Error>> {
+    let config = call_config(py, kwargs, asynchronous)?;
+    Ok(pool().client(&config, ClientVariant::Provider))
+}
+
+pub(crate) fn host_client(py: Python<'_>, variant: ClientVariant) -> PyResult<Client> {
+    let config = call_config(py, &PyDict::new(py), true)?;
+    pool().client(&config, variant).map_err(client_error)
 }
 
 pub(crate) fn client_error(error: litellm_http::Error) -> PyErr {
@@ -77,23 +167,26 @@ fn unreported(
 }
 
 pub(crate) fn url_policy(py: Python<'_>) -> PyResult<UrlPolicy> {
-    project_url_policy(&PythonSettings::UrlPolicy.read(py)?)
+    match PythonSettings::UrlPolicy.read_or_unset(py)? {
+        Some(snapshot) => project_url_policy(&snapshot),
+        None => Ok(UrlPolicy::default()),
+    }
 }
 
-fn project_url_policy(value: &Bound<'_, PyAny>) -> PyResult<UrlPolicy> {
+fn project_url_policy(snapshot: &Snapshot<'_>) -> PyResult<UrlPolicy> {
     Ok(UrlPolicy {
-        validate: Field::read(value, "url_policy.user_url_validation")?
-            .truthy()?
-            .0,
-        allowed_hosts: Field::read(value, "url_policy.user_url_allowed_hosts")?
-            .host_collection()?
-            .0,
+        validate: snapshot.read(&USER_URL_VALIDATION)?,
+        allowed_hosts: snapshot.read(&USER_URL_ALLOWED_HOSTS)?,
     })
 }
 
 fn call_ssl_verify(kwargs: &Bound<'_, PyDict>) -> PyResult<Option<SslVerify>> {
     match kwargs.get_item("ssl_verify")? {
-        Some(value) => Ok(Field::new("request.ssl_verify", value).ssl_verify()?.0),
+        Some(value) => Ok(decode_ssl_verify(&Field::new(
+            "request",
+            "ssl_verify",
+            value,
+        ))?),
         None => Ok(None),
     }
 }
@@ -106,39 +199,18 @@ fn for_call(call_ssl_verify: Option<SslVerify>, asynchronous: bool) -> HttpSetti
     }
 }
 
-fn configured(value: &Bound<'_, PyAny>) -> PyResult<HttpSettingsLayer> {
+fn configured(snapshot: &Snapshot<'_>) -> PyResult<HttpSettingsLayer> {
     Ok(HttpSettingsLayer {
-        ssl_verify: Field::read(value, "http_settings.ssl_verify")?
-            .ssl_verify()?
-            .0,
-        ssl_certificate: Field::read(value, "http_settings.ssl_certificate")?
-            .optional_strict_string()?
-            .0
-            .map(PathBuf::from),
-        ssl_security_level: Field::read(value, "http_settings.ssl_security_level")?
-            .tuning_string()?
-            .0,
-        ssl_ecdh_curve: Field::read(value, "http_settings.ssl_ecdh_curve")?
-            .tuning_string()?
-            .0,
-        force_ipv4: Some(Field::read(value, "http_settings.force_ipv4")?.truthy()?.0),
-        http2: Some(Field::read(value, "http_settings.http2")?.exact_true().0),
-        aiohttp_trust_env: Some(
-            Field::read(value, "http_settings.aiohttp_trust_env")?
-                .truthy()?
-                .0,
-        ),
-        disable_aiohttp_trust_env: Some(
-            Field::read(value, "http_settings.disable_aiohttp_trust_env")?
-                .truthy()?
-                .0,
-        ),
-        disable_aiohttp_transport: Some(
-            Field::read(value, "http_settings.disable_aiohttp_transport")?
-                .exact_true()
-                .0,
-        ),
-        user_agent: Some(Field::read(value, "http_settings.user_agent")?.schema_string()?),
+        ssl_verify: snapshot.read(&SSL_VERIFY)?,
+        ssl_certificate: snapshot.read(&SSL_CERTIFICATE)?.map(PathBuf::from),
+        ssl_security_level: snapshot.read(&SSL_SECURITY_LEVEL)?,
+        ssl_ecdh_curve: snapshot.read(&SSL_ECDH_CURVE)?,
+        force_ipv4: Some(snapshot.read(&FORCE_IPV4)?),
+        http2: Some(snapshot.read(&HTTP2)?),
+        aiohttp_trust_env: Some(snapshot.read(&AIOHTTP_TRUST_ENV)?),
+        disable_aiohttp_trust_env: Some(snapshot.read(&DISABLE_AIOHTTP_TRUST_ENV)?),
+        disable_aiohttp_transport: Some(snapshot.read(&DISABLE_AIOHTTP_TRANSPORT)?),
+        user_agent: Some(snapshot.read(&USER_AGENT)?),
         ..HttpSettingsLayer::default()
     })
 }
@@ -150,12 +222,15 @@ mod tests {
     use rstest::rstest;
 
     use super::*;
-    use crate::python_settings::CONTRACT;
 
-    fn python_settings<'py>(py: Python<'py>, overrides: &str) -> Bound<'py, PyAny> {
+    fn evaluate<'py>(py: Python<'py>, source: &str) -> Bound<'py, PyAny> {
+        py.eval(&std::ffi::CString::new(source).unwrap(), None, None)
+            .unwrap()
+    }
+
+    fn python_settings<'py>(py: Python<'py>, overrides: &str) -> Snapshot<'py> {
         let source = format!(
             "
-import json
 import types
 defaults = dict(
     ssl_verify=True,
@@ -170,14 +245,13 @@ defaults = dict(
     user_agent='litellm/test',
 )
 defaults.update(dict({overrides}))
-settings = types.SimpleNamespace(**{{name: defaults[name] for name in json.loads(contract)['http_settings']['fields']}})
+settings = types.SimpleNamespace(**defaults)
 "
         );
         let locals = PyDict::new(py);
-        locals.set_item("contract", CONTRACT).unwrap();
         let source = std::ffi::CString::new(source).unwrap();
         py.run(&source, Some(&locals), Some(&locals)).unwrap();
-        locals.get_item("settings").unwrap().unwrap()
+        PythonSettings::Http.snapshot(locals.get_item("settings").unwrap().unwrap())
     }
 
     #[test]
@@ -395,7 +469,7 @@ user_agent='litellm/9.9.9',
         Python::attach(|py| {
             let value = py.eval(c"__import__('types').SimpleNamespace(user_url_validation=[], user_url_allowed_hosts=['B.test', 'a.test.', 'b.test'])", None, None).unwrap();
             assert_eq!(
-                project_url_policy(&value).unwrap(),
+                project_url_policy(&PythonSettings::UrlPolicy.snapshot(value)).unwrap(),
                 UrlPolicy {
                     validate: false,
                     allowed_hosts: vec!["a.test".into(), "b.test".into()],
@@ -418,5 +492,45 @@ user_agent='litellm/9.9.9',
         };
         let settings = HttpSettings::from_layers([for_call(None, asynchronous), opted_out]);
         assert_eq!(settings.trust_proxy_env, expected);
+    }
+    #[rstest]
+    #[case("'EXAMPLE.TEST.'", vec!["example.test"])]
+    #[case("['B.test', '', None, 0, [], 'A.test.', 'b.test']", vec!["a.test", "b.test"])]
+    #[case("('B.test', 'a.test')", vec!["a.test", "b.test"])]
+    #[case("{'B.test', 'a.test'}", vec!["a.test", "b.test"])]
+    #[case("(host for host in ['B.test', 'a.test'])", vec!["a.test", "b.test"])]
+    #[case("None", vec![])]
+    #[case("False", vec![])]
+    fn host_collection_is_owned_normalized_and_deterministic(
+        #[case] source: &str,
+        #[case] expected: Vec<&str>,
+    ) {
+        Python::initialize();
+        Python::attach(|py| {
+            assert_eq!(
+                decode_hosts(&Field::new(
+                    "url_policy",
+                    "user_url_allowed_hosts",
+                    evaluate(py, source)
+                ))
+                .unwrap(),
+                expected
+            );
+        });
+    }
+
+    #[test]
+    fn projection_releases_the_source_collection() {
+        Python::initialize();
+        Python::attach(|py| {
+            let source = evaluate(py, "['A.test']");
+            let projected = decode_hosts(&Field::new("test", "hosts", source.clone())).unwrap();
+            source.call_method1("append", ("b.test",)).unwrap();
+            assert_eq!(projected, ["a.test"]);
+            assert_eq!(
+                decode_hosts(&Field::new("test", "hosts", source)).unwrap(),
+                ["a.test", "b.test"]
+            );
+        });
     }
 }

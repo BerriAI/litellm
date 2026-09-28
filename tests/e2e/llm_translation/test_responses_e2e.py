@@ -45,6 +45,9 @@ class _OptionalResponsesBody(BaseModel):
 
 
 BEDROCK_CONVERSE_BACKEND = "bedrock/us.anthropic.claude-haiku-4-5-20251001-v1:0"
+VERTEX_BACKEND: Final = "vertex_ai/gemini-2.5-flash"
+AZURE_OPENAI_BACKEND: Final = "azure/gpt-5.4-nano"
+AZURE_OPENAI_API_VERSION: Final = "v1"
 INSTRUCTIONS = "You are a helpful assistant"
 CAT_IMAGE_URL = "https://upload.wikimedia.org/wikipedia/commons/3/3a/Cat03.jpg"
 BEDROCK_EDGE_REGION: Final = "us-east-1"
@@ -102,6 +105,23 @@ def _bedrock_params() -> LiteLLMParamsBody:
         aws_access_key_id="os.environ/AWS_ACCESS_KEY_ID",
         aws_secret_access_key="os.environ/AWS_SECRET_ACCESS_KEY",
         aws_region_name="os.environ/AWS_REGION",
+    )
+
+
+def _vertex_params() -> LiteLLMParamsBody:
+    return LiteLLMParamsBody(
+        model=VERTEX_BACKEND,
+        vertex_project="os.environ/VERTEXAI_PROJECT",
+        vertex_location="us-central1",
+    )
+
+
+def _azure_openai_params() -> LiteLLMParamsBody:
+    return LiteLLMParamsBody(
+        model=AZURE_OPENAI_BACKEND,
+        api_base="os.environ/AZURE_API_BASE",
+        api_key="os.environ/AZURE_API_KEY",
+        api_version=AZURE_OPENAI_API_VERSION,
     )
 
 
@@ -287,6 +307,66 @@ class TestResponses:
             input="What is the weather in San Francisco? Use the get_weather tool.",
             instructions=INSTRUCTIONS,
             tools=[WEATHER_TOOL],
+            extra_body=NO_PROXY_CACHE,
+        )
+        _assert_weather_call(response)
+
+    @pytest.mark.covers("llm.responses.vertex.basic.nonstream.works")
+    def test_responses_vertex_returns_completion(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = _register(proxy, resources, _vertex_params(), prefix="e2e-responses-vertex")
+        client = sdk.openai(resources.key())
+
+        response = client.responses.create(
+            model=model, input="reply with one word", instructions=INSTRUCTIONS, extra_body=NO_PROXY_CACHE
+        )
+        assert response.output_text.strip(), f"/responses over vertex returned no output text: {response.output!r}"
+
+    @pytest.mark.covers("llm.responses.vertex.tool_use.nonstream.works")
+    def test_responses_vertex_returns_function_call(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = _register(proxy, resources, _vertex_params(), prefix="e2e-responses-vertex-tool")
+        client = sdk.openai(resources.key())
+
+        response = client.responses.create(
+            model=model,
+            input="What is the weather in San Francisco? Use the get_weather tool.",
+            instructions=INSTRUCTIONS,
+            tools=[WEATHER_TOOL],
+            tool_choice="required",
+            extra_body=NO_PROXY_CACHE,
+        )
+        _assert_weather_call(response)
+
+    @pytest.mark.covers("llm.responses.azure_openai.basic.nonstream.works")
+    def test_responses_azure_openai_returns_completion(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = _register(proxy, resources, _azure_openai_params(), prefix="e2e-responses-azure-openai")
+        client = sdk.openai(resources.key())
+
+        response = client.responses.create(
+            model=model, input="reply with one word", instructions=INSTRUCTIONS, extra_body=NO_PROXY_CACHE
+        )
+        assert response.output_text.strip(), (
+            f"/responses over azure openai returned no output text: {response.output!r}"
+        )
+
+    @pytest.mark.covers("llm.responses.azure_openai.tool_use.nonstream.works")
+    def test_responses_azure_openai_returns_function_call(
+        self, proxy: ProxyClient, resources: ResourceManager, sdk: SdkClients
+    ) -> None:
+        model = _register(proxy, resources, _azure_openai_params(), prefix="e2e-responses-azure-openai-tool")
+        client = sdk.openai(resources.key())
+
+        response = client.responses.create(
+            model=model,
+            input="What is the weather in San Francisco? Use the get_weather tool.",
+            instructions=INSTRUCTIONS,
+            tools=[WEATHER_TOOL],
+            tool_choice="required",
             extra_body=NO_PROXY_CACHE,
         )
         _assert_weather_call(response)

@@ -36,6 +36,7 @@ if TYPE_CHECKING:
     from litellm.llms.base_llm.chat.transformation import (
         BaseLLMException as _BaseLLMException,
     )
+    from litellm.llms.custom_httpx.http_handler import HTTPHandler
 
     LiteLLMLoggingObj = _LiteLLMLoggingObj
     BaseLLMException = _BaseLLMException
@@ -491,6 +492,7 @@ class VertexAIVideoConfig(BaseVideoConfig, VertexBase):
         raw_response: httpx.Response,
         logging_obj: LiteLLMLoggingObj,
         custom_llm_provider: str | None = None,
+        client: "HTTPHandler | None" = None,
     ) -> VideoObject:
         """
         Transform the Veo operation status response.

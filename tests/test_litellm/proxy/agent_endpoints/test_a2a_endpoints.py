@@ -16,6 +16,7 @@ from unittest.mock import AsyncMock, MagicMock, patch
 import pytest
 
 from litellm.proxy._types import UserAPIKeyAuth
+from litellm.types.agents import AgentCaller
 
 AddLiteLLMData = Callable[..., Awaitable[dict[str, object]]]
 
@@ -513,6 +514,24 @@ async def test_message_methods_forward_caller_identity_headers(method: str):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("method", ["message/send", "message/stream"])
+async def test_agent_calling_another_agent_forwards_the_human_who_invoked_it(method: str):
+    """LIT-8014: an agent acting for alice calls a second agent through the proxy. That hop must
+    carry alice, not the first agent's owner, so the chain stays capped at what alice may reach."""
+    mock_request = _make_request_mock(method, _HELLO_MESSAGE_PARAMS)
+    agent_key = UserAPIKeyAuth(api_key="sk-agent", user_id="agent-owner", team_id="agent-team", agent_id="agent-1")
+    agent_key.agent_caller = AgentCaller(user_id="alice", team_id="callers")
+
+    captured = await _invoke_message_method(method, mock_request, agent_key)
+
+    forwarded_headers = captured.agent_extra_headers or {}
+    assert (forwarded_headers.get("X-LiteLLM-User-Id"), forwarded_headers.get("X-LiteLLM-Team-Id")) == (
+        "alice",
+        "callers",
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("method", ["message/send", "message/stream"])
 async def test_message_methods_send_the_entra_bearer_for_azure_agents(method: str):
     """A Microsoft Foundry agent accepts only an Entra ID bearer, so an agent registered with
     Entra credentials in litellm_params must reach the backend with that bearer on every call."""
@@ -569,7 +588,9 @@ async def test_message_send_reports_an_unresolvable_entra_credential_as_internal
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
+    )
     mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
     downstream = AsyncMock()
 
@@ -937,7 +958,9 @@ async def test_subscribe_to_task_calls_pre_call_hook():
             yield chunk
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
+    )
     mock_proxy_logging.async_post_call_streaming_iterator_hook = _passthrough_iterator
     mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
 
@@ -1070,7 +1093,9 @@ async def test_task_method_failure_hook_uses_enriched_request_data():
     mock_handler.post = AsyncMock(side_effect=RuntimeError("upstream failed"))
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
+    )
     mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
 
     with ExitStack() as stack:
@@ -1135,7 +1160,9 @@ async def test_agentcore_invalid_context_id_returns_jsonrpc_invalid_params_400()
     user_api_key_dict = UserAPIKeyAuth(api_key="sk-test", user_id="u1", team_id="t1")
 
     mock_proxy_logging = MagicMock()
-    mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda user_api_key_dict, data, call_type: data)
+    mock_proxy_logging.pre_call_hook = AsyncMock(
+        side_effect=lambda user_api_key_dict, data, call_type, skip_guardrails=False: data
+    )
     mock_proxy_logging.post_call_failure_hook = AsyncMock(return_value=None)
 
     with ExitStack() as stack:
