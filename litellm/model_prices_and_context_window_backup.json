@@ -69667,13 +69667,14 @@
         "max_tokens": 32768
     },
     "together_ai/Salesforce/Llama-Rank-V1": {
+        "deprecation_date": "2026-02-06",
         "input_cost_per_token": 1e-07,
         "litellm_provider": "together_ai",
         "max_input_tokens": 8192,
         "max_tokens": 8192,
         "mode": "rerank",
         "output_cost_per_token": 0.0,
-        "source": "https://api.together.xyz/v1/models"
+        "source": "https://api.together.ai/v1/models"
     },
     "together_ai/meta-llama/Meta-Llama-3.1-8B": {
         "input_cost_per_token": 2e-07,
