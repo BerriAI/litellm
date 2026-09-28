@@ -1,3 +1,11 @@
 [
-  "tests/e2e/ui/tests/integrationCritical/projectDetachment.spec.ts::project creation and explicit detachment preserve saved scope and restore serving"
+  "tests/e2e/ui/tests/integrationCritical/projectDetachment.spec.ts::project creation and explicit detachment preserve saved scope and restore serving",
+  "tests/e2e/ui/tests/integrationCritical/teamGlobalGuardrailKillSwitch.spec.ts::proxy admin can enable the global guardrail kill switch from the models page team drill-in",
+  "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::per-user MCP env var stays updatable and clearable from the card after it is set",
+  "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::cancelling the clear confirmation keeps the stored value and sends no delete",
+  "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::pressing Enter on Update opens the credentials modal instead of the server editor",
+  "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::a server with two per-user variables reports the remaining gap until both are saved",
+  "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::a server without per-user variables shows no credential row",
+  "tests/e2e/ui/tests/integrationCritical/mcpUserEnvVars.spec.ts::clearing credentials for a server deleted underneath the modal reports the failure without losing the page",
+  "tests/e2e/ui/tests/integrationCritical/costOptimizationModelGroups.spec.ts::cache leakage by model merges a deployment's resolved and requested model names into its model group"
 ]

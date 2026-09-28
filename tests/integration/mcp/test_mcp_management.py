@@ -17,7 +17,15 @@ from integration._support.mcp import (
 )
 from integration._support.process import owned_proxy
 
+from litellm.models.user import LiteLLM_UserTable
+from litellm.proxy.auth.auth_checks import ExperimentalUIJWTToken
+
 ADD: Final = {"a": 4, "b": 5}
+
+
+def _dashboard_ui_session_token(user_id: str) -> str:
+    user: Final = LiteLLM_UserTable(user_id=user_id, user_role="internal_user", models=[])
+    return ExperimentalUIJWTToken.get_experimental_ui_login_jwt_auth_token(user)
 
 
 def _servers(gateway: Gateway, key: str | None = None) -> dict[str, dict[str, object]]:
@@ -118,16 +126,67 @@ def test_delete_removes_listing_calls_and_database_row(gateway: Gateway) -> None
 
 
 def test_duplicate_alias_is_rejected_so_tool_prefixes_cannot_collide(gateway: Gateway) -> None:
+    import concurrent.futures
+
     with mcp_peer() as peer, gateway.scenario() as scenario:
         alias: Final = "mgmt" + uuid.uuid4().hex[:8]
-        register_mcp(scenario, peer, alias)
+        identity: Final = register_mcp(scenario, peer, alias)
+        key: Final = scenario.key(object_permission={"mcp_servers": [identity]})
+
         duplicate: Final = gateway.request(
             "POST", "/v1/mcp/server", {"server_name": alias, "alias": alias, **peer.registration()}
         )
-        if duplicate.status_code == 201:
-            scenario.cleanups.callback(forget_mcp, gateway, duplicate.json()["server_id"])
-            pytest.skip("BUG: POST /v1/mcp/server accepts a duplicate alias, so two servers share one tool prefix")
         assert duplicate.status_code == 400, duplicate.text
+        assert alias in duplicate.json()["detail"]["error"], duplicate.text
+
+        same_alias: Final = gateway.request(
+            "POST", "/v1/mcp/server", {"server_name": alias + "other", "alias": alias, **peer.registration()}
+        )
+        assert same_alias.status_code == 400, same_alias.text
+        assert alias in same_alias.json()["detail"]["error"], same_alias.text
+
+        case_variant: Final = gateway.request(
+            "POST", "/v1/mcp/server", {"server_name": alias.upper(), "alias": alias.upper(), **peer.registration()}
+        )
+        assert case_variant.status_code == 400, case_variant.text
+
+        same_name_no_alias: Final = gateway.request(
+            "POST", "/v1/mcp/server", {"server_name": alias, **peer.registration()}
+        )
+        assert same_name_no_alias.status_code == 400, same_name_no_alias.text
+
+        second_alias: Final = alias + "2"
+        second_identity: Final = register_mcp(scenario, peer, second_alias)
+        colliding_rename: Final = gateway.request(
+            "PUT", "/v1/mcp/server", {"server_id": second_identity, "alias": alias}
+        )
+        assert colliding_rename.status_code == 400, colliding_rename.text
+
+        cleared_alias: Final = gateway.request("PUT", "/v1/mcp/server", {"server_id": second_identity, "alias": None})
+        assert cleared_alias.status_code == 202, cleared_alias.text
+
+        name: Final = tool_names(gateway, key, identity)["add"]
+        response: Final = call_tool(gateway, key, identity, name, ADD)
+        assert response.status_code == 200, response.text
+        assert response.json()["content"][0]["text"] == "9", response.text
+
+        racing_alias: Final = "race" + uuid.uuid4().hex[:8]
+
+        def try_register() -> int:
+            response: Final = gateway.request(
+                "POST", "/v1/mcp/server", {"server_name": racing_alias, "alias": racing_alias, **peer.registration()}
+            )
+            return response.status_code
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=8) as pool:
+            statuses: Final = tuple(pool.map(lambda _i: try_register(), range(8)))
+
+        assert statuses.count(201) == 1, statuses
+        assert statuses.count(400) == 7, statuses
+        winner: Final = next(
+            server["server_id"] for server in _servers(gateway).values() if server["alias"] == racing_alias
+        )
+        scenario.cleanups.callback(forget_mcp, gateway, winner)
 
 
 def test_invalid_registrations_are_rejected(gateway: Gateway) -> None:
@@ -235,3 +294,47 @@ def test_config_declared_server_behaves_like_database_server_but_is_read_only(ga
             assert declared_id in _servers(candidate)
             assert call_tool(candidate, key, declared_id, declared_names["add"], ADD).status_code == 200
             assert len(tool_calls(declared_peer.drain())) == 1 and tool_calls(database_peer.drain()) == ()
+
+
+def test_team_granted_database_server_detail_is_available_to_team_key(gateway: Gateway) -> None:
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "lit3974_team_" + uuid.uuid4().hex[:8]
+        server_id: Final = register_mcp(scenario, peer, alias)
+        team_id: Final = scenario.team(object_permission={"mcp_servers": [server_id]})
+        key: Final = scenario.key(team_id=team_id)
+
+        response: Final = gateway.request("GET", f"/v1/mcp/server/{server_id}", key=key)
+
+        assert response.status_code == 200, f"Team-granted server detail access should succeed: {response.text}"
+        assert response.json()["server_id"] == server_id, response.text
+        assert response.json()["alias"] == alias, response.text
+
+
+def test_ui_session_lists_and_fetches_team_granted_config_server(
+    gateway: Gateway,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-integration-salt")
+    with mcp_peer() as peer, gateway.scenario() as scenario:
+        alias: Final = "lit3974_config_" + uuid.uuid4().hex[:8]
+        server_id: Final = "lit3974-" + uuid.uuid4().hex[:12]
+        team_id: Final = scenario.team(object_permission={"mcp_servers": [server_id]})
+        user_id: Final = scenario.user(user_role="internal_user", teams=[team_id])
+        config: Final = yaml.safe_load((Path(__file__).resolve().parents[1] / "proxy_config.yaml").read_text())
+        config["mcp_servers"] = {alias: {**peer.registration(), "alias": alias, "server_id": server_id}}
+        config_path: Final = tmp_path / "lit3974-mcp.yaml"
+        config_path.write_text(yaml.safe_dump(config))
+
+        with owned_proxy(gateway, tmp_path, {}, config=config_path) as candidate:
+            token: Final = _dashboard_ui_session_token(user_id)
+            headers: Final = {"Authorization": f"Bearer {token}"}
+            listed: Final = candidate.client.get("/v1/mcp/server", headers=headers)
+            assert listed.status_code == 200, listed.text
+            assert [server["server_id"] for server in listed.json()] == [server_id], listed.text
+
+            detail: Final = candidate.client.get(f"/v1/mcp/server/{server_id}", headers=headers)
+
+        assert detail.status_code == 200, f"Team-granted server detail access should succeed: {detail.text}"
+        assert detail.json()["server_id"] == server_id, detail.text
+        assert detail.json()["alias"] == alias, detail.text

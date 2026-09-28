@@ -94,7 +94,6 @@ GET /guardrails/{guardrail_id}
 GET /prompts/{prompt_id}
 GET /prompts/{prompt_id}/versions
 PATCH /guardrails/{guardrail_id}
-PATCH /model/{model_id}/update
 PATCH /prompts/{prompt_id}
 PATCH /team/{team_id}
 POST /team/model/add

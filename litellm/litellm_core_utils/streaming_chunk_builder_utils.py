@@ -475,9 +475,7 @@ class ChunkProcessor:
 
     def get_combined_tool_content(
         self, tool_call_chunks: Sequence["_ToolCallChunk"]
-    ) -> list[
-        ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
-    ]:  # mutable-ok: assigned verbatim to Message.tool_calls, a list field
+    ) -> list[ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall]:
         tool_calls_list: list[
             ChatCompletionMessageToolCall | ChatCompletionMessageCustomToolCall
         ] = []  # mutable-ok: see return type
@@ -687,7 +685,7 @@ class ChunkProcessor:
 
         def _flush_thinking_block() -> None:
             nonlocal current_thinking_text_parts, current_signature
-            if len(current_thinking_text_parts) > 0 and current_signature:
+            if current_signature:
                 thinking_blocks.append(
                     ChatCompletionThinkingBlock(
                         type="thinking",

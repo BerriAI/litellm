@@ -7,15 +7,21 @@
 #   1. Resolve the latest LiteLLM final release tag from the GitHub
 #      Releases API.
 #   2. Update a long-lived worktree at $WORKTREE to that tag and `uv sync` it.
-#   3. Boot the proxy as a background subprocess on $PROXY_PORT (default
+#   3. Resolve the Claude Code CLI version under test (the newest npm
+#      release at least 3 days old, via pr_gate_version_resolver.py, or
+#      $CLAUDE_CODE_VERSION when set) and download that release's
+#      linux-x64 binary into the run's scratch dir, checksum-verified
+#      against the vendor's release manifest (install_claude_code.sh).
+#   4. Boot the proxy as a background subprocess on $PROXY_PORT (default
 #      4100; a separate port from the human-tended :4000 proxy).
-#   4. Run `pytest tests/e2e/claude_code/` against the proxy. Test
-#      failures become `fail` cells in the JSON, not script errors.
-#   5. Hand the per-test results artifact + manifest to a small Python
+#   5. Run `pytest tests/e2e/claude_code/` against the proxy with that
+#      CLI first on PATH. Test failures become `fail` cells in the JSON,
+#      not script errors.
+#   6. Hand the per-test results artifact + manifest to a small Python
 #      CLI (`build_matrix.py`) that wraps the existing
 #      `matrix_builder.build_from_paths` to produce the published
 #      compatibility-matrix.json.
-#   6. `gh repo clone` litellm-docs, write the JSON to a deterministic
+#   7. `gh repo clone` litellm-docs, write the JSON to a deterministic
 #      branch (`compat-matrix/<litellm>-<claude>-<UTC-date>`), commit,
 #      push the branch straight to BerriAI/litellm-docs (mateo-berri has
 #      write access), `gh pr create`, then — *only if no cell regressed
@@ -23,7 +29,7 @@
 #      auto-merge so the PR merges itself once required checks pass. A
 #      green→red regression leaves auto-merge off for human review; an
 #      already-red cell (red→red) does not block.
-#   7. Sweep stale compat-matrix PRs: once today's PR exists, close any
+#   8. Sweep stale compat-matrix PRs: once today's PR exists, close any
 #      other open `compat-matrix/*` PR (and delete its bot-owned branch)
 #      so at most ONE compat-matrix PR is ever open — the newest. A
 #      gate-withheld PR that nobody triages is superseded by the next
@@ -33,7 +39,7 @@
 # rather than spawning a new one. If the JSON is byte-identical to the
 # docs branch, we skip the push entirely.
 #
-# Required commands on $PATH: git, uv, gh, jq, curl, claude.
+# Required commands on $PATH: git, uv, gh, jq, curl.
 # Required state: a litellm checkout at $LITELLM_REPO (this file lives in
 # it); $WORKTREE is created on first run.
 #
@@ -51,6 +57,9 @@ DOCS_BRANCH="${DOCS_BRANCH:-main}"
 DOCS_TARGET_PATH="${DOCS_TARGET_PATH:-src/data/compatibility-matrix.json}"
 SKIP_PUBLISH="${SKIP_PUBLISH:-0}"
 PYTEST_K="${PYTEST_K:-}"
+# Empty means "resolve it": the newest @anthropic-ai/claude-code npm
+# release published at least 3 days ago. Set it to pin a manual run.
+CLAUDE_CODE_VERSION="${CLAUDE_CODE_VERSION:-}"
 # The e2e suite uses PEP 695 `type` aliases, so the venv needs Python
 # >= 3.12 (also what repo CI runs) even when the host's system python is
 # older. uv fetches a managed CPython of this version on first use --
@@ -108,7 +117,7 @@ trap cleanup EXIT INT TERM
 log() { printf '==> %s\n' "$*" >&2; }
 die() { printf 'ERROR: %s\n' "$*" >&2; exit 1; }
 
-for cmd in git uv gh jq curl claude; do
+for cmd in git uv gh jq curl; do
   command -v "${cmd}" >/dev/null 2>&1 || die "missing required command: ${cmd}"
 done
 
@@ -198,10 +207,6 @@ LITELLM_VERSION="$(
 )"
 [[ -n "${LITELLM_VERSION}" ]] || die "could not resolve latest PEP 440 final release (vX.Y.Z) in 5 pages of releases"
 log "resolved litellm: ${LITELLM_VERSION}"
-
-CLAUDE_CODE_VERSION="$(claude --version 2>/dev/null | awk '{print $1}')"
-[[ -n "${CLAUDE_CODE_VERSION}" ]] || die "could not read 'claude --version'"
-log "local claude code: ${CLAUDE_CODE_VERSION}"
 
 # ---------------------------------------------------------------------------
 # 2. Update the worktree to that tag
@@ -314,7 +319,27 @@ PROXY_CONFIG="${WORKTREE}/tests/e2e/claude_code/test_config.yaml"
 [[ -f "${PROXY_CONFIG}" ]] || die "proxy config not found at ${PROXY_CONFIG} (shim incomplete?)"
 
 # ---------------------------------------------------------------------------
-# 3. Boot the proxy
+# 3. Resolve and install the Claude Code CLI under test
+# ---------------------------------------------------------------------------
+
+# The resolver is stdlib-only, but the image ships no python of its
+# own, so it runs on the venv the sync above just built. Its 3-day
+# publish-age buffer (PRD #26476) keeps a release that gets pulled or
+# patched within days from ever driving the published matrix.
+if [[ -z "${CLAUDE_CODE_VERSION}" ]]; then
+  CLAUDE_CODE_VERSION="$(
+    cd "${WORKTREE}" \
+      && "${WORKTREE_UV}" run --no-sync python "${POPULATOR_DIR}/../pr_gate_version_resolver.py"
+  )" || die "could not resolve the Claude Code version to test"
+  log "resolved claude code: ${CLAUDE_CODE_VERSION}"
+else
+  log "CLAUDE_CODE_VERSION set; testing claude code ${CLAUDE_CODE_VERSION}"
+fi
+CLAUDE_CLI_DIR="${WORKDIR}/claude-cli"
+"${POPULATOR_DIR}/install_claude_code.sh" "${CLAUDE_CODE_VERSION}" "${CLAUDE_CLI_DIR}"
+
+# ---------------------------------------------------------------------------
+# 4. Boot the proxy
 # ---------------------------------------------------------------------------
 
 log "starting proxy on 127.0.0.1:${PROXY_PORT}"
@@ -350,7 +375,7 @@ curl -fsS "${HEALTH_URL}" >/dev/null \
   || { tail -50 "${WORKDIR}/proxy.log" >&2; die "proxy did not become healthy"; }
 
 # ---------------------------------------------------------------------------
-# 4. Run pytest
+# 5. Run pytest
 # ---------------------------------------------------------------------------
 
 RESULTS_JSON="${WORKDIR}/compat-results.json"
@@ -374,6 +399,7 @@ set +e
     && LITELLM_PROXY_URL="http://127.0.0.1:${PROXY_PORT}" \
        LITELLM_MASTER_KEY="${PROXY_API_KEY}" \
        COMPAT_RESULTS_PATH="${RESULTS_JSON}" \
+       PATH="${CLAUDE_CLI_DIR}:${PATH}" \
        "${WORKTREE_UV}" run --no-sync pytest "${PYTEST_ARGS[@]}"
 )
 PYTEST_EXIT=$?
@@ -386,7 +412,7 @@ log "pytest exit code: ${PYTEST_EXIT} (failures become 'fail' cells, not script 
 [[ -f "${RESULTS_JSON}" ]] || die "pytest did not produce ${RESULTS_JSON}"
 
 # ---------------------------------------------------------------------------
-# 5. Build the matrix JSON
+# 6. Build the matrix JSON
 # ---------------------------------------------------------------------------
 
 MATRIX_JSON="${WORKDIR}/compatibility-matrix.json"
@@ -402,7 +428,7 @@ log "building ${MATRIX_JSON}"
 )
 
 # ---------------------------------------------------------------------------
-# 6. Open a docs-repo PR
+# 7. Open a docs-repo PR
 # ---------------------------------------------------------------------------
 
 if [[ "${SKIP_PUBLISH}" == "1" ]]; then
@@ -634,7 +660,9 @@ else
     || die "auto-merge still armed on ${BRANCH_NAME} (enabled ${AUTOMERGE_ARMED}) after --disable-auto"
 fi
 
-# --- Stale-PR sweep ----------------------------------------------------------
+# ---------------------------------------------------------------------------
+# 8. Sweep stale compat-matrix PRs
+# ---------------------------------------------------------------------------
 # Keep at most ONE compat-matrix PR open: today's. Any other open
 # `compat-matrix/*` PR is a leftover from a day whose regression gate
 # withheld auto-merge and nobody triaged it; the PR we just opened or
