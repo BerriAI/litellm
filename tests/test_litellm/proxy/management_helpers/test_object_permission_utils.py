@@ -28,8 +28,9 @@ from litellm.proxy.management_helpers.object_permission_utils import (
 )
 
 
+@pytest.mark.parametrize("use_transaction", [False, True])
 @pytest.mark.asyncio
-async def test_set_object_permission():
+async def test_set_object_permission(use_transaction: bool):
     """
     Test that _set_object_permission correctly:
     1. Creates an object permission record in the database
@@ -48,6 +49,9 @@ async def test_set_object_permission():
     )
     mock_prisma_client.db.litellm_mcpservertable.find_many = AsyncMock(return_value=[])
 
+    write_table = MagicMock() if use_transaction else mock_prisma_client.db.litellm_objectpermissiontable
+    write_table.create = AsyncMock(return_value=mock_created_permission)
+
     # Test data with object_permission
     data_json = {
         "user_id": "test_user",
@@ -63,7 +67,7 @@ async def test_set_object_permission():
 
     # Call the function
     result = await _set_object_permission(
-        data_json=data_json, prisma_client=mock_prisma_client
+        data_json=data_json, prisma_client=mock_prisma_client, table=write_table if use_transaction else None
     )
 
     # Verify object_permission_id was added to result
@@ -73,10 +77,12 @@ async def test_set_object_permission():
     assert "object_permission" not in result
 
     # Verify create was called
-    mock_prisma_client.db.litellm_objectpermissiontable.create.assert_called_once()
+    write_table.create.assert_awaited_once()
+    if use_transaction:
+        mock_prisma_client.db.litellm_objectpermissiontable.create.assert_not_awaited()
 
     # Verify the data passed to create excludes None values and object_permission_id
-    call_args = mock_prisma_client.db.litellm_objectpermissiontable.create.call_args
+    call_args = write_table.create.call_args
     created_data = call_args.kwargs["data"]
 
     assert "object_permission_id" not in created_data

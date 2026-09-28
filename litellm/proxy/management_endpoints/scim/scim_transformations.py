@@ -1,5 +1,5 @@
 from collections.abc import Callable
-from typing import Final, TypeVar
+from typing import TYPE_CHECKING, Final, TypeVar
 
 from pydantic import ValidationError
 
@@ -13,6 +13,9 @@ from litellm.proxy._types import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.types.proxy.management_endpoints.scim_v2 import *
 
+if TYPE_CHECKING:
+    from prisma import Prisma
+
 T = TypeVar("T")
 
 
@@ -25,17 +28,23 @@ class ScimTransformations:
     @staticmethod
     async def transform_litellm_user_to_scim_user(
         user: LiteLLM_UserTable | NewUserResponse,
+        *,
+        tx: "Prisma | None" = None,
     ) -> SCIMUser:
         from litellm.proxy.proxy_server import prisma_client
 
-        if prisma_client is None:
+        if prisma_client is None and tx is None:
             raise HTTPException(status_code=500, detail={"error": "No database connected"})
 
         # Get user's teams/groups
         groups: Final = []
         team_ids: Final[list[str]] = user.teams or []  # mutable-ok: scim reads the user row's team ids
         for team_id in team_ids:
-            team = await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
+            team = (
+                await TeamRepository(prisma_client).table.find_unique(where={"team_id": team_id})
+                if tx is None
+                else await tx.litellm_teamtable.find_unique(where={"team_id": team_id})
+            )
             if team:
                 team_alias = getattr(team, "team_alias", team.team_id)
                 groups.append(SCIMUserGroup(value=team.team_id, display=team_alias))

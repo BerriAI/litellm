@@ -3846,7 +3846,7 @@ class _TokenInFilter(TypedDict):
 
 async def get_jwt_key_mapping_cache_keys_for_tokens(
     hashed_tokens: Sequence[str],
-    prisma_client: PrismaClient,
+    prisma_client: DatabaseClient,
 ) -> tuple[str, ...]:
     """Cache keys of every JWT claim mapped to any of the given virtual keys."""
     if not hashed_tokens:
