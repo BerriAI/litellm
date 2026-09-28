@@ -4,7 +4,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import Final, Protocol, TypeVar, cast
+from typing import Final, TypeVar
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -24,11 +24,6 @@ from litellm.repositories.chunked_in import find_many_in
 from litellm.repositories.user_repository import UserRepository
 
 _T = TypeVar("_T")
-
-
-class _PrismaRawQueryDatabase(Protocol):
-    def query_raw(self, query: str, *values: object) -> Awaitable[object]: ...
-
 
 _ACTIVE_TOKEN_DIGEST_SQL: Final = """
 SELECT encode(sha256(convert_to(token, 'UTF8')), 'hex') AS digest, key_alias, team_id, user_id
@@ -172,18 +167,6 @@ async def _reverse_hash_key_metadata(
     )
 
 
-async def _daily_user_spend_owner_rows(
-    prisma_client: PrismaClient,
-    keys: AbstractSet[str],
-) -> tuple[_DailyUserSpendOwnerRow, ...]:
-    raw_database: Final[_PrismaRawQueryDatabase] = cast(
-        _PrismaRawQueryDatabase,
-        prisma_client.db,  # pyright: ignore[reportAny]  # Prisma database raw query is untyped
-    )
-    raw_rows: Final[object] = await raw_database.query_raw(_DAILY_USER_SPEND_OWNER_SQL, sorted(keys))
-    return _DAILY_USER_SPEND_OWNER_ROWS.validate_python(raw_rows)
-
-
 async def recover_key_owner_from_daily_spend(
     prisma_client: PrismaClient,
     keys: AbstractSet[str],
@@ -191,7 +174,7 @@ async def recover_key_owner_from_daily_spend(
     if not keys:
         return _EMPTY_KEY_OWNERS
     rows: Final = await _db_or_empty(
-        lambda: _daily_user_spend_owner_rows(prisma_client, keys),
+        lambda: prisma_client.db.query_raw(_DAILY_USER_SPEND_OWNER_SQL, sorted(keys)),
         "Failed daily-spend key owner recovery for %d keys: %s",
         len(keys),
     )
@@ -200,7 +183,7 @@ async def recover_key_owner_from_daily_spend(
     return MappingProxyType(
         {
             row.api_key: owner
-            for row in rows
+            for row in _DAILY_USER_SPEND_OWNER_ROWS.validate_python(rows)
             for owner in (_unanimous(row.first_owner, row.last_owner),)
             if row.api_key in keys and owner is not None
         }

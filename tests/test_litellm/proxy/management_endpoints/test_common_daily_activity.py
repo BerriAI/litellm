@@ -47,7 +47,7 @@ async def test_get_daily_activity_empty_entity_id_list():
     mock_prisma.db.litellm_dailyspend = mock_table
 
     # Call the function with empty entity_id list
-    await get_daily_activity(
+    result = await get_daily_activity(
         prisma_client=mock_prisma,
         table_name="litellm_dailyspend",
         entity_id_field="team_id",
@@ -166,7 +166,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         "timed_requests": 0,
         "failed_requests": 0,
     }
-    mock_rows: Final[list[dict[str, object]]] = [
+    mock_rows = [
         # (date, endpoint) — rolls up across api_keys and models
         {
             **base,
@@ -293,6 +293,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
     assert chat_endpoint.api_key_breakdown["key-1"].metrics.spend == 15.0
     assert "key-2" in embeddings_endpoint.api_key_breakdown
     assert embeddings_endpoint.api_key_breakdown["key-2"].metrics.spend == 3.0
+    assert mock_prisma.db.query_raw.await_count == 2
 
 @pytest.mark.asyncio
 async def test_get_api_key_metadata_returns_active_key_metadata():
@@ -497,7 +498,7 @@ async def test_get_api_key_metadata_recovers_double_hashed_key_via_reverse_hash(
 
 @pytest.mark.asyncio
 async def test_get_api_key_metadata_permanent_miss_never_pages_tokens_or_reads_spend_logs():
-    """Without a spend-log window, a dirty key gets a daily-owner lookup without paging tokens."""
+    """Without a spend-log window a dirty key no table can explain costs two digest lookups and never a token page walk."""
     from litellm.proxy.utils import hash_token
 
     double_hashed = hash_token("b" * 64)
