@@ -1,9 +1,11 @@
+use std::ops::ControlFlow;
+
 use litellm_coroutine::Co;
 
 use super::coroutine::MachineFault;
 use crate::{
     event::{MachineEvent, RequestContext, WireRequest},
-    protocol::{Demand, HookRequest, Protocol, Reply, StreamDelivery, Suspension},
+    protocol::{HookRequest, HostRequest, Protocol, Reply, StreamDelivery},
 };
 
 pub struct CallContext<P: Protocol> {
@@ -13,7 +15,7 @@ pub struct CallContext<P: Protocol> {
 }
 
 impl<P: Protocol> CallContext<P> {
-    pub(super) fn new(co: Co<Suspension<P>>) -> Self {
+    pub(super) fn new(co: Co<HostRequest<P>>) -> Self {
         let channel = Channel(co);
         Self {
             services: HostServices(channel.clone()),
@@ -23,7 +25,7 @@ impl<P: Protocol> CallContext<P> {
     }
 }
 
-struct Channel<P: Protocol>(Co<Suspension<P>>);
+struct Channel<P: Protocol>(Co<HostRequest<P>>);
 
 impl<P: Protocol> Clone for Channel<P> {
     fn clone(&self) -> Self {
@@ -37,7 +39,7 @@ where
 {
     async fn request_reply<A: Send>(
         &self,
-        request: impl FnOnce(Reply<A>) -> Suspension<P> + Send,
+        request: impl FnOnce(Reply<A>) -> HostRequest<P> + Send,
     ) -> Result<A, P::Error> {
         self.0
             .yield_(request)
@@ -63,7 +65,7 @@ where
         request: impl FnOnce(Reply<A>) -> P::HostCall + Send,
     ) -> Result<A, P::Error> {
         self.0
-            .request_reply(|reply| Suspension::HostCall(request(reply)))
+            .request_reply(|reply| HostRequest::HostCall(request(reply)))
             .await
     }
 }
@@ -87,7 +89,7 @@ where
     ) -> Result<WireRequest, P::Error> {
         self.0
             .request_reply(|reply| {
-                Suspension::Hook(HookRequest::BeforeProviderRequest {
+                HostRequest::Hook(HookRequest::BeforeProviderRequest {
                     wire: Box::new(wire),
                     context: Box::new(context),
                     reply,
@@ -98,7 +100,7 @@ where
 
     async fn on_event(&self, event: MachineEvent) -> Result<(), P::Error> {
         self.0
-            .request_reply(|reply| Suspension::Hook(HookRequest::Event(event, reply)))
+            .request_reply(|reply| HostRequest::Hook(HookRequest::Event(event, reply)))
             .await
     }
 }
@@ -109,15 +111,15 @@ impl<P: Protocol> StreamSender<P>
 where
     P::Error: From<MachineFault>,
 {
-    pub async fn open_stream(&self, head: P::StreamHead) -> Result<Demand, P::Error> {
+    pub async fn open_stream(&self, head: P::StreamHead) -> Result<ControlFlow<()>, P::Error> {
         self.0
-            .request_reply(|reply| Suspension::Stream(StreamDelivery::Open(head, reply)))
+            .request_reply(|reply| HostRequest::Stream(StreamDelivery::Open(head, reply)))
             .await
     }
 
-    pub async fn send_chunk(&self, chunk: P::Chunk) -> Result<Demand, P::Error> {
+    pub async fn send_chunk(&self, chunk: P::Chunk) -> Result<ControlFlow<()>, P::Error> {
         self.0
-            .request_reply(|reply| Suspension::Stream(StreamDelivery::Chunk(chunk, reply)))
+            .request_reply(|reply| HostRequest::Stream(StreamDelivery::Chunk(chunk, reply)))
             .await
     }
 }

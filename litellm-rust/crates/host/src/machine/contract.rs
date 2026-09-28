@@ -1,9 +1,9 @@
 use std::{future::Future, pin::Pin};
 
-use crate::protocol::{Protocol, Suspension};
+use crate::protocol::{HostRequest, Protocol};
 
 pub enum MachineStep<R: Protocol, C> {
-    Suspended(Suspension<R>),
+    Suspended(HostRequest<R>),
     Complete(C),
 }
 

@@ -1,4 +1,4 @@
-use std::future::Future;
+use std::{future::Future, ops::ControlFlow};
 
 use litellm_host::{
     call::{HostedCompletion, HostedMachine},
@@ -6,7 +6,7 @@ use litellm_host::{
     hooks::RouteHooks,
     lifecycle::CallObserver,
     machine::{Machine, MachineFault},
-    protocol::{Demand, Protocol},
+    protocol::Protocol,
     services::HostCallHandler,
 };
 
@@ -16,16 +16,19 @@ pub trait StreamConsumer<P: Protocol>: Send + Sync {
     fn open_stream(
         &self,
         head: P::StreamHead,
-    ) -> impl Future<Output = Result<Demand, P::Error>> + Send;
-    fn send_chunk(&self, chunk: P::Chunk) -> impl Future<Output = Result<Demand, P::Error>> + Send;
+    ) -> impl Future<Output = Result<ControlFlow<()>, P::Error>> + Send;
+    fn send_chunk(
+        &self,
+        chunk: P::Chunk,
+    ) -> impl Future<Output = Result<ControlFlow<()>, P::Error>> + Send;
 }
 
 impl<P: Protocol> StreamConsumer<P> for () {
-    async fn open_stream(&self, _: P::StreamHead) -> Result<Demand, P::Error> {
-        Ok(Demand::More)
+    async fn open_stream(&self, _: P::StreamHead) -> Result<ControlFlow<()>, P::Error> {
+        Ok(ControlFlow::Continue(()))
     }
-    async fn send_chunk(&self, _: P::Chunk) -> Result<Demand, P::Error> {
-        Ok(Demand::More)
+    async fn send_chunk(&self, _: P::Chunk) -> Result<ControlFlow<()>, P::Error> {
+        Ok(ControlFlow::Continue(()))
     }
 }
 
@@ -110,11 +113,11 @@ where
     H: RouteHooks<<M::Protocol as Protocol>::Error>,
     C: StreamConsumer<M::Protocol>,
 {
-    let mut demand = Demand::More;
+    let mut demand = ControlFlow::Continue(());
     loop {
         let boundary = match demand {
-            Demand::More => driver.advance().await?,
-            Demand::Detached => driver.detach().await?,
+            ControlFlow::Continue(()) => driver.advance().await?,
+            ControlFlow::Break(()) => driver.detach().await?,
         };
         let delivered = match boundary {
             Boundary::Complete(complete) => return Ok(complete),

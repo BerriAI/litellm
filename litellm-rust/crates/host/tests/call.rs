@@ -1,6 +1,7 @@
 use litellm_host::protocol::StreamDelivery;
 use std::{
     convert::Infallible,
+    ops::ControlFlow,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -13,7 +14,7 @@ use litellm_host::{
     event::CallEvent,
     lifecycle::{CallObserver, observe_call, observe_unary},
     machine::{Machine, MachineFault, MachineStep},
-    protocol::{Demand, Protocol, Suspension},
+    protocol::{HostRequest, Protocol},
 };
 use rstest::{fixture, rstest};
 
@@ -60,7 +61,7 @@ async fn delivery_obeys_demand_and_distinguishes_detachment(
             chunks,
         })
     });
-    let MachineStep::Suspended(Suspension::Stream(StreamDelivery::Open(head, reply))) =
+    let MachineStep::Suspended(HostRequest::Stream(StreamDelivery::Open(head, reply))) =
         machine.resume().await.unwrap()
     else {
         panic!()
@@ -68,20 +69,20 @@ async fn delivery_obeys_demand_and_distinguishes_detachment(
     assert_eq!(head, "headers");
     assert_eq!(polls.load(Ordering::SeqCst), 0);
     reply.send(if detach_after == Some(0) {
-        Demand::Detached
+        ControlFlow::Break(())
     } else {
-        Demand::More
+        ControlFlow::Continue(())
     });
     let mut delivered = Vec::new();
     let completed = loop {
         match machine.resume().await.unwrap() {
-            MachineStep::Suspended(Suspension::Stream(StreamDelivery::Chunk(chunk, reply))) => {
+            MachineStep::Suspended(HostRequest::Stream(StreamDelivery::Chunk(chunk, reply))) => {
                 delivered.push(chunk);
                 assert_eq!(polls.load(Ordering::SeqCst), delivered.len());
                 reply.send(if detach_after == Some(delivered.len()) {
-                    Demand::Detached
+                    ControlFlow::Break(())
                 } else {
-                    Demand::More
+                    ControlFlow::Continue(())
                 });
             }
             MachineStep::Complete(result) => break result,

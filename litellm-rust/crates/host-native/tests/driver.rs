@@ -1,6 +1,9 @@
-use std::sync::{
-    Arc, Mutex,
-    atomic::{AtomicBool, AtomicUsize, Ordering},
+use std::{
+    ops::ControlFlow,
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
 };
 
 use futures_util::{StreamExt, stream};
@@ -10,7 +13,7 @@ use litellm_host::{
     hooks::RouteHooks,
     lifecycle::CallObserver,
     machine::{CallMachine, HostFailure, Interrupted, Machine, MachineFault, Step},
-    protocol::{Demand, Protocol, Reply},
+    protocol::{Protocol, Reply},
     services::HostCallHandler,
 };
 use litellm_host_native::{
@@ -315,25 +318,25 @@ struct Consumer {
 }
 
 impl Consumer {
-    fn demand_after(&self, delivered: usize) -> Result<Demand, TestError> {
+    fn demand_after(&self, delivered: usize) -> Result<ControlFlow<()>, TestError> {
         if self.fail_after == Some(delivered) {
             return Err(TestError::Consumer);
         }
         Ok(if self.detach_after == Some(delivered) {
-            Demand::Detached
+            ControlFlow::Break(())
         } else {
-            Demand::More
+            ControlFlow::Continue(())
         })
     }
 }
 
 impl StreamConsumer<TestProtocol> for Consumer {
-    async fn open_stream(&self, head: &'static str) -> Result<Demand, TestError> {
+    async fn open_stream(&self, head: &'static str) -> Result<ControlFlow<()>, TestError> {
         assert_eq!(head, "headers");
         self.demand_after(0)
     }
 
-    async fn send_chunk(&self, chunk: usize) -> Result<Demand, TestError> {
+    async fn send_chunk(&self, chunk: usize) -> Result<ControlFlow<()>, TestError> {
         let mut delivered = self.delivered.lock().unwrap();
         delivered.push(chunk);
         self.demand_after(delivered.len())

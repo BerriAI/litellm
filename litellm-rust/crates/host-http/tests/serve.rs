@@ -507,11 +507,11 @@ async fn invalid_host_operations_fail_without_panicking(hooks: Hooks, #[case] fl
         Box::pin(async move {
             match flow {
                 InvalidFlow::DeliverBeforeOpen => {
-                    host.stream.send_chunk(Bytes::new()).await?;
+                    let _ = host.stream.send_chunk(Bytes::new()).await?;
                 }
                 InvalidFlow::OpenTwice => {
-                    host.stream.open_stream("text/event-stream").await?;
-                    host.stream.open_stream("text/event-stream").await?;
+                    let _ = host.stream.open_stream("text/event-stream").await?;
+                    let _ = host.stream.open_stream("text/event-stream").await?;
                 }
             }
             Ok(HostedCompletion::StreamEnded)

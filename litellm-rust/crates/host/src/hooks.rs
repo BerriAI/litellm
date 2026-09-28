@@ -63,8 +63,8 @@ mod tests {
         event::RawResponse,
         machine::MachineFault,
         machine::{CallMachine, Machine, MachineStep},
+        protocol::HostRequest,
         protocol::Protocol,
-        protocol::Suspension,
     };
 
     struct Unit;
@@ -127,7 +127,7 @@ mod tests {
             })
         });
 
-        let Ok(MachineStep::Suspended(Suspension::Hook(HookRequest::BeforeProviderRequest {
+        let Ok(MachineStep::Suspended(HostRequest::Hook(HookRequest::BeforeProviderRequest {
             wire,
             reply,
             ..
@@ -141,7 +141,7 @@ mod tests {
             ..*wire
         });
 
-        let Ok(MachineStep::Suspended(Suspension::Hook(HookRequest::Event(event, reply)))) =
+        let Ok(MachineStep::Suspended(HostRequest::Hook(HookRequest::Event(event, reply)))) =
             machine.resume().await
         else {
             panic!("on_event yields Emit");

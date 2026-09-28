@@ -17,11 +17,11 @@ Credential acquisition contracts and reusable adapters belong in `litellm-auth-t
 
 ## Execution and replies
 
-The coroutine polls the route future until it completes or yields a `Suspension`. Each suspension carries a typed `Reply` that its driver must answer before resuming, or abandon when interrupting or dropping the execution. A pending network future is an ordinary async wait, not a host suspension
+The coroutine polls the route future until it completes or yields a `HostRequest`. Each request carries a typed `Reply` that its driver must answer before resuming, or abandon when interrupting or dropping the execution. A pending network future is an ordinary async wait, not a host suspension
 
-`CallContext` gives the route three separate handles: `HostServices` requests host operations, `ChannelHooks` requests active hooks, and `StreamSender` delivers stream values. Keep their yield-and-reply mechanics in `context.rs`. The actual service and hook implementations belong to the host
+`CallContext` gives the route three separate handles: `HostServices` requests host operations, `ChannelHooks` requests active hooks, and `StreamSender` delivers stream values. Keep their yield-and-reply mechanics in `context.rs`. The actual service and hook implementations belong to the host. This follows the effect-handler pattern: the route requests an operation, the driver handles it, and the route continues with the reply. The suspended computation stays in the coroutine; `Reply` only supplies its result
 
-`Demand::More` permits stream execution to continue. `Demand::Detached` tells it that the consumer stopped reading. Keep stream forwarding and the distinction between stream exhaustion and detachment in `crate::call::hosted_call`
+Stream replies use `std::ops::ControlFlow<()>`. `ControlFlow::Continue(())` permits stream execution to continue. `ControlFlow::Break(())` tells it that the consumer stopped reading. Holding the reply applies backpressure until the consumer advances. Keep stream forwarding and the distinction between stream exhaustion and detachment in `crate::call::hosted_call`
 
 `CallMachine::interrupt` cancels the coroutine and returns the supplied failure. Dropping `CallMachine` drops its execution future. Preserve both behaviors and do not spawn a producer task or poll stream chunks ahead of consumer demand
 

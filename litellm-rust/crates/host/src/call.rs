@@ -4,7 +4,7 @@ use futures_util::{TryStreamExt, stream::BoxStream};
 
 use crate::{
     machine::{CallMachine, ChannelHooks, HostServices, MachineFault},
-    protocol::{Demand, Protocol},
+    protocol::Protocol,
 };
 
 pub enum CallOutput<Response, Head, Chunk, Error> {
@@ -49,11 +49,11 @@ where
             match execute(request, host.services, host.hooks).await? {
                 CallOutput::Complete(response) => Ok(HostedCompletion::Complete(response)),
                 CallOutput::Stream { head, mut chunks } => {
-                    if host.stream.open_stream(head).await? == Demand::Detached {
+                    if host.stream.open_stream(head).await?.is_break() {
                         return Ok(HostedCompletion::Detached);
                     }
                     while let Some(chunk) = chunks.try_next().await? {
-                        if host.stream.send_chunk(chunk).await? == Demand::Detached {
+                        if host.stream.send_chunk(chunk).await?.is_break() {
                             return Ok(HostedCompletion::Detached);
                         }
                     }

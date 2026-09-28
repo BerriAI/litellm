@@ -1,7 +1,9 @@
+use std::ops::ControlFlow;
+
 use litellm_host::{
     hooks::RouteHooks,
     machine::{HostFailure, Machine, MachineStep},
-    protocol::{Demand, HookRequest, Protocol, Reply, StreamDelivery, Suspension},
+    protocol::{HookRequest, HostRequest, Protocol, Reply, StreamDelivery},
     services::HostCallHandler,
 };
 
@@ -20,7 +22,7 @@ pub struct Driver<M: Machine, S, H> {
     machine: M,
     services: S,
     hooks: H,
-    demand: Option<Reply<Demand>>,
+    demand: Option<Reply<ControlFlow<()>>>,
 }
 
 impl<M, S, H> Driver<M, S, H>
@@ -39,11 +41,11 @@ where
     }
 
     pub async fn advance(&mut self) -> Result<Boundary<M>, ErrorOf<M>> {
-        self.resume(Demand::More).await
+        self.resume(ControlFlow::Continue(())).await
     }
 
     pub async fn detach(&mut self) -> Result<Boundary<M>, ErrorOf<M>> {
-        self.resume(Demand::Detached).await
+        self.resume(ControlFlow::Break(())).await
     }
 
     /// Interrupts the machine with a failure the consumer hit at the last stream boundary,
@@ -53,18 +55,18 @@ where
         self.machine.interrupt(HostFailure::Error(error)).await
     }
 
-    async fn resume(&mut self, demand: Demand) -> Result<Boundary<M>, ErrorOf<M>> {
+    async fn resume(&mut self, demand: ControlFlow<()>) -> Result<Boundary<M>, ErrorOf<M>> {
         if let Some(reply) = self.demand.take() {
             reply.send(demand);
         }
         loop {
-            let suspension = match self.machine.resume().await? {
+            let request = match self.machine.resume().await? {
                 MachineStep::Complete(complete) => return Ok(Boundary::Complete(complete)),
-                MachineStep::Suspended(suspension) => suspension,
+                MachineStep::Suspended(request) => request,
             };
-            let answered = match suspension {
-                Suspension::HostCall(call) => self.services.handle_host_call(call).await,
-                Suspension::Hook(HookRequest::BeforeProviderRequest {
+            let answered = match request {
+                HostRequest::HostCall(call) => self.services.handle_host_call(call).await,
+                HostRequest::Hook(HookRequest::BeforeProviderRequest {
                     wire,
                     context,
                     reply,
@@ -73,14 +75,14 @@ where
                     .before_provider_request(*wire, *context)
                     .await
                     .map(|wire| reply.send(wire)),
-                Suspension::Hook(HookRequest::Event(event, reply)) => {
+                HostRequest::Hook(HookRequest::Event(event, reply)) => {
                     self.hooks.on_event(event).await.map(|()| reply.send(()))
                 }
-                Suspension::Stream(StreamDelivery::Open(head, reply)) => {
+                HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
                     self.demand = Some(reply);
                     return Ok(Boundary::Open(head));
                 }
-                Suspension::Stream(StreamDelivery::Chunk(chunk, reply)) => {
+                HostRequest::Stream(StreamDelivery::Chunk(chunk, reply)) => {
                     self.demand = Some(reply);
                     return Ok(Boundary::Chunk(chunk));
                 }

@@ -1,4 +1,7 @@
-use std::sync::{Mutex, mpsc};
+use std::{
+    ops::ControlFlow,
+    sync::{Mutex, mpsc},
+};
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
@@ -6,7 +9,6 @@ use litellm_core::messages::{
     MessagesResponse,
     route::{Messages, MessagesStreamHead},
 };
-use litellm_host::protocol::Demand;
 use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::rstest;
 use tokio::{
@@ -60,12 +62,12 @@ impl RecordingStreamHost {
         }
     }
 
-    fn record(&self, op: Seen) -> Demand {
+    fn record(&self, op: Seen) -> ControlFlow<()> {
         let mut seen = self.seen.lock().unwrap();
         seen.push(op);
         match seen.len() < self.detach_after {
-            true => Demand::More,
-            false => Demand::Detached,
+            true => ControlFlow::Continue(()),
+            false => ControlFlow::Break(()),
         }
     }
 }
@@ -85,10 +87,10 @@ impl RecordingStreamHost {
 }
 
 impl litellm_host_native::in_process::StreamConsumer<Messages> for RecordingStreamHost {
-    async fn open_stream(&self, head: MessagesStreamHead) -> Result<Demand, Error> {
+    async fn open_stream(&self, head: MessagesStreamHead) -> Result<ControlFlow<()>, Error> {
         Ok(self.record(Seen::Open(head.headers)))
     }
-    async fn send_chunk(&self, chunk: Bytes) -> Result<Demand, Error> {
+    async fn send_chunk(&self, chunk: Bytes) -> Result<ControlFlow<()>, Error> {
         Ok(self.record(Seen::Deliver(chunk)))
     }
 }

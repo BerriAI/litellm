@@ -3,7 +3,10 @@
 
 #![allow(dead_code)] // each test binary compiles this module on its own and uses a different subset
 
-use std::sync::{Arc, Mutex};
+use std::{
+    ops::ControlFlow,
+    sync::{Arc, Mutex},
+};
 
 use futures_util::future::BoxFuture;
 use litellm_http::{
@@ -326,19 +329,13 @@ where
     P: litellm_host::protocol::Protocol<HostCall = std::convert::Infallible>,
     P::Error: From<litellm_host::machine::MachineFault>,
 {
-    async fn open_stream(
-        &self,
-        head: P::StreamHead,
-    ) -> Result<litellm_host::protocol::Demand, P::Error> {
+    async fn open_stream(&self, head: P::StreamHead) -> Result<ControlFlow<()>, P::Error> {
         *self.head.lock().unwrap() = Some(head);
-        Ok(litellm_host::protocol::Demand::More)
+        Ok(ControlFlow::Continue(()))
     }
-    async fn send_chunk(
-        &self,
-        chunk: P::Chunk,
-    ) -> Result<litellm_host::protocol::Demand, P::Error> {
+    async fn send_chunk(&self, chunk: P::Chunk) -> Result<ControlFlow<()>, P::Error> {
         self.chunks.lock().unwrap().push(chunk);
-        Ok(litellm_host::protocol::Demand::More)
+        Ok(ControlFlow::Continue(()))
     }
 }
 impl<P> litellm_host::lifecycle::CallObserver for RecordingCall<P>

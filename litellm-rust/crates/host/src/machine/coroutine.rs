@@ -6,7 +6,7 @@ use super::{
     context::CallContext,
     contract::{HostFailure, Interrupted, Machine, MachineStep, Step},
 };
-use crate::protocol::{Protocol, Suspension};
+use crate::protocol::{HostRequest, Protocol};
 
 /// The machine's own failures, distinct from anything the provider call reports.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -20,7 +20,7 @@ pub enum MachineFault {
 pub type ExecuteFuture<R, C = <R as Protocol>::Response> =
     Pin<Box<dyn Future<Output = Result<C, <R as Protocol>::Error>> + Send>>;
 
-type CallCoroutine<R, C> = Coroutine<Suspension<R>, Result<C, <R as Protocol>::Error>>;
+type CallCoroutine<R, C> = Coroutine<HostRequest<R>, Result<C, <R as Protocol>::Error>>;
 
 pub struct CallMachine<R: Protocol, C = <R as Protocol>::Response> {
     coroutine: CallCoroutine<R, C>,

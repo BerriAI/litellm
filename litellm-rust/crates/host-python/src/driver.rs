@@ -1,16 +1,17 @@
-use crate::PythonHostCalls;
-use litellm_host::call::HostedCompletion;
-use litellm_host::event::WireRequest;
-use litellm_host::event::{FailureOrigin, Timing, epoch_seconds};
-use litellm_host::machine::{HostFailure, Machine, MachineStep};
-use litellm_host::protocol::HookRequest;
-use litellm_host::protocol::StreamDelivery;
-use litellm_host::protocol::{Demand, Protocol, Reply, Suspension};
+use std::ops::ControlFlow;
+
 use pyo3::exceptions::{PyBaseException, PyException, PyRuntimeError};
 use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
+use litellm_host::call::HostedCompletion;
+use litellm_host::event::WireRequest;
+use litellm_host::event::{FailureOrigin, Timing, epoch_seconds};
+use litellm_host::machine::{HostFailure, Machine, MachineStep};
+use litellm_host::protocol::{StreamDelivery,HookRequest,HostRequest, Protocol, Reply};
+
+use crate::PythonHostCalls;
 use crate::handle::{Execution, ExecutionBody, ExecutionStep};
 use crate::hooks::{HookEvent, HookResume, HookStep, Preflight, PythonCallHooks};
 use crate::native::{NativeMachine, NativePoll};
@@ -45,7 +46,7 @@ enum Pending<L> {
     Wire(HookResume<L, Box<WireRequest>>, Reply<WireRequest>),
     Response(HookResume<L, Py<PyAny>>),
     Event(HookResume<L, ()>, EventNext),
-    Consumer(Reply<Demand>),
+    Consumer(Reply<ControlFlow<()>>),
 }
 
 /// A route answer as the driver resumes on it: a Python exception interrupts the call as
@@ -171,9 +172,9 @@ where
             (Some(Pending::Native), Some(Err(error))) => self.interrupt(py, error),
             (Some(Pending::Consumer(reply)), Some(read)) => {
                 reply.send(if read.is_ok() {
-                    Demand::More
+                    ControlFlow::Continue(())
                 } else {
-                    Demand::Detached
+                    ControlFlow::Break(())
                 });
                 self.resume_machine(py, None)
             }
@@ -355,8 +356,8 @@ where
             Err(error) => return self.machine_failed(py, error).map(Next::Return),
         };
         let answered = match op {
-            Suspension::HostCall(op) => answered(self.binding.handle_host_call(py, op)),
-            Suspension::Hook(HookRequest::BeforeProviderRequest {
+            HostRequest::HostCall(op) => answered(self.binding.handle_host_call(py, op)),
+            HostRequest::Hook(HookRequest::BeforeProviderRequest {
                 wire,
                 context,
                 reply,
@@ -371,13 +372,13 @@ where
                 }
                 Err(error) => Err(error),
             },
-            Suspension::Stream(StreamDelivery::Open(head, reply)) => {
+            HostRequest::Stream(StreamDelivery::Open(head, reply)) => {
                 return self.opened(py, head, reply).map(Next::Return);
             }
-            Suspension::Stream(StreamDelivery::Chunk(chunk, reply)) => {
+            HostRequest::Stream(StreamDelivery::Chunk(chunk, reply)) => {
                 return self.delivered(py, chunk, reply).map(Next::Return);
             }
-            Suspension::Hook(HookRequest::Event(event, reply)) => {
+            HostRequest::Hook(HookRequest::Event(event, reply)) => {
                 match self.hooks.on_event(py, HookEvent::Machine(&event)) {
                     Ok(HookStep::Ready(())) => {
                         reply.send(());
@@ -405,7 +406,7 @@ where
         &mut self,
         py: Python<'_>,
         head: <ProtocolOf<H> as Protocol>::StreamHead,
-        reply: Reply<Demand>,
+        reply: Reply<ControlFlow<()>>,
     ) -> PyResult<ExecutionStep> {
         self.stage = Stage::Streaming;
         let head = match self.binding.encode_stream_head(py, head) {
@@ -425,7 +426,7 @@ where
         &mut self,
         py: Python<'_>,
         chunk: <ProtocolOf<H> as Protocol>::Chunk,
-        reply: Reply<Demand>,
+        reply: Reply<ControlFlow<()>>,
     ) -> PyResult<ExecutionStep> {
         let chunk = match self.binding.encode_chunk(py, chunk) {
             Ok(chunk) => chunk,

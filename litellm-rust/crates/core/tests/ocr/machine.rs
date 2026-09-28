@@ -15,7 +15,7 @@ use litellm_host::{
     event::{CallEvent, WireRequest},
     hooks::RouteHooks,
     machine::{HostFailure, Machine, MachineStep},
-    protocol::Suspension,
+    protocol::HostRequest,
     services::HostCallHandler,
 };
 use litellm_llms::base_llm::ocr::transformation::OcrTransportConfig;
@@ -43,21 +43,21 @@ async fn drive_until(
             Err(error) => break Err(error),
         };
         let answer = match op {
-            Suspension::Stream(stream) => match stream {
+            HostRequest::Stream(stream) => match stream {
                 litellm_host::protocol::StreamDelivery::Open(head, _) => match head {},
                 litellm_host::protocol::StreamDelivery::Chunk(chunk, _) => match chunk {},
             },
-            Suspension::HostCall(op) => {
+            HostRequest::HostCall(op) => {
                 ops.push(match op {
                     OcrOp::AcquireAzureAdToken(_) => "AcquireAzureAdToken",
                 });
                 host.handle_host_call(op).await.map_err(HostFailure::Error)
             }
-            Suspension::Hook(HookRequest::BeforeProviderRequest { wire, reply, .. }) => {
+            HostRequest::Hook(HookRequest::BeforeProviderRequest { wire, reply, .. }) => {
                 ops.push("BeforeSend");
                 intercept(*wire).map(|wire| reply.send(wire))
             }
-            Suspension::Hook(HookRequest::Event(event, reply)) => {
+            HostRequest::Hook(HookRequest::Event(event, reply)) => {
                 ops.push(event_name(&CallEvent::Machine(event.clone())));
                 host.on_event(event)
                     .await
@@ -80,10 +80,10 @@ async fn drive_until_notified(machine: &mut OcrMachine, host: &LocalOcrHost, sto
                 _ = stop.notified() => break,
                 step = machine.resume() => {
                     match step.unwrap() {
-                        MachineStep::Suspended(Suspension::HostCall(op)) => host.handle_host_call(op).await.unwrap(),
-                        MachineStep::Suspended(Suspension::Hook(HookRequest::BeforeProviderRequest { wire, reply, .. })) => reply.send(*wire),
-                        MachineStep::Suspended(Suspension::Hook(HookRequest::Event(_, reply))) => reply.send(()),
-                        MachineStep::Suspended(Suspension::Stream(stream)) => match stream {
+                        MachineStep::Suspended(HostRequest::HostCall(op)) => host.handle_host_call(op).await.unwrap(),
+                        MachineStep::Suspended(HostRequest::Hook(HookRequest::BeforeProviderRequest { wire, reply, .. })) => reply.send(*wire),
+                        MachineStep::Suspended(HostRequest::Hook(HookRequest::Event(_, reply))) => reply.send(()),
+                        MachineStep::Suspended(HostRequest::Stream(stream)) => match stream {
                             litellm_host::protocol::StreamDelivery::Open(head, _) => match head {},
                             litellm_host::protocol::StreamDelivery::Chunk(chunk, _) => match chunk {},
                         },
@@ -185,7 +185,7 @@ async fn resuming_before_answering_keeps_the_pending_operation() {
         request,
         caller_token: false,
     });
-    let Ok(MachineStep::Suspended(Suspension::Hook(HookRequest::BeforeProviderRequest {
+    let Ok(MachineStep::Suspended(HostRequest::Hook(HookRequest::BeforeProviderRequest {
         wire,
         reply,
         ..
@@ -197,7 +197,7 @@ async fn resuming_before_answering_keeps_the_pending_operation() {
     reply.send(*wire);
     assert!(matches!(
         machine.resume().await,
-        Ok(MachineStep::Suspended(Suspension::Hook(
+        Ok(MachineStep::Suspended(HostRequest::Hook(
             HookRequest::Event(_, _)
         )))
     ));
