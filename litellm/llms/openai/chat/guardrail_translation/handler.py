@@ -794,6 +794,14 @@ class OpenAIChatCompletionsHandler(BaseTranslation):
         self.merge_user_api_key_metadata_into_request(request_data, user_api_key_dict)
 
         inputs: Final = GenericGuardrailAPIInputs(texts=texts_to_check)
+        if self._streamed_tool_call_fingerprints(responses_so_far):
+            assembled: Final = self._rebuild_ended_stream_per_choice(responses_so_far, litellm_logging_obj)
+            inputs["tool_calls"] = [
+                converted
+                for choice in assembled.choices
+                for tool_call in choice.message.tool_calls or ()
+                if (converted := self._convert_tool_call_to_dict(tool_call)) is not None
+            ]
         if responses_so_far and getattr(responses_so_far[0], "model", None):
             inputs["model"] = responses_so_far[0].model
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
