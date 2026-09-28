@@ -17892,8 +17892,7 @@ async def update_config(
                 if k == "pass_through_endpoints":
                     stored_section = cast("Mapping[str, JsonValue]", existing)  # cast-ok: section read from the DB
                     restored = restore_redacted_pass_through_endpoint_headers(v, stored_section.get(k))
-                    existing[k] = cast(JsonValue, restored)  # cast-ok: list in, list out
-                    continue
+                    v = cast(JsonValue, restored)  # cast-ok: list in, list out
                 existing[k] = v
             await _upsert_section("general_settings", existing)
             asyncio.create_task(

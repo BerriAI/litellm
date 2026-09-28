@@ -7807,7 +7807,11 @@ def test_restore_redacted_pass_through_headers_prefers_exact_name_over_case_inse
     )
 
     stored = {"Authorization": "Bearer A", "authorization": "Bearer B", "x-num": 12345}
-    incoming = {"Authorization": "REDACTED_BY_LITELM", "authorization": "REDACTED_BY_LITELM", "X-NUM": "REDACTED_BY_LITELM"}
+    incoming = {
+        "Authorization": "REDACTED_BY_LITELM",
+        "authorization": "REDACTED_BY_LITELM",
+        "X-NUM": "REDACTED_BY_LITELM",
+    }
 
     assert _restore_redacted_pass_through_headers(incoming, stored) == {
         "Authorization": "Bearer A",
@@ -7846,15 +7850,19 @@ def test_restore_redacted_pass_through_endpoint_headers_keeps_same_path_entries_
         {"path": "/shared", "methods": ["post"], "headers": {"Authorization": "Bearer write-secret"}},
         {"path": "/dup", "headers": {"Authorization": "Bearer dup-one"}},
         {"path": "/dup", "headers": {"Authorization": "Bearer dup-two"}},
+        {"path": "/all", "methods": [], "headers": {"Authorization": "Bearer all-secret"}},
+        {"path": "/all", "methods": ["GET"], "headers": {"Authorization": "Bearer all-get"}},
     ]
     incoming = [
         {"path": "/shared", "methods": ["GET"], "headers": {"Authorization": "REDACTED_BY_LITELM"}},
         {"path": "/shared", "methods": ["POST"], "headers": {"Authorization": "REDACTED_BY_LITELM"}},
+        {"path": "/all", "methods": None, "headers": {"Authorization": "REDACTED_BY_LITELM"}},
     ]
 
     assert restore_redacted_pass_through_endpoint_headers(incoming, stored) == [
         {"path": "/shared", "methods": ["GET"], "headers": {"Authorization": "Bearer read-secret"}},
         {"path": "/shared", "methods": ["POST"], "headers": {"Authorization": "Bearer write-secret"}},
+        {"path": "/all", "methods": None, "headers": {"Authorization": "Bearer all-secret"}},
     ]
     with pytest.raises(HTTPException) as exc_info:
         restore_redacted_pass_through_endpoint_headers(
@@ -7863,25 +7871,51 @@ def test_restore_redacted_pass_through_endpoint_headers_keeps_same_path_entries_
     assert exc_info.value.status_code == 400
 
 
-def test_restore_redacted_pass_through_endpoint_headers_follows_methods_edit_on_id_less_entry():
+def test_restore_redacted_pass_through_endpoint_headers_rejects_placeholder_on_new_id_less_path_and_methods():
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        restore_redacted_pass_through_endpoint_headers,
+    )
+
+    stored = [{"path": "/solo", "methods": ["GET"], "headers": {"Authorization": "Bearer solo-secret"}}]
+
+    for sent in (
+        {"path": "/solo", "methods": ["GET", "POST"], "headers": {"Authorization": "REDACTED_BY_LITELM"}},
+        {"path": "/solo", "methods": ["POST"], "headers": {"Authorization": "REDACTED_BY_LITELM"}},
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            restore_redacted_pass_through_endpoint_headers([sent], stored)
+        assert exc_info.value.status_code == 400
+
+
+def test_restore_redacted_pass_through_endpoint_headers_never_borrows_across_entries():
     from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
         restore_redacted_pass_through_endpoint_headers,
     )
 
     stored = [
-        {"path": "/solo", "methods": ["GET"], "headers": {"Authorization": "Bearer solo-secret"}},
-        {"path": "/pair", "methods": ["GET"], "headers": {"Authorization": "Bearer pair-get"}},
-        {"path": "/pair", "methods": ["POST"], "headers": {"Authorization": "Bearer pair-post"}},
+        {"path": "/mix", "methods": ["GET"], "headers": {"Authorization": "Bearer mix-id-less"}},
+        {"id": "ep-mix", "path": "/mix", "methods": ["POST"], "headers": {"Authorization": "Bearer mix-with-id"}},
+        {"path": "/solo", "headers": {"Authorization": "Bearer solo-secret"}},
     ]
 
     assert restore_redacted_pass_through_endpoint_headers(
-        [{"path": "/solo", "methods": ["GET", "POST"], "headers": {"Authorization": "REDACTED_BY_LITELM"}}], stored
-    ) == [{"path": "/solo", "methods": ["GET", "POST"], "headers": {"Authorization": "Bearer solo-secret"}}]
-    with pytest.raises(HTTPException) as exc_info:
-        restore_redacted_pass_through_endpoint_headers(
-            [{"path": "/pair", "methods": ["PUT"], "headers": {"Authorization": "REDACTED_BY_LITELM"}}], stored
-        )
-    assert exc_info.value.status_code == 400
+        [
+            {"path": "/mix", "methods": ["GET"], "headers": {"Authorization": "REDACTED_BY_LITELM"}},
+            {"id": "ep-mix", "path": "/mix", "methods": ["PUT"], "headers": {"Authorization": "REDACTED_BY_LITELM"}},
+        ],
+        stored,
+    ) == [
+        {"path": "/mix", "methods": ["GET"], "headers": {"Authorization": "Bearer mix-id-less"}},
+        {"id": "ep-mix", "path": "/mix", "methods": ["PUT"], "headers": {"Authorization": "Bearer mix-with-id"}},
+    ]
+    for borrowed in (
+        {"path": "/mix", "methods": ["POST"], "headers": {"Authorization": "REDACTED_BY_LITELM"}},
+        {"path": "/other", "headers": {"Authorization": "REDACTED_BY_LITELM"}},
+        {"id": "ep-unknown", "path": "/solo", "headers": {"Authorization": "REDACTED_BY_LITELM"}},
+    ):
+        with pytest.raises(HTTPException) as exc_info:
+            restore_redacted_pass_through_endpoint_headers([borrowed], stored)
+        assert exc_info.value.status_code == 400
 
 
 def test_restore_redacted_pass_through_endpoint_headers_rejects_placeholder_without_stored_entry():

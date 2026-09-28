@@ -3598,14 +3598,10 @@ def _endpoint_key(endpoint: Mapping[str, object]) -> object:
     methods = endpoint.get("methods")
     method_key = (
         tuple(sorted(str(method).upper() for method in cast("list[object]", methods)))  # cast-ok: JSON list
-        if isinstance(methods, list)
+        if isinstance(methods, list) and methods
         else None
     )
     return ("path", endpoint.get("path"), method_key)
-
-
-def _path_key(endpoint: Mapping[str, object]) -> object:
-    return None if endpoint.get("id") else ("path", endpoint.get("path"))
 
 
 def _unique_lookup(
@@ -3626,12 +3622,11 @@ def _headers_of(endpoint: Mapping[str, object]) -> Mapping[str, object]:
 
 
 def restore_redacted_pass_through_endpoint_headers(incoming: object, stored: object) -> object:
-    """Restore redacted header values in a ``pass_through_endpoints`` list from the stored entry with the same id; an entry without an id uses the stored entry with the same path and methods, else the only id-less stored entry on that path. A key several stored entries share restores nothing."""
+    """Restore redacted header values in a ``pass_through_endpoints`` list from the stored entry with the same id, or for an entry without an id, the same path and methods; a key several stored entries share restores nothing."""
     if not isinstance(incoming, list):
         return incoming
     stored_endpoints: Final = _as_mappings(stored)
     by_key: Final = _unique_lookup([(_endpoint_key(ep), _headers_of(ep)) for ep in stored_endpoints])
-    by_path: Final = _unique_lookup([(_path_key(ep), _headers_of(ep)) for ep in stored_endpoints])
 
     def restore(endpoint: object) -> object:
         if not isinstance(endpoint, dict):
@@ -3639,7 +3634,7 @@ def restore_redacted_pass_through_endpoint_headers(incoming: object, stored: obj
         endpoint_map: Final = cast("Mapping[str, object]", endpoint)  # cast-ok: JSON object
         if not isinstance(endpoint_map.get("headers"), dict):
             return endpoint_map
-        stored_headers: Final = by_key.get(_endpoint_key(endpoint_map)) or by_path.get(_path_key(endpoint_map), {})
+        stored_headers: Final = by_key.get(_endpoint_key(endpoint_map), {})
         return {
             **endpoint_map,
             "headers": _restore_redacted_pass_through_headers(_headers_of(endpoint_map), stored_headers),
@@ -3768,17 +3763,23 @@ async def update_pass_through_endpoints(
     # an existing auth=false entry on any unrelated edit.
     # Exclude is_from_config as it's a response-only field (computed at read time)
     update_data: Final = data.model_dump(exclude_unset=True, exclude_none=True, exclude={"is_from_config"})
-    if "headers" in update_data:
-        update_data["headers"] = _restore_redacted_pass_through_headers(
-            cast("Mapping[str, object]", update_data["headers"]),  # cast-ok: model_dump of the headers dict
-            cast("Mapping[str, object]", found_endpoint.headers),  # cast-ok: the model types headers as a bare dict
-        )
+    merge_data: Final = (
+        {
+            **update_data,
+            "headers": _restore_redacted_pass_through_headers(
+                cast("Mapping[str, object]", update_data["headers"]),  # cast-ok: model_dump of the headers dict
+                cast("Mapping[str, object]", found_endpoint.headers),  # cast-ok: the model types headers as a bare dict
+            ),
+        }
+        if "headers" in update_data
+        else update_data
+    )
 
     # Start with existing endpoint data
     endpoint_dict: Final = found_endpoint.model_dump()
 
     # Update with new data (only explicitly provided values)
-    endpoint_dict.update(update_data)
+    endpoint_dict.update(merge_data)
 
     # Preserve existing ID if not provided in update and endpoint has ID
     if "id" not in update_data and found_endpoint.id is not None:
