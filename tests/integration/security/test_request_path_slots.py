@@ -361,6 +361,22 @@ def _caller(scenario: Scenario, model: str) -> Caller:
     return Caller(team, user, scenario.key(team_id=team, user_id=user, models=[model]))
 
 
+def _deployment_id(rig: Rig, model: str) -> str:
+    """The router's ``model_info.id`` for the slot's deployment, for the ``{model_id}`` routes."""
+    data: Final = rig.proxy.get("/model/info").get("data")
+    assert isinstance(data, list), data
+    found: Final = tuple(
+        info["id"]
+        for entry in data
+        if isinstance(entry, dict)
+        and entry.get("model_name") == model
+        and isinstance(info := entry.get("model_info"), dict)
+        and isinstance(info.get("id"), str)
+    )
+    assert len(found) == 1, f"expected one {model} deployment in /model/info, got {found}"
+    return str(found[0])
+
+
 def _trigger(outcome: str) -> str:
     return {"success": "", "provider_4xx": f" {PROVIDER_4XX}", "provider_5xx": f" {PROVIDER_5XX}"}[outcome]
 
@@ -458,7 +474,7 @@ def test_request_credential_reaches_only_the_provider(
                 "request_id": request_id,
                 "team_id": caller.team_id,
                 "user_id": caller.user_id,
-                "model_id": slot.model,
+                "model_id": _deployment_id(rig, slot.model),
                 "model": slot.model,
             },
             callers=caller.callers(rig),
