@@ -5919,7 +5919,7 @@ class TestStrategyRouterWriteValidation:
                     ),
                     user_api_key_dict=admin,
                 )
-            assert exc_info.value.code == 400
+            assert str(exc_info.value.code) == "400"
             assert "not a supported or routable provider" in str(
                 exc_info.value.message
             ) or "not a routable provider" in str(exc_info.value.message)
