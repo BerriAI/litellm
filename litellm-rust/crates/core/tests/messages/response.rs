@@ -1,7 +1,4 @@
-use litellm_core::{
-    Phase,
-    messages::{MessagesResponse, messages_body},
-};
+use litellm_core::messages::{MessagesResponse, messages_body};
 use litellm_http::transport::Error as TransportError;
 use rstest::rstest;
 
@@ -225,7 +222,7 @@ async fn an_unreadable_success_body_is_an_invalid_response(
     .await
     .expect_err("an unreadable body fails");
 
-    assert_eq!(error.phase(), Phase::AfterSend, "{error:?}");
+    assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
 }
 
 #[rstest]

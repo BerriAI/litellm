@@ -1,9 +1,7 @@
 use litellm_host::interceptors::RawResponse;
 use std::time::Duration;
 
-use litellm_core::chat_completions::{
-    Error, chat_completions_decline_reason, types::ChatCompletionsRequest,
-};
+use litellm_core::chat_completions::{Error, types::ChatCompletionsRequest};
 use litellm_http::transport::Error as TransportError;
 use litellm_types::utils::ChatCompletionsResponse;
 use rstest::{fixture, rstest};
@@ -157,8 +155,6 @@ async fn bedrock_round_trip_is_signed_and_normalized(request: ChatCompletionsReq
     assert_eq!(response.usage.total_tokens, 15);
 }
 
-/// The provider already answered and billed these, so the host must not retry them on
-/// its own path: they surface as `InvalidResponse`, never as a pre-send decline.
 #[rstest]
 #[case::missing_usage(
     r#"{"model":"m","content":[{"type":"text","text":"hi"}],"stop_reason":"end_turn"}"#
@@ -210,10 +206,9 @@ async fn an_upstream_error_status_keeps_its_code_and_body(
     );
 }
 
-/// Nothing was sent, so nothing was billed and the host can still serve the request.
 #[rstest]
 #[tokio::test]
-async fn a_connection_that_is_never_established_declines_instead_of_failing(
+async fn a_connection_that_is_never_established_returns_a_connect_error(
     request: ChatCompletionsRequest<'static>,
 ) {
     let error = complete(ChatCompletionsRequest {
@@ -231,9 +226,7 @@ async fn a_connection_that_is_never_established_declines_instead_of_failing(
 
 #[rstest]
 #[tokio::test]
-async fn a_timeout_after_sending_is_not_a_pre_send_decline(
-    request: ChatCompletionsRequest<'static>,
-) {
+async fn a_timeout_after_sending_returns_a_network_error(request: ChatCompletionsRequest<'static>) {
     let upstream =
         upstream([anthropic_response(ANTHROPIC_MESSAGE).set_delay(Duration::from_secs(5))]).await;
     let base = upstream.uri();
@@ -250,79 +243,6 @@ async fn a_timeout_after_sending_is_not_a_pre_send_decline(
         matches!(error, Error::Transport(TransportError::Network(_))),
         "{error:?}"
     );
-}
-
-#[rstest]
-#[case::accepted("anthropic/claude-sonnet-4-5", None, hi(), json!({"max_tokens": 16}), None)]
-#[case::accepted_bedrock("bedrock/anthropic.claude-sonnet-4-5", None, hi(), json!({}), None)]
-#[case::unknown_provider(
-    "gpt-4o",
-    Some("openai"),
-    hi(),
-    json!({}),
-    Some("provider is not on the rust chat completions path")
-)]
-#[case::unreadable_messages(
-    "anthropic/claude-sonnet-4-5",
-    None,
-    json!("hi"),
-    json!({}),
-    Some("unreadable message list")
-)]
-#[case::empty_messages("anthropic/claude-sonnet-4-5", None, json!([]), json!({}), Some("empty message list"))]
-#[case::streaming(
-    "anthropic/claude-sonnet-4-5",
-    None,
-    hi(),
-    json!({"stream": true}),
-    Some("streaming")
-)]
-#[case::unrecognized_param(
-    "anthropic/claude-sonnet-4-5",
-    None,
-    hi(),
-    json!({"not_a_param": 1}),
-    Some("unrecognized request parameter")
-)]
-#[case::opens_on_assistant_turn(
-    "anthropic/claude-sonnet-4-5",
-    None,
-    json!([{"role": "assistant", "content": "hi"}]),
-    json!({}),
-    Some("conversation does not open on a user turn")
-)]
-fn decline_reason_names_why_the_core_would_not_serve_the_request(
-    #[case] model: &str,
-    #[case] provider: Option<&str>,
-    #[case] messages: Value,
-    #[case] params: Value,
-    #[case] reason: Option<&str>,
-) {
-    assert_eq!(
-        chat_completions_decline_reason(model, provider, messages, &object(params)),
-        reason
-    );
-}
-
-/// A request the decline check accepts must not be declined by the call itself.
-#[rstest]
-#[tokio::test]
-async fn a_declined_request_fails_the_call_before_sending(
-    request: ChatCompletionsRequest<'static>,
-) {
-    let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
-    let base = upstream.uri();
-
-    let error = complete(ChatCompletionsRequest {
-        optional_params: object(json!({"stream": true})),
-        api_base: Some(&base),
-        ..request
-    })
-    .await
-    .expect_err("streaming is declined");
-
-    assert_eq!(error, Error::Unsupported("streaming"));
-    assert!(received(&upstream).await.is_empty());
 }
 
 #[rstest]
@@ -428,7 +348,6 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
         )
         .await
         .unwrap_err();
-    assert_eq!(error.phase(), litellm_core::error::Phase::AfterSend);
     let Error::PostCallHook(source) = error else {
         panic!("expected retained callback error")
     };

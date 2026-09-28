@@ -34031,11 +34031,6 @@ export interface components {
              */
             advisory_system_message?: string | null;
             /**
-             * Agent Id
-             * @description Agent identity reported to Agent 365 with every tool evaluation. When unset, the caller's key alias is used.
-             */
-            agent_id?: string | null;
-            /**
              * Akto Account Id
              * @description Akto account ID for multi-tenant deployments. Env: AKTO_ACCOUNT_ID. Default: '1000000'.
              */
@@ -34684,11 +34679,6 @@ export interface components {
              * @description The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.
              */
             realtime_violation_message?: string | null;
-            /**
-             * Resource App Id
-             * @description Application id of the Agent 365 resource the OBO token is minted for. Defaults to the production resource ea9ffc3e-8a23-4a7d-836d-234d7c7565c1; the Test and PreProd environments use a different id. Falls back to the AGENT365_RESOURCE_APP_ID environment variable.
-             */
-            resource_app_id?: string | null;
             /**
              * Rules
              * @description Ordered allow/deny rules. Patterns use regex for tool names/types and optional regex constraints on tool arguments.

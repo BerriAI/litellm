@@ -3,7 +3,7 @@ import contextlib
 import json
 import logging
 import math
-from collections.abc import AsyncGenerator, Awaitable, Callable, Mapping, Sequence
+from collections.abc import AsyncGenerator, Awaitable, Callable, Coroutine, Mapping, Sequence
 from datetime import datetime
 from functools import lru_cache
 from types import MappingProxyType
@@ -974,7 +974,7 @@ _NO_GENERAL_SETTINGS: Final[Mapping[str, object]] = MappingProxyType({})
 
 
 async def create_response(
-    generator: AsyncGenerator[str, None],
+    generator: AsyncGenerator[str, None] | Coroutine[object, object, AsyncGenerator[str, None]],
     media_type: str,
     headers: Mapping[str, str],
     default_status_code: int = status.HTTP_200_OK,
@@ -4166,7 +4166,7 @@ class ProxyBaseLLMRequestProcessing:
         )
 
     @staticmethod
-    def _stream_usage_for_event(obj: Mapping[str, object], usage: Mapping[str, Any]) -> Usage | None:
+    def _stream_usage_for_event(obj: Mapping[str, object], usage: Mapping[str, object]) -> Usage | None:
         # Anthropic reports input_tokens excluding cache tokens, so reuse the non-streaming
         # transformation to total the prompt and keep the 5m/1h cache creation split
         if obj.get("type") == "message_delta":

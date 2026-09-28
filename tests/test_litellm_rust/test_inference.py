@@ -245,17 +245,28 @@ async def test_unstarted_native_inference_has_no_provider_or_callback_effects(
         {"model_list": []},
     ),
 )
-async def test_native_inference_declines_unsupported_requests_before_callbacks(
-    route: Route,
+async def test_native_responses_declines_unsupported_requests_before_callbacks(
     recording_server: RecordingServer,
     options: Mapping[str, object],
 ) -> None:
     recorder: Final = RecordingLogger()
     recording_server.expected_requests = 0
     with pytest.raises(_native.RustBridgeDeclined):
-        native_call(route, True, recording_server, {**options, "callbacks": [recorder]})
+        native_call("responses", True, recording_server, {**options, "callbacks": [recorder]})
     assert not recording_server.requests
     assert not recorder.events
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_native_chat_validation_failure_is_terminal(
+    asynchronous: bool, recording_server: RecordingServer
+) -> None:
+    recording_server.expected_requests = 0
+    with pytest.raises(Exception, match="chat completions requires at least one message") as failure:
+        await execute("chat", asynchronous, recording_server, {"messages": []})
+    assert not isinstance(failure.value, _native.RustBridgeDeclined)
+    assert not recording_server.requests
 
 
 @pytest.mark.asyncio
