@@ -122,7 +122,7 @@ class AWSEventStreamDecoder:
                         continue
 
         # remove custom sagemaker [DONE] message in stream
-        accumulated_json = accumulated_json.removesuffix("[DONE"])
+        accumulated_json = accumulated_json.removesuffix("[DONE]")
 
         # Handle any remaining data after the iterator is exhausted
         if accumulated_json:
@@ -179,7 +179,7 @@ class AWSEventStreamDecoder:
                     continue
 
         # remove custom sagemaker [DONE] message in stream
-        accumulated_json = accumulated_json.removesuffix("[DONE"])
+        accumulated_json = accumulated_json.removesuffix("[DONE]")
 
         # Handle any remaining data after the iterator is exhausted
         if accumulated_json:
