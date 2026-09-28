@@ -3453,9 +3453,13 @@ class ProxyBaseLLMRequestProcessing:
         unwrapped inner iterator.
         """
         from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
+        from litellm.proxy.route_llm_request import _RouterOwnedStream
         from litellm.router_utils.add_retry_fallback_headers import HiddenParamsAsyncIteratorWrapper
 
-        unwrapped: Final = response._inner if isinstance(response, HiddenParamsAsyncIteratorWrapper) else response
+        owned_stream: Final = response._stream if isinstance(response, _RouterOwnedStream) else response
+        unwrapped: Final = (
+            owned_stream._inner if isinstance(owned_stream, HiddenParamsAsyncIteratorWrapper) else owned_stream
+        )
 
         if isinstance(unwrapped, CustomStreamWrapper):
             # Intentionally a live reference (not a copy) — mirrors

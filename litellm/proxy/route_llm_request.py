@@ -1,6 +1,7 @@
 import asyncio
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any, Final, Literal
+from collections.abc import AsyncIterator, Mapping
+from contextlib import suppress
+from typing import TYPE_CHECKING, Any, Final, Literal, cast
 
 import httpx
 from fastapi import HTTPException, status
@@ -35,6 +36,46 @@ else:
     LitellmRouter = Any
 
 
+class _RouterOwnedStream:
+    """Keep per-request router callbacks until the stream ends or is closed."""
+
+    def __init__(self, stream: AsyncIterator[object], router: LitellmRouter):
+        self._stream = stream
+        self._router = router
+        self._discarded = False
+
+    def __getattr__(self, name: str) -> object:
+        return getattr(self._stream, name)
+
+    def __aiter__(self) -> "_RouterOwnedStream":
+        return self
+
+    def _discard(self) -> None:
+        if not self._discarded:
+            self._discarded = True
+            self._router.discard()
+
+    async def __anext__(self) -> object:
+        try:
+            return await anext(self._stream)
+        except BaseException:
+            # A failed or cancelled stream still owns an upstream connection.
+            # Preserve the original exception if closing also fails.
+            with suppress(BaseException):
+                await self.aclose()
+            raise
+
+    async def aclose(self) -> None:
+        if self._discarded:
+            return
+        try:
+            closer = getattr(self._stream, "aclose", None)
+            if closer is not None:
+                await closer()
+        finally:
+            self._discard()
+
+
 def _route_user_config_request(data: dict, route_type: str):
     """Route a request using the user-provided router config."""
     router_config: Final = data.pop("user_config")
@@ -45,9 +86,26 @@ def _route_user_config_request(data: dict, route_type: str):
     filtered_config: Final = {k: v for k, v in router_config.items() if k in valid_args}
 
     user_router: Final = litellm.Router(**filtered_config)
-    ret_val: Final = getattr(user_router, f"{route_type}")(**data)
-    user_router.discard()
-    return ret_val
+    try:
+        call = getattr(user_router, route_type)(**data)
+    except BaseException:
+        user_router.discard()
+        raise
+
+    async def _run():
+        stream_returned = False
+        try:
+            response = await call
+            if isinstance(response, AsyncIterator):
+                wrapped = _RouterOwnedStream(cast("AsyncIterator[object]", response), user_router)
+                stream_returned = True
+                return wrapped
+            return response
+        finally:
+            if not stream_returned:
+                user_router.discard()
+
+    return _run()
 
 
 def _is_a2a_agent_model(model_name: object) -> bool:
