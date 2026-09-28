@@ -6,16 +6,17 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-core-utils.workspace = true
 litellm-http.workspace = true
 futures-util.workspace = true
 litellm-auth-gcp.workspace = true
 litellm-auth-types.workspace = true
 litellm-cache.workspace = true
-percent-encoding.workspace = true
 reqwest.workspace = true
 tokio.workspace = true
 
 [dev-dependencies]
+percent-encoding.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-cache-testing.workspace = true
 rstest.workspace = true

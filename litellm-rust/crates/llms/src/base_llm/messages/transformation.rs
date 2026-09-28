@@ -23,14 +23,14 @@ pub trait BaseAnthropicMessagesConfig: Sync {
         api_base: Option<&str>,
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error>;
+    ) -> Result<url::Url, Error>;
 
     fn complete_stream_url(
         &self,
         api_base: Option<&str>,
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         self.get_complete_url(api_base, model, env_lookup)
     }
 
@@ -97,8 +97,8 @@ mod tests {
             _api_base: Option<&str>,
             _model: &str,
             _env_lookup: &dyn Fn(&str) -> Option<String>,
-        ) -> Result<String, Error> {
-            Ok(String::new())
+        ) -> Result<url::Url, Error> {
+            Ok(url::Url::parse("https://example.test/").unwrap())
         }
 
         fn validate_environment(

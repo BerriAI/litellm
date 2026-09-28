@@ -77,7 +77,7 @@ impl BaseOcrConfig for AzureAiOcrConfig {
         request: &PreparedOcrRequest,
         _optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         self.build_ocr_url(request.connection.api_base.as_deref(), &|name: &str| {
             request.connection.secret(name)
         })
@@ -181,11 +181,11 @@ impl AzureAiOcrConfig {
         &self,
         api_base: Option<&str>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         let base = Self::resolve_api_base(api_base, env_lookup)?;
         ApiUrl::parse(&base)
             .and_then(|url| url.complete_path(&AZURE_AI_OCR_PATH))
-            .map(|url| url.into_string())
+            .map(|url| url.into_url())
             .map_err(|_| Error::RequestField {
                 path: "api_base".into(),
             })
@@ -232,7 +232,8 @@ mod tests {
         assert_eq!(
             AzureAiOcrConfig
                 .build_ocr_url(Some(api_base), &|_| None)
-                .unwrap(),
+                .unwrap()
+                .to_string(),
             expected
         );
     }
@@ -356,6 +357,9 @@ mod tests {
             headers,
             [("Authorization".to_string(), "Bearer env-key".to_string())]
         );
-        assert_eq!(url, "https://env.example/providers/mistral/azure/ocr");
+        assert_eq!(
+            url.as_str(),
+            "https://env.example/providers/mistral/azure/ocr"
+        );
     }
 }

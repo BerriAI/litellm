@@ -33,7 +33,7 @@ pub trait BaseAudioTranscriptionConfig: Sync {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error>;
+    ) -> Result<url::Url, Error>;
 
     fn transform_audio_transcription_request(
         &self,

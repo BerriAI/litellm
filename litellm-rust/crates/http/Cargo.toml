@@ -10,6 +10,7 @@ test-support = []
 mcp = ["dep:rmcp", "dep:reqwest-mcp"]
 
 [dependencies]
+url.workspace = true
 rmcp = { version = "=3.4.1", default-features = false, features = ["client", "transport-streamable-http-client-reqwest"], optional = true }
 reqwest-mcp = { package = "reqwest", version = "0.13.2", default-features = false, features = ["rustls-no-provider", "json", "stream", "http2"], optional = true }
 http.workspace = true
@@ -28,6 +29,7 @@ veil.workspace = true
 webpki-roots.workspace = true
 
 [dev-dependencies]
+wiremock = "0.6.5"
 futures-util.workspace = true
 rcgen = "0.14.10"
 tempfile.workspace = true

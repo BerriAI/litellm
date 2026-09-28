@@ -88,7 +88,7 @@ fn connect_creates_the_container_once(fixture: Fixture) {
             if_none_match: None,
         }]
     );
-    assert_eq!(fixture.cache.account_url(), ACCOUNT_URL);
+    assert_eq!(fixture.cache.account_url(), format!("{ACCOUNT_URL}/"));
     assert_eq!(fixture.cache.container_name(), CONTAINER);
 }
 
@@ -106,7 +106,10 @@ fn connect_accepts_an_existing_container() {
 fn connect_accepts_account_urls_with_trailing_slash() {
     let (service, cache) = connect_to("https://example.blob.core.windows.net/");
     assert_eq!(service.requests()[0].path, format!("/{CONTAINER}"));
-    assert_eq!(cache.account_url(), "https://example.blob.core.windows.net");
+    assert_eq!(
+        cache.account_url(),
+        "https://example.blob.core.windows.net/"
+    );
 }
 
 #[rstest]

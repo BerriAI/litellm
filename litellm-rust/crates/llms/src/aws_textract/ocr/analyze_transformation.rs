@@ -78,8 +78,8 @@ impl BaseOcrConfig for TextractAnalyzeDocumentConfig {
         request: &PreparedOcrRequest,
         _optional_params: &AnalyzeDocumentOptions,
         environment: &TextractEnvironment,
-    ) -> Result<String, Error> {
-        Ok(endpoint(request, environment))
+    ) -> Result<url::Url, Error> {
+        endpoint(request, environment)
     }
 
     fn transform_ocr_request(

@@ -450,3 +450,40 @@ async fn trailing_slash_endpoint_preserves_base_path() {
         "value"
     );
 }
+
+#[rstest]
+#[tokio::test]
+async fn endpoint_prefix_query_and_each_resource_segment_are_preserved() {
+    let server = MockServer::start().await;
+    Mock::given(path("/prefix/authn/acct%2Ftenant/host%2Fuser/authenticate"))
+        .and(wiremock::matchers::query_param("tenant", "a"))
+        .respond_with(ResponseTemplate::new(200).set_body_string(TOKEN_JSON))
+        .expect(1)
+        .mount(&server)
+        .await;
+    Mock::given(path("/prefix/secrets/acct%2Ftenant/variable/a%252Fb%3F%23"))
+        .and(wiremock::matchers::query_param("tenant", "a"))
+        .respond_with(ResponseTemplate::new(200).set_body_string("value"))
+        .expect(1)
+        .mount(&server)
+        .await;
+    let manager = CyberArkSecretManager::with_client(
+        litellm_http::Client::plain_for_test(),
+        format!("{}/prefix?tenant=a#f", server.uri())
+            .parse()
+            .unwrap(),
+        "acct/tenant".into(),
+        "host/user".into(),
+        SecretValue::new("key"),
+        None,
+    );
+    assert_eq!(
+        manager
+            .async_read_secret("a%2Fb?#")
+            .await
+            .unwrap()
+            .unwrap()
+            .expose(),
+        "value"
+    );
+}

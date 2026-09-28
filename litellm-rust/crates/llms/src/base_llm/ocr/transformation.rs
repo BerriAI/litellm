@@ -53,7 +53,8 @@ impl OcrDocument {
 
     pub fn is_remote(&self) -> bool {
         let source = self.source();
-        source.starts_with("http://") || source.starts_with("https://")
+        url::Url::parse(source)
+            .is_ok_and(|url| matches!(url.scheme(), "http" | "https") && url.host().is_some())
     }
 
     pub fn with_source(self, source: String) -> Self {
@@ -476,7 +477,7 @@ pub trait BaseOcrConfig: Send + Sync + Sized + 'static {
         request: &PreparedOcrRequest,
         optional_params: &Self::OcrParams,
         environment: &Self::Environment,
-    ) -> Result<String, Error>;
+    ) -> Result<url::Url, Error>;
 
     fn transform_ocr_request(
         &self,

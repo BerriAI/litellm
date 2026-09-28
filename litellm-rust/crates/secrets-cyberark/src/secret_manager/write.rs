@@ -91,9 +91,7 @@ impl CyberArkSecretManager {
         name: &str,
         context: &CyberarkOperationContext,
     ) {
-        let policy_url = self
-            .endpoint
-            .join(&format!("policies/{}/policy/root", self.account));
+        let policy_url = self.endpoint_url(&["policies", &self.account, "policy", "root"]);
         let Ok(policy_url) = policy_url else {
             litellm_tracing::warn!("Could not build CyberArk policy endpoint");
             return;

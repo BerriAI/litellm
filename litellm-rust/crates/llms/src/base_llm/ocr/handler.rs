@@ -213,7 +213,7 @@ pub fn transport_error(error: reqwest::Error) -> Error {
 pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     config: &C,
     request: &PreparedOcrRequest,
-    url: &str,
+    url: &url::Url,
     headers: &[(String, String)],
     body: B,
     signer: Option<&dyn RequestSigner>,
@@ -235,21 +235,20 @@ pub async fn transform_request_body<C: BaseOcrConfig, B: Serialize>(
     }
     config.validate_request_body(&changed.body)?;
     let timeout = Some(request.connection.timeout);
+    let final_url = litellm_core_utils::url_utils::ApiUrl::parse(&changed.url)?
+        .complete_path(&[])?
+        .into_url();
     Ok(match signer {
-        Some(signer) => OutboundRequest::signed_json(
-            url.into(),
-            changed.headers,
-            &changed.body,
-            timeout,
-            signer,
-        ),
-        None => OutboundRequest::json(url.into(), changed.headers, &changed.body, timeout),
+        Some(signer) => {
+            OutboundRequest::signed_json(final_url, changed.headers, &changed.body, timeout, signer)
+        }
+        None => OutboundRequest::json(final_url, changed.headers, &changed.body, timeout),
     }?)
 }
 
-fn wire_request(url: &str, headers: &[(String, String)], body: Value) -> WireRequest {
+fn wire_request(url: &url::Url, headers: &[(String, String)], body: Value) -> WireRequest {
     WireRequest {
-        url: url.into(),
+        url: url.as_str().into(),
         headers: headers.to_vec(),
         body,
     }
@@ -257,7 +256,7 @@ fn wire_request(url: &str, headers: &[(String, String)], body: Value) -> WireReq
 
 pub fn build_http_request(
     request: &PreparedOcrRequest,
-    url: String,
+    url: url::Url,
     headers: Vec<(String, String)>,
     body: &impl Serialize,
 ) -> Result<OutboundRequest, Error> {
@@ -271,10 +270,10 @@ pub fn build_http_request(
 
 pub async fn guardrail_document(
     request: &PreparedOcrRequest,
-    url: &str,
+    url: &url::Url,
     headers: &[(String, String)],
     hooks: &dyn CallHooks<Error>,
-) -> Result<(OcrDocument, Vec<(String, String)>), Error> {
+) -> Result<(OcrDocument, Vec<(String, String)>, url::Url), Error> {
     let body = serde_json::to_value(&request.document).map_err(|_| Error::RequestField {
         path: "document".into(),
     })?;
@@ -282,7 +281,10 @@ pub async fn guardrail_document(
         .before_provider_request(wire_request(url, headers, body))
         .await?;
     let document = decode_request_value(changed.body, "guardrail.document")?;
-    Ok((document, changed.headers))
+    let url = litellm_core_utils::url_utils::ApiUrl::parse(&changed.url)?
+        .complete_path(&[])?
+        .into_url();
+    Ok((document, changed.headers, url))
 }
 
 pub fn body_document(body: &Value) -> Result<OcrDocument, Error> {

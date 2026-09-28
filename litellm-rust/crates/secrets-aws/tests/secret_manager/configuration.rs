@@ -31,9 +31,7 @@ async fn credential_failures_are_not_swallowed_as_missing_secrets() {
 #[case::environment(false)]
 #[case::operation_override(true)]
 #[tokio::test]
-async fn endpoint_overrides_replace_the_service_and_override_the_region(
-    #[case] override_context: bool,
-) {
+async fn endpoint_overrides_preserve_paths_and_override_the_region(#[case] override_context: bool) {
     let configured = MockServer::start().await;
     let explicit = MockServer::start().await;
     let target = if override_context {
@@ -41,7 +39,7 @@ async fn endpoint_overrides_replace_the_service_and_override_the_region(
     } else {
         &configured
     };
-    Mock::given(wiremock::matchers::path_regex("^/secretsmanager/?$"))
+    Mock::given(wiremock::matchers::path_regex("^/bedrock-runtime/?$"))
         .and(header("x-amz-target", "secretsmanager.GetSecretValue"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({"SecretString":"value"})))
         .expect(1)

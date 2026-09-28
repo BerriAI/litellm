@@ -28,7 +28,7 @@ pub trait RequestSigner: Send + Sync {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct OutboundRequest {
-    url: String,
+    url: url::Url,
     headers: Vec<(String, String)>,
     body: Vec<u8>,
     timeout: Option<Duration>,
@@ -36,7 +36,7 @@ pub struct OutboundRequest {
 
 impl OutboundRequest {
     pub fn json(
-        url: String,
+        url: url::Url,
         headers: Vec<(String, String)>,
         body: &impl Serialize,
         timeout: Option<Duration>,
@@ -45,7 +45,7 @@ impl OutboundRequest {
     }
 
     pub fn signed_json(
-        url: String,
+        url: url::Url,
         headers: Vec<(String, String)>,
         body: &impl Serialize,
         timeout: Option<Duration>,
@@ -55,12 +55,17 @@ impl OutboundRequest {
     }
 
     fn build(
-        url: String,
+        url: url::Url,
         headers: Vec<(String, String)>,
         body: &impl Serialize,
         timeout: Option<Duration>,
         signer: Option<&dyn RequestSigner>,
     ) -> Result<Self, Error> {
+        if !matches!(url.scheme(), "http" | "https") || url.host().is_none() {
+            return Err(Error::UrlScheme(url.scheme().into()));
+        }
+        let mut url = url;
+        url.set_fragment(None);
         let body =
             serde_json::to_vec(body).map_err(|error| Error::RequestBody(error.to_string()))?;
         let content_type = (!has_header(&headers, "content-type"))
@@ -69,7 +74,7 @@ impl OutboundRequest {
         let signature = signer
             .map(|signer| {
                 signer.sign(UnsignedRequest {
-                    url: &url,
+                    url: url.as_str(),
                     headers: &unsigned,
                     body: &body,
                 })
@@ -85,7 +90,7 @@ impl OutboundRequest {
     }
 
     pub fn url(&self) -> &str {
-        &self.url
+        self.url.as_str()
     }
 
     pub fn headers(&self) -> &[(String, String)] {
@@ -109,7 +114,7 @@ impl OutboundRequest {
 
     pub async fn send(self, client: &crate::Client) -> Result<reqwest::Response, reqwest::Error> {
         let builder = with_headers(
-            client.post(&self.url).body(self.body),
+            client.post(self.url).body(self.body),
             &self.headers,
             HeaderPolicy::All,
         );
@@ -140,11 +145,11 @@ mod tests {
         }
     }
 
-    #[test]
+    #[rstest::rstest]
     fn the_signer_sees_exactly_the_bytes_that_are_sent() {
         let signer = Recording::default();
         let request = OutboundRequest::signed_json(
-            "https://provider.test/".into(),
+            url::Url::parse("https://provider.test/").unwrap(),
             vec![("x-caller".into(), "kept".into())],
             &json!({"b": 1, "a": [true, null]}),
             None,
@@ -169,7 +174,7 @@ mod tests {
         }
 
         let defaulted = OutboundRequest::signed_json(
-            "u".into(),
+            url::Url::parse("https://provider.test/").unwrap(),
             Vec::new(),
             &json!({}),
             None,
@@ -179,7 +184,7 @@ mod tests {
         assert_eq!(defaulted.header("content-type"), Some("application/json"));
 
         let provider = OutboundRequest::signed_json(
-            "u".into(),
+            url::Url::parse("https://provider.test/").unwrap(),
             vec![("Content-Type".into(), "application/x-amz-json-1.1".into())],
             &json!({}),
             None,
@@ -203,8 +208,49 @@ mod tests {
         }
 
         assert_eq!(
-            OutboundRequest::signed_json("u".into(), Vec::new(), &json!({}), None, &Refuses),
+            OutboundRequest::signed_json(
+                url::Url::parse("https://provider.test/").unwrap(),
+                Vec::new(),
+                &json!({}),
+                None,
+                &Refuses
+            ),
             Err(Error::ComputedHeader("authorization".into()))
         );
+    }
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn signed_url_equals_the_sent_url() {
+        struct RecordUrl(Mutex<Option<String>>);
+        impl RequestSigner for RecordUrl {
+            fn sign(&self, request: UnsignedRequest<'_>) -> Result<Vec<(String, String)>, Error> {
+                *self.0.lock().unwrap() = Some(request.url.into());
+                Ok(Vec::new())
+            }
+        }
+        let server = wiremock::MockServer::start().await;
+        wiremock::Mock::given(wiremock::matchers::any())
+            .respond_with(wiremock::ResponseTemplate::new(200))
+            .mount(&server)
+            .await;
+        let signer = RecordUrl(Mutex::new(None));
+        let url = url::Url::parse(&format!(
+            "{}/prefix/a%2Fb?tenant=a%20b#fragment",
+            server.uri()
+        ))
+        .unwrap();
+        OutboundRequest::signed_json(url, Vec::new(), &json!({}), None, &signer)
+            .unwrap()
+            .send(&crate::Client::plain_for_test())
+            .await
+            .unwrap();
+        let requests = server.received_requests().await.unwrap();
+        let sent = &requests[0];
+        let sent_url = format!(
+            "http://{}{}",
+            sent.headers["host"].to_str().unwrap(),
+            &sent.url[url::Position::BeforePath..]
+        );
+        assert_eq!(signer.0.into_inner().unwrap().unwrap(), sent_url);
     }
 }

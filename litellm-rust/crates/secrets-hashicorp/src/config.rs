@@ -58,7 +58,6 @@ impl HashicorpVaultConfig {
         let address: String = environment
             .get(HCP_VAULT_ADDR)
             .and_then(|value| nonempty(value.trim()))
-            .map(|value| value.trim_end_matches('/').to_owned())
             .filter(|value| !value.is_empty())
             .unwrap_or_else(|| DEFAULT_ADDRESS.to_owned());
         let token: Option<SecretValue> = environment

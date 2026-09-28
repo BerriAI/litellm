@@ -200,7 +200,7 @@ impl BaseOcrConfig for AzureDocumentIntelligenceOcrConfig {
         request: &PreparedOcrRequest,
         optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         let endpoint = nonblank(request.connection.api_base.clone())
             .or_else(|| nonblank(request.connection.secret(AZURE_DI_ENDPOINT_ENV)))
             .ok_or_else(|| Error::Auth(litellm_auth::Error::ProviderAuthentication("Missing Azure Document Intelligence API Base - Set AZURE_DOCUMENT_INTELLIGENCE_ENDPOINT or pass api_base".into())))?;
@@ -578,7 +578,7 @@ impl AzureDocumentIntelligenceOcrConfig {
         model: &str,
         params: &DocumentIntelligenceParams,
         api_version: &str,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         let path = Self::analyze_path(model)?;
         ApiUrl::parse(endpoint)
             .and_then(|url| url.complete_path(&path.each_ref().map(String::as_str)))
@@ -594,7 +594,7 @@ impl AzureDocumentIntelligenceOcrConfig {
                                 .map(|features| ("features", features.as_str())),
                         ),
                 )
-                .into_string()
+                .into_url()
             })
             .map_err(|_| Error::RequestField {
                 path: "api_base".into(),

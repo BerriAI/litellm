@@ -103,8 +103,8 @@ impl BaseConfig for AnthropicConfig {
         _model: &str,
         _optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(complete_anthropic_url(api_base, env_lookup))
+    ) -> Result<url::Url, Error> {
+        complete_anthropic_url(api_base, env_lookup)
     }
 
     fn transform_request(

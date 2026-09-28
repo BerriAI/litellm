@@ -191,7 +191,7 @@ mod tests {
             .expect("request preparation should fail")
     }
 
-    #[test]
+    #[rstest::rstest]
     fn resolves_the_provider_from_the_model_prefix() {
         let prepared = prepare_chat_completions_call(request(
             "anthropic/claude-sonnet-4-5",
@@ -201,7 +201,10 @@ mod tests {
         ))
         .expect("prepares");
         assert_eq!(prepared.model, "claude-sonnet-4-5");
-        assert_eq!(prepared.url, "https://api.anthropic.com/v1/messages");
+        assert_eq!(
+            prepared.url.as_str(),
+            "https://api.anthropic.com/v1/messages"
+        );
         assert_eq!(prepared.body["model"], json!("claude-sonnet-4-5"));
     }
 
@@ -414,7 +417,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest::rstest]
     fn prepares_a_bedrock_call_without_resolving_credentials() {
         let mut call = request(
             "bedrock/us-east-1/anthropic.claude-v2",
@@ -425,7 +428,7 @@ mod tests {
         call.api_key = None;
         let prepared = prepare_chat_completions_call(call).expect("prepares");
         assert_eq!(
-            prepared.url,
+            prepared.url.as_str(),
             "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/converse"
         );
         assert!(matches!(

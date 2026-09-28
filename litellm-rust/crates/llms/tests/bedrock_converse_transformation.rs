@@ -223,7 +223,7 @@ fn accepts_a_user_to_user_text_conversation() {
     );
 }
 
-#[test]
+#[rstest::rstest]
 fn builds_the_converse_url_from_the_region_in_the_model_id() {
     let config = &BEDROCK_CHAT_COMPLETIONS_CONFIG;
     assert_eq!(
@@ -231,30 +231,33 @@ fn builds_the_converse_url_from_the_region_in_the_model_id() {
             .get_complete_url(None, "us-east-1/anthropic.claude-v2", &Map::new(), &|_| {
                 None
             })
-            .expect("url builds"),
+            .expect("url builds")
+            .as_str(),
         "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude-v2/converse"
     );
 }
 
-#[test]
+#[rstest::rstest]
 fn falls_back_to_the_region_env_then_the_default_region() {
     let config = &BEDROCK_CHAT_COMPLETIONS_CONFIG;
     let with_env = |key: &str| (key == "AWS_REGION_NAME").then(|| "eu-west-1".to_string());
     assert_eq!(
         config
             .get_complete_url(None, "anthropic.claude-v2", &Map::new(), &with_env)
-            .expect("url builds"),
+            .expect("url builds")
+            .as_str(),
         "https://bedrock-runtime.eu-west-1.amazonaws.com/model/anthropic.claude-v2/converse"
     );
     assert_eq!(
         config
             .get_complete_url(None, "anthropic.claude-v2", &Map::new(), &|_| None)
-            .expect("url builds"),
+            .expect("url builds")
+            .as_str(),
         "https://bedrock-runtime.us-west-2.amazonaws.com/model/anthropic.claude-v2/converse"
     );
 }
 
-#[test]
+#[rstest::rstest]
 fn prefers_an_explicit_runtime_endpoint_over_the_api_base() {
     let config = &BEDROCK_CHAT_COMPLETIONS_CONFIG;
     let overrides = params(json!({"aws_bedrock_runtime_endpoint": "https://vpce.internal/"}));
@@ -266,7 +269,8 @@ fn prefers_an_explicit_runtime_endpoint_over_the_api_base() {
                 &overrides,
                 &|_| None
             )
-            .expect("url builds"),
+            .expect("url builds")
+            .as_str(),
         "https://vpce.internal/model/anthropic.claude-v2/converse"
     );
 }
@@ -563,7 +567,7 @@ fn accepts_aws_call_configuration_without_serializing_it() {
     );
 }
 
-#[test]
+#[rstest::rstest]
 fn leaves_a_complete_converse_url_untouched() {
     let config = &BEDROCK_CHAT_COMPLETIONS_CONFIG;
     let already_built =
@@ -576,13 +580,14 @@ fn leaves_a_complete_converse_url_untouched() {
                 &Map::new(),
                 &|_| None
             )
-            .expect("url builds"),
+            .expect("url builds")
+            .as_str(),
         already_built,
         "a host that encoded the model id itself must not have it re-derived"
     );
 }
 
-#[test]
+#[rstest::rstest]
 fn host_supplied_credentials_outrank_ambient_profile_and_role_state() {
     use litellm_auth_aws::host_supplied_credentials;
 
@@ -606,4 +611,29 @@ fn host_supplied_credentials_outrank_ambient_profile_and_role_state() {
         .is_none()
     );
     assert!(host_supplied_credentials(&Map::new()).is_none());
+}
+
+#[rstest]
+#[case::arn(
+    "arn:aws:bedrock:us-east-1:123:inference-profile/a",
+    "arn:aws:bedrock:us-east-1:123:inference-profile%2Fa"
+)]
+#[case::encoded_literal("name%2Fpart", "name%252Fpart")]
+#[case::delimiters("name?x#f", "name%3Fx%23f")]
+fn raw_model_ids_are_one_segment(#[case] model: &str, #[case] encoded: &str) {
+    let url = BEDROCK_CHAT_COMPLETIONS_CONFIG
+        .get_complete_url(
+            Some("https://example.test/prefix?tenant=a#f"),
+            model,
+            &Map::new(),
+            &|_| None,
+        )
+        .unwrap();
+    assert_eq!(url.path(), format!("/prefix/model/{encoded}/converse"));
+    assert_eq!(url.query(), Some("tenant=a"));
+    assert_eq!(url.fragment(), Some("f"));
+    let completed = BEDROCK_CHAT_COMPLETIONS_CONFIG
+        .get_complete_url(Some(url.as_str()), "ignored", &Map::new(), &|_| None)
+        .unwrap();
+    assert_eq!(completed, url);
 }

@@ -16,10 +16,10 @@ serde_json.workspace = true
 thiserror.workspace = true
 veil.workspace = true
 litellm-tracing.workspace = true
-percent-encoding = "2.3"
 tokio = { workspace = true, features = ["sync"] }
 
 [dev-dependencies]
+percent-encoding = "2.3"
 litellm-http = { workspace = true, features = ["test-support"] }
 rcgen = "0.14.10"
 rstest.workspace = true

@@ -29,7 +29,7 @@ pub fn complete_openai_like_url(
     api_base: Option<&str>,
     custom_endpoint: bool,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
+) -> Result<url::Url, Error> {
     let (api_base, _) = openai_compatible_provider_info(api_base, None, env_lookup);
     let api_base = api_base.ok_or_else(|| {
         Error::InvalidRequest(
@@ -37,13 +37,11 @@ pub fn complete_openai_like_url(
                 .into(),
         )
     })?;
+    let base = litellm_core_utils::url_utils::ApiUrl::parse(&api_base)?;
     if custom_endpoint {
-        return Ok(api_base);
+        return Ok(base.into_url());
     }
-    Ok(format!(
-        "{}/chat/completions",
-        api_base.trim_end_matches('/')
-    ))
+    Ok(base.append_path(&["chat", "completions"])?.into_url())
 }
 
 /// The api key the call resolves to. `None` means neither the deployment nor the

@@ -107,7 +107,7 @@ fn opencode_config_is_valid_json_registering_the_gateway_model(#[case] wire: Wir
     assert!(provider["models"]["some-model"].is_object());
 }
 
-#[test]
+#[rstest::rstest]
 fn opencode_uses_a_different_provider_package_for_every_wire() {
     let package = |wire| {
         let dir = tempfile::tempdir().unwrap();
@@ -129,5 +129,23 @@ fn opencode_uses_a_different_provider_package_for_every_wire() {
             .collect::<std::collections::BTreeSet<_>>()
             .len(),
         packages.len()
+    );
+}
+
+#[rstest]
+#[case::root("http://[::1]:4000/prefix?tenant=a#f")]
+#[case::complete("http://[::1]:4000/prefix/v1?tenant=a#f")]
+fn codex_preserves_base_components(#[case] base: &str) {
+    let config = Settings {
+        base_url: base.into(),
+        ..settings(Wire::Responses)
+    };
+    let spec = Codex
+        .configure(&version(), &config, Path::new("/h"))
+        .unwrap();
+    assert!(
+        spec.files
+            .values()
+            .any(|contents| contents.contains("http://[::1]:4000/prefix/v1?tenant=a#f"))
     );
 }

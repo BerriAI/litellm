@@ -270,3 +270,35 @@ async fn trait_read_limits_the_operation_duration() {
         Err(Error::Timeout)
     ));
 }
+
+#[rstest]
+#[tokio::test]
+async fn secret_url_preserves_prefix_and_query() {
+    let server = MockServer::start().await;
+    Mock::given(path("/prefix/secrets/a%252Fb%3F%23"))
+        .and(query_param("tenant", "a"))
+        .and(query_param("api-version", "7.4"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(serde_json::json!({"value":"value"})),
+        )
+        .expect(1)
+        .mount(&server)
+        .await;
+    let manager = litellm_secrets_azure::AzureKeyVault::with_client(
+        litellm_http::Client::plain_for_test(),
+        format!("{}/prefix?tenant=a#f", server.uri())
+            .parse()
+            .unwrap(),
+        Arc::new(|name: &str| (name == "AZURE_AD_TOKEN").then(|| "fake".to_owned())),
+    )
+    .unwrap();
+    assert_eq!(
+        manager
+            .get_secret("a%2Fb?#")
+            .await
+            .unwrap()
+            .unwrap()
+            .as_str(),
+        Some("value")
+    );
+}

@@ -125,7 +125,7 @@ impl BaseOcrConfig for ReductoParseV3Config {
         request: &PreparedOcrRequest,
         _optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         build_ocr_url(request.connection.api_base.as_deref())
     }
 
@@ -217,7 +217,7 @@ impl BaseOcrConfig for ReductoParseLegacyConfig {
         request: &PreparedOcrRequest,
         optional_params: &Self::OcrParams,
         environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         ReductoParseV3Config.get_complete_url(request, optional_params, environment)
     }
 
@@ -277,7 +277,7 @@ async fn prepare_upload_request<C: BaseOcrConfig<Environment = Vec<(String, Stri
     let params = config.map_ocr_params(&request.optional_params, &request.model)?;
     let headers = config.validate_environment(request, client).await?;
     let url = config.get_complete_url(request, &params, &headers)?;
-    let (document, headers) = guardrail_document(request, &url, &headers, hooks).await?;
+    let (document, headers, url) = guardrail_document(request, &url, &headers, hooks).await?;
     let body = config
         .async_transform_ocr_request(
             &request.model,
@@ -423,18 +423,18 @@ fn page(index: i64, markdown: String, blocks: Option<Value>) -> OcrPage {
         ..Default::default()
     }
 }
-fn build_ocr_url(api_base: Option<&str>) -> Result<String, Error> {
+fn build_ocr_url(api_base: Option<&str>) -> Result<url::Url, Error> {
     complete_endpoint_url(api_base, "parse")
 }
 
-fn complete_endpoint_url(api_base: Option<&str>, path: &str) -> Result<String, Error> {
+fn complete_endpoint_url(api_base: Option<&str>, path: &str) -> Result<url::Url, Error> {
     let base = api_base
         .map(str::trim)
         .filter(|base| !base.is_empty())
         .unwrap_or(REDUCTO_API_BASE);
     ApiUrl::parse(base)
         .and_then(|url| url.complete_path(&[path]))
-        .map(|url| url.into_string())
+        .map(|url| url.into_url())
         .map_err(|_| Error::RequestField {
             path: "api_base".into(),
         })

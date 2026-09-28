@@ -37,7 +37,14 @@ impl Install for ClaudeCode {
         version: &Version,
         target: Target,
     ) -> Result<Release, Error> {
-        let manifest_url = format!("{RELEASES}/{version}/manifest.json");
+        let version = version.to_string();
+        let base = litellm_core_utils::url_utils::ApiUrl::parse(RELEASES)?
+            .append_path(&[&version])?
+            .into_url();
+        let manifest_url: String = litellm_core_utils::url_utils::ApiUrl::from_url(base.clone())?
+            .append_path(&["manifest.json"])?
+            .into_url()
+            .into();
         let manifest: Manifest = parse(&manifest_url, &fetch.get(&manifest_url).await?)?;
         let key = format!(
             "{}-{}{}",
@@ -50,7 +57,10 @@ impl Install for ClaudeCode {
             .get(&key)
             .ok_or_else(|| Error::AssetNotFound(key.clone()))?;
         Ok(Release {
-            url: format!("{RELEASES}/{version}/{key}/claude"),
+            url: litellm_core_utils::url_utils::ApiUrl::from_url(base)?
+                .append_path(&[&key, "claude"])?
+                .into_url()
+                .into(),
             asset: key,
             sha256: platform.checksum.clone(),
             packaging: Packaging::Bare,

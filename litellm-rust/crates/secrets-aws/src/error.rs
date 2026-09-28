@@ -2,6 +2,8 @@ use aws_sdk_secretsmanager::error::SdkError;
 
 #[derive(thiserror::Error, veil::Redact)]
 pub enum Error {
+    #[error("invalid AWS endpoint")]
+    Endpoint(#[from] #[redact] litellm_core_utils::ApiUrlError),
     #[error("AWS authentication failed")]
     Auth(#[from] #[redact] litellm_auth_aws::Error),
     #[error("AWS region is not configured")]

@@ -69,7 +69,7 @@ impl Configure for Codex {
         let config = format!(
             "model = {model}\nmodel_provider = \"litellm\"\n\n[model_providers.litellm]\nname = \"LiteLLM\"\nbase_url = {base_url}\nenv_key = \"LITELLM_API_KEY\"\nwire_api = \"responses\"\n",
             model = quoted(&settings.model),
-            base_url = quoted(&v1(settings)),
+            base_url = quoted(&v1(settings)?),
         );
         Ok(LaunchSpec {
             env: env([

@@ -22,7 +22,7 @@ pub struct ProviderAudioTranscriptionRequest {
     pub model: String,
     pub custom_llm_provider: String,
     pub config: &'static dyn BaseAudioTranscriptionConfig,
-    pub url: String,
+    pub url: url::Url,
     pub body: Value,
     pub environment: ValidatedEnvironment,
     pub secrets: Secrets,
@@ -39,7 +39,7 @@ impl ProviderAudioTranscriptionRequest {
     }
 
     pub fn url(&self) -> &str {
-        &self.url
+        self.url.as_str()
     }
 
     pub fn body(&self) -> &Value {

@@ -26,7 +26,15 @@ pub(super) struct RawPath(pub(super) String);
 
 impl Match for RawPath {
     fn matches(&self, request: &Request) -> bool {
-        request.url.path() == self.0
+        request
+            .url
+            .path()
+            .split('/')
+            .map(|segment| percent_encoding::percent_decode_str(segment).decode_utf8_lossy())
+            .eq(self
+                .0
+                .split('/')
+                .map(|segment| percent_encoding::percent_decode_str(segment).decode_utf8_lossy()))
     }
 }
 

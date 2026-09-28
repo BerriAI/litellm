@@ -15,7 +15,6 @@ use litellm_types::recognized::Recognized;
 use serde::Deserialize;
 use serde_json::Value;
 
-use crate::base_llm::messages::transformation::MESSAGES_PATH_SUFFIX;
 use crate::{
     anthropic::ANTHROPIC_OAUTH_TOKEN_PREFIX,
     base_llm::auth::{AuthScheme, Headers},
@@ -151,14 +150,12 @@ pub fn resolve_anthropic_api_base(
 pub fn complete_anthropic_url(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> String {
+) -> Result<url::Url, crate::Error> {
     let api_base = resolve_anthropic_api_base(api_base, env_lookup);
 
-    let api_base = api_base.trim_end_matches('/');
-    if api_base.ends_with(MESSAGES_PATH_SUFFIX) {
-        return api_base.to_string();
-    }
-    format!("{api_base}{MESSAGES_PATH_SUFFIX}")
+    Ok(litellm_core_utils::url_utils::ApiUrl::parse(&api_base)?
+        .complete_path(&["v1", "messages"])?
+        .into_url())
 }
 
 pub fn existing_betas(headers: &[(String, String)]) -> BetaSet {

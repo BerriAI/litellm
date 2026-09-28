@@ -44,7 +44,7 @@ async fn set_writes_encoded_object_and_headers(#[future(awt)] server: MockServer
     assert_eq!(requests.len(), 1);
     assert_eq!(
         requests[0].url.query(),
-        Some("uploadType=media&name=cache%2Fteam%3Aa%20b%2Fc")
+        Some("uploadType=media&name=cache%2Fteam%3Aa+b%2Fc")
     );
 }
 
@@ -107,10 +107,10 @@ async fn cache_exposes_its_configuration(#[future(awt)] server: MockServer) {
 }
 
 #[rstest]
-#[case::punctuation("a~b-c_d.e/f g%h", "uploadType=media&name=p%2Fa~b-c_d.e%2Ff%20g%25h")]
+#[case::punctuation("a~b-c_d.e/f g%h", "uploadType=media&name=p%2Fa%7Eb-c_d.e%2Ff+g%25h")]
 #[case::utf8("ключ", "uploadType=media&name=p%2F%D0%BA%D0%BB%D1%8E%D1%87")]
 #[tokio::test]
-async fn object_names_use_python_quote_encoding(
+async fn object_names_are_query_values(
     #[future(awt)] server: MockServer,
     #[case] key: &str,
     #[case] query: &str,
@@ -134,7 +134,7 @@ async fn object_names_use_python_quote_encoding(
 #[tokio::test]
 async fn object_names_are_encoded_in_the_download_path(#[future(awt)] server: MockServer) {
     Mock::given(method("GET"))
-        .and(path("/storage/v1/b/bucket/o/p%2Fa%3Ab%20c"))
+        .and(path("/storage/v1/b/bucket/o/p%2Fa:b%20c"))
         .and(query_param("alt", "media"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!(1)))
         .expect(2)
@@ -277,4 +277,44 @@ async fn token_source_failure_skips_http(#[future(awt)] server: MockServer) {
         Error::Unavailable
     );
     assert_eq!(server.received_requests().await.unwrap().len(), 0);
+}
+
+#[rstest]
+#[tokio::test]
+async fn prefixed_endpoint_preserves_query_and_encodes_resource_names(
+    #[future(awt)] server: MockServer,
+) {
+    Mock::given(method("POST"))
+        .and(path("/prefix/upload/storage/v1/b/bucket/o"))
+        .and(query_param("tenant", "a"))
+        .and(query_param("name", "folder/a%2Fb?#"))
+        .respond_with(ResponseTemplate::new(200))
+        .mount(&server)
+        .await;
+    Mock::given(method("GET"))
+        .and(path("/prefix/storage/v1/b/bucket/o/folder%2Fa%252Fb%3F%23"))
+        .and(query_param("tenant", "a"))
+        .and(query_param("alt", "media"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!(1)))
+        .mount(&server)
+        .await;
+    let config = GcsConfig {
+        endpoint: format!("{}/prefix?tenant=a#f", server.uri()),
+        ..support::config(&server, Some("folder"))
+    };
+    let cache = GcsCache::with_token_source(
+        config,
+        litellm_http::Client::plain_for_test(),
+        litellm_cache::JsonCodec::<Value>::new(),
+        Arc::new(litellm_cache_gcs::StaticTokenSource("tok".into())),
+    );
+    cache
+        .async_set_cache("a%2Fb?#", json!(1), context())
+        .await
+        .unwrap();
+    assert_eq!(
+        cache.async_get_cache("a%2Fb?#", &context()).await.unwrap(),
+        Some(json!(1))
+    );
+    assert_eq!(server.received_requests().await.unwrap().len(), 2);
 }

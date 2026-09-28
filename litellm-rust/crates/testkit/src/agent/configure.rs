@@ -64,6 +64,11 @@ pub(crate) fn quoted(value: &str) -> String {
     serde_json::Value::from(value).to_string()
 }
 
-pub(crate) fn v1(settings: &Settings) -> String {
-    format!("{}/v1", settings.base_url.trim_end_matches('/'))
+pub(crate) fn v1(settings: &Settings) -> Result<String, Error> {
+    Ok(
+        litellm_core_utils::url_utils::ApiUrl::parse(&settings.base_url)?
+            .complete_path(&["v1"])?
+            .into_url()
+            .into(),
+    )
 }

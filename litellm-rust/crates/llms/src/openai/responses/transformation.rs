@@ -1,6 +1,8 @@
+use litellm_core_utils::url_utils::ApiUrl;
 use litellm_types::responses::main::ResponsesApiResponse;
 use litellm_types::responses::streaming_websocket::ResponsesWsEvent;
 use serde_json::{Map, Value};
+use url::Url;
 
 use litellm_auth::{CredentialPlacement, SecretValue};
 
@@ -27,7 +29,7 @@ impl ResponsesWebSocketProviderConfig for OpenAiResponsesApiConfig {
         true
     }
 
-    fn complete_websocket_url(&self, api_base: Option<&str>, model: &str) -> String {
+    fn complete_websocket_url(&self, api_base: Option<&str>, model: &str) -> Result<Url, Error> {
         complete_websocket_url(api_base, model)
     }
 
@@ -50,54 +52,25 @@ impl ResponsesWebSocketProviderConfig for OpenAiResponsesApiConfig {
     }
 }
 
-fn complete_websocket_url(api_base: Option<&str>, model: &str) -> String {
+fn complete_websocket_url(api_base: Option<&str>, model: &str) -> Result<Url, Error> {
     let base = api_base
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .unwrap_or(OPENAI_RESPONSES_DEFAULT_API_BASE);
-    let (base_without_query, query) = base
-        .split_once('?')
-        .map_or((base, None), |(value, query)| (value, Some(query)));
-    let response_url = format!(
-        "{}{}",
-        base_without_query.trim_end_matches('/'),
-        OPENAI_RESPONSES_PATH
-    );
-    let scheme_flipped = if let Some(rest) = response_url.strip_prefix("https://") {
-        format!("wss://{rest}")
-    } else if let Some(rest) = response_url.strip_prefix("http://") {
-        format!("ws://{rest}")
-    } else {
-        response_url
+    let mut url = ApiUrl::parse(base)?
+        .complete_path(&["responses"])?
+        .into_url();
+    let scheme = match url.scheme() {
+        "https" | "wss" => "wss",
+        "http" | "ws" => "ws",
+        _ => return Err(Error::InvalidRequest("invalid WebSocket scheme".into())),
     };
-    let url = query.map_or(scheme_flipped.clone(), |value| {
-        format!("{scheme_flipped}?{value}")
-    });
-    if query.is_some_and(|value| {
-        value
-            .split('&')
-            .any(|part| part.split('=').next() == Some("model"))
-    }) {
-        return url;
+    url.set_scheme(scheme)
+        .map_err(|()| Error::InvalidRequest("invalid WebSocket scheme".into()))?;
+    if !url.query_pairs().any(|(name, _)| name == "model") {
+        url.query_pairs_mut().append_pair("model", model);
     }
-    format!(
-        "{url}{}model={}",
-        if query.is_some() { "&" } else { "?" },
-        percent_encode(model)
-    )
-}
-
-fn percent_encode(value: &str) -> String {
-    value
-        .bytes()
-        .map(|byte| {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-                format!("{}", byte as char)
-            } else {
-                format!("%{byte:02X}")
-            }
-        })
-        .collect()
+    Ok(url)
 }
 
 impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
@@ -148,14 +121,16 @@ impl BaseResponsesApiConfig for OpenAiResponsesApiConfig {
         &self,
         api_base: Option<&str>,
         lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> String {
+    ) -> Result<Url, Error> {
         let base = api_base
             .filter(|base| !base.is_empty())
             .map(str::to_owned)
             .or_else(|| lookup("OPENAI_BASE_URL"))
             .or_else(|| lookup("OPENAI_API_BASE"))
             .unwrap_or_else(|| OPENAI_RESPONSES_DEFAULT_API_BASE.into());
-        format!("{}/responses", base.trim_end_matches('/'))
+        Ok(ApiUrl::parse(&base)?
+            .complete_path(&["responses"])?
+            .into_url())
     }
 
     fn transform_responses_api_request(
@@ -202,7 +177,10 @@ mod tests {
     fn default_endpoint_belongs_to_openai(#[case] api_base: Option<&str>) {
         let expected_base = OPENAI_RESPONSES_DEFAULT_API_BASE.replacen("https://", "wss://", 1);
         assert_eq!(
-            OPENAI_RESPONSES_WS_CONFIG.complete_websocket_url(api_base, "test-model"),
+            OPENAI_RESPONSES_WS_CONFIG
+                .complete_websocket_url(api_base, "test-model")
+                .unwrap()
+                .as_str(),
             format!("{expected_base}{OPENAI_RESPONSES_PATH}?model=test-model")
         );
     }
@@ -210,11 +188,11 @@ mod tests {
     #[rstest::rstest]
     #[case::http(
         "http://localhost:8080/",
-        "ws://localhost:8080/responses?model=test%20model"
+        "ws://localhost:8080/responses?model=test+model"
     )]
     #[case::query(
         "https://example.test/v1?foo=bar",
-        "wss://example.test/v1/responses?foo=bar&model=test%20model"
+        "wss://example.test/v1/responses?foo=bar&model=test+model"
     )]
     #[case::existing_model(
         "https://example.test?model=existing",
@@ -222,12 +200,15 @@ mod tests {
     )]
     fn provider_url_preserves_query_and_encodes_model(#[case] base: &str, #[case] expected: &str) {
         assert_eq!(
-            OPENAI_RESPONSES_WS_CONFIG.complete_websocket_url(Some(base), "test model"),
+            OPENAI_RESPONSES_WS_CONFIG
+                .complete_websocket_url(Some(base), "test model")
+                .unwrap()
+                .as_str(),
             expected
         );
     }
 
-    #[test]
+    #[rstest::rstest]
     fn openai_config_is_native_and_enforces_model() {
         let event: ResponsesWsEvent =
             serde_json::from_value(serde_json::json!({"type":"response.create"}))
@@ -237,5 +218,57 @@ mod tests {
             .expect("valid transform");
         assert_eq!(result.events[0].model(), Some("gpt-5"));
         assert!(OPENAI_RESPONSES_WS_CONFIG.supports_native_websocket());
+    }
+    #[rstest::rstest]
+    #[case::complete(
+        "https://example.test/prefix/responses?x=a#fragment",
+        "wss://example.test/prefix/responses?x=a&model=a%2Fb%25%3F%23#fragment"
+    )]
+    #[case::decoded_key(
+        "https://example.test/v1?%6Dodel=existing#f",
+        "wss://example.test/v1/responses?%6Dodel=existing#f"
+    )]
+    #[case::ipv6(
+        "http://[::1]:8080/v1",
+        "ws://[::1]:8080/v1/responses?model=a%2Fb%25%3F%23"
+    )]
+    fn websocket_completion_uses_url_components(#[case] base: &str, #[case] expected: &str) {
+        assert_eq!(
+            complete_websocket_url(Some(base), "a/b%?#")
+                .unwrap()
+                .as_str(),
+            expected
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::base(
+        "https://example.test/prefix/v1?tenant=a#f",
+        "https://example.test/prefix/v1/responses?tenant=a#f"
+    )]
+    #[case::complete(
+        "https://example.test/prefix/responses?tenant=a#f",
+        "https://example.test/prefix/responses?tenant=a#f"
+    )]
+    fn http_completion_preserves_queries(#[case] base: &str, #[case] expected: &str) {
+        assert_eq!(
+            OpenAiResponsesApiConfig
+                .get_complete_url(Some(base), &|_| None)
+                .unwrap()
+                .as_str(),
+            expected
+        );
+    }
+
+    #[rstest::rstest]
+    #[case::invalid("relative/path")]
+    #[case::unsupported("ftp://example.test/v1")]
+    fn invalid_endpoints_fail_before_dispatch(#[case] base: &str) {
+        assert!(complete_websocket_url(Some(base), "model").is_err());
+        assert!(
+            OpenAiResponsesApiConfig
+                .get_complete_url(Some(base), &|_| None)
+                .is_err()
+        );
     }
 }

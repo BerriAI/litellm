@@ -26,15 +26,16 @@ impl HttpFetch {
 
 impl Fetch for HttpFetch {
     async fn get(&self, url: &str) -> Result<Vec<u8>, Error> {
+        let parsed = litellm_core_utils::url_utils::ApiUrl::parse(url)?
+            .complete_path(&[])?
+            .into_url();
+        let github = parsed.scheme() == "https" && parsed.host_str() == Some("api.github.com");
         let request = self
             .client
-            .get(url)
+            .get(parsed)
             .header("user-agent", "litellm-testkit")
             .header("accept", "application/json, application/octet-stream");
-        let request = match (
-            &self.github_token,
-            url.starts_with("https://api.github.com/"),
-        ) {
+        let request = match (&self.github_token, github) {
             (Some(token), true) => request.bearer_auth(token),
             _ => request,
         };

@@ -51,8 +51,8 @@ impl BaseAnthropicMessagesConfig for AnthropicMessagesConfig {
         api_base: Option<&str>,
         _model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(complete_anthropic_url(api_base, env_lookup))
+    ) -> Result<url::Url, Error> {
+        complete_anthropic_url(api_base, env_lookup)
     }
 
     fn transform_anthropic_messages_request(
@@ -818,7 +818,9 @@ mod tests {
         #[case] expected: &str,
     ) {
         assert_eq!(
-            ANTHROPIC_MESSAGES_CONFIG.get_complete_url(api_base, "claude", &env(vars)),
+            ANTHROPIC_MESSAGES_CONFIG
+                .get_complete_url(api_base, "claude", &env(vars))
+                .map(String::from),
             Ok(expected.to_string())
         );
     }

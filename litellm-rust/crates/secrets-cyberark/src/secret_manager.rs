@@ -15,7 +15,6 @@ use litellm_secrets_types::{
     validate_secret_name,
 };
 use moka::future::Cache;
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, utf8_percent_encode};
 
 use crate::Error;
 
@@ -32,11 +31,6 @@ const DEFAULT_ACCOUNT: &str = "default";
 const DEFAULT_USERNAME: &str = "admin";
 const DEFAULT_REFRESH_INTERVAL: Duration = Duration::from_secs(300);
 const MAX_TOKEN_LIFETIME: Duration = Duration::from_secs(7 * 60);
-const SECRET_NAME_SAFE: &AsciiSet = &NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'_')
-    .remove(b'.')
-    .remove(b'~');
 
 #[derive(Clone)]
 pub struct CyberArkSecretManager {
@@ -90,10 +84,7 @@ impl WriteFailure {
 
 impl CyberArkSecretManager {
     fn secret_url(&self, name: &str) -> Result<reqwest::Url, Error> {
-        let encoded = utf8_percent_encode(name, SECRET_NAME_SAFE);
-        self.endpoint
-            .join(&format!("secrets/{}/variable/{}", self.account, encoded))
-            .map_err(|_| Error::Endpoint)
+        self.endpoint_url(&["secrets", &self.account, "variable", name])
     }
 }
 

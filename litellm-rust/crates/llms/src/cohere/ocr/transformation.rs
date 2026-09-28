@@ -136,7 +136,7 @@ impl BaseOcrConfig for CohereParseConfig {
         request: &PreparedOcrRequest,
         _optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         self.build_ocr_url(
             request
                 .connection
@@ -203,14 +203,14 @@ impl CohereParseConfig {
         )
     }
 
-    fn build_ocr_url(&self, api_base: &str) -> Result<String, Error> {
+    fn build_ocr_url(&self, api_base: &str) -> Result<url::Url, Error> {
         let parsed = reqwest::Url::parse(api_base).map_err(|_| invalid_api_base())?;
         if !matches!(parsed.scheme(), "http" | "https") {
             return Err(invalid_api_base());
         }
-        ApiUrl::parse(api_base)
+        ApiUrl::from_url(parsed)
             .and_then(|url| url.complete_path(&["v2", "parse"]))
-            .map(|url| url.into_string())
+            .map(|url| url.into_url())
             .map_err(|_| invalid_api_base())
     }
 }
@@ -704,7 +704,8 @@ mod tests {
         assert_eq!(
             CohereParseConfig
                 .build_ocr_url(&format!("https://example.com{suffix}?tenant=a"))
-                .unwrap(),
+                .unwrap()
+                .to_string(),
             format!("https://example.com{path}?tenant=a")
         );
     }

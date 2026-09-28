@@ -41,7 +41,16 @@ impl ResponsesWebSocketConnection {
         timeout: Option<Duration>,
     ) -> Result<Self, Error> {
         crate::diagnostic::operation("litellm.websocket.connect_url", async {
-            let mut request = url.into_client_request().map_err(|error| {
+            let mut parsed = litellm_core_utils::url_utils::ApiUrl::parse(url)
+                .map_err(litellm_llms::Error::from)?
+                .into_url();
+            if !matches!(parsed.scheme(), "ws" | "wss") {
+                return Err(Error::InvalidRequest(
+                    "WebSocket URL must use ws or wss".into(),
+                ));
+            }
+            parsed.set_fragment(None);
+            let mut request = parsed.as_str().into_client_request().map_err(|error| {
                 Error::Transport(litellm_http::transport::Error::Network(error.to_string()))
             })?;
             for (name, value) in headers {

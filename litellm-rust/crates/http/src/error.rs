@@ -22,6 +22,8 @@ pub enum Error {
     },
     #[error("could not build the HTTP client: {0}")]
     Client(String),
+    #[error("unsupported HTTP URL scheme: {0}")]
+    UrlScheme(String),
     #[error("request body could not be serialized: {0}")]
     RequestBody(String),
     #[error("request forwards a header the signer computes: {0}")]

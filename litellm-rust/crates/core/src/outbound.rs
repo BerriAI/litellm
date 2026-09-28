@@ -23,7 +23,7 @@ pub(crate) async fn send(
 /// bytes that are sent.
 pub(crate) fn outbound_request(
     authenticated: Authenticated,
-    url: String,
+    url: url::Url,
     body: &Value,
     timeout: Option<Duration>,
 ) -> Result<OutboundRequest, litellm_http::Error> {
