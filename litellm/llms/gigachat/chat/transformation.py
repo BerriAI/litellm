@@ -142,7 +142,6 @@ class GigaChatConfig(BaseConfig):
             "top_p",
             "max_tokens",
             "max_completion_tokens",
-            "stop",
             "tools",
             "tool_choice",
             "functions",
@@ -171,9 +170,6 @@ class GigaChatConfig(BaseConfig):
                 optional_params["top_p"] = value
             elif param in ("max_tokens", "max_completion_tokens"):
                 optional_params["max_tokens"] = value
-            elif param == "stop":
-                # GigaChat doesn't support stop sequences
-                pass
             elif param == "tools":
                 # Convert tools to functions format
                 if isinstance(value, Sequence):
@@ -212,6 +208,24 @@ class GigaChatConfig(BaseConfig):
                     ]
                     optional_params["function_call"] = {"name": schema_name}  # mutable-ok: request payload
                     optional_params["_structured_output"] = True
+                elif not (
+                    isinstance(value, Mapping)
+                    and (value.get("type") in (None, "text", "json_schema"))
+                ):
+                    # Only json_schema is actually mapped above; other response_format
+                    # values (e.g. json_object) would otherwise be silently ignored.
+                    if not drop_params:
+                        from litellm.utils import UnsupportedParamsError
+
+                        raise UnsupportedParamsError(
+                            status_code=400,
+                            message=(
+                                "GigaChat does not support response_format="
+                                f"{value!r}. Use response_format={{'type': 'json_schema', "
+                                "'json_schema': {...}}} instead, or set `drop_params=True` "
+                                "to drop it."
+                            ),
+                        )
 
         return optional_params
 

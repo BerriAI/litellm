@@ -19,6 +19,7 @@ from litellm.llms.gigachat.chat.transformation import (
     is_valid_json,
 )
 from litellm.types.utils import ModelResponse, Usage
+from litellm.utils import UnsupportedParamsError, get_optional_params
 
 TRANSFORM_MODULE = "litellm.llms.gigachat.chat.transformation"
 
@@ -174,7 +175,6 @@ class TestGetSupportedOpenAiParams:
             "top_p",
             "max_tokens",
             "max_completion_tokens",
-            "stop",
             "tools",
             "tool_choice",
             "functions",
@@ -243,12 +243,30 @@ class TestMapOpenAiParams:
         )
         assert result["max_tokens"] == 200
 
-    def test_stop_is_dropped(self):
-        result = self.config.map_openai_params(
-            non_default_params={"stop": ["\n\n"]},
-            optional_params={},
-            model="GigaChat",
-            drop_params=False,
+    def test_stop_not_declared_supported(self):
+        params = self.config.get_supported_openai_params("GigaChat")
+        assert "stop" not in params
+
+    def test_stop_raises_unsupported_params_error(self):
+        # stop is not supported by the GigaChat API; with drop_params=False
+        # (the default) litellm must surface that instead of silently ignoring it
+        with pytest.raises(UnsupportedParamsError):
+            get_optional_params(
+                model="GigaChat-Pro",
+                custom_llm_provider="gigachat",
+                stop=["\n\n"],
+                request_timeout=10,
+                num_retries=0,
+            )
+
+    def test_stop_dropped_with_drop_params_true(self):
+        result = get_optional_params(
+            model="GigaChat-Pro",
+            custom_llm_provider="gigachat",
+            stop=["\n\n"],
+            request_timeout=10,
+            num_retries=0,
+            drop_params=True,
         )
         assert "stop" not in result
 
@@ -353,6 +371,35 @@ class TestMapOpenAiParams:
         assert result["functions"][0]["name"] == "test_schema"
         assert result["function_call"] == {"name": "test_schema"}
         assert result["_structured_output"] is True
+
+    def test_response_format_json_object_raises_unsupported(self):
+        with pytest.raises(UnsupportedParamsError):
+            self.config.map_openai_params(
+                non_default_params={"response_format": {"type": "json_object"}},
+                optional_params={},
+                model="GigaChat",
+                drop_params=False,
+            )
+
+    def test_response_format_json_object_dropped_with_drop_params(self):
+        result = self.config.map_openai_params(
+            non_default_params={"response_format": {"type": "json_object"}},
+            optional_params={},
+            model="GigaChat",
+            drop_params=True,
+        )
+        assert "functions" not in result
+        assert "function_call" not in result
+
+    def test_response_format_text_is_a_noop(self):
+        result = self.config.map_openai_params(
+            non_default_params={"response_format": {"type": "text"}},
+            optional_params={},
+            model="GigaChat",
+            drop_params=False,
+        )
+        assert "functions" not in result
+        assert "function_call" not in result
 
 
 class TestConvertToolsToFunctions:
