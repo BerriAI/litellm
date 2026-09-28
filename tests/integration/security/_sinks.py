@@ -26,6 +26,9 @@ API:
   handler. ``sink_token`` is the bearer the ``generic_api`` double requires and
   ``GENERIC_LOGGER_HEADERS`` sends; pass a ``Canary`` (slot G1 style) to plant a sink credential,
   and ``Rig.own_headers`` then allows that one header to carry it (pass it to ``sweep_all``).
+- ``Rig.model_id``: the router's ``model_info.id`` for ``CONFIG_MODEL`` (read from
+  ``/model/info`` once the proxy is up). Pass it as ``ids["model_id"]`` so the
+  ``{model_id}`` routes (``/credentials/by_model/{model_id}``, ...) resolve the deployment.
 - ``Rig.proxy``: the owned proxy ``Gateway`` (master key). ``Rig.canaries``: config-held
   canaries by slot id. ``Rig.provider`` and ``Rig.sinks[name]``: ``Recorder`` objects whose
   ``requests()`` returns every request received so far (the underlying queue is drained into a
@@ -108,6 +111,7 @@ class Rig:
     canaries: Mapping[str, Canary]
     own_headers: Mapping[str, tuple[str, str]] = field(default_factory=lambda: MappingProxyType({}))
     egress: Callable[[], tuple[bytes, ...]] = field(default=lambda: ())
+    model_id: str = ""
 
 
 def chat_upstream(request: Request) -> Reply:
@@ -240,8 +244,25 @@ def canary_rig(
                 MappingProxyType(planted),
                 own_headers,
                 egress,
+                config_model_id(owned.gateway),
             )
         assert egress() == (), f"Owned proxy tried to reach external hosts: {sorted(set(egress()))}"
+
+
+def config_model_id(gateway: Gateway) -> str:
+    """The router's ``model_info.id`` for the ``CONFIG_MODEL`` deployment."""
+    data: Final = gateway.get("/model/info").get("data")
+    assert isinstance(data, list), data
+    found: Final = tuple(
+        info["id"]
+        for entry in data
+        if isinstance(entry, dict)
+        and entry.get("model_name") == CONFIG_MODEL
+        and isinstance(info := entry.get("model_info"), dict)
+        and isinstance(info.get("id"), str)
+    )
+    assert len(found) == 1, f"expected one {CONFIG_MODEL} deployment in /model/info, got {found}"
+    return str(found[0])
 
 
 @dataclass(frozen=True, slots=True)

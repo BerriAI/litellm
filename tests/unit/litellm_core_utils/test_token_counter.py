@@ -29,6 +29,7 @@ import litellm.constants
 from litellm.constants import TOKEN_COUNTER_MAX_CONCURRENT_COUNTS
 from litellm.litellm_core_utils.asyncify import asyncify
 from litellm.litellm_core_utils.token_counter import (
+    _encoding_count,
     _get_exact_count_function,
     _get_extrapolating_count_function,
     _get_tiktoken_count_function,
@@ -79,15 +80,17 @@ def test_token_counter_basic():
     )
 
 
-def test_token_counter_large_repeated_text_is_fast():
-    messages = [{"role": "user", "content": [{"type": "text", "text": "A" * 1024 * 1024}]}]
+def test_token_counter_large_repeated_text_is_encoded_in_bounded_chunks():
+    text_length: Final = 1024 * 1024
+    messages: Final = [{"role": "user", "content": [{"type": "text", "text": "A" * text_length}]}]
 
-    start_time = time.perf_counter()
-    tokens = token_counter_new(model="us.anthropic.claude-sonnet-4-6", messages=messages)
-    elapsed = time.perf_counter() - start_time
+    with patch("litellm.litellm_core_utils.token_counter._encoding_count", wraps=_encoding_count) as encoding_count:
+        tokens: Final = token_counter_new(model="us.anthropic.claude-sonnet-4-6", messages=messages)
 
-    assert elapsed < 2, f"Token counting took too long: {elapsed:.2f}s"
+    encoded_lengths: Final = tuple(len(call.args[1]) for call in encoding_count.call_args_list)
     assert tokens > 0
+    assert sum(encoded_lengths) >= text_length
+    assert max(encoded_lengths) <= litellm.constants.TIKTOKEN_ENCODE_MAX_CHUNK_SIZE_CHARS
 
 
 @pytest.mark.parametrize(

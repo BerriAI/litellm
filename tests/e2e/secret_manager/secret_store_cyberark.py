@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import os
+import time
 from dataclasses import dataclass, field
 from typing import Final, Literal
 from urllib.parse import quote
@@ -24,6 +25,9 @@ DEFAULT_ACCOUNT: Final = "default"
 DEFAULT_USERNAME: Final = "admin"
 
 SYSTEM: Final = "cyberark"
+
+_POLICY_LOAD_ATTEMPTS: Final = 5
+_POLICY_LOAD_RETRY_DELAY_SECONDS: Final = 0.2
 
 _START_HINT: Final = (
     f"Start one with `bash tests/e2e/secret_manager/backend.sh up {SYSTEM}`, which writes the env for "
@@ -72,13 +76,20 @@ class Conjur:
     def _secret_url(self, name: str) -> str:
         return f"{self.base_url}/secrets/{self.account}/variable/{quote(name, safe='')}"
 
-    def _update_root_policy(self, method: Literal["POST", "PATCH"], policy: str, action: str) -> None:
+    def _load_root_policy(self, method: Literal["POST", "PATCH"], policy: str, attempt: int = 0) -> ExternalWrite:
         result: Final = send_text_external(
             method,
             f"{self.base_url}/policies/{self.account}/policy/root",
             headers=self._headers(content_type="application/x-yaml"),
             content=policy,
         )
+        if result.status_code != 409 or attempt + 1 == _POLICY_LOAD_ATTEMPTS:
+            return result
+        time.sleep(_POLICY_LOAD_RETRY_DELAY_SECONDS * (1 << attempt))
+        return self._load_root_policy(method, policy, attempt + 1)
+
+    def _update_root_policy(self, method: Literal["POST", "PATCH"], policy: str, action: str) -> None:
+        result: Final = self._load_root_policy(method, policy)
         self._fail_unless_reached(result, action)
         if not result.ok:
             pytest.fail(f"Conjur refused to {action}: HTTP {result.status_code} {result.body[:300]}")

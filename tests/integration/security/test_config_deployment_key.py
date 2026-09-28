@@ -63,7 +63,7 @@ def test_config_deployment_api_key_reaches_only_the_provider(
                 "request_id": request_id,
                 "team_id": caller.team_id,
                 "user_id": caller.user_id,
-                "model_id": CONFIG_MODEL,
+                "model_id": rig.model_id,
                 "model": CONFIG_MODEL,
             },
             callers=caller.callers(rig),
@@ -78,5 +78,9 @@ def test_config_deployment_api_key_reaches_only_the_provider(
                 "S2": f"GET /spend/logs/ui/{request_id} as admin -> 200",
                 "S4": f"{GENERIC_SINK}[",
             },
+        )
+        by_model: Final = f"GET /credentials/by_model/{rig.model_id} as admin"
+        assert report.routes.statuses.get(by_model) == 200, (
+            f"{by_model} must resolve the config deployment: {report.routes.statuses.get(by_model)}"
         )
         assert_no_hits(report.credential_hits(), f"slot B1, {outcome}")
