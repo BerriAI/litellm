@@ -25220,7 +25220,7 @@
       },
       "/cursor/models": {
         "get": {
-          "description": "OpenAI-compatible model listing for the Cursor BYOK base URL.\n\nClients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and\nverify models via `GET {base}/models` (the OpenAI SDK contract). Without this\nroute those requests fall through to the Cursor Cloud Agents passthrough, which\ndemands a Cursor API key and 401s, so key verification silently fails before any\nchat request is ever sent. Delegates to the standard `/v1/models` handler.",
+          "description": "OpenAI-compatible model listing for the Cursor BYOK base URL.\n\nClients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and\nverify models via `GET {base}/models` (the OpenAI SDK contract). Without this\nroute those requests fall through to the Cursor Cloud Agents passthrough, which\ndemands a Cursor API key and 401s, so key verification silently fails before any\nchat request is ever sent. Delegates to the standard `/v1/models` handler with\nwildcard routes left out, since Cursor offers every listed id as a callable model.",
           "operationId": "cursor_model_list_cursor_models_get",
           "responses": {
             "200": {
@@ -25245,7 +25245,7 @@
       },
       "/cursor/v1/models": {
         "get": {
-          "description": "OpenAI-compatible model listing for the Cursor BYOK base URL.\n\nClients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and\nverify models via `GET {base}/models` (the OpenAI SDK contract). Without this\nroute those requests fall through to the Cursor Cloud Agents passthrough, which\ndemands a Cursor API key and 401s, so key verification silently fails before any\nchat request is ever sent. Delegates to the standard `/v1/models` handler.",
+          "description": "OpenAI-compatible model listing for the Cursor BYOK base URL.\n\nClients pointed at `<proxy>/cursor` as an OpenAI-compatible base URL resolve and\nverify models via `GET {base}/models` (the OpenAI SDK contract). Without this\nroute those requests fall through to the Cursor Cloud Agents passthrough, which\ndemands a Cursor API key and 401s, so key verification silently fails before any\nchat request is ever sent. Delegates to the standard `/v1/models` handler with\nwildcard routes left out, since Cursor offers every listed id as a callable model.",
           "operationId": "cursor_model_list_cursor_v1_models_get",
           "responses": {
             "200": {

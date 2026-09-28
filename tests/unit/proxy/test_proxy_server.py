@@ -3186,7 +3186,8 @@ async def _model_info_resolves(model_id: str, **query: bool) -> bool:
             **query,
         )
     except HTTPException as e:
-        assert e.status_code == 404, e.detail
+        if e.status_code != 404:
+            raise
         return False
     return response["id"] == model_id
 
