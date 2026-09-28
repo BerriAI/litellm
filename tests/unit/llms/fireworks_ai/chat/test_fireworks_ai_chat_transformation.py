@@ -5,6 +5,7 @@ import pytest
 
 import litellm
 from litellm.constants import SESSION_ID_GENERATED_METADATA_KEY
+from litellm.llms.custom_httpx.http_handler import HTTPHandler
 from litellm.llms.fireworks_ai.chat.transformation import FireworksAIConfig
 from litellm.llms.fireworks_ai.common_utils import get_fireworks_session_id
 from litellm.types.utils import (
@@ -1781,8 +1782,57 @@ def test_streaming_preserves_selected_model_for_private_accounting():
     [
         ("deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
         ("glm-5p3-fast", "fireworks_ai/accounts/fireworks/routers/glm-5p3-fast"),
+        ("auto", "fireworks_ai/accounts/fireworks/routers/auto"),
         ("accounts/fireworks/models/deepseek-r1", "fireworks_ai/accounts/fireworks/models/deepseek-r1"),
     ],
 )
 def test_get_model_cost_key_resolves_short_names_to_long_keys(model: str, expected: str) -> None:
     assert FireworksAIConfig().get_model_cost_key(model) == expected
+
+
+_LISTED_ROUTERS = ("auto", "auto-instant", "firerouter")
+
+
+@pytest.mark.parametrize("router", _LISTED_ROUTERS)
+def test_listed_router_short_name_resolves_to_its_catalog_row_and_accepts_tool_choice_and_reasoning(
+    router: str,
+) -> None:
+    info = litellm.get_model_info(model=f"fireworks_ai/{router}")
+    params = FireworksAIConfig().get_supported_openai_params(router)
+
+    assert info["key"] == f"fireworks_ai/accounts/fireworks/routers/{router}"
+    assert {"tools", "tool_choice", "reasoning_effort"} <= set(params), params
+
+
+@pytest.mark.parametrize("router", _LISTED_ROUTERS)
+def test_listed_router_request_is_sent_to_the_router_resource_and_billed_at_the_served_models_rate(router: str) -> None:
+    served_model = "glm-5p3-flash"
+    body = {
+        "id": f"chat-{router}",
+        "object": "chat.completion",
+        "created": 1,
+        "model": served_model,
+        "choices": [{"index": 0, "message": {"role": "assistant", "content": "pong"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 23, "completion_tokens": 41, "total_tokens": 64},
+    }
+    raw_response = MagicMock()
+    raw_response.status_code = 200
+    raw_response.headers = {}
+    raw_response.text = json.dumps(body)
+    raw_response.json = lambda: body
+    client = MagicMock(spec=HTTPHandler)
+    client.post.return_value = raw_response
+
+    response = litellm.completion(
+        model=f"fireworks_ai/{router}",
+        messages=[{"role": "user", "content": "ping"}],
+        api_key="fw-test-key",
+        client=client,
+    )
+
+    sent_body = json.loads(client.post.call_args.kwargs["data"])
+    served_info = litellm.model_cost[f"fireworks_ai/{served_model}"]
+    expected_cost = 23 * served_info["input_cost_per_token"] + 41 * served_info["output_cost_per_token"]
+    assert sent_body["model"] == f"accounts/fireworks/routers/{router}"
+    assert expected_cost > 0
+    assert response._hidden_params["response_cost"] == pytest.approx(expected_cost)
