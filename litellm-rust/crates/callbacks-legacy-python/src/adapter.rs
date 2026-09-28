@@ -132,7 +132,6 @@ impl LegacyLogging {
 
     /// The keyword view the rest of the call reads: a copy, so the deployment hook's own
     /// dict is left as the hook returned it, carrying the logger as `@client` injects it.
-    /// The driver's preflight rewrites this same dict before the host projects from it.
     fn prepare(&mut self, py: Python<'_>) -> PyResult<HookStep<Self, Py<PyDict>>> {
         let prepared = self.call.kwargs().bind(py).copy()?;
         prepared.set_item("litellm_logging_obj", self.logger()?.object(py))?;

@@ -9,7 +9,7 @@ pub(crate) mod token_counter;
 
 use litellm_callbacks_legacy_python::{LegacyLogging, PublicCall};
 use litellm_host::{call::HostedCompletion, machine::Machine, protocol::Protocol};
-use litellm_host_python::{PythonBinding, PythonCallHooks, PythonHostCalls};
+use litellm_host_python::{HookChain, PythonBinding, PythonCallHooks, PythonHostCalls};
 use litellm_types::Operation;
 use pyo3::{
     prelude::*,
@@ -58,8 +58,7 @@ where
             start(py, arguments, request).map(crate::logger::LoggedMachine::new)
         },
         host,
-        hooks,
-        crate::preflight::sdk_preflight,
+        HookChain::new(hooks, crate::preflight::SdkPolicy),
         arguments,
         crate::lifecycle::call_options(asynchronous),
     )

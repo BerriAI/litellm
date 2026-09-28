@@ -249,6 +249,22 @@ const TIMING: Timing = Timing {
     end_time: 1.0,
 };
 
+struct PreparedPolicy;
+
+impl CallHooks<PythonRuntime> for PreparedPolicy {
+    fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
+        arguments.bind(py).set_item("policy", "configured")
+    }
+}
+
+impl PythonOwned for PreparedPolicy {
+    fn close(&mut self, _: Python<'_>) {}
+
+    fn traverse(&self, _: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+        Ok(())
+    }
+}
+
 #[rstest]
 #[case::sync(false)]
 #[case::suspended(true)]
@@ -257,17 +273,13 @@ fn transformations_feed_each_other_and_notifications_share_final_values(
     #[case] asynchronous: bool,
 ) {
     Python::attach(|py| {
-        let mut hooks = chain(py, &scripts, asynchronous);
+        let mut hooks = HookChain::new(chain(py, &scripts, asynchronous), PreparedPolicy);
         let original = PyDict::new(py).unbind();
         let step = hooks
             .prepare_arguments(py, original.clone_ref(py), 0.0)
             .unwrap();
         let arguments = finish(py, &mut hooks, step).unwrap();
         hooks.arguments_prepared(py, &arguments).unwrap();
-        arguments
-            .bind(py)
-            .set_item("preflight", "configured")
-            .unwrap();
         let context = RequestContext {
             model: "model".into(),
             custom_llm_provider: "provider".into(),
@@ -309,7 +321,7 @@ fn transformations_feed_each_other_and_notifications_share_final_values(
 assert arguments['order'] == 'ab'
 assert original == {}
 assert first.adopted is arguments and second.adopted is arguments
-assert first.adopted['preflight'] == 'configured'
+assert first.adopted['policy'] == second.adopted['policy'] == 'configured'
 assert first.model == second.model == 'model'
 assert final_response == ((response, 'a'), 'b')
 assert [(name, kind) for name, kind, value in log] == [

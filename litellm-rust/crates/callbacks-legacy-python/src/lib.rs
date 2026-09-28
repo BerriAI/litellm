@@ -2,9 +2,7 @@
 //! sync and async callback registries it fans out to, the deployment hooks and the deferred
 //! proxy release. All of it sits behind one
 //! [`PythonCallHooks`](litellm_host_python::PythonCallHooks), so the driver, the routes and
-//! core never learn which Python object is on the other end. The SDK's own request policy
-//! (credential inheritance, the budget and retry limits) is the driver's preflight, not this
-//! crate's.
+//! core never learn which Python object is on the other end.
 //!
 //! Legacy callbacks receive the caller's own objects and may mutate them. [`PublicCall`]
 //! is where those objects live.

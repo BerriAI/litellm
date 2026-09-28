@@ -16,7 +16,7 @@ use litellm_host::{
 
 use crate::PythonHostCalls;
 use crate::handle::{Execution, ExecutionBody, ExecutionStep, PythonLifecycle};
-use crate::hooks::{HookResume, HookStep, Preflight, PythonCallEvent, PythonCallHooks};
+use crate::hooks::{HookResume, HookStep, PythonCallEvent, PythonCallHooks};
 use crate::native::{NativeMachine, NativePoll};
 use crate::{InvokeError, PythonBinding, missing_state};
 
@@ -96,7 +96,6 @@ where
 {
     binding: H,
     hooks: L,
-    preflight: Preflight,
     native: NativeMachine<M>,
     start: Option<StartMachine<ProtocolOf<H>, M>>,
     closed: bool,
@@ -111,9 +110,6 @@ where
     terminal_observation: Option<CallEvent>,
 }
 
-/// Runs one native call for Python: synchronously, or as a coroutine that awaits every
-/// host suspension inline in the caller's task. `preflight` runs once, on the keyword view
-/// the hooks' `prepare_arguments` returned, before the binding decodes the request.
 pub fn run_call<H, M, L>(
     py: Python<'_>,
     start: impl FnOnce(
@@ -126,7 +122,6 @@ pub fn run_call<H, M, L>(
     + 'static,
     binding: H,
     hooks: L,
-    preflight: Preflight,
     arguments: Py<PyDict>,
     options: CallOptions,
 ) -> PyResult<Py<PyAny>>
@@ -139,7 +134,6 @@ where
     let mut driver = PythonDriver {
         binding,
         hooks,
-        preflight,
         native: NativeMachine::new(options.asynchronous),
         start: Some(Box::new(start)),
         closed: false,
@@ -262,9 +256,6 @@ where
             }
             HookStep::Ready(arguments) => {
                 if let Err(error) = self.hooks.arguments_prepared(py, &arguments) {
-                    return self.hook_failed(py, error);
-                }
-                if let Err(error) = (self.preflight)(py, arguments.bind(py)) {
                     return self.hook_failed(py, error);
                 }
                 let decoded = self.binding.decode_request(py, arguments.bind(py));
@@ -1059,12 +1050,12 @@ mod tests {
         script: HookScript,
         asynchronous: bool,
     ) -> (PyResult<Py<PyAny>>, Vec<String>) {
-        run_preflighted(
+        run_composed(
             py,
             machine,
             host,
             script,
-            no_preflight,
+            std::convert::identity,
             call_options(asynchronous),
         )
     }
@@ -1100,7 +1091,6 @@ mod tests {
                     classifier_fails: false,
                 },
                 hooks,
-                no_preflight,
                 PyDict::new(py).unbind(),
                 call_options(asynchronous),
             )
@@ -1141,16 +1131,12 @@ mod tests {
         });
     }
 
-    fn no_preflight(_: Python<'_>, _: &Bound<'_, PyDict>) -> PyResult<()> {
-        Ok(())
-    }
-
-    fn run_preflighted(
+    fn run_composed<L: PythonCallHooks + 'static>(
         py: Python<'_>,
         machine: impl FnOnce(String) -> CallMachine<Synthetic> + Send + Sync + 'static,
         host: SyntheticBinding,
         script: HookScript,
-        preflight: Preflight,
+        compose: impl FnOnce(SyntheticHooks) -> L,
         options: CallOptions,
     ) -> (PyResult<Py<PyAny>>, Vec<String>) {
         let asynchronous = options.asynchronous;
@@ -1165,8 +1151,7 @@ mod tests {
             py,
             move |_, _, request| Ok(machine(request)),
             host,
-            adapter,
-            preflight,
+            compose(adapter),
             arguments.unbind(),
             options,
         );
@@ -1234,7 +1219,7 @@ mod tests {
             if closed {
                 receiver.close();
             }
-            let (actual, actual_log) = run_preflighted(
+            let (actual, actual_log) = run_composed(
                 py,
                 success_machine(),
                 SyntheticBinding {
@@ -1243,7 +1228,7 @@ mod tests {
                     classifier_fails: false,
                 },
                 HookScript::ReplaceResponse,
-                no_preflight,
+                std::convert::identity,
                 CallOptions {
                     asynchronous,
                     lifecycle: lifecycle_binding,
@@ -1293,7 +1278,7 @@ mod tests {
             let (sender, mut receiver) = litellm_host::observation::observation_channel(
                 std::num::NonZeroUsize::new(4).unwrap(),
             );
-            let (result, log) = run_preflighted(
+            let (result, log) = run_composed(
                 py,
                 success_machine(),
                 SyntheticBinding {
@@ -1302,7 +1287,7 @@ mod tests {
                     classifier_fails: false,
                 },
                 script,
-                no_preflight,
+                std::convert::identity,
                 CallOptions {
                     asynchronous,
                     lifecycle: lifecycle_binding,
@@ -1558,7 +1543,6 @@ mod tests {
                     log: Log(log.0.clone()),
                     script: HookScript::Plain,
                 },
-                no_preflight,
                 PyDict::new(py).unbind(),
                 CallOptions {
                     asynchronous,
@@ -1656,7 +1640,6 @@ mod tests {
                     |_, _, request| Ok(streaming_machine()(request)),
                     StreamingBinding,
                     adapter,
-                    no_preflight,
                     PyDict::new(py).unbind(),
                     call_options(asynchronous),
                 )
@@ -1861,18 +1844,29 @@ mod tests {
         });
     }
 
-    /// The rejection a preflight raised, kept so a test can check the caller receives that
-    /// exact object. A `Preflight` is a plain `fn`, so it cannot capture one itself.
-    static REJECTION: Mutex<Option<Py<PyBaseException>>> = Mutex::new(None);
-
-    fn rejecting_preflight(py: Python<'_>, _: &Bound<'_, PyDict>) -> PyResult<()> {
-        let error = PyValueError::new_err("over budget");
-        *REJECTION.lock().unwrap() = Some(error.value(py).clone().unbind());
-        Err(error)
+    enum ArgumentPolicy {
+        Inherit,
+        Reject(Py<PyBaseException>),
     }
 
-    fn inheriting_preflight(_: Python<'_>, arguments: &Bound<'_, PyDict>) -> PyResult<()> {
-        arguments.set_item("api_key", "inherited")
+    impl CallHooks<PythonRuntime> for ArgumentPolicy {
+        fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
+            match self {
+                Self::Inherit => arguments.bind(py).set_item("api_key", "inherited"),
+                Self::Reject(error) => Err(PyErr::from_value(error.bind(py).clone().into_any())),
+            }
+        }
+    }
+
+    impl PythonOwned for ArgumentPolicy {
+        fn close(&mut self, _: Python<'_>) {}
+
+        fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
+            match self {
+                Self::Inherit => Ok(()),
+                Self::Reject(error) => visit.call(error),
+            }
+        }
     }
 
     #[rstest::rstest]
@@ -1912,11 +1906,13 @@ mod tests {
                     op: OpScript::Answer,
                     classifier_fails: false,
                 },
-                SyntheticHooks {
-                    log: Log(log.0.clone()),
-                    script: HookScript::RewriteArguments,
-                },
-                inheriting_preflight,
+                crate::HookChain::new(
+                    SyntheticHooks {
+                        log: Log(log.0.clone()),
+                        script: HookScript::RewriteArguments,
+                    },
+                    ArgumentPolicy::Inherit,
+                ),
                 arguments.clone().unbind(),
                 call_options(asynchronous),
             );
@@ -1997,7 +1993,6 @@ mod tests {
                     log: Log(log.0.clone()),
                     script: HookScript::Plain,
                 },
-                no_preflight,
                 PyDict::new(py).unbind(),
                 call_options(true),
             )
@@ -2010,69 +2005,72 @@ mod tests {
     }
 
     #[rstest::rstest]
-    fn a_preflight_rejection_is_the_callers_error_and_the_machine_never_starts() {
+    #[case::synchronous(false)]
+    #[case::asynchronous(true)]
+    fn an_argument_policy_rejection_is_the_callers_error_and_the_machine_never_starts(
+        #[case] asynchronous: bool,
+    ) {
         let _guard = PYTHON_GLOBALS
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         crate::initialize_python();
         Python::attach(|py| {
             install_lifecycle_module(py);
-            for asynchronous in [false, true] {
-                let (result, log) = run_preflighted(
-                    py,
-                    success_machine(),
-                    SyntheticBinding {
-                        log: Log::default(),
-                        op: OpScript::Answer,
-                        classifier_fails: false,
-                    },
-                    HookScript::Plain,
-                    rejecting_preflight,
-                    call_options(asynchronous),
-                );
-                let error = result.unwrap_err();
-                let raised = REJECTION.lock().unwrap().take().unwrap();
-                assert!(error.value(py).is(&raised));
-                assert_eq!(
-                    log,
-                    [
-                        "started",
-                        "begin",
-                        "failed:Host:over budget",
-                        "adapter.close",
-                        "host.close"
-                    ]
-                );
-            }
+            let raised = PyValueError::new_err("over budget").into_value(py);
+            let (result, log) = run_composed(
+                py,
+                success_machine(),
+                SyntheticBinding {
+                    log: Log::default(),
+                    op: OpScript::Answer,
+                    classifier_fails: false,
+                },
+                HookScript::Plain,
+                |hooks| crate::HookChain::new(hooks, ArgumentPolicy::Reject(raised.clone_ref(py))),
+                call_options(asynchronous),
+            );
+            assert!(result.unwrap_err().value(py).is(raised.bind(py)));
+            assert_eq!(
+                log,
+                [
+                    "started",
+                    "begin",
+                    "failed:Host:over budget",
+                    "adapter.close",
+                    "host.close"
+                ]
+            );
         });
     }
 
     #[rstest::rstest]
-    fn the_host_projects_from_the_keyword_view_the_preflight_rewrote() {
+    #[case::synchronous(false)]
+    #[case::asynchronous(true)]
+    fn the_host_projects_from_the_keyword_view_the_argument_policy_rewrote(
+        #[case] asynchronous: bool,
+    ) {
         let _guard = PYTHON_GLOBALS
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         crate::initialize_python();
         Python::attach(|py| {
             install_lifecycle_module(py);
-            for asynchronous in [false, true] {
-                let (result, _) = run_preflighted(
-                    py,
-                    success_machine(),
-                    SyntheticBinding {
-                        log: Log::default(),
-                        op: OpScript::Answer,
-                        classifier_fails: false,
-                    },
-                    HookScript::Plain,
-                    inheriting_preflight,
-                    call_options(asynchronous),
-                );
-                assert_eq!(
-                    result.unwrap().extract::<String>(py).unwrap(),
-                    "project:2|sign|rewritten"
-                );
-            }
+            let (result, _) = run_composed(
+                py,
+                success_machine(),
+                SyntheticBinding {
+                    log: Log::default(),
+                    op: OpScript::Answer,
+                    classifier_fails: false,
+                },
+                HookScript::Plain,
+                |hooks| crate::HookChain::new(hooks, ArgumentPolicy::Inherit),
+                call_options(asynchronous),
+            );
+            assert_eq!(
+                result.unwrap().extract::<String>(py).unwrap(),
+                "project:2|sign|rewritten"
+            );
         });
     }
 
@@ -2204,7 +2202,6 @@ mod tests {
                 |_, _, request| Ok(success_machine()(request)),
                 host,
                 adapter,
-                no_preflight,
                 PyDict::new(py).unbind(),
                 call_options(false),
             )

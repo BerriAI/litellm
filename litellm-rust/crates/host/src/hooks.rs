@@ -10,6 +10,8 @@ pub trait HookRuntime {
     type Chunk;
     type Error;
     type Step<H, T>;
+
+    fn ready<H, T>(value: T) -> Self::Step<H, T>;
 }
 
 pub type RuntimeCallEvent<'a, R> =
@@ -18,10 +20,12 @@ pub type RuntimeCallEvent<'a, R> =
 pub trait CallHooks<R: HookRuntime>: Sized {
     fn prepare_arguments(
         &mut self,
-        runtime: R::Context<'_>,
+        _runtime: R::Context<'_>,
         arguments: R::Arguments,
-        started_at: f64,
-    ) -> Result<R::Step<Self, R::Arguments>, R::Error>;
+        _started_at: f64,
+    ) -> Result<R::Step<Self, R::Arguments>, R::Error> {
+        Ok(R::ready(arguments))
+    }
 
     fn arguments_prepared(
         &mut self,
@@ -33,29 +37,39 @@ pub trait CallHooks<R: HookRuntime>: Sized {
 
     fn before_provider_request(
         &mut self,
-        runtime: R::Context<'_>,
+        _runtime: R::Context<'_>,
         wire: Box<WireRequest>,
-        context: &RequestContext,
-    ) -> Result<R::Step<Self, Box<WireRequest>>, R::Error>;
+        _context: &RequestContext,
+    ) -> Result<R::Step<Self, Box<WireRequest>>, R::Error> {
+        Ok(R::ready(wire))
+    }
 
     fn transform_response(
         &mut self,
-        runtime: R::Context<'_>,
+        _runtime: R::Context<'_>,
         response: R::Response,
-        timing: Timing,
-    ) -> Result<R::Step<Self, R::Response>, R::Error>;
+        _timing: Timing,
+    ) -> Result<R::Step<Self, R::Response>, R::Error> {
+        Ok(R::ready(response))
+    }
 
     fn on_event(
         &mut self,
-        runtime: R::Context<'_>,
-        event: RuntimeCallEvent<'_, R>,
-    ) -> Result<R::Step<Self, ()>, R::Error>;
+        _runtime: R::Context<'_>,
+        _event: RuntimeCallEvent<'_, R>,
+    ) -> Result<R::Step<Self, ()>, R::Error> {
+        Ok(R::ready(()))
+    }
 
-    fn on_stream_open(&mut self, runtime: R::Context<'_>) -> Result<(), R::Error>;
+    fn on_stream_open(&mut self, _runtime: R::Context<'_>) -> Result<(), R::Error> {
+        Ok(())
+    }
 
     fn on_stream_chunk(
         &mut self,
-        runtime: R::Context<'_>,
-        chunk: &R::Chunk,
-    ) -> Result<(), R::Error>;
+        _runtime: R::Context<'_>,
+        _chunk: &R::Chunk,
+    ) -> Result<(), R::Error> {
+        Ok(())
+    }
 }

@@ -8,6 +8,7 @@ from pydantic import JsonValue, TypeAdapter
 import litellm
 from litellm import RateLimitError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.models.credentials import CredentialItem
 from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge import _native
 from litellm.rust_bridge.chat_completions.entrypoints import LiteLLMChatCompletionsRequest
@@ -138,14 +139,27 @@ async def test_native_inference_pre_call_edits_reach_the_provider(
 
 
 @pytest.mark.asyncio
+@pytest.mark.parametrize("from_credentials", (False, True))
 async def test_native_resource_setup_uses_deployment_hook_arguments(
-    route: Route, recording_server: RecordingServer
+    route: Route,
+    recording_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+    from_credentials: bool,
 ) -> None:
+    invalid_settings: Final = {"ssl_verify": object()}
+    credential: Final = CredentialItem(
+        credential_name="resource-settings", credential_info={}, credential_values=invalid_settings
+    )
+    monkeypatch.setattr(litellm, "credential_list", [credential])
+
     class Prepare(CustomLogger):
         async def async_pre_call_deployment_hook(
             self, kwargs: dict[str, object], call_type: CallTypes | None
         ) -> dict[str, object]:
-            return {**kwargs, "ssl_verify": object()}
+            return {
+                **kwargs,
+                **({"litellm_credential_name": credential.credential_name} if from_credentials else invalid_settings),
+            }
 
     litellm.callbacks.append(Prepare())
     recorder: Final = RecordingLogger()
@@ -156,6 +170,28 @@ async def test_native_resource_setup_uses_deployment_hook_arguments(
     assert len(failure) == 1
     assert _OBJECT.validate_python(failure[0].kwargs)["exception"] is caught.value
     assert not recording_server.requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+async def test_sdk_policy_rejection_precedes_resource_setup_and_is_logged_once(
+    route: Route,
+    asynchronous: bool,
+    recording_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(litellm, "max_budget", 1.0)
+    monkeypatch.setattr(litellm, "_current_cost", 2.0)
+    monkeypatch.setattr(litellm, "ssl_verify", object())
+    recorder: Final = RecordingLogger()
+    recording_server.expected_requests = 0
+    with pytest.raises(litellm.BudgetExceededError) as caught:
+        await execute(route, asynchronous, recording_server, {"callbacks": [recorder]})
+    failure: Final = await recorder.wait_for_async("async_log_failure_event" if asynchronous else "log_failure_event")
+    assert len(failure) == 1
+    assert _OBJECT.validate_python(failure[0].kwargs)["exception"] is caught.value
+    assert not recording_server.requests
+    assert not any("success" in name for name in recorder.names)
 
 
 @pytest.mark.asyncio
@@ -188,6 +224,8 @@ async def test_unstarted_native_inference_has_no_provider_or_callback_effects(
     recorder: Final = RecordingLogger()
     recording_server.expected_requests = 0
     monkeypatch.setattr(litellm, "ssl_verify", object())
+    monkeypatch.setattr(litellm, "max_budget", 1.0)
+    monkeypatch.setattr(litellm, "_current_cost", 2.0)
     pending: Final = native_call(route, True, recording_server, {"callbacks": [recorder]})
     assert asyncio.iscoroutine(pending)
     pending.close()
