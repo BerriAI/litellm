@@ -205,6 +205,17 @@ const menuGroups: MenuGroup[] = [
         label: "Usage",
       },
       {
+        key: "model-insights",
+        page: "model-insights",
+        icon: <BarChart3 {...ICON} />,
+        roles: all_admin_roles,
+        label: (
+          <span className="flex items-center gap-2">
+            Model Leaderboard <Badge variant="secondary">New</Badge>
+          </span>
+        ),
+      },
+      {
         key: "cost-optimization",
         page: "cost-optimization",
         icon: <PiggyBank {...ICON} />,
