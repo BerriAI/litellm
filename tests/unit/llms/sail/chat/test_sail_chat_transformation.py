@@ -80,6 +80,41 @@ async def test_sail_chat_stream_sends_metadata_window_and_bills_matching_price(
 
 
 @pytest.mark.parametrize("preview", [False, True], ids=["preview-off", "preview-on"])
+@pytest.mark.parametrize(
+    ("caller_window", "window", "column_suffix"),
+    [
+        pytest.param("flex", "flex", "_flex", id="flex"),
+        pytest.param("balanced", "balanced", "_balanced", id="balanced"),
+        pytest.param("asap", "asap", "", id="asap"),
+    ],
+)
+@pytest.mark.asyncio
+async def test_sail_chat_accepts_caller_metadata_window_with_or_without_preview(
+    sail_env: None,
+    chat_route: respx.Route,
+    spend_capture: SpendCapture,
+    monkeypatch: pytest.MonkeyPatch,
+    preview: bool,
+    caller_window: str,
+    window: str,
+    column_suffix: str,
+) -> None:
+    monkeypatch.setattr(litellm, "enable_preview_features", preview)
+
+    await litellm.acompletion(
+        model=MODEL,
+        messages=MESSAGES,
+        metadata={"requester_metadata": {"completion_window": caller_window}},
+        litellm_call_id=spend_capture.call_id,
+    )
+
+    body: Final = sent_body(chat_route)
+    assert body["metadata"] == {"completion_window": window}
+    assert "service_tier" not in body
+    assert await spend_capture.settled_cost() == pytest.approx(cost_at(column_suffix))
+
+
+@pytest.mark.parametrize("preview", [False, True], ids=["preview-off", "preview-on"])
 @pytest.mark.asyncio
 async def test_sail_chat_forwards_only_caller_metadata_from_proxy_shape(
     sail_env: None,
@@ -117,6 +152,64 @@ async def test_sail_chat_ignores_sdk_metadata_kwarg_without_proxy_snapshot(
     await spend_capture.settled_cost()
     assert spend_capture.optional_params is not None
     assert "service_tier" not in spend_capture.optional_params
+
+
+@pytest.mark.asyncio
+async def test_sail_chat_does_not_forward_internal_proxy_metadata_without_caller_metadata(
+    sail_env: None,
+    chat_route: respx.Route,
+) -> None:
+    await litellm.acompletion(
+        model=MODEL,
+        messages=MESSAGES,
+        metadata={
+            "user_api_key_hash": "h",
+            "user_api_key": "key",
+            "requester_ip_address": "127.0.0.1",
+            "api_base": SAIL_API_BASE,
+        },
+    )
+
+    assert "metadata" not in sent_body(chat_route)
+
+
+@pytest.mark.asyncio
+async def test_openai_completion_does_not_forward_metadata(
+    monkeypatch: pytest.MonkeyPatch, respx_mock: respx.MockRouter
+) -> None:
+    monkeypatch.setattr(litellm, "enable_preview_features", False)
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    monkeypatch.setenv("DISABLE_AIOHTTP_TRANSPORT", "True")
+    litellm.in_memory_llm_clients_cache.flush_cache()
+    route: Final = respx_mock.post("https://api.openai.com/v1/chat/completions").mock(
+        return_value=httpx.Response(
+            200,
+            json={
+                "id": "chatcmpl-test",
+                "object": "chat.completion",
+                "model": "gpt-4o-mini",
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": {"role": "assistant", "content": "ok"},
+                        "finish_reason": "stop",
+                    }
+                ],
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+            },
+        )
+    )
+
+    await litellm.acompletion(
+        model="gpt-4o-mini",
+        messages=[{"role": "user", "content": "hi"}],
+        metadata={"completion_window": "flex", "trace": "t"},
+        api_key="sk-test",
+    )
+
+    assert route.called
+    body: Final = json.loads(route.calls.last.request.content)
+    assert "metadata" not in body
 
 
 @pytest.mark.parametrize(
