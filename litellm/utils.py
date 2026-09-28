@@ -52,7 +52,7 @@ import litellm.litellm_core_utils
 
 # audio_utils.utils is lazy-loaded - only imported when needed for transcription calls
 import litellm.litellm_core_utils.json_validation_rule
-from litellm._internal_context import is_internal_call
+from litellm._internal_context import is_internal_call, provider_call_scope
 from litellm._lazy_imports import (
     _get_default_encoding,
     _get_modified_max_tokens,
@@ -2079,9 +2079,15 @@ def client(original_function):
                 else kwargs
             )
             try:
-                if litellm._async_input_callback:
-                    await logging_obj.async_pre_call()
-                result = await original_function(*args, **call_kwargs)
+                if litellm._async_input_callback or (
+                    litellm.input_callback and any(check_coroutine(callback) for callback in litellm.input_callback)
+                ):
+                    with provider_call_scope(logging_obj) as nested_provider_call:
+                        if not nested_provider_call:
+                            await logging_obj.async_pre_call()
+                        result = await original_function(*args, **call_kwargs)
+                else:
+                    result = await original_function(*args, **call_kwargs)
             except Exception as deployment_error:
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with
                 try:

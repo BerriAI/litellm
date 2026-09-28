@@ -74,6 +74,7 @@ from litellm.litellm_core_utils.core_helpers import (
     reconstruct_model_name,
     set_response_cost_in_hidden_params,
 )
+from litellm.litellm_core_utils.coroutine_checker import coroutine_checker
 from litellm.litellm_core_utils.error_normalization import normalize_error
 from litellm.litellm_core_utils.get_litellm_params import get_litellm_params
 from litellm.litellm_core_utils.internal_call_metadata import (
@@ -1338,15 +1339,31 @@ class Logging(LiteLLMLoggingBaseClass):
         )
 
     async def async_pre_call(self) -> None:
-        if self.model_call_details.get("has_logged_async_pre_call"):
+        candidates: Final = (
+            *(callback for callback in litellm._async_input_callback if callable(callback)),
+            *(
+                callback
+                for callback in litellm.input_callback
+                if callable(callback) and coroutine_checker.is_async_callable(callback)
+            ),
+        )
+        callbacks: Final = tuple(
+            callback
+            for index, callback in enumerate(candidates)
+            if not any(earlier is callback for earlier in candidates[:index])
+        )
+        if not callbacks:
             return
 
-        self.model_call_details["has_logged_async_pre_call"] = True
-        self.model_call_details.update(model=self.model, messages=self.messages, log_event_type="pre_api_call")
-        for callback in litellm._async_input_callback:
+        request: Final = {  # mutable-ok: callbacks receive the plain kwargs dict they always got
+            **self.model_call_details,
+            "model": self.model,
+            "messages": self.messages,
+            "log_event_type": "pre_api_call",
+        }
+        for callback in callbacks:
             try:
-                if callable(callback):
-                    await callback(self.model_call_details)
+                await callback(request)
             except Exception as e:
                 verbose_logger.exception(
                     "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while async pre-call logging %s", e
@@ -1460,7 +1477,11 @@ class Logging(LiteLLMLoggingBaseClass):
                             messages=self.messages,
                             kwargs=self.model_call_details,
                         )
-                    elif callable(callback) and customLogger is not None:  # custom logger functions
+                    elif (
+                        callable(callback)
+                        and customLogger is not None
+                        and not coroutine_checker.is_async_callable(callback)
+                    ):  # custom logger functions
                         customLogger.log_input_event(
                             model=self.model,
                             messages=self.messages,
