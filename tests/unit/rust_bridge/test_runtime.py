@@ -162,9 +162,7 @@ def test_context_outside_rule_stays_on_python() -> None:
         RouteContext(Route.TRANSCRIPTION, provider="openai"),
     ),
 )
-async def test_shipped_python_routes_never_load_native(
-    monkeypatch: pytest.MonkeyPatch, context: RouteContext
-) -> None:
+async def test_shipped_python_routes_never_load_native(monkeypatch: pytest.MonkeyPatch, context: RouteContext) -> None:
     monkeypatch.setenv("LITELLM_RUST", "1")
     configuration.rust(True)
     calls: Final = recorder()

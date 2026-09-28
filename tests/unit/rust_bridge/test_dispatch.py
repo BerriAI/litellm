@@ -157,9 +157,7 @@ async def test_async_route_without_rules_preserves_async_iterator_result(rules: 
 @pytest.mark.asyncio
 async def test_async_dispatch_accepts_websocket_style_none_result() -> None:
     request: Final = Request(model="realtime-model")
-    rules: Final[Rules] = (
-        RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),
-    )
+    rules: Final[Rules] = (RouteRule(Route.RESPONSES, Rollout.RUST_REQUIRED),)
     dispatch: Final = PublicDispatch(
         route=Route.RESPONSES,
         request=lambda args, kwargs: request,
