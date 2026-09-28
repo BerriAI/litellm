@@ -362,6 +362,42 @@ class TestLangfuseOtelIntegration:
                 actual == expect_output
             ), "Mismatch in observation input/output OTEL attributes."
 
+    def test_set_langfuse_specific_attributes_keeps_non_ascii_unescaped(self):
+        """Non-ASCII input/output is written as-is, not as \\uXXXX escapes."""
+        from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes
+        from litellm.types.utils import Choices, ModelResponse
+
+        response_obj = ModelResponse(
+            id="chatcmpl-test",
+            model="gpt-4o",
+            choices=[
+                Choices(
+                    finish_reason="stop",
+                    message={"role": "assistant", "content": "В Токио солнечно. 晴れ"},
+                )
+            ],
+        )
+        kwargs = {"messages": [{"role": "user", "content": "Какая погода в Токио?"}]}
+
+        with patch(
+            "litellm.integrations.arize._utils.safe_set_attribute"
+        ) as mock_safe_set_attribute:
+            LangfuseOtelLogger._set_langfuse_specific_attributes(
+                MagicMock(), kwargs, response_obj
+            )
+
+            raw = {
+                call.args[1]: call.args[2]
+                for call in mock_safe_set_attribute.call_args_list
+            }
+
+        input_raw = raw[LangfuseSpanAttributes.OBSERVATION_INPUT.value]
+        output_raw = raw[LangfuseSpanAttributes.OBSERVATION_OUTPUT.value]
+        assert "Какая погода в Токио?" in input_raw
+        assert "В Токио солнечно. 晴れ" in output_raw
+        assert "\\u" not in input_raw and "\\u" not in output_raw
+        assert json.loads(input_raw) == kwargs["messages"]
+
     def test_set_langfuse_specific_attributes_with_tool_calls(self):
         """Test that _set_langfuse_specific_attributes correctly sets observation.output with tool calls in Langfuse format."""
         from litellm.types.integrations.langfuse_otel import LangfuseSpanAttributes

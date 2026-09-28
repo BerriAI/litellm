@@ -236,3 +236,15 @@ def test_safe_json_structure_keeps_tuples_and_drops_non_string_keys():
     assert structure == {"models": ("A", "B"), "tags": ["X", "Y"], "nested": {"deep": ("C",)}}
     assert type(structure["models"]) is tuple
     assert json.loads(safe_dumps(data)) == {"models": ["a", "b"], "tags": ["x", "y"], "nested": {"deep": ["c"]}}
+
+
+def test_ensure_ascii_default_escapes_non_ascii():
+    # Default stays json.dumps-compatible: non-ASCII is escaped
+    assert safe_dumps({"text": "Привет"}) == '{"text": "\\u041f\\u0440\\u0438\\u0432\\u0435\\u0442"}'
+
+
+def test_ensure_ascii_false_keeps_non_ascii():
+    data = {"text": "Привет, 世界", "nested": ["ü", {"k": "é"}]}
+    result = safe_dumps(data, ensure_ascii=False)
+    assert result == '{"text": "Привет, 世界", "nested": ["ü", {"k": "é"}]}'
+    assert json.loads(result) == json.loads(safe_dumps(data))

@@ -88,6 +88,15 @@ def safe_dumps(
     data: object,
     max_depth: int = DEFAULT_MAX_RECURSE_DEPTH,
     value_transform: Callable[[str | None, str], str] | None = None,
+    ensure_ascii: bool = True,
 ) -> str:
-    """Serialize data to JSON text through safe_json_structure."""
-    return json.dumps(safe_json_structure(data, max_depth, value_transform), default=str)
+    """Serialize data to JSON text through safe_json_structure.
+
+    ensure_ascii=False keeps non-ASCII characters as-is instead of \\uXXXX
+    escapes; the parsed value is identical either way.
+    """
+    return json.dumps(
+        safe_json_structure(data, max_depth, value_transform),
+        default=str,
+        ensure_ascii=ensure_ascii,
+    )
