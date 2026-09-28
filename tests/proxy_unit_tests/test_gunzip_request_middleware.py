@@ -871,3 +871,46 @@ def test_should_return_413_on_decompress_exactly_at_limit(monkeypatch):
         body=compressed,
     )
     assert status == 413
+
+
+def test_should_reject_compressed_size_over_limit_before_reading_body(monkeypatch):
+    """Content-Length pre-check: an oversized compressed body is rejected with
+    413 before a single body byte is read (no decompression work at all)."""
+    monkeypatch.setenv("LITELLM_MAX_DECOMPRESSED_REQUEST_SIZE_MB", "0.001")  # ~1KB limit
+    receive_called = []
+
+    async def counting_receive():
+        receive_called.append(True)
+        return {"type": "http.request", "body": b"", "more_body": False}
+
+    captured = {}
+    scope = _make_scope(
+        {
+            "content-type": "application/json",
+            "content-encoding": "gzip",
+            "content-length": "5000",  # 5KB wire size > 1KB limit
+        }
+    )
+    send = _make_send(captured)
+    middleware = GunzipRequestMiddleware(_echo_app(captured))
+    asyncio.run(middleware(scope, counting_receive, send))
+    assert captured.get("status") == 413
+    assert receive_called == []
+
+
+def test_should_still_decompress_when_compressed_size_within_limit():
+    """A compressed body within the limit still flows through decompression
+    even with a Content-Length header present."""
+    compressed = gzip.compress(json.dumps(PAYLOAD).encode("utf-8"))
+    status, raw, _ = _run_middleware(
+        {
+            "content-type": "application/json",
+            "content-encoding": "gzip",
+            "content-length": str(len(compressed)),
+        },
+        body=compressed,
+    )
+    assert status == 200
+    data = json.loads(raw)
+    assert json.loads(data["received"]) == PAYLOAD
+    assert data["content_length"] == str(len(json.dumps(PAYLOAD).encode("utf-8")))

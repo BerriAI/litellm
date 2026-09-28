@@ -2230,6 +2230,10 @@ current_dir = os.path.dirname(os.path.abspath(__file__))
 # app.mount("/ui", StaticFiles(directory=ui_path, html=True), name="ui")
 
 
+# Last-added middleware is outermost. RequestSizeLimitMiddleware (registered
+# later, below) therefore wraps this one: it bounds the compressed wire size
+# before decompression, while GunzipRequestMiddleware bounds the decompressed
+# output with the same max_request_size_mb. Both limits hold independently.
 app.add_middleware(
     GunzipRequestMiddleware,
     get_max_size=lambda: general_settings.get("max_request_size_mb"),
