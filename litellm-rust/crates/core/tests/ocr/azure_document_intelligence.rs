@@ -3,7 +3,7 @@ use std::{
     time::Duration,
 };
 
-use litellm_host::event::{CallEvent, MachineEvent};
+use litellm_host::{hooks::MachineEvent, lifecycle::CallEvent};
 use litellm_llms::base_llm::ocr::settings::OcrSettings;
 use rstest::rstest;
 
@@ -190,7 +190,7 @@ async fn client_settings_choose_the_api_version_and_the_inch_to_pixel_dpi() {
     });
 
     let result = route
-        .execute(read_request(&upstream.uri(), json!({})), &())
+        .execute(read_request(&upstream.uri(), json!({})), &(), None)
         .await
         .unwrap();
 
@@ -354,7 +354,7 @@ async fn the_polling_deadline_bounds_the_retry_delay() {
 
     let error = tokio::time::timeout(
         Duration::from_secs(1),
-        route.execute(read_request(&upstream.uri(), json!({})), &()),
+        route.execute(read_request(&upstream.uri(), json!({})), &(), None),
     )
     .await
     .expect("the deadline cuts the retry delay short")

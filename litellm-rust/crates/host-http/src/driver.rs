@@ -7,12 +7,11 @@ use futures_util::{StreamExt, stream};
 use litellm_host::{
     call::{CallOutput, HostedCompletion, HostedMachine},
     hooks::RouteHooks,
-    lifecycle::{observe_call, observe_unary},
+    lifecycle::{CallObserver, observe_call, observe_unary},
     machine::MachineFault,
     protocol::Protocol,
-    services::HostCallHandler,
 };
-use litellm_host_native::{Boundary, Driver};
+use litellm_host_native::{Boundary, Driver, services::HostCallHandler};
 
 use crate::{Error, ResponseEncoder, StreamEncoder};
 
@@ -24,6 +23,7 @@ pub async fn serve_unary<P, A, H, S>(
     services: S,
     hooks: H,
     encoder: A,
+    observer: Option<Arc<dyn CallObserver>>,
 ) -> Result<Response, Error<P::Error>>
 where
     P: Protocol<Chunk = Infallible, StreamHead = Infallible>,
@@ -32,7 +32,6 @@ where
     S: HostCallHandler<P>,
     A: ResponseEncoder<Protocol = P>,
 {
-    let observer = hooks.observer();
     let mut driver = Driver::new(machine, services, hooks);
     observe_unary(observer, async move {
         match driver.advance().await.map_err(Error::Call)? {
@@ -50,6 +49,7 @@ pub async fn serve<P, A, H, S>(
     services: S,
     hooks: H,
     encoder: A,
+    observer: Option<Arc<dyn CallObserver>>,
 ) -> Result<Response, Error<P::Error>>
 where
     P: Protocol,
@@ -59,7 +59,6 @@ where
     S: HostCallHandler<P> + 'static,
 {
     let encoder = Arc::new(encoder);
-    let observer = hooks.observer();
     let driver = Driver::new(machine, services, hooks);
     match observe_call(observer, start(driver, encoder.clone())).await? {
         CallOutput::Complete(response) => Ok(response),

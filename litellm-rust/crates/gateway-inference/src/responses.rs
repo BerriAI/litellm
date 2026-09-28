@@ -36,5 +36,5 @@ pub(crate) async fn create(
             json!({"type": "error", "code": error.status().as_u16().to_string(), "message": error.to_string(), "param": null})
         ))
     });
-    Ok(litellm_host_http::serve(machine, (), (), stream).await?)
+    Ok(litellm_host_http::serve(machine, (), (), stream, None).await?)
 }

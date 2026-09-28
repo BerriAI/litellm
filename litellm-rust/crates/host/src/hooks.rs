@@ -1,14 +1,44 @@
 use std::future::Future;
 
-use crate::event::{MachineEvent, RequestContext, WireRequest};
+use serde_json::Value;
+
+/// The provider request as it is about to leave, offered to the host for rewriting.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WireRequest {
+    pub url: String,
+    pub headers: Vec<(String, String)>,
+    pub body: Value,
+}
+
+/// What the route knows about the request it is sending, for a host that logs it. The
+/// route owns these facts; a host reads them beside the wire request and never rewrites
+/// them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RequestContext {
+    pub model: String,
+    pub custom_llm_provider: String,
+    /// The route's parameters before the provider transformation.
+    pub optional_params: Value,
+    /// Optional-param names that carry credentials and must be redacted when logged.
+    pub secret_fields: Vec<String>,
+    /// The credential the route resolved for the provider call.
+    pub api_key: Option<litellm_auth::SecretValue>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RawResponse {
+    pub body: String,
+}
+
+/// What a machine reports while it runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum MachineEvent {
+    ResponseReceived { raw: RawResponse },
+}
 
 /// What a route reaches for mid-call: the send-time rewrite and the events it reports.
 /// Python's `logging_obj.pre_call` and `post_call`, in that order.
 pub trait RouteHooks<E>: Send + Sync {
-    fn observer(&self) -> Option<std::sync::Arc<dyn crate::lifecycle::CallObserver>> {
-        None
-    }
-
     fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -19,10 +49,6 @@ pub trait RouteHooks<E>: Send + Sync {
 }
 
 impl<E, T: RouteHooks<E> + ?Sized> RouteHooks<E> for &T {
-    fn observer(&self) -> Option<std::sync::Arc<dyn crate::lifecycle::CallObserver>> {
-        (**self).observer()
-    }
-
     fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -36,7 +62,6 @@ impl<E, T: RouteHooks<E> + ?Sized> RouteHooks<E> for &T {
     }
 }
 
-/// No host: the wire request goes out as prepared and nothing observes the call.
 impl<E> RouteHooks<E> for () {
     async fn before_provider_request(
         &self,
@@ -60,11 +85,8 @@ mod tests {
     use super::*;
     use crate::protocol::HookRequest;
     use crate::{
-        event::RawResponse,
-        machine::MachineFault,
-        machine::{CallMachine, Machine, MachineStep},
-        protocol::HostRequest,
-        protocol::Protocol,
+        machine::{CallMachine, Machine, MachineFault, MachineStep},
+        protocol::{HostRequest, Protocol},
     };
 
     struct Unit;

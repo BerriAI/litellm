@@ -1,6 +1,9 @@
 use std::sync::{Arc, Mutex};
 
-use litellm_host::event::{CallEvent, MachineEvent, WireRequest};
+use litellm_host::{
+    hooks::{MachineEvent, WireRequest},
+    lifecycle::CallEvent,
+};
 use rstest::rstest;
 
 use super::*;

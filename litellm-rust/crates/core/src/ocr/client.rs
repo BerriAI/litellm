@@ -24,8 +24,9 @@ impl OcrRoute {
         &self,
         request: LiteLLMOcrRequest,
         hooks: &impl RouteHooks<Error>,
+        observer: Option<Arc<dyn litellm_host::lifecycle::CallObserver>>,
     ) -> Result<LiteLLMOcrResponse, Error> {
-        litellm_host::lifecycle::observe_unary(hooks.observer(), self.run(request, hooks)).await
+        litellm_host::lifecycle::observe_unary(observer, self.run(request, hooks)).await
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(

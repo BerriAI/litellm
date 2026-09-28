@@ -3,7 +3,7 @@
 | Responsibility | Shared contract | HTTP | Python |
 | --- | --- | --- | --- |
 | Input and output conversion | `Protocol::{Request, Response, StreamHead, Chunk, Error}` | Typed input; `ResponseEncoder` and `StreamEncoder` produce HTTP values | `PythonBinding` decodes prepared arguments, encodes public values and maps native errors |
-| Host services | `Protocol::HostCall`, `HostServices::call` | `HostCallHandler` answers typed calls; `()` handles protocols without host calls | `PythonHostCalls` invokes retained Python objects; it may share an owner with the binding |
+| Host services | `Protocol::HostCall`, `HostServices::call` | `host-native::services::HostCallHandler` answers typed calls; `()` handles protocols without host calls | `PythonHostCalls` invokes retained Python objects; it may share an owner with the binding |
 | Active hooks | `RouteHooks::{before_provider_request, on_event}` | Request interception and fallible execution callbacks | `PythonCallHooks` also prepares arguments, transforms public responses and receives stream callbacks |
 | Passive observation | `lifecycle::CallObserver` | Start and terminal observation, retained by the response body | Public Python callbacks remain active hooks with their existing failure policy |
 | Runtime driving | `Machine`, `HostRequest::{HostCall, Hook, Stream}` | Body polling controls demand | Native polling and inline caller-task Python awaits control progress |
@@ -13,6 +13,10 @@
 Core route constructors prepare their dependencies and return a closure accepting the typed request. Python starts that closure only after argument preparation, preflight and decoding succeed. These steps remain inside the driver's terminal and error handling. Decoding may retain objects for subsequent host service calls
 
 Each driver owns terminal dispatch. Hooks can change or fail execution; passive observers return no result. HTTP observes success after response conversion or stream exhaustion, failure on errors, and cancellation on body drop. Python preserves exception identity and maps native failures once. Explicit Python stream close reports success for delivered chunks; cancellation stops further callback dispatch
+
+`hooks.rs` owns `RouteHooks` and its request and execution-event types. `lifecycle.rs` owns `CallObserver`, `CallEvent`, timing, failure origin, and the observation wrappers. Pass observers separately from hooks at direct route and HTTP entrypoints. Hook implementations can forward execution events to an observer, but do not supply the lifecycle observer
+
+`protocol.rs` owns `Protocol` and suspension messages, including `HookRequest` and `StreamDelivery`. `call.rs` owns route outputs and their adaptation into a hosted machine. Rust service handling belongs in `host-native::services`; coroutine channel handles stay in `machine/context.rs`
 
 Rust handlers answer suspensions through `litellm-host-native::Driver`, which `litellm-host-http` and `litellm_host_native::in_process` share. `in_process::Host` is an assembly of services, hooks, stream consumer and optional observer. It is not a trait mirroring every suspension. Use `run_hosted` to preserve the distinction between stream completion and detachment
 

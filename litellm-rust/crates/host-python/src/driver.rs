@@ -5,10 +5,13 @@ use pyo3::gc::{PyTraverseError, PyVisit};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 
-use litellm_host::call::HostedCompletion;
-use litellm_host::event::{FailureOrigin, Timing, WireRequest, epoch_seconds};
-use litellm_host::machine::{HostFailure, Machine, MachineStep};
-use litellm_host::protocol::{HookRequest, HostRequest, Protocol, Reply, StreamDelivery};
+use litellm_host::{
+    call::HostedCompletion,
+    hooks::WireRequest,
+    lifecycle::{FailureOrigin, Timing, epoch_seconds},
+    machine::{HostFailure, Machine, MachineStep},
+    protocol::{HookRequest, HostRequest, Protocol, Reply, StreamDelivery},
+};
 
 use crate::PythonHostCalls;
 use crate::handle::{Execution, ExecutionBody, ExecutionStep};
@@ -582,8 +585,10 @@ where
 mod tests {
     use std::sync::{Arc, Mutex};
 
-    use litellm_host::event::{MachineEvent, RawResponse, RequestContext};
-    use litellm_host::machine::{CallMachine, MachineFault};
+    use litellm_host::{
+        hooks::{MachineEvent, RawResponse, RequestContext},
+        machine::{CallMachine, MachineFault},
+    };
     use pyo3::exceptions::{PyBaseException, PyValueError};
     use pyo3::types::PyDict;
 

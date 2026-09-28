@@ -4,5 +4,6 @@
 
 mod driver;
 pub mod in_process;
+pub mod services;
 
 pub use driver::{Boundary, Driver};

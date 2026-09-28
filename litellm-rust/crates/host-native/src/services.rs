@@ -1,5 +1,6 @@
-use crate::protocol::Protocol;
 use std::{convert::Infallible, future::Future};
+
+use litellm_host::protocol::Protocol;
 
 pub trait HostCallHandler<P: Protocol>: Send + Sync {
     fn handle_host_call(

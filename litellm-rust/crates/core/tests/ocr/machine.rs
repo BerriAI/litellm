@@ -1,4 +1,3 @@
-use litellm_host::protocol::HookRequest;
 use std::{
     sync::{
         Arc,
@@ -12,12 +11,12 @@ use litellm_core::ocr::{
     types::OcrDocumentInput,
 };
 use litellm_host::{
-    event::{CallEvent, WireRequest},
-    hooks::RouteHooks,
+    hooks::{RouteHooks, WireRequest},
+    lifecycle::CallEvent,
     machine::{HostFailure, Machine, MachineStep},
-    protocol::HostRequest,
-    services::HostCallHandler,
+    protocol::{HookRequest, HostRequest},
 };
+use litellm_host_native::services::HostCallHandler;
 use litellm_llms::base_llm::ocr::transformation::OcrTransportConfig;
 use rstest::rstest;
 use tokio::{io::AsyncReadExt, net::TcpListener, sync::Notify};

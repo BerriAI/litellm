@@ -9,16 +9,15 @@ use std::{
 use futures_util::{StreamExt, stream};
 use litellm_host::{
     call::{CallOutput, HostedCompletion, hosted_call},
-    event::{CallEvent, MachineEvent, RawResponse, RequestContext, WireRequest},
-    hooks::RouteHooks,
-    lifecycle::CallObserver,
+    hooks::{MachineEvent, RawResponse, RequestContext, RouteHooks, WireRequest},
+    lifecycle::{CallEvent, CallObserver},
     machine::{CallMachine, HostFailure, Interrupted, Machine, MachineFault, Step},
     protocol::{Protocol, Reply},
-    services::HostCallHandler,
 };
 use litellm_host_native::{
     Boundary, Driver,
     in_process::{Host, StreamConsumer, run, run_hosted},
+    services::HostCallHandler,
 };
 use rstest::{fixture, rstest};
 use serde_json::json;

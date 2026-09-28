@@ -32,6 +32,6 @@ pub(super) struct ProviderResponsesRequest {
     pub environment: ValidatedEnvironment,
     pub url: String,
     pub body: Value,
-    pub context: litellm_host::event::RequestContext,
+    pub context: litellm_host::hooks::RequestContext,
     pub timeout: Option<Duration>,
 }

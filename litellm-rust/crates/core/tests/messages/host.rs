@@ -1,7 +1,10 @@
 use std::sync::Mutex;
 
 use litellm_core::messages::route::Messages;
-use litellm_host::event::{CallEvent, MachineEvent, RequestContext, WireRequest};
+use litellm_host::{
+    hooks::{MachineEvent, RequestContext, WireRequest},
+    lifecycle::CallEvent,
+};
 use litellm_llms::base_llm::messages::context::MessagesModelCapabilities as AnthropicModelCapabilities;
 use rstest::rstest;
 
@@ -62,7 +65,7 @@ impl RecordingHost {
 }
 
 impl litellm_host::lifecycle::CallObserver for RecordingHost {
-    fn observe(&self, event: litellm_host::event::CallEvent) {
+    fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
         self.events.lock().unwrap().push(event.clone());
     }
 }
@@ -82,11 +85,11 @@ impl litellm_host::hooks::RouteHooks<<Messages as litellm_host::protocol::Protoc
     }
     async fn on_event(
         &self,
-        event: litellm_host::event::MachineEvent,
+        event: litellm_host::hooks::MachineEvent,
     ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
         litellm_host::lifecycle::CallObserver::observe(
             self,
-            litellm_host::event::CallEvent::Machine(event),
+            litellm_host::lifecycle::CallEvent::Machine(event),
         );
         Ok(())
     }

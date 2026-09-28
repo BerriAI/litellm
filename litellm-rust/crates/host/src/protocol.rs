@@ -2,7 +2,7 @@ use std::ops::ControlFlow;
 
 pub use litellm_coroutine::{Abandoned, Answer, Reply, reply};
 
-use crate::event::{MachineEvent, RequestContext, WireRequest};
+use crate::hooks::{MachineEvent, RequestContext, WireRequest};
 
 pub trait Protocol: Send + Sync + 'static {
     type Request: Send + 'static;

@@ -80,7 +80,7 @@ mod tests {
 
     use futures_util::future::BoxFuture;
     use litellm_core_utils::call_arguments::{CallArguments, compose_body, parse_options};
-    use litellm_host::event::WireRequest;
+    use litellm_host::hooks::WireRequest;
     use litellm_llms::{
         base_llm::ocr::{
             error::Error,

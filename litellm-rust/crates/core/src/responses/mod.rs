@@ -37,8 +37,9 @@ impl ResponsesRoute {
         &self,
         call: ResponsesCall,
         hooks: &impl RouteHooks<Error>,
+        observer: Option<Arc<dyn litellm_host::lifecycle::CallObserver>>,
     ) -> Result<ResponsesOutput, Error> {
-        litellm_host::lifecycle::observe_call(hooks.observer(), self.run(call, hooks)).await
+        litellm_host::lifecycle::observe_call(observer, self.run(call, hooks)).await
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(

@@ -4,8 +4,9 @@ use litellm_host::{
     hooks::RouteHooks,
     machine::{HostFailure, Machine, MachineStep},
     protocol::{HookRequest, HostRequest, Protocol, Reply, StreamDelivery},
-    services::HostCallHandler,
 };
+
+use crate::services::HostCallHandler;
 
 type ProtocolOf<M> = <M as Machine>::Protocol;
 type ErrorOf<M> = <ProtocolOf<M> as Protocol>::Error;

@@ -95,28 +95,28 @@ impl litellm_host_native::in_process::StreamConsumer<Messages> for RecordingStre
     }
 }
 impl litellm_host::lifecycle::CallObserver for RecordingStreamHost {
-    fn observe(&self, _: litellm_host::event::CallEvent) {}
+    fn observe(&self, _: litellm_host::lifecycle::CallEvent) {}
 }
 impl litellm_host::hooks::RouteHooks<<Messages as litellm_host::protocol::Protocol>::Error>
     for RecordingStreamHost
 {
     async fn before_provider_request(
         &self,
-        wire: litellm_host::event::WireRequest,
-        _: litellm_host::event::RequestContext,
+        wire: litellm_host::hooks::WireRequest,
+        _: litellm_host::hooks::RequestContext,
     ) -> Result<
-        litellm_host::event::WireRequest,
+        litellm_host::hooks::WireRequest,
         <Messages as litellm_host::protocol::Protocol>::Error,
     > {
         Ok(wire)
     }
     async fn on_event(
         &self,
-        event: litellm_host::event::MachineEvent,
+        event: litellm_host::hooks::MachineEvent,
     ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
         litellm_host::lifecycle::CallObserver::observe(
             self,
-            litellm_host::event::CallEvent::Machine(event),
+            litellm_host::lifecycle::CallEvent::Machine(event),
         );
         Ok(())
     }
@@ -346,6 +346,7 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
                 ..streaming(call, upstream.uri())
             },
             &(),
+            None,
         )
         .await
         .unwrap();
@@ -366,7 +367,7 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
 async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall) {
     let upstream = upstream([ResponseTemplate::new(429).set_body_string("slow down")]).await;
     let error = messages_route(no_secrets())
-        .execute(streaming(call, upstream.uri()), &())
+        .execute(streaming(call, upstream.uri()), &(), None)
         .await
         .err()
         .expect("upstream failure is returned by messages()");
@@ -397,6 +398,7 @@ async fn dropping_the_sdk_stream_closes_the_unfinished_upstream(
                 ..streaming(call, base)
             },
             &(),
+            None,
         ),
     )
     .await
@@ -433,6 +435,7 @@ async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesC
                 ..streaming(call, base)
             },
             &(),
+            None,
         )
         .await
         .unwrap();

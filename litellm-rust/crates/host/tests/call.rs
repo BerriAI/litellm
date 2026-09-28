@@ -11,8 +11,7 @@ use std::{
 use futures_util::{StreamExt, stream};
 use litellm_host::{
     call::{CallOutput, HostedCompletion, hosted_call},
-    event::CallEvent,
-    lifecycle::{CallObserver, observe_call, observe_unary},
+    lifecycle::{CallEvent, CallObserver, observe_call, observe_unary},
     machine::{Machine, MachineFault, MachineStep},
     protocol::{HostRequest, Protocol},
 };

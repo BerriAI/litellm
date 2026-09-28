@@ -47,7 +47,7 @@ async fn handle(
     let machine = gateway.messages.clone().machine(call);
     let stream =
         Sse::<Messages, _, _>::new(Json, |error| Bytes::from(Error::from(error).sse_frame()));
-    Ok(litellm_host_http::serve(machine, (), (), stream).await?)
+    Ok(litellm_host_http::serve(machine, (), (), stream, None).await?)
 }
 
 fn project(

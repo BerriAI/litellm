@@ -2,15 +2,16 @@ use std::{future::Future, ops::ControlFlow};
 
 use litellm_host::{
     call::{HostedCompletion, HostedMachine},
-    event::{CallEvent, FailureOrigin, Timing, epoch_seconds},
     hooks::RouteHooks,
-    lifecycle::CallObserver,
+    lifecycle::{CallEvent, CallObserver, FailureOrigin, Timing, epoch_seconds},
     machine::{Machine, MachineFault},
     protocol::Protocol,
-    services::HostCallHandler,
 };
 
-use crate::driver::{Boundary, Driver};
+use crate::{
+    driver::{Boundary, Driver},
+    services::HostCallHandler,
+};
 
 pub trait StreamConsumer<P: Protocol>: Send + Sync {
     fn open_stream(

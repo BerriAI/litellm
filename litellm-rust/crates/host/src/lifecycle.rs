@@ -1,11 +1,54 @@
-use std::{future::Future, sync::Arc};
+use std::{
+    future::Future,
+    sync::Arc,
+    time::{SystemTime, UNIX_EPOCH},
+};
 
 use futures_util::TryStreamExt;
 
-use crate::{
-    call::CallOutput,
-    event::{CallEvent, FailureOrigin, Timing, epoch_seconds},
-};
+use crate::{call::CallOutput, hooks::MachineEvent};
+
+/// Seconds since the Unix epoch, on one clock for every host.
+pub fn epoch_seconds() -> f64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs_f64())
+        .unwrap_or(0.0)
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Timing {
+    pub start_time: f64,
+    pub end_time: f64,
+}
+
+/// Whether a failure surfaced inside the call, including a host op the call asked for,
+/// or in a host step around it (preparing the arguments, finalizing the response).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FailureOrigin {
+    Call,
+    Host,
+}
+
+/// What an in-process host observes: the machine's own events between the driver's
+/// start and terminal ones.
+#[derive(Clone, Debug, PartialEq)]
+pub enum CallEvent {
+    Started {
+        start_time: f64,
+    },
+    Machine(MachineEvent),
+    Succeeded {
+        timing: Timing,
+    },
+    Failed {
+        timing: Timing,
+        origin: FailureOrigin,
+    },
+    Cancelled {
+        timing: Timing,
+    },
+}
 
 pub trait CallObserver: Send + Sync {
     fn observe(&self, event: CallEvent);

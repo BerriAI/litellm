@@ -63,6 +63,7 @@ async fn handle(
         (),
         (),
         litellm_host_http::Unary::new(Json),
+        None,
     )
     .await?;
     Ok(response)

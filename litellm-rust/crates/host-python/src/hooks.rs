@@ -1,5 +1,8 @@
 use crate::PythonOwned;
-use litellm_host::event::{FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest};
+use litellm_host::{
+    hooks::{MachineEvent, RequestContext, WireRequest},
+    lifecycle::{FailureOrigin, Timing},
+};
 use pyo3::prelude::*;
 use pyo3::types::PyDict;
 

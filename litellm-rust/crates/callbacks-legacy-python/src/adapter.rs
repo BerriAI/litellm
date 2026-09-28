@@ -4,8 +4,9 @@
 
 use litellm_host_python::PythonOwned;
 
-use litellm_host::event::{
-    FailureOrigin, MachineEvent, RequestContext, Timing, WireRequest, epoch_seconds,
+use litellm_host::{
+    hooks::{MachineEvent, RequestContext, WireRequest},
+    lifecycle::{FailureOrigin, Timing, epoch_seconds},
 };
 use litellm_host_python::{HookEvent, HookStep, PythonCallHooks, from_py, missing_state, to_py};
 use pyo3::{
@@ -519,7 +520,7 @@ impl PythonOwned for LegacyLogging {
 mod deployment_hooks_tests {
     use std::ffi::CStr;
 
-    use litellm_host::event::{FailureOrigin, Timing};
+    use litellm_host::lifecycle::{FailureOrigin, Timing};
     use litellm_host_python::{HookEvent, HookStep, PythonCallHooks};
     use pyo3::exceptions::asyncio::CancelledError;
     use pyo3::prelude::*;
@@ -808,7 +809,7 @@ mod payload_tests {
     use std::ffi::CStr;
 
     use litellm_auth::SecretValue;
-    use litellm_host::event::{MachineEvent, RawResponse, RequestContext, WireRequest};
+    use litellm_host::hooks::{MachineEvent, RawResponse, RequestContext, WireRequest};
     use litellm_host_python::{HookEvent, HookStep, PythonCallHooks, PythonOwned, to_py};
     use proptest::prelude::*;
     use pyo3::gc::{PyTraverseError, PyVisit};
@@ -1459,7 +1460,7 @@ def check():
 mod terminal_tests {
     use std::ffi::CStr;
 
-    use litellm_host::event::{FailureOrigin, Timing};
+    use litellm_host::lifecycle::{FailureOrigin, Timing};
     use litellm_host_python::{HookEvent, HookStep, PythonCallHooks, PythonOwned};
     use pyo3::exceptions::PyRuntimeError;
     use pyo3::exceptions::asyncio::CancelledError;

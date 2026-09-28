@@ -15,7 +15,7 @@ use support::*;
 const ANTHROPIC_MESSAGE: &str = r#"{"id":"msg_1","type":"message","role":"assistant","model":"claude-sonnet-4-5-20260101","content":[{"type":"text","text":"hello"}],"stop_reason":"end_turn","stop_sequence":null,"usage":{"input_tokens":11,"output_tokens":4}}"#;
 
 async fn complete(request: ChatCompletionsRequest<'_>) -> Result<ChatCompletionsResponse, Error> {
-    chat_completions_route().execute(request, &()).await
+    chat_completions_route().execute(request, &(), None).await
 }
 
 fn object(value: Value) -> Map<String, Value> {
@@ -333,7 +333,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
     #[case] hosted: bool,
 ) {
     use litellm_core::chat_completions::route::ChatCompletions;
-    use litellm_host::{call::HostedCompletion, event::CallEvent};
+    use litellm_host::{call::HostedCompletion, lifecycle::CallEvent};
 
     let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
     let base = upstream.uri();
@@ -370,6 +370,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
                     timeout: call.timeout,
                 },
                 &host,
+                Some(host.events.clone()),
             )
             .await
             .unwrap()
@@ -398,10 +399,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
 async fn a_post_call_hook_failure_never_looks_safe_to_retry(
     request: ChatCompletionsRequest<'static>,
 ) {
-    use litellm_host::{
-        event::{MachineEvent, RequestContext, WireRequest},
-        hooks::RouteHooks,
-    };
+    use litellm_host::hooks::{MachineEvent, RequestContext, RouteHooks, WireRequest};
     struct FailingHook;
     impl RouteHooks<Error> for FailingHook {
         async fn before_provider_request(
@@ -424,6 +422,7 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
                 ..request
             },
             &FailingHook,
+            None,
         )
         .await
         .unwrap_err();

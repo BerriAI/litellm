@@ -64,8 +64,9 @@ impl ChatCompletionsRoute {
         &self,
         request: ChatCompletionsRequest<'_>,
         hooks: &impl litellm_host::hooks::RouteHooks<Error>,
+        observer: Option<Arc<dyn litellm_host::lifecycle::CallObserver>>,
     ) -> Result<ChatCompletionsResponse, Error> {
-        litellm_host::lifecycle::observe_unary(hooks.observer(), self.run(request, hooks)).await
+        litellm_host::lifecycle::observe_unary(observer, self.run(request, hooks)).await
     }
 
     #[tracing::instrument(name = "litellm.route", skip_all, fields(

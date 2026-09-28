@@ -156,28 +156,28 @@ impl LocalMessagesHost {
 }
 
 impl litellm_host::lifecycle::CallObserver for LocalMessagesHost {
-    fn observe(&self, _: litellm_host::event::CallEvent) {}
+    fn observe(&self, _: litellm_host::lifecycle::CallEvent) {}
 }
 impl litellm_host::hooks::RouteHooks<<Messages as litellm_host::protocol::Protocol>::Error>
     for LocalMessagesHost
 {
     async fn before_provider_request(
         &self,
-        wire: litellm_host::event::WireRequest,
-        _: litellm_host::event::RequestContext,
+        wire: litellm_host::hooks::WireRequest,
+        _: litellm_host::hooks::RequestContext,
     ) -> Result<
-        litellm_host::event::WireRequest,
+        litellm_host::hooks::WireRequest,
         <Messages as litellm_host::protocol::Protocol>::Error,
     > {
         Ok(wire)
     }
     async fn on_event(
         &self,
-        event: litellm_host::event::MachineEvent,
+        event: litellm_host::hooks::MachineEvent,
     ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
         litellm_host::lifecycle::CallObserver::observe(
             self,
-            litellm_host::event::CallEvent::Machine(event),
+            litellm_host::lifecycle::CallEvent::Machine(event),
         );
         Ok(())
     }

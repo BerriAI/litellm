@@ -13,12 +13,10 @@ use futures_util::{StreamExt, stream};
 use http::{StatusCode, header::CONTENT_TYPE};
 use litellm_host::{
     call::{CallOutput, hosted_call},
-    event::{CallEvent, MachineEvent, RawResponse, RequestContext, WireRequest},
-    hooks::RouteHooks,
-    lifecycle::CallObserver,
+    hooks::{MachineEvent, RawResponse, RequestContext, RouteHooks, WireRequest},
+    lifecycle::{CallEvent, CallObserver},
     machine::MachineFault,
-    protocol::Protocol,
-    protocol::Reply,
+    protocol::{Protocol, Reply},
 };
 use litellm_host_http::{Error, ResponseEncoder, StreamEncoder, Unary, serve, serve_unary};
 use rstest::{fixture, rstest};
@@ -71,7 +69,7 @@ impl ResponseEncoder for Adapter {
     }
 }
 
-impl litellm_host::services::HostCallHandler<TestProtocol> for Adapter {
+impl litellm_host_native::services::HostCallHandler<TestProtocol> for Adapter {
     async fn handle_host_call(&self, reply: Reply<&'static str>) -> Result<(), TestError> {
         if self.0 == Rejection::Custom {
             return Err(TestError::Adapter);
@@ -123,10 +121,6 @@ struct Hooks {
 }
 
 impl RouteHooks<TestError> for Hooks {
-    fn observer(&self) -> Option<Arc<dyn CallObserver>> {
-        Some(self.observer.clone())
-    }
-
     async fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -202,6 +196,7 @@ async fn projection_custom_operations_and_hooks_feed_the_http_response(hooks: Ho
         Adapter(Rejection::None),
         hooks,
         Adapter(Rejection::None),
+        Some(observer.clone()),
     )
     .await
     .unwrap();
@@ -234,10 +229,9 @@ impl Drop for Release {
 #[case::dropped_before_eof(Some(2))]
 #[tokio::test]
 async fn body_demand_controls_polling_and_lifecycle(
-    hooks: Hooks,
+    observer: Arc<Observer>,
     #[case] drop_after: Option<usize>,
 ) {
-    let observer = hooks.observer.clone();
     let polls = Arc::new(AtomicUsize::new(0));
     let released = Arc::new(AtomicBool::new(false));
     let provider_polls = polls.clone();
@@ -258,8 +252,9 @@ async fn body_demand_controls_polling_and_lifecycle(
     let response = serve(
         machine,
         Adapter(Rejection::None),
-        hooks,
+        (),
         Adapter(Rejection::None),
+        Some(observer.clone()),
     )
     .await
     .unwrap();
@@ -322,9 +317,15 @@ async fn stream_failure_emits_one_error_frame_and_stops(
             chunks,
         })
     });
-    let response = serve(machine, Adapter(rejection), hooks, Adapter(rejection))
-        .await
-        .unwrap();
+    let response = serve(
+        machine,
+        Adapter(rejection),
+        hooks,
+        Adapter(rejection),
+        Some(observer.clone()),
+    )
+    .await
+    .unwrap();
     let body = to_bytes(response.into_body(), 1024).await.unwrap();
     let prefix = if rejection == Rejection::Chunk {
         ""
@@ -370,9 +371,15 @@ async fn failures_before_open_return_an_error(hooks: Hooks, #[case] rejection: R
         TestError::Adapter
     };
     assert_eq!(
-        serve(machine, Adapter(rejection), hooks, Adapter(rejection))
-            .await
-            .unwrap_err(),
+        serve(
+            machine,
+            Adapter(rejection),
+            hooks,
+            Adapter(rejection),
+            Some(observer.clone())
+        )
+        .await
+        .unwrap_err(),
         Error::Call(expected)
     );
     assert!(matches!(
@@ -409,6 +416,7 @@ async fn cancelling_pending_work_releases_the_machine(hooks: Hooks, #[case] stre
         Adapter(Rejection::None),
         hooks,
         Adapter(Rejection::None),
+        Some(observer.clone()),
     ));
     if streaming {
         let mut body = response.await.unwrap().into_body().into_data_stream();
@@ -476,7 +484,8 @@ async fn hook_rejection_stops_execution_and_is_reported_once(
             machine,
             Adapter(Rejection::None),
             hooks,
-            Adapter(Rejection::None)
+            Adapter(Rejection::None),
+            Some(observer.clone()),
         )
         .await
         .unwrap_err(),
@@ -522,6 +531,7 @@ async fn invalid_host_operations_fail_without_panicking(hooks: Hooks, #[case] fl
         Adapter(Rejection::None),
         hooks,
         Adapter(Rejection::None),
+        Some(observer.clone()),
     )
     .await;
     if matches!(flow, InvalidFlow::OpenTwice) {
@@ -589,6 +599,7 @@ async fn unary_calls_use_into_response_after_hooks_and_before_success(hooks: Hoo
             ));
             (StatusCode::CREATED, [("x-converted", "yes")], Json(value))
         }),
+        Some(observer.clone()),
     )
     .await
     .unwrap();
@@ -638,6 +649,7 @@ async fn unary_failure_preserves_the_error_without_converting(
             converted.store(true, Ordering::SeqCst);
             Json(value)
         }),
+        Some(observer.clone()),
     )
     .await;
     assert_eq!(result.unwrap_err(), Error::Call(expected));
@@ -667,6 +679,7 @@ async fn cancelling_unary_execution_releases_work_without_converting(hooks: Hook
             converted.store(true, Ordering::SeqCst);
             Json(value)
         }),
+        Some(observer.clone()),
     ));
     assert!(futures_util::poll!(&mut call).is_pending());
     assert!(!released.load(Ordering::SeqCst));
@@ -709,7 +722,7 @@ impl ResponseEncoder for CustomUnaryAdapter {
 
 struct Credentials(bool);
 
-impl litellm_host::services::HostCallHandler<CustomUnaryProtocol> for Credentials {
+impl litellm_host_native::services::HostCallHandler<CustomUnaryProtocol> for Credentials {
     async fn handle_host_call(&self, reply: Reply<&'static str>) -> Result<(), TestError> {
         if self.0 {
             return Err(TestError::Adapter);
@@ -725,11 +738,10 @@ impl litellm_host::services::HostCallHandler<CustomUnaryProtocol> for Credential
 #[case::response_conversion_fails(false, true)]
 #[tokio::test]
 async fn unary_custom_operations_and_conversion_finish_before_terminal_observation(
-    hooks: Hooks,
+    observer: Arc<Observer>,
     #[case] reject_op: bool,
     #[case] reject_response: bool,
 ) {
-    let observer = hooks.observer.clone();
     let continued = Arc::new(AtomicBool::new(false));
     let executed = continued.clone();
     let released = Arc::new(AtomicBool::new(false));
@@ -749,11 +761,12 @@ async fn unary_custom_operations_and_conversion_finish_before_terminal_observati
     let result = serve_unary(
         machine,
         Credentials(reject_op),
-        hooks,
+        (),
         CustomUnaryAdapter {
             reject_response,
             converted: converted.clone(),
         },
+        Some(observer.clone()),
     )
     .await;
     assert_eq!(continued.load(Ordering::SeqCst), !reject_op);

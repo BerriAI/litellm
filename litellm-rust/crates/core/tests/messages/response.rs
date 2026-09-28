@@ -8,13 +8,19 @@ use rstest::rstest;
 use super::*;
 
 #[rstest]
-#[case::without_hooks(false)]
-#[case::with_hooks(true)]
+#[case::neither(false, false)]
+#[case::hooks_only(true, false)]
+#[case::observer_only(false, true)]
+#[case::both(true, true)]
 #[tokio::test]
-async fn calls_defer_execution_until_polled(call: MessagesCall, #[case] with_hooks: bool) {
+async fn calls_defer_execution_until_polled(
+    call: MessagesCall,
+    #[case] with_hooks: bool,
+    #[case] with_observer: bool,
+) {
     use futures_util::future::BoxFuture;
 
-    use litellm_host::event::CallEvent;
+    use litellm_host::lifecycle::{CallEvent, CallObserver};
 
     let upstream = upstream([message_response()]).await;
     let secrets = Arc::new(RecordingSecrets::new([("ANTHROPIC_API_KEY", "test-key")]));
@@ -24,10 +30,11 @@ async fn calls_defer_execution_until_polled(call: MessagesCall, #[case] with_hoo
         ..call
     });
     let request = host.request().unwrap();
+    let observer: Option<Arc<dyn CallObserver>> = with_observer.then(|| host.events.clone() as _);
     let future: BoxFuture<'_, Result<MessagesResponse, Error>> = if with_hooks {
-        Box::pin(route.execute(request, &host))
+        Box::pin(route.execute(request, &host, observer))
     } else {
-        Box::pin(route.execute(request, &()))
+        Box::pin(route.execute(request, &(), observer))
     };
 
     assert!(secrets.requested().is_empty());
@@ -46,18 +53,25 @@ async fn calls_defer_execution_until_polled(call: MessagesCall, #[case] with_hoo
     assert_eq!(sent.header("x-api-key"), Some("test-key"));
     assert_eq!(sent.header("x-hook"), with_hooks.then_some("called"));
     let events = host.events.0.lock().unwrap();
-    if with_hooks {
-        assert!(matches!(
-            &events[..],
-            [
-                CallEvent::Started { .. },
-                CallEvent::Machine(_),
-                CallEvent::Succeeded { .. }
-            ]
-        ));
-    } else {
-        assert!(events.is_empty());
-    }
+    assert!(matches!(
+        (with_hooks, with_observer, events.as_slice()),
+        (false, false, [])
+            | (true, false, [CallEvent::Machine(_)])
+            | (
+                false,
+                true,
+                [CallEvent::Started { .. }, CallEvent::Succeeded { .. }]
+            )
+            | (
+                true,
+                true,
+                [
+                    CallEvent::Started { .. },
+                    CallEvent::Machine(_),
+                    CallEvent::Succeeded { .. }
+                ]
+            )
+    ));
 }
 
 #[rstest]
@@ -249,6 +263,7 @@ async fn the_facade_sends_through_the_injected_http_pool_configuration(call: Mes
             ..call
         },
         &(),
+        None,
     )
     .await
     .expect("messages request succeeds");

@@ -3,3 +3,5 @@
 The consumer decides demand, so the driver never spawns a producer task and never buffers chunks ahead of demand. `litellm-host-http` polls it from the response body; `in_process::run_hosted` polls it on behalf of a `StreamConsumer`. Both observe lifecycle terminals themselves, the driver reports none
 
 Depend on `litellm-host` only. HTTP encoding stays in `litellm-host-http`; `litellm-host-python` drives the machine directly so Python callbacks stay in the caller's asyncio task
+
+`services.rs` owns `HostCallHandler` and its borrowed and no-service implementations. This is the Rust driver's handler contract; the shared host crate owns the service request protocol

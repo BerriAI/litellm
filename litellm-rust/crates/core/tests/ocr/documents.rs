@@ -1,6 +1,6 @@
 use base64::Engine;
 use litellm_core::ocr::types::OcrDocumentInput;
-use litellm_host::event::WireRequest;
+use litellm_host::hooks::WireRequest;
 use rstest::rstest;
 use wiremock::{Mock, matchers::any};
 

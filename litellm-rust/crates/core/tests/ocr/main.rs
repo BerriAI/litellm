@@ -5,7 +5,10 @@ use litellm_core::ocr::{
     types::{LiteLLMOcrRequest, OcrDocumentInput},
     wire::{OcrWireRequest, decode_request},
 };
-use litellm_host::event::{CallEvent, RequestContext, WireRequest};
+use litellm_host::{
+    hooks::{RequestContext, WireRequest},
+    lifecycle::CallEvent,
+};
 use litellm_llms::base_llm::ocr::{
     error::Error,
     settings::OcrSettings,
@@ -57,7 +60,7 @@ fn ocr_route_with(settings: OcrSettings) -> OcrRoute {
 }
 
 async fn perform(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error> {
-    ocr_route().execute(request, &()).await
+    ocr_route().execute(request, &(), None).await
 }
 
 async fn perform_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Error> {
@@ -211,7 +214,7 @@ impl LocalOcrHost {
         }
     }
 }
-impl litellm_host::services::HostCallHandler<Ocr> for LocalOcrHost {
+impl litellm_host_native::services::HostCallHandler<Ocr> for LocalOcrHost {
     async fn handle_host_call(&self, op: OcrOp) -> Result<(), Error> {
         match op {
             OcrOp::AcquireAzureAdToken(_) => {
@@ -224,7 +227,7 @@ impl litellm_host::services::HostCallHandler<Ocr> for LocalOcrHost {
 }
 
 impl litellm_host::lifecycle::CallObserver for LocalOcrHost {
-    fn observe(&self, event: litellm_host::event::CallEvent) {
+    fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
         if let Some(observer) = &self.observer {
             observer(&event);
         }
@@ -245,11 +248,11 @@ impl litellm_host::hooks::RouteHooks<<Ocr as litellm_host::protocol::Protocol>::
     }
     async fn on_event(
         &self,
-        event: litellm_host::event::MachineEvent,
+        event: litellm_host::hooks::MachineEvent,
     ) -> Result<(), <Ocr as litellm_host::protocol::Protocol>::Error> {
         litellm_host::lifecycle::CallObserver::observe(
             self,
-            litellm_host::event::CallEvent::Machine(event),
+            litellm_host::lifecycle::CallEvent::Machine(event),
         );
         Ok(())
     }

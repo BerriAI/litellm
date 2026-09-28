@@ -4,7 +4,10 @@ use litellm_core::ocr::{
     route::{Ocr, OcrCall, OcrOp},
     types::OcrDocumentInput,
 };
-use litellm_host::event::{CallEvent, MachineEvent, RequestContext, WireRequest};
+use litellm_host::{
+    hooks::{MachineEvent, RequestContext, WireRequest},
+    lifecycle::CallEvent,
+};
 use rstest::rstest;
 
 use super::*;
@@ -217,7 +220,7 @@ impl CallerTokenHost {
         }
     }
 }
-impl litellm_host::services::HostCallHandler<Ocr> for CallerTokenHost {
+impl litellm_host_native::services::HostCallHandler<Ocr> for CallerTokenHost {
     async fn handle_host_call(&self, op: OcrOp) -> Result<(), Error> {
         match op {
             OcrOp::AcquireAzureAdToken(reply) => {
@@ -232,7 +235,7 @@ impl litellm_host::services::HostCallHandler<Ocr> for CallerTokenHost {
 }
 
 impl litellm_host::lifecycle::CallObserver for CallerTokenHost {
-    fn observe(&self, _: litellm_host::event::CallEvent) {}
+    fn observe(&self, _: litellm_host::lifecycle::CallEvent) {}
 }
 impl litellm_host::hooks::RouteHooks<<Ocr as litellm_host::protocol::Protocol>::Error>
     for CallerTokenHost
@@ -265,11 +268,11 @@ impl litellm_host::hooks::RouteHooks<<Ocr as litellm_host::protocol::Protocol>::
     }
     async fn on_event(
         &self,
-        event: litellm_host::event::MachineEvent,
+        event: litellm_host::hooks::MachineEvent,
     ) -> Result<(), <Ocr as litellm_host::protocol::Protocol>::Error> {
         litellm_host::lifecycle::CallObserver::observe(
             self,
-            litellm_host::event::CallEvent::Machine(event),
+            litellm_host::lifecycle::CallEvent::Machine(event),
         );
         Ok(())
     }
@@ -317,10 +320,6 @@ async fn direct_execution_uses_hooks_without_a_machine() {
     struct Hooks(Arc<super::support::CallEvents>);
 
     impl RouteHooks<Error> for Hooks {
-        fn observer(&self) -> Option<Arc<dyn CallObserver>> {
-            Some(self.0.clone())
-        }
-
         async fn before_provider_request(
             &self,
             wire: WireRequest,
@@ -352,6 +351,7 @@ async fn direct_execution_uses_hooks_without_a_machine() {
     let builder = route.execute(
         ocr_request("mistral/model", &upstream.uri(), json!({})),
         &hooks,
+        Some(events.clone()),
     );
     assert!(events.0.lock().unwrap().is_empty());
     assert!(received(&upstream).await.is_empty());

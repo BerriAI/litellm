@@ -4,7 +4,7 @@ use litellm_coroutine::Co;
 
 use super::coroutine::MachineFault;
 use crate::{
-    event::{MachineEvent, RequestContext, WireRequest},
+    hooks::{MachineEvent, RequestContext, WireRequest},
     protocol::{HookRequest, HostRequest, Protocol, Reply, StreamDelivery},
 };
 

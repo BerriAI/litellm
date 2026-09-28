@@ -251,10 +251,10 @@ pub struct RecordingCall<P: litellm_host::protocol::Protocol> {
 }
 
 #[derive(Default)]
-pub struct CallEvents(pub Mutex<Vec<litellm_host::event::CallEvent>>);
+pub struct CallEvents(pub Mutex<Vec<litellm_host::lifecycle::CallEvent>>);
 
 impl litellm_host::lifecycle::CallObserver for CallEvents {
-    fn observe(&self, event: litellm_host::event::CallEvent) {
+    fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
         self.0.lock().unwrap().push(event);
     }
 }
@@ -273,16 +273,12 @@ impl<P: litellm_host::protocol::Protocol> RecordingCall<P> {
 impl<P: litellm_host::protocol::Protocol> litellm_host::hooks::RouteHooks<P::Error>
     for RecordingCall<P>
 {
-    fn observer(&self) -> Option<Arc<dyn litellm_host::lifecycle::CallObserver>> {
-        Some(self.events.clone())
-    }
-
     async fn before_provider_request(
         &self,
-        wire: litellm_host::event::WireRequest,
-        _: litellm_host::event::RequestContext,
-    ) -> Result<litellm_host::event::WireRequest, P::Error> {
-        Ok(litellm_host::event::WireRequest {
+        wire: litellm_host::hooks::WireRequest,
+        _: litellm_host::hooks::RequestContext,
+    ) -> Result<litellm_host::hooks::WireRequest, P::Error> {
+        Ok(litellm_host::hooks::WireRequest {
             headers: wire
                 .headers
                 .into_iter()
@@ -292,12 +288,12 @@ impl<P: litellm_host::protocol::Protocol> litellm_host::hooks::RouteHooks<P::Err
         })
     }
 
-    async fn on_event(&self, event: litellm_host::event::MachineEvent) -> Result<(), P::Error> {
+    async fn on_event(&self, event: litellm_host::hooks::MachineEvent) -> Result<(), P::Error> {
         self.events
             .0
             .lock()
             .unwrap()
-            .push(litellm_host::event::CallEvent::Machine(event));
+            .push(litellm_host::lifecycle::CallEvent::Machine(event));
         Ok(())
     }
 }
@@ -343,7 +339,7 @@ where
     P: litellm_host::protocol::Protocol<HostCall = std::convert::Infallible>,
     P::Error: From<litellm_host::machine::MachineFault>,
 {
-    fn observe(&self, event: litellm_host::event::CallEvent) {
+    fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
         self.events.0.lock().unwrap().push(event.clone());
     }
 }
