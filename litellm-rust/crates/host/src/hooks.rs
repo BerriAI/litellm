@@ -23,6 +23,14 @@ pub trait CallHooks<R: HookRuntime>: Sized {
         started_at: f64,
     ) -> Result<R::Step<Self, R::Arguments>, R::Error>;
 
+    fn arguments_prepared(
+        &mut self,
+        _runtime: R::Context<'_>,
+        _arguments: &R::Arguments,
+    ) -> Result<(), R::Error> {
+        Ok(())
+    }
+
     fn before_provider_request(
         &mut self,
         runtime: R::Context<'_>,

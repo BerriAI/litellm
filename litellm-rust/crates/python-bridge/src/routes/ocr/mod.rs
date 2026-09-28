@@ -4,11 +4,11 @@ mod host;
 mod project;
 
 use host::OcrPythonHost;
-use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
 use litellm_core::ocr::provider_config;
 use litellm_core_utils::settings::ProcessEnvironment;
 use litellm_host_python::to_py;
 use litellm_llms::base_llm::ocr::settings::OcrSettings;
+use litellm_types::Operation;
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
@@ -29,17 +29,6 @@ const ENABLE_AZURE_AD_TOKEN_REFRESH: FieldSpec<bool> =
         Ok(field.exact_true())
     });
 
-const SURFACE: LegacySurface = LegacySurface {
-    call_type: "ocr",
-    input_description: "OCR document processing",
-    stream: None,
-};
-
-const ASYNC_SURFACE: LegacySurface = LegacySurface {
-    call_type: "aocr",
-    ..SURFACE
-};
-
 fn run_ocr(
     py: Python<'_>,
     request: Bound<'_, PyAny>,
@@ -47,10 +36,11 @@ fn run_ocr(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    run_legacy_call(
+    let (arguments, hooks) =
+        crate::routes::call_hooks(py, Operation::Ocr, &request, &args, &kwargs, asynchronous)?;
+    crate::routes::run_public_call(
         py,
-        if asynchronous { ASYNC_SURFACE } else { SURFACE },
-        PublicCall::capture(&request, &args, &kwargs)?,
+        arguments,
         move |py, arguments, request| {
             let config = http::call_config(py, arguments, asynchronous)?;
             let client = litellm_llms::base_llm::ocr::handler::OcrClient::new(
@@ -63,13 +53,11 @@ fn run_ocr(
             )
             .map_err(http::client_error)?;
             let route = litellm_core::ocr::OcrRoute::new(client);
-            Ok(crate::logger::LoggedMachine::new(
-                route.machine(request, None),
-            ))
+            Ok(route.machine(request, None))
         },
         OcrPythonHost::new(request.unbind()),
-        crate::preflight::sdk_preflight,
-        crate::lifecycle::call_options(asynchronous),
+        hooks,
+        asynchronous,
     )
 }
 

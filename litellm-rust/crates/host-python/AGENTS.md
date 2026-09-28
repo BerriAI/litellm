@@ -14,6 +14,10 @@ The driver owns ordering: start, argument preparation, preflight, binding decode
 
 Boundary tests exercise behavior with a supplied lifecycle binding without importing the LiteLLM Python package. Pin inline awaiting, awaitable final values, exception identity, cancellation, re-entry and release of retained objects, rather than module names or source layout
 
+`HookChain` composes Python runtime hooks in order. Each argument, wire-request and response transformation feeds its result to the next hook. After all argument transformations, the driver calls `arguments_prepared` on every hook before SDK preflight mutates that shared dictionary. Retained callback views must adopt that dictionary
+
+Terminal notifications share the selected response or exception. An ordinary notification error is reported as unraisable and does not skip the next hook or replace the selected outcome. Preparation, interception and transformation errors stop the chain. Cancellation stops all further hook dispatch. Suspensions stay inline in the existing driver, and the chain traverses retained event values for GC
+
 ## Existing runtime invariants
 
 - Keep this crate the CPython runtime adapter and nothing more: Serde marshalling, interpreter detachment, tokio/asyncio glue, the `Execution` handle, the call driver and the `PythonBinding`, `PythonHostCalls` and `PythonOwned` traits, and the `PythonRuntime` specialization of `host::hooks::CallHooks`

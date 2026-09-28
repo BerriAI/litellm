@@ -145,6 +145,11 @@ impl CallHooks<PythonRuntime> for LegacyLogging {
         (PREPARE.invoke)(self, py, arguments, started_at)
     }
 
+    fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
+        self.adopt_arguments(py, arguments);
+        Ok(())
+    }
+
     fn before_provider_request(
         &mut self,
         py: Python<'_>,

@@ -20,7 +20,7 @@ fn run_public(
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     use super::inference::InferenceHost;
-    use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
+    use litellm_types::Operation;
     let host = InferenceHost::new(
         request.clone().unbind(),
         "litellm.rust_bridge.responses.route_host",
@@ -63,18 +63,17 @@ fn run_public(
             "native Python responses streaming",
         ));
     }
-    run_legacy_call(
+    let (arguments, hooks) = crate::routes::call_hooks(
         py,
-        LegacySurface {
-            call_type: if asynchronous {
-                "aresponses"
-            } else {
-                "responses"
-            },
-            input_description: "Responses",
-            stream: None,
-        },
-        PublicCall::capture(&request, &args, &kwargs)?,
+        Operation::Responses,
+        &request,
+        &args,
+        &kwargs,
+        asynchronous,
+    )?;
+    crate::routes::run_public_call(
+        py,
+        arguments,
         move |py, arguments, request| {
             let route = litellm_core::responses::ResponsesRoute::new(
                 crate::http::provider_client(py, arguments, asynchronous)?
@@ -82,13 +81,11 @@ fn run_public(
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );
-            Ok(crate::logger::LoggedMachine::new(
-                route.machine(request, None),
-            ))
+            Ok(route.machine(request, None))
         },
         host::ResponsesPythonHost(host),
-        crate::preflight::sdk_preflight,
-        crate::lifecycle::call_options(asynchronous),
+        hooks,
+        asynchronous,
     )
 }
 

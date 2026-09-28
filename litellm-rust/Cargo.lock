@@ -3616,6 +3616,7 @@ dependencies = [
  "litellm-auth",
  "litellm-host",
  "litellm-host-python",
+ "litellm-types",
  "proptest",
  "pyo3",
  "rstest",

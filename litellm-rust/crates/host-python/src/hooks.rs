@@ -1,3 +1,6 @@
+mod chain;
+pub use chain::HookChain;
+
 use crate::PythonOwned;
 use litellm_host::hooks::{CallHooks, HookRuntime, RuntimeCallEvent};
 use pyo3::prelude::*;

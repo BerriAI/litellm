@@ -261,6 +261,9 @@ where
                 Ok(ExecutionStep::Await(awaitable))
             }
             HookStep::Ready(arguments) => {
+                if let Err(error) = self.hooks.arguments_prepared(py, &arguments) {
+                    return self.hook_failed(py, error);
+                }
                 if let Err(error) = (self.preflight)(py, arguments.bind(py)) {
                     return self.hook_failed(py, error);
                 }
@@ -888,6 +891,7 @@ mod tests {
     enum HookScript {
         Plain,
         RewriteArguments,
+        ObserveArguments,
         FailBegin,
         ReplaceResponse,
         FailAfterSuccess,
@@ -923,6 +927,18 @@ mod tests {
             Ok(HookStep::Ready(arguments))
         }
 
+        fn arguments_prepared(&mut self, py: Python<'_>, arguments: &Py<PyDict>) -> PyResult<()> {
+            if matches!(self.script, HookScript::ObserveArguments) {
+                let value: String = arguments
+                    .bind(py)
+                    .get_item("prepared")?
+                    .unwrap()
+                    .extract()?;
+                self.log.push(format!("adopted:{value}"));
+            }
+            Ok(())
+        }
+
         fn before_provider_request(
             &mut self,
             _: Python<'_>,
@@ -949,6 +965,7 @@ mod tests {
                 )),
                 HookScript::FailAfterSuccess => Err(PyValueError::new_err("after_success failed")),
                 HookScript::Plain
+                | HookScript::ObserveArguments
                 | HookScript::RewriteArguments
                 | HookScript::FailBegin
                 | HookScript::CancelTerminal
@@ -1050,6 +1067,78 @@ mod tests {
             no_preflight,
             call_options(asynchronous),
         )
+    }
+
+    #[rstest::rstest]
+    #[case::synchronous(false)]
+    #[case::asynchronous(true)]
+    fn composed_hooks_share_prepared_arguments_and_one_execution(#[case] asynchronous: bool) {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        crate::initialize_python();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            let log = Log::default();
+            let hook = |script| SyntheticHooks {
+                log: Log(log.0.clone()),
+                script,
+            };
+            let hooks = crate::HookChain::new(
+                hook(HookScript::ObserveArguments),
+                crate::HookChain::new(
+                    hook(HookScript::RewriteArguments),
+                    hook(HookScript::ReplaceResponse),
+                ),
+            );
+            let result = run_call(
+                py,
+                move |_, _, request| Ok(success_machine()(request)),
+                SyntheticBinding {
+                    log: Log(log.0.clone()),
+                    op: OpScript::Answer,
+                    classifier_fails: false,
+                },
+                hooks,
+                no_preflight,
+                PyDict::new(py).unbind(),
+                call_options(asynchronous),
+            )
+            .unwrap();
+            let response = if asynchronous {
+                assert!(log.entries().is_empty());
+                let completion = result.call_method1(py, "send", (py.None(),)).unwrap_err();
+                assert!(completion.is_instance_of::<pyo3::exceptions::PyStopIteration>(py));
+                completion.value(py).getattr("value").unwrap().unbind()
+            } else {
+                result
+            };
+            assert_eq!(response.extract::<String>(py).unwrap(), "replaced");
+            let entries = log.entries();
+            assert!(entries.iter().any(|entry| entry == "adopted:hook"));
+            assert_eq!(
+                entries
+                    .iter()
+                    .filter(|entry| entry.as_str() == "project")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                entries
+                    .iter()
+                    .filter(|entry| entry.as_str() == "op:sign")
+                    .count(),
+                1
+            );
+            assert_eq!(
+                entries
+                    .iter()
+                    .filter(|entry| entry.as_str() == "succeeded:replaced")
+                    .count(),
+                3
+            );
+            assert!(!entries.iter().any(|entry| entry.starts_with("failed:")));
+        });
     }
 
     fn no_preflight(_: Python<'_>, _: &Bound<'_, PyDict>) -> PyResult<()> {

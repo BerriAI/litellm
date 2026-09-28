@@ -158,7 +158,7 @@ fn run_public(
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     use super::inference::InferenceHost;
-    use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
+    use litellm_types::Operation;
     let host = InferenceHost::new(
         request.clone().unbind(),
         "litellm.rust_bridge.chat_completions.route_host",
@@ -199,18 +199,17 @@ fn run_public(
             "native Python chat_completions streaming",
         ));
     }
-    run_legacy_call(
+    let (arguments, hooks) = crate::routes::call_hooks(
         py,
-        LegacySurface {
-            call_type: if asynchronous {
-                "acompletion"
-            } else {
-                "completion"
-            },
-            input_description: "Chat completions",
-            stream: None,
-        },
-        PublicCall::capture(&request, &args, &kwargs)?,
+        Operation::Completion,
+        &request,
+        &args,
+        &kwargs,
+        asynchronous,
+    )?;
+    crate::routes::run_public_call(
+        py,
+        arguments,
         move |py, arguments, request| {
             let route = ChatCompletionsRoute::new(
                 crate::http::provider_client(py, arguments, asynchronous)?
@@ -218,13 +217,11 @@ fn run_public(
                 crate::http::resources().auth.clone(),
                 crate::secrets::source(py)?,
             );
-            Ok(crate::logger::LoggedMachine::new(
-                route.machine(request, None),
-            ))
+            Ok(route.machine(request, None))
         },
         host::ChatCompletionsPythonHost(host),
-        crate::preflight::sdk_preflight,
-        crate::lifecycle::call_options(asynchronous),
+        hooks,
+        asynchronous,
     )
 }
 

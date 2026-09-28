@@ -8,6 +8,6 @@ Before execution starts, perform only admission checks needed to select native e
 
 The host driver owns sequencing and terminal events; the bridge supplies fallible resource composition without exposing route types to the driver. An unstarted async call performs no resource setup. Setup errors after start follow the terminal failure contract and never authorize fallback or provider replay
 
-Pass the public call to `run_legacy_call`; `callbacks-legacy-python` owns legacy argument sharing and `Logging` dispatch. Route bindings may retain the request needed for projection, but must not duplicate the legacy callback contract
+Use the shared `run_public_call` boundary with hooks supplied by bridge composition. `callbacks-legacy-python` owns legacy argument sharing and `Logging` dispatch behind `PublicCall` and `LegacyLogging`. Route bindings identify their neutral `Operation` and may retain the request needed for projection, but must not duplicate the legacy callback contract
 
 Regression tests must observe that an unstarted call does no setup, hook and preflight rewrites affect resource configuration, setup failures reach the selected failure handler once, and provider work is not replayed. Retain existing read-point and object-identity guarantees while changing setup timing
