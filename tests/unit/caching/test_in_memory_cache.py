@@ -86,6 +86,22 @@ def test_increment_cache_is_atomic_under_thread_concurrency():
     assert cache.get_cache("counter") == seed + thread_count
 
 
+@pytest.mark.parametrize("bad_value", [{"count": 1}, [1], _CachedBudget(spend=1.0, events=[1])])
+def test_increment_cache_rejects_non_numeric_cached_values(bad_value):
+    cache = InMemoryCache()
+    cache.set_cache("counter", bad_value)
+    with pytest.raises(TypeError, match="Cached value is not numeric"):
+        cache.increment_cache("counter", 1)
+
+
+@pytest.mark.asyncio
+async def test_async_set_cache_sadd_rejects_non_set_cached_value():
+    cache = InMemoryCache()
+    cache.set_cache("members", ["one"])
+    with pytest.raises(TypeError, match="Cached value is not a set"):
+        await cache.async_set_cache_sadd("members", ["two"], ttl=None)
+
+
 async def test_async_increment_delegates_to_locked_sync_path():
     cache = InMemoryCache()
     assert await cache.async_increment("counter", 2) == 2
