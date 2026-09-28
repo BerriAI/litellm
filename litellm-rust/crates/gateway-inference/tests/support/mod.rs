@@ -34,38 +34,82 @@ pub fn app_with_permissions(
     api_base: &str,
     permissions: litellm_gateway_auth::Permissions,
 ) -> Router {
+    configured_app(model, api_base, permissions, None, None)
+}
+
+pub fn app_with_cache(
+    model: &str,
+    api_base: &str,
+    cache: Arc<dyn litellm_cache_response::ResponseCacheService>,
+) -> Router {
+    configured_app(
+        model,
+        api_base,
+        litellm_gateway_auth::Permissions::All,
+        Some(cache),
+        None,
+    )
+}
+
+pub fn app_with_cache_for_principal(
+    model: &str,
+    api_base: &str,
+    cache: Arc<dyn litellm_cache_response::ResponseCacheService>,
+    principal: litellm_gateway_auth::Principal,
+) -> Router {
+    configured_app(
+        model,
+        api_base,
+        litellm_gateway_auth::Permissions::All,
+        Some(cache),
+        Some(principal),
+    )
+}
+
+fn configured_app(
+    model: &str,
+    api_base: &str,
+    permissions: litellm_gateway_auth::Permissions,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
+    principal: Option<litellm_gateway_auth::Principal>,
+) -> Router {
     let pool = Arc::new(HttpClientPool::new(Arc::new(PublicDnsResolver)));
     let http = Resolution::from(&HttpSettings::default()).config;
     let secrets = Arc::new(NoSecrets);
     let resources = CoreResources::new(pool);
-    router(Arc::new(
-        Gateway::new(
-            resources,
-            http,
-            secrets,
-            [(
-                "public/model".into(),
-                Deployment {
-                    model: model.into(),
-                    api_base: Some(api_base.into()),
-                    api_key: Some("test-key".into()),
-                    timeout: Some(Duration::from_secs(5)),
-                    ..Default::default()
-                },
-            )]
-            .into_iter()
-            .collect(),
-        )
-        .unwrap(),
-    ))
-    .layer(axum::middleware::from_fn_with_state(
-        permissions,
+    let gateway = Gateway::new(
+        resources,
+        http,
+        secrets,
+        [(
+            "public/model".into(),
+            Deployment {
+                model: model.into(),
+                api_base: Some(api_base.into()),
+                api_key: Some("test-key".into()),
+                timeout: Some(Duration::from_secs(5)),
+                ..Default::default()
+            },
+        )]
+        .into_iter()
+        .collect(),
+    )
+    .unwrap();
+    let gateway = match cache {
+        Some(cache) => gateway.with_cache(cache),
+        None => gateway,
+    };
+    router(Arc::new(gateway)).layer(axum::middleware::from_fn_with_state(
+        (permissions, principal),
         test_identity,
     ))
 }
 
 async fn test_identity(
-    axum::extract::State(permissions): axum::extract::State<litellm_gateway_auth::Permissions>,
+    axum::extract::State((permissions, principal)): axum::extract::State<(
+        litellm_gateway_auth::Permissions,
+        Option<litellm_gateway_auth::Principal>,
+    )>,
     mut request: axum::extract::Request,
     next: axum::middleware::Next,
 ) -> Response {
@@ -74,7 +118,7 @@ async fn test_identity(
             Some(SecretValue::new("test-inbound-key")),
             Arc::new(NoSecrets),
         )),
-        Arc::new(TestPermissions(permissions)),
+        Arc::new(TestPermissions(permissions, principal)),
         Arc::new(litellm_gateway_auth::NoAdditionalPolicy),
         Arc::new(litellm_gateway_auth::SystemClock),
     );
@@ -101,7 +145,10 @@ pub async fn json(response: Response) -> Value {
     serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap()).unwrap()
 }
 
-struct TestPermissions(litellm_gateway_auth::Permissions);
+struct TestPermissions(
+    litellm_gateway_auth::Permissions,
+    Option<litellm_gateway_auth::Principal>,
+);
 
 impl litellm_gateway_auth::IdentityResolver for TestPermissions {
     fn resolve<'a>(
@@ -110,7 +157,7 @@ impl litellm_gateway_auth::IdentityResolver for TestPermissions {
     ) -> litellm_gateway_auth::AuthFuture<'a, litellm_gateway_auth::ResolvedIdentity> {
         Box::pin(async move {
             Ok(litellm_gateway_auth::ResolvedIdentity {
-                principal: identity.principal.clone(),
+                principal: self.1.clone().unwrap_or_else(|| identity.principal.clone()),
                 permissions: self.0.clone(),
             })
         })
