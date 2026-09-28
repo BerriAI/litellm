@@ -9,6 +9,7 @@ from litellm.litellm_core_utils.litellm_logging import verbose_logger
 from litellm.llms.base_llm.anthropic_messages.transformation import (
     BaseAnthropicMessagesConfig,
 )
+from litellm.router_utils.caller_credential_failure import mark_missing_caller_credential
 from litellm.types.llms.anthropic import (
     ANTHROPIC_ADVISOR_TOOL_TYPE,
     ANTHROPIC_BETA_HEADER_VALUES,
@@ -258,7 +259,7 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
         if "x-api-key" not in header_names and "authorization" not in header_names:
             auth_header: Final = AnthropicModelInfo.get_auth_header(api_key)
             if auth_header is None:
-                raise AuthenticationError(
+                missing_key: Final = AuthenticationError(
                     message=(
                         "Missing Anthropic API Key - A call is being made to anthropic but no key is set "
                         "either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` "
@@ -267,6 +268,8 @@ class AnthropicMessagesConfig(BaseAnthropicMessagesConfig):
                     llm_provider=self._resolved_provider,
                     model=model,
                 )
+                mark_missing_caller_credential(missing_key)
+                raise missing_key
             headers.update(auth_header)
         if "anthropic-version" not in headers:
             headers["anthropic-version"] = DEFAULT_ANTHROPIC_API_VERSION

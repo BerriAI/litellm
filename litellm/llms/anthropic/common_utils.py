@@ -29,6 +29,7 @@ from litellm.litellm_core_utils.prompt_templates.factory import (
 )
 from litellm.llms.base_llm.base_utils import BaseLLMModelInfo, BaseTokenCounter
 from litellm.llms.base_llm.chat.transformation import BaseLLMException
+from litellm.router_utils.caller_credential_failure import mark_missing_caller_credential
 from litellm.types.llms.anthropic import (
     ANTHROPIC_HOSTED_TOOLS,
     ANTHROPIC_OAUTH_BETA_HEADER,
@@ -1003,11 +1004,13 @@ class AnthropicModelInfo(BaseLLMModelInfo):
         if api_key is None:
             auth_token = AnthropicModelInfo.get_auth_token()
         if api_key is None and auth_token is None:
-            raise litellm.AuthenticationError(
+            missing_key: Final = litellm.AuthenticationError(
                 message="Missing Anthropic API Key - A call is being made to anthropic but no key is set either in the environment variables or via params. Please set `ANTHROPIC_API_KEY` or `ANTHROPIC_AUTH_TOKEN` in your environment vars",
                 llm_provider="anthropic",
                 model=model,
             )
+            mark_missing_caller_credential(missing_key)
+            raise missing_key
 
         tools: Final = optional_params.get("tools")
         prompt_caching_set: Final = self.is_cache_control_set(messages=messages)

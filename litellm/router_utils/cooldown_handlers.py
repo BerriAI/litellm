@@ -23,6 +23,7 @@ from litellm.constants import (
     INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
+from litellm.router_utils.caller_credential_failure import is_missing_caller_credential
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
 from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
@@ -62,6 +63,11 @@ def mark_advisor_orchestration_failure(exception: BaseException) -> None:
 def is_advisor_orchestration_failure(exception: BaseException | None) -> bool:
     """Whether ``exception`` was tagged by ``mark_advisor_orchestration_failure``."""
     return bool(getattr(exception, _ADVISOR_ORCHESTRATION_FAILURE_ATTR, False))
+
+
+def is_caller_attributable_failure(exception: BaseException | None) -> bool:
+    """Whether the failure came from the request rather than the selected deployment."""
+    return is_advisor_orchestration_failure(exception) or is_missing_caller_credential(exception)
 
 
 def is_background_response_cost_poll_not_found(exception: Exception, litellm_params: Mapping[str, object]) -> bool:

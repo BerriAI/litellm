@@ -56,6 +56,7 @@ from litellm.router_utils.fallback_event_handlers import DISABLE_FALLBACKS_METAD
 from litellm.router_utils.router_callbacks.track_deployment_metrics import get_deployment_successes_for_current_minute
 from litellm.types.llms.openai import ChatCompletionRequest
 from litellm.types.router import Deployment, DeploymentTypedDict, LiteLLM_Params, ModelInfo, PreRoutingHookResponse, RetryPolicy
+from litellm.types.utils import ProviderSpecificHeader
 
 
 def test_update_kwargs_does_not_mutate_defaults_and_merges_metadata():
@@ -18548,3 +18549,78 @@ async def test_a_guardrail_verdict_is_neither_retried_nor_fallen_back(verdict: E
             await router.acompletion(model="primary", messages=[{"role": "user", "content": "hi"}])
 
     assert [c.kwargs["metadata"]["model_group"] for c in mock_acompletion.call_args_list] == ["primary"]
+
+
+def _oauth_bearer_router() -> Router:
+    return Router(
+        model_list=[
+            {
+                "model_name": "claude-subscription",
+                "litellm_params": {"model": "anthropic/claude-opus-5-5"},
+                "model_info": {"id": "shared-subscription-deployment"},
+            }
+        ],
+        num_retries=0,
+    )
+
+
+def _forwarded_oauth_bearer(token: str) -> ProviderSpecificHeader:
+    return ProviderSpecificHeader(custom_llm_provider="anthropic", extra_headers={"authorization": f"Bearer {token}"})
+
+
+def _anthropic_message_reply(request: httpx.Request) -> httpx.Response:
+    if request.headers.get("authorization") == "Bearer sk-ant-oat01-revoked-seat":
+        return httpx.Response(
+            401, json={"type": "error", "error": {"type": "authentication_error", "message": "invalid token"}}
+        )
+    return httpx.Response(
+        200,
+        json={
+            "id": "msg_1",
+            "type": "message",
+            "role": "assistant",
+            "model": "claude-opus-5-5",
+            "content": [{"type": "text", "text": "served"}],
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 3, "output_tokens": 1},
+        },
+    )
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "failing_bearer",
+    [pytest.param("sk-ant-oat01-revoked-seat", id="revoked bearer"), pytest.param(None, id="no bearer")],
+)
+async def test_one_callers_oauth_failure_does_not_cool_down_the_deployment_for_other_callers(
+    monkeypatch: pytest.MonkeyPatch, failing_bearer: str | None
+):
+    monkeypatch.setattr(litellm, "disable_aiohttp_transport", True)
+    router: Final = _oauth_bearer_router()
+    failing_credential: Final = (
+        {"provider_specific_header": _forwarded_oauth_bearer(failing_bearer)} if failing_bearer is not None else {}
+    )
+
+    with respx.mock(assert_all_called=False) as respx_mock:
+        route: Final = respx_mock.post(url__startswith="https://api.anthropic.com/v1/messages").mock(
+            side_effect=_anthropic_message_reply
+        )
+        with pytest.raises(litellm.AuthenticationError):
+            await router.aanthropic_messages(
+                model="claude-subscription",
+                messages=[{"role": "user", "content": "hi"}],
+                max_tokens=5,
+                **failing_credential,
+            )
+        await asyncio.sleep(0.2)
+        cooled_down: Final = await _async_get_cooldown_deployments(litellm_router_instance=router, parent_otel_span=None)
+        response: Final = await router.aanthropic_messages(
+            model="claude-subscription",
+            messages=[{"role": "user", "content": "hi"}],
+            max_tokens=5,
+            provider_specific_header=_forwarded_oauth_bearer("sk-ant-oat01-active-seat"),
+        )
+
+    assert cooled_down == [], "one caller's credential failure cooled the shared deployment down for everyone"
+    assert response["content"][0]["text"] == "served", response
+    assert route.calls[-1].request.headers["authorization"] == "Bearer sk-ant-oat01-active-seat"

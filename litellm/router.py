@@ -195,8 +195,8 @@ from litellm.router_utils.cooldown_handlers import (
     _first_present,  # pyright: ignore[reportPrivateUsage] - shared internal helper across router_utils submodules, matching the other cooldown_handlers imports on this line
     _get_cooldown_deployments,
     _set_cooldown_deployments,
-    is_advisor_orchestration_failure,
     is_background_response_cost_poll_not_found,
+    is_caller_attributable_failure,
     is_caller_timeout_408,
 )
 from litellm.router_utils.fallback_event_handlers import (
@@ -3915,7 +3915,11 @@ class Router:
         """
         model_info: Final = deployment.get("model_info", {}).copy()
         litellm_params: Final = deployment["litellm_params"].copy()
-        dynamic_litellm_params: Final = get_dynamic_litellm_params(litellm_params=litellm_params, request_kwargs=kwargs)
+        dynamic_litellm_params: Final = get_dynamic_litellm_params(
+            litellm_params=litellm_params,
+            request_kwargs=kwargs,
+            custom_llm_provider=provider_for_generic_call(deployment["litellm_params"]),
+        )
         # Use deployment model_name as model_group for generating model_id
         metadata_variable_name: Final = _get_router_metadata_variable_name(
             function_name=function_name,
@@ -3975,7 +3979,9 @@ class Router:
         deployment_litellm_model_name = deployment["litellm_params"]["model"]
         deployment_api_base = deployment["litellm_params"].get("api_base")
         deployment_model_name: Final = deployment["model_name"]
-        if is_clientside_credential(request_kwargs=kwargs):
+        if is_clientside_credential(
+            request_kwargs=kwargs, custom_llm_provider=provider_for_generic_call(deployment["litellm_params"])
+        ):
             deployment_pydantic_obj: Final = self._handle_clientside_credential(
                 deployment=deployment, kwargs=kwargs, function_name=function_name
             )
@@ -8211,10 +8217,11 @@ class Router:
         try:
             exception: Final = kwargs.get("exception", None)
 
-            if is_advisor_orchestration_failure(exception):
+            if is_caller_attributable_failure(exception):
                 verbose_router_logger.debug(
                     "Router: Exiting 'deployment_callback_on_failure' without cooldown. "
-                    "Failure originated from advisor orchestration, not the selected deployment."
+                    "Failure originated from the request (advisor orchestration or a missing caller credential), "
+                    "not the selected deployment."
                 )
                 return False
 
