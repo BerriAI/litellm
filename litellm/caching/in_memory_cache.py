@@ -217,8 +217,6 @@ class InMemoryCache(BaseCache):
             try:
                 cached_response = json.loads(original_cached_response)
             except (TypeError, ValueError):
-                # JSON strings already produce a new value. Isolate mutable data
-                # stored as Python objects without copying cached clients or handles.
                 if isinstance(original_cached_response, (dict, list, BaseModel)):
                     return deepcopy(original_cached_response)
                 return original_cached_response
