@@ -1,16 +1,13 @@
 mod host;
 
-use host::MessagesRouteHost;
+use host::MessagesPythonHost;
 use litellm_callbacks_legacy_python::{
     LegacySurface, PassThroughStream, PublicCall, run_legacy_call,
 };
-use litellm_core::messages::route::{messages_machine, supports};
 use pyo3::{
     prelude::*,
     types::{PyDict, PyTuple},
 };
-
-use crate::errors::RustBridgeDeclined;
 
 const SURFACE: LegacySurface = LegacySurface {
     call_type: "anthropic_messages",
@@ -28,23 +25,19 @@ fn run_messages(
     kwargs: Bound<'_, PyDict>,
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
-    let model: String = request.getattr("model")?.extract()?;
-    let provider: Option<String> = request.getattr("custom_llm_provider")?.extract()?;
-    let stream = request
-        .getattr("stream")?
-        .extract::<Option<bool>>()?
-        .unwrap_or(false);
-    if !supports(&model, provider.as_deref(), stream) {
-        return Err(RustBridgeDeclined::new_err(
-            "the Rust Messages route does not serve this provider",
-        ));
-    }
+    let route = litellm_core::messages::MessagesRoute::new(
+        crate::http::provider_client(py, &kwargs, asynchronous)?
+            .map_err(crate::http::client_error)?,
+        crate::http::resources().auth.clone(),
+        crate::secrets::source(py)?,
+    );
     run_legacy_call(
         py,
         SURFACE,
         PublicCall::capture(&request, &args, &kwargs)?,
-        messages_machine(),
-        MessagesRouteHost::new(request.unbind()),
+        move |request| crate::logger::LoggedMachine::new(route.machine(request)),
+        MessagesPythonHost::new(request.unbind()),
+        crate::preflight::sdk_preflight,
         asynchronous,
     )
 }

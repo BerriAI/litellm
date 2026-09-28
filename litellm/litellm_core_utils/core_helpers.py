@@ -3,7 +3,7 @@
 import copy
 import logging
 import re
-from collections.abc import Iterable, Mapping
+from collections.abc import Collection, Iterable, Mapping
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final, Literal, Protocol
 
@@ -365,7 +365,7 @@ def _budget_reservation_on_auth_object(user_api_key_auth: object) -> object:
     return getattr(user_api_key_auth, "budget_reservation", None)
 
 
-def budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict | None:
+def budget_reservation_from_metadata(metadata: Mapping[str, object]) -> dict[str, object] | None:
     stamped: Final = metadata.get("user_api_key_budget_reservation")
     if isinstance(stamped, dict):
         return stamped
@@ -709,10 +709,11 @@ def filter_internal_params(data: dict, additional_internal_params: set | None = 
 
 def redact_nested_match_and_regex_keys(
     payload: dict | list[Any] | str | None,
+    keys: Collection[str] = ("match", "regex"),
 ) -> dict | list[Any] | str | None:
     """
-    Deep-copy `payload` and replace every `match` / `regex` string field with
-    "[REDACTED]" anywhere in nested dict/list structures.
+    Deep-copy `payload` and replace every configured string field with "[REDACTED]"
+    anywhere in nested dict/list structures.
 
     Used for guardrail spend/compliance logging so raw spans are not persisted.
     """
@@ -734,10 +735,9 @@ def redact_nested_match_and_regex_keys(
                 continue
             seen.add(node_id)
             if isinstance(node, dict):
-                if "match" in node:
-                    node["match"] = "[REDACTED]"
-                if "regex" in node:
-                    node["regex"] = "[REDACTED]"
+                for key in keys:
+                    if key in node:
+                        node[key] = "[REDACTED]"
                 stack.extend(node.values())
             elif isinstance(node, list):
                 stack.extend(node)
@@ -764,4 +764,31 @@ def set_response_cost_in_hidden_params(response: _CarriesHiddenParams, cost: flo
         **(additional_headers if isinstance(additional_headers, Mapping) else _NO_HEADERS),
         RESPONSE_COST_HEADER: cost,
     }
-    hidden_params["additional_headers"] = merged  # rebind-ok: the caller's record is the point
+    hidden_params["additional_headers"] = merged
+
+
+_HIDDEN_PARAMS_ADAPTER: Final = TypeAdapter(Mapping[str, object])
+_PROVIDER_HEADERS_ADAPTER: Final = TypeAdapter(Mapping[str, str])
+
+
+def set_provider_response_headers_in_hidden_params(
+    response: _CarriesHiddenParams, headers: httpx.Headers | Mapping[str, str]
+) -> None:
+    hidden_params: Final = response._hidden_params  # pyright: ignore[reportPrivateUsage]  # no public accessor
+    existing_additional_headers: Final[object] = hidden_params.get("additional_headers")
+    raw_headers: Final[dict[str, str]] = dict(headers)  # mutable-ok: stored as the plain-dict hidden param
+    additional_headers: Final[dict[str, object]] = {  # mutable-ok: assigned into the plain-dict hidden params
+        **process_response_headers(raw_headers),
+        **(existing_additional_headers if isinstance(existing_additional_headers, Mapping) else _NO_HEADERS),
+    }
+    hidden_params["headers"] = raw_headers
+    hidden_params["additional_headers"] = additional_headers
+
+
+def get_provider_response_headers_from_hidden_params(response: object) -> Mapping[str, str] | None:
+    hidden_params: Final[object] = getattr(response, "_hidden_params", None)
+    try:
+        validated: Final = _HIDDEN_PARAMS_ADAPTER.validate_python(hidden_params)
+        return _PROVIDER_HEADERS_ADAPTER.validate_python(validated.get("headers"))
+    except ValidationError:
+        return None

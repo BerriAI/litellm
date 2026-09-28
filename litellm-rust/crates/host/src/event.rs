@@ -73,4 +73,7 @@ pub enum CallEvent {
         timing: Timing,
         origin: FailureOrigin,
     },
+    Cancelled {
+        timing: Timing,
+    },
 }

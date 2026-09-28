@@ -28,7 +28,7 @@ async def test_get_available_deployments():
         },
         {
             "model_name": "gpt-3.5-turbo",
-            "litellm_params": {"model": "groq/llama-3.1-8b-instant"},
+            "litellm_params": {"model": "groq/openai/gpt-oss-20b"},
             "model_info": {"id": "groq-llama"},
         },
     ]

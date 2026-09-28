@@ -1,5 +1,6 @@
+use crate::logger::run_async;
 use litellm_cache_response::PartialHits;
-use litellm_host_python::{ExecutionStep, from_py, release_gil, run_async, to_py};
+use litellm_host_python::{ExecutionStep, from_py, release_gil, to_py};
 use pyo3::{
     PyTraverseError, PyVisit,
     exceptions::{PyRuntimeError, PyValueError},
@@ -9,11 +10,12 @@ use pyo3::{
 use serde_json::Value;
 
 use super::{
+    activation::activate,
     cache_error,
     callback::PythonCallback,
-    config::{CacheBackendConfig, CacheConfigProjection, NativeCacheConfig},
+    config::{CacheConfigProjection, NativeCacheConfig},
     future::{ready_none, ready_value},
-    native::NativeResponseCache,
+    native::{NativeResponseCache, SemanticReply},
     request::{now, request, requests},
 };
 use crate::errors::RustBridgeDeclined;
@@ -27,6 +29,7 @@ pub(super) enum CacheBinding {
 #[pyclass(frozen, name = "_ResponseCacheRuntime")]
 pub(crate) struct ResolvedCache {
     binding: CacheBinding,
+    guard: Option<super::facade::FacadeGuard>,
     pid: u32,
 }
 
@@ -34,8 +37,22 @@ impl ResolvedCache {
     pub(super) fn new(binding: CacheBinding) -> Self {
         Self {
             binding,
+            guard: None,
             pid: std::process::id(),
         }
+    }
+
+    pub(super) fn with_guard(mut self, guard: super::facade::FacadeGuard) -> Self {
+        self.guard = Some(guard);
+        self
+    }
+
+    pub(super) fn native_service(&self) -> PyResult<Option<NativeResponseCache>> {
+        self.check_process()?;
+        Ok(match &self.binding {
+            CacheBinding::Native(service) => Some(service.clone()),
+            _ => None,
+        })
     }
 
     fn check_process(&self) -> PyResult<()> {
@@ -69,6 +86,43 @@ impl ResolvedCache {
 #[pymethods]
 impl ResolvedCache {
     #[staticmethod]
+    pub(crate) fn from_selected(cache: &Bound<'_, PyAny>) -> PyResult<Self> {
+        let py = cache.py();
+        let binding = if cache.is_none() {
+            CacheBinding::Disabled
+        } else if let Ok(handle) = cache.extract::<PyRef<'_, super::handle::CacheTestHandle>>() {
+            CacheBinding::Native(handle.service()?)
+        } else if let Some(service) = super::facade::resolve(py, cache)? {
+            CacheBinding::Native(service)
+        } else if let Some(runtime) = cache
+            .getattr_opt("_native_cache")?
+            .filter(|value| !value.is_none())
+        {
+            let resolved = runtime
+                .getattr("native")?
+                .extract::<PyRef<'_, ResolvedCache>>()?;
+            match resolved.native_service()? {
+                Some(service) => {
+                    if !resolved
+                        .guard
+                        .as_ref()
+                        .is_some_and(|guard| guard.matches(py, cache).unwrap_or(false))
+                    {
+                        return Err(RustBridgeDeclined::new_err(
+                            "native cache runtime no longer matches its facade",
+                        ));
+                    }
+                    CacheBinding::Native(service)
+                }
+                None => CacheBinding::PythonCallback(PythonCallback::new(cache.clone().unbind())),
+            }
+        } else {
+            CacheBinding::PythonCallback(PythonCallback::new(cache.clone().unbind()))
+        };
+        Ok(Self::new(binding))
+    }
+
+    #[staticmethod]
     fn from_cache(cache: &Bound<'_, PyAny>) -> PyResult<Self> {
         let config = match NativeCacheConfig::project(cache)? {
             CacheConfigProjection::Native(config) => *config,
@@ -76,23 +130,15 @@ impl ResolvedCache {
                 return Err(RustBridgeDeclined::new_err(reason.message()));
             }
         };
-        let service = match config.backend {
-            CacheBackendConfig::Memory(memory) => NativeResponseCache::memory(
-                memory.capacity,
-                memory.default_ttl,
-                memory.max_entry_bytes,
-            ),
-            _ => {
-                return Err(RustBridgeDeclined::new_err(
-                    "native response cache activation is not implemented for this backend",
-                ));
-            }
-        };
-        Ok(Self::new(CacheBinding::Native(
-            service
-                .with_scope(config.policy.semantic_cache_scope)
-                .with_redis_flush_size(config.policy.redis_flush_size),
-        )))
+        let backend = cache.getattr("cache")?;
+        let service = activate(cache.py(), &backend, config)?;
+        let resolved = Self::new(CacheBinding::Native(service.clone()));
+        Ok(
+            match super::facade::FacadeGuard::capture(cache.py(), cache, &service) {
+                Ok(guard) => resolved.with_guard(guard),
+                Err(_) => resolved,
+            },
+        )
     }
 
     #[getter]
@@ -124,6 +170,41 @@ impl ResolvedCache {
             CacheBinding::PythonCallback(callback) => {
                 callback.lookup(py, callback_kwargs).map(Bound::unbind)
             }
+        }
+    }
+
+    /// `(response, similarity)`: the similarity is `None` when the backend reports none.
+    fn lookup_semantic(&self, py: Python<'_>, request: &Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
+        self.check_process()?;
+        match &self.binding {
+            CacheBinding::Native(service) => {
+                let request = self::request(request)?;
+                let service = service.clone();
+                let lookup = release_gil(py, move || service.lookup_semantic(&request, now()))
+                    .map_err(cache_error)?;
+                to_py(py, &SemanticReply::from(lookup))
+            }
+            CacheBinding::Disabled => to_py(py, &SemanticReply(None, None)),
+            CacheBinding::PythonCallback(_) => Err(PyRuntimeError::new_err(
+                "semantic lookups require a native cache binding",
+            )),
+        }
+    }
+
+    fn async_lookup_semantic<'py>(
+        &self,
+        py: Python<'py>,
+        request: &Bound<'py, PyAny>,
+    ) -> PyResult<Bound<'py, PyAny>> {
+        self.check_process()?;
+        match &self.binding {
+            CacheBinding::Native(service) => {
+                service.async_lookup_semantic_py(py, self::request(request)?)
+            }
+            CacheBinding::Disabled => ready_value(py, &SemanticReply(None, None)),
+            CacheBinding::PythonCallback(_) => Err(PyRuntimeError::new_err(
+                "semantic lookups require a native cache binding",
+            )),
         }
     }
 
@@ -299,6 +380,9 @@ impl ResolvedCache {
     fn __traverse__(&self, visit: PyVisit<'_>) -> Result<(), PyTraverseError> {
         if let CacheBinding::PythonCallback(callback) = &self.binding {
             callback.traverse(&visit)?;
+        }
+        if let Some(guard) = &self.guard {
+            guard.traverse(visit)?;
         }
         Ok(())
     }
