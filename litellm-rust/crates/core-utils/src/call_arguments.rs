@@ -109,6 +109,7 @@ impl IntoIterator for CallArguments {
 
 #[cfg(test)]
 mod tests {
+    use rstest::rstest;
     use serde_json::json;
 
     use super::*;
@@ -140,20 +141,29 @@ mod tests {
         assert_eq!(serde_json::to_value(arguments).unwrap(), original);
     }
 
-    #[test]
-    fn invalid_extra_body_is_rejected_without_coercing_it_to_empty() {
-        for value in [json!(false), json!(0), json!([]), json!("")] {
-            let arguments = serde_json::from_value(json!({"extra_body":value})).unwrap();
-            assert_eq!(
-                compose_body(&arguments, &json!({}), &[]),
-                Err(crate::params::Error::ExtraBody)
-            );
-        }
-        let arguments = serde_json::from_value(json!({"extra_body":null})).unwrap();
+    #[rstest]
+    #[case::boolean(json!(false))]
+    #[case::number(json!(0))]
+    #[case::array(json!([]))]
+    #[case::string(json!(""))]
+    fn invalid_extra_body_is_rejected_without_coercing_it_to_empty(
+        #[case] value: serde_json::Value,
+    ) {
+        let arguments = serde_json::from_value(json!({"extra_body":value})).unwrap();
         assert_eq!(
-            compose_body(&arguments, &json!({}), &[]).unwrap(),
-            json!({})
+            compose_body(&arguments, &json!({}), &[]),
+            Err(crate::params::Error::ExtraBody)
         );
+    }
+
+    #[rstest]
+    #[case::null(json!(null), json!({}))]
+    fn null_extra_body_is_coerced_to_empty_object(
+        #[case] value: serde_json::Value,
+        #[case] expected: serde_json::Value,
+    ) {
+        let arguments = serde_json::from_value(json!({"extra_body":value})).unwrap();
+        assert_eq!(compose_body(&arguments, &json!({}), &[]).unwrap(), expected);
     }
 
     #[test]

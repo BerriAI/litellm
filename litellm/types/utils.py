@@ -2970,6 +2970,7 @@ class StandardLoggingRoutingDecisionTierBoundaries(TypedDict):
 
 
 RoutingDecisionCause = Literal[
+    "prompt_cache_cost",
     "heuristic_scorer",
     "heuristic_v2",
     # The scorer found 2+ reasoning markers and forced REASONING regardless of score.
@@ -3677,6 +3678,9 @@ class StandardCallbackDynamicParams(TypedDict, total=False):
     # request-supplied values are blocked)
     newrelic_api_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
     newrelic_region: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns into the dict
+
+    signoz_ingestion_endpoint: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
+    signoz_ingestion_key: str | None  # writable-ok: initialize_standard_callback_dynamic_params assigns it
 
     # Logging settings
     turn_off_message_logging: bool | None  # when true will not log messages

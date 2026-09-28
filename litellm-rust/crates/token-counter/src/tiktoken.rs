@@ -41,7 +41,7 @@ impl From<LoadError> for Error {
     fn from(error: LoadError) -> Self {
         match error {
             LoadError::Unsupported(error) => error.into(),
-            LoadError::Ranks(message) => Self::Ranks(message),
+            LoadError::Ranks(source) => Self::Ranks(source.into()),
         }
     }
 }
