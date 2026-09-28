@@ -12085,7 +12085,11 @@ class Router:
         remains authoritative when default_fallbacks changes at runtime.
         """
         self.validate_fallbacks(fallback_param=fallbacks)
-        effective = [fallback for fallback in (fallbacks or []) if fallback is not self._materialized_default_fallback]
+        effective = [
+            fallback
+            for fallback in (fallbacks or [])
+            if self._materialized_default_fallback is None or fallback != self._materialized_default_fallback
+        ]
         self._materialized_default_fallback = None
         if self.default_fallbacks and not any("*" in fallback for fallback in effective):
             self._materialized_default_fallback = {"*": list(self.default_fallbacks)}
