@@ -14,6 +14,7 @@ from litellm.constants import LITTELM_INTERNAL_HEALTH_SERVICE_ACCOUNT_NAME
 from litellm.litellm_core_utils.health_check_helpers import (
     IMAGE_EDIT_HEALTH_CHECK_PROMPT,
     HealthCheckHelpers,
+    _wildcard_health_check_models,
 )
 from litellm.main import ahealth_check
 from litellm.proxy._types import UserAPIKeyAuth
@@ -548,3 +549,20 @@ def test_ocr_health_check_document_raises_without_the_extension():
             _ocr_health_check_document(model="mistral/mistral-ocr-latest", custom_llm_provider="mistral")
     finally:
         NATIVE_OCR_HEALTH_CHECK_DOCUMENT.reset()
+
+
+def test_wildcard_health_check_models_partial_prefix_substitutes_stripped_id():
+    candidates: Final = _wildcard_health_check_models(
+        "databricks/system.ai.*",
+        ["databricks/databricks-gemini-3-1-flash-image", "databricks/databricks-gpt-5"],
+    )
+    assert candidates == (
+        "databricks/system.ai.databricks-gemini-3-1-flash-image",
+        "databricks/system.ai.databricks-gpt-5",
+    )
+
+
+def test_wildcard_health_check_models_bare_provider_and_star_wildcard_unchanged():
+    candidates: Final = ("databricks/databricks-gpt-5",)
+    assert _wildcard_health_check_models("databricks/*", candidates) == candidates
+    assert _wildcard_health_check_models("*", candidates) == candidates

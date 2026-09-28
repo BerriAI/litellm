@@ -3,7 +3,7 @@ Helper functions for health check calls.
 """
 
 import base64
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Sequence
 from typing import TYPE_CHECKING, Final, Literal
 
 from litellm.llms.base_llm.ocr.transformation import DocumentType
@@ -39,6 +39,19 @@ def _ocr_health_check_document(model: str, custom_llm_provider: str) -> Document
     return native(model, custom_llm_provider)
 
 
+def _wildcard_health_check_models(wildcard_model: str, cheapest_models: Sequence[str]) -> tuple[str, ...]:
+    """Substitute each candidate id into the wildcard's dynamic segment so the health
+    check probes a name the wildcard route actually expands, instead of the bare
+    cost-map id (e.g. `databricks/system.ai.*` + `databricks/databricks-x` ->
+    `databricks/system.ai.databricks-x`)."""
+    provider_prefix, sep, wildcard_suffix = wildcard_model.partition("/")
+    if not sep or wildcard_suffix == "*":
+        return tuple(cheapest_models)
+    return tuple(
+        f"{provider_prefix}/{wildcard_suffix.replace('*', model.partition('/')[-1], 1)}" for model in cheapest_models
+    )
+
+
 class HealthCheckHelpers:
     @staticmethod
     async def ahealth_check_wildcard_models(
@@ -58,11 +71,9 @@ class HealthCheckHelpers:
             raise Exception(
                 f"Unable to health check wildcard model for provider {custom_llm_provider}. Add a model on your config.yaml or contribute here - https://github.com/BerriAI/litellm/blob/main/model_prices_and_context_window.json"
             )
-        if len(cheapest_models) > 1:
-            fallback_models = cheapest_models[1:]  # Pick the last 2 models from the shuffled list
-        else:
-            fallback_models = None
-        model_params["model"] = cheapest_models[0]
+        candidates: Final = _wildcard_health_check_models(wildcard_model=model, cheapest_models=cheapest_models)
+        fallback_models: Final = list(candidates[1:]) or None
+        model_params["model"] = candidates[0]
         model_params["litellm_logging_obj"] = litellm_logging_obj
         model_params["fallbacks"] = fallback_models
         model_params["max_tokens"] = model_params.get("max_tokens", 16)  # GPT-5 models require max_output_tokens >= 16

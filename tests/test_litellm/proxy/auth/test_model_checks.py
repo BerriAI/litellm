@@ -1,3 +1,4 @@
+from typing import Final
 from unittest.mock import patch
 
 import pytest
@@ -11,9 +12,7 @@ def test_get_team_models_for_all_models_and_team_only_models():
     model_access_groups = {}
     include_model_access_groups = False
 
-    result = get_team_models(
-        team_models, proxy_model_list, model_access_groups, include_model_access_groups
-    )
+    result = get_team_models(team_models, proxy_model_list, model_access_groups, include_model_access_groups)
     combined_models = team_models + proxy_model_list
     assert set(result) == set(combined_models)
 
@@ -246,9 +245,7 @@ def test_get_key_models_does_not_mutate_input():
         ),
     ],
 )
-def test_get_complete_model_list_order(
-    key_models, team_models, proxy_model_list, model_list, expected
-):
+def test_get_complete_model_list_order(key_models, team_models, proxy_model_list, model_list, expected):
     """
     Test that get_complete_model_list preserves order
     """
@@ -401,9 +398,7 @@ def test_wildcard_credential_hydration_preserves_deployment_params(
         captured_params["api_key"] = litellm_params.api_key
         captured_params["api_version"] = litellm_params.api_version
         captured_params["credential_name"] = litellm_params.litellm_credential_name
-        captured_params["has_unexpected_field"] = hasattr(
-            litellm_params, "unexpected_field"
-        )
+        captured_params["has_unexpected_field"] = hasattr(litellm_params, "unexpected_field")
         return ["gpt-4o"]
 
     monkeypatch.setattr(model_checks, "get_provider_models", fake_get_provider_models)
@@ -448,9 +443,7 @@ def test_wildcard_custom_prefix_does_not_stack_provider_prefix(monkeypatch):
 
     result = get_known_models_from_wildcard(
         wildcard_model="ollama_server1/*",
-        litellm_params=LiteLLM_Params(
-            model="ollama_chat/*", custom_llm_provider="ollama_chat"
-        ),
+        litellm_params=LiteLLM_Params(model="ollama_chat/*", custom_llm_provider="ollama_chat"),
     )
 
     assert result == ["ollama_server1/gemma3:1b", "ollama_server1/llama3:8b"]
@@ -477,12 +470,45 @@ def test_wildcard_custom_prefix_keeps_org_segment_for_non_provider_first_segment
 
     result = get_known_models_from_wildcard(
         wildcard_model="my_hf/*",
-        litellm_params=LiteLLM_Params(
-            model="huggingface/*", custom_llm_provider="huggingface"
-        ),
+        litellm_params=LiteLLM_Params(model="huggingface/*", custom_llm_provider="huggingface"),
     )
 
     assert result == ["my_hf/meta-llama/Llama-3-8B"]
+
+
+def test_partial_prefix_wildcard_expands_against_stripped_provider_ids(monkeypatch):
+    """A partial wildcard like ``databricks/system.ai.*`` must splice the prefix before
+    ``*`` onto the provider-stripped model id, not onto the whole cost-map key. Prepending
+    to the provider-prefixed key yielded ``databricks/system.ai.databricks/databricks-x``,
+    an id no upstream accepts.
+    """
+    import litellm
+    from litellm.proxy.auth import model_checks
+    from litellm.proxy.auth.model_checks import get_known_models_from_wildcard
+    from litellm.types.router import LiteLLM_Params
+
+    provider_ids: Final = list(litellm.models_by_provider["databricks"])
+    monkeypatch.setattr(
+        model_checks,
+        "get_provider_models",
+        lambda provider, litellm_params=None: provider_ids,
+    )
+
+    result: Final = get_known_models_from_wildcard(
+        wildcard_model="databricks/system.ai.*",
+        litellm_params=LiteLLM_Params(
+            model="databricks/system.ai.*",
+            api_key="x",
+            api_base="https://example.invalid",
+        ),
+    )
+
+    expected: Final = [f"databricks/system.ai.{model_id.partition('/')[-1]}" for model_id in provider_ids]
+    assert result == expected
+    assert all(
+        model_id.startswith("databricks/system.ai.") and "/" not in model_id.removeprefix("databricks/system.ai.")
+        for model_id in result
+    )
 
 
 def test_wildcard_credential_hydration_preserves_missing_credential_name(
@@ -927,9 +953,7 @@ def test_add_known_models_refreshes_models_by_provider_for_wildcard_expansion():
     assert fake_model not in litellm.models_by_provider["vertex_ai"]
     try:
         litellm.add_known_models(
-            model_cost_map={
-                fake_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"}
-            }
+            model_cost_map={fake_model: {"litellm_provider": "vertex_ai-language-models", "mode": "chat"}}
         )
         assert fake_model in litellm.models_by_provider["vertex_ai"]
         assert litellm.models_by_provider is captured_reference
@@ -977,6 +1001,4 @@ def test_transcribe_is_a_known_provider_for_wildcard_expansion():
     assert "transcribe" in litellm.models_by_provider
     assert "transcribe/StartTranscriptionJob" in litellm.models_by_provider["transcribe"]
     assert get_provider_models("transcribe") == ["transcribe/StartTranscriptionJob"]
-    assert get_known_models_from_wildcard("transcribe/*") == [
-        "transcribe/StartTranscriptionJob"
-    ]
+    assert get_known_models_from_wildcard("transcribe/*") == ["transcribe/StartTranscriptionJob"]
