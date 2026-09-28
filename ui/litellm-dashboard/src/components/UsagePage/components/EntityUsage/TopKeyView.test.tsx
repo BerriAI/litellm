@@ -29,6 +29,8 @@ vi.mock("../../../templates/key_info_view", () => ({
   ),
 }));
 
+const chartBars = (container: HTMLElement) => Array.from(container.querySelectorAll("path.recharts-rectangle"));
+
 describe("TopKeyView", () => {
   const mockUseAuthorized = vi.mocked(useAuthorized);
   const mockKeyInfoV1Call = vi.mocked(networking.keyInfoV1Call);
@@ -102,6 +104,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 100,
             tags: [
               { tag: "tag-1", usage: 50 },
@@ -116,6 +119,60 @@ describe("TopKeyView", () => {
     expect(screen.getByText(/tag-1/)).toBeInTheDocument();
     expect(screen.getByText(/tag-2/)).toBeInTheDocument();
     expect(screen.getByText("$100.00")).toBeInTheDocument();
+  });
+
+  it("should render User column only when a row has user attribution", () => {
+    const { rerender } = render(
+      <TopKeyView
+        {...baseProps}
+        topKeys={[
+          {
+            api_key: "key-123",
+            key_alias: "Key without user",
+            user: null,
+            spend: 100,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.queryByText("User")).not.toBeInTheDocument();
+
+    rerender(
+      <TopKeyView
+        {...baseProps}
+        topKeys={[
+          {
+            api_key: "key-123",
+            key_alias: "",
+            user: "alice@example.com",
+            spend: 100,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("User")).toBeInTheDocument();
+    expect(screen.getByText("alice@example.com")).toBeInTheDocument();
+  });
+
+  it("should render a user ID in the User column", () => {
+    render(
+      <TopKeyView
+        {...baseProps}
+        topKeys={[
+          {
+            api_key: "key-123",
+            key_alias: "Key with user ID",
+            user: "user-123",
+            spend: 100,
+          },
+        ]}
+      />,
+    );
+
+    expect(screen.getByText("User")).toBeInTheDocument();
+    expect(screen.getByText("user-123")).toBeInTheDocument();
   });
 
   it("should switch to chart view when chart view button is clicked", async () => {
@@ -142,6 +199,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "A Very Long Key Alias",
+            user: null,
             spend: 100,
           },
         ]}
@@ -150,7 +208,7 @@ describe("TopKeyView", () => {
 
     await user.click(screen.getByRole("button", { name: "Chart View" }));
 
-    const bars = container.querySelectorAll("path.recharts-rectangle");
+    const bars = chartBars(container);
     expect(bars).toHaveLength(1);
     expect(bars[0]).toHaveAttribute("fill", "var(--color-cyan-500, #06b6d4)");
     expect(screen.getAllByText("A Very Lon...").length).toBeGreaterThan(0);
@@ -197,6 +255,7 @@ describe("TopKeyView", () => {
           {
             api_key: "sk-1234567890abcdef",
             key_alias: "Test Key",
+            user: null,
             spend: 100,
           },
         ]}
@@ -215,12 +274,13 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "",
+            user: null,
             spend: 100,
           },
         ]}
       />,
     );
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getAllByText("-")).toHaveLength(1);
   });
 
   it("should format spend values with two decimal places", () => {
@@ -231,6 +291,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 123.456,
           },
         ]}
@@ -247,6 +308,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 0.004,
           },
         ]}
@@ -263,12 +325,13 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 0,
           },
         ]}
       />,
     );
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getAllByText("-")).toHaveLength(1);
     expect(screen.queryByText("$0.00")).not.toBeInTheDocument();
   });
 
@@ -280,6 +343,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 100,
             tags: [],
           },
@@ -298,6 +362,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 100,
           },
         ]}
@@ -315,6 +380,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 100,
             tags: [
               { tag: "tag-1", usage: 50 },
@@ -340,6 +406,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 100,
             tags: [
               { tag: "tag-1", usage: 50 },
@@ -367,6 +434,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 100,
             tags: [
               { tag: "tag-1", usage: 50 },
@@ -404,6 +472,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 100,
           },
         ]}
@@ -424,6 +493,35 @@ describe("TopKeyView", () => {
     });
   });
 
+  it("should only look up keys that still exist in the database, from both the table and the chart", async () => {
+    mockKeyInfoV1Call.mockResolvedValue({ key: "info" });
+    mockTransformKeyInfo.mockReturnValue({ transformed: "data" } as unknown as KeyResponse);
+
+    const user = userEvent.setup();
+    const { container } = render(
+      <TopKeyView
+        {...baseProps}
+        topKeys={[
+          { api_key: "session-key", key_alias: null, user: "alice@example.com", key_exists: false, spend: 100 },
+          { api_key: "stored-key", key_alias: "Stored", user: null, key_exists: true, spend: 50 },
+        ]}
+      />,
+    );
+
+    expect(screen.getByRole("button", { name: "stored-key" })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "session-key" })).not.toBeInTheDocument();
+    await user.click(screen.getByText("session-key"));
+
+    await user.click(screen.getByRole("button", { name: "Chart View" }));
+    const bars = chartBars(container);
+    expect(bars).toHaveLength(2);
+    bars.forEach((bar) => fireEvent.click(bar));
+
+    expect(await screen.findByText("Key Info View for stored-key")).toBeInTheDocument();
+    expect(mockKeyInfoV1Call).toHaveBeenCalledTimes(1);
+    expect(mockKeyInfoV1Call).toHaveBeenCalledWith("test-token", "stored-key");
+  });
+
   it("should close modal when close button is clicked", async () => {
     const mockKeyInfo = { key: "info" };
     const mockTransformedData = { transformed: "data" } as unknown as KeyResponse;
@@ -438,6 +536,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 100,
           },
         ]}
@@ -475,6 +574,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 100,
           },
         ]}
@@ -511,6 +611,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 100,
           },
         ]}
@@ -550,6 +651,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 100,
           },
         ]}
@@ -580,6 +682,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 100,
           },
         ]}
@@ -610,6 +713,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "Test Key",
+            user: null,
             spend: 100,
             tags: [
               { tag: "tag-low", usage: 10 },
@@ -643,6 +747,7 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: "This is a very long key alias",
+            user: null,
             spend: 100,
           },
         ]}
@@ -659,11 +764,12 @@ describe("TopKeyView", () => {
           {
             api_key: "key-123",
             key_alias: null,
+            user: null,
             spend: 100,
           },
         ]}
       />,
     );
-    expect(screen.getByText("-")).toBeInTheDocument();
+    expect(screen.getAllByText("-")).toHaveLength(1);
   });
 });

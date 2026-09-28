@@ -7,8 +7,10 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"reflect"
+	"sync/atomic"
 	"testing"
 
+	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/terraform"
 )
@@ -598,6 +600,12 @@ func TestKeyUpdateWithoutMetadataChangePreservesServerMetadata(t *testing.T) {
 	if got := newState.Attributes["metadata.a"]; got != "1" {
 		t.Errorf("metadata.a = %q, want 1", got)
 	}
+	if got := newState.Attributes["server_metadata.server_side"]; got != "x" {
+		t.Errorf("server_metadata.server_side = %q, want x", got)
+	}
+	if _, present := proxy.updates[0]["server_metadata"]; present {
+		t.Errorf("computed server_metadata was sent on /key/update: %v", proxy.updates[0]["server_metadata"])
+	}
 }
 
 func TestKeyUpdateWithMetadataChangeMergesOverServerMetadata(t *testing.T) {
@@ -652,6 +660,32 @@ func TestKeyReadKeepsOnlyDeclaredMetadata(t *testing.T) {
 	}
 }
 
+func TestKeyReadExposesUndeclaredMetadataInServerMetadata(t *testing.T) {
+	proxy := &fakeKeyProxy{metadata: map[string]interface{}{
+		"a":               "1",
+		"server_side":     "x",
+		"model_rpm_limit": map[string]interface{}{"gpt-4o-mini": float64(5)},
+		"nested":          map[string]interface{}{"k": "v"},
+	}}
+	srv := httptest.NewServer(proxy.handler())
+	defer srv.Close()
+	client := NewClient(srv.URL, "test-key", true)
+
+	d := newKeyResourceData(t, map[string]interface{}{"metadata": map[string]interface{}{"a": "1"}})
+	d.SetId("hash-1")
+	if diags := resourceKeyRead(context.Background(), d, client); diags.HasError() {
+		t.Fatalf("Read returned error: %v", diags)
+	}
+
+	if got, want := d.Get("metadata"), map[string]interface{}{"a": "1"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("metadata in state = %v, want %v", got, want)
+	}
+	want := map[string]interface{}{"a": "1", "server_side": "x", "nested": `{"k":"v"}`}
+	if got := d.Get("server_metadata"); !reflect.DeepEqual(got, want) {
+		t.Errorf("server_metadata in state = %v, want %v", got, want)
+	}
+}
+
 func TestKeyUpdateSendsChangedDuration(t *testing.T) {
 	proxy := &fakeKeyProxy{metadata: map[string]interface{}{}}
 	srv := httptest.NewServer(proxy.handler())
@@ -684,5 +718,193 @@ func TestKeyUpdateOmitsUnchangedDuration(t *testing.T) {
 	}
 	if v, present := proxy.updates[0]["duration"]; present {
 		t.Errorf("update payload unexpectedly contains duration = %v", v)
+	}
+}
+
+// newKeyUpdateResourceData builds a *schema.ResourceData reflecting a real
+// state -> config diff for team_id (unlike schema.TestResourceDataRaw, which
+// has no notion of prior state), so d.HasChange("team_id") behaves the way it
+// does during a real Update call.
+func newKeyUpdateResourceData(t *testing.T, id, oldTeamID, newTeamID string) *schema.ResourceData {
+	t.Helper()
+	state := &terraform.InstanceState{ID: id, Attributes: map[string]string{"team_id": oldTeamID}}
+	diff := &terraform.InstanceDiff{Attributes: map[string]*terraform.ResourceAttrDiff{
+		"team_id": {Old: oldTeamID, New: newTeamID},
+	}}
+	d, err := schema.InternalMap(resourceKey().Schema).Data(state, diff)
+	if err != nil {
+		t.Fatalf("building ResourceData returned error: %v", err)
+	}
+	return d
+}
+
+// keyRecoveryProxy fakes the two responses the cascade-delete recovery path
+// turns on: what POST /key/update returns, and whether GET /key/info still
+// finds the key afterwards.
+type keyRecoveryProxy struct {
+	updateStatus  int
+	updateBody    string
+	staleKeyGone  bool
+	updateCalls   int32
+	generateCalls int32
+}
+
+const keyNotFoundBody = `{"error":{"message":"Key not found.","type":"not_found_error","param":"key","code":"404"}}`
+
+func (p *keyRecoveryProxy) handler() http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/key/update":
+			atomic.AddInt32(&p.updateCalls, 1)
+			w.WriteHeader(p.updateStatus)
+			io.WriteString(w, p.updateBody)
+		case "/key/generate":
+			atomic.AddInt32(&p.generateCalls, 1)
+			io.WriteString(w, `{"key": "sk-new", "token_id": "new-token"}`)
+		case "/key/info":
+			requested := r.URL.Query().Get("key")
+			if p.staleKeyGone && requested != "new-token" {
+				w.WriteHeader(http.StatusNotFound)
+				io.WriteString(w, keyNotFoundBody)
+				return
+			}
+			json.NewEncoder(w).Encode(map[string]interface{}{
+				"key":  requested,
+				"info": map[string]interface{}{"team_id": "team-b"},
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}
+}
+
+func runKeyUpdate(t *testing.T, p *keyRecoveryProxy, d *schema.ResourceData) diag.Diagnostics {
+	t.Helper()
+	srv := httptest.NewServer(p.handler())
+	defer srv.Close()
+	return resourceKeyUpdate(context.Background(), d, NewClient(srv.URL, "test-key", true))
+}
+
+// Reassigning a key between two teams that both still exist is a plain
+// in-place /key/update and must not be turned into a destroy/recreate.
+func TestResourceKeyUpdateTeamReassignmentStaysInPlace(t *testing.T) {
+	proxy := &keyRecoveryProxy{updateStatus: http.StatusOK, updateBody: `{"key": "hash-1"}`}
+	d := newKeyUpdateResourceData(t, "hash-1", "team-a", "team-b")
+
+	if diags := runKeyUpdate(t, proxy, d); diags.HasError() {
+		t.Fatalf("update returned error: %v", diags)
+	}
+	if got := atomic.LoadInt32(&proxy.generateCalls); got != 0 {
+		t.Errorf("a benign team reassignment must not recreate the key, got %d /key/generate calls", got)
+	}
+	if d.Id() != "hash-1" {
+		t.Errorf("Id = %q, want hash-1 unchanged", d.Id())
+	}
+}
+
+// The reported bug: the key was cascade-deleted along with its old team, so
+// /key/update 404s and the apply must recover by recreating it.
+func TestResourceKeyUpdateRecreatesCascadeDeletedKey(t *testing.T) {
+	proxy := &keyRecoveryProxy{updateStatus: http.StatusNotFound, updateBody: keyNotFoundBody, staleKeyGone: true}
+	d := newKeyUpdateResourceData(t, "stale-token", "team-a", "team-b")
+
+	if diags := runKeyUpdate(t, proxy, d); diags.HasError() {
+		t.Fatalf("a cascade-deleted key must be recreated, not error: %v", diags)
+	}
+	if got := atomic.LoadInt32(&proxy.updateCalls); got != 1 {
+		t.Errorf("expected 1 /key/update attempt before recovering, got %d", got)
+	}
+	if got := atomic.LoadInt32(&proxy.generateCalls); got != 1 {
+		t.Errorf("expected exactly 1 /key/generate recreate, got %d", got)
+	}
+	if d.Id() != "new-token" {
+		t.Errorf("Id = %q, want the recreated key's new-token", d.Id())
+	}
+}
+
+// /key/update 404s for reasons other than a missing key, a rejected
+// project_id among them. Recovering on the status code alone would orphan a
+// key that is still live on the proxy, so the key's absence must be confirmed.
+func TestResourceKeyUpdateNotFoundWithLiveKeyFailsLoudly(t *testing.T) {
+	proxy := &keyRecoveryProxy{
+		updateStatus: http.StatusNotFound,
+		updateBody:   `{"error":{"message":"Project not found, project_id=proj-1"}}`,
+	}
+	d := newKeyUpdateResourceData(t, "hash-1", "team-a", "team-b")
+
+	if diags := runKeyUpdate(t, proxy, d); !diags.HasError() {
+		t.Fatal("a 404 on a key that still exists must stay an error")
+	}
+	if got := atomic.LoadInt32(&proxy.generateCalls); got != 0 {
+		t.Errorf("expected no recreate while the key is still live, got %d /key/generate calls", got)
+	}
+	if d.Id() != "hash-1" {
+		t.Errorf("Id = %q, want hash-1 untouched on a hard failure", d.Id())
+	}
+}
+
+// A key gone for some reason unrelated to a team move still fails loudly.
+func TestResourceKeyUpdateNotFoundWithoutTeamChangeFailsLoudly(t *testing.T) {
+	proxy := &keyRecoveryProxy{updateStatus: http.StatusNotFound, updateBody: keyNotFoundBody, staleKeyGone: true}
+	d := newKeyUpdateResourceData(t, "gone-token", "team-a", "team-a")
+
+	if diags := runKeyUpdate(t, proxy, d); !diags.HasError() {
+		t.Fatal("expected an error when team_id did not change")
+	}
+	if got := atomic.LoadInt32(&proxy.generateCalls); got != 0 {
+		t.Errorf("expected no recreate when team_id is unchanged, got %d /key/generate calls", got)
+	}
+	if d.Id() != "gone-token" {
+		t.Errorf("Id = %q, want gone-token untouched on a hard failure", d.Id())
+	}
+}
+
+// A transient failure must never be mistaken for a cascade-deleted key.
+func TestResourceKeyUpdateServerErrorDoesNotRecreate(t *testing.T) {
+	proxy := &keyRecoveryProxy{
+		updateStatus: http.StatusInternalServerError,
+		updateBody:   `{"error":{"message":"Internal Server Error"}}`,
+		staleKeyGone: true,
+	}
+	d := newKeyUpdateResourceData(t, "hash-1", "team-a", "team-b")
+
+	if diags := runKeyUpdate(t, proxy, d); !diags.HasError() {
+		t.Fatal("expected a 500 to surface as an error")
+	}
+	if got := atomic.LoadInt32(&proxy.generateCalls); got != 0 {
+		t.Errorf("expected no recreate for a transient error, got %d /key/generate calls", got)
+	}
+}
+
+// The metadata pre-read fails before /key/update is ever reached when the key
+// is gone, so that path needs the same recovery.
+func TestResourceKeyUpdateRecreatesCascadeDeletedKeyWithMetadataChange(t *testing.T) {
+	proxy := &keyRecoveryProxy{updateStatus: http.StatusOK, updateBody: `{"key": "hash-1"}`, staleKeyGone: true}
+	state := &terraform.InstanceState{ID: "stale-token", Attributes: map[string]string{
+		"team_id":       "team-a",
+		"metadata.%":    "1",
+		"metadata.tier": "gold",
+	}}
+	diff := &terraform.InstanceDiff{Attributes: map[string]*terraform.ResourceAttrDiff{
+		"team_id":       {Old: "team-a", New: "team-b"},
+		"metadata.tier": {Old: "gold", New: "silver"},
+	}}
+	d, err := schema.InternalMap(resourceKey().Schema).Data(state, diff)
+	if err != nil {
+		t.Fatalf("building ResourceData returned error: %v", err)
+	}
+
+	if diags := runKeyUpdate(t, proxy, d); diags.HasError() {
+		t.Fatalf("a cascade-deleted key must be recreated, not error: %v", diags)
+	}
+	if got := atomic.LoadInt32(&proxy.updateCalls); got != 0 {
+		t.Errorf("expected the metadata pre-read to short-circuit /key/update, got %d calls", got)
+	}
+	if got := atomic.LoadInt32(&proxy.generateCalls); got != 1 {
+		t.Errorf("expected exactly 1 /key/generate recreate, got %d", got)
+	}
+	if d.Id() != "new-token" {
+		t.Errorf("Id = %q, want the recreated key's new-token", d.Id())
 	}
 }

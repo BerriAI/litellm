@@ -3,11 +3,12 @@ import asyncio
 import gc
 import json
 import os
+import socket
 import sys
 import tracemalloc
 from collections import Counter
 from collections.abc import Mapping, Sequence
-from typing import Any, Final, NamedTuple, Protocol, TypedDict
+from typing import Annotated, Any, Final, NamedTuple, Protocol, TypedDict
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing_extensions import ReadOnly
@@ -15,8 +16,11 @@ from typing_extensions import ReadOnly
 from litellm import get_secret_str
 from litellm._logging import verbose_proxy_logger
 from litellm.constants import PYTHON_GC_THRESHOLD
+from litellm.litellm_core_utils.bug_report import EnvironmentReport
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
+from litellm.proxy.bug_report_config import build_proxy_environment_report
+from litellm.proxy.common_utils.resource_ownership import is_proxy_admin
 
 router: Final = APIRouter()
 
@@ -237,6 +241,80 @@ def _process_memory_usage(process: _ProcessHandle) -> _ProcessMemoryUsage:
     )
 
 
+PROC_STATM_PATH: Final = "/proc/self/statm"
+PROC_MEMINFO_PATH: Final = "/proc/meminfo"
+PSUTIL_MISSING_ERROR: Final = "Install psutil for memory monitoring: pip install psutil"
+
+
+class _ProcMemoryInfo(NamedTuple):
+    rss: int
+    vms: int
+
+
+class _ProcFilesystemProcess:
+    """Memory of the running process read from the Linux proc filesystem, for images without psutil."""
+
+    def __init__(
+        self,
+        statm_path: str = PROC_STATM_PATH,
+        meminfo_path: str = PROC_MEMINFO_PATH,
+        page_size: int | None = None,
+    ) -> None:
+        self._statm_path: Final = statm_path
+        self._meminfo_path: Final = meminfo_path
+        self._page_size: Final = os.sysconf("SC_PAGE_SIZE") if page_size is None else page_size
+
+    def memory_info(self) -> _ProcMemoryInfo:
+        with open(self._statm_path, encoding="ascii") as statm:
+            size_pages, resident_pages = statm.read().split()[:2]
+        return _ProcMemoryInfo(rss=int(resident_pages) * self._page_size, vms=int(size_pages) * self._page_size)
+
+    def memory_percent(self) -> float:
+        with open(self._meminfo_path, encoding="ascii") as meminfo:
+            total_kilobytes: Final = next(int(line.split()[1]) for line in meminfo if line.startswith("MemTotal:"))
+        return self.memory_info().rss / (total_kilobytes * 1024) * 100
+
+
+def _process_handle() -> _ProcessHandle | None:
+    try:
+        import psutil
+    except ImportError:
+        return _ProcFilesystemProcess() if os.path.exists(PROC_STATM_PATH) else None
+    return psutil.Process()
+
+
+def _health_status(memory_percent: float) -> str:
+    if memory_percent > 80:
+        return "critical"
+    if memory_percent > 60:
+        return "warning"
+    return "healthy"
+
+
+class _SummaryProcessMemory(TypedDict, total=False):
+    summary: ReadOnly[str]
+    ram_usage_mb: ReadOnly[float]
+    system_memory_percent: ReadOnly[float]
+    error: ReadOnly[str]
+
+
+def _summary_process_memory(process: _ProcessHandle | None) -> tuple[_SummaryProcessMemory, str]:
+    if process is None:
+        missing: Final[_SummaryProcessMemory] = {"error": PSUTIL_MISSING_ERROR}
+        return missing, "healthy"
+    try:
+        usage: Final = _process_memory_usage(process)
+    except Exception as e:
+        unreadable: Final[_SummaryProcessMemory] = {"error": str(e)}
+        return unreadable, "healthy"
+    memory: Final[_SummaryProcessMemory] = {
+        "summary": f"{usage.resident_megabytes:.1f} MB ({usage.percent:.1f}% of system memory)",
+        "ram_usage_mb": round(usage.resident_megabytes, 2),
+        "system_memory_percent": round(usage.percent, 2),
+    }
+    return memory, _health_status(usage.percent)
+
+
 @router.get("/debug/memory/summary", include_in_schema=False)
 async def get_memory_summary(
     _: UserAPIKeyAuth = Depends(user_api_key_auth),
@@ -246,6 +324,7 @@ async def get_memory_summary(
 
     Returns:
     - worker_pid: Process ID
+    - hostname: Host (the pod on Kubernetes) the worker runs on
     - status: Overall health based on memory usage
     - memory: Process memory usage and RAM info
     - caches: Cache item counts and descriptions
@@ -263,35 +342,7 @@ async def get_memory_summary(
         user_api_key_cache,
     )
 
-    # Get process memory info
-    process_memory = {}
-    health_status = "healthy"
-
-    try:
-        import psutil
-
-        usage: Final = _process_memory_usage(psutil.Process())
-        memory_mb: Final = usage.resident_megabytes
-        memory_percent: Final = usage.percent
-
-        process_memory = {
-            "summary": f"{memory_mb:.1f} MB ({memory_percent:.1f}% of system memory)",
-            "ram_usage_mb": round(memory_mb, 2),
-            "system_memory_percent": round(memory_percent, 2),
-        }
-
-        # Check memory health status
-        if memory_percent > 80:
-            health_status = "critical"
-        elif memory_percent > 60:
-            health_status = "warning"
-        else:
-            health_status = "healthy"
-
-    except ImportError:
-        process_memory["error"] = "Install psutil for memory monitoring: pip install psutil"
-    except Exception as e:
-        process_memory["error"] = str(e)
+    process_memory, health_status = _summary_process_memory(_process_handle())
 
     # Get cache information
     caches: Final[dict[str, object]] = {}
@@ -347,6 +398,7 @@ async def get_memory_summary(
 
     return {
         "worker_pid": os.getpid(),
+        "hostname": socket.gethostname(),
         "status": health_status,
         "memory": process_memory,
         "caches": {
@@ -732,6 +784,23 @@ async def configure_gc_thresholds_endpoint(
         "objects_awaiting_collection": current_count,
         "tip": f"Next collection will run after {generation_0 - current_count} more allocations",
     }
+
+
+@router.get("/debug/report", include_in_schema=False)
+async def get_debug_report(
+    user_api_key_dict: Annotated[UserAPIKeyAuth, Depends(user_api_key_auth)],
+) -> EnvironmentReport:
+    """
+    The same LiteLLM-owned environment facts the bug report link puts in a GitHub issue:
+    versions, deployment kind, and config flags whose keys and values LiteLLM defines.
+    Nothing from the operator's config values, request data, or errors
+
+    Example usage:
+    curl http://localhost:4000/debug/report -H "Authorization: Bearer sk-1234"
+    """
+    if not is_proxy_admin(user_api_key_dict):
+        raise HTTPException(status_code=403, detail="Only proxy admins can read /debug/report")
+    return build_proxy_environment_report()
 
 
 @router.get(

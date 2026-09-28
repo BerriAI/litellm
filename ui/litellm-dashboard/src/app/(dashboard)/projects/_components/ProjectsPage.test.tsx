@@ -190,22 +190,48 @@ describe("ProjectsPage", () => {
 
   it("should reset to the first page when the search text changes", async () => {
     const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
     const manyProjects = Array.from({ length: 12 }, (_, i) => ({
       ...mockProjects[0],
       project_id: `proj-${i + 1}`,
       project_alias: `Project ${String(i + 1).padStart(2, "0")}`,
     }));
     mockUseProjects.mockReturnValue({ data: manyProjects, isLoading: false });
-    renderWithProviders(<ProjectsPage />);
+    renderWithProviders(<ProjectsPage />, { onUrlUpdate });
 
     await user.click(screen.getByTestId("pagination-next"));
     expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 2 of 2");
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].searchParams.get("page")).toBe("2"));
 
     fireEvent.change(screen.getByPlaceholderText(/search projects/i), { target: { value: "Project 01" } });
     await waitFor(() => {
       expect(screen.getByText("Project 01")).toBeInTheDocument();
       expect(screen.getByTestId("pagination-page")).toHaveTextContent("Page 1 of 1");
     });
+    await waitFor(() => expect(onUrlUpdate.mock.calls.at(-1)?.[0].queryString).toBe("?project_search=Project+01"));
+    expect(onUrlUpdate).toHaveBeenCalledTimes(2);
+  });
+
+  it("should restore the search box and filtered list from a ?project_search= deep link", () => {
+    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    renderWithProviders(<ProjectsPage />, { searchParams: "?project_search=Beta" });
+
+    expect(screen.getByPlaceholderText(/search projects/i)).toHaveValue("Beta");
+    expect(screen.getByText("Beta Project")).toBeInTheDocument();
+    expect(screen.queryByText("Alpha Project")).not.toBeInTheDocument();
+  });
+
+  it("should remove ?project_search= when the search is cleared", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    renderWithProviders(<ProjectsPage />, { searchParams: "?project_search=Beta", onUrlUpdate });
+
+    await user.click(screen.getByRole("button", { name: /clear search/i }));
+
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenLastCalledWith(expect.objectContaining({ queryString: "" })));
+    expect(screen.getByPlaceholderText(/search projects/i)).toHaveValue("");
+    expect(screen.getByText("Alpha Project")).toBeInTheDocument();
   });
 
   it("should open the detail view directly from a ?project= deep link", () => {
@@ -248,6 +274,24 @@ describe("ProjectsPage", () => {
     expect(onUrlUpdate.mock.calls.at(-1)?.[0].options.history).toBe("replace");
     expect(screen.queryByTestId("project-detail")).not.toBeInTheDocument();
     expect(screen.getByText("Alpha Project")).toBeInTheDocument();
+  });
+
+  it("should drop the project's key table state but keep the list's search and page when the detail view is closed", async () => {
+    const user = userEvent.setup();
+    const onUrlUpdate = vi.fn<(event: UrlUpdateEvent) => void>();
+    mockUseProjects.mockReturnValue({ data: mockProjects, isLoading: false });
+    renderWithProviders(<ProjectsPage />, {
+      searchParams:
+        "?page=2&project_search=Project&project=proj-1&keys_page=3&keys_page_size=10&keys_search=prod&keys_sort_by=spend&keys_sort_order=asc",
+      onUrlUpdate,
+    });
+
+    await user.click(screen.getByRole("button", { name: /back to projects/i }));
+
+    await waitFor(() => expect(onUrlUpdate).toHaveBeenCalledTimes(1));
+    const [update] = onUrlUpdate.mock.calls[0];
+    expect(update.queryString).toBe("?page=2&project_search=Project");
+    expect(update.options.history).toBe("replace");
   });
 
   it("should resolve team alias from the teams list in the Team column", () => {

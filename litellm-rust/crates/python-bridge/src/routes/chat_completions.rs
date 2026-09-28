@@ -1,91 +1,187 @@
-use litellm_core::Error;
-use std::future::Future;
+mod host;
 
-use litellm_core::chat_completions::types::{ChatCompletionsRequest, ChatCompletionsResponse};
-use litellm_core::chat_completions::{
-    chat_completions as run_chat_completions, chat_completions_decline_reason,
-};
+use pyo3::types::{PyDict, PyTuple};
+
+use crate::logger::{run_async, run_sync};
+use litellm_core::chat_completions::{ChatCompletionsRoute, Error, types::ChatCompletionsRequest};
+use litellm_types::utils::ChatCompletionsResponse;
 use pyo3::prelude::*;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
-use crate::errors::chat_completions_error_to_pyerr;
-use crate::marshal::{RouteOptions, RouteOptionsInputs, object_or_empty, required_value};
+use crate::{
+    errors::route_error_to_pyerr,
+    marshal::{
+        RouteOptions, extra_headers_argument, messages_argument, optional_params_argument,
+        optional_timeout,
+    },
+};
 
-fn prepare_chat_completions(
-    inputs: ChatCompletionsInputs,
-) -> PyResult<impl Future<Output = Result<ChatCompletionsResponse, Error>> + Send + 'static> {
-    let messages = required_value("messages", inputs.messages, Value::is_array, "list")?;
-    let optional_params = object_or_empty("optional_params", inputs.optional_params)?;
-    let options = RouteOptions::from_python(RouteOptionsInputs {
-        model: inputs.model,
-        api_key: inputs.api_key,
-        api_base: inputs.api_base,
-        custom_llm_provider: inputs.custom_llm_provider,
-        extra_headers: inputs.extra_headers,
-        timeout_seconds: inputs.timeout_seconds,
-    })?;
-
-    Ok(async move {
-        let RouteOptions {
-            model,
-            api_key,
-            api_base,
-            custom_llm_provider,
-            extra_headers,
-            timeout,
-        } = options;
-        run_chat_completions(ChatCompletionsRequest {
-            model: &model,
-            messages,
-            optional_params,
-            api_key: api_key.as_deref(),
-            api_base: api_base.as_deref(),
-            custom_llm_provider: custom_llm_provider.as_deref(),
-            extra_headers,
-            timeout,
-        })
+async fn execute(
+    http: Result<litellm_http::Client, litellm_http::Error>,
+    secrets: std::sync::Arc<dyn litellm_secrets::source::SecretSource>,
+    messages: Vec<Value>,
+    optional_params: Map<String, Value>,
+    options: RouteOptions,
+) -> Result<ChatCompletionsResponse, Error> {
+    let RouteOptions {
+        model,
+        api_key,
+        api_base,
+        custom_llm_provider,
+        extra_headers,
+        timeout,
+    } = options;
+    ChatCompletionsRoute::new(http?, crate::http::resources().auth.clone(), secrets)
+        .execute(
+            ChatCompletionsRequest {
+                model: &model,
+                messages: Value::Array(messages),
+                optional_params,
+                api_key: api_key.as_deref(),
+                api_base: api_base.as_deref(),
+                custom_llm_provider: custom_llm_provider.as_deref(),
+                extra_headers,
+                timeout,
+            },
+            &(),
+        )
         .await
-    })
 }
 
 #[pyfunction]
-#[pyo3(signature = (model, messages, optional_params=None, custom_llm_provider=None))]
-fn chat_completions_decline(
+#[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one parameter per Python keyword"
+)]
+pub(crate) fn chat_completions(
+    py: Python<'_>,
     model: String,
-    #[pyo3(from_py_with = litellm_python_interop::from_py)] messages: Value,
-    #[pyo3(from_py_with = litellm_python_interop::from_py)] optional_params: Option<Value>,
+    #[pyo3(from_py_with = messages_argument)] messages: Vec<Value>,
+    #[pyo3(from_py_with = optional_params_argument)] optional_params: Option<Map<String, Value>>,
+    api_key: Option<String>,
+    api_base: Option<String>,
     custom_llm_provider: Option<String>,
-) -> PyResult<Option<String>> {
-    let optional_params = object_or_empty("optional_params", optional_params)?;
-    Ok(chat_completions_decline_reason(
-        &model,
-        custom_llm_provider.as_deref(),
-        messages,
-        &optional_params,
+    #[pyo3(from_py_with = extra_headers_argument)] extra_headers: Option<Map<String, Value>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Py<PyAny>> {
+    let options = RouteOptions {
+        model,
+        api_key,
+        api_base,
+        custom_llm_provider,
+        extra_headers,
+        timeout: optional_timeout(timeout_seconds),
+    };
+    let http = crate::http::provider_client(py, &PyDict::new(py), false)?;
+    let secrets = crate::secrets::source(py)?;
+    run_sync(
+        py,
+        execute(
+            http,
+            secrets,
+            messages,
+            optional_params.unwrap_or_default(),
+            options,
+        ),
+        route_error_to_pyerr,
     )
-    .map(str::to_string))
 }
 
-bridge_route! {
-    sync = chat_completions,
-    asynchronous = achat_completions,
-    inputs = ChatCompletionsInputs,
-    required = {
-        model: String,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        messages: serde_json::Value,
-    },
-    optional = {
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        optional_params: Option<serde_json::Value>,
-        api_key: Option<String>,
-        api_base: Option<String>,
-        custom_llm_provider: Option<String>,
-        #[pyo3(from_py_with = litellm_python_interop::from_py)]
-        extra_headers: Option<serde_json::Value>,
-        timeout_seconds: Option<f64>,
-    },
-    prepare = prepare_chat_completions,
-    errors = chat_completions_error_to_pyerr,
-    extra = [chat_completions_decline],
+#[pyfunction]
+#[pyo3(signature = (model, messages, optional_params=None, api_key=None, api_base=None, custom_llm_provider=None, extra_headers=None, timeout_seconds=None))]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "one parameter per Python keyword"
+)]
+pub(crate) fn achat_completions<'py>(
+    py: Python<'py>,
+    model: String,
+    #[pyo3(from_py_with = messages_argument)] messages: Vec<Value>,
+    #[pyo3(from_py_with = optional_params_argument)] optional_params: Option<Map<String, Value>>,
+    api_key: Option<String>,
+    api_base: Option<String>,
+    custom_llm_provider: Option<String>,
+    #[pyo3(from_py_with = extra_headers_argument)] extra_headers: Option<Map<String, Value>>,
+    timeout_seconds: Option<f64>,
+) -> PyResult<Bound<'py, PyAny>> {
+    let options = RouteOptions {
+        model,
+        api_key,
+        api_base,
+        custom_llm_provider,
+        extra_headers,
+        timeout: optional_timeout(timeout_seconds),
+    };
+    let http = crate::http::provider_client(py, &PyDict::new(py), true)?;
+    let secrets = crate::secrets::source(py)?;
+    run_async(
+        py,
+        execute(
+            http,
+            secrets,
+            messages,
+            optional_params.unwrap_or_default(),
+            options,
+        ),
+        route_error_to_pyerr,
+    )
+}
+
+fn run_public(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+    asynchronous: bool,
+) -> PyResult<Py<PyAny>> {
+    use super::inference::InferenceHost;
+    use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
+    let host = InferenceHost::new(
+        request.clone().unbind(),
+        "litellm.rust_bridge.chat_completions.route_host",
+    );
+    let route = ChatCompletionsRoute::new(
+        crate::http::provider_client(py, &kwargs, asynchronous)?
+            .map_err(crate::http::client_error)?,
+        crate::http::resources().auth.clone(),
+        crate::secrets::source(py)?,
+    );
+    run_legacy_call(
+        py,
+        LegacySurface {
+            call_type: if asynchronous {
+                "acompletion"
+            } else {
+                "completion"
+            },
+            input_description: "Chat completions",
+            stream: None,
+        },
+        PublicCall::capture(&request, &args, &kwargs)?,
+        move |request| crate::logger::LoggedMachine::new(route.machine(request)),
+        host::ChatCompletionsPythonHost(host),
+        crate::preflight::sdk_preflight,
+        asynchronous,
+    )
+}
+
+#[pyfunction]
+pub(crate) fn completion(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    run_public(py, request, args, kwargs, false)
+}
+
+#[pyfunction]
+pub(crate) fn acompletion(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    run_public(py, request, args, kwargs, true)
 }

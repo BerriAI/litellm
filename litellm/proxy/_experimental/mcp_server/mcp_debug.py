@@ -100,6 +100,8 @@ Usage with curl::
          http://localhost:4000/mcp/atlassian_mcp
 """
 
+from __future__ import annotations
+
 import asyncio
 import base64
 import io
@@ -109,17 +111,20 @@ from collections.abc import AsyncIterator, Callable, Mapping
 from http.cookies import CookieError, SimpleCookie
 from itertools import islice
 from types import MappingProxyType
-from typing import Final
+from typing import TYPE_CHECKING, Final
 from urllib.parse import parse_qsl, quote, quote_plus, unquote_plus, urlencode
 
 import httpx
+import httpx2
 from pydantic import JsonValue, TypeAdapter
 from starlette.requests import HTTPConnection
 from starlette.types import Message, Send
 
 from litellm.litellm_core_utils.secret_redaction import REDACTED, redact_string
 from litellm.litellm_core_utils.sensitive_data_masker import SensitiveDataMasker
-from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
+
+if TYPE_CHECKING:
+    from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
 
 # Header the client sends to opt into debug mode
 MCP_DEBUG_REQUEST_HEADER: Final = "x-litellm-mcp-debug"
@@ -132,9 +137,9 @@ MCP_AUTH_DIAGNOSTICS_SCOPE_KEY: Final = "litellm.mcp.auth_diagnostics"
 
 
 def record_auth_resolution(server_id: str, source: AuthResolution) -> None:
-    from mcp.server.lowlevel.server import request_ctx
+    from litellm.proxy._experimental.mcp_server.mcp_context import get_active_mcp_request_ctx
 
-    context: Final[object] = request_ctx.get(None)
+    context: Final[object] = get_active_mcp_request_ctx()
     request: Final[object] = getattr(context, "request", None)
     if isinstance(request, HTTPConnection):
         diagnostics: Final[object] = request.scope.get(MCP_AUTH_DIAGNOSTICS_SCOPE_KEY)
@@ -150,6 +155,8 @@ class MCPAuthDiagnostics:
         self._outcomes = tuple(item for item in self._outcomes if item[0] != server_id) + ((server_id, resolution),)
 
     def resolution(self) -> str:
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
+
         match self._outcomes:
             case ():
                 return AuthResolution.unresolved.value
@@ -159,15 +166,15 @@ class MCPAuthDiagnostics:
                 return AuthResolution.multiple.value
 
     def headers(self) -> Mapping[str, str]:
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
+
         if len(self._outcomes) <= 1:
             return MappingProxyType({"x-mcp-debug-auth-resolution": self.resolution()})
         return MappingProxyType(
             {
                 "x-mcp-debug-auth-resolution": AuthResolution.multiple.value,
                 "x-mcp-debug-auth-resolutions": json.dumps(
-                    {
-                        server_id: source.value for server_id, source in self._outcomes[:32]
-                    },  # mutable-ok: JSON encoder requires a concrete dict
+                    {server_id: source.value for server_id, source in self._outcomes[:32]},
                     separators=(",", ":"),
                     ensure_ascii=True,
                 ),
@@ -372,6 +379,8 @@ class MCPDebug:
 
         server_url: str | None = None
         server_auth_type: str | None = None
+        from litellm.proxy._experimental.mcp_server.outbound_credentials.types import AuthResolution
+
         auth_resolution: Final = AuthResolution.unresolved.value
 
         for server_name in mcp_servers or []:
@@ -409,7 +418,7 @@ def _safe_text(value: str, limit: int = _BODY_PREVIEW_CHARS) -> str:
     return escaped if len(escaped) <= limit else f"{escaped[:limit]}...(truncated)"
 
 
-def safe_upstream_url(url: httpx.URL) -> str:
+def safe_upstream_url(url: httpx.URL | httpx2.URL) -> str:
     return _safe_text(str(url.copy_with(username="", password="", path="/", query=None, fragment=None)))
 
 
@@ -449,10 +458,10 @@ def _header_secret_values(name: str, value: str) -> tuple[str, ...]:
     return (value, credential, decoded, password, unquote_plus(password))
 
 
-def _body_secret_values(request: httpx.Request) -> tuple[str, ...] | None:
+def _body_secret_values(request: httpx.Request | httpx2.Request) -> tuple[str, ...] | None:
     try:
         raw: Final = request.content
-    except httpx.RequestNotRead:
+    except (httpx.RequestNotRead, httpx2.RequestNotRead):
         return None
     if not raw:
         return ()
@@ -478,7 +487,7 @@ def _body_secret_values(request: httpx.Request) -> tuple[str, ...] | None:
     )
 
 
-def _request_secret_values(request: httpx.Request) -> tuple[str, ...] | None:
+def _request_secret_values(request: httpx.Request | httpx2.Request) -> tuple[str, ...] | None:
     body_values: Final = _body_secret_values(request)
     if body_values is None:
         return None
@@ -537,18 +546,18 @@ def _preview(raw: bytes, content_type: str = "", secrets: tuple[str, ...] = ()) 
     return _safe_text(redact_string(_mask_known_values(json.dumps(parsed, separators=(",", ":")), secrets)))
 
 
-def _masked_headers(headers: httpx.Headers) -> str:
+def _masked_headers(headers: httpx.Headers | httpx2.Headers) -> str:
     return _safe_text(", ".join(f"{name}={value}" for name, value in headers.items() if name in _SAFE_HEADER_NAMES))
 
 
-def _request_body_preview(request: httpx.Request, secrets: tuple[str, ...] | None) -> str:
+def _request_body_preview(request: httpx.Request | httpx2.Request, secrets: tuple[str, ...] | None) -> str:
     try:
         return _preview(request.content, request.headers.get("content-type", ""), secrets or ())
-    except httpx.RequestNotRead:
+    except (httpx.RequestNotRead, httpx2.RequestNotRead):
         return "(streamed, not captured)"
 
 
-def _response_body_preview(response: httpx.Response, secrets: tuple[str, ...] | None) -> str:
+def _response_body_preview(response: httpx.Response | httpx2.Response, secrets: tuple[str, ...] | None) -> str:
     if secrets is None:
         return "(omitted: request credentials unavailable)"
     captured: Final = response.extensions.get(_CAPTURE_EXTENSION)
@@ -556,7 +565,7 @@ def _response_body_preview(response: httpx.Response, secrets: tuple[str, ...] | 
         return captured
     try:
         return _preview(response.content, response.headers.get("content-type", ""), secrets)
-    except httpx.ResponseNotRead:
+    except (httpx.ResponseNotRead, httpx2.ResponseNotRead):
         return "(not read)"
 
 
@@ -569,7 +578,7 @@ async def _read_error_prefix(chunks: AsyncIterator[bytes], limit: int) -> bytes:
     return buffer.getvalue()
 
 
-async def capture_upstream_error_response(response: httpx.Response) -> None:
+async def capture_upstream_error_response(response: httpx.Response | httpx2.Response) -> None:
     if not response.is_error:
         return
     try:
@@ -584,16 +593,14 @@ async def capture_upstream_error_response(response: httpx.Response) -> None:
             if secrets is not None
             else "(omitted: request credentials unavailable)"
         )
-    except (asyncio.TimeoutError, httpx.HTTPError, httpx.StreamError):
+    except (asyncio.TimeoutError, httpx.HTTPError, httpx.StreamError, httpx2.HTTPError, httpx2.StreamError):
         response._content = b""  # pyright: ignore[reportPrivateUsage]  # rebind-ok: httpx auth retries must survive diagnostic read failures
-        response.extensions[_CAPTURE_EXTENSION] = (
-            "(unavailable: error body read failed)"  # rebind-ok: httpx response hooks communicate through extensions
-        )
+        response.extensions[_CAPTURE_EXTENSION] = "(unavailable: error body read failed)"
         return
     response.extensions[_CAPTURE_EXTENSION] = preview  # rebind-ok: httpx response hooks communicate through extensions
 
 
-def describe_upstream_response(response: httpx.Response) -> str:
+def describe_upstream_response(response: httpx.Response | httpx2.Response) -> str:
     try:
         request: Final = response.request
     except RuntimeError:
@@ -616,6 +623,6 @@ def describe_upstream_http_failure(exc: BaseException) -> str | None:
         describe_upstream_response(response)
         for current in islice(iter_exception_tree(exc), 16)
         for response in (getattr(current, "response", None),)
-        if isinstance(response, httpx.Response)
+        if isinstance(response, (httpx.Response, httpx2.Response))
     )
     return " | ".join(lines) or None

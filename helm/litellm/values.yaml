@@ -208,6 +208,11 @@ database:
       name: litellm-writer-secret
       usernameKey: username
       passwordKey: password
+    # libpq sslmode / sslrootcert applied to the writer and reader URLs (Prisma and the
+    # in-container PgBouncer); e.g. verify-full with /etc/ssl/certs/ca-certificates.crt for AWS RDS.
+    # sslRootCert on its own implies sslMode verify-full
+    sslMode: ""
+    sslRootCert: ""
 
   # Optional read-replica routing. When `reader.host` is set, the proxy routes
   # reads (find_*, count, group_by, query_raw/_first) to this endpoint while
@@ -392,6 +397,11 @@ gateway:
   #   failureThreshold: 30
   #   periodSeconds: 10
   startupProbe: {}
+  # Optional fixed pod count, rendered into the Deployment's spec.replicas only
+  # when hpa.enabled is false. Unset by default so an existing Deployment keeps
+  # its current count; with the HPA on, the autoscaler owns the count, e.g.:
+  #   replicaCount: 3
+  replicaCount:
   hpa:
     enabled: true
     minReplicas: 1
@@ -519,6 +529,8 @@ backend:
   strategy: {}
   # Optional startupProbe; same shape as gateway.startupProbe. Empty by default.
   startupProbe: {}
+  # Same semantics as gateway.replicaCount.
+  replicaCount:
   hpa:
     enabled: true
     minReplicas: 1
@@ -585,6 +597,8 @@ ui:
   strategy: {}
   # Optional startupProbe; same shape as gateway.startupProbe. Empty by default.
   startupProbe: {}
+  # Same semantics as gateway.replicaCount.
+  replicaCount:
   hpa:
     enabled: false
     minReplicas: 1
