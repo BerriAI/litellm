@@ -564,6 +564,18 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
     return True
 
 
+def _dispatched_model_name(model_name: str, valid_token: UserAPIKeyAuth) -> str:
+    after_team_alias: Final = alias_map(valid_token.team_model_aliases).get(model_name, model_name)
+    return alias_map(valid_token.aliases).get(after_team_alias, after_team_alias)
+
+
+def is_dispatched_model_cost_zero(
+    model: str | list[str] | None, llm_router: Router | None, valid_token: UserAPIKeyAuth
+) -> bool:
+    dispatched_model: Final = _dispatched_model_name(model, valid_token) if isinstance(model, str) else model
+    return _is_model_cost_zero(model=dispatched_model, llm_router=llm_router)
+
+
 _NO_MODEL_INFO: Final[Mapping[str, object]] = MappingProxyType({})
 _TEAM_GRANT_RELATIONS: Final[Mapping[str, object]] = MappingProxyType({"litellm_model_table": True})
 

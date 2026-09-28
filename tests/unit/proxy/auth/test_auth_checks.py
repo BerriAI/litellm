@@ -25,6 +25,7 @@ from litellm.proxy.utils import PrismaClient
 from litellm.proxy.auth.auth_checks import (
     can_team_access_model,
     _is_model_cost_zero,
+    is_dispatched_model_cost_zero,
     _virtual_key_soft_budget_check,
     _team_soft_budget_check,
 )
@@ -1574,3 +1575,27 @@ def test_zero_cost_check_follows_an_alias_repointed_at_runtime(
     assert _is_model_cost_zero(model=alias, llm_router=router) is not expected_after_repoint
     router.update_settings(model_group_alias=_aliases_to(repointed_target))
     assert _is_model_cost_zero(model=alias, llm_router=router) is expected_after_repoint
+
+
+@pytest.mark.parametrize(
+    "team_model_aliases, key_aliases, model, expected",
+    [
+        (None, {"visible": "paid-model"}, "visible", False),
+        (None, {"free-model": "paid-model"}, "free-model", False),
+        ({"free-model": "paid-model"}, None, "free-model", False),
+        (None, {"my-free": "free-model"}, "my-free", True),
+        (None, {"my-free": "visible"}, "my-free", True),
+        ({"team-name": "key-name"}, {"key-name": "free-model"}, "team-name", True),
+        ({"team-name": "key-name"}, {"key-name": "paid-model"}, "team-name", False),
+        (None, {"other": "paid-model"}, "visible", True),
+    ],
+)
+def test_zero_cost_check_prices_the_model_the_key_and_team_aliases_dispatch_to(
+    team_model_aliases: dict[str, str] | None,
+    key_aliases: dict[str, str] | None,
+    model: str,
+    expected: bool,
+) -> None:
+    router: Final = _alias_router(_aliases_to("free-model"))
+    token: Final = UserAPIKeyAuth(aliases=key_aliases or {}, team_model_aliases=team_model_aliases)
+    assert is_dispatched_model_cost_zero(model=model, llm_router=router, valid_token=token) is expected

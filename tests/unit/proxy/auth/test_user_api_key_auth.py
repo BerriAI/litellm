@@ -1794,3 +1794,47 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
         "the mapped-key branch returns before the shared virtual-key checks, so the "
         "user's per-model budget is never attached and never enforced"
     )
+
+
+@pytest.mark.parametrize(
+    "key_aliases, expected",
+    [
+        ({}, True),
+        ({"free-alias": "paid-model"}, False),
+    ],
+)
+def test_budget_skip_judges_the_model_a_key_alias_dispatches_to(key_aliases: dict[str, str], expected: bool) -> None:
+    from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
+    from litellm.router import Router
+
+    router = Router(
+        model_list=[
+            {
+                "model_name": "free-model",
+                "litellm_params": {
+                    "model": "ollama/llama2",
+                    "api_base": "http://localhost:11434",
+                    "input_cost_per_token": 0.0,
+                    "output_cost_per_token": 0.0,
+                },
+            },
+            {
+                "model_name": "paid-model",
+                "litellm_params": {
+                    "model": "openai/paid-model",
+                    "api_key": "sk-fake",
+                    "input_cost_per_token": 1e-06,
+                    "output_cost_per_token": 2e-06,
+                },
+            },
+        ],
+        model_group_alias={"free-alias": "free-model"},
+    )
+    skipped = _should_skip_budget_checks(
+        request_data={"model": "free-alias"},
+        route="/chat/completions",
+        request=None,
+        llm_router=router,
+        valid_token=UserAPIKeyAuth(aliases=key_aliases),
+    )
+    assert skipped is expected

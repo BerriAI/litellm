@@ -48,7 +48,6 @@ from litellm.proxy.auth.auth_checks import (
     _check_end_user_budget,
     _delete_cache_key_object,
     _get_user_role,
-    _is_model_cost_zero,
     _is_user_proxy_admin,
     _team_member_max_budget_alert_check,
     _virtual_key_max_budget_alert_check,
@@ -65,6 +64,7 @@ from litellm.proxy.auth.auth_checks import (
     get_team_membership,
     get_team_object,
     get_user_object,
+    is_dispatched_model_cost_zero,
     is_valid_fallback_model,
     jwt_key_mapping_cache_key,
     key_model_aliases_for_auth_check,
@@ -1795,9 +1795,9 @@ async def _user_api_key_auth_builder(
                     )
                     skip_budget_checks = False
                     if model is not None and llm_router is not None:
-                        from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-
-                        skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
+                        skip_budget_checks = is_dispatched_model_cost_zero(
+                            model=model, llm_router=llm_router, valid_token=valid_token
+                        )
                         if skip_budget_checks:
                             verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
 
@@ -2237,9 +2237,9 @@ async def _user_api_key_auth_builder(
             )
             skip_budget_checks = False
             if model is not None and llm_router is not None:
-                from litellm.proxy.auth.auth_checks import _is_model_cost_zero
-
-                skip_budget_checks = _is_model_cost_zero(model=model, llm_router=llm_router)
+                skip_budget_checks = is_dispatched_model_cost_zero(
+                    model=model, llm_router=llm_router, valid_token=valid_token
+                )
                 if skip_budget_checks:
                     verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
 
@@ -2965,7 +2965,7 @@ async def _run_centralized_common_checks(
         route=route,
         request=request,
         llm_router=llm_router,
-        team_id=user_api_key_auth_obj.team_id,
+        valid_token=user_api_key_auth_obj,
     )
 
     # Pin the metadata variable name (litellm_metadata vs metadata) before
@@ -3136,17 +3136,17 @@ def _should_skip_budget_checks(
     route: str,
     request: Request | None,
     llm_router: Any | None,
-    team_id: str | None = None,
+    valid_token: UserAPIKeyAuth,
 ) -> bool:
     model: Final = _get_model_from_request_context(
         request_data=request_data,
         route=route,
         request=request,
         llm_router=llm_router,
-        team_id=team_id,
+        team_id=valid_token.team_id,
     )
     if model is not None and llm_router is not None:
-        return _is_model_cost_zero(model=model, llm_router=llm_router)
+        return is_dispatched_model_cost_zero(model=model, llm_router=llm_router, valid_token=valid_token)
     return False
 
 
@@ -3715,7 +3715,7 @@ async def _run_post_custom_auth_checks(
     # every budget check for these; this path did not, so the same request could
     # be refused under custom auth and served under the other two.
     skip_budget_checks: Final = (
-        _is_model_cost_zero(model=current_model, llm_router=llm_router)
+        is_dispatched_model_cost_zero(model=current_model, llm_router=llm_router, valid_token=valid_token)
         if current_model is not None and llm_router is not None
         else False
     )
