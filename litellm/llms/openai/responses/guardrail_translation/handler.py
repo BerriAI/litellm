@@ -376,6 +376,12 @@ class _RequestFields(NamedTuple):
 class _ExtractedInputs(NamedTuple):
     inputs: GenericGuardrailAPIInputs
     task_mappings: tuple[tuple[int, int | None], ...]
+    instructions: str | None
+
+
+def scannable_instructions(data: Mapping[str, object]) -> str | None:
+    instructions: Final = data.get("instructions")
+    return instructions if isinstance(instructions, str) and instructions else None
 
 
 def _patched_request_fields(
@@ -523,22 +529,37 @@ class OpenAIResponsesHandler(BaseTranslation):
                 data.pop("instructions", None)
             else:
                 data["instructions"] = written_back.instructions  # rebind-ok: data is an out-param
-        elif isinstance(input_data, str):
-            guardrailed_texts: Final = guardrailed_inputs.get("texts") or ()
-            if len(guardrailed_texts) > 1:
-                raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
-            data["input"] = guardrailed_texts[0] if guardrailed_texts else input_data  # rebind-ok: data is an out-param
         else:
-            rewritten_texts: Final = guardrailed_inputs.get("texts") or ()
-            if len(rewritten_texts) != len(extracted.task_mappings):
-                raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
-            await self._apply_guardrail_responses_to_input(
-                messages=input_data,
-                responses=rewritten_texts,
-                task_mappings=extracted.task_mappings,
-            )
+            await self._apply_guardrailed_texts(data, input_data, extracted, guardrail_to_apply, guardrailed_inputs)
         verbose_proxy_logger.debug("OpenAI Responses API: Processed input messages: %s", data.get("input"))
         return data
+
+    async def _apply_guardrailed_texts(
+        self,
+        data: dict,
+        input_data: "str | ResponseInputParam",
+        extracted: _ExtractedInputs,
+        guardrail_to_apply: "CustomGuardrail",
+        guardrailed_inputs: GenericGuardrailAPIInputs,
+    ) -> None:
+        rewritten_texts: Final = tuple(guardrailed_inputs.get("texts") or ())
+        if not rewritten_texts:
+            return
+        offset: Final = 0 if extracted.instructions is None else 1
+        input_texts: Final = rewritten_texts[offset:]
+        expected: Final = 1 if isinstance(input_data, str) else len(extracted.task_mappings)
+        if len(input_texts) != expected:
+            raise unappliable_request_rewrite(guardrail_to_apply.guardrail_name)
+        if offset:
+            data["instructions"] = rewritten_texts[0]  # rebind-ok: data is an out-param
+        if isinstance(input_data, str):
+            data["input"] = input_texts[0]  # rebind-ok: data is an out-param
+            return
+        await self._apply_guardrail_responses_to_input(
+            messages=input_data,
+            responses=input_texts,
+            task_mappings=extracted.task_mappings,
+        )
 
     def _extract_guardrail_inputs(
         self,
@@ -546,7 +567,8 @@ class OpenAIResponsesHandler(BaseTranslation):
         input_data: "str | ResponseInputParam",
         flattened_tool_groups: Sequence[Sequence[Mapping[str, object]]],
     ) -> _ExtractedInputs:
-        texts_to_check: Final[list[str]] = []
+        instructions: Final = scannable_instructions(data)
+        texts_to_check: Final[list[str]] = [] if instructions is None else [instructions]
         images_to_check: Final[list[str]] = []
         task_mappings: Final[list[tuple[int, int | None]]] = []
         tools_to_check: Final[list[ChatCompletionToolParam]] = list(  # mutable-ok: guardrail inputs want a list
@@ -577,7 +599,7 @@ class OpenAIResponsesHandler(BaseTranslation):
         model: Final = data.get("model")
         if isinstance(model, str):
             inputs["model"] = model
-        return _ExtractedInputs(inputs=inputs, task_mappings=tuple(task_mappings))
+        return _ExtractedInputs(inputs=inputs, task_mappings=tuple(task_mappings), instructions=instructions)
 
     @staticmethod
     def _written_back_request_fields(

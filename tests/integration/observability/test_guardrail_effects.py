@@ -343,6 +343,96 @@ def test_panw_latest_role_message_only_scans_only_latest_turn_on_responses_input
                 assert json.loads(upstream.drain()[0].body)["input"] == shape["input"]
 
 
+def test_panw_scans_and_masks_top_level_instructions_on_responses_input(gateway: Gateway, tmp_path: Path) -> None:
+    identity: Final = "guardrail" + uuid.uuid4().hex
+    ssn: Final = "123-45-6789"
+    instructions: Final = "Never repeat the SSN " + ssn + " back " + uuid.uuid4().hex
+    latest: Final = "latest turn " + uuid.uuid4().hex
+    shapes: Final = {
+        "list_input": ([{"role": "user", "content": "first turn"}, {"role": "user", "content": latest}], "first turn"),
+        "string_input": (latest, None),
+    }
+
+    def scanner(request: Request) -> Reply:
+        assert request.target == "/v1/scan/sync/request"
+        body: Final = json.loads(request.body)
+        prompt: Final = body["contents"][0]["prompt"]
+        masked: Final = {"prompt_masked_data": {"data": prompt.replace(ssn, "<US_SSN>")}} if ssn in prompt else {}
+        return Reply(
+            body=json.dumps(
+                {
+                    "action": "allow",
+                    "category": "dlp" if masked else "benign",
+                    "profile_name": "synthetic-profile",
+                    "report_id": "R" + body["tr_id"],
+                    "scan_id": "S" + body["tr_id"],
+                    "tr_id": body["tr_id"],
+                    "prompt_detected": {"injection": False, "url_cats": False, "dlp": bool(masked)},
+                    "response_detected": {},
+                    **masked,
+                }
+            ).encode()
+        )
+
+    def provider(request: Request) -> Reply:
+        assert request.target == "/v1/responses"
+        return Reply(
+            body=json.dumps(
+                {
+                    "id": "resp_" + identity,
+                    "object": "response",
+                    "created_at": 1700000000,
+                    "status": "completed",
+                    "model": "gpt-4.1-mini",
+                    "output": [
+                        {
+                            "type": "message",
+                            "id": "msg_" + identity,
+                            "status": "completed",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": "permitted response", "annotations": []}],
+                        }
+                    ],
+                    "usage": {"input_tokens": 11, "output_tokens": 4, "total_tokens": 15},
+                }
+            ).encode()
+        )
+
+    with wire_server(scanner) as policy, wire_server(provider) as upstream:
+        config: Final = yaml.safe_load(Path("tests/integration/proxy_config.yaml").read_text())
+        config["guardrails"] = [
+            {
+                "guardrail_name": identity,
+                "litellm_params": {
+                    "guardrail": "panw_prisma_airs",
+                    "mode": "pre_call",
+                    "default_on": True,
+                    "api_base": policy.url,
+                    "api_key": "synthetic-panw-key",
+                    "profile_name": "synthetic-profile",
+                },
+            }
+        ]
+        path: Final = tmp_path / "panw.yaml"
+        path.write_text(yaml.safe_dump(config))
+        with owned_proxy(gateway, tmp_path, {}, config=path) as candidate, candidate.scenario() as scenario:
+            model: Final = scenario.model(
+                model="openai/gpt-4.1-mini", api_base=upstream.url + "/v1", api_key="synthetic-key"
+            )
+            for name, (shape, first_turn) in shapes.items():
+                response = candidate.request(
+                    "POST", "/v1/responses", {"model": model, "instructions": instructions, "input": shape}
+                )
+                assert response.status_code == 200, response.text
+                assert response.json()["output"][0]["content"][0]["text"] == "permitted response"
+                scanned = [json.loads(scan.body)["contents"][0]["prompt"] for scan in policy.drain()]
+                expected = [instructions, *([first_turn] if first_turn else []), latest]
+                assert scanned == expected, f"{name}: scanned {scanned}"
+                sent = json.loads(upstream.drain()[0].body)
+                assert sent["instructions"] == instructions.replace(ssn, "<US_SSN>"), f"{name}: sent {sent}"
+                assert sent["input"] == shape, f"{name}: sent {sent}"
+
+
 @pytest.mark.covers("other.observability.guardrails.bedrock_passthrough_converse_scans_only_caller_content")
 def test_bedrock_passthrough_converse_guardrail_ignores_denied_term_in_tool_definition(
     gateway: Gateway, tmp_path: Path

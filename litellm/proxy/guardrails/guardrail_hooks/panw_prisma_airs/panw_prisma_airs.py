@@ -34,6 +34,7 @@ from litellm.llms.custom_httpx.http_handler import (
     get_async_httpx_client,
     httpxSpecialProvider,
 )
+from litellm.llms.openai.responses.guardrail_translation.handler import scannable_instructions
 from litellm.proxy._types import UserAPIKeyAuth
 from litellm.proxy.common_utils.callback_utils import (
     add_guardrail_scan_id,
@@ -1636,10 +1637,10 @@ class PanwPrismaAirsHandler(CustomGuardrail):
 
         A message's texts are consumed only when they sit at the running position of
         ``texts``; messages the translation handler added without a counterpart in
-        ``texts`` (Responses ``instructions``, ``function_call_output``, ``reasoning``)
-        are skipped. The walk runs front-to-back and back-to-front and both must agree,
-        so an added message whose text happens to equal a neighbouring real message's
-        text cannot steal that text's attribution. Returns None otherwise.
+        ``texts`` (Responses ``function_call_output``, ``reasoning``) are skipped. The walk
+        runs front-to-back and back-to-front and both must agree, so an added message whose
+        text happens to equal a neighbouring real message's text cannot steal that text's
+        attribution. Returns None otherwise.
         """
         runs: Final = tuple(cls._message_texts(message) for message in messages)
 
@@ -1671,7 +1672,7 @@ class PanwPrismaAirsHandler(CustomGuardrail):
         The Responses translation handler gives those model-authored items the default
         ``user`` role, so the latest-turn selection must not mistake one for a human turn.
         Empty for requests without a Responses ``input`` item list; None when the raw items
-        do not account for every entry of ``texts``.
+        (after the leading ``instructions`` text) do not account for every entry of ``texts``.
         """
         try:
             raw_input: Final = _RESPONSES_INPUT.validate_python(request_data.get("input"))
@@ -1679,10 +1680,11 @@ class PanwPrismaAirsHandler(CustomGuardrail):
             return None
         if not isinstance(raw_input, tuple):
             return frozenset()
+        offset: Final = 0 if scannable_instructions(request_data) is None else 1
         counts: Final = tuple(item.text_count() for item in raw_input)
-        if sum(counts) != len(texts):
+        if offset + sum(counts) != len(texts):
             return None
-        starts: Final = itertools.accumulate(counts, initial=0)
+        starts: Final = itertools.accumulate(counts, initial=offset)
         return frozenset(
             text_idx
             for item, count, start in zip(raw_input, counts, starts)

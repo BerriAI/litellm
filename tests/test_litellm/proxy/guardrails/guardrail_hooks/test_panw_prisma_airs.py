@@ -4780,7 +4780,7 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
         assert result["input"][0]["content"] == "First user turn"
 
     @pytest.mark.asyncio
-    async def test_flag_false_responses_scans_full_history(self):
+    async def test_flag_false_responses_scans_instructions_and_full_history(self):
         from litellm.llms.openai.responses.guardrail_translation.handler import (
             OpenAIResponsesHandler,
         )
@@ -4791,7 +4791,11 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
         with patcher:
             await OpenAIResponsesHandler().process_input_messages(data=request_data, guardrail_to_apply=handler)
 
-        assert [call.kwargs["content"] for call in mock_api.call_args_list] == ["First user turn", self.LATEST]
+        assert [call.kwargs["content"] for call in mock_api.call_args_list] == [
+            "answer briefly",
+            "First user turn",
+            self.LATEST,
+        ]
 
     @pytest.mark.asyncio
     async def test_flag_true_unalignable_texts_fall_back_to_scanning_everything(self):
@@ -4879,8 +4883,12 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
             ),
         ],
     )
+    @pytest.mark.parametrize(
+        "instructions",
+        [pytest.param(None, id="no_instructions"), pytest.param("answer briefly", id="instructions")],
+    )
     async def test_flag_true_reasoning_content_after_latest_user_turn_still_scans_that_turn(
-        self, tail: Sequence[Mapping[str, object]]
+        self, tail: Sequence[Mapping[str, object]], instructions: str | None
     ):
         from litellm.llms.openai.responses.guardrail_translation.handler import (
             OpenAIResponsesHandler,
@@ -4896,6 +4904,7 @@ class TestPanwAirsLatestRoleMessageOnlyEveryRequestShape:
                 "content": [{"type": "reasoning_text", "text": "model chain of thought"}],
             },
             *tail,
+            **({"instructions": instructions} if instructions is not None else {}),
         )
         patcher, mock_api = self._scan(handler)
         with patcher:

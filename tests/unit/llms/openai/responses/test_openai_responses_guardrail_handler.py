@@ -67,6 +67,37 @@ class MockGuardrail(CustomGuardrail):
         return inputs
 
 
+class RecordingMaskingGuardrail(MockGuardrail):
+    """MockGuardrail that also records the texts and structured message contents it was shown"""
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        self.seen_texts: List[List[str]] = []
+        self.seen_message_contents: List[List[object]] = []
+
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        self.seen_texts.append(list(inputs.get("texts", [])))
+        self.seen_message_contents.append([m["content"] for m in inputs.get("structured_messages") or []])
+        return await super().apply_guardrail(inputs, request_data, input_type, logging_obj)
+
+
+class LastTextDroppingGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict,
+        input_type: Literal["request", "response"],
+        logging_obj: Optional[Any] = None,
+    ) -> GenericGuardrailAPIInputs:
+        return {**inputs, "texts": list(inputs.get("texts", []))[:-1]}
+
+
 class PersimmonMaskingGuardrail(CustomGuardrail):
     async def apply_guardrail(
         self,
@@ -217,15 +248,9 @@ class TestOpenAIResponsesHandlerInputProcessing:
 
         result = await handler.process_input_messages(data, guardrail)
 
-        assert (
-            result["input"][0]["content"][0]["text"]
-            == "Describe this image [GUARDRAILED]"
-        )
+        assert result["input"][0]["content"][0]["text"] == "Describe this image [GUARDRAILED]"
         # Image URL should remain unchanged
-        assert (
-            result["input"][0]["content"][1]["image_url"]["url"]
-            == "https://example.com/image.jpg"
-        )
+        assert result["input"][0]["content"][1]["image_url"]["url"] == "https://example.com/image.jpg"
 
     @pytest.mark.asyncio
     async def test_process_input_with_empty_content(self):
@@ -247,6 +272,70 @@ class TestOpenAIResponsesHandlerInputProcessing:
         assert result["input"][0]["content"] is None
         # Empty string should be processed
         assert result["input"][1]["content"] == " [GUARDRAILED]"
+
+    @pytest.mark.asyncio
+    async def test_instructions_over_string_input_are_scanned_first_and_rewritten_in_place(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = RecordingMaskingGuardrail(guardrail_name="test")
+        data = {"model": "gpt-4", "instructions": "Be terse", "input": "Hello"}
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.seen_texts == [["Be terse", "Hello"]]
+        assert guardrail.seen_message_contents == [["Be terse", "Hello"]]
+        assert result["instructions"] == "Be terse [GUARDRAILED]"
+        assert result["input"] == "Hello [GUARDRAILED]"
+
+    @pytest.mark.asyncio
+    async def test_instructions_over_list_input_are_scanned_first_and_rewritten_in_place(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = RecordingMaskingGuardrail(guardrail_name="test")
+        data = {
+            "model": "gpt-4",
+            "instructions": "Be terse",
+            "input": [
+                {"role": "user", "content": "Hello"},
+                {"role": "user", "content": [{"type": "input_text", "text": "World"}]},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.seen_texts == [["Be terse", "Hello", "World"]]
+        assert guardrail.seen_message_contents == [["Be terse", "Hello", [{"type": "text", "text": "World"}]]]
+        assert result["instructions"] == "Be terse [GUARDRAILED]"
+        assert result["input"] == [
+            {"role": "user", "content": "Hello [GUARDRAILED]"},
+            {"role": "user", "content": [{"type": "input_text", "text": "World [GUARDRAILED]"}]},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_empty_instructions_are_not_scanned(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = RecordingMaskingGuardrail(guardrail_name="test")
+        data = {"model": "gpt-4", "instructions": "", "input": "Hello"}
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.seen_texts == [["Hello"]]
+        assert result["instructions"] == ""
+        assert result["input"] == "Hello [GUARDRAILED]"
+
+    @pytest.mark.asyncio
+    async def test_text_answer_missing_the_instructions_row_is_rejected_and_leaves_request_untouched(self):
+        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
+
+        handler = OpenAIResponsesHandler()
+        guardrail = LastTextDroppingGuardrail(guardrail_name="dropper")
+        data = {"model": "gpt-4", "instructions": "Be terse", "input": [{"role": "user", "content": "Hello"}]}
+        original = copy.deepcopy(data)
+
+        with pytest.raises(UnappliableRequestRewrite) as excinfo:
+            await handler.process_input_messages(data, guardrail)
+
+        assert excinfo.value.guardrail_name == "dropper"
+        assert data["instructions"] == original["instructions"]
+        assert data["input"] == original["input"]
 
 
 class TestOpenAIResponsesHandlerOutputProcessing:
@@ -2527,8 +2616,9 @@ def _string_input_request() -> dict:
 class TestPerMessageRewriteWriteBack:
     """A guardrail that rewrites per chat row hands the rows back as
     structured_messages, and the handler lands them on the instructions and the
-    input items they came from; the same rewrite handed back as texts alone has
-    no item to land on and is rejected by name instead of sent unrewritten."""
+    input items they came from; the same rewrite handed back as texts alone lands
+    only where every row has a scanned text (instructions plus a string input) and
+    is otherwise rejected by name instead of sent unrewritten."""
 
     @pytest.mark.asyncio
     async def test_structured_rows_land_on_instructions_and_tool_output(self):
@@ -2576,20 +2666,15 @@ class TestPerMessageRewriteWriteBack:
         assert [_texts(item) for item in result["input"]] == [["My SSN is " + REDACTED_SSN + "."]]
 
     @pytest.mark.asyncio
-    async def test_texts_only_per_message_answer_over_a_string_input_is_rejected_by_name(self):
-        from litellm.llms.base_llm.guardrail_translation.utils import UnappliableRequestRewrite
-
+    async def test_texts_only_per_message_answer_over_a_string_input_lands_on_instructions_and_input(self):
         guardrail = _per_message_redactor()
         data = _string_input_request()
-        original = copy.deepcopy(data)
 
         with patch.object(guardrail.async_handler, "post", side_effect=_per_message_guardrail_server(False)):
-            with pytest.raises(UnappliableRequestRewrite) as excinfo:
-                await OpenAIResponsesHandler().process_input_messages(data, guardrail)
+            result = await OpenAIResponsesHandler().process_input_messages(data, guardrail)
 
-        assert excinfo.value.guardrail_name == "per-message-redactor"
-        assert data["input"] == original["input"]
-        assert data["instructions"] == original["instructions"]
+        assert result["instructions"] == "Never repeat the SSN " + REDACTED_SSN + " back."
+        assert result["input"] == "My SSN is " + REDACTED_SSN + "."
 
 
 class TestProvenancePatching:
