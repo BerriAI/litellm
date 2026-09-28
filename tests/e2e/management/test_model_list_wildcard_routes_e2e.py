@@ -4,9 +4,9 @@ the models it expands to.
 
 The setting is written through /config/field/update, the route behind the admin UI's
 General Settings toggle, and deleted on teardown so the shared proxy goes back to
-leaving wildcard routes out. Every other listing the suites run passes
-return_wildcard_routes explicitly, so the window with the setting on changes none of
-them. The wildcard deployment gets a unique prefix instead of `openai/*`, which would
+leaving wildcard routes out. The other listings the suites run either pass
+return_wildcard_routes explicitly or only check that a named model is present, so the
+window with the setting on changes none of them. The wildcard deployment gets a unique prefix instead of `openai/*`, which would
 claim every `openai/...` request the other suites send.
 """
 

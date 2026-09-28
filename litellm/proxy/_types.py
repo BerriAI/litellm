@@ -2859,9 +2859,10 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
     model_list_return_wildcard_routes: bool | None = Field(
         None,
         description=(
-            "When true, `/models` lists wildcard routes such as `openai/*` next to the models they "
-            "expand to, for every caller, without needing `return_wildcard_routes=true` per request. "
-            "A request can still pass `return_wildcard_routes=false` to leave them out."
+            "When true, `/v1/models` lists wildcard routes such as `openai/*` next to the models they "
+            "expand to, without the caller passing `return_wildcard_routes=true`. A request that passes "
+            "`return_wildcard_routes=false` still leaves them out, as do the dashboard's model pickers "
+            "and `/cursor/v1/models`."
         ),
     )
     alerting: list | None = Field(

@@ -482,7 +482,10 @@ async def cursor_model_list(
     """
     from litellm.proxy.proxy_server import model_list
 
-    return await model_list(user_api_key_dict=user_api_key_dict)
+    # Cursor offers every listed id as a model and a wildcard route such as
+    # `openai/*` is not callable, so the proxy-wide model_list_return_wildcard_routes
+    # default is pinned off here; Cursor sends no query params to opt out itself.
+    return await model_list(user_api_key_dict=user_api_key_dict, return_wildcard_routes=False)
 
 
 @router.post(
