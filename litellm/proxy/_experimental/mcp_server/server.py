@@ -92,6 +92,62 @@ if TYPE_CHECKING:
     from mcp.server.session import ServerSession as _McpServerSession
 
 
+_MCP_AUTH_RESPONSE_SCOPE_KEY: Final = "litellm_mcp_auth_response"
+
+
+class MCPAuthResponse:
+    """Defer HTTP success until the SDK produces data, preserving late auth challenges."""
+
+    def __init__(self, send: Send) -> None:
+        self._send = send
+        self._start: Message | None = None
+        self._preamble: tuple[Message, ...] = ()
+        self._committed = False
+        self._replaced = False
+        self._sse = False
+        self.challenge: HTTPException | None = None
+
+    async def send(self, message: Message) -> None:
+        if self._replaced:
+            return
+        if message["type"] == "http.response.start" and message["status"] == 200:
+            self._start = message
+            self._sse = any(
+                name.lower() == b"content-type" and b"text/event-stream" in value
+                for name, value in message.get("headers", ())
+            )
+            return
+        if self._start is None or self._committed:
+            await self._send(message)
+            return
+        body: Final = message.get("body", b"")
+        if (
+            self._sse
+            and message.get("more_body", False)
+            and not any(line.startswith(b"data:") and line[5:].strip() for line in body.splitlines())
+        ):
+            if not body.startswith(b":"):
+                self._preamble = (*self._preamble, message)
+            return
+        self._committed = True
+        if self.challenge is not None:
+            self._replaced = True
+            response: Final = JSONResponse(
+                {"detail": self.challenge.detail},
+                status_code=self.challenge.status_code,
+                headers=self.challenge.headers,
+            )
+            await self._send(
+                {"type": "http.response.start", "status": response.status_code, "headers": response.raw_headers}
+            )
+            await self._send({"type": "http.response.body", "body": response.body, "more_body": False})
+            return
+        await self._send(self._start)
+        for preamble in self._preamble:
+            await self._send(preamble)
+        await self._send(message)
+
+
 _STATEFUL_SESSION_IDLE_TIMEOUT_SECONDS: Final = 30 * 60
 # Upper bound on concurrent stateful sessions a single caller may hold. Each
 # `initialize` creates a session that survives until the idle timeout, so
@@ -530,6 +586,7 @@ if MCP_AVAILABLE:
         ListToolsResult,
         PaginatedRequestParams,
         ReadResourceRequestParams,
+        TextContent,
     )
 
     from litellm.proxy._experimental.mcp_server.auth.litellm_auth_handler import (
@@ -806,38 +863,60 @@ if MCP_AVAILABLE:
 
     @contextlib.asynccontextmanager
     async def _legacy_operation_context(ctx: ServerRequestContext, *, trace: bool) -> AsyncGenerator[OperationContext]:
-        with contextlib.ExitStack() as cleanup:
-            cleanup.callback(active_mcp_request_ctx_var.reset, active_mcp_request_ctx_var.set(ctx))
-            cleanup.callback(active_mcp_session_var.reset, active_mcp_session_var.set(ctx.session))
-            if trace:
-                cleanup.callback(
-                    _otel_reset_mcp_trace_carrier, _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(ctx))
+        try:
+            with contextlib.ExitStack() as cleanup:
+                cleanup.callback(active_mcp_request_ctx_var.reset, active_mcp_request_ctx_var.set(ctx))
+                cleanup.callback(active_mcp_session_var.reset, active_mcp_session_var.set(ctx.session))
+                if trace:
+                    cleanup.callback(
+                        _otel_reset_mcp_trace_carrier, _otel_set_mcp_trace_carrier(_mcp_meta_trace_carrier(ctx))
+                    )
+                    cleanup.callback(
+                        _otel_reset_mcp_transport_span,
+                        _otel_set_mcp_transport_span(_otel_transport_span_from_message(ctx)),
+                    )
+                    cleanup.callback(_otel_reset_mcp_request_destinations, _otel_set_mcp_request_destinations(ctx))
+                (
+                    auth,
+                    token,
+                    servers,
+                    server_headers,
+                    oauth_headers,
+                    headers,
+                    client_ip,
+                ) = await get_or_extract_auth_context()
+                yield operations.prepare_context(
+                    auth,
+                    token,
+                    servers,
+                    server_headers,
+                    oauth_headers,
+                    headers,
+                    client_ip,
+                    _mcp_proxy_mode.get(),
+                    wire_compat_for(ctx.protocol_version),
+                    ctx.protocol_version,
                 )
-                cleanup.callback(
-                    _otel_reset_mcp_transport_span, _otel_set_mcp_transport_span(_otel_transport_span_from_message(ctx))
-                )
-                cleanup.callback(_otel_reset_mcp_request_destinations, _otel_set_mcp_request_destinations(ctx))
-            (
-                auth,
-                token,
-                servers,
-                server_headers,
-                oauth_headers,
-                headers,
-                client_ip,
-            ) = await get_or_extract_auth_context()
-            yield operations.prepare_context(
-                auth,
-                token,
-                servers,
-                server_headers,
-                oauth_headers,
-                headers,
-                client_ip,
-                _mcp_proxy_mode.get(),
-                wire_compat_for(ctx.protocol_version),
-                ctx.protocol_version,
-            )
+        except (MCPUpstreamAuthError, HTTPException) as exc:
+            if isinstance(exc, HTTPException) and (
+                exc.status_code != 401
+                or not exc.headers
+                or not any(name.lower() == "www-authenticate" for name in exc.headers)
+            ):
+                raise
+            if isinstance(ctx.request, StarletteRequest):
+                response: Final = ctx.request.scope.get(_MCP_AUTH_RESPONSE_SCOPE_KEY)
+                if isinstance(response, MCPAuthResponse):
+                    response.challenge = (
+                        exc.to_http_exception(
+                            base_url=get_request_base_url(ctx.request), request_path=ctx.request.url.path
+                        )
+                        if isinstance(exc, MCPUpstreamAuthError)
+                        else exc
+                    )
+            raise MCPError(
+                code=INVALID_REQUEST, message=f"Upstream authorization failed (HTTP {exc.status_code})"
+            ) from exc
 
     async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListToolsResult:
         try:
@@ -896,9 +975,21 @@ if MCP_AVAILABLE:
     async def mcp_server_tool_call(
         ctx: ServerRequestContext, params: CallToolRequestParams
     ) -> CallToolResult | InputRequiredResult:
-        async with _legacy_operation_context(ctx, trace=True) as context:
-            return await operations.GatewayOperations(_capture_host_progress_callback(ctx)).execute(
-                CallToolRequest(params=params), context
+        try:
+            async with _legacy_operation_context(ctx, trace=True) as context:
+                return await operations.GatewayOperations(_capture_host_progress_callback(ctx)).execute(
+                    CallToolRequest(params=params), context
+                )
+        except MCPError as exc:
+            if not isinstance(exc.__cause__, (MCPUpstreamAuthError, HTTPException)):
+                raise
+            return CallToolResult(
+                content=[
+                    TextContent(
+                        type="text", text=f"Error: upstream authentication required (HTTP {exc.__cause__.status_code})"
+                    )
+                ],
+                is_error=True,
             )
 
     async def list_prompts(ctx: ServerRequestContext, params: PaginatedRequestParams) -> ListPromptsResult:
@@ -909,6 +1000,8 @@ if MCP_AVAILABLE:
                 return await operations.GatewayOperations(_capture_host_progress_callback(ctx)).execute(
                     ListPromptsRequest(params=params), context
                 )
+        except MCPError:
+            raise
         except Exception as exc:  # noqa: BLE001  # preserve native listing fallback for ingress failures
             verbose_logger.exception("Error in list_prompts endpoint: %s", exc)
             return ListPromptsResult(prompts=[])
@@ -929,6 +1022,8 @@ if MCP_AVAILABLE:
                 return await operations.GatewayOperations(_capture_host_progress_callback(ctx)).execute(
                     ListResourcesRequest(params=params), context
                 )
+        except MCPError:
+            raise
         except Exception as exc:  # noqa: BLE001  # preserve native listing fallback for ingress failures
             verbose_logger.exception("Error in list_resources endpoint: %s", exc)
             return ListResourcesResult(resources=[])
@@ -943,6 +1038,8 @@ if MCP_AVAILABLE:
                 return await operations.GatewayOperations(_capture_host_progress_callback(ctx)).execute(
                     ListResourceTemplatesRequest(params=params), context
                 )
+        except MCPError:
+            raise
         except Exception as exc:  # noqa: BLE001  # preserve native listing fallback for ingress failures
             verbose_logger.exception("Error in list_resource_templates endpoint: %s", exc)
             return ListResourceTemplatesResult(resource_templates=[])
@@ -2248,7 +2345,12 @@ if MCP_AVAILABLE:
                     scoped_server_endpoint=scoped_server_endpoint,
                     is_initialize=is_initialize,
                 ):
-                    await target_manager.handle_request(scope, receive, local_send)
+                    if request_method == "POST" and body and not is_initialize:
+                        auth_response: Final = MCPAuthResponse(local_send)
+                        scope[_MCP_AUTH_RESPONSE_SCOPE_KEY] = auth_response
+                        await target_manager.handle_request(scope, receive, auth_response.send)
+                    else:
+                        await target_manager.handle_request(scope, receive, local_send)
                     if use_stateful and session_id and scope.get("method") == "DELETE":
                         _remove_stateful_session_tracking(session_id)
 

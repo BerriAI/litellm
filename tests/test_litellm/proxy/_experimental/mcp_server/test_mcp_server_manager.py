@@ -2047,9 +2047,8 @@ class TestMCPServerManager:
         assert mock_log.warning.called
 
     @pytest.mark.asyncio
-    async def test_call_non_passthrough_does_not_opt_into_raise_on_error(self):
-        """Non-client-forwarded auth types keep the default call_tool masking (raise_on_error stays
-        off), so this relay is scoped to the pass-through modes and cannot regress api_key/OBO calls."""
+    async def test_call_static_auth_preserves_success_with_transport_errors_enabled(self):
+        """A static credential uses the same transport-auth error channel while preserving tool results."""
         server = MCPServer(
             server_id="ak-call",
             name="ak-call-server",
@@ -2076,7 +2075,7 @@ class TestMCPServerManager:
         )
 
         assert result.is_error is False
-        assert mock_client.call_tool.call_args.kwargs.get("raise_on_error") is not True
+        assert mock_client.call_tool.call_args.kwargs.get("raise_on_error") is True
 
     def _token_exchange_server(self, server_id: str) -> "MCPServer":
         return MCPServer(
@@ -6909,7 +6908,7 @@ class TestMCPServerManager:
         # Create mock client that tracks call_tool usage
         mock_client = AsyncMock()
 
-        async def mock_call_tool(params, host_progress_callback=None, allow_input_required=False):
+        async def mock_call_tool(params, host_progress_callback=None, allow_input_required=False, raise_on_error=False):
             # Return a mock CallToolResult
             result = MagicMock(spec=CallToolResult)
             result.content = [{"type": "text", "text": "Tool executed successfully"}]
@@ -14141,6 +14140,7 @@ async def test_discovery_cache_bounds_detached_fetches_without_dropping_results(
 
 @pytest.mark.asyncio
 async def test_discovery_cache_tracks_resolved_credentials_across_workers() -> None:
+    from litellm.proxy._experimental.mcp_server.exceptions import MCPUpstreamAuthError
     import respx
     from litellm.proxy._experimental.mcp_server.outbound_credentials.httpx_auth import StaticHeaderAuth
     from litellm.proxy._experimental.mcp_server.outbound_credentials.resolver import UpstreamCredentialProvider
@@ -14198,7 +14198,9 @@ async def test_discovery_cache_tracks_resolved_credentials_across_workers() -> N
         assert upstream.initializes == 4
         source.token = None
         for manager in managers:
-            assert await manager.get_prompts_from_server(server, user) == []
+            with pytest.raises(MCPUpstreamAuthError) as failure:
+                await manager.get_prompts_from_server(server, user)
+            assert failure.value.status_code == 401
         assert upstream.initializes == 4
 
 

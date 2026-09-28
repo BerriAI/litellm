@@ -255,3 +255,57 @@ def test_pure_non_auth_response_still_classifies_upstream_error():
     fault = classify_list_exception(exc)
     assert fault.tag == "upstream_error"
     assert fault.status_code == 502
+
+
+@pytest.mark.parametrize(
+    "outcomes,expected_status",
+    (
+        ({}, None),
+        ({"empty": ServerListOk(tool_count=0)}, None),
+        ({"auth": ServerListFault(tag="auth_required", status_code=401)}, 401),
+        ({"denied": ServerListFault(tag="forbidden", status_code=403)}, 403),
+        ({"denied": ServerListFault(tag="forbidden", status_code=403), "auth": ServerListFault(tag="auth_required", status_code=401)}, 401),
+        ({"auth": ServerListFault(tag="auth_required", status_code=401), "empty": ServerListOk(tool_count=0)}, None),
+        ({"auth": ServerListFault(tag="auth_required", status_code=401), "healthy": ServerListOk(tool_count=2)}, None),
+        ({"auth": ServerListFault(tag="auth_required", status_code=401), "timeout": ServerListFault(tag="timeout")}, None),
+    ),
+)
+def test_listing_auth_failure_requires_every_server_to_be_blocked(
+    outcomes: dict[str, ServerListOk | ServerListFault], expected_status: int | None
+) -> None:
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import listing_auth_error
+    from typing import Final
+    failure: Final = listing_auth_error(outcomes)
+    assert (failure.status_code if failure else None) == expected_status
+
+
+def test_classified_auth_challenge_is_preserved_without_serializing_it() -> None:
+    from typing import Final
+    from fastapi import HTTPException
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import listing_auth_error
+    challenge: Final = 'Bearer resource_metadata="https://gateway/.well-known/oauth-protected-resource/mcp"'
+    fault: Final = classify_list_exception(HTTPException(401, headers={"WWW-Authenticate": challenge}))
+    failure: Final = listing_auth_error({"upstream": fault})
+    assert failure is not None
+    assert failure.www_authenticate == challenge
+    assert failure.server_name == "upstream"
+    assert "www_authenticate" not in fault.model_dump()
+    assert challenge not in repr(fault)
+    assert outcome_wire_value(fault) == {"status": "auth_required", "http_status": 401}
+
+
+def test_auth_recovery_uses_routable_server_name_without_exposing_it_in_outcomes() -> None:
+    from typing import Final
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import listing_auth_error
+    fault: Final = classify_list_exception(MCPUpstreamAuthError(401, None, "upstream-internal"))
+    failure: Final = listing_auth_error({"short-prefix": fault})
+    assert failure is not None
+    assert failure.server_name == "upstream-internal"
+    assert "server_name" not in fault.model_dump()
+    assert "upstream-internal" not in repr(fault)
+    assert outcome_wire_value(fault) == {"status": "auth_required", "http_status": 401}
+
+
+def test_auth_challenge_traversal_preserves_typed_carrier() -> None:
+    from litellm.proxy._experimental.mcp_server.faults.list_outcomes import upstream_auth_challenge
+    assert upstream_auth_challenge(MCPUpstreamAuthError(401, "Bearer", "upstream")) == (401, "Bearer")

@@ -4632,6 +4632,8 @@ class MCPServerManager:
             return self._create_prefixed_prompts(items, server, add_prefix=add_prefix)
         except Exception as error:
             verbose_logger.warning("Failed to get prompts from server %s: %s", server.name, error)
+            if upstream_auth_challenge(error) is not None:
+                raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
             return []
 
     async def get_resources_from_server(
@@ -4678,6 +4680,8 @@ class MCPServerManager:
             return self._create_prefixed_resources(items, server, add_prefix=add_prefix)
         except Exception as error:
             verbose_logger.warning("Failed to get resources from server %s: %s", server.name, error)
+            if upstream_auth_challenge(error) is not None:
+                raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
             return []
 
     async def get_resource_templates_from_server(
@@ -4724,6 +4728,8 @@ class MCPServerManager:
             return self._create_prefixed_resource_templates(items, server, add_prefix=add_prefix)
         except Exception as error:
             verbose_logger.warning("Failed to get resource_templates from server %s: %s", server.name, error)
+            if upstream_auth_challenge(error) is not None:
+                raise_classified_list_failure(error, server.name, suppress_challenge=server.is_dcr_bridge)
             return []
 
     async def read_resource_from_server(
@@ -4738,29 +4744,38 @@ class MCPServerManager:
     ) -> ReadResourceResult:
         """Read resource contents from a specific MCP server."""
 
-        verbose_logger.debug("Connecting to url: %s", server.url)
-        verbose_logger.info("read_resource_from_server for %s...", server.name)
+        try:
+            verbose_logger.debug("Connecting to url: %s", server.url)
+            verbose_logger.info("read_resource_from_server for %s...", server.name)
 
-        if server.static_headers:
-            if extra_headers is None:
-                extra_headers = {}
-            extra_headers.update(server.static_headers)
+            if server.static_headers:
+                if extra_headers is None:
+                    extra_headers = {}
+                extra_headers.update(server.static_headers)
 
-        stdio_env: Final = self._build_stdio_env(server, raw_headers)
-        subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
+            stdio_env: Final = self._build_stdio_env(server, raw_headers)
+            subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
 
-        client: Final = await self._create_mcp_client(
-            server=server,
-            mcp_auth_header=mcp_auth_header,
-            extra_headers=extra_headers,
-            stdio_env=stdio_env,
-            subject_token=subject_token,
-            raw_headers=raw_headers,
-            client_ip=client_ip,
-            user_api_key_auth=user_api_key_auth,
-        )
+            client: Final = await self._create_mcp_client(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=extra_headers,
+                stdio_env=stdio_env,
+                subject_token=subject_token,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
+                user_api_key_auth=user_api_key_auth,
+            )
 
-        return await client.read_resource(url)
+            return await client.read_resource(url)
+        except Exception as exc:
+            auth_failure: Final = upstream_auth_challenge(exc)
+            if auth_failure is not None:
+                status_code, challenge = auth_failure
+                raise MCPUpstreamAuthError(
+                    status_code, None if server.is_dcr_bridge else challenge, server.name
+                ) from exc
+            raise
 
     async def get_prompt_from_server(
         self,
@@ -4775,33 +4790,42 @@ class MCPServerManager:
     ) -> GetPromptResult:
         """Fetch a specific prompt definition from a single MCP server."""
 
-        verbose_logger.debug("Connecting to url: %s", server.url)
-        verbose_logger.info("get_prompt_from_server for %s...", server.name)
+        try:
+            verbose_logger.debug("Connecting to url: %s", server.url)
+            verbose_logger.info("get_prompt_from_server for %s...", server.name)
 
-        if server.static_headers:
-            if extra_headers is None:
-                extra_headers = {}
-            extra_headers.update(server.static_headers)
+            if server.static_headers:
+                if extra_headers is None:
+                    extra_headers = {}
+                extra_headers.update(server.static_headers)
 
-        stdio_env: Final = self._build_stdio_env(server, raw_headers)
-        subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
+            stdio_env: Final = self._build_stdio_env(server, raw_headers)
+            subject_token: Final = self._obo_subject_token(server, raw_headers, user_api_key_auth)
 
-        client: Final = await self._create_mcp_client(
-            server=server,
-            mcp_auth_header=mcp_auth_header,
-            extra_headers=extra_headers,
-            stdio_env=stdio_env,
-            subject_token=subject_token,
-            raw_headers=raw_headers,
-            client_ip=client_ip,
-            user_api_key_auth=user_api_key_auth,
-        )
+            client: Final = await self._create_mcp_client(
+                server=server,
+                mcp_auth_header=mcp_auth_header,
+                extra_headers=extra_headers,
+                stdio_env=stdio_env,
+                subject_token=subject_token,
+                raw_headers=raw_headers,
+                client_ip=client_ip,
+                user_api_key_auth=user_api_key_auth,
+            )
 
-        get_prompt_request_params: Final = GetPromptRequestParams(
-            name=prompt_name,
-            arguments=arguments,
-        )
-        return await client.get_prompt(get_prompt_request_params)
+            get_prompt_request_params: Final = GetPromptRequestParams(
+                name=prompt_name,
+                arguments=arguments,
+            )
+            return await client.get_prompt(get_prompt_request_params)
+        except Exception as exc:
+            auth_failure: Final = upstream_auth_challenge(exc)
+            if auth_failure is not None:
+                status_code, challenge = auth_failure
+                raise MCPUpstreamAuthError(
+                    status_code, None if server.is_dcr_bridge else challenge, server.name
+                ) from exc
+            raise
 
     @staticmethod
     def _is_same_authority_metadata_url(url: str, server_url: str) -> bool:
@@ -6094,29 +6118,10 @@ class MCPServerManager:
 
             tool_call_coro = _obo_call_tool_limited()
         else:
-            # Scoped to the two client-forwarded token modes this stack introduced; legacy
-            # oauth2 + delegate_auth_to_upstream (is_oauth_passthrough) is being removed, so it is not
-            # added here even though the list path still relays for it.
-            relays_upstream_auth: Final = mcp_server.is_client_forwarded_token
             server_label: Final = mcp_server.name or mcp_server.server_name or mcp_server.alias or ""
 
             async def _call_tool_via_client(client, params):
                 async with self._limit_outbound_concurrency(mcp_server):
-                    if not relays_upstream_auth:
-                        return await client.call_tool(
-                            params,
-                            host_progress_callback=host_progress_callback,
-                            allow_input_required=allow_input_required,
-                        )
-                    # The client-forwarded modes carry the caller's own upstream token, so an upstream
-                    # 401 (expired/invalid token) is the caller's to resolve: relay it as
-                    # MCPUpstreamAuthError so single-server REST callers turn it into a 401 +
-                    # WWW-Authenticate and re-run the upstream OAuth flow. Only 401 is a re-auth signal
-                    # (mirrors the list path and MCPUpstreamAuthError's contract); a 403 is a genuine
-                    # authorization failure that re-auth won't fix, so it takes the non-auth branch and
-                    # stays a visible warning. raise_on_error only re-raises transport failures
-                    # (tool-level isError results are still returned normally); a non-auth failure keeps
-                    # the same isError degradation the default path produces.
                     try:
                         return await client.call_tool(
                             params,
@@ -6142,7 +6147,7 @@ class MCPServerManager:
                         _, www_authenticate = auth_info
                         raise MCPUpstreamAuthError(
                             status_code=401,
-                            www_authenticate=www_authenticate,
+                            www_authenticate=None if mcp_server.is_dcr_bridge else www_authenticate,
                             server_name=server_label,
                         ) from e
 

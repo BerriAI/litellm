@@ -1969,7 +1969,8 @@ async def test_mcp_routing_initialize_to_stateful_no_session_to_stateless(_mcp_r
 
     assert stateful_handle.await_count == (1 if stateful else 0)
     assert stateless_handle.await_count == (0 if stateful else 1)
-    observe_start.assert_awaited_once_with(0 if debug and method == "POST" else 1)
+    deferred: Final = method == "POST" and (debug or (bool(request_body) and not stateful))
+    observe_start.assert_awaited_once_with(0 if deferred else 1)
     assert send.await_count == 2
     assert send.call_args_list[0].args[0]["status"] == 200
     assert send.call_args_list[1].args[0] == body

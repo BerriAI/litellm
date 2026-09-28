@@ -4,9 +4,10 @@ import asyncio
 import traceback
 import types
 import uuid
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from datetime import datetime
-from typing import Any, Final, NoReturn, TypeAlias, overload
+from itertools import chain
+from typing import Any, Final, NoReturn, TypeAlias, TypeVar, overload
 
 from fastapi import HTTPException
 from mcp import ReadResourceResult, Resource
@@ -78,6 +79,7 @@ from litellm.proxy._experimental.mcp_server.faults.list_outcomes import (
     ServerListOk,
     ServerOutcome,
     classify_list_exception,
+    listing_auth_error,
     outcome_wire_value,
 )
 from litellm.proxy._experimental.mcp_server.mcp_server_manager import (
@@ -1242,6 +1244,26 @@ async def _get_tools_from_mcp_servers(
         raise
 
 
+_ListingItem = TypeVar("_ListingItem", Prompt, Resource, ResourceTemplate)
+
+
+async def _collect_mcp_listing(
+    servers: Sequence[MCPServer], fetch: Callable[[MCPServer], Awaitable[list[_ListingItem]]]
+) -> list[_ListingItem]:
+    async def fetch_one(server: MCPServer) -> tuple[list[_ListingItem], ServerOutcome]:
+        try:
+            items: Final = await fetch(server)
+            return items, ServerListOk(tool_count=len(items))
+        except Exception as exc:
+            return [], classify_list_exception(exc)
+
+    results: Final = await asyncio.gather(*(fetch_one(server) for server in servers))
+    failure: Final = listing_auth_error({server.name: result[1] for server, result in zip(servers, results)})
+    if failure is not None:
+        raise failure
+    return list(chain.from_iterable(items for items, _ in results))
+
+
 async def _get_prompts_from_mcp_servers(
     user_api_key_auth: UserAPIKeyAuth | None,
     mcp_auth_header: str | None,
@@ -1251,32 +1273,13 @@ async def _get_prompts_from_mcp_servers(
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
 ) -> list[Prompt]:
-    """
-    Helper method to fetch prompt from MCP servers based on server filtering criteria.
-
-    Args:
-        user_api_key_auth: User authentication info for access control
-        mcp_auth_header: Optional auth header for MCP server (deprecated)
-        mcp_servers: Optional list of server names/aliases to filter by
-        mcp_server_auth_headers: Optional dict of server-specific auth headers
-        oauth2_headers: Optional dict of oauth2 headers
-
-    Returns:
-        List[Prompt]: Combined list of prompts from filtered servers
-    """
-
-    allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
+    allowed: Final = await _get_allowed_mcp_servers(
         user_api_key_auth=user_api_key_auth,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
     )
 
-    # Get prompts from each allowed server
-    all_prompts: Final = []
-    for server in allowed_mcp_servers:
-        if server is None:
-            continue
-
+    async def fetch(server: MCPServer) -> list[Prompt]:
         server_auth_header, extra_headers = _prepare_mcp_server_headers(
             server=server,
             mcp_server_auth_headers=mcp_server_auth_headers,
@@ -1284,30 +1287,19 @@ async def _get_prompts_from_mcp_servers(
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             user_api_key_auth=user_api_key_auth,
-            scope_servers=allowed_mcp_servers,
+            scope_servers=allowed,
+        )
+        return await global_mcp_server_manager.get_prompts_from_server(
+            server=server,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=server_auth_header,
+            extra_headers=extra_headers,
+            add_prefix=True,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
         )
 
-        try:
-            prompts = await global_mcp_server_manager.get_prompts_from_server(
-                server=server,
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=server_auth_header,
-                extra_headers=extra_headers,
-                add_prefix=True,  # Always add server prefix
-                raw_headers=raw_headers,
-                client_ip=client_ip,
-            )
-
-            all_prompts.extend(prompts)
-
-            verbose_logger.debug("Successfully fetched %s prompts from server %s", len(prompts), server.name)
-        except Exception as e:
-            verbose_logger.exception("Error getting prompts from server %s: %s", server.name, e)
-            # Continue with other servers instead of failing completely
-
-    verbose_logger.info("Successfully fetched %s prompts total from all MCP servers", len(all_prompts))
-
-    return all_prompts
+    return await _collect_mcp_listing(tuple(server for server in allowed if server is not None), fetch)
 
 
 async def _get_resources_from_mcp_servers(
@@ -1319,19 +1311,13 @@ async def _get_resources_from_mcp_servers(
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
 ) -> list[Resource]:
-    """Fetch resources from allowed MCP servers."""
-
-    allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
+    allowed: Final = await _get_allowed_mcp_servers(
         user_api_key_auth=user_api_key_auth,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
     )
 
-    all_resources: Final[list[Resource]] = []
-    for server in allowed_mcp_servers:
-        if server is None:
-            continue
-
+    async def fetch(server: MCPServer) -> list[Resource]:
         server_auth_header, extra_headers = _prepare_mcp_server_headers(
             server=server,
             mcp_server_auth_headers=mcp_server_auth_headers,
@@ -1339,28 +1325,19 @@ async def _get_resources_from_mcp_servers(
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             user_api_key_auth=user_api_key_auth,
-            scope_servers=allowed_mcp_servers,
+            scope_servers=allowed,
+        )
+        return await global_mcp_server_manager.get_resources_from_server(
+            server=server,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=server_auth_header,
+            extra_headers=extra_headers,
+            add_prefix=True,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
         )
 
-        try:
-            resources = await global_mcp_server_manager.get_resources_from_server(
-                server=server,
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=server_auth_header,
-                extra_headers=extra_headers,
-                add_prefix=True,  # Always add server prefix
-                raw_headers=raw_headers,
-                client_ip=client_ip,
-            )
-            all_resources.extend(resources)
-
-            verbose_logger.debug("Successfully fetched %s resources from server %s", len(resources), server.name)
-        except Exception as e:
-            verbose_logger.exception("Error getting resources from server %s: %s", server.name, e)
-
-    verbose_logger.info("Successfully fetched %s resources total from all MCP servers", len(all_resources))
-
-    return all_resources
+    return await _collect_mcp_listing(tuple(server for server in allowed if server is not None), fetch)
 
 
 async def _get_resource_templates_from_mcp_servers(
@@ -1372,19 +1349,13 @@ async def _get_resource_templates_from_mcp_servers(
     raw_headers: dict[str, str] | None = None,
     client_ip: str | None = None,
 ) -> list[ResourceTemplate]:
-    """Fetch resource templates from allowed MCP servers."""
-
-    allowed_mcp_servers: Final = await _get_allowed_mcp_servers(
+    allowed: Final = await _get_allowed_mcp_servers(
         user_api_key_auth=user_api_key_auth,
         mcp_servers=mcp_servers,
         client_ip=client_ip,
     )
 
-    all_resource_templates: Final[list[ResourceTemplate]] = []
-    for server in allowed_mcp_servers:
-        if server is None:
-            continue
-
+    async def fetch(server: MCPServer) -> list[ResourceTemplate]:
         server_auth_header, extra_headers = _prepare_mcp_server_headers(
             server=server,
             mcp_server_auth_headers=mcp_server_auth_headers,
@@ -1392,38 +1363,19 @@ async def _get_resource_templates_from_mcp_servers(
             oauth2_headers=oauth2_headers,
             raw_headers=raw_headers,
             user_api_key_auth=user_api_key_auth,
-            scope_servers=allowed_mcp_servers,
+            scope_servers=allowed,
+        )
+        return await global_mcp_server_manager.get_resource_templates_from_server(
+            server=server,
+            user_api_key_auth=user_api_key_auth,
+            mcp_auth_header=server_auth_header,
+            extra_headers=extra_headers,
+            add_prefix=True,
+            raw_headers=raw_headers,
+            client_ip=client_ip,
         )
 
-        try:
-            resource_templates = await global_mcp_server_manager.get_resource_templates_from_server(
-                server=server,
-                user_api_key_auth=user_api_key_auth,
-                mcp_auth_header=server_auth_header,
-                extra_headers=extra_headers,
-                add_prefix=True,  # Always add server prefix
-                raw_headers=raw_headers,
-                client_ip=client_ip,
-            )
-            all_resource_templates.extend(resource_templates)
-            verbose_logger.debug(
-                "Successfully fetched %s resource templates from server %s",
-                len(resource_templates),
-                server.name,
-            )
-        except Exception as e:
-            verbose_logger.exception(
-                "Error getting resource templates from server %s: %s",
-                server.name,
-                str(e),
-            )
-
-    verbose_logger.info(
-        "Successfully fetched %s resource templates total from all MCP servers",
-        len(all_resource_templates),
-    )
-
-    return all_resource_templates
+    return await _collect_mcp_listing(tuple(server for server in allowed if server is not None), fetch)
 
 
 async def filter_tools_by_key_team_permissions(
@@ -1539,6 +1491,8 @@ async def _list_mcp_prompts(
             client_ip=client_ip,
         )
         verbose_logger.debug("Successfully fetched %s prompts from managed MCP servers", len(managed_prompts))
+    except MCPUpstreamAuthError:
+        raise
     except Exception as e:
         verbose_logger.exception("Error getting tools from managed MCP servers: %s", e)
         # Continue with empty managed tools list instead of failing completely
@@ -1569,6 +1523,8 @@ async def _list_mcp_resources(
             client_ip=client_ip,
         )
         verbose_logger.debug("Successfully fetched %s resources from managed MCP servers", len(managed_resources))
+    except MCPUpstreamAuthError:
+        raise
     except Exception as e:
         verbose_logger.exception("Error getting resources from managed MCP servers: %s", e)
 
@@ -1601,6 +1557,8 @@ async def _list_mcp_resource_templates(
             "Successfully fetched %s resource templates from managed MCP servers",
             len(managed_resource_templates),
         )
+    except MCPUpstreamAuthError:
+        raise
     except Exception as e:
         verbose_logger.exception(
             "Error getting resource templates from managed MCP servers: %s",
@@ -2721,6 +2679,9 @@ async def _execute_handle_list_tools(
             list_tools_log_source="mcp_protocol",
             client_ip=_client_ip,
         )
+        auth_failure: Final = listing_auth_error(listing.outcomes)
+        if auth_failure is not None:
+            raise auth_failure
         verbose_logger.info("MCP list_tools - Successfully returned %s tools", len(listing.tools))
         if not listing.outcomes:
             return ListToolsResult(tools=listing.tools)
@@ -2728,6 +2689,8 @@ async def _execute_handle_list_tools(
             SERVER_OUTCOMES_META_KEY: {key: outcome_wire_value(outcome) for key, outcome in listing.outcomes.items()}
         }
         return ListToolsResult.model_validate({"tools": listing.tools, "_meta": outcome_meta})
+    except MCPUpstreamAuthError:
+        raise
     except HTTPException as e:
         from mcp.shared.exceptions import MCPError
         from mcp.types import INVALID_REQUEST
@@ -2857,27 +2820,16 @@ async def _execute_mcp_server_tool_call(
             is_error=True,
         )
     except HTTPException as e:
+        if e.status_code == 401 and e.headers and any(name.lower() == "www-authenticate" for name in e.headers):
+            raise
         verbose_logger.error("HTTPException in MCP tool call: %s", e)
         return CallToolResult(
             content=[TextContent(text=f"Error: {_http_detail_message(e.detail)}", type="text")],
             is_error=True,
         )
-    except MCPUpstreamAuthError as e:
-        # The MCP session manager serializes handler exceptions as JSON-RPC errors, so a
-        # mid-session tool call cannot emit a raw 401 + WWW-Authenticate the way the REST
-        # call path and the connect-time preemptive check do. Return an explicit isError
-        # naming the upstream status (at info level, not a traceback) so the client still
-        # learns it must re-authenticate upstream and expected pass-through 401s don't spam.
-        verbose_logger.info("Upstream auth failure calling MCP tool: HTTP %s", e.status_code)
-        return CallToolResult(
-            content=[
-                TextContent(
-                    text=f"Error: upstream authentication required (HTTP {e.status_code})",
-                    type="text",
-                )
-            ],
-            is_error=True,
-        )
+    except MCPUpstreamAuthError as exc:
+        verbose_logger.info("Upstream auth failure calling MCP tool: HTTP %s", exc.status_code)
+        raise
     except Exception as e:
         verbose_logger.exception("MCP mcp_server_tool_call - error: %s", e)
         return CallToolResult(
@@ -2922,6 +2874,8 @@ async def _execute_list_prompts(
         )
         verbose_logger.info("MCP list_prompts - Successfully returned %s prompts", len(prompts))
         return ListPromptsResult(prompts=prompts)
+    except MCPUpstreamAuthError:
+        raise
     except Exception as e:
         verbose_logger.exception("Error in list_prompts endpoint: %s", e)
         # Return empty list instead of failing completely
@@ -2991,6 +2945,8 @@ async def _execute_list_resources(
         )
         verbose_logger.info("MCP list_resources - Successfully returned %s resources", len(resources))
         return ListResourcesResult(resources=resources)
+    except MCPUpstreamAuthError:
+        raise
     except Exception as e:
         verbose_logger.exception("Error in list_resources endpoint: %s", e)
         return ListResourcesResult(resources=[])  # mutable-ok: MCP result payload
@@ -3031,6 +2987,8 @@ async def _execute_list_resource_templates(
             "MCP list_resource_templates - Successfully returned %s resource templates", len(resource_templates)
         )
         return ListResourceTemplatesResult(resource_templates=resource_templates)
+    except MCPUpstreamAuthError:
+        raise
     except Exception as e:
         verbose_logger.exception("Error in list_resource_templates endpoint: %s", e)
         return ListResourceTemplatesResult(resource_templates=[])  # mutable-ok: MCP result payload
