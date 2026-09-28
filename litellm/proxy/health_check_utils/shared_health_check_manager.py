@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, Final
 
 from litellm._internal_context import with_service_target
@@ -40,7 +40,7 @@ class SharedHealthCheckManager:
         self.health_check_ttl = health_check_ttl
         self.lock_ttl = lock_ttl
         self.pod_id = f"pod_{int(time.time() * 1000)}"
-        self._release_lock_script: Any | None = None
+        self._release_lock_script: Callable[..., Awaitable[int]] | None = None
 
     @staticmethod
     def get_health_check_lock_key() -> str:
@@ -108,15 +108,18 @@ end
             return
 
         lock_key: Final = self.get_health_check_lock_key()
-        script_register: Final = getattr(self.redis_cache, "async_register_script", None)
+        script_register: Final[Callable[[str], Callable[..., Awaitable[int]]] | None] = getattr(
+            self.redis_cache, "async_register_script", None
+        )
         if not callable(script_register):
             verbose_proxy_logger.warning("Cannot atomically release health check lock; leaving it to expire")
             return
 
         try:
+            script: Final = self._release_lock_script or script_register(self._COMPARE_AND_DELETE_LOCK_SCRIPT)
             if self._release_lock_script is None:
-                self._release_lock_script = script_register(self._COMPARE_AND_DELETE_LOCK_SCRIPT)
-            result: Final = await self._release_lock_script(keys=[lock_key], args=[json.dumps(self.pod_id)])
+                self._release_lock_script = script
+            result: Final = await script(keys=[lock_key], args=[json.dumps(self.pod_id)])
             if int(result or 0) == 1:
                 verbose_proxy_logger.info("Pod %s released health check lock", self.pod_id)
         except Exception as exc:
