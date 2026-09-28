@@ -43,7 +43,7 @@ func handleAPIResponse(resp *http.Response, reqBody interface{}, client *Client)
 		return nil, fmt.Errorf("failed to read response body: %v", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			if isModelNotFoundError(errResp) {
@@ -60,6 +60,10 @@ func handleAPIResponse(resp *http.Response, reqBody interface{}, client *Client)
 	}
 	if err := json.Unmarshal(bodyBytes, &envelope); err == nil && len(envelope.Data) > 0 {
 		bodyBytes = envelope.Data[0]
+	}
+
+	if len(bodyBytes) == 0 || string(bodyBytes) == "null" {
+		return &ModelResponse{}, nil
 	}
 
 	var modelResp ModelResponse
@@ -140,7 +144,7 @@ func handleMCPAPIResponse(resp *http.Response, result interface{}, client *Clien
 		return fmt.Errorf("failed to read response body: %v", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		var errResp ErrorResponse
 		if err := json.Unmarshal(bodyBytes, &errResp); err == nil {
 			if isMCPServerNotFoundError(errResp) {

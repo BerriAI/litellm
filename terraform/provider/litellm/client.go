@@ -422,7 +422,7 @@ func (c *Client) sendRequest(method, path string, body interface{}) (map[string]
 	log.Printf("Response status: %d", resp.StatusCode)
 	log.Printf("Response body: %s", c.redactSensitiveData(string(bodyBytes)))
 
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return nil, &apiError{StatusCode: resp.StatusCode, Body: string(bodyBytes)}
 	}
 
