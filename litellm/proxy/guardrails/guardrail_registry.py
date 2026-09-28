@@ -3,7 +3,7 @@
 import asyncio
 import importlib
 import os
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from datetime import datetime, timezone
 from itertools import chain, count
 from typing import TYPE_CHECKING, Final, Literal, Optional, Protocol, TypeAlias, cast
@@ -14,12 +14,15 @@ import litellm
 from litellm import Router
 from litellm._logging import verbose_proxy_logger
 from litellm._uuid import uuid
+from litellm.constants import DEFAULT_MAX_RECURSE_DEPTH
 from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.litellm_core_utils.safe_json_dumps import safe_dumps
 from litellm.llms.base_llm.guardrail_translation.utils import (
     effective_scan_only_tool_results_for_guardrail,
     effective_skip_tool_message_for_guardrail,
 )
+from litellm.proxy.common_utils.callback_utils import CALLBACK_VAR_ENCRYPTED_PREFIX, is_sensitive_callback_key
+from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper, encrypt_value_helper
 from litellm.proxy.guardrails.guardrail_hooks.bedrock_guardrails import (
     BedrockGuardrail,
 )
@@ -75,6 +78,66 @@ class _GuardrailRowLike(Protocol):
 def _guardrail_table(prisma_client: PrismaClient) -> "TableActions[prisma_models.LiteLLM_GuardrailsTable]":
     """Typed view of the guardrails table actions exposed by the Prisma repository."""
     return GuardrailsRepository(prisma_client).table
+
+
+def _encrypted_param(key: str, value: object, new_encryption_key: str | None, depth: int = 0) -> object:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return value
+    match value:
+        case dict():
+            return {k: _encrypted_param(k, v, new_encryption_key, depth + 1) for k, v in value.items()}
+        case list():
+            return [_encrypted_param(key, item, new_encryption_key, depth + 1) for item in value]
+        case str() if value and is_sensitive_callback_key(key) and not value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX):
+            try:
+                return CALLBACK_VAR_ENCRYPTED_PREFIX + encrypt_value_helper(
+                    value, new_encryption_key=new_encryption_key
+                )
+            except Exception:  # noqa: BLE001  # no salt key or master key configured: store the value as written
+                return value
+        case _:
+            return value
+
+
+def _decrypted_param(key: str, value: object, depth: int = 0) -> object:
+    if depth > DEFAULT_MAX_RECURSE_DEPTH:
+        return value
+    match value:
+        case dict():
+            return {k: _decrypted_param(k, v, depth + 1) for k, v in value.items()}
+        case list():
+            return [_decrypted_param(key, item, depth + 1) for item in value]
+        case str() if value.startswith(CALLBACK_VAR_ENCRYPTED_PREFIX):
+            decrypted: Final = decrypt_value_helper(
+                value.removeprefix(CALLBACK_VAR_ENCRYPTED_PREFIX),
+                key=key,
+                exception_type="debug",
+                return_original_value=False,
+            )
+            return value if decrypted is None else decrypted
+        case _:
+            return value
+
+
+def encrypt_guardrail_litellm_params(
+    litellm_params: Mapping[str, object], new_encryption_key: str | None = None
+) -> dict[str, object]:
+    """Encrypt every string stored under a sensitive key (at any dict depth) for the guardrails table."""
+    return {key: _encrypted_param(key, value, new_encryption_key) for key, value in litellm_params.items()}
+
+
+def decrypt_guardrail_litellm_params(litellm_params: Mapping[str, object]) -> dict[str, object]:
+    """Decrypt values written by encrypt_guardrail_litellm_params; plaintext values pass through unchanged."""
+    return {key: _decrypted_param(key, value) for key, value in litellm_params.items()}
+
+
+def guardrail_from_db_row(row: Iterable[tuple[str, object]]) -> Guardrail:
+    """Build a Guardrail from a guardrails table row with its litellm_params decrypted."""
+    fields: Final = dict(row)
+    stored_params: Final = fields.get("litellm_params")
+    if isinstance(stored_params, Mapping):
+        fields["litellm_params"] = decrypt_guardrail_litellm_params(stored_params)
+    return Guardrail(**fields)
 
 
 guardrail_initializer_registry: Final = {
@@ -295,7 +358,7 @@ class GuardrailRegistry:
                 litellm_params_dict = litellm_params_obj.model_dump()
             else:
                 litellm_params_dict = dict(litellm_params_obj) if litellm_params_obj else {}
-            litellm_params: Final[str] = safe_dumps(litellm_params_dict)
+            litellm_params: Final[str] = safe_dumps(encrypt_guardrail_litellm_params(litellm_params_dict))
             guardrail_info: Final[str] = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Create guardrail in DB
@@ -341,7 +404,7 @@ class GuardrailRegistry:
                 litellm_params_dict = litellm_params_obj.model_dump()
             else:
                 litellm_params_dict = dict(litellm_params_obj) if litellm_params_obj else {}
-            litellm_params: Final[str] = safe_dumps(litellm_params_dict)
+            litellm_params: Final[str] = safe_dumps(encrypt_guardrail_litellm_params(litellm_params_dict))
             guardrail_info: Final[str] = safe_dumps(guardrail.get("guardrail_info", {}))
 
             # Update in DB
@@ -357,8 +420,7 @@ class GuardrailRegistry:
             if updated_guardrail is None:
                 raise ValueError(f"Guardrail not found, passed guardrail_id={guardrail_id}")
 
-            # Convert to dict and return
-            return dict(updated_guardrail)
+            return dict(guardrail_from_db_row(updated_guardrail))
         except Exception as e:
             raise Exception(f"Error updating guardrail in DB: {e}")
 
@@ -378,7 +440,7 @@ class GuardrailRegistry:
 
             guardrails: Final[list[Guardrail]] = []
             for guardrail in guardrails_from_db:
-                guardrails.append(Guardrail(**(dict(guardrail))))
+                guardrails.append(guardrail_from_db_row(guardrail))
 
             return guardrails
         except Exception as e:
@@ -394,7 +456,7 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))
+            return guardrail_from_db_row(guardrail)
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {e}")
 
@@ -410,9 +472,28 @@ class GuardrailRegistry:
             if not guardrail:
                 return None
 
-            return Guardrail(**(dict(guardrail)))
+            return guardrail_from_db_row(guardrail)
         except Exception as e:
             raise Exception(f"Error getting guardrail from DB: {e}")
+
+    @staticmethod
+    async def rotate_guardrail_params_master_key(prisma_client: PrismaClient, new_master_key: str) -> int:
+        """Re-encrypt the sensitive litellm_params of every guardrail row under new_master_key. Returns rows updated."""
+        rows_updated = 0
+        for row in await _guardrail_table(prisma_client).find_many():
+            stored_params = row.litellm_params
+            if not isinstance(stored_params, Mapping):
+                continue
+            rotated_params = encrypt_guardrail_litellm_params(
+                decrypt_guardrail_litellm_params(stored_params), new_encryption_key=new_master_key
+            )
+            if rotated_params == stored_params:
+                continue
+            rows_updated += await _guardrail_table(prisma_client).update_many(
+                where={"guardrail_id": row.guardrail_id, "updated_at": row.updated_at},
+                data={"litellm_params": safe_dumps(rotated_params)},
+            )
+        return rows_updated
 
 
 def _apply_configured_bool_overrides(instance: CustomGuardrail, litellm_params: LitellmParams) -> None:

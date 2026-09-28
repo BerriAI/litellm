@@ -21093,3 +21093,40 @@ class TestTeamAdminMemberKeyBudgetUpdate:
             )
         assert exc.value.status_code == 403
         assert "member_key_budgets" not in str(exc.value.detail)
+
+
+@pytest.mark.asyncio
+async def test_rotate_master_key_reencrypts_guardrail_params(monkeypatch):
+    """Master-key rotation re-encrypts the guardrails table's litellm_params under the new key."""
+    from unittest.mock import AsyncMock, MagicMock
+
+    from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.guardrails.guardrail_registry import GuardrailRegistry
+    from litellm.proxy.management_endpoints import key_management_endpoints
+    from litellm.proxy.management_endpoints.key_management_endpoints import (
+        _rotate_master_key,
+    )
+
+    for rotator in (
+        "rotate_mcp_server_credentials_master_key",
+        "rotate_mcp_user_credentials_master_key",
+        "rotate_mcp_user_env_vars_master_key",
+        "rotate_sso_identity_assertions_master_key",
+    ):
+        monkeypatch.setattr(key_management_endpoints, rotator, AsyncMock())
+    rotate_guardrails = AsyncMock(return_value=1)
+    monkeypatch.setattr(GuardrailRegistry, "rotate_guardrail_params_master_key", rotate_guardrails)
+    mock_prisma_client = AsyncMock()
+    mock_prisma_client.db = MagicMock()
+    mock_prisma_client.db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_config.find_many = AsyncMock(return_value=[])
+    mock_prisma_client.db.litellm_credentialstable.find_many = AsyncMock(return_value=[])
+
+    await _rotate_master_key(
+        prisma_client=mock_prisma_client,
+        user_api_key_dict=UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN, user_id="test-user"),
+        current_master_key="sk-old-master-key",
+        new_master_key="sk-new-master-key",
+    )
+
+    rotate_guardrails.assert_awaited_once_with(prisma_client=mock_prisma_client, new_master_key="sk-new-master-key")

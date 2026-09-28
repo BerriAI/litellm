@@ -2670,3 +2670,59 @@ async def test_test_custom_code_endpoint_reports_a_system_exit_as_an_execution_e
     assert response.error == "Execution error: SystemExit: bye"
     assert response.error_type == "execution"
     assert time.monotonic() - started < 2.0
+
+
+@pytest.mark.asyncio
+async def test_team_guardrail_api_key_is_encrypted_at_rest_and_decrypted_on_review(mocker, monkeypatch):
+    """register stores the vendor api_key encrypted; submission detail masks the plaintext and approve loads it."""
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-guardrail-test")
+    mock_prisma = mocker.Mock()
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=None)
+    mock_prisma.db.litellm_guardrailstable.create = AsyncMock(
+        return_value=mocker.Mock(
+            guardrail_id="reg-enc",
+            guardrail_name="team-enc",
+            status="pending_review",
+            submitted_at=datetime.now(),
+        )
+    )
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mock_prisma)
+    request = RegisterGuardrailRequest(
+        guardrail_name="team-enc",
+        litellm_params={
+            "guardrail": "generic_guardrail_api",
+            "mode": "pre_call",
+            "api_base": "https://guardrails.example.com/validate",
+            "api_key": "team-vendor-secret-1234",
+        },
+    )
+    await register_guardrail(request, UserAPIKeyAuth(user_id="u1", team_id="team-1"))
+
+    stored_params = json.loads(mock_prisma.db.litellm_guardrailstable.create.call_args[1]["data"]["litellm_params"])
+    assert stored_params["api_key"].startswith("litellm_enc::")
+    assert "team-vendor-secret-1234" not in json.dumps(stored_params)
+
+    row = mocker.Mock(
+        guardrail_id="reg-enc",
+        guardrail_name="team-enc",
+        status="pending_review",
+        team_id="team-1",
+        litellm_params=stored_params,
+        guardrail_info={},
+        submitted_at=None,
+        reviewed_at=None,
+        created_at=datetime.now(),
+        updated_at=datetime.now(),
+    )
+    mock_prisma.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    mock_prisma.db.litellm_guardrailstable.update = AsyncMock()
+    admin = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
+
+    submission = await get_guardrail_submission("reg-enc", admin)
+    assert submission.litellm_params["api_key"] == "te****34"
+
+    mock_handler = mocker.Mock()
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", mock_handler)
+    await approve_guardrail_submission("reg-enc", admin)
+    loaded = mock_handler.initialize_guardrail.call_args.kwargs["guardrail"]
+    assert loaded["litellm_params"]["api_key"] == "team-vendor-secret-1234"

@@ -521,3 +521,39 @@ async def test_resync_agents_waits_for_agent_reload_and_skips_duplicate_registra
 
     assert await resync_task is True
     assert len(clean_agent_registry.agent_list) == 1
+
+
+@pytest.mark.asyncio
+async def test_resync_guardrails_syncs_decrypted_litellm_params(monkeypatch):
+    from unittest.mock import AsyncMock, MagicMock
+
+    import litellm.proxy.common_utils.registry_read_through as read_through_module
+    import litellm.proxy.proxy_server as proxy_server
+    from litellm.proxy.common_utils.registry_read_through import _resync_guardrails
+    from litellm.proxy.guardrails.guardrail_registry import (
+        IN_MEMORY_GUARDRAIL_HANDLER,
+        encrypt_guardrail_litellm_params,
+    )
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-guardrail-test")
+    encrypted_params: Final = encrypt_guardrail_litellm_params(
+        {"guardrail": "generic_guardrail_api", "mode": "pre_call", "api_key": "vendor-key"}
+    )
+    prisma_client: Final = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_first = AsyncMock(
+        return_value={
+            "guardrail_id": "enc-id",
+            "guardrail_name": "enc-guardrail",
+            "litellm_params": encrypted_params,
+            "guardrail_info": {},
+            "status": "active",
+        }
+    )
+    synced: list[dict] = []
+    monkeypatch.setattr(proxy_server, "prisma_client", prisma_client)
+    monkeypatch.setattr(proxy_server, "store_model_in_db", True)
+    monkeypatch.setattr(IN_MEMORY_GUARDRAIL_HANDLER, "sync_guardrail_from_db", lambda guardrail: synced.append(guardrail))
+    monkeypatch.setattr(read_through_module, "_initialized_guardrail", lambda guardrail_name: MagicMock())
+
+    assert await _resync_guardrails("enc-guardrail") is True
+    assert synced[0]["litellm_params"]["api_key"] == "vendor-key"
