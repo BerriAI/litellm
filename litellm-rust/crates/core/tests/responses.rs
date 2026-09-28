@@ -39,7 +39,7 @@ async fn http_responses_share_execution_and_hooks(call: ResponsesCall, #[case] h
         ..call
     });
     let response = if hosted {
-        let HostedCompletion::Complete(response) = litellm_host::in_process::run_hosted(
+        let HostedCompletion::Complete(response) = litellm_host_native::in_process::run_hosted(
             responses_route(no_secrets()).machine(host.request().unwrap()),
             host.runtime(),
         )
@@ -95,7 +95,7 @@ async fn streaming_keeps_headers_and_bytes_and_finishes_after_consumption(
     });
     let (headers, bytes) = if hosted {
         assert_eq!(
-            litellm_host::in_process::run_hosted(
+            litellm_host_native::in_process::run_hosted(
                 responses_route(no_secrets()).machine(host.request().unwrap()),
                 host.runtime(),
             )
@@ -257,7 +257,7 @@ async fn route_tracing_covers_native_and_hosted_outcomes(
         .logger()
         .instrument(async {
             if hosted {
-                litellm_host::in_process::run_hosted(
+                litellm_host_native::in_process::run_hosted(
                     route.clone().machine(host.request().unwrap()),
                     host.runtime(),
                 )

@@ -61,9 +61,12 @@ async fn perform(request: LiteLLMOcrRequest) -> Result<LiteLLMOcrResponse, Error
 }
 
 async fn perform_with(host: LocalOcrHost) -> Result<LiteLLMOcrResponse, Error> {
-    litellm_host::in_process::run_hosted(ocr_route().machine(host.request()?), host.runtime())
-        .await
-        .map(completed)
+    litellm_host_native::in_process::run_hosted(
+        ocr_route().machine(host.request()?),
+        host.runtime(),
+    )
+    .await
+    .map(completed)
 }
 
 fn wire(model: &str, base: &str, document: Value, options: Value) -> OcrWireRequest {
@@ -199,8 +202,8 @@ impl LocalOcrHost {
             })
             .ok_or_else(|| Error::InvalidRequest("OCR request was already projected".into()))
     }
-    pub fn runtime(&self) -> litellm_host::in_process::Host<'_, Self, Self, ()> {
-        litellm_host::in_process::Host {
+    pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, Self, Self, ()> {
+        litellm_host_native::in_process::Host {
             services: self,
             hooks: self,
             stream: &(),

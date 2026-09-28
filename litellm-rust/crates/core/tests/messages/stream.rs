@@ -74,8 +74,8 @@ impl RecordingStreamHost {
     pub fn request(&self) -> Result<MessagesCall, Error> {
         self.call.request()
     }
-    pub fn runtime(&self) -> litellm_host::in_process::Host<'_, (), Self, Self> {
-        litellm_host::in_process::Host {
+    pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, Self> {
+        litellm_host_native::in_process::Host {
             services: &(),
             hooks: self,
             stream: self,
@@ -84,7 +84,7 @@ impl RecordingStreamHost {
     }
 }
 
-impl litellm_host::in_process::StreamConsumer<Messages> for RecordingStreamHost {
+impl litellm_host_native::in_process::StreamConsumer<Messages> for RecordingStreamHost {
     async fn open_stream(&self, head: MessagesStreamHead) -> Result<Demand, Error> {
         Ok(self.record(Seen::Open(head.headers)))
     }
@@ -136,7 +136,7 @@ fn sse_response() -> ResponseTemplate {
 }
 
 async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Error> {
-    litellm_host::in_process::run_hosted(
+    litellm_host_native::in_process::run_hosted(
         machine(Arc::new(RecordingSecrets::empty()))(host.request()?),
         host.runtime(),
     )

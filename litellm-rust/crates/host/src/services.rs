@@ -8,6 +8,15 @@ pub trait HostCallHandler<P: Protocol>: Send + Sync {
     ) -> impl Future<Output = Result<(), P::Error>> + Send;
 }
 
+impl<P: Protocol, T: HostCallHandler<P> + ?Sized> HostCallHandler<P> for &T {
+    fn handle_host_call(
+        &self,
+        call: P::HostCall,
+    ) -> impl Future<Output = Result<(), P::Error>> + Send {
+        (**self).handle_host_call(call)
+    }
+}
+
 impl<P: Protocol<HostCall = Infallible>> HostCallHandler<P> for () {
     async fn handle_host_call(&self, call: Infallible) -> Result<(), P::Error> {
         match call {}

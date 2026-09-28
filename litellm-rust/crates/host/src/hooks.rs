@@ -18,6 +18,24 @@ pub trait RouteHooks<E>: Send + Sync {
     fn on_event(&self, event: MachineEvent) -> impl Future<Output = Result<(), E>> + Send;
 }
 
+impl<E, T: RouteHooks<E> + ?Sized> RouteHooks<E> for &T {
+    fn observer(&self) -> Option<std::sync::Arc<dyn crate::lifecycle::CallObserver>> {
+        (**self).observer()
+    }
+
+    fn before_provider_request(
+        &self,
+        wire: WireRequest,
+        context: RequestContext,
+    ) -> impl Future<Output = Result<WireRequest, E>> + Send {
+        (**self).before_provider_request(wire, context)
+    }
+
+    fn on_event(&self, event: MachineEvent) -> impl Future<Output = Result<(), E>> + Send {
+        (**self).on_event(event)
+    }
+}
+
 /// No host: the wire request goes out as prepared and nothing observes the call.
 impl<E> RouteHooks<E> for () {
     async fn before_provider_request(

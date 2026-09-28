@@ -9,7 +9,6 @@
 pub mod call;
 pub mod event;
 pub mod hooks;
-pub mod in_process;
 pub mod lifecycle;
 pub mod machine;
 pub mod protocol;

@@ -3647,6 +3647,7 @@ dependencies = [
  "litellm-auth-gcp",
  "litellm-core-utils",
  "litellm-host",
+ "litellm-host-native",
  "litellm-http",
  "litellm-llms",
  "litellm-secrets",
@@ -3907,9 +3908,21 @@ dependencies = [
  "futures-util",
  "http 1.4.2",
  "litellm-host",
+ "litellm-host-native",
  "rstest",
  "serde_json",
  "thiserror 2.0.19",
+ "tokio",
+]
+
+[[package]]
+name = "litellm-host-native"
+version = "0.1.0"
+dependencies = [
+ "futures-util",
+ "litellm-host",
+ "rstest",
+ "serde_json",
  "tokio",
 ]
 

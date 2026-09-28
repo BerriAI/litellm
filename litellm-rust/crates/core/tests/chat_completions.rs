@@ -345,7 +345,7 @@ async fn direct_and_hosted_calls_share_hooks_and_lifecycle(
         .into(),
     );
     let response = if hosted {
-        let result = litellm_host::in_process::run_hosted(
+        let result = litellm_host_native::in_process::run_hosted(
             chat_completions_route().machine(host.request().unwrap()),
             host.runtime(),
         )

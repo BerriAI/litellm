@@ -51,8 +51,8 @@ impl RecordingHost {
     pub fn request(&self) -> Result<MessagesCall, Error> {
         self.call.request()
     }
-    pub fn runtime(&self) -> litellm_host::in_process::Host<'_, (), Self, ()> {
-        litellm_host::in_process::Host {
+    pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, ()> {
+        litellm_host_native::in_process::Host {
             services: &(),
             hooks: self,
             stream: &(),
@@ -93,7 +93,7 @@ impl litellm_host::hooks::RouteHooks<<Messages as litellm_host::protocol::Protoc
 }
 
 async fn run_through(host: &RecordingHost) -> Result<MessagesOutput, Error> {
-    litellm_host::in_process::run_hosted(
+    litellm_host_native::in_process::run_hosted(
         machine(Arc::new(RecordingSecrets::empty()))(host.request()?),
         host.runtime(),
     )

@@ -208,7 +208,7 @@ async fn configured_client_preserves_document_url_policy(#[case] allowed: bool) 
         json!({"type": "document_url", "document_url": document_url}),
         json!({}),
     ));
-    let result = litellm_host::in_process::run_hosted(
+    let result = litellm_host_native::in_process::run_hosted(
         route.machine(host.request().unwrap()),
         host.runtime(),
     )

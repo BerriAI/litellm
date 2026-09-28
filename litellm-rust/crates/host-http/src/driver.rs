@@ -8,15 +8,16 @@ use litellm_host::{
     call::{CallOutput, HostedCompletion, HostedMachine},
     hooks::RouteHooks,
     lifecycle::{observe_call, observe_unary},
-    machine::{Machine, MachineFault, MachineStep},
-    protocol::{Demand, HookRequest, Protocol, Reply, StreamDelivery, Suspension},
+    machine::MachineFault,
+    protocol::Protocol,
     services::HostCallHandler,
 };
+use litellm_host_native::{Boundary, Driver};
 
 use crate::{Error, ResponseEncoder, StreamEncoder};
 
-type StepOf<P> = MachineStep<P, HostedCompletion<<P as Protocol>::Response>>;
 type Output<E> = CallOutput<Response, http::Response<()>, Bytes, E>;
+type HostedDriver<P, S, H> = Driver<HostedMachine<P>, S, H>;
 
 pub async fn serve_unary<P, A, H, S>(
     machine: HostedMachine<P>,
@@ -34,8 +35,8 @@ where
     let observer = hooks.observer();
     let mut driver = Driver::new(machine, services, hooks);
     observe_unary(observer, async move {
-        match driver.advance().await? {
-            MachineStep::Complete(HostedCompletion::Complete(value)) => {
+        match driver.advance().await.map_err(Error::Call)? {
+            Boundary::Complete(HostedCompletion::Complete(value)) => {
                 encoder.encode_response(value).map_err(Error::Call)
             }
             _ => Err(Error::Protocol),
@@ -60,7 +61,7 @@ where
     let encoder = Arc::new(encoder);
     let observer = hooks.observer();
     let driver = Driver::new(machine, services, hooks);
-    match observe_call(observer, driver.start(encoder.clone())).await? {
+    match observe_call(observer, start(driver, encoder.clone())).await? {
         CallOutput::Complete(response) => Ok(response),
         CallOutput::Stream { head, chunks } => {
             let body = chunks.map(move |chunk| {
@@ -73,93 +74,38 @@ where
     }
 }
 
-struct Driver<P: Protocol, H, S> {
-    machine: HostedMachine<P>,
-    services: S,
-    hooks: H,
-    demand: Option<Reply<Demand>>,
-}
-
-impl<P, H, S> Driver<P, H, S>
+async fn start<P, A, H, S>(
+    mut driver: HostedDriver<P, S, H>,
+    encoder: Arc<A>,
+) -> Result<Output<Error<P::Error>>, Error<P::Error>>
 where
     P: Protocol,
     P::Error: From<MachineFault>,
-    H: RouteHooks<P::Error>,
-    S: HostCallHandler<P>,
+    A: StreamEncoder<Protocol = P>,
+    H: RouteHooks<P::Error> + 'static,
+    S: HostCallHandler<P> + 'static,
 {
-    fn new(machine: HostedMachine<P>, services: S, hooks: H) -> Self {
-        Self {
-            machine,
-            services,
-            hooks,
-            demand: None,
-        }
-    }
-
-    async fn advance(&mut self) -> Result<StepOf<P>, Error<P::Error>> {
-        if let Some(reply) = self.demand.take() {
-            reply.send(Demand::More);
-        }
-        loop {
-            match self.machine.resume().await.map_err(Error::Call)? {
-                MachineStep::Suspended(Suspension::Hook(HookRequest::BeforeProviderRequest {
-                    wire,
-                    context,
-                    reply,
-                })) => reply.send(
-                    self.hooks
-                        .before_provider_request(*wire, *context)
-                        .await
-                        .map_err(Error::Call)?,
-                ),
-                MachineStep::Suspended(Suspension::Hook(HookRequest::Event(event, reply))) => {
-                    self.hooks.on_event(event).await.map_err(Error::Call)?;
-                    reply.send(());
-                }
-                MachineStep::Suspended(Suspension::HostCall(op)) => {
-                    self.services
-                        .handle_host_call(op)
-                        .await
-                        .map_err(Error::Call)?;
-                }
-                boundary => return Ok(boundary),
-            }
-        }
-    }
-
-    async fn start<A>(mut self, encoder: Arc<A>) -> Result<Output<Error<P::Error>>, Error<P::Error>>
-    where
-        A: StreamEncoder<Protocol = P>,
-        H: 'static,
-        S: 'static,
-    {
-        match self.advance().await? {
-            MachineStep::Complete(HostedCompletion::Complete(value)) => encoder
-                .encode_response(value)
-                .map(CallOutput::Complete)
-                .map_err(Error::Call),
-            MachineStep::Suspended(Suspension::Stream(StreamDelivery::Open(head, reply))) => {
-                let head = encoder.encode_stream_head(head).map_err(Error::Call)?;
-                self.demand = Some(reply);
-                let chunks =
-                    stream::try_unfold((self, encoder), |(mut driver, encoder)| async move {
-                        match driver.advance().await? {
-                            MachineStep::Suspended(Suspension::Stream(StreamDelivery::Chunk(
-                                chunk,
-                                reply,
-                            ))) => {
-                                let bytes = encoder.encode_chunk(chunk).map_err(Error::Call)?;
-                                driver.demand = Some(reply);
-                                Ok(Some((bytes, (driver, encoder))))
-                            }
-                            MachineStep::Complete(HostedCompletion::StreamEnded) => Ok(None),
-                            _ => Err(Error::Protocol),
+    match driver.advance().await.map_err(Error::Call)? {
+        Boundary::Complete(HostedCompletion::Complete(value)) => encoder
+            .encode_response(value)
+            .map(CallOutput::Complete)
+            .map_err(Error::Call),
+        Boundary::Open(head) => {
+            let head = encoder.encode_stream_head(head).map_err(Error::Call)?;
+            let chunks =
+                stream::try_unfold((driver, encoder), |(mut driver, encoder)| async move {
+                    match driver.advance().await.map_err(Error::Call)? {
+                        Boundary::Chunk(chunk) => {
+                            let bytes = encoder.encode_chunk(chunk).map_err(Error::Call)?;
+                            Ok(Some((bytes, (driver, encoder))))
                         }
-                    })
-                    .boxed();
-                Ok(CallOutput::Stream { head, chunks })
-            }
-            _ => Err(Error::Protocol),
+                        Boundary::Complete(HostedCompletion::StreamEnded) => Ok(None),
+                        _ => Err(Error::Protocol),
+                    }
+                })
+                .boxed();
+            Ok(CallOutput::Stream { head, chunks })
         }
+        _ => Err(Error::Protocol),
     }
 }
