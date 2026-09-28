@@ -146,6 +146,27 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
         yield from _iter_text_parts_in_content(message.get("content"))
 
 
+def iter_request_messages(data: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    """Yield the request's messages in prompt order.
+
+    A top-level ``system`` prompt (Anthropic) and Responses-API ``instructions``
+    that carry text (a string or a list of parts) come first, each as a ``system``
+    message, then ``messages`` and ``input``. A body in any other shape yields nothing.
+    """
+    top_level_prompts: Final = tuple(
+        prompt
+        for prompt in (data.get("system"), data.get("instructions"))
+        if isinstance(prompt, (str, list)) and prompt
+    )
+    yield from ({"role": "system", "content": prompt} for prompt in top_level_prompts)
+    yield from (message for message in _iter_inspection_messages(data) if isinstance(message, dict))
+
+
+def message_text(message: Mapping[str, object]) -> str:
+    """Join a message's text fragments, skipping images and other non-text parts."""
+    return "\n".join(_iter_text_parts_in_content(message.get("content")))
+
+
 def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
     """Rewrite every text fragment in place via ``visit``.
 

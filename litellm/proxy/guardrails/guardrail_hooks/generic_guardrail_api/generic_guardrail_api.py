@@ -20,6 +20,7 @@ from litellm.integrations.custom_guardrail import (
     log_guardrail_information,
 )
 from litellm.llms.custom_httpx.http_handler import (
+    AsyncHTTPHandler,
     get_async_httpx_client,
     httpxSpecialProvider,
 )
@@ -32,6 +33,8 @@ from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import
     GuardrailToolParam,
 )
 from litellm.types.utils import GenericGuardrailAPIInputs
+
+from .message_filter import build_message_skip_filter
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
@@ -170,6 +173,10 @@ def _structured_rows_to_write_back(
     )
 
 
+def _passthrough_inputs(inputs: GenericGuardrailAPIInputs) -> GenericGuardrailAPIInputs:
+    return GenericGuardrailAPIInputs(**inputs)
+
+
 class GenericGuardrailAPI(CustomGuardrail):
     """
     Generic Guardrail API integration for LiteLLM.
@@ -204,9 +211,14 @@ class GenericGuardrailAPI(CustomGuardrail):
         streaming_end_of_stream_only: bool | None = None,
         streaming_sampling_rate: int | None = None,
         streaming_transform_mode: Literal["block_only", "incremental_diff"] | None = None,
+        skip_if_system_prompt_matches: Sequence[str] | None = None,
+        skip_if_first_role_in: Sequence[str] | None = None,
+        async_handler: AsyncHTTPHandler | None = None,
         **kwargs,
     ):
-        self.async_handler = get_async_httpx_client(llm_provider=httpxSpecialProvider.GuardrailCallback)
+        self.async_handler = async_handler or get_async_httpx_client(
+            llm_provider=httpxSpecialProvider.GuardrailCallback
+        )
         self.headers = headers or {}
         self.extra_headers = extra_headers or []
 
@@ -255,6 +267,13 @@ class GenericGuardrailAPI(CustomGuardrail):
         kwargs.setdefault("supported_event_hooks", list(self.get_supported_event_hooks()))
 
         super().__init__(**kwargs)
+
+        self._message_skip_filter: Final = build_message_skip_filter(
+            skip_if_system_prompt_matches=skip_if_system_prompt_matches,
+            skip_if_first_role_in=skip_if_first_role_in,
+            guardrail_name=self.guardrail_name,
+            event_hook=self.event_hook,
+        )
 
         verbose_proxy_logger.debug("Generic Guardrail API initialized with api_base: %s", self.api_base)
 
@@ -431,6 +450,19 @@ class GenericGuardrailAPI(CustomGuardrail):
         # Use provided request_data or create an empty dict
         if request_data is None:
             request_data = {}
+
+        skip_reason: Final = self._message_skip_filter.skip_reason(
+            input_type=input_type,
+            request_data=request_data,
+            logging_obj=logging_obj,
+        )
+        if skip_reason is not None:
+            self.add_standard_logging_guardrail_information_to_request_data(
+                guardrail_json_response=skip_reason,
+                request_data=request_data,
+                guardrail_status="not_run",
+            )
+            return _passthrough_inputs(inputs)
 
         request_body: Final = request_data.get("body") or {}
 

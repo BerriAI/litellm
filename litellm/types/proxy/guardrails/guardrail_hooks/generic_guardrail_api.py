@@ -103,6 +103,31 @@ class GenericGuardrailAPIOptionalParams(BaseModel):
         ),
     )
 
+    skip_if_system_prompt_matches: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "Regex patterns searched in the request's instructions: system and developer messages, a top-level "
+            "system prompt (Anthropic) and Responses API instructions, never user text. Only "
+            "the first 16384 characters of each instruction message are searched. On a match the guardrail is "
+            "skipped for the call: nothing is sent for the request or for its paired response. The decision reads "
+            "the full request, so skip_system_message_in_guardrail and scan_only_tool_results do not change it. "
+            "Needs a request-side hook (pre_call or during_call) in mode. An invalid regex fails at startup. The "
+            "caller controls its own messages, so a caller that knows a pattern can exempt itself: treat this as "
+            "traffic scoping, not enforcement. Patterns run on caller-supplied text and Python's re has no "
+            "timeout, so keep them linear-time (no nested quantifiers such as (a+)+)."
+        ),
+    )
+
+    skip_if_first_role_in: tuple[str, ...] | None = Field(
+        default=None,
+        description=(
+            "If the role of the request's first message is in this list (e.g. ['developer']), the guardrail is "
+            "skipped for the call, request and paired response alike. A top-level system prompt or Responses API "
+            "instructions count as a leading system message. Same mode requirement and same trust boundary as "
+            "skip_if_system_prompt_matches: the caller chooses the roles it sends."
+        ),
+    )
+
 
 class GenericGuardrailAPIConfigModel(
     GuardrailConfigModel[GenericGuardrailAPIOptionalParams],
