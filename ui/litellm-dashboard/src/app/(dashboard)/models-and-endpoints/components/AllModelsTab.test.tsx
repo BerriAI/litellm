@@ -403,6 +403,17 @@ describe("AllModelsTab", () => {
     });
   });
 
+  it("uses All Proxy Models as the public model name filter default", async () => {
+    const user = userEvent.setup();
+    renderWithProviders(<AllModelsTab {...defaultProps} />);
+
+    await user.click(screen.getByTestId("datatable-filters-trigger"));
+    await user.click(await screen.findByPlaceholderText("Filter by Public Model Name"));
+
+    expect(await screen.findByRole("option", { name: "All Proxy Models" })).toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "All Models" })).not.toBeInTheDocument();
+  });
+
   it("renders every row the server returned for the selected model group so rows match the footer total", () => {
     setModelsInfo([makeRow(), { ...makeRow({ model_info: { id: "model-2" } }), model_name: "claude-opus" }], 2);
     renderWithProviders(<AllModelsTab {...defaultProps} selectedModelGroup="claude-opus" />);

@@ -31,6 +31,7 @@ export const ALL_MODEL_GROUPS_VALUE = "all";
 export const WILDCARD_MODEL_GROUP_VALUE = "wildcard";
 
 const MODEL_TABLE_BODY_HEIGHT = 600;
+const ALL_PROXY_MODELS_LABEL = "All Proxy Models";
 
 const FILTER_LABELS: Record<string, string> = {
   [MODEL_NAME_COLUMN_ID]: "Public Model Name",
@@ -39,7 +40,7 @@ const FILTER_LABELS: Record<string, string> = {
 
 const VIEW_MODE_LABELS: Record<ModelViewMode, string> = {
   current_team: "Current Team Models",
-  all: "All Proxy Models",
+  all: ALL_PROXY_MODELS_LABEL,
 };
 
 export interface ModelsTableTeamOption {
@@ -146,7 +147,7 @@ export function AllModelsTable({
 
   const modelGroupOptions = useMemo(
     () => [
-      { label: "All Models", value: ALL_MODEL_GROUPS_VALUE },
+      { label: ALL_PROXY_MODELS_LABEL, value: ALL_MODEL_GROUPS_VALUE },
       { label: "Wildcard Models (*)", value: WILDCARD_MODEL_GROUP_VALUE },
       ...availableModelGroups.map((group) => ({ label: group, value: group })),
     ],
