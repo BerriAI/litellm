@@ -11,6 +11,7 @@ import litellm
 from litellm.cost_calculator import default_video_cost_calculator
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LitellmLogging
+from litellm.litellm_core_utils.logging_worker import GLOBAL_LOGGING_WORKER
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.custom_httpx.llm_http_handler import BaseLLMHTTPHandler
 from litellm.llms.gemini.videos.transformation import GeminiVideoConfig
@@ -988,6 +989,7 @@ class TestVideoLogging:
         """
         custom_logger = self.TestVideoLogger()
         litellm.logging_callback_manager._reset_all_callbacks()
+        await asyncio.wait_for(GLOBAL_LOGGING_WORKER.flush(), timeout=10.0)
         litellm.callbacks = [custom_logger]
 
         # Mock video generation response

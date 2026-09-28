@@ -26,6 +26,7 @@ impl CyberArkSecretManager {
             token,
             secrets,
             authentication_lock: Arc::new(tokio::sync::Mutex::new(())),
+            policy_load_lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
