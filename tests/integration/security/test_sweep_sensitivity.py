@@ -15,17 +15,19 @@ from typing import Final
 
 import pytest
 from integration._support.client import eventually, string_value
-from integration.security._canary import DECODE_BUDGET_BYTES, MARKER, DecodeBudgetExceeded, canary, find_canary
+from integration.security._canary import DECODE_BUDGET_BYTES, MARKER, SLOTS, DecodeBudgetExceeded, canary, find_canary
 from integration.security._sinks import CONFIG_MODEL, GENERIC_SINK, Rig, canary_rig, settle, team_caller
 from integration._support.wire import Request
 from integration.security._sweeps import (
     ADMIN_ONLY_ALLOWANCES,
+    ALLOWANCE_SLOT_FAMILIES,
     PROVIDER_PASSTHROUGH_REASON,
     assert_marker_seen,
     get_routes,
     record_route_sweep,
     route_allowance,
     route_denied,
+    scoped_queries,
     sweep_all,
     sweep_redis,
     sweep_sink,
@@ -75,6 +77,13 @@ def test_route_allowances_match_only_their_exact_route_and_caller() -> None:
     allowed: Final = {(route, caller) for route in routes for caller in callers if route_allowance(route, caller)}
     assert allowed == set(ADMIN_ONLY_ALLOWANCES), allowed
     assert all(route_denied(route) is None for route, _ in ADMIN_ONLY_ALLOWANCES)
+    assert set(ALLOWANCE_SLOT_FAMILIES) == set(ADMIN_ONLY_ALLOWANCES)
+    for (route, caller), families in ALLOWANCE_SLOT_FAMILIES.items():
+        for family in families:
+            assert route_allowance(route, caller, family + "1") is not None
+        for slot in SLOTS:
+            if not slot.startswith(families):
+                assert route_allowance(route, caller, slot) is None, (route, caller, slot)
 
 
 def test_only_provider_passthrough_routes_match_the_passthrough_deny_rule() -> None:
@@ -120,18 +129,19 @@ def test_every_sweep_finds_the_stored_prompt_marker(rig: Rig, request: pytest.Fi
         settle(rig, request_id, marker)
         eventually(lambda: sweep_redis((marker,)), bool, seconds=10)
 
+        ids: Final = {
+            "request_id": request_id,
+            "team_id": caller.team_id,
+            "user_id": caller.user_id,
+            "model_id": rig.model_id,
+            "model": CONFIG_MODEL,
+        }
         report: Final = sweep_all(
             rig.proxy,
             (marker,),
             responses=(response,),
             sinks={name: sink.requests() for name, sink in rig.sinks.items()},
-            ids={
-                "request_id": request_id,
-                "team_id": caller.team_id,
-                "user_id": caller.user_id,
-                "model_id": CONFIG_MODEL,
-                "model": CONFIG_MODEL,
-            },
+            ids=ids,
             callers=caller.callers(rig),
             own_headers=rig.own_headers,
             since=started,
@@ -150,4 +160,11 @@ def test_every_sweep_finds_the_stored_prompt_marker(rig: Rig, request: pytest.Fi
         assert_marker_seen(report, {"S2": f"GET /spend/logs?request_id={request_id} as admin -> 200"})
         assert_marker_seen(report, {"S2": f"GET /spend/logs?user_id={caller.user_id} as admin -> 200"})
         assert_marker_seen(report, {"S2": f"GET /spend/logs/ui/{request_id} as internal_user -> 200"})
+        for route in ("/spend/logs/ui", "/spend/logs/v2"):
+            filtered = tuple(query for query in scoped_queries(route, ids, started) if "_id=" in query)
+            assert len(filtered) == 2, filtered
+            for query in filtered:
+                assert report.routes.statuses.get(f"GET {route}{query} as admin") == 200, (route, query)
+                listed = rig.proxy.request("GET", route + query)
+                assert request_id in listed.text, f"{route}{query} does not list the scenario's row"
         assert report.credential_hits() == ()

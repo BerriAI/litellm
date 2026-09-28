@@ -29,12 +29,24 @@ API:
   whatever its status; responses with status >= 500 are also listed in ``RouteSweep.errors``.
   A call that got no response at all (timeout, reset) is listed in ``RouteSweep.unreachable``,
   and ``sweep_all`` fails on it, since that route went unchecked. ``ADMIN_ONLY_ALLOWANCES``
-  names exact ``(route, caller label)`` pairs allowed to return a credential by design; those
-  hits land in ``RouteSweep.allowed`` instead of ``hits``, and every other caller of that route
-  is still swept. ``record_route_sweep(routes, node)`` appends the report to
+  names exact ``(route, caller label)`` pairs allowed to return a credential by design, and
+  ``ALLOWANCE_SLOT_FAMILIES`` the slot families each pair may return; those hits land in
+  ``RouteSweep.allowed`` instead of ``hits``, while any other slot on that route, and every other
+  caller of it, is still a hit. A route whose path parameters all came from ``ids`` must not
+  answer the admin with 404 (an id the scenario passed is wrong, so the route saw no data);
+  such calls are listed in ``RouteSweep.not_found`` and ``sweep_all`` fails on them, except the
+  routes in ``NOT_FOUND_EXPECTED``. ``PARAMETER_ALIASES`` fills a parameter from another id for
+  the routes where the name misleads (``/v1/models/{model_id}`` takes the public model name, so
+  it is filled from ``ids["model"]``, while ``/credentials/by_model/{model_id}`` takes the
+  router's deployment id).
+  ``RouteSweep.statuses`` maps each call's location to its status code. ``record_route_sweep(routes, node)`` appends the report to
   ``$INTEGRATION_RESULTS_DIR/security-route-sweep.jsonl`` (a CI artifact). With ``since``,
-  unpaginated list routes (``SCENARIO_SCOPED_LIST_ROUTES``, today ``/spend/logs``) are called
-  with this scenario's request id, user id and a summarized date window instead of unfiltered.
+  the log list routes (``SCENARIO_SCOPED_LIST_ROUTES``: ``/spend/logs``, ``/spend/logs/ui``,
+  ``/spend/logs/v2``) are called with this scenario's request id, user id and a date window
+  (summarized for ``/spend/logs``; ``since`` to ``since + LIST_WINDOW`` with ``LIST_PAGE_SIZE``
+  rows for the paginated two) instead of unfiltered. A 4xx from one of those calls is listed in
+  ``RouteSweep.rejected`` and ``sweep_all`` fails on it, since the route then returned no rows.
+  ``scoped_queries(route, ids, since)`` returns the query strings S2 uses for a route.
 - ``sweep_responses(responses, canaries) -> tuple[Hit, ...]`` (S3): body and headers of every
   client-facing response the scenario received.
 - ``sweep_sink(name, requests, canaries, *, own_header=None) -> tuple[Hit, ...]`` (S4): every
@@ -60,7 +72,7 @@ import sys
 from collections.abc import Callable, Iterable, Mapping, Sequence
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from functools import cache
 from pathlib import Path
 from types import MappingProxyType
@@ -116,6 +128,16 @@ REAL_ID_REQUIRED: Final = MappingProxyType(
     }
 )
 
+PARAMETER_ALIASES: Final = MappingProxyType(
+    {
+        "/models/{model_id}": {"model_id": "model"},
+        "/v1/models/{model_id}": {"model_id": "model"},
+    }
+)
+NOT_FOUND_EXPECTED: Final = MappingProxyType(
+    {"/fallback/{model}": "answers 404 when the model has no fallbacks configured"}
+)
+
 ADMIN_ONLY_ALLOWANCES: Final = MappingProxyType(
     {
         ("/get/config/callbacks", "admin"): (
@@ -125,9 +147,21 @@ ADMIN_ONLY_ALLOWANCES: Final = MappingProxyType(
 )
 
 
-def route_allowance(route: str, caller: str) -> str | None:
-    """The documented reason ``caller`` may read a credential from ``route``, or None."""
-    return ADMIN_ONLY_ALLOWANCES.get((route, caller))
+ALLOWANCE_SLOT_FAMILIES: Final = MappingProxyType({("/get/config/callbacks", "admin"): ("G",)})
+
+
+def route_allowance(route: str, caller: str, slot: str | None = None) -> str | None:
+    """The documented reason ``caller`` may read a credential from ``route``, or None.
+
+    With ``slot``, the allowance also has to cover that slot: its id must start with one of the
+    families in ``ALLOWANCE_SLOT_FAMILIES`` for the pair (``/get/config/callbacks`` serves the
+    callback env values, so only the G-family sink credentials), so any other slot found there
+    is still a hit.
+    """
+    reason: Final = ADMIN_ONLY_ALLOWANCES.get((route, caller))
+    if reason is None or slot is None:
+        return reason
+    return reason if slot.startswith(ALLOWANCE_SLOT_FAMILIES.get((route, caller), ())) else None
 
 
 @dataclass(frozen=True, slots=True)
@@ -146,6 +180,9 @@ class RouteSweep:
     errors: tuple[str, ...] = field(default=())
     unreachable: tuple[str, ...] = field(default=())
     allowed: tuple[Hit, ...] = field(default=())
+    not_found: tuple[str, ...] = field(default=())
+    rejected: tuple[str, ...] = field(default=())
+    statuses: Mapping[str, int] = field(default_factory=lambda: MappingProxyType({}))
 
 
 def format_hits(hits: Iterable[Hit]) -> str:
@@ -229,25 +266,52 @@ def _route_queries(route: str, ids: Mapping[str, str], since: datetime | None) -
     """Query strings a route is called with; unbounded list routes are narrowed to this scenario."""
     if route not in SCENARIO_SCOPED_LIST_ROUTES or since is None:
         return ("",)
-    return tuple(
-        "?" + urlencode(query) for query in SCENARIO_SCOPED_LIST_ROUTES[route](ids, since.astimezone(UTC).date())
-    )
+    aware: Final = since if since.tzinfo is not None else since.replace(tzinfo=UTC)
+    return tuple("?" + urlencode(query) for query in SCENARIO_SCOPED_LIST_ROUTES[route](ids, aware.astimezone(UTC)))
 
 
-def _spend_logs_queries(ids: Mapping[str, str], day: date) -> tuple[Mapping[str, str], ...]:
-    window: Final = {
-        "start_date": day.isoformat(),
-        "end_date": (datetime.now(UTC).date() + timedelta(days=1)).isoformat(),
-    }
+def scoped_queries(route: str, ids: Mapping[str, str], since: datetime | None) -> tuple[str, ...]:
+    """The query strings S2 calls ``route`` with (``("",)`` unless it is a scoped list route)."""
+    return _route_queries(route, ids, since)
+
+
+def _scenario_filters(ids: Mapping[str, str]) -> tuple[Mapping[str, str], ...]:
     return (
         *(({"request_id": ids["request_id"]},) if "request_id" in ids else ()),
         *(({"user_id": ids["user_id"]},) if "user_id" in ids else ()),
-        window,
     )
 
 
-SCENARIO_SCOPED_LIST_ROUTES: Final[Mapping[str, Callable[[Mapping[str, str], date], tuple[Mapping[str, str], ...]]]] = (
-    MappingProxyType({"/spend/logs": _spend_logs_queries})
+def _spend_logs_queries(ids: Mapping[str, str], since: datetime) -> tuple[Mapping[str, str], ...]:
+    window: Final = {
+        "start_date": since.date().isoformat(),
+        "end_date": (datetime.now(UTC).date() + timedelta(days=1)).isoformat(),
+    }
+    return (*_scenario_filters(ids), window)
+
+
+LIST_PAGE_SIZE: Final = 50
+LIST_WINDOW: Final = timedelta(hours=1)
+
+
+def _spend_logs_page_queries(ids: Mapping[str, str], since: datetime) -> tuple[Mapping[str, str], ...]:
+    """``/spend/logs/ui`` and ``/spend/logs/v2`` require a window; keep it to this scenario."""
+    window: Final = {
+        "start_date": (since - SCOPE_SLACK).strftime("%Y-%m-%d %H:%M:%S"),
+        "end_date": (since + LIST_WINDOW).strftime("%Y-%m-%d %H:%M:%S"),
+        "page_size": str(LIST_PAGE_SIZE),
+    }
+    return (*({**window, **query} for query in _scenario_filters(ids)), window)
+
+
+SCENARIO_SCOPED_LIST_ROUTES: Final[
+    Mapping[str, Callable[[Mapping[str, str], datetime], tuple[Mapping[str, str], ...]]]
+] = MappingProxyType(
+    {
+        "/spend/logs": _spend_logs_queries,
+        "/spend/logs/ui": _spend_logs_page_queries,
+        "/spend/logs/v2": _spend_logs_page_queries,
+    }
 )
 
 
@@ -297,9 +361,15 @@ def get_routes() -> tuple[str, ...]:
     return routes
 
 
+def _route_ids(route: str, ids: Mapping[str, str]) -> Mapping[str, str]:
+    """``ids`` with the route's ``PARAMETER_ALIASES`` applied (``/v1/models/{model_id}`` takes a model name)."""
+    aliases: Final = PARAMETER_ALIASES.get(route, {})
+    return {**ids, **{name: ids[source] for name, source in aliases.items() if source in ids}}
+
+
 def _filled(route: str, ids: Mapping[str, str]) -> tuple[str, bool]:
     """The concrete path, and whether any parameter fell back to ``PLACEHOLDER_ID``."""
-    known: Final = {**DEFAULT_IDS, **ids}
+    known: Final = {**DEFAULT_IDS, **_route_ids(route, ids)}
     names: Final = _PATH_PARAMETER.findall(route)
     path: Final = _PATH_PARAMETER.sub(lambda match: quote(known.get(match.group(1), PLACEHOLDER_ID), safe=""), route)
     return path, any(name not in known for name in names)
@@ -311,6 +381,8 @@ class _RouteCall:
     allowed: tuple[Hit, ...]
     error: str | None
     unreachable: str | None
+    location: str = ""
+    status: int = 0
 
 
 def sweep_routes(
@@ -323,9 +395,9 @@ def sweep_routes(
 ) -> RouteSweep:
     """S2: call every GET route as each caller (label -> bearer key; default the master key).
 
-    With ``since``, the unpaginated list routes in ``SCENARIO_SCOPED_LIST_ROUTES`` are called with
-    this scenario's filters (its request id, its user, and a summarized date window from
-    ``since``) instead of unfiltered, which on a shared database returns every row ever written.
+    With ``since``, the log list routes in ``SCENARIO_SCOPED_LIST_ROUTES`` are called with this
+    scenario's filters (its request id, its user, and a date window from ``since``) instead of
+    unfiltered, which on a shared database returns every row ever written or no rows at all.
     """
     routes: Final = tuple(route for route in get_routes() if route_denied(route) is None)
     targets: Final = tuple(
@@ -342,17 +414,18 @@ def sweep_routes(
             with httpx.Client(base_url=base_url, timeout=_ROUTE_TIMEOUT, trust_env=False) as client:
                 response = client.get(path, headers={"Authorization": f"Bearer {key}"})
         except httpx.HTTPError as error:
-            return _RouteCall((), (), None, f"{location}: {type(error).__name__}")
+            return _RouteCall((), (), None, f"{location}: {type(error).__name__}", location)
         headers = "\n".join(f"{name}: {value}" for name, value in response.headers.items())
         found = _hits(
             "S2", f"{location} -> {response.status_code}", response.content + b"\n" + headers.encode(), canaries
         )
-        allowed = route_allowance(route, label) is not None
         return _RouteCall(
-            () if allowed else found,
-            found if allowed else (),
+            tuple(hit for hit in found if route_allowance(route, label, hit.slot) is None),
+            tuple(hit for hit in found if route_allowance(route, label, hit.slot) is not None),
             f"{location}: {response.status_code}" if response.status_code >= 500 else None,
             None,
+            location,
+            response.status_code,
         )
 
     jobs: Final = tuple(
@@ -363,6 +436,14 @@ def sweep_routes(
     )
     with ThreadPoolExecutor(max_workers=8) as pool:
         results: Final = tuple(pool.map(lambda job: call(*job), jobs))
+    supplied: Final = {
+        route
+        for route, _, _ in targets
+        if route not in NOT_FOUND_EXPECTED
+        and _PATH_PARAMETER.findall(route)
+        and all(name in _route_ids(route, ids) for name in _PATH_PARAMETER.findall(route))
+    }
+    scoped: Final = {route for route in SCENARIO_SCOPED_LIST_ROUTES if since is not None}
     return RouteSweep(
         hits=tuple(hit for result in results for hit in result.hits),
         called=tuple(f"{label} {path}" for _, label, _, path in jobs),
@@ -373,6 +454,17 @@ def sweep_routes(
         errors=tuple(result.error for result in results if result.error is not None),
         unreachable=tuple(result.unreachable for result in results if result.unreachable is not None),
         allowed=tuple(hit for result in results for hit in result.allowed),
+        not_found=tuple(
+            f"{result.location} -> 404"
+            for (route, label, _, _), result in zip(jobs, results, strict=True)
+            if route in supplied and label == "admin" and result.status == 404
+        ),
+        rejected=tuple(
+            f"{result.location} -> {result.status}"
+            for (route, _, _, _), result in zip(jobs, results, strict=True)
+            if route in scoped and 400 <= result.status < 500
+        ),
+        statuses=MappingProxyType({result.location: result.status for result in results}),
     )
 
 
@@ -388,6 +480,8 @@ def record_route_sweep(routes: RouteSweep, node: str) -> None:
         "unreachable": routes.unreachable,
         "unfilled": routes.unfilled,
         "allowed": [f"{hit.slot} {hit.location}" for hit in routes.allowed],
+        "not_found": routes.not_found,
+        "rejected": routes.rejected,
     }
     with (Path(destination) / "security-route-sweep.jsonl").open("a") as report:
         report.write(json.dumps(entry) + "\n")
@@ -484,6 +578,12 @@ def sweep_all(
     redis: Final = sweep_redis(canaries)
     routes: Final = sweep_routes(gateway, canaries, ids, callers=callers, since=since)
     assert not routes.unreachable, f"GET routes returned no response, so S2 did not check them: {routes.unreachable}"
+    assert not routes.rejected, (
+        f"Scoped list routes rejected the scenario's query, so S2 saw no rows: {routes.rejected}"
+    )
+    assert not routes.not_found, (
+        f"GET routes whose ids were all supplied answered 404 to the admin, so an id is wrong: {routes.not_found}"
+    )
     hits: Final = (
         *sweep_database(canaries, since=since),
         *routes.hits,
