@@ -1,13 +1,28 @@
 - Target invariants, not completion claims; these supersede the crate guidance below where they conflict
+
+## Boundary migration
+
+Keep domain composition here and execution mechanics in `litellm-host-python`. A helper does not belong in the runtime adapter merely because it uses PyO3. LiteLLM argument rules, provider defaults, public responses, public exception policy and cache or secret-manager compatibility remain product responsibilities
+
+The bridge supplies the Python lifecycle binding and public stream construction to the runtime adapter. Preserve the single inline coroutine driver; removing the host's hardcoded import must not introduce another driver or a separate asyncio task for caller hooks
+
+`src/callable.rs::wrap_failure` owns callable exception policy here. Resolved-Future construction uses `litellm-host-python::ready_future`, passing an already constructed Python value. Keep cache-specific serialization and disabled-cache results here
+
+Implement the migration in separate steps that preserve public API contracts: first defer route resource setup until prepared arguments and preflight are available, then supply the lifecycle binding and separate public stream construction, then relocate the two helpers. Change the host interface and its consumers together in each step. The `native.rs` rename is optional and comes last
+
+Each step needs focused regression tests in the owning crate and Python integration coverage where the public contract crosses crates. Verify deferred setup and setup failure ordering, caller task and context identity, sync and async streams, exception provenance, cancellation and GC. Use a fresh installed extension to verify Python behavior and update `_native.pyi` when public signatures change. Do not treat these instructions as evidence that the migration is complete
+
+## Existing bridge invariants
+
 - Keep this crate the product-specific PyO3 consumer of `litellm-host-python`
   - Own registration, input projection, the route host and the caller callables it answers operations with (file readers, token providers), public response/error construction and the per-call composition of machine, route host and callback contract
-  - Legacy callback sharing (the caller's args, kwargs and request object, body/header roots, re-aliasing unchanged body keys) lives in `litellm-callbacks-legacy-python` behind `PublicCall` and `run_legacy_call`; the bridge hands the public call over and keeps no copy
+  - Legacy callback sharing (the caller's args, kwargs and request object, body/header roots, re-aliasing unchanged body keys) lives in `litellm-callbacks-legacy-python` behind `PublicCall` and `LegacyLogging`; the bridge hands the public call over and keeps no copy
   - Value-oriented execution, sync waiting, nested-runtime checks, signal polling and panic containment live in `litellm-host-python`; native async work uses `pyo3-async-runtimes`, Serde output uses `Pythonized<T>`
   - Core owns typed native state, the route machine, provider preparation/I/O and normalization; the host driver owns terminal events; the legacy adapter in `litellm-callbacks-legacy-python` owns `Logging` dispatch policy
   - Python, Rust SDK and gateway use one lifecycle-bearing core route entrypoint; provider helpers stay private, never bridge-accessible transport drivers
   - Built-in provider/config/secret/auth/document preparation stays in Rust; caller-authored callbacks and focused Python-file reads run only at core-selected points
 - Target GIL-enabled CPython explicitly with `#[pymodule(gil_used = true)]`; detach Rust-only work
-  - GIL and tokio invariants, each pinned by a test in `host-python` (`execution.rs`,
+  - GIL and tokio invariants, each pinned by a test in `host-python` (`runtime.rs`,
     `gil.rs`) so a regression fails there before it deadlocks a proxy:
     - Never hold the GIL while waiting on the runtime. A sync entrypoint releases it with
       `release_gil` around `block_on`, because every task that attaches would otherwise wait
