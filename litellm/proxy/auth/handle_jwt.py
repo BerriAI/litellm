@@ -2736,29 +2736,32 @@ class JWTAuthManager:
                 team_id_upsert=team_id_upsert,
             )
 
-        if managed is not None:
-            from litellm.proxy.agent_endpoints.auth.agent_permission_handler import resolve_delegated_agent_team
+        from litellm.proxy.agent_endpoints.auth.agent_permission_handler import resolve_delegated_agent_team
 
-            claimed_teams: Final = frozenset(handler.get_all_jwt_team_ids(jwt_valid_token))
-            scoped_teams: Final = claimed_teams or (
-                frozenset((team_id,))
-                if team_id and handler.get_team_alias(jwt_valid_token, default_value=None)
-                else None
-            )
-            granting_team: Final = await resolve_delegated_agent_team(
+        claimed_teams: Final = (
+            frozenset(handler.get_all_jwt_team_ids(jwt_valid_token)) if managed is not None else frozenset()
+        )
+        scoped_teams: Final = claimed_teams or (
+            frozenset((team_id,))
+            if managed is not None and team_id and handler.get_team_alias(jwt_valid_token, default_value=None)
+            else None
+        )
+        granting_team: Final = (
+            await resolve_delegated_agent_team(
                 managed.user_id,
                 managed.agent_id,
                 team_id,
                 explicit_team=header_team is not None,
                 allowed_team_ids=None if handler.litellm_jwtauth.fallback_to_db_teams else scoped_teams,
             )
-            if granting_team is not None and granting_team != team_id:
-                if not JWTAuthManager._is_team_route_allowed(route, request_method, handler):
-                    raise HTTPException(403, "The granting team is not allowed to access this route")
-
-        selected_team_id: Final = (
-            (granting_team if granting_team is not None else team_id) if managed is not None else team_id
+            if managed is not None
+            else team_id
         )
+        if granting_team is not None and granting_team != team_id:
+            if not JWTAuthManager._is_team_route_allowed(route, request_method, handler):
+                raise HTTPException(403, "The granting team is not allowed to access this route")
+
+        selected_team_id: Final = granting_team if granting_team is not None else team_id
         selected_team_object: Final = (
             await get_team_object(
                 team_id=selected_team_id,
@@ -2768,7 +2771,7 @@ class JWTAuthManager:
                 proxy_logging_obj=proxy_logging_obj,
                 check_db_only=True,
             )
-            if selected_team_id != team_id
+            if selected_team_id is not None and selected_team_id != team_id
             else team_object
         )
 
@@ -2865,7 +2868,7 @@ class JWTAuthManager:
             )
         elif provisional_header_team is not None and selected_team_id == provisional_header_team.team_id:
             JWTAuthManager._validate_header_team_in_db_membership(
-                team_id=team_id,
+                team_id=selected_team_id,
                 user_object=user_object,
                 header_value=provisional_header_team.header_value,
             )
