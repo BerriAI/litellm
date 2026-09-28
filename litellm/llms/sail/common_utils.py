@@ -55,6 +55,8 @@ def _json_value(value: object) -> object:
 def completion_window_for_service_tier(
     service_tier: object, *, model: str, drop_params: bool
 ) -> CompletionWindow | None:
+    """Sail picks speed and price by ``metadata.completion_window`` and rejects
+    ``service_tier``, so the tier is translated."""
     if service_tier is None:
         return None
     tier: Final = service_tier.lower() if isinstance(service_tier, str) else None
@@ -71,6 +73,8 @@ def completion_window_for_service_tier(
 def _metadata_without_caller_window(
     metadata: object, *, field: str, model: str, drop_params: bool
 ) -> Mapping[str, object]:
+    """Chat bills from ``service_tier``, so a window written into metadata would
+    run on Sail at a price LiteLLM never charges."""
     if not isinstance(metadata, Mapping):
         return _EMPTY
     if "completion_window" in metadata and not _dropping(drop_params):
@@ -81,15 +85,17 @@ def _metadata_without_caller_window(
 def extra_body_for_sail(
     extra_body: Mapping[str, object], request_metadata: object, *, model: str, drop_params: bool
 ) -> Mapping[str, object]:
+    """``extra_body`` keys are sent over the request body, so its ``metadata``
+    would replace the metadata carrying the window. The two are merged, and a
+    tier or window set in ``extra_body`` is rejected because billing cannot see it."""
     if "service_tier" in extra_body and not _dropping(drop_params):
         raise _unsupported("sail does not accept service_tier inside extra_body. Send service_tier instead.", model)
     caller_metadata: Final = _metadata_without_caller_window(
         extra_body.get("metadata"), field="extra_body.metadata", model=model, drop_params=drop_params
     )
-    request_metadata_mapping: Final[Mapping[str, object]] = (
-        request_metadata if isinstance(request_metadata, Mapping) else _EMPTY
+    merged_metadata: Final = MappingProxyType(
+        {**caller_metadata, **(request_metadata if isinstance(request_metadata, Mapping) else _EMPTY)}
     )
-    merged_metadata: Final = MappingProxyType({**caller_metadata, **request_metadata_mapping})
     rest: Final = without_keys(extra_body, frozenset({"service_tier", "metadata"}))
     raw_metadata: Final = extra_body.get("metadata")
     if merged_metadata:
@@ -107,12 +113,7 @@ def chat_request_for_sail(request: Mapping[str, object], *, model: str, drop_par
             **(
                 _entry(
                     "extra_body",
-                    extra_body_for_sail(
-                        extra_body,
-                        request.get("metadata"),
-                        model=model,
-                        drop_params=drop_params,
-                    ),
+                    extra_body_for_sail(extra_body, request.get("metadata"), model=model, drop_params=drop_params),
                 )
                 if isinstance(extra_body, Mapping)
                 else _EMPTY
@@ -136,6 +137,8 @@ def _caller_completion_window(window: object, *, model: str, drop_params: bool) 
 def params_with_completion_window(
     params: Mapping[str, object], *, model: str, drop_params: bool
 ) -> Mapping[str, object]:
+    """Billing reads these mapped params, so ``service_tier`` is kept
+    as the tier whose price columns match the window and stripped from the body later."""
     raw_tier: Final = params.get("service_tier")
     raw_metadata: Final = params.get("metadata")
     metadata: Final[Mapping[str, object]] = raw_metadata if isinstance(raw_metadata, Mapping) else _EMPTY
