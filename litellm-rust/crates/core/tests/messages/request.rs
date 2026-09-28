@@ -7,6 +7,8 @@ use super::*;
 
 #[rstest]
 #[case::anthropic_key("anthropic", Some("sk-ant"), &[], ("x-api-key", "sk-ant"), &["authorization"])]
+#[case::minimax_key("minimax", Some("sk-minimax"), &[], ("x-api-key", "sk-minimax"), &["authorization"])]
+#[case::minimax_bearer("minimax", None, &[("Authorization", "Bearer caller")], ("authorization", "Bearer caller"), &["x-api-key"])]
 #[case::azure_key("azure_ai", Some("sk-azure"), &[], ("x-api-key", "sk-azure"), &["authorization"])]
 #[case::caller_x_api_key_wins(
     "azure_ai",
@@ -74,6 +76,7 @@ async fn credentials_become_exactly_one_auth_header(
 #[rstest]
 #[case::anthropic("anthropic")]
 #[case::azure_ai("azure_ai")]
+#[case::minimax("minimax")]
 #[tokio::test]
 async fn a_call_without_credentials_fails_before_sending(
     call: MessagesCall,
@@ -100,16 +103,25 @@ async fn a_call_without_credentials_fails_before_sending(
 }
 
 #[rstest]
-#[case::anthropic(MODEL, Some("anthropic"), "", "/v1/messages")]
-#[case::anthropic_base_with_trailing_slash(MODEL, Some("anthropic"), "/", "/v1/messages")]
+#[case::anthropic(MODEL, Some("anthropic"), "", "/v1/messages", MODEL)]
+#[case::anthropic_base_with_trailing_slash(MODEL, Some("anthropic"), "/", "/v1/messages", MODEL)]
 #[case::anthropic_base_with_the_messages_path(
     MODEL,
     Some("anthropic"),
     "/v1/messages",
-    "/v1/messages"
+    "/v1/messages",
+    MODEL
 )]
-#[case::azure_ai(MODEL, Some("azure_ai"), "", "/anthropic/v1/messages")]
-#[case::provider_from_model_prefix("anthropic/claude-sonnet-4-5", None, "", "/v1/messages")]
+#[case::minimax(MODEL, Some("minimax"), "/anthropic", "/anthropic/v1/messages", MODEL)]
+#[case::minimax_prefix(
+    "minimax/test-model",
+    None,
+    "/anthropic",
+    "/anthropic/v1/messages",
+    "test-model"
+)]
+#[case::azure_ai(MODEL, Some("azure_ai"), "", "/anthropic/v1/messages", MODEL)]
+#[case::provider_from_model_prefix("anthropic/claude-sonnet-4-5", None, "", "/v1/messages", MODEL)]
 #[tokio::test]
 async fn each_provider_posts_to_its_messages_endpoint(
     call: MessagesCall,
@@ -117,6 +129,7 @@ async fn each_provider_posts_to_its_messages_endpoint(
     #[case] provider: Option<&str>,
     #[case] base_suffix: &str,
     #[case] path: &str,
+    #[case] expected_model: &str,
 ) {
     let upstream = upstream([message_response()]).await;
 
@@ -131,7 +144,7 @@ async fn each_provider_posts_to_its_messages_endpoint(
     let request = only_request(&upstream).await;
     assert_eq!(request.method.as_str(), "POST");
     assert_eq!(request.url.path(), path);
-    assert_eq!(request.json()["model"], MODEL);
+    assert_eq!(request.json()["model"], expected_model);
     assert_eq!(request.header_values("anthropic-version"), ["2023-06-01"]);
     assert_eq!(request.header_values("content-type"), ["application/json"]);
 }

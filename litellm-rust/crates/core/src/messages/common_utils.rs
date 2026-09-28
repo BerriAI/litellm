@@ -5,6 +5,7 @@ use litellm_llms::{
     azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
     base_llm::messages::transformation::BaseAnthropicMessagesConfig,
     bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+    minimax::messages::transformation::MINIMAX_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
 
@@ -18,6 +19,7 @@ pub(crate) enum MessagesProvider {
     Anthropic,
     AzureAi,
     Bedrock,
+    Minimax,
 }
 
 impl MessagesProvider {
@@ -26,6 +28,7 @@ impl MessagesProvider {
             Self::Anthropic => LlmProviders::Anthropic,
             Self::AzureAi => LlmProviders::AzureAi,
             Self::Bedrock => LlmProviders::Bedrock,
+            Self::Minimax => LlmProviders::Minimax,
         }
         .into()
     }
@@ -35,6 +38,7 @@ impl MessagesProvider {
             Self::Anthropic => &ANTHROPIC_MESSAGES_CONFIG,
             Self::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,
             Self::Bedrock => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
+            Self::Minimax => &MINIMAX_MESSAGES_CONFIG,
         }
     }
 }
@@ -44,6 +48,7 @@ pub(crate) fn messages_provider(provider: LlmProviders) -> Option<MessagesProvid
         LlmProviders::Anthropic => Some(MessagesProvider::Anthropic),
         LlmProviders::AzureAi => Some(MessagesProvider::AzureAi),
         LlmProviders::Bedrock => Some(MessagesProvider::Bedrock),
+        LlmProviders::Minimax => Some(MessagesProvider::Minimax),
         LlmProviders::AwsTextract
         | LlmProviders::Cohere
         | LlmProviders::Mistral
@@ -74,6 +79,7 @@ mod tests {
     #[case::anthropic("anthropic", MessagesProvider::Anthropic)]
     #[case::azure_ai("azure_ai", MessagesProvider::AzureAi)]
     #[case::bedrock("bedrock", MessagesProvider::Bedrock)]
+    #[case::minimax("minimax", MessagesProvider::Minimax)]
     fn provider_round_trips_through_its_python_name(
         #[case] name: &str,
         #[case] provider: MessagesProvider,

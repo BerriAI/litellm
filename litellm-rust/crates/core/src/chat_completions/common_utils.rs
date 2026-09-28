@@ -37,6 +37,7 @@ pub(super) fn chat_completions_provider(provider: LlmProviders) -> Option<ChatPr
         | LlmProviders::AzureAi
         | LlmProviders::Cohere
         | LlmProviders::Mistral
+        | LlmProviders::Minimax
         | LlmProviders::Openai
         | LlmProviders::Reducto
         | LlmProviders::VertexAi => None,

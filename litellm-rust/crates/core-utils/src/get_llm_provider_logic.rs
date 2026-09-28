@@ -14,6 +14,7 @@ pub enum LlmProviders {
     AzureAi,
     Bedrock,
     Cohere,
+    Minimax,
     Mistral,
     Openai,
     OpenaiLike,

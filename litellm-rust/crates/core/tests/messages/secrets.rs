@@ -10,6 +10,10 @@ use super::*;
     "/v1/messages",
     &["ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN", "ANTHROPIC_API_BASE", "ANTHROPIC_BASE_URL"]
 )]
+#[case::minimax(
+    "minimax", "MINIMAX_API_KEY", "MINIMAX_API_BASE", "/v1/messages",
+    &["MINIMAX_API_KEY", "MINIMAX_API_BASE"]
+)]
 #[case::azure_ai(
     "azure_ai",
     "AZURE_API_KEY",

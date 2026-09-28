@@ -148,10 +148,24 @@ async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Er
 }
 
 #[rstest]
+#[case::anthropic("anthropic")]
+#[case::minimax("minimax")]
 #[tokio::test]
-async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(call: MessagesCall) {
+async fn upstream_headers_are_on_the_stream_head_before_the_first_chunk(
+    call: MessagesCall,
+    #[case] provider: &str,
+) {
     let upstream = upstream([sse_response()]).await;
-    let host = RecordingStreamHost::new(streaming(call, upstream.uri()), usize::MAX);
+    let host = RecordingStreamHost::new(
+        streaming(
+            MessagesCall {
+                custom_llm_provider: Some(provider.into()),
+                ..call
+            },
+            upstream.uri(),
+        ),
+        usize::MAX,
+    );
 
     let outcome = stream_through(&host).await.expect("streamed call succeeds");
 

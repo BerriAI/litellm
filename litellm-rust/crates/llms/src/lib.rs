@@ -5,6 +5,7 @@ pub mod base_llm;
 pub mod bedrock;
 pub mod cohere;
 mod error;
+pub mod minimax;
 pub mod mistral;
 pub mod openai;
 pub mod openai_like;

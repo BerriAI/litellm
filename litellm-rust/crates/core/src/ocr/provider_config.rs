@@ -227,6 +227,7 @@ pub(crate) fn resolve_provider_config(
         LlmProviders::VertexAi => OcrConfigKind::VertexAi,
         LlmProviders::Anthropic
         | LlmProviders::Bedrock
+        | LlmProviders::Minimax
         | LlmProviders::Openai
         | LlmProviders::OpenaiLike => {
             return Err(Error::InvalidProvider(
