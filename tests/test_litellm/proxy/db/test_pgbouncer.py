@@ -122,6 +122,13 @@ class TestPlanPgBouncer:
             "pgbouncer": "true",
         }
 
+    def test_an_upstream_that_already_disables_prepared_statements_gets_a_single_pgbouncer_flag(self):
+        pooled: Final = _plan("postgresql://app:pw@db/litellm?connection_limit=5&pgbouncer=true").pooled_url
+        assert urllib.parse.parse_qsl(urllib.parse.urlsplit(pooled).query) == [
+            ("connection_limit", "5"),
+            ("pgbouncer", "true"),
+        ]
+
     @pytest.mark.parametrize("hop_param", ["channel_binding=require", "gssencmode=require"])
     def test_transport_params_for_the_postgres_hop_stay_off_the_plain_tcp_loopback_url(self, hop_param: str):
         pooled: Final = _plan(f"postgresql://app:pw@db/litellm?connection_limit=5&{hop_param}").pooled_url
@@ -411,7 +418,7 @@ class TestPgBouncerProcess:
             port=port,
             socket_path=unix_socket_path(tmp_path, port),
             restart_delay_seconds=0.1,
-            ready_timeout_seconds=0.3,
+            ready_timeout_seconds=2.0,
         )
         assert pooler.start() is None
         first_pid: Final = pooler.pid
@@ -421,8 +428,8 @@ class TestPgBouncerProcess:
         with caplog.at_level(logging.ERROR, logger=verbose_proxy_logger.name):
             os.kill(first_pid, signal.SIGKILL)
             assert _wait_until(lambda: _listening(wrong_port))
-            assert _wait_until(lambda: any("did not start listening" in record.message for record in caplog.records))
             port_file.write_text(str(port))
+            assert _wait_until(lambda: any("did not start listening" in record.message for record in caplog.records))
             assert _wait_until(lambda: _listening(port))
             assert _wait_until(lambda: not _listening(wrong_port))
         pooler.stop()

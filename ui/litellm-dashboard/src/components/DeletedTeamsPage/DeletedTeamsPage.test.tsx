@@ -5,6 +5,8 @@ import { renderWithProviders } from "../../../tests/test-utils";
 import DeletedTeamsPage from "./DeletedTeamsPage";
 import { useDeletedTeams, DeletedTeam } from "@/app/(dashboard)/hooks/teams/useTeams";
 
+vi.mock("next/navigation", () => ({ useRouter: () => ({ push: vi.fn() }) }));
+
 vi.mock("@/app/(dashboard)/hooks/teams/useTeams", () => ({
   useDeletedTeams: vi.fn(),
 }));

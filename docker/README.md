@@ -2,6 +2,17 @@
 
 This guide provides instructions for building and running the LiteLLM application using Docker and Docker Compose.
 
+> **Just want to run LiteLLM?** This guide builds from source. To run the published
+> image instead, use `docker-compose.quickstart.yml` in this directory — the
+> two-service stack (gateway + Postgres) that the
+> [Docker quickstart](https://docs.litellm.ai/docs/proxy/docker_quick_start) documents:
+>
+> ```bash
+> curl -sSLO https://github.com/BerriAI/litellm/raw/main/docker/docker-compose.quickstart.yml
+> printf 'LITELLM_MASTER_KEY=sk-%s\nLITELLM_SALT_KEY=sk-%s\n' "$(openssl rand -hex 32)" "$(openssl rand -hex 32)" > .env
+> docker compose -f docker-compose.quickstart.yml up -d
+> ```
+
 ## Prerequisites
 
 - Docker

@@ -3,8 +3,10 @@ package litellm
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log"
+	"slices"
 
 	"github.com/hashicorp/go-cty/cty"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
@@ -59,6 +61,12 @@ func resourceKey() *schema.Resource {
 				Type:     schema.TypeMap,
 				Optional: true,
 				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"server_metadata": {
+				Type:        schema.TypeMap,
+				Computed:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+				Description: "Every metadata entry the proxy stores for this key, including ones not declared in metadata. Read-only, so drift on undeclared entries shows up on refresh without Terraform taking ownership of them. Entries the provider already exposes as their own attributes (model_rpm_limit, model_tpm_limit, tags, guardrails, enforced_params, allowed_passthrough_routes, rpm_limit_type, tpm_limit_type, prompts) are omitted, and non-string values are JSON encoded",
 			},
 			"tpm_limit": {
 				Type:     schema.TypeInt,
@@ -303,6 +311,7 @@ func resourceKeyRead(ctx context.Context, d *schema.ResourceData, m interface{})
 		return nil
 	}
 
+	d.Set("server_metadata", serverKeyMetadata(key.Metadata))
 	key.Metadata = declaredKeyMetadata(key.Metadata, d.Get("metadata").(map[string]interface{}))
 	mapKeyToResourceData(d, key)
 	return nil
@@ -321,17 +330,40 @@ func resourceKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{
 
 	metadata, err := plannedKeyMetadata(c, d)
 	if err != nil {
-		d.Partial(true)
-		return diag.FromErr(fmt.Errorf("error updating key: %s", err))
+		return failedKeyUpdate(ctx, d, m, err)
 	}
 	key.Metadata = metadata
 
 	if _, err := c.UpdateKey(key); err != nil {
-		d.Partial(true)
-		return diag.FromErr(fmt.Errorf("error updating key: %s", err))
+		return failedKeyUpdate(ctx, d, m, err)
 	}
 
 	return resourceKeyRead(ctx, d, m)
+}
+
+// Deleting a team cascade-deletes its keys, so an apply that moves a key onto a
+// replacement team can find the key already gone, and recreating it is the only
+// way forward. Confirming it is really gone keeps an unrelated 404 (a rejected
+// project_id, say) a hard failure rather than silently orphaning a live key.
+func failedKeyUpdate(ctx context.Context, d *schema.ResourceData, m interface{}, err error) diag.Diagnostics {
+	c := m.(*Client)
+	if d.HasChange("team_id") && keyIsGone(c, d.Id(), err) {
+		log.Printf("[WARN] Key %q no longer exists, most likely cascade-deleted with its previous team; recreating it under the new team_id", d.Id())
+		return resourceKeyCreate(ctx, d, m)
+	}
+	d.Partial(true)
+	return diag.FromErr(fmt.Errorf("error updating key: %s", err))
+}
+
+func keyIsGone(c *Client, keyID string, err error) bool {
+	if errors.Is(err, errKeyGone) {
+		return true
+	}
+	if !isNotFound(err) {
+		return false
+	}
+	key, getErr := c.GetKey(keyID)
+	return getErr == nil && key == nil
 }
 
 func changedMap(d *schema.ResourceData, name string) map[string]interface{} {
@@ -340,6 +372,8 @@ func changedMap(d *schema.ResourceData, name string) map[string]interface{} {
 	}
 	return d.Get(name).(map[string]interface{})
 }
+
+var errKeyGone = errors.New("no longer exists")
 
 func plannedKeyMetadata(c *Client, d *schema.ResourceData) (map[string]interface{}, error) {
 	if !d.HasChange("metadata") {
@@ -350,7 +384,7 @@ func plannedKeyMetadata(c *Client, d *schema.ResourceData) (map[string]interface
 		return nil, err
 	}
 	if current == nil {
-		return nil, fmt.Errorf("key %s no longer exists", d.Id())
+		return nil, fmt.Errorf("key %s %w", d.Id(), errKeyGone)
 	}
 	oldDeclared, newDeclared := d.GetChange("metadata")
 	return mergeKeyMetadata(current.Metadata, oldDeclared.(map[string]interface{}), newDeclared.(map[string]interface{})), nil
@@ -365,6 +399,25 @@ func declaredKeyMetadata(server, declared map[string]interface{}) map[string]int
 		if v, ok := server[k]; ok {
 			result[k] = v
 		}
+	}
+	return result
+}
+
+func serverKeyMetadata(server map[string]interface{}) map[string]string {
+	result := make(map[string]string, len(server))
+	for k, v := range server {
+		if slices.Contains(keyFieldsStoredInMetadata, k) {
+			continue
+		}
+		if s, ok := v.(string); ok {
+			result[k] = s
+			continue
+		}
+		encoded, err := json.Marshal(v)
+		if err != nil {
+			continue
+		}
+		result[k] = string(encoded)
 	}
 	return result
 }

@@ -42,9 +42,9 @@ class _DownstreamElicitSession(Protocol):
 
     async def elicit_url(self, message: str, url: str, elicitation_id: str) -> "ElicitResult": ...
 
-    async def elicit_form(self, message: str, requestedSchema: dict[str, object]) -> "ElicitResult": ...
+    async def elicit_form(self, message: str, requested_schema: dict[str, object]) -> "ElicitResult": ...
 
-    async def elicit(self, message: str, requestedSchema: dict[str, object]) -> "ElicitResult": ...
+    async def elicit(self, message: str, requested_schema: dict[str, object]) -> "ElicitResult": ...
 
 
 async def handle_elicitation_request(
@@ -145,22 +145,22 @@ async def _relay_elicitation_to_downstream(
             result = await downstream_session.elicit_url(
                 message=params.message,
                 url=params.url,
-                elicitation_id=params.elicitationId,
+                elicitation_id=params.elicitation_id,
             )
         elif isinstance(params, ElicitRequestFormParams):
             # Form mode: relay structured form to client
             verbose_logger.info("MCP elicitation: relaying form mode to downstream")
             result = await downstream_session.elicit_form(
                 message=params.message,
-                requestedSchema=params.requestedSchema,
+                requested_schema=params.requested_schema,
             )
         else:
             # Fallback for generic ElicitRequestParams — pass an empty schema
-            # since elicit() requires requestedSchema as a positional arg.
+            # since elicit() requires requested_schema as a positional arg.
             verbose_logger.info("MCP elicitation: relaying generic elicitation to downstream")
             result = await downstream_session.elicit(
                 message=getattr(params, "message", ""),
-                requestedSchema=getattr(params, "requestedSchema", {}),
+                requested_schema=getattr(params, "requested_schema", {}),  # mutable-ok: elicitation default schema
             )
         verbose_logger.info(
             "MCP elicitation: downstream responded with action=%s",

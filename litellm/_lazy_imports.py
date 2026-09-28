@@ -58,7 +58,8 @@ from ._lazy_imports_registry import (
 
 if TYPE_CHECKING:
     import httpx
-    from tiktoken import Encoding
+
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 def get_litellm_globals() -> dict[str, object]:
@@ -89,26 +90,11 @@ def _get_module_level_client_timeout(litellm_globals: Mapping[str, Any]) -> "flo
 # These are special lazy loaders for things that are used internally
 # They're separate from the main lazy import system because they have specific use cases
 
-# Lazy loader for default encoding - avoids importing heavy tiktoken library at startup
-_default_encoding: "Encoding | None" = None
 
+def _get_default_encoding() -> "Tokenizer":
+    from litellm.rust_bridge.tokenizer import get_encoding
 
-def _get_default_encoding() -> "Encoding":
-    """
-    Lazily load and cache the default OpenAI encoding.
-
-    This avoids importing `litellm.litellm_core_utils.default_encoding` (and thus tiktoken)
-    at `litellm` import time. The encoding is cached after the first import.
-
-    This is used internally by utils.py functions that need the encoding but shouldn't
-    trigger its import during module load.
-    """
-    global _default_encoding
-    if _default_encoding is None:
-        from litellm.litellm_core_utils.default_encoding import encoding
-
-        _default_encoding = encoding
-    return _default_encoding
+    return get_encoding("cl100k_base")
 
 
 # Lazy loader for get_modified_max_tokens to avoid importing token_counter at module import time
