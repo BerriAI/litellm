@@ -5,8 +5,10 @@ from typing import Final, Literal, TypeAlias
 import pytest
 from pydantic import JsonValue, TypeAdapter
 
+import litellm
 from litellm import RateLimitError
 from litellm.integrations.custom_logger import CustomLogger
+from litellm.responses.utils import ResponsesAPIRequestUtils
 from litellm.rust_bridge import _native
 from litellm.rust_bridge.chat_completions.entrypoints import LiteLLMChatCompletionsRequest
 from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
@@ -16,7 +18,7 @@ from tests.test_litellm_rust.support.callback_recorder import RecordingLogger
 from tests.test_litellm_rust.support.recording_server import RecordingServer, ResponseSpec
 from tests.test_litellm_rust.support.requests import MESSAGES, MESSAGES_MODEL, MESSAGES_RESPONSE, request_body
 
-pytestmark = [pytest.mark.requires_rust_extension, pytest.mark.parametrize("route", ("chat", "responses"))]
+pytestmark = pytest.mark.requires_rust_extension
 Route: TypeAlias = Literal["chat", "responses"]
 _OBJECT: Final = TypeAdapter(dict[str, object])
 NativeResult: TypeAlias = (
@@ -43,6 +45,11 @@ RESPONSES_RESPONSE: Final[dict[str, JsonValue]] = {
     ],
     "usage": {"input_tokens": 5, "output_tokens": 4, "total_tokens": 9},
 }
+
+
+@pytest.fixture(params=("chat", "responses"))
+def route(request: pytest.FixtureRequest) -> Route:
+    return TypeAdapter(Route).validate_python(request.param)
 
 
 def native_call(
@@ -215,3 +222,60 @@ async def test_native_projection_reads_positional_parameters(route: Route, recor
         body: Final = _OBJECT.validate_python(recording_server.requests[0].body)
         assert body["instructions"] == "Be brief"
         assert body["max_output_tokens"] == 16
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("source", ("explicit", "base_url", "global", "provider", "environment", "empty"))
+async def test_native_connection_settings_reach_the_provider(
+    route: Route,
+    asynchronous: bool,
+    source: str,
+    recording_server: RecordingServer,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    key: Final = "selected-key"
+    explicit: Final = source in ("explicit", "base_url")
+    monkeypatch.setattr(litellm, "api_key", key if source in ("global", "empty") else ("unused" if explicit else None))
+    monkeypatch.setattr(litellm, "openai_key", key if source == "provider" else ("unused" if explicit else None))
+    monkeypatch.setattr(litellm, "anthropic_key", key if source == "provider" else ("unused" if explicit else None))
+    monkeypatch.setattr(
+        litellm,
+        "api_base",
+        None if source == "environment" else ("http://127.0.0.1:1" if explicit else recording_server.base_url),
+    )
+    monkeypatch.setenv(
+        "OPENAI_API_KEY" if route == "responses" else "ANTHROPIC_API_KEY", key if source == "environment" else "unused"
+    )
+    for name in ("OPENAI_BASE_URL", "OPENAI_API_BASE", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_BASE"):
+        monkeypatch.setenv(name, recording_server.base_url if source == "environment" else "http://127.0.0.1:1")
+    result: Final = await execute(
+        route,
+        asynchronous,
+        recording_server,
+        {
+            "api_key": key if explicit else ("" if source == "empty" else None),
+            "api_base": recording_server.base_url if source == "explicit" else ("" if source == "empty" else None),
+            **({"base_url": recording_server.base_url} if source == "base_url" else {}),
+        },
+    )
+    assert isinstance(result, ModelResponse | ResponsesAPIResponse)
+    assert len(recording_server.requests) == 1
+    headers: Final = recording_server.requests[0].headers
+    assert headers["x-api-key" if route == "chat" else "authorization"] == (key if route == "chat" else f"Bearer {key}")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("asynchronous", (False, True))
+@pytest.mark.parametrize("encoded", (False, True))
+async def test_native_responses_decode_continuation_ids(
+    asynchronous: bool, encoded: bool, recording_server: RecordingServer
+) -> None:
+    original: Final = "resp_upstream"
+    previous: Final = (
+        ResponsesAPIRequestUtils._build_responses_api_response_id("openai", "deployment", original)
+        if encoded
+        else original
+    )
+    await execute("responses", asynchronous, recording_server, {"previous_response_id": previous})
+    assert _OBJECT.validate_python(recording_server.requests[0].body)["previous_response_id"] == original

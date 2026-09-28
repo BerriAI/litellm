@@ -1,4 +1,5 @@
 use litellm_core::RouteError;
+use litellm_core_utils::get_llm_provider_logic::get_custom_llm_provider;
 use litellm_host_python::{from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
 use pyo3::{exceptions::PyValueError, prelude::*, types::PyDict};
@@ -63,13 +64,26 @@ impl InferenceHost {
             .map(|value| python_timeout_seconds(py, value.unbind()))
             .transpose()?
             .flatten();
+        let model = string("model")?.ok_or_else(|| PyValueError::new_err("model is required"))?;
+        let custom_llm_provider = string("custom_llm_provider")?;
+        let provider = get_custom_llm_provider(&model, custom_llm_provider.as_deref())
+            .map_or("", |resolved| resolved.custom_llm_provider);
+        let (default_key, default_base): (Option<String>, Option<String>) = py
+            .import(self.module)?
+            .getattr("connection_defaults")?
+            .call1((provider,))?
+            .extract()?;
         Ok(ProjectedCall {
             options: RouteOptions {
-                model: string("model")?
-                    .ok_or_else(|| PyValueError::new_err("model is required"))?,
-                api_key: string("api_key")?,
-                api_base: string("api_base")?.or(string("base_url")?),
-                custom_llm_provider: string("custom_llm_provider")?,
+                model,
+                api_key: string("api_key")?
+                    .filter(|key| !key.is_empty())
+                    .or(default_key),
+                api_base: string("api_base")?
+                    .filter(|base| !base.is_empty())
+                    .or(string("base_url")?.filter(|base| !base.is_empty()))
+                    .or(default_base),
+                custom_llm_provider,
                 extra_headers: argument("extra_headers")?
                     .map(|value| from_py(&value))
                     .transpose()?,

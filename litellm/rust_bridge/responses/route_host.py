@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections.abc import Mapping
 from typing import Final
 
+import litellm
 from litellm import get_llm_provider
 from litellm.rust_bridge import failures
 from litellm.rust_bridge.public_call import inference_decline_reason
@@ -10,6 +11,10 @@ from litellm.rust_bridge.responses.entrypoints import LiteLLMResponsesRequest
 from litellm.types.llms.openai import ResponsesAPIOptionalRequestParams, ResponsesAPIResponse
 
 PARAMETERS: Final = tuple(ResponsesAPIOptionalRequestParams.__annotations__)
+
+
+def connection_defaults(_provider: str) -> tuple[str | None, str | None]:
+    return litellm.api_key or litellm.openai_key, litellm.api_base
 
 
 def response(value: Mapping[str, object]) -> ResponsesAPIResponse:

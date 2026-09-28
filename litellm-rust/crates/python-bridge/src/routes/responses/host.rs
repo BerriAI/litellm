@@ -17,10 +17,31 @@ pub(super) fn project(
     arguments: &Bound<'_, PyDict>,
 ) -> PyResult<ResponsesCall> {
     let call = host.project(py, arguments, "input")?;
+    let optional_params = call
+        .params
+        .into_iter()
+        .map(|(name, value)| {
+            let value = match (name.as_str(), value) {
+                ("previous_response_id", serde_json::Value::String(id)) => {
+                    let decoded: String = py
+                        .import("litellm.responses.utils")?
+                        .getattr("ResponsesAPIRequestUtils")?
+                        .call_method1(
+                            "decode_previous_response_id_to_original_previous_response_id",
+                            (id,),
+                        )?
+                        .extract()?;
+                    serde_json::Value::String(decoded)
+                }
+                (_, value) => value,
+            };
+            Ok((name, value))
+        })
+        .collect::<PyResult<_>>()?;
     Ok(ResponsesCall {
         model: call.options.model,
         input: call.input,
-        optional_params: call.params,
+        optional_params,
         api_key: call.options.api_key,
         api_base: call.options.api_base,
         custom_llm_provider: call.options.custom_llm_provider,
