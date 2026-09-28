@@ -11349,7 +11349,7 @@ async def _deployment_hidden_by_listing_callbacks(deployment: Deployment, user_a
 async def model_list(
     request: Request = None,  # pyright: ignore[reportArgumentType]  # FastAPI always injects the Request; the None default only serves direct in-process callers
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
-    return_wildcard_routes: bool | None = False,
+    return_wildcard_routes: bool | None = None,
     team_id: str | None = None,
     include_model_access_groups: bool | None = False,
     only_model_access_groups: bool | None = False,
@@ -11364,6 +11364,10 @@ async def model_list(
     This is just for compatibility with openai projects like aider.
 
     Query Parameters:
+    - return_wildcard_routes: When true, also list wildcard routes (e.g. `openai/*`)
+                    next to the models they expand to. Defaults to
+                    `general_settings.model_list_return_wildcard_routes`, which is
+                    false unless set; pass `false` to leave them out regardless.
     - include_metadata: Include additional metadata in the response with fallback information
     - fallback_type: Type of fallbacks to include ("general", "context_window", "content_policy")
                     Defaults to "general" when include_metadata=true
@@ -11452,6 +11456,12 @@ async def model_list(
 
     hidden_names: Final = blocked_names | unhealthy_names
 
+    include_wildcard_routes: Final = (
+        settings.get("model_list_return_wildcard_routes") is True
+        if return_wildcard_routes is None
+        else return_wildcard_routes
+    )
+
     # If scope=expand and user has admin privileges, return all proxy models
     if should_expand_scope:
         # Get all proxy models as if user is a proxy admin
@@ -11475,7 +11485,7 @@ async def model_list(
             proxy_model_list=proxy_model_list,
             user_model=None,
             infer_model_from_keys=False,
-            return_wildcard_routes=return_wildcard_routes or False,
+            return_wildcard_routes=include_wildcard_routes,
             llm_router=llm_router,
             model_access_groups=model_access_groups,
             include_model_access_groups=include_model_access_groups or False,
@@ -11535,7 +11545,7 @@ async def model_list(
         team_id=team_id,
         include_model_access_groups=include_model_access_groups or False,
         only_model_access_groups=only_model_access_groups or False,
-        return_wildcard_routes=return_wildcard_routes or False,
+        return_wildcard_routes=include_wildcard_routes,
         user_api_key_cache=user_api_key_cache,
     )
 

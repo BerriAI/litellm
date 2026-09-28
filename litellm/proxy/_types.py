@@ -2856,6 +2856,14 @@ class ConfigGeneralSettings(LiteLLMPydanticObjectBase):
             "hidden model can still be called."
         ),
     )
+    model_list_return_wildcard_routes: bool | None = Field(
+        None,
+        description=(
+            "When true, `/models` lists wildcard routes such as `openai/*` next to the models they "
+            "expand to, for every caller, without needing `return_wildcard_routes=true` per request. "
+            "A request can still pass `return_wildcard_routes=false` to leave them out."
+        ),
+    )
     alerting: list | None = Field(
         None,
         description="List of alerting integrations - e.g. `alerting: ['slack', 'webhook', 'email']`. 'slack' posts Slack-format messages to any Slack-compatible webhook (Slack, Rocket.Chat, Mattermost); 'webhook' posts structured JSON budget alerts to WEBHOOK_URL",
