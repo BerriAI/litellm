@@ -46,6 +46,9 @@ def initialize_guardrail(
         timeout=litellm_params.timeout,
         send_images=_get_config_value(litellm_params, optional_params, "send_images"),
         exclude_payload_fields=_get_config_value(litellm_params, optional_params, "exclude_payload_fields"),
+        max_messages=_get_config_value(litellm_params, optional_params, "max_messages"),
+        max_text_chars=_get_config_value(litellm_params, optional_params, "max_text_chars"),
+        strip_patterns=_get_config_value(litellm_params, optional_params, "strip_patterns"),
     )
 
     litellm.logging_callback_manager.add_litellm_callback(_generic_guardrail_api_callback)
