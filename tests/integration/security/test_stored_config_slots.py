@@ -86,7 +86,9 @@ def rig(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Rig]:
     def configure(config: dict[str, object], _: str) -> None:
         settings: Final = config["litellm_settings"]
         assert isinstance(settings, dict)
-        settings["enable_model_config_credential_overrides"] = True
+        settings["enable_model_config_credential_overrides"] = (
+            True  # rebind-ok: canary_rig's configure hook edits the config it is handed
+        )
 
     with canary_rig(tmp_path_factory.mktemp("canary-stored-config"), configure=configure) as value:
         yield value
@@ -657,7 +659,9 @@ def test_config_guardrail_api_key_reaches_only_the_guardrail(
         guardrail: Final = Recorder(wire)
 
         def configure(config: dict[str, object], _: str) -> None:
-            config["guardrails"] = [{"guardrail_name": name, "litellm_params": _guardrail_params(wire.url, e1)}]
+            config["guardrails"] = [  # rebind-ok: canary_rig's configure hook edits the config it is handed
+                {"guardrail_name": name, "litellm_params": _guardrail_params(wire.url, e1)}
+            ]
 
         with canary_rig(tmp_path, configure=configure) as owned, owned.proxy.scenario() as scenario:
             caller: Final = _caller(scenario, models=[CONFIG_MODEL])
@@ -723,7 +727,9 @@ def test_sink_credentials_from_env_reach_only_their_sink(
     def configure(config: dict[str, object], _: str) -> None:
         settings: Final = config["litellm_settings"]
         assert isinstance(settings, dict)
-        settings.update({"success_callback": ["langfuse"], "failure_callback": ["langfuse"]})
+        settings.update(
+            {"success_callback": ["langfuse"], "failure_callback": ["langfuse"]}
+        )  # rebind-ok: canary_rig's configure hook edits the config it is handed
 
     with wire_server(_langfuse) as wire:
         langfuse: Final = Recorder(wire)
