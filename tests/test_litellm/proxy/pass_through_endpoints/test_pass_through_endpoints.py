@@ -7305,6 +7305,71 @@ def test_passthrough_client_cannot_forge_session_id_omission(client_metadata_key
     )
 
 
+@pytest.mark.parametrize(
+    "header_name,header_value",
+    [
+        ("x-litellm-session-id", "S1"),
+        ("x-litellm-trace-id", "T1"),
+    ],
+)
+def test_passthrough_honors_session_header_for_spend_logs(header_name: str, header_value: str):
+    """Pass-through routes must pick up x-litellm-session-id / x-litellm-trace-id
+    the same way /v1/chat/completions does (#43540). Without this, every
+    /gemini/... spend row gets a fresh uuid4 session."""
+    from litellm.litellm_core_utils.litellm_logging import StandardLoggingPayloadSetup
+
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
+    mock_request.headers = Headers({header_name: header_value})
+    mock_request.scope = {}
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={},
+        litellm_call_id="lit-43540-call-id",
+    )
+
+    litellm_params = kwargs["litellm_params"]
+    assert litellm_params["litellm_session_id"] == header_value
+    assert litellm_params["litellm_trace_id"] == header_value
+    assert litellm_params["metadata"]["session_id"] == header_value
+    assert litellm_params["metadata"]["trace_id"] == header_value
+    assert (
+        StandardLoggingPayloadSetup.get_standard_logging_payload_trace_id(
+            logging_obj=MagicMock(litellm_trace_id="fallback-uuid"),
+            litellm_params=litellm_params,
+        )
+        == header_value
+    )
+
+
+def test_passthrough_without_session_header_does_not_invent_one():
+    """No session header → leave litellm_session_id unset so spend logging
+    keeps its existing uuid4 / omit fallback."""
+    mock_request = MagicMock(spec=Request)
+    mock_request.method = "POST"
+    mock_request.url = "http://0.0.0.0:4000/gemini/v1beta/models/gemini-2.5-flash:generateContent"
+    mock_request.headers = Headers({})
+    mock_request.scope = {}
+
+    kwargs = HttpPassThroughEndpointHelpers._init_kwargs_for_pass_through_endpoint(
+        request=mock_request,
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key"),
+        passthrough_logging_payload=MagicMock(),
+        logging_obj=MagicMock(),
+        _parsed_body={},
+        litellm_call_id="lit-43540-no-header",
+    )
+
+    assert "litellm_session_id" not in kwargs["litellm_params"]
+    assert "litellm_trace_id" not in kwargs["litellm_params"]
+    assert "session_id" not in kwargs["litellm_params"]["metadata"]
+
+
 @pytest.mark.parametrize("client_metadata_key", ["litellm_metadata", "metadata"])
 def test_passthrough_logs_the_resolved_deployment_model_info_over_the_request_body(client_metadata_key: str):
     """A provider route that resolved a router deployment stashes its model_info on request.state. That
