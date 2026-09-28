@@ -1,0 +1,37 @@
+use std::sync::Arc;
+
+use axum::{Json, body::Bytes, extract::State, response::Response};
+use litellm_core::responses::{route::Responses, types::ResponsesCall};
+use litellm_host_http::Sse;
+use serde_json::json;
+
+use crate::{Error, Gateway, JsonObject, request};
+
+pub(crate) async fn create(
+    State(gateway): State<Arc<Gateway>>,
+    JsonObject(body): JsonObject,
+) -> Result<Response, Error> {
+    let deployment = request::resolve_deployment(&gateway, &body)?;
+    let call = ResponsesCall {
+        model: deployment.model.clone(),
+        input: body.get("input").cloned().unwrap_or_default(),
+        optional_params: body
+            .into_iter()
+            .filter(|(name, _)| !matches!(name.as_str(), "model" | "input"))
+            .collect(),
+        api_key: deployment.api_key.clone(),
+        api_base: deployment.api_base.clone(),
+        custom_llm_provider: deployment.custom_llm_provider.clone(),
+        extra_headers: None,
+        timeout: deployment.timeout,
+    };
+    let machine = gateway.responses.clone().machine(call);
+    let stream = Sse::<Responses, _, _>::new(Json, |error| {
+        let error = Error::from(error);
+        Bytes::from(format!(
+            "event: error\ndata: {}\n\n",
+            json!({"type": "error", "code": error.status().as_u16().to_string(), "message": error.to_string(), "param": null})
+        ))
+    });
+    Ok(litellm_host_http::serve(machine, (), (), stream).await?)
+}

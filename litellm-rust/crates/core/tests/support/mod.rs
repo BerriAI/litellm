@@ -57,6 +57,15 @@ pub fn chat_completions_route() -> litellm_core::chat_completions::ChatCompletio
     )
 }
 
+pub fn responses_route(secrets: Arc<dyn SecretSource>) -> litellm_core::responses::ResponsesRoute {
+    let resources = resources();
+    litellm_core::responses::ResponsesRoute::new(
+        provider_http(&resources, &http_config()),
+        resources.auth,
+        secrets,
+    )
+}
+
 pub fn audio_transcription_route() -> litellm_core::audio_transcription::AudioTranscriptionRoute {
     let resources = resources();
     litellm_core::audio_transcription::AudioTranscriptionRoute::new(

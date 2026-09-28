@@ -9,13 +9,14 @@ mod error;
 pub mod messages;
 mod ocr;
 mod request;
+mod responses;
 
 use std::sync::Arc;
 
 use axum::{Router, routing::post};
 use litellm_core::{
     audio_transcription::AudioTranscriptionRoute, chat_completions::ChatCompletionsRoute,
-    messages::MessagesRoute, ocr::OcrRoute, resources::CoreResources,
+    messages::MessagesRoute, ocr::OcrRoute, resources::CoreResources, responses::ResponsesRoute,
 };
 use litellm_http::{ClientVariant, HttpClientConfig, media::UrlPolicy};
 use litellm_llms::base_llm::ocr::{handler::OcrClient, settings::OcrSettings};
@@ -30,6 +31,7 @@ pub struct Gateway {
     pub chat_completions: ChatCompletionsRoute,
     pub messages: MessagesRoute,
     pub ocr: OcrRoute,
+    pub responses: ResponsesRoute,
     pub models: ModelList,
     pub secrets: Arc<dyn SecretSource>,
     pub resources: CoreResources,
@@ -56,7 +58,8 @@ impl Gateway {
                 auth.clone(),
                 secrets.clone(),
             ),
-            messages: MessagesRoute::new(provider, auth.clone(), secrets.clone()),
+            messages: MessagesRoute::new(provider.clone(), auth.clone(), secrets.clone()),
+            responses: ResponsesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(
                 &resources.pool,
                 &http,
@@ -87,8 +90,8 @@ pub fn router(gateway: Arc<Gateway>) -> Router {
             "/v1/audio/transcriptions",
             post(audio_transcription::create),
         )
-        .route("/responses", post(request::unsupported))
-        .route("/v1/responses", post(request::unsupported))
+        .route("/responses", post(responses::create))
+        .route("/v1/responses", post(responses::create))
         .route("/embeddings", post(request::unsupported))
         .route("/v1/embeddings", post(request::unsupported))
         .route("/completions", post(request::unsupported))

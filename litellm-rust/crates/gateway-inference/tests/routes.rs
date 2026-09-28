@@ -227,6 +227,7 @@ async fn upload_audio_format_validation_matches_core(#[case] filename: &str) {
 
 #[rstest]
 #[case::chat("/v1/chat/completions", false)]
+#[case::responses("/v1/responses", false)]
 #[case::deployment("/openai/deployments/public%2Fmodel/chat/completions", false)]
 #[case::messages("/v1/messages", true)]
 #[case::ocr("/v1/ocr", false)]
