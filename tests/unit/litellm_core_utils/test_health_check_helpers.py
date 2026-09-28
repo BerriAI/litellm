@@ -40,11 +40,8 @@ def _distinct_rgb_colors(png: bytes) -> set[bytes]:
 @pytest.mark.asyncio
 @pytest.mark.parametrize("raises", [False, True])
 async def test_audio_transcription_health_check_closes_file(raises: bool):
-    file_handles = []
-
     async def transcription(**kwargs):
         file = kwargs["file"]
-        file_handles.append(file)
         assert not file.closed
         assert file.read(4) == b"RIFF"
         if raises:
@@ -56,15 +53,15 @@ async def test_audio_transcription_health_check_closes_file(raises: bool):
         custom_llm_provider="openai",
         model_params={"model": "openai/whisper-1", "api_key": "sk-test"},
     )
-    with patch("litellm.atranscription", side_effect=transcription):
+    with patch("litellm.atranscription", side_effect=transcription) as mock_transcription:
         if raises:
             with pytest.raises(RuntimeError, match="transcription failed"):
                 await handlers["audio_transcription"]()
         else:
             assert await handlers["audio_transcription"]() == {"text": "healthy"}
 
-    assert len(file_handles) == 1
-    assert file_handles[0].closed
+    mock_transcription.assert_called_once()
+    assert mock_transcription.call_args.kwargs["file"].closed
 
 
 @pytest.mark.asyncio
