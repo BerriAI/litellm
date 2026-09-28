@@ -39,12 +39,26 @@ impl MessagesRoute {
         litellm_host::lifecycle::observe_call(hooks.observer(), self.run(call, hooks)).await
     }
 
+    #[tracing::instrument(name = "litellm.route", skip_all, fields(
+        route = "messages",
+        model = %call.body.model,
+        provider,
+        resolved_model,
+        stream = call.body.params.stream == Some(true),
+        outcome
+    ))]
     async fn run(
         &self,
         call: MessagesCall,
         hooks: &impl litellm_host::hooks::RouteHooks<Error>,
     ) -> Result<MessagesResponse, Error> {
-        let request = prepare::prepare(call, self.secrets.as_ref()).await?;
-        handler::execute(&self.http, &self.auth, request, hooks).await
+        crate::diagnostic::call(async {
+            let request = prepare::prepare(call, self.secrets.as_ref()).await?;
+            crate::diagnostic::provider(&request.body.model, request.provider.as_str());
+            let execute: futures_util::future::BoxFuture<'_, Result<MessagesResponse, Error>> =
+                Box::pin(handler::execute(&self.http, &self.auth, request, hooks));
+            execute.await
+        })
+        .await
     }
 }

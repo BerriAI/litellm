@@ -250,3 +250,31 @@ async fn an_unreadable_success_body_is_an_invalid_response(
 
     assert!(matches!(error, Error::InvalidResponse(_)), "{error:?}");
 }
+
+#[rstest]
+#[tokio::test]
+async fn transcription_records_route_and_resolved_provider(
+    request: AudioTranscriptionRequest<'static>,
+    traces: TraceCapture,
+) {
+    let upstream = upstream([transcript_response("hello")]).await;
+    let base = upstream.uri();
+    let model = request.model;
+    traces
+        .logger()
+        .instrument(transcribe(AudioTranscriptionRequest {
+            api_base: Some(&base),
+            ..request
+        }))
+        .await
+        .unwrap();
+    let summaries = traces.summaries("litellm.route");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0]["route"], "audio_transcription");
+    assert_eq!(summaries[0]["model"], model);
+    assert_eq!(summaries[0]["resolved_model"], model);
+    assert_eq!(summaries[0]["provider"], "bedrock");
+    assert_eq!(summaries[0]["outcome"], "success");
+    assert_eq!(summaries[0]["stream"], false);
+    assert!(!format!("{:?}", traces.records()).contains("secret-key"));
+}

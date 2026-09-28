@@ -434,3 +434,33 @@ async fn a_post_call_hook_failure_never_looks_safe_to_retry(
     assert_eq!(*source, Error::InvalidRequest("callback rejected".into()));
     assert_eq!(received(&upstream).await.len(), 1);
 }
+
+#[rstest]
+#[tokio::test]
+async fn completed_chat_records_route_and_resolved_provider(
+    request: ChatCompletionsRequest<'static>,
+    traces: TraceCapture,
+) {
+    let upstream = upstream([anthropic_response(ANTHROPIC_MESSAGE)]).await;
+    let base = upstream.uri();
+    let model = request.model;
+    traces
+        .logger()
+        .instrument(complete(ChatCompletionsRequest {
+            api_base: Some(&base),
+            ..request
+        }))
+        .await
+        .unwrap();
+    let summaries = traces.summaries("litellm.route");
+    assert_eq!(summaries.len(), 1);
+    assert_eq!(summaries[0]["route"], "chat_completions");
+    assert_eq!(summaries[0]["model"], model);
+    assert_eq!(summaries[0]["provider"], "anthropic");
+    assert_eq!(
+        summaries[0]["resolved_model"],
+        only_request(&upstream).await.json()["model"]
+    );
+    assert_eq!(summaries[0]["outcome"], "success");
+    assert_eq!(summaries[0]["stream"], false);
+}

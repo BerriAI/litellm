@@ -30,6 +30,7 @@ fn provider_config(provider: LlmProviders) -> Option<&'static dyn BaseAudioTrans
     }
 }
 
+#[tracing::instrument(name = "litellm.prepare", level = "debug", skip_all)]
 pub async fn prepare_audio_transcription_provider_call(
     request: AudioTranscriptionRequest<'_>,
     secrets: &dyn SecretSource,
