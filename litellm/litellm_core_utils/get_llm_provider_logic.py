@@ -272,7 +272,7 @@ def get_llm_provider(
                     elif endpoint == "api.clfaigateway.dev/v1":
                         custom_llm_provider = "clf_ai_gateway"  # rebind-ok: endpoint inference, like every branch
                         clf_env_key = get_secret_str("CLF_AI_GATEWAY_API_KEY")
-                        dynamic_api_key = api_key or clf_env_key  # rebind-ok: caller key wins, like every branch
+                        dynamic_api_key = api_key or clf_env_key
                     elif endpoint == "api.mistral.ai/v1":
                         custom_llm_provider = "mistral"
                         dynamic_api_key = get_secret_str("MISTRAL_API_KEY")
