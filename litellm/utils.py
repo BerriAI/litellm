@@ -2079,7 +2079,8 @@ def client(original_function):
                 else kwargs
             )
             try:
-                await logging_obj.async_pre_call()
+                if litellm._async_input_callback:
+                    await logging_obj.async_pre_call()
                 result = await original_function(*args, **call_kwargs)
             except Exception as deployment_error:
                 _deployment_call_end_time = datetime.datetime.now()  # noqa: DTZ005  # matches the naive datetimes this whole function already times start_time/end_time with

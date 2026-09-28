@@ -5298,6 +5298,8 @@ async def test_wrapper_async_awaits_async_input_callback_before_the_provider_cal
     def sync_callback(kwargs: dict) -> None:
         events.append(("sync", kwargs["log_event_type"]))
 
+    monkeypatch.setattr("litellm.litellm_core_utils.litellm_logging.customLogger", CustomLogger())
+
     if registration == "manager":
         litellm.logging_callback_manager.add_litellm_input_callback(async_callback)
     else:
@@ -5343,6 +5345,8 @@ async def test_wrapper_async_skips_async_input_callback_on_cache_hit(
 
     def sync_callback(kwargs: dict) -> None:
         events.append("sync")
+
+    monkeypatch.setattr("litellm.litellm_core_utils.litellm_logging.customLogger", CustomLogger())
 
     monkeypatch.setattr(litellm, "_async_input_callback", [async_callback])
     monkeypatch.setattr(litellm, "input_callback", [sync_callback])
