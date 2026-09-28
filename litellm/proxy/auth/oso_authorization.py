@@ -99,7 +99,7 @@ class OsoCloudAuthorizer:
             params={
                 "timeout": config.timeout,
                 "client_alias": "oso_authorization",
-            },  # mutable-ok: client API requires dict
+            },
         )
 
     async def authorize(self, request: OsoAuthorizeRequest) -> bool:
