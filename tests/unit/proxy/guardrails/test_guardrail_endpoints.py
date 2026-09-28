@@ -17,6 +17,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
     RegisterGuardrailRequest,
     TestCustomCodeGuardrailRequest,
     UpdateGuardrailRequest,
+    _get_fields_from_model,
     apply_guardrail,
     approve_guardrail_submission,
     create_guardrail,
@@ -36,6 +37,7 @@ from litellm.proxy.guardrails.content_filter_data import DATA_ROOTS
 from litellm.proxy.guardrails.guardrail_endpoints import (
     test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
+from litellm.types.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPIOptionalParams
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
@@ -559,6 +561,20 @@ def test_get_guardrails_list_response_includes_guardrail_id():
     )
 
     assert response.guardrails[0].guardrail_id == "stable-config-id"
+
+
+def test_config_only_generic_guardrail_options_stay_out_of_the_form_but_still_validate():
+    form_fields = _get_fields_from_model(GenericGuardrailAPIOptionalParams)
+    config_only = {"skip_if_system_prompt_matches", "skip_if_first_role_in"}
+
+    assert config_only.isdisjoint(form_fields)
+    assert "unreachable_fallback" in form_fields
+    assert GenericGuardrailAPIOptionalParams(
+        skip_if_system_prompt_matches=["internal-agent"], skip_if_first_role_in=["developer"]
+    ).model_dump(include=config_only) == {
+        "skip_if_system_prompt_matches": ("internal-agent",),
+        "skip_if_first_role_in": ("developer",),
+    }
 
 
 def test_get_provider_specific_params():

@@ -146,6 +146,23 @@ def iter_message_text(data: Mapping[str, object]) -> Iterator[str]:
         yield from _iter_text_parts_in_content(message.get("content"))
 
 
+def iter_request_messages(data: Mapping[str, object]) -> Iterator[Mapping[str, object]]:
+    """Yield the request's messages in prompt order, a top-level system prompt or instructions first."""
+    system: Final = data.get("system")
+    if isinstance(system, (str, list)) and system:
+        yield {"role": "system", "content": system}
+    instructions: Final = data.get("instructions")
+    if isinstance(instructions, str) and instructions:
+        yield {"role": "system", "content": instructions}
+    if isinstance(instructions, list):
+        yield from (item for item in instructions if isinstance(item, dict))
+    yield from (message for message in _iter_inspection_messages(data) if isinstance(message, dict))
+
+
+def message_text(message: Mapping[str, object]) -> str:
+    return "\n".join(_iter_text_parts_in_content(message.get("content")))
+
+
 def walk_user_text(data: dict[str, Any], visit: Callable[[str], str]) -> int:
     """Rewrite every text fragment in place via ``visit``.
 
