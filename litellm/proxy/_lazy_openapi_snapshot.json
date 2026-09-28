@@ -3313,18 +3313,6 @@
         },
         "DailySpendMetadata": {
           "properties": {
-            "api_key_limit": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "When set, api_keys and every api_key_breakdown list at most this many keys, ranked by spend. Totals and the model, provider, mcp and endpoint rollups still cover every key.",
-              "title": "Api Key Limit"
-            },
             "has_more": {
               "default": false,
               "title": "Has More",
@@ -3334,18 +3322,6 @@
               "default": 1,
               "title": "Page",
               "type": "integer"
-            },
-            "total_api_keys": {
-              "anyOf": [
-                {
-                  "type": "integer"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Distinct API keys matching the filters. When this exceeds api_key_limit, the per-key lists are truncated to the highest-spend keys.",
-              "title": "Total Api Keys"
             },
             "total_api_requests": {
               "default": 0,
@@ -11368,18 +11344,6 @@
               "description": "Custom advisory message template used when on_flagged='inject_system_message'. Must contain a {reason} placeholder. Defaults to a generic advisory message if unset.",
               "title": "Advisory System Message"
             },
-            "agent_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Agent identity reported to Agent 365 with every tool evaluation. When unset, the caller's key alias is used.",
-              "title": "Agent Id"
-            },
             "akto_account_id": {
               "anyOf": [
                 {
@@ -12950,18 +12914,6 @@
               ],
               "description": "The message the bot speaks aloud when a /v1/realtime guardrail fires. Falls back to violation_message_template if not set.",
               "title": "Realtime Violation Message"
-            },
-            "resource_app_id": {
-              "anyOf": [
-                {
-                  "type": "string"
-                },
-                {
-                  "type": "null"
-                }
-              ],
-              "description": "Application id of the Agent 365 resource the OBO token is minted for. Defaults to the production resource ea9ffc3e-8a23-4a7d-836d-234d7c7565c1; the Test and PreProd environments use a different id. Falls back to the AGENT365_RESOURCE_APP_ID environment variable.",
-              "title": "Resource App Id"
             },
             "rules": {
               "anyOf": [

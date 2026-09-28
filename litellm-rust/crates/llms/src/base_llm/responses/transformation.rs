@@ -1,22 +1,59 @@
-use litellm_types::responses::streaming_websocket::{ResponsesWsEvent, ResponsesWsTransformResult};
+use litellm_types::responses::main::ResponsesApiResponse;
+use litellm_types::responses::streaming_websocket::ResponsesWsEvent;
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 
-use crate::Error;
+use crate::{Error, base_llm::auth::ValidatedEnvironment};
 
-pub const OPENAI_RESPONSES_DEFAULT_API_BASE: &str = "https://api.openai.com/v1";
-pub const OPENAI_RESPONSES_PATH: &str = "/responses";
+pub trait BaseResponsesApiConfig: Sync {
+    fn secret_names(
+        &self,
+        api_key: Option<&str>,
+        api_base: Option<&str>,
+    ) -> &'static [&'static str];
+
+    fn validate_environment(
+        &self,
+        headers: Vec<(String, String)>,
+        api_key: Option<&str>,
+        lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> Result<ValidatedEnvironment, Error>;
+
+    fn get_complete_url(
+        &self,
+        api_base: Option<&str>,
+        lookup: &dyn Fn(&str) -> Option<String>,
+    ) -> String;
+
+    fn transform_responses_api_request(
+        &self,
+        model: &str,
+        input: Value,
+        params: Map<String, Value>,
+    ) -> Result<Value, Error>;
+
+    fn transform_response_api_response(&self, body: Value) -> Result<ResponsesApiResponse, Error>;
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct ResponsesWsTransformResult {
+    pub events: Vec<ResponsesWsEvent>,
+}
+
+impl ResponsesWsTransformResult {
+    pub fn passthrough(event: ResponsesWsEvent) -> Self {
+        Self {
+            events: vec![event],
+        }
+    }
+}
 
 pub trait ResponsesWebSocketProviderConfig: Sync {
     fn supports_native_websocket(&self) -> bool {
         false
     }
 
-    fn model_in_websocket_url(&self) -> bool {
-        true
-    }
-
-    fn complete_websocket_url(&self, api_base: Option<&str>, model: &str) -> String {
-        complete_websocket_url(api_base, model, self.model_in_websocket_url())
-    }
+    fn complete_websocket_url(&self, api_base: Option<&str>, model: &str) -> String;
 
     fn transform_ws_request(
         &self,
@@ -29,62 +66,6 @@ pub trait ResponsesWebSocketProviderConfig: Sync {
         event: &ResponsesWsEvent,
         model: &str,
     ) -> Result<ResponsesWsTransformResult, Error>;
-}
-
-pub fn complete_websocket_url(
-    api_base: Option<&str>,
-    model: &str,
-    model_in_websocket_url: bool,
-) -> String {
-    let base = api_base
-        .map(str::trim)
-        .filter(|value| !value.is_empty())
-        .unwrap_or(OPENAI_RESPONSES_DEFAULT_API_BASE);
-    let (base_without_query, query) = base
-        .split_once('?')
-        .map_or((base, None), |(value, query)| (value, Some(query)));
-    let response_url = format!(
-        "{}{}",
-        base_without_query.trim_end_matches('/'),
-        OPENAI_RESPONSES_PATH
-    );
-    let scheme_flipped = if let Some(rest) = response_url.strip_prefix("https://") {
-        format!("wss://{rest}")
-    } else if let Some(rest) = response_url.strip_prefix("http://") {
-        format!("ws://{rest}")
-    } else {
-        response_url
-    };
-    let url = query.map_or(scheme_flipped.clone(), |value| {
-        format!("{scheme_flipped}?{value}")
-    });
-    if !model_in_websocket_url
-        || query.is_some_and(|value| {
-            value
-                .split('&')
-                .any(|part| part.split('=').next() == Some("model"))
-        })
-    {
-        return url;
-    }
-    format!(
-        "{url}{}model={}",
-        if query.is_some() { "&" } else { "?" },
-        percent_encode(model)
-    )
-}
-
-fn percent_encode(value: &str) -> String {
-    value
-        .bytes()
-        .map(|byte| {
-            if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
-                format!("{}", byte as char)
-            } else {
-                format!("%{byte:02X}")
-            }
-        })
-        .collect()
 }
 
 pub fn enforce_model(event: &ResponsesWsEvent, model: &str) -> ResponsesWsEvent {
@@ -123,26 +104,6 @@ mod tests {
 
     fn event(value: serde_json::Value) -> ResponsesWsEvent {
         serde_json::from_value(value).expect("valid event")
-    }
-
-    #[test]
-    fn url_construction_matches_python_defaults_and_query_behavior() {
-        assert_eq!(
-            complete_websocket_url(None, "gpt-5", true),
-            "wss://api.openai.com/v1/responses?model=gpt-5"
-        );
-        assert_eq!(
-            complete_websocket_url(Some("http://localhost:8080/"), "gpt 5", true),
-            "ws://localhost:8080/responses?model=gpt%205"
-        );
-        assert_eq!(
-            complete_websocket_url(Some("https://example.test/v1?foo=bar"), "gpt-5", true),
-            "wss://example.test/v1/responses?foo=bar&model=gpt-5"
-        );
-        assert_eq!(
-            complete_websocket_url(Some("https://example.test?model=existing"), "gpt-5", true),
-            "wss://example.test/responses?model=existing"
-        );
     }
 
     #[test]

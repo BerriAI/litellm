@@ -1877,6 +1877,7 @@ LITELLM_SETTINGS_SAFE_DB_OVERRIDES: Final = [
     "cost_margin_config",
     "block_requests_for_models_without_pricing",
     "budget_exceeded_throttle_percentage",
+    "log_auth_failure_key_identity",
     # Every field editable from the Admin UI (proxy_server._GENERAL_SETTINGS_UI_LITELLM_FIELDS)
     # must be listed here so a DB write from one worker overrides the live litellm attribute on
     # the others when config reloads; otherwise peer workers stay on their startup value.
@@ -2139,16 +2140,12 @@ MCP_SPEND_LOG_MODEL_PREFIX: Final[str] = "MCP: "
 PTU_SENTINEL_API_KEY: Final[str] = "__ptu_flat_cost__"
 PTU_ROLLUP_JOB_ID: Final[str] = "ptu_flat_cost_rollup_job"
 PTU_ROLLUP_LOCK_TTL_SECONDS: Final[int] = 900
-USAGE_TOP_API_KEYS_LIMIT: Final[int] = int(os.getenv("USAGE_TOP_API_KEYS_LIMIT", "100"))
 # Furthest back the catch-up pass looks for unpriced PTU days when a deployment
 # declares no ptu_effective_from, bounding the scan for an open-ended window.
 PTU_ROLLUP_MAX_BACKFILL_DAYS: Final[int] = 90
 # Deployments named in the lapsed-window alert before it is truncated, so a fleet-wide
 # expiry cannot produce an alert too large for the channel delivering it.
 PTU_LAPSED_ALERT_LIMIT: Final[int] = 10
-DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID: Final[str] = "daily_global_spend_reconcile_job"
-DAILY_GLOBAL_SPEND_RECONCILE_LOCK_TTL_SECONDS: Final[int] = 3600
-DAILY_GLOBAL_SPEND_RECONCILED_THROUGH_PARAM: Final[str] = "daily_global_spend_reconciled_through"
 SPEND_CAPTURE_RATE_CHECK_JOB_ID: Final[str] = "spend_capture_rate_check_job"
 SPEND_CAPTURE_RATE_CHECK_LOCK_TTL_SECONDS: Final[int] = 900
 SPEND_CAPTURE_RATE_MAX_RANGE_DAYS: Final[int] = 180
