@@ -2393,11 +2393,19 @@ class PrometheusLogger(CustomLogger):
         removal path of this file's own.
         """
         labelnames: Final = self.get_labels_for_metric(metric_name)
-        if UserAPIKeyLabelNames.TEAM.value not in labelnames:
-            # Without a team label the gauge collapses to one sample shared by
-            # every team, which cannot attribute a limit to anyone and cannot
-            # be retired. Publishing nothing beats publishing a number that
-            # silently belongs to whichever team wrote it last.
+        if (
+            UserAPIKeyLabelNames.TEAM.value not in labelnames
+            or UserAPIKeyLabelNames.v1_LITELLM_MODEL_NAME.value not in labelnames
+        ):
+            # This gauge is team-and-model scoped, so it needs both labels to
+            # identify what it is reporting. Without the team label it collapses
+            # to one sample shared by every team; without the model label, to one
+            # sample shared by every model of a team -- and then a request for an
+            # unlimited model retires the series a limited one published, while a
+            # second limited model overwrites it. Either way the series cannot
+            # attribute a limit to anyone and cannot be retired, so publishing
+            # nothing beats publishing a number that silently belongs to whichever
+            # request wrote it last.
             return
 
         labels: Final = prometheus_label_factory(
