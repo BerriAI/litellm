@@ -3,6 +3,7 @@ import { NEVER_RESETS_BUDGET_DURATION } from "../common_components/budget_durati
 import type { RouterSettingsAccordionValue } from "../common_components/RouterSettingsAccordion";
 import type { BudgetWindowEntry } from "../key_team_helpers/BudgetWindowsEditor";
 import type { ModelMaxBudget } from "../key_team_helpers/ModelMaxBudgetEditor";
+import { WORKLOAD_CLASS_FIELD, withWorkloadClass } from "../fairness/workloadClass";
 import { tagRowsToLimits, type TagRateLimitEntry } from "../key_team_helpers/TagRateLimitEditor";
 
 export interface KeyLoggingSetting {
@@ -91,7 +92,7 @@ const parseMetadata = (raw: unknown): unknown => {
 };
 
 const buildMetadataJson = (values: Record<string, unknown>, input: KeyCreateInput): string => {
-  const parsed = parseMetadata(values.metadata);
+  const parsed = withWorkloadClass(parseMetadata(values.metadata), values[WORKLOAD_CLASS_FIELD]);
   if (input.keyOwner === "service_account") {
     (parsed as Record<string, unknown>).service_account_id = values.key_alias;
   }
@@ -153,6 +154,7 @@ const consumedSourceKeys = (
   new Set<string>([
     "mcp_tool_permissions",
     "allowed_skills",
+    WORKLOAD_CLASS_FIELD,
     ...(values.disable_global_guardrails ? [] : ["disable_global_guardrails"]),
     ...(vectorStores ? ["allowed_vector_store_ids"] : []),
     ...(mcp ? ["allowed_mcp_servers_and_groups"] : []),

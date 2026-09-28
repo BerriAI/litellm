@@ -52,6 +52,8 @@ import OrganizationDropdown from "../common_components/OrganizationDropdown";
 import ProjectDropdown from "../common_components/ProjectDropdown";
 import { CreateUserButton } from "../CreateUserButton";
 import { BudgetFallbacksEditor } from "../key_team_helpers/BudgetFallbacksEditor";
+import { useShowWorkloadClass, WORKLOAD_CLASS_HINT, WorkloadClassSelect } from "../fairness/WorkloadClassSelect";
+import { WORKLOAD_CLASS_FIELD } from "../fairness/workloadClass";
 import { END_USER_BUDGET_HINT, EndUserBudgetSelect } from "../key_team_helpers/EndUserBudgetSelect";
 import { BudgetWindowEntry, BudgetWindowsEditor } from "../key_team_helpers/BudgetWindowsEditor";
 import { ModelMaxBudget, ModelMaxBudgetEditor } from "../key_team_helpers/ModelMaxBudgetEditor";
@@ -243,6 +245,7 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
     defaultValues: formDefaults,
   });
   const registry = useMountRegistry();
+  const showWorkloadClass = useShowWorkloadClass(undefined);
   const mountedForm = useMemo(() => ({ control: form.control, registry }), [form.control, registry]);
   const [isModalVisible, setIsModalVisible] = useState(false);
   const [apiKey, setApiKey] = useState(null);
@@ -1493,6 +1496,28 @@ const CreateKey: React.FC<CreateKeyProps> = ({ team, teams, data, addKey, autoOp
                           />
                         )}
                       </MountedFormField>
+                      {showWorkloadClass && (
+                        <MountedFormField
+                          label={
+                            <span>
+                              Workload class{" "}
+                              <SimpleTooltip content={WORKLOAD_CLASS_HINT}>
+                                <Info className="ml-1 inline size-3.5 align-text-bottom" />
+                              </SimpleTooltip>
+                            </span>
+                          }
+                          name={WORKLOAD_CLASS_FIELD}
+                          className="mt-4"
+                        >
+                          {(control) => (
+                            <WorkloadClassSelect
+                              id={control.id}
+                              value={control.value as string | undefined}
+                              onChange={control.onChange}
+                            />
+                          )}
+                        </MountedFormField>
+                      )}
                       <MountedFormField
                         label={
                           <span>

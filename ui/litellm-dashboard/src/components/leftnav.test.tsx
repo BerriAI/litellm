@@ -240,6 +240,10 @@ describe("Sidebar (leftnav)", () => {
     expect(placementsOf("router-settings")).toEqual(["SETTINGS > settings"]);
   });
 
+  it("keeps Fairness under Load as a single admin-only Settings child", () => {
+    expect(placementsOf("fairness")).toEqual(["SETTINGS > settings"]);
+  });
+
   it("has no duplicate keys among all menu items and their children", () => {
     // React keys must be unique across the whole nav config, otherwise the
     // active-item highlight and group expansion collide.
@@ -617,6 +621,7 @@ describe("getBreadcrumb", () => {
 
   it("resolves router-settings under the Settings section", () => {
     expect(getBreadcrumb("/ui/router-settings")).toEqual({ section: "Settings", title: "Router Settings" });
+    expect(getBreadcrumb("/ui/fairness")).toEqual({ section: "Settings", title: "Fairness under Load" });
   });
 
   it("falls back to a prettified title with no section for unknown routes", () => {

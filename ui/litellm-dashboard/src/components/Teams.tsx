@@ -64,6 +64,8 @@ interface TeamProps {
 import DeleteResourceModal from "./common_components/DeleteResourceModal";
 import { teamCreateCall } from "./networking";
 import { normalizeTeamModelSelection } from "./team/teamModelAccess";
+import { useShowWorkloadClass, WORKLOAD_CLASS_HINT, WorkloadClassSelect } from "./fairness/WorkloadClassSelect";
+import { withWorkloadClass } from "./fairness/workloadClass";
 import { ModelSelect } from "./ModelSelect/ModelSelect";
 
 const SUPPRESSED_BY_DESCRIPTION = "";
@@ -80,6 +82,7 @@ const teamCreateFieldsSchema = z.object({
   rpm_limit: numericInputSchema,
   tpd_limit: numericInputSchema,
   metadata: metadataPairsSchema.optional(),
+  workload_class: z.string().optional(),
   team_id: z.string().optional(),
   team_member_budget: z.number().optional(),
   team_member_key_duration: z.string().optional(),
@@ -117,6 +120,7 @@ const EMPTY_TEAM_CREATE_VALUES: TeamCreateFormValues = {
   rpm_limit: undefined,
   tpd_limit: undefined,
   metadata: [],
+  workload_class: undefined,
   team_id: undefined,
   team_member_budget: undefined,
   team_member_key_duration: undefined,
@@ -253,6 +257,7 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
   );
 
   const form = useZodForm(teamCreateSchema, { defaultValues: EMPTY_TEAM_CREATE_VALUES });
+  const showWorkloadClass = useShowWorkloadClass(undefined);
   const watchedOrganizationId = form.watch("organization_id");
   const watchedMcpSelection = form.watch("allowed_mcp_servers_and_groups");
   const watchedToolPermissions = form.watch("mcp_tool_permissions");
@@ -425,10 +430,11 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
         toast.info("Creating Team");
 
         const metadataObject = {
-          ...metadataPairsToObject(formValues.metadata),
+          ...withWorkloadClass(metadataPairsToObject(formValues.metadata), formValues.workload_class),
           ...(loggingSettings.length > 0 ? { logging: loggingSettings.filter((config) => config.callback_name) } : {}),
         };
         formValues.metadata = Object.keys(metadataObject).length > 0 ? JSON.stringify(metadataObject) : undefined;
+        delete formValues.workload_class;
 
         if (formValues.secret_manager_settings) {
           if (typeof formValues.secret_manager_settings === "string") {
@@ -850,6 +856,15 @@ const Teams: React.FC<TeamProps> = ({ accessToken, userID, userRole, premiumUser
                       <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} width={400} />
                     )}
                   </FormField>
+                  {showWorkloadClass && (
+                    <FormField
+                      control={form.control}
+                      name="workload_class"
+                      label={labelWithHint("Workload class", WORKLOAD_CLASS_HINT)}
+                    >
+                      {({ id, value, onChange }) => <WorkloadClassSelect id={id} value={value} onChange={onChange} />}
+                    </FormField>
+                  )}
                   <Field>
                     <FieldLabel>Metadata</FieldLabel>
                     <MetadataKeyValueFields

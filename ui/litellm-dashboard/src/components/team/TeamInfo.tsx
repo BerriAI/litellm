@@ -81,6 +81,8 @@ import MetadataKeyValueFields, {
   metadataPairsToObject,
 } from "../common_components/MetadataKeyValueFields";
 import { useTeamMetadataSchema } from "@/app/(dashboard)/hooks/teams/useTeamMetadataSchema";
+import { useShowWorkloadClass, WORKLOAD_CLASS_HINT, WorkloadClassSelect } from "../fairness/WorkloadClassSelect";
+import { readWorkloadClass, WORKLOAD_CLASS_METADATA_KEY, workloadClassMetadata } from "../fairness/workloadClass";
 import ModelAliasManager from "../common_components/ModelAliasManager";
 import AgentSelector from "../agent_management/AgentSelector";
 import DeleteResourceModal from "../common_components/DeleteResourceModal";
@@ -144,6 +146,7 @@ const UI_MANAGED_METADATA_KEYS: ReadonlySet<string> = new Set([
   "guardrails",
   "opted_out_global_guardrails",
   "disable_global_guardrails",
+  WORKLOAD_CLASS_METADATA_KEY,
 ]);
 
 const TEAM_MODEL_BADGE_TONES: Record<TeamModelBadgeKind, StatusTone> = {
@@ -429,6 +432,7 @@ const teamUpdateFieldsSchema = z.object({
   logging_settings: z.array(z.unknown()).optional(),
   secret_manager_settings: z.string().optional(),
   metadata: metadataPairsSchema.optional(),
+  workload_class: z.string().optional(),
 });
 
 type TeamUpdateFormValues = z.infer<typeof teamUpdateFieldsSchema>;
@@ -481,6 +485,7 @@ const EMPTY_TEAM_UPDATE_VALUES: TeamUpdateFormValues = {
   logging_settings: [],
   secret_manager_settings: "",
   metadata: [],
+  workload_class: undefined,
 };
 
 const computeEffectiveGuardrails = (info: TeamInfoRecord, globalGuardrailNames: ReadonlySet<string>): string[] => {
@@ -552,6 +557,7 @@ const toTeamFormValues = (info: TeamInfoRecord, effectiveGuardrails: string[]): 
     ? JSON.stringify(info.metadata.secret_manager_settings, null, 2)
     : "",
   metadata: metadataObjectToPairs(info.metadata, UI_MANAGED_METADATA_KEYS),
+  workload_class: readWorkloadClass(info.metadata),
 });
 
 const isParsableJson = (value: string | undefined): boolean => {
@@ -590,6 +596,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
   const [loading, setLoading] = useState(true);
   const [isAddMemberModalVisible, setIsAddMemberModalVisible] = useState(false);
   const form = useZodForm(teamUpdateSchema, { defaultValues: EMPTY_TEAM_UPDATE_VALUES });
+  const showWorkloadClass = useShowWorkloadClass(form.watch("workload_class"));
   const {
     fields: modelLimitRows,
     append: appendModelLimit,
@@ -1045,6 +1052,7 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
         budget_duration: values.budget_duration ?? null,
         metadata: {
           ...parsedMetadata,
+          ...workloadClassMetadata(values.workload_class),
           ...passthroughRoutesMetadata,
           guardrails: (values.guardrails || []).filter((n: string) => !globalGuardrailNames.has(n)),
           opted_out_global_guardrails: optedOutGlobalGuardrails,
@@ -1777,6 +1785,16 @@ const TeamInfoView: React.FC<TeamInfoProps> = ({
                   >
                     {({ ref, value, ...field }) => <NumericalInput {...field} ref={ref} value={value ?? ""} step={1} />}
                   </FormField>
+
+                  {showWorkloadClass && (
+                    <FormField
+                      control={form.control}
+                      name="workload_class"
+                      label={labelWithHint("Workload class", WORKLOAD_CLASS_HINT)}
+                    >
+                      {({ id, value, onChange }) => <WorkloadClassSelect id={id} value={value} onChange={onChange} />}
+                    </FormField>
+                  )}
 
                   <Field>
                     <FieldLabel>Metadata</FieldLabel>

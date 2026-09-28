@@ -442,7 +442,7 @@ async def test_normal_router_call_tpm_v3(
         "messages": [{"role": "user", "content": "hi"}],
         "max_tokens": 5,
     }
-    expected_reservation = parallel_request_handler._estimate_tokens_for_request(
+    expected_reservation = parallel_request_handler.estimate_tokens_for_request(
         data=pre_call_data
     )
     assert (
@@ -6401,7 +6401,7 @@ def test_conflicting_token_limits_reserve_the_larger_declared_budget():
     bodies = _conflicting_budget_bodies()
 
     reserved = {
-        label: handler._estimate_tokens_for_request(data=body)
+        label: handler.estimate_tokens_for_request(data=body)
         for label, body in bodies.items()
     }
 
@@ -6422,8 +6422,8 @@ def test_non_integer_output_budgets_still_reserve_their_declared_size(declared):
     )
     base = {"model": "gpt-5-chat", "messages": [{"role": "user", "content": "hi"}]}
 
-    reserved = handler._estimate_tokens_for_request(data={**base, "max_tokens": declared})
-    reserved_int = handler._estimate_tokens_for_request(data={**base, "max_tokens": 10000})
+    reserved = handler.estimate_tokens_for_request(data={**base, "max_tokens": declared})
+    reserved_int = handler.estimate_tokens_for_request(data={**base, "max_tokens": 10000})
 
     assert reserved == reserved_int
 

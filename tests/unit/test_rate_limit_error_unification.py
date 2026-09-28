@@ -767,16 +767,13 @@ class TestProxyHooksActuallyRaiseProxyRateLimitError:
         """
         from unittest.mock import AsyncMock, MagicMock
 
+        from litellm.caching.caching import DualCache
         from litellm.proxy._types import UserAPIKeyAuth
         from litellm.proxy.hooks.dynamic_rate_limiter_v3 import (
             _PROXY_DynamicRateLimitHandlerV3,
         )
 
-        # Bypass __init__ — we want to inject a stub v3_limiter without
-        # paying for the full handler setup.
-        handler = _PROXY_DynamicRateLimitHandlerV3.__new__(
-            _PROXY_DynamicRateLimitHandlerV3
-        )
+        handler = _PROXY_DynamicRateLimitHandlerV3(internal_usage_cache=DualCache())
         v3_limiter = MagicMock()
         v3_limiter.window_size = 60
         v3_limiter.atomic_check_and_increment_by_n = AsyncMock(
