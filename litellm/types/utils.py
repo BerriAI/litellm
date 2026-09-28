@@ -4221,6 +4221,12 @@ class LiteLLMLoggingBaseClass:
     def pre_call(self, input, api_key, model=None, additional_args=None) -> None:
         pass
 
+    async def async_pre_call(self, input, api_key, model=None, additional_args=None) -> None:
+        pass
+
+    async def async_input_callback(self) -> None:
+        pass
+
     def post_call(self, original_response, input=None, api_key=None, additional_args=None) -> None:
         pass
 

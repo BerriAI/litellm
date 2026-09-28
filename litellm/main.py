@@ -95,7 +95,12 @@ from litellm.litellm_core_utils.health_check_utils import (
     _create_health_check_response,
     _filter_model_params,
 )
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import (
+    Logging as LiteLLMLoggingObj,
+)
+from litellm.litellm_core_utils.litellm_logging import (
+    run_async_input_callbacks,
+)
 from litellm.litellm_core_utils.mock_functions import (
     mock_embedding,
     mock_image_generation,
@@ -669,6 +674,7 @@ async def acompletion(
         func_with_context: Final = partial(ctx.run, func)
 
         init_response: Final = await loop.run_in_executor(None, func_with_context)
+        await run_async_input_callbacks(litellm_logging_obj)
         if isinstance(init_response, dict) or isinstance(init_response, ModelResponse):  ## CACHING SCENARIO
             if isinstance(init_response, dict):
                 response = _model_response_from_cached_dict(init_response)

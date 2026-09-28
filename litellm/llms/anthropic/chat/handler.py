@@ -55,6 +55,7 @@ from litellm.types.utils import (
     _generate_id,
 )
 
+from ....litellm_core_utils.litellm_logging import run_async_input_callbacks
 from ...base import BaseLLM
 from ..common_utils import AnthropicError, process_anthropic_headers
 from .transformation import ANTHROPIC_TOOL_NAME_REVERSE_MAP_KEY, AnthropicConfig
@@ -403,6 +404,7 @@ class AnthropicChatCompletion(BaseLLM):
                     headers=headers,
                 )
             )
+            await run_async_input_callbacks(logging_obj)
             if (
                 stream is True
             ):  # if function call - fake the streaming (need complete blocks for output parsing in openai format)

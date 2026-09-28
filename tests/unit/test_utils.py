@@ -3268,6 +3268,7 @@ class TestCallbackAsyncSyncSeparation:
     def setup_method(self):
         """Reset callback lists before each test."""
         litellm.input_callback = []
+        litellm.callbacks = []
         litellm.success_callback = []
         litellm.failure_callback = []
         litellm._async_input_callback = []
@@ -3328,6 +3329,18 @@ class TestCallbackAsyncSyncSeparation:
         litellm.logging_callback_manager.add_litellm_input_callback(my_async_cb)
         assert my_async_cb in litellm._async_input_callback
         assert my_async_cb not in litellm.input_callback
+
+    @pytest.mark.asyncio
+    async def test_async_input_callback_from_callbacks_is_not_registered_twice(self):
+        async def my_async_cb(*args, **kwargs):
+            pass
+
+        litellm.callbacks = [my_async_cb]
+
+        await litellm.acompletion(model="openai/test-model", messages=[], mock_response="ok")
+        await litellm.acompletion(model="openai/test-model", messages=[], mock_response="ok")
+
+        assert litellm._async_input_callback == [my_async_cb]
 
     def test_sync_input_callback_stays_in_sync_list(self):
         def my_sync_cb(*args, **kwargs):

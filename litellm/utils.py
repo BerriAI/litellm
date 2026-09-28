@@ -999,8 +999,7 @@ def function_setup(
                         type(cb) is type(callback) for cb in litellm._async_success_callback
                     ):  # don't double add a callback
                         continue
-                if callback not in litellm.input_callback:
-                    litellm.input_callback.append(callback)
+                litellm.logging_callback_manager.add_litellm_input_callback(callback)
                 if callback not in litellm.success_callback:
                     litellm.logging_callback_manager.add_litellm_success_callback(callback)
                 if callback not in litellm.failure_callback:
@@ -1024,7 +1023,7 @@ def function_setup(
             removed_async_items = []
             for index, callback in enumerate(litellm.input_callback):
                 if coroutine_checker.is_async_callable(callback):
-                    litellm._async_input_callback.append(callback)
+                    litellm.logging_callback_manager.add_litellm_input_callback(callback)
                     removed_async_items.append(index)
 
             # Pop the async items from input_callback in reverse order to avoid index issues
@@ -1282,6 +1281,7 @@ def function_setup(
             kwargs=kwargs,
             applied_guardrails=applied_guardrails,
             supports_correlation_logging=is_async_call,
+            is_async_call=is_async_call,
         )
 
         ## check if metadata is passed in

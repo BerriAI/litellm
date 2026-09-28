@@ -28,7 +28,12 @@ from litellm._logging import verbose_logger
 from litellm.constants import DEFAULT_MAX_RETRIES
 from litellm.files.types import FileContentStreamingResult
 from litellm.litellm_core_utils.core_helpers import set_provider_response_headers_in_hidden_params
-from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.litellm_core_utils.litellm_logging import (
+    Logging as LiteLLMLoggingObj,
+)
+from litellm.litellm_core_utils.litellm_logging import (
+    run_async_input_callbacks,
+)
 from litellm.litellm_core_utils.logging_utils import speech_request_body, track_llm_api_timing
 from litellm.llms.base_llm.base_model_iterator import BaseModelResponseIterator
 from litellm.llms.base_llm.chat.transformation import BaseConfig, BaseLLMException
@@ -944,6 +949,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         "openai_sdk": True,
                     },
                 )
+                await run_async_input_callbacks(logging_obj)
 
                 headers, response = await self.make_openai_chat_completion_request(
                     openai_aclient=openai_aclient,
@@ -1123,6 +1129,7 @@ class OpenAIChatCompletion(BaseLLM, BaseOpenAILLM):
                         "complete_input_dict": data,
                     },
                 )
+                await run_async_input_callbacks(logging_obj)
 
                 headers, response = await self.make_openai_chat_completion_request(
                     openai_aclient=openai_aclient,
