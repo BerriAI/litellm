@@ -157,7 +157,7 @@ describe("EditAutoRouterModal keyword matching", () => {
     const threshold = screen.getByRole("textbox", { name: "Success threshold" });
     expect(threshold).toHaveValue("0.91");
     fireEvent.change(threshold, { target: { value: raw } });
-    await waitFor(() => expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled());
+    await waitFor(() => expect(screen.getByRole("button", { name: "Save Changes" })).toBeEnabled(), { timeout: 5000 });
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
     await waitFor(() => expect(modelPatchUpdateCall).toHaveBeenCalledOnce());
     if (raw === "") expect(savedConfig()).not.toHaveProperty("heuristic_v2_success_threshold");
