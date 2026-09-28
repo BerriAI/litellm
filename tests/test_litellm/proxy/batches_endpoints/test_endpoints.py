@@ -3269,3 +3269,92 @@ async def test_cancel__executed_batch_rejects_key_without_model_grant(cancel_har
     factory.assert_not_called()
     runner.cancel.assert_not_called()
     cancel_harness.router_acancel.assert_not_called()
+
+
+# =========================================================================== #
+# OpenAI `project` forwarding. The project a batch was created in keeps applying
+# to retrieve/list/cancel, and a caller can only steer it through the
+# `forward_openai_project` opt-in.
+# =========================================================================== #
+
+PROJECT_HEADER = {"OpenAI-Project": "proj_forwarded"}
+FORWARD_PROJECT_SETTINGS = {"forward_openai_project": True}
+CREATE_BODY = {
+    "input_file_id": "file-plain",
+    "endpoint": "/v1/chat/completions",
+    "completion_window": "24h",
+}
+
+
+@pytest.mark.asyncio
+async def test_create__openai_project_header_forwarded_when_opted_in(harness, openai_env_creds, monkeypatch):
+    monkeypatch.setattr(proxy_server, "general_settings", FORWARD_PROJECT_SETTINGS)
+    set_body(harness, CREATE_BODY)
+
+    await call_create(harness, headers=PROJECT_HEADER)
+
+    assert harness.acreate_kwargs()["project"] == "proj_forwarded"
+
+
+@pytest.mark.asyncio
+async def test_create__openai_project_body_value_forwarded_when_opted_in(harness, openai_env_creds, monkeypatch):
+    monkeypatch.setattr(proxy_server, "general_settings", FORWARD_PROJECT_SETTINGS)
+    set_body(harness, {**CREATE_BODY, "project": "proj_from_body"})
+
+    await call_create(harness)
+
+    assert harness.acreate_kwargs()["project"] == "proj_from_body"
+
+
+@pytest.mark.asyncio
+async def test_create__openai_project_dropped_without_opt_in(harness, openai_env_creds):
+    set_body(harness, {**CREATE_BODY, "project": "proj_from_body"})
+
+    await call_create(harness, headers=PROJECT_HEADER)
+
+    assert "project" not in harness.acreate_kwargs()
+
+
+@pytest.mark.asyncio
+async def test_retrieve__openai_project_header_forwarded_when_opted_in(
+    retrieve_harness, openai_env_creds, monkeypatch
+):
+    """Regression: creation honored the header, retrieval ignored it, so a batch
+    made inside a project could not be read back through the proxy."""
+    monkeypatch.setattr(proxy_server, "general_settings", FORWARD_PROJECT_SETTINGS)
+
+    await call_retrieve(retrieve_harness, "batch-raw-xyz", headers=PROJECT_HEADER)
+
+    assert retrieve_harness.aretrieve_kwargs()["project"] == "proj_forwarded"
+
+
+@pytest.mark.asyncio
+async def test_retrieve__openai_project_dropped_without_opt_in(retrieve_harness, openai_env_creds):
+    await call_retrieve(retrieve_harness, "batch-raw-xyz", headers=PROJECT_HEADER)
+
+    assert "project" not in retrieve_harness.aretrieve_kwargs()
+
+
+@pytest.mark.asyncio
+async def test_list__openai_project_header_forwarded_when_opted_in(list_harness, monkeypatch):
+    monkeypatch.setattr(proxy_server, "general_settings", FORWARD_PROJECT_SETTINGS)
+
+    await call_list(list_harness, headers=PROJECT_HEADER)
+
+    assert list_harness.alist_kwargs()["project"] == "proj_forwarded"
+
+
+@pytest.mark.asyncio
+async def test_list__openai_project_dropped_without_opt_in(list_harness):
+    await call_list(list_harness, headers=PROJECT_HEADER)
+
+    assert "project" not in list_harness.alist_kwargs()
+
+
+@pytest.mark.asyncio
+async def test_cancel__openai_project_header_forwarded_when_opted_in(cancel_harness, openai_env_creds, monkeypatch):
+    monkeypatch.setattr(proxy_server, "general_settings", FORWARD_PROJECT_SETTINGS)
+
+    await call_cancel(cancel_harness, "batch-raw-xyz", headers=PROJECT_HEADER)
+
+    assert cancel_harness.acancel_kwargs()["project"] == "proj_forwarded"

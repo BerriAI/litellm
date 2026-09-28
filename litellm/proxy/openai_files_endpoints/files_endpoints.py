@@ -47,6 +47,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     extract_nested_form_metadata,
 )
 from litellm.proxy.common_utils.openai_endpoint_utils import (
+    apply_openai_project_to_data,
     get_custom_llm_provider_from_request_body,
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
@@ -552,6 +553,7 @@ async def create_file(
     custom_llm_provider: str = Form(default="openai"),
     file: UploadFile = File(...),
     litellm_metadata: str | None = Form(default=None),
+    project: str | None = Form(default=None),
     passthrough: bool = Form(default=False),
     user_api_key_dict: UserAPIKeyAuth = Depends(user_api_key_auth),
 ):
@@ -758,8 +760,9 @@ async def create_file(
             proxy_config=proxy_config,
         )
 
-        if data.get("project") is None and request.headers.get("OpenAI-Project"):
-            data["project"] = request.headers.get("OpenAI-Project")
+        if project is not None:
+            data["project"] = project
+        apply_openai_project_to_data(data=data, request=request, general_settings=general_settings)
 
         uploaded_file_info: Final[UploadedFileInfo] = {
             "filename": file.filename,
@@ -996,6 +999,7 @@ async def get_file_content(
             proxy_config=proxy_config,
             route_type="afile_content",
         )
+        apply_openai_project_to_data(data=data, request=request, general_settings=general_settings)
 
         custom_llm_provider: Final = (
             provider
@@ -1309,6 +1313,7 @@ async def get_file(
             proxy_config=proxy_config,
             route_type="afile_retrieve",
         )
+        apply_openai_project_to_data(data=data, request=request, general_settings=general_settings)
 
         ## Check for model-based credential routing
         from litellm.proxy.proxy_server import llm_router
@@ -1515,6 +1520,7 @@ async def delete_file(
             proxy_config=proxy_config,
             route_type="afile_delete",
         )
+        apply_openai_project_to_data(data=data, request=request, general_settings=general_settings)
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
@@ -1722,6 +1728,7 @@ async def list_files(
             proxy_config=proxy_config,
             route_type=CallTypes.alist_fine_tuning_jobs.value,
         )
+        apply_openai_project_to_data(data=data, request=request, general_settings=general_settings)
 
         response: Any | None = None
 

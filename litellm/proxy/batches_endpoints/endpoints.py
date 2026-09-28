@@ -37,6 +37,7 @@ from litellm.proxy.common_request_processing import (
 from litellm.proxy.common_utils.callback_utils import sanitize_openai_provider_metadata
 from litellm.proxy.common_utils.http_parsing_utils import _read_request_body
 from litellm.proxy.common_utils.openai_endpoint_utils import (
+    apply_openai_project_to_data,
     get_custom_llm_provider_from_request_headers,
     get_custom_llm_provider_from_request_query,
 )
@@ -268,8 +269,7 @@ async def create_batch(
             "Request received by LiteLLM:\n%s",
             json.dumps(data, indent=4),
         )
-        if data.get("project") is None and request.headers.get("OpenAI-Project"):
-            data["project"] = request.headers.get("OpenAI-Project")
+        apply_openai_project_to_data(data=data, request=request, general_settings=general_settings)
         base_llm_response_processor: Final = ProxyBaseLLMRequestProcessing(data=data)
         (
             data,
@@ -598,6 +598,7 @@ async def retrieve_batch(
             proxy_config=proxy_config,
             route_type="aretrieve_batch",
         )
+        apply_openai_project_to_data(data=data, request=request, general_settings=general_settings)
 
         unified_model_id: Final = get_model_id_from_unified_batch_id(unified_batch_id) if unified_batch_id else None
         if unified_model_id is not None:
@@ -901,6 +902,8 @@ async def list_batches(
             proxy_config=proxy_config,
             route_type="alist_batches",
         )
+        data = dict(data)  # mutable-ok: the project resolution below drops or sets `project`
+        apply_openai_project_to_data(data=data, request=request, general_settings=general_settings)
 
         # Try to use managed objects table for listing batches (returns encoded IDs).
         managed_files_obj: Final = proxy_logging_obj.get_proxy_hook("managed_files")
@@ -1095,6 +1098,7 @@ async def cancel_batch(
             proxy_config=proxy_config,
             route_type="acancel_batch",
         )
+        apply_openai_project_to_data(data=data, request=request, general_settings=general_settings)
 
         # Include original request and headers in the data
         data = await add_litellm_data_to_request(
