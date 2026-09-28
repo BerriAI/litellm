@@ -25,12 +25,16 @@ async def test_async_timeout_decorator_enforces_per_call_timeout(timeout_arg: st
 
 
 @pytest.mark.asyncio
-async def test_async_timeout_decorator_extends_duration_with_per_call_timeout() -> None:
+@pytest.mark.parametrize("timeout_arg", ["request_timeout", "force_timeout"])
+async def test_async_timeout_decorator_extends_duration_with_per_call_timeout(
+    timeout_arg: str,
+) -> None:
     @timeout(timeout_duration=0.001)
-    async def fast_func(**kwargs):
+    async def delayed_func(**kwargs):
+        await asyncio.sleep(0.01)
         return "completed"
 
-    result: Final = await fast_func(request_timeout=60.0, model="test-model")
+    result: Final = await delayed_func(**{timeout_arg: 60.0, "model": "test-model"})
     assert result == "completed"
 
 
