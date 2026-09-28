@@ -97,7 +97,7 @@ async def test_add_litellm_data_to_request_snapshots_requester_metadata(mock_req
     empty_snapshot: Final = await add_litellm_data_to_request(
         {}, mock_request, user_api_key_dict, proxy_config
     )
-    assert empty_snapshot["litellm_metadata"]["requester_metadata"] == {}
+    assert "requester_metadata" not in empty_snapshot["litellm_metadata"]
 
     mock_request.url.path = "/chat/completions"
     mock_request.headers = {}

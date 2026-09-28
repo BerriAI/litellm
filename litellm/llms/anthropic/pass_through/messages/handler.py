@@ -474,6 +474,7 @@ def anthropic_messages_handler(
     )
 
     local_vars: Final = locals()
+    anthropic_metadata: Final = validate_anthropic_api_metadata(metadata)
     is_async: Final = kwargs.pop("is_async", False)
     # Use provided client or create a new one
     litellm_logging_obj: Final[LiteLLMLoggingObj] = kwargs.get("litellm_logging_obj")
@@ -541,7 +542,7 @@ def anthropic_messages_handler(
                 max_tokens=max_tokens,
                 messages=messages,
                 model=model,
-                metadata=validate_anthropic_api_metadata(metadata),
+                metadata=anthropic_metadata,
                 stop_sequences=stop_sequences,
                 stream=stream,
                 system=system,
@@ -585,7 +586,7 @@ def anthropic_messages_handler(
                 max_tokens=max_tokens,
                 messages=messages,
                 model=original_model,
-                metadata=validate_anthropic_api_metadata(metadata),
+                metadata=anthropic_metadata,
                 stop_sequences=stop_sequences,
                 stream=stream,
                 system=system,
@@ -611,7 +612,7 @@ def anthropic_messages_handler(
             max_tokens=max_tokens,
             messages=messages,
             model=original_model,
-            metadata=validate_anthropic_api_metadata(metadata),
+            metadata=anthropic_metadata,
             stop_sequences=stop_sequences,
             stream=stream,
             system=system,

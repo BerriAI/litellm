@@ -52,7 +52,7 @@ def _get_skill_request_metadata(
 
     metadata: Final = kwargs.get("metadata")
     if isinstance(metadata, dict) and isinstance(metadata.get("requester_metadata"), dict):
-        return metadata["requester_metadata"] or None
+        return metadata["requester_metadata"]
     return None
 
 

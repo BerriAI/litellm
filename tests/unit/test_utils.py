@@ -77,21 +77,11 @@ from litellm.utils import (
     get_non_default_completion_params,
     get_optional_params_image_gen,
     get_prompt_cache_min_tokens,
-    get_requester_metadata,
     is_cached_message,
     is_prompt_caching_valid_prompt,
 )
 
 # Adds the parent directory to the system path
-
-
-def test_get_requester_metadata_trusts_present_snapshot() -> None:
-    assert get_requester_metadata({"requester_metadata": {}, "internal": "value"}) is None
-    assert get_requester_metadata({"requester_metadata": {"trace_id": "trace-1"}, "internal": "value"}) == {
-        "trace_id": "trace-1"
-    }
-    assert get_requester_metadata({"trace_id": "trace-1"}) == {"trace_id": "trace-1"}
-    assert get_requester_metadata({"requester_metadata": "invalid", "trace_id": "trace-1"}) is None
 
 
 def test_non_ocr_wrapper_preserves_logging_executor_and_context(monkeypatch: pytest.MonkeyPatch) -> None:

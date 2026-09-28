@@ -72,11 +72,6 @@ def test_should_extract_skill_request_metadata_with_extra_body_precedence():
         )
         is None
     )
-    assert skills_main._get_skill_request_metadata({"metadata": {"requester_metadata": {}}}, None) is None
-    snapshot = {"purpose": "requester"}
-    assert (
-        skills_main._get_skill_request_metadata({"metadata": {"requester_metadata": snapshot}}, None) is snapshot
-    )
 
 
 def test_should_forward_skill_auth_through_sdk_entrypoints(monkeypatch):

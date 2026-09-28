@@ -2020,7 +2020,7 @@ async def add_litellm_data_to_request(
         for _mk in list(_user_metadata.keys()):
             if _mk.startswith("user_api_key_"):
                 del _user_metadata[_mk]
-    _requester_metadata_source: Final = copy.deepcopy(_user_metadata) if isinstance(_user_metadata, dict) else {}
+    _requester_metadata_source: Final = copy.deepcopy(_user_metadata) if isinstance(_user_metadata, dict) else None
     if isinstance(_requester_metadata_source, dict):
         _strip_untrusted_request_header_controls(
             _requester_metadata_source.get("headers"),
@@ -2249,14 +2249,15 @@ async def add_litellm_data_to_request(
     #     that walks the structure.
     refresh_proxy_server_request_body_snapshot(data)
 
-    data[_metadata_variable_name]["requester_metadata"] = _requester_metadata_source
-    if _metadata_variable_name == "litellm_metadata":
-        data[_metadata_variable_name].update(
-            _promoted_trace_control_fields(
-                requester_metadata=data[_metadata_variable_name]["requester_metadata"],
-                litellm_metadata=data[_metadata_variable_name],
+    if _requester_metadata_source is not None:
+        data[_metadata_variable_name]["requester_metadata"] = _requester_metadata_source
+        if _metadata_variable_name == "litellm_metadata":
+            data[_metadata_variable_name].update(
+                _promoted_trace_control_fields(
+                    requester_metadata=data[_metadata_variable_name]["requester_metadata"],
+                    litellm_metadata=data[_metadata_variable_name],
+                )
             )
-        )
 
     # Merge litellm_metadata into the metadata variable (preserving existing
     # values). Runs after the user_api_key_* / _pipeline_managed_guardrails
