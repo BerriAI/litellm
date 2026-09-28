@@ -733,6 +733,7 @@ from litellm.proxy.openai_files_endpoints.files_endpoints import (
 from litellm.proxy.openai_files_endpoints.files_endpoints import (
     set_files_config,
 )
+from litellm.proxy.pass_through_endpoints.common_utils import encrypt_pass_through_endpoints
 from litellm.proxy.pass_through_endpoints.openai_passthrough_endpoints import (
     router as openai_passthrough_router,
 )
@@ -17888,7 +17889,7 @@ async def update_config(
                         existing["alerting"] = ["slack"]
                     elif isinstance(existing["alerting"], list) and "slack" not in existing["alerting"]:
                         existing["alerting"].append("slack")
-                existing[k] = v
+                existing[k] = encrypt_pass_through_endpoints(v) if k == "pass_through_endpoints" else v
             await _upsert_section("general_settings", existing)
             asyncio.create_task(
                 create_config_audit_log(
@@ -18149,6 +18150,8 @@ async def update_config_general_settings(
     field_value = data.field_value
     if data.field_name == "plugins":
         field_value = _preserve_redacted_plugin_keys(field_value, general_settings.get("plugins"))
+    if data.field_name == "pass_through_endpoints":
+        field_value = encrypt_pass_through_endpoints(field_value)
 
     general_settings[data.field_name] = cast(JsonValue, field_value)  # cast-ok: ConfigGeneralSettings validated it
 

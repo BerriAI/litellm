@@ -66,6 +66,7 @@ from litellm.proxy.auth.auth_utils import (
     enforce_batch_enqueued_token_limit_is_admin_only,
     enforce_output_token_estimates_are_admin_only,
 )
+from litellm.proxy.auth.master_key_boot_check import SALT_KEY_ENV_VAR
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
 from litellm.proxy.common_utils.auth_cache_invalidation_pubsub import (
     evict_and_broadcast,
@@ -124,6 +125,7 @@ from litellm.proxy.management_helpers.team_member_permission_checks import (
     TeamMemberPermissionChecks,
 )
 from litellm.proxy.management_helpers.utils import management_endpoint_wrapper
+from litellm.proxy.pass_through_endpoints.common_utils import reencrypt_general_settings_pass_through
 from litellm.proxy.spend_tracking.budget_reservation import get_budget_window_start
 from litellm.proxy.spend_tracking.spend_tracking_utils import _is_master_key
 from litellm.proxy.utils import (
@@ -131,6 +133,7 @@ from litellm.proxy.utils import (
     ProxyLogging,
     _hash_token_if_needed,
     handle_exception_on_proxy,
+    invalidate_config_param,
     is_valid_api_key,
 )
 from litellm.repositories.base_repository import BaseRepository
@@ -5300,6 +5303,18 @@ async def _rotate_master_key(
                     where={"param_name": "environment_variables"},
                     data={"param_value": prisma.Json(encrypted_env_vars)},
                 )
+
+        for c in config:
+            if (
+                c.param_name == "general_settings"
+                and os.getenv(SALT_KEY_ENV_VAR) is None
+                and (reencrypted := reencrypt_general_settings_pass_through(c.param_value, new_master_key)) is not None
+            ):
+                await _config_table(prisma_client).update(
+                    where={"param_name": "general_settings"},
+                    data={"param_value": prisma.Json(reencrypted)},
+                )
+                await invalidate_config_param("general_settings")
 
     # 4. process MCP server table
     try:

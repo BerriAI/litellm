@@ -15562,3 +15562,64 @@ async def test_spend_capture_rate_check_job_clears_the_gauge_once_the_setting_is
         call(api_provider="openai", capture_rate=0.97),
         call(api_provider="openai", capture_rate=None),
     ]
+
+
+def test_update_config_encrypts_pass_through_endpoint_headers(_update_config_setup, monkeypatch):
+    from litellm.proxy.pass_through_endpoints.common_utils import decrypt_pass_through_headers
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-pass-through-tests")
+    client, prisma, restore = _update_config_setup(initial_rows={"general_settings": {"store_model_in_db": True}})
+    try:
+        resp = client.post(
+            "/config/update",
+            json={
+                "general_settings": {
+                    "pass_through_endpoints": [
+                        {"path": "/pt", "target": "http://upstream", "headers": {"Authorization": "Bearer sk-literal"}}
+                    ]
+                }
+            },
+        )
+        assert resp.status_code == 200
+        stored = prisma.db.litellm_config.rows["general_settings"]
+        stored_headers = stored["pass_through_endpoints"][0]["headers"]
+        assert "sk-literal" not in json.dumps(stored)
+        assert decrypt_pass_through_headers(stored_headers) == {"Authorization": "Bearer sk-literal"}
+        assert stored["store_model_in_db"] is True
+    finally:
+        restore()
+
+
+@pytest.mark.asyncio
+async def test_update_config_general_settings_encrypts_pass_through_endpoint_headers(monkeypatch):
+    import litellm.proxy.proxy_server as ps
+    from litellm.proxy._types import ConfigFieldUpdate, LitellmUserRoles, UserAPIKeyAuth
+    from litellm.proxy.pass_through_endpoints.common_utils import decrypt_pass_through_headers
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-salt-pass-through-tests")
+    prisma = _FakePrismaClient(initial_rows={"general_settings": {"store_model_in_db": True}})
+    monkeypatch.setattr(ps, "prisma_client", prisma)
+    monkeypatch.setattr(ps, "invalidate_config_param", AsyncMock(return_value=None))
+    monkeypatch.setattr(ps.proxy_config.settings, "apply_db_row", MagicMock())
+    monkeypatch.setattr(ps, "create_config_audit_log", AsyncMock(return_value=None))
+    endpoints = [
+        {"path": "/a", "target": "http://upstream-a", "headers": {"x-a": "plain-a"}},
+        {"path": "/b", "target": "http://upstream-b", "headers": {"Authorization": "Bearer sk-literal"}},
+    ]
+
+    await ps.update_config_general_settings(
+        data=ConfigFieldUpdate(
+            field_name="pass_through_endpoints", field_value=endpoints, config_type="general_settings"
+        ),
+        user_api_key_dict=UserAPIKeyAuth(api_key="k", user_id="a", user_role=LitellmUserRoles.PROXY_ADMIN),
+    )
+
+    stored = prisma.db.litellm_config.rows["general_settings"]
+    assert "sk-literal" not in json.dumps(stored)
+    assert "plain-a" not in json.dumps(stored)
+    assert [decrypt_pass_through_headers(e["headers"]) for e in stored["pass_through_endpoints"]] == [
+        {"x-a": "plain-a"},
+        {"Authorization": "Bearer sk-literal"},
+    ]
+    assert endpoints[1]["headers"] == {"Authorization": "Bearer sk-literal"}
+    ps.proxy_config.settings.apply_db_row.assert_called_once_with("general_settings", stored)
