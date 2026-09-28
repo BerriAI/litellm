@@ -7512,6 +7512,27 @@ def test_update_kwargs_with_deployment_propagates_model_tags():
     assert "production" in kwargs["metadata"]["tags"]
 
 
+def test_update_kwargs_before_fallbacks_snapshots_requester_metadata():
+    router = litellm.Router(
+        model_list=[
+            {
+                "model_name": "gpt-4o-mini",
+                "litellm_params": {"model": "openai/gpt-4o-mini", "api_key": "fake-key"},
+            }
+        ]
+    )
+
+    caller_metadata: Final = {"trace_id": "trace-1"}
+    kwargs: Final[dict[str, object]] = {"metadata": caller_metadata}
+    router._update_kwargs_before_fallbacks(model="gpt-4o-mini", kwargs=kwargs)
+    assert kwargs["metadata"]["requester_metadata"] == {"trace_id": "trace-1"}
+
+    proxy_snapshot: Final = {"trace_id": "proxy-trace"}
+    proxy_kwargs: Final[dict[str, object]] = {"metadata": {"requester_metadata": proxy_snapshot}}
+    router._update_kwargs_before_fallbacks(model="gpt-4o-mini", kwargs=proxy_kwargs)
+    assert proxy_kwargs["metadata"]["requester_metadata"] is proxy_snapshot
+
+
 def test_update_kwargs_with_deployment_merges_tags_without_duplicates():
     """
     Test that when both request-level and deployment-level tags exist,
@@ -15753,9 +15774,7 @@ async def test_run_async_fallback_keeps_caller_metadata_keys_on_the_wire(monkeyp
 
     assert len(wire_bodies) == 1
     small_wire = wire_bodies[0]["metadata"]
-    assert {k: small_wire[k] for k in small_metadata} == small_metadata
-    assert small_wire["original_model_group"] == "primary-group"
-    assert small_wire["model_group"] == "fallback-group"
+    assert small_wire == small_metadata
 
 
 @pytest.mark.asyncio

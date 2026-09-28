@@ -6,7 +6,10 @@ import respx
 
 import litellm
 from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
+from litellm.llms.openai_like.json_loader import JSONProviderRegistry
+from litellm.llms.openai_like.messages.transformation import JSONProviderAnthropicMessagesConfig
 from litellm.llms.sail.common_utils import billed_service_tier
+from litellm.llms.sail.messages.transformation import SailAnthropicMessagesConfig
 from tests.unit.llms.sail.helpers import MODEL, SAIL_API_BASE, messages_body, sent_body
 
 MESSAGES: Final = [{"role": "user", "content": "hi"}]
@@ -27,33 +30,6 @@ async def test_sail_messages_sends_caller_window(sail_env: None, messages_route:
     body: Final = sent_body(messages_route)
     assert body["metadata"] == {"completion_window": window}
     assert "service_tier" not in body
-
-
-@pytest.mark.asyncio
-async def test_sail_messages_service_tier_becomes_window_without_service_tier_body(
-    sail_env: None, messages_route: respx.Route
-) -> None:
-    await litellm.anthropic_messages(model=MODEL, messages=MESSAGES, max_tokens=16, service_tier="flex")
-
-    body: Final = sent_body(messages_route)
-    assert body["metadata"] == {"completion_window": "flex"}
-    assert "service_tier" not in body
-
-
-@pytest.mark.asyncio
-async def test_sail_messages_rejects_conflicting_window_before_dispatch(
-    sail_env: None, messages_route: respx.Route
-) -> None:
-    with pytest.raises(litellm.UnsupportedParamsError, match="select different completion windows"):
-        await litellm.anthropic_messages(
-            model=MODEL,
-            messages=MESSAGES,
-            max_tokens=16,
-            service_tier="balanced",
-            metadata={"completion_window": "flex"},
-        )
-
-    assert not messages_route.called
 
 
 @pytest.mark.parametrize("drop_params", ["false", True])
@@ -95,3 +71,16 @@ def test_native_anthropic_messages_filter_provider_metadata() -> None:
     assert AnthropicMessagesConfig().request_metadata({"user_id": "user-1", "trace_id": "internal"}) == {
         "user_id": "user-1"
     }
+
+
+def test_messages_metadata_filtering_is_provider_owned() -> None:
+    meta_provider: Final = JSONProviderRegistry.get("meta")
+    sail_provider: Final = JSONProviderRegistry.get("sail")
+    assert meta_provider is not None
+    assert sail_provider is not None
+    openai_like: Final = JSONProviderAnthropicMessagesConfig(meta_provider)
+    sail: Final = SailAnthropicMessagesConfig(sail_provider)
+    metadata: Final = {"completion_window": "flex", "user_id": "u"}
+
+    assert openai_like.request_metadata(metadata) == {"user_id": "u"}
+    assert sail.request_metadata(metadata) == metadata

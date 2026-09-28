@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from datetime import datetime
-from typing import Any, Dict, List, Optional, Union
+from typing import Any, Dict, Final, List, Optional, Union
 from unittest.mock import Mock
 
 import pytest
@@ -84,6 +84,26 @@ async def test_add_litellm_data_to_request_non_thread_endpoint(endpoint, mock_re
 
     assert "metadata" in data
     assert "litellm_metadata" not in data
+
+
+@pytest.mark.asyncio
+async def test_add_litellm_data_to_request_snapshots_requester_metadata(mock_request):
+    mock_request.url.path = "/chat/completions"
+    mock_request.headers = {}
+    user_api_key_dict = UserAPIKeyAuth(api_key="test_api_key")
+    proxy_config = Mock()
+
+    empty_snapshot: Final = await add_litellm_data_to_request(
+        {}, mock_request, user_api_key_dict, proxy_config
+    )
+    assert empty_snapshot["metadata"]["requester_metadata"] == {}
+
+    caller_metadata = {"trace_id": "trace-1"}
+    snapshot: Final = await add_litellm_data_to_request(
+        {"metadata": caller_metadata}, mock_request, user_api_key_dict, proxy_config
+    )
+    caller_metadata["trace_id"] = "changed"
+    assert snapshot["metadata"]["requester_metadata"] == {"trace_id": "trace-1"}
 
 
 # test adding traceparent

@@ -1,4 +1,3 @@
-from collections.abc import Mapping
 from typing import Any, Final
 
 import litellm
@@ -32,9 +31,6 @@ class OpenAILikeAnthropicMessagesConfig(AnthropicMessagesConfig):
     def __init__(self, cache_control_ttl: bool = False) -> None:
         super().__init__()
         self._cache_control_ttl: Final = cache_control_ttl
-
-    def request_metadata(self, metadata: Mapping[str, object] | None) -> Mapping[str, object] | None:
-        return metadata
 
     def validate_anthropic_messages_environment(
         self,
