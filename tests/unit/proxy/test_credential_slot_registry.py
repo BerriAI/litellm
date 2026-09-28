@@ -90,6 +90,8 @@ CALLBACK_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingProx
         "dd_agent_port": NotSecret("agent port"),
         "newrelic_api_key": Secret(UNPLANTED),
         "newrelic_region": NotSecret("region name"),
+        "signoz_ingestion_key": Secret(UNPLANTED),
+        "signoz_ingestion_endpoint": NotSecret("sink endpoint URL"),
         "turn_off_message_logging": NotSecret("boolean logging switch"),
         "litellm_disabled_callbacks": NotSecret("list of callback names"),
     }
