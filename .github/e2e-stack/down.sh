@@ -10,7 +10,7 @@ for pid_file in "${STACK_DIR}"/pids/*.pid; do
   rm -f "${pid_file}"
 done
 
-for container in e2e-nginx e2e-valkey e2e-jaeger e2e-postgres; do
+for container in e2e-nginx e2e-keycloak e2e-valkey e2e-jaeger e2e-postgres; do
   docker rm -f "${container}" >/dev/null 2>&1
 done
 

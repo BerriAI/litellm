@@ -2,13 +2,13 @@
 
 import { SortingState } from "@tanstack/react-table";
 import { FolderKanban } from "lucide-react";
-import { parseAsInteger, useQueryStates } from "nuqs";
 import { useMemo, useState } from "react";
 
 import { ProjectResponse } from "@/app/(dashboard)/hooks/projects/useProjects";
 import { DataTable, DataTablePagination } from "@/components/shared/DataTable";
 
 import { getProjectsTableColumns } from "./ProjectsTableColumns";
+import { PROJECTS_DEFAULT_PAGE_SIZE, useProjectsTableState } from "./useProjectsUrlState";
 
 interface ProjectsTableProps {
   projects: ProjectResponse[];
@@ -19,8 +19,7 @@ interface ProjectsTableProps {
   isTeamsLoading: boolean;
 }
 
-const DEFAULT_PAGE_SIZE = 10;
-const PAGE_SIZE_OPTIONS = [DEFAULT_PAGE_SIZE, 25, 50];
+const PAGE_SIZE_OPTIONS = [PROJECTS_DEFAULT_PAGE_SIZE, 25, 50];
 
 function EmptyState({ isFiltered }: { isFiltered: boolean }) {
   return (
@@ -47,11 +46,8 @@ export function ProjectsTable({
   isTeamsLoading,
 }: ProjectsTableProps) {
   const [sorting, setSorting] = useState<SortingState>([]);
-  const [{ page, page_size }, setPagination] = useQueryStates(
-    { page: parseAsInteger.withDefault(1), page_size: parseAsInteger.withDefault(DEFAULT_PAGE_SIZE) },
-    { history: "push" },
-  );
-  const pageSize = PAGE_SIZE_OPTIONS.includes(page_size) ? page_size : DEFAULT_PAGE_SIZE;
+  const { pagination, onPaginationChange } = useProjectsTableState();
+  const pageSize = PAGE_SIZE_OPTIONS.includes(pagination.pageSize) ? pagination.pageSize : PROJECTS_DEFAULT_PAGE_SIZE;
 
   const columns = useMemo(() => {
     const deps = { onProjectClick, teamAliasMap, isTeamsLoading };
@@ -59,7 +55,7 @@ export function ProjectsTable({
   }, [onProjectClick, teamAliasMap, isTeamsLoading]);
 
   const pageCount = Math.max(Math.ceil(projects.length / pageSize), 1);
-  const pageIndex = page >= 1 && page <= pageCount ? page - 1 : 0;
+  const pageIndex = pagination.pageIndex < pageCount ? pagination.pageIndex : 0;
 
   return (
     <DataTable
@@ -77,8 +73,8 @@ export function ProjectsTable({
           page={pageIndex}
           pageSize={pageSize}
           rowCount={projects.length}
-          onPageChange={(nextPageIndex) => void setPagination({ page: nextPageIndex + 1 })}
-          onPageSizeChange={(nextPageSize) => void setPagination({ page_size: nextPageSize, page: null })}
+          onPageChange={(nextPageIndex) => onPaginationChange({ pageIndex: nextPageIndex, pageSize })}
+          onPageSizeChange={(nextPageSize) => onPaginationChange({ pageIndex: 0, pageSize: nextPageSize })}
           pageSizeOptions={PAGE_SIZE_OPTIONS}
           isLoading={isLoading}
         />

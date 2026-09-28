@@ -11,14 +11,20 @@ Routes covered:
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
+
+from litellm.litellm_core_utils.get_model_cost_map import get_model_cost_map_provenance
 
 from .conftest import VOLATILE_KEYS, normalize
 
 # Some response bodies include a "timestamp" — extend the volatile set so
 # dict-equality assertions remain stable.
 _VOLATILE = VOLATILE_KEYS | frozenset({"timestamp"})
+
+_SERVED_ETAG = 'W/"cost-map-etag"'
+_ROOT_COST_MAP = Path(__file__).resolve().parents[4] / "model_prices_and_context_window.json"
 
 
 # ---------------------------------------------------------------------------
@@ -83,11 +89,60 @@ def test_reload_model_cost_map_happy(client, auth_as, monkeypatch, mock_prisma):
         "status": "success",
         "models_count": 2,
         "timestamp": "<VOLATILE>",
+        **get_model_cost_map_provenance(),
     }
     assert table.upsert.await_count == 1
     update_payload = table.upsert.await_args.kwargs["data"]["update"]
     assert set(update_payload) == {"last_run_at", "reload_revision"}
     assert update_payload["reload_revision"] == {"increment": 1}
+
+
+def test_reload_model_cost_map_surfaces_the_blob_id_of_the_bytes_served_on_every_status_surface(
+    client, auth_as, monkeypatch, mock_prisma
+):
+    import httpx
+
+    import litellm
+    from litellm.litellm_core_utils.get_model_cost_map import git_blob_id
+    from litellm.proxy import proxy_server as ps
+    from litellm.proxy._types import LitellmUserRoles
+
+    _attach_litellm_config(mock_prisma)
+    monkeypatch.setattr(ps, "prisma_client", mock_prisma)
+    monkeypatch.delenv("LITELLM_LOCAL_MODEL_COST_MAP", raising=False)
+    body = _ROOT_COST_MAP.read_bytes()
+    expected = {"source_revision": git_blob_id(body), "etag": _SERVED_ETAG}
+    served = httpx.Response(200, headers={"ETag": _SERVED_ETAG}, content=body)
+    monkeypatch.setattr(
+        "litellm.litellm_core_utils.get_model_cost_map._default_reload_client",
+        lambda: httpx.AsyncClient(transport=httpx.MockTransport(lambda request: served)),
+    )
+    monkeypatch.setattr("litellm.add_known_models", lambda model_cost_map=None: None)
+    monkeypatch.setattr("litellm.model_cost", {}, raising=False)
+
+    async def _fake_invalidate(name):
+        return None
+
+    monkeypatch.setattr(ps, "invalidate_config_param", _fake_invalidate)
+
+    with auth_as(LitellmUserRoles.PROXY_ADMIN):
+        reload_response = client.post("/reload/model_cost_map")
+        source_response = client.get("/model/cost_map/source")
+        status_response = client.get("/schedule/model_cost_map_reload/status")
+    public_response = client.get("/public/litellm_model_cost_map")
+
+    assert reload_response.status_code == 200
+    reload_body = reload_response.json()
+    assert {key: reload_body[key] for key in expected} == expected
+    assert source_response.status_code == 200
+    source_body = source_response.json()
+    assert {key: source_body[key] for key in expected} == expected
+    assert source_body["source"] == "remote"
+    assert status_response.status_code == 200
+    assert {key: status_response.json()[key] for key in expected} == expected
+    assert public_response.status_code == 200
+    assert "gpt-4o" in public_response.json()
+    assert reload_body["models_count"] == len(litellm.model_cost)
 
 
 def test_reload_model_cost_map_fetch_failure_502_keeps_map(
@@ -270,7 +325,7 @@ def test_cancel_model_cost_map_reload_no_db_500(client, auth_as, monkeypatch):
 def test_get_model_cost_map_reload_status_no_db_not_scheduled(
     client, auth_as, monkeypatch
 ):
-    """No prisma client → returns the not-scheduled shape (4 keys, all-null)."""
+    """No prisma client → returns the not-scheduled shape (all-null) plus the cost map provenance."""
     from litellm.proxy import proxy_server as ps
     from litellm.proxy._types import LitellmUserRoles
 
@@ -283,6 +338,7 @@ def test_get_model_cost_map_reload_status_no_db_not_scheduled(
         "interval_hours": None,
         "last_run": None,
         "next_run": None,
+        **get_model_cost_map_provenance(),
     }
 
 
@@ -309,6 +365,7 @@ def test_get_model_cost_map_reload_status_scheduled(
         "interval_hours": 12,
         "last_run": None,
         "next_run": None,
+        **get_model_cost_map_provenance(),
     }
 
 
@@ -337,6 +394,7 @@ def test_get_model_cost_map_reload_status_reports_persisted_last_run(
         "interval_hours": 6,
         "last_run": "2024-01-01T06:00:00+00:00",
         "next_run": "2024-01-01T12:00:00+00:00",
+        **get_model_cost_map_provenance(),
     }
 
 
@@ -365,6 +423,7 @@ def test_get_model_cost_map_reload_status_no_config_not_scheduled(
         "interval_hours": None,
         "last_run": None,
         "next_run": None,
+        **get_model_cost_map_provenance(),
     }
 
 
@@ -391,6 +450,8 @@ def test_get_model_cost_map_source_happy(client, auth_as, monkeypatch):
         "url": "https://example.invalid/cost_map.json",
         "is_env_forced": False,
         "fallback_reason": None,
+        "loaded_at": "2026-09-07T01:02:03+00:00",
+        **get_model_cost_map_provenance(),
     }
     monkeypatch.setattr(
         "litellm.litellm_core_utils.get_model_cost_map.get_model_cost_map_source_info",
@@ -406,6 +467,8 @@ def test_get_model_cost_map_source_happy(client, auth_as, monkeypatch):
         "url": "https://example.invalid/cost_map.json",
         "is_env_forced": False,
         "fallback_reason": None,
+        "loaded_at": "2026-09-07T01:02:03+00:00",
+        **get_model_cost_map_provenance(),
         "model_count": 3,
     }
 

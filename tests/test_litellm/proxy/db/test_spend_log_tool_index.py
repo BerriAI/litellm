@@ -1,15 +1,17 @@
 """
 Tests for the tool usage writer: ToolUsageTransaction construction (invoked tools
-only) and the flush that writes LiteLLM_SpendLogToolIndex plus the
-LiteLLM_DailyToolSpend rollup in one transaction.
+only) and the flush that writes LiteLLM_SpendLogToolIndex in bounded statements
+plus the LiteLLM_DailyToolSpend rollup in one transaction.
 """
 
 from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock, MagicMock
 
+import httpx
 import pytest
 
+from litellm.proxy.db import spend_log_tool_index
 from litellm.proxy.db.spend_log_tool_index import (
     ToolUsageTransaction,
     build_tool_usage_transaction,
@@ -35,11 +37,24 @@ class _FakeBatcher:
         return None
 
 
+def _prisma(batch_: MagicMock) -> MagicMock:
+    prisma = MagicMock()
+    prisma.db.batch_ = batch_
+    prisma.db.litellm_spendlogtoolindex.create_many = AsyncMock()
+    return prisma
+
+
 def _prisma_with_batcher() -> tuple[MagicMock, _FakeBatcher]:
     batcher = _FakeBatcher()
-    prisma = MagicMock()
-    prisma.db.batch_ = MagicMock(return_value=batcher)
-    return prisma, batcher
+    return _prisma(MagicMock(return_value=batcher)), batcher
+
+
+def _index_rows_written(prisma: MagicMock) -> list[tuple[str, str]]:
+    return [
+        (row["request_id"], row["tool_name"])
+        for call in prisma.db.litellm_spendlogtoolindex.create_many.call_args_list
+        for row in call.kwargs["data"]
+    ]
 
 
 class TestBuildToolUsageTransaction:
@@ -228,9 +243,8 @@ class TestFlushToolUsageTransactions:
             prisma_client=prisma,
             transactions=[_transaction("r1", tool_names=("tool_a", "tool_b"), spend=0.10, total_tokens=100)],
         )
-        index_rows = batcher.litellm_spendlogtoolindex.create_many.call_args.kwargs["data"]
-        assert [(r["request_id"], r["tool_name"]) for r in index_rows] == [("r1", "tool_a"), ("r1", "tool_b")]
-        assert batcher.litellm_spendlogtoolindex.create_many.call_args.kwargs["skip_duplicates"] is True
+        assert _index_rows_written(prisma) == [("r1", "tool_a"), ("r1", "tool_b")]
+        assert prisma.db.litellm_spendlogtoolindex.create_many.call_args.kwargs["skip_duplicates"] is True
 
         upserts = {
             c.kwargs["where"]["date_tool_name"]["tool_name"]: c.kwargs["data"]
@@ -267,18 +281,45 @@ class TestFlushToolUsageTransactions:
         assert data["update"]["request_count"] == {"increment": 2}
 
     @pytest.mark.asyncio
-    async def test_index_rows_and_rollup_share_one_transaction(self):
-        # Both writes go through the same batch_() so a failed flush cannot leave
-        # index rows without their rollup increments (or vice versa); increments
-        # are not idempotent, so partial states must be unreachable.
+    async def test_index_rows_are_written_in_bounded_statements_outside_the_rollup_transaction(self, monkeypatch):
+        monkeypatch.setattr(spend_log_tool_index, "SPEND_LOG_WRITE_BATCH_MAX_ROWS", 100)
         prisma, batcher = _prisma_with_batcher()
-        await flush_tool_usage_transactions(
-            prisma_client=prisma,
-            transactions=[_transaction("r1")],
-        )
+        tool_names = tuple(f"tool_{i}" for i in range(50))
+        transactions = [_transaction(f"r{i}", tool_names=tool_names) for i in range(5)]
+        await flush_tool_usage_transactions(prisma_client=prisma, transactions=transactions)
+
+        statements = prisma.db.litellm_spendlogtoolindex.create_many.call_args_list
+        assert [len(call.kwargs["data"]) for call in statements] == [100, 100, 50]
+        assert all(call.kwargs["skip_duplicates"] is True for call in statements)
+        assert _index_rows_written(prisma) == [
+            (txn.request_id, tool_name) for txn in transactions for tool_name in tool_names
+        ]
+        batcher.litellm_spendlogtoolindex.create_many.assert_not_called()
         prisma.db.batch_.assert_called_once()
-        batcher.litellm_spendlogtoolindex.create_many.assert_called_once()
+        assert batcher.litellm_dailytoolspend.upsert.call_count == len(tool_names)
+
+    @pytest.mark.asyncio
+    async def test_index_connection_error_is_retried_before_the_rollup_is_attempted(self, monkeypatch):
+        prisma, batcher = _prisma_with_batcher()
+        prisma.db.litellm_spendlogtoolindex.create_many = AsyncMock(side_effect=[httpx.ConnectError("down"), None])
+
+        async def fake_sleep(seconds: float) -> None:
+            return None
+
+        monkeypatch.setattr("litellm.proxy.db.spend_log_tool_index.asyncio.sleep", fake_sleep)
+        await flush_tool_usage_transactions(prisma_client=prisma, transactions=[_transaction("r1")])
+        assert prisma.db.litellm_spendlogtoolindex.create_many.await_count == 2
+        prisma.db.batch_.assert_called_once()
         batcher.litellm_dailytoolspend.upsert.assert_called_once()
+
+    @pytest.mark.asyncio
+    async def test_ambiguous_index_error_drops_the_batch_without_touching_the_rollup(self):
+        prisma, _ = _prisma_with_batcher()
+        prisma.db.litellm_spendlogtoolindex.create_many = AsyncMock(side_effect=httpx.ReadTimeout("ambiguous"))
+        with pytest.raises(httpx.ReadTimeout):
+            await flush_tool_usage_transactions(prisma_client=prisma, transactions=[_transaction("r1")])
+        prisma.db.litellm_spendlogtoolindex.create_many.assert_awaited_once()
+        prisma.db.batch_.assert_not_called()
 
     @pytest.mark.asyncio
     async def test_empty_batch_touches_nothing(self):
@@ -290,11 +331,8 @@ class TestFlushToolUsageTransactions:
     async def test_connection_errors_retry_and_succeed(self, monkeypatch):
         # A failed batch commits nothing, so retrying a connection error cannot
         # double-count; the flush must retry rather than drop the batch.
-        import httpx
-
         batcher = _FakeBatcher()
-        prisma = MagicMock()
-        prisma.db.batch_ = MagicMock(side_effect=[httpx.ConnectError("down"), batcher])
+        prisma = _prisma(MagicMock(side_effect=[httpx.ConnectError("down"), batcher]))
         sleeps: list[float] = []
 
         async def fake_sleep(seconds: float) -> None:
@@ -308,10 +346,7 @@ class TestFlushToolUsageTransactions:
 
     @pytest.mark.asyncio
     async def test_connection_errors_exhaust_retries_then_raise(self, monkeypatch):
-        import httpx
-
-        prisma = MagicMock()
-        prisma.db.batch_ = MagicMock(side_effect=httpx.ConnectError("down"))
+        prisma = _prisma(MagicMock(side_effect=httpx.ConnectError("down")))
 
         async def fake_sleep(seconds: float) -> None:
             return None
@@ -325,8 +360,7 @@ class TestFlushToolUsageTransactions:
 
     @pytest.mark.asyncio
     async def test_non_connection_errors_do_not_retry(self):
-        prisma = MagicMock()
-        prisma.db.batch_ = MagicMock(side_effect=ValueError("bad data"))
+        prisma = _prisma(MagicMock(side_effect=ValueError("bad data")))
         with pytest.raises(ValueError, match="bad data"):
             await flush_tool_usage_transactions(prisma_client=prisma, transactions=[_transaction("r1")])
         prisma.db.batch_.assert_called_once()
@@ -338,11 +372,8 @@ class TestFlushToolUsageTransactions:
         # unknown; the engine can leave the transaction open on the pooled
         # connection, so a retry's statements would stack into it and one
         # commit would apply both increment sets. These must never retry.
-        import httpx
-
         error = getattr(httpx, ambiguous_error)("ambiguous")
-        prisma = MagicMock()
-        prisma.db.batch_ = MagicMock(side_effect=error)
+        prisma = _prisma(MagicMock(side_effect=error))
         with pytest.raises((httpx.ReadTimeout, httpx.ReadError)):
             await flush_tool_usage_transactions(prisma_client=prisma, transactions=[_transaction("r1")])
         prisma.db.batch_.assert_called_once()
