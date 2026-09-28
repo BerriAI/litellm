@@ -213,7 +213,7 @@ class UserProvisionerHelpers:
             dict.fromkeys(team if isinstance(team, str) else team.team_id for team in new_user_request.teams or [])
         )
         new_teams: Final = requested_teams if requested_teams else list(existing_user.teams or [])
-        await assert_legacy_team_changes_unowned(auth, existing_user.teams or [], new_teams)
+        await assert_legacy_team_changes_unowned(auth, existing_user.teams or (), new_teams)
 
         if new_user_request.user_id != existing_user.user_id:
             verbose_proxy_logger.info(
@@ -1921,7 +1921,7 @@ async def create_user(
 
         # Extract data from SCIM user
         user_data: Final = _extract_scim_user_data(user)
-        await assert_legacy_team_changes_unowned(auth, (), user_data["teams"] or [])
+        await assert_legacy_team_changes_unowned(auth, (), user_data["teams"] or ())
 
         # Check if user already exists
         if user.userName:
@@ -2034,7 +2034,7 @@ async def update_user(
         # SCIM User.groups is readOnly (RFC 7643 4.1.2): IdPs sync membership via /Groups and send
         # no groups or `groups: []` on profile PUTs, so empty means unspecified, not "remove from every team"
         target_teams: Final = user_data["teams"] or existing_user.teams
-        await assert_legacy_team_changes_unowned(auth, existing_user.teams or [], target_teams or [])
+        await assert_legacy_team_changes_unowned(auth, existing_user.teams or (), target_teams or ())
         await _handle_team_membership_changes(
             user_id=user_id,
             existing_teams=existing_user.teams,
@@ -2629,7 +2629,7 @@ async def patch_user(
             patch_ops=patch_ops,
         )
 
-        await assert_legacy_team_changes_unowned(auth, existing_user.teams or [], tuple(final_team_set))
+        await assert_legacy_team_changes_unowned(auth, existing_user.teams or (), tuple(final_team_set))
 
         patched_metadata: Final = update_data.get("metadata")
         new_active: Final = _scim_active_value(patched_metadata if isinstance(patched_metadata, Mapping) else None)
