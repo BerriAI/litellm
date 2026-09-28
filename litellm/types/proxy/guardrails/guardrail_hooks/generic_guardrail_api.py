@@ -159,7 +159,7 @@ def coerce_stream_holdback_value(value: Any) -> int:
         return 0
 
 
-def structured_messages_from_response(value: object) -> Sequence[AllMessageValues] | None:
+def structured_messages_from_json(value: object) -> Sequence[AllMessageValues] | None:
     if not isinstance(value, list):
         return None
     if not all(isinstance(message, Mapping) and isinstance(message.get("role"), str) for message in value):
@@ -212,5 +212,5 @@ class GenericGuardrailAPIResponse:
             images=data.get("images"),
             tools=data.get("tools"),
             stream_holdback_chars=stream_holdback_chars,
-            structured_messages=structured_messages_from_response(data.get("structured_messages")),
+            structured_messages=structured_messages_from_json(data.get("structured_messages")),
         )
