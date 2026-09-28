@@ -2407,7 +2407,7 @@ class MCPServerManager:
             # Set default values for core fields if not present
             if "server_name" not in mcp_info:
                 mcp_info["server_name"] = server_name
-            if "description" not in mcp_info and server_config.get("description"):
+            if mcp_info.get("description") is None and server_config.get("description"):
                 mcp_info["description"] = server_config.get("description")
             _normalize_mcp_server_cost_info(mcp_info)
 
@@ -3095,7 +3095,7 @@ class MCPServerManager:
         mcp_info: Final[MCPInfo] = _mcp_info.copy()
         if "server_name" not in mcp_info:
             mcp_info["server_name"] = mcp_server.server_name or mcp_server.server_id
-        if "description" not in mcp_info and mcp_server.description:
+        if mcp_info.get("description") is None and mcp_server.description:
             mcp_info["description"] = mcp_server.description
         _normalize_mcp_server_cost_info(mcp_info)
 
