@@ -1337,6 +1337,21 @@ class Logging(LiteLLMLoggingBaseClass):
             additional_args.get("api_base", "")
         )
 
+    async def async_pre_call(self) -> None:
+        if self.model_call_details.get("has_logged_async_pre_call"):
+            return
+
+        self.model_call_details["has_logged_async_pre_call"] = True
+        self.model_call_details.update(model=self.model, messages=self.messages, log_event_type="pre_api_call")
+        for callback in litellm._async_input_callback:
+            try:
+                if callable(callback):
+                    await callback(self.model_call_details)
+            except Exception as e:
+                verbose_logger.exception(
+                    "LiteLLM.LoggingError: [Non-Blocking] Exception occurred while async pre-call logging %s", e
+                )
+
     def pre_call(self, input, api_key, model=None, additional_args={}):
         # Log the exact input to the LLM API
         try:
