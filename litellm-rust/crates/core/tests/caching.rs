@@ -1140,15 +1140,17 @@ async fn cache_identity_follows_resolved_configuration_and_request_callbacks(
         }
     }
     assert_eq!(hooks.calls.load(Ordering::SeqCst), 4);
-    let facts = hooks.facts.lock().unwrap();
-    assert_eq!(facts[0].source, ResultSource::Provider);
-    assert_eq!(facts[2].source, ResultSource::Provider);
-    let (ResultSource::Cache { key: first_key }, ResultSource::Cache { key: second_key }) =
-        (&facts[1].source, &facts[3].source)
-    else {
-        panic!("unchanged effective requests must hit the cache");
-    };
-    assert_ne!(first_key, second_key);
+    {
+        let facts = hooks.facts.lock().unwrap();
+        assert_eq!(facts[0].source, ResultSource::Provider);
+        assert_eq!(facts[2].source, ResultSource::Provider);
+        let (ResultSource::Cache { key: first_key }, ResultSource::Cache { key: second_key }) =
+            (&facts[1].source, &facts[3].source)
+        else {
+            panic!("unchanged effective requests must hit the cache");
+        };
+        assert_ne!(first_key, second_key);
+    }
     let requests = first.received_requests().await.unwrap();
     if change == "credentials" {
         let header = if surface == "responses" {

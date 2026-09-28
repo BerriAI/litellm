@@ -64,6 +64,7 @@ enum EventNext {
 }
 
 enum Pending<L> {
+    Host,
     Native,
     Arguments(HookResume<L, Py<PyDict>>),
     Wire(HookResume<L, Box<WireRequest>>, Reply<WireRequest>),
@@ -197,6 +198,19 @@ where
                 match self.hooks.on_event(py, started) {
                     Ok(step) => self.on_event(py, step, EventNext::Started),
                     Err(error) => self.hook_failed(py, error),
+                }
+            }
+            (Some(Pending::Host), Some(result)) => {
+                match self.binding.resume_host_call(py, result) {
+                    Ok(Some(awaitable)) => {
+                        self.pending = Some(Pending::Host);
+                        Ok(ExecutionStep::Await(awaitable))
+                    }
+                    Ok(None) => self.resume_machine(py, None),
+                    Err(InvokeError::Python(error)) => self.interrupt(py, error),
+                    Err(InvokeError::Native(error)) => {
+                        self.resume_machine(py, Some(HostFailure::Error(error)))
+                    }
                 }
             }
             (Some(Pending::Native), Some(Ok(_))) => {
@@ -405,7 +419,13 @@ where
             Err(error) => return self.machine_failed(py, error).map(Next::Return),
         };
         let answered = match op {
-            HostRequest::HostCall(op) => answered(self.binding.handle_host_call(py, op)),
+            HostRequest::HostCall(op) => match self.binding.begin_host_call(py, op) {
+                Ok(Some(awaitable)) => {
+                    self.pending = Some(Pending::Host);
+                    return Ok(Next::Return(ExecutionStep::Await(awaitable)));
+                }
+                result => answered(result.map(|_| ())),
+            },
             HostRequest::Intercept(InterceptRequest::BeforeProviderRequest {
                 wire,
                 context,
@@ -785,12 +805,15 @@ mod tests {
         RejectNatively,
         RejectRequestNatively,
         RaiseRequestPython,
+        AwaitAnswer,
+        AwaitFailure,
     }
 
     struct SyntheticBinding {
         log: Log,
         op: OpScript,
         classifier_fails: bool,
+        pending_reply: Option<Reply<String>>,
     }
 
     /// The fake route's public exception, kept as a value so a test sees what `classify`
@@ -807,7 +830,7 @@ mod tests {
     impl SyntheticBinding {
         fn answer(&self, value: impl FnOnce() -> String) -> Result<String, InvokeError<Error>> {
             match self.op {
-                OpScript::Answer => Ok(value()),
+                OpScript::Answer | OpScript::AwaitAnswer | OpScript::AwaitFailure => Ok(value()),
                 OpScript::RaisePython | OpScript::RaiseRequestPython => {
                     Err(PyValueError::new_err("op failed").into())
                 }
@@ -881,6 +904,41 @@ mod tests {
             self.log.push(format!("op:{op}"));
             self.answer(|| op.to_string())
                 .map(|answer| reply.send(answer))
+        }
+
+        fn begin_host_call(
+            &mut self,
+            py: Python<'_>,
+            (op, reply): (&'static str, Reply<String>),
+        ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+            if !matches!(self.op, OpScript::AwaitAnswer | OpScript::AwaitFailure) {
+                return self.handle_host_call(py, (op, reply)).map(|()| None);
+            }
+            self.pending_reply = Some(reply);
+            let module = PyModule::from_code(
+                py,
+                pyo3::ffi::c_str!(
+                    "async def answer(fail):\n    if fail:\n        raise LookupError('async host failed')\n    return 'awaited'\n"
+                ),
+                pyo3::ffi::c_str!("host_op.py"),
+                pyo3::ffi::c_str!("host_op"),
+            )?;
+            Ok(Some(
+                module
+                    .getattr("answer")?
+                    .call1((matches!(self.op, OpScript::AwaitFailure),))?
+                    .unbind(),
+            ))
+        }
+
+        fn resume_host_call(
+            &mut self,
+            py: Python<'_>,
+            result: PyResult<Py<PyAny>>,
+        ) -> Result<Option<Py<PyAny>>, InvokeError<Error>> {
+            let answer = result?.extract::<String>(py)?;
+            self.pending_reply.take().unwrap().send(answer);
+            Ok(None)
         }
     }
 
@@ -1055,6 +1113,7 @@ mod tests {
                 log: Log::default(),
                 op,
                 classifier_fails: false,
+                pending_reply: None,
             },
             script,
             asynchronous,
@@ -1076,6 +1135,50 @@ mod tests {
             std::convert::identity,
             call_options(asynchronous),
         )
+    }
+
+    #[rstest::rstest]
+    #[case::success(OpScript::AwaitAnswer)]
+    #[case::failure(OpScript::AwaitFailure)]
+    fn asynchronous_host_operations_resume_the_same_machine(#[case] op: OpScript) {
+        let _guard = PYTHON_GLOBALS
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Python::initialize();
+        Python::attach(|py| {
+            install_lifecycle_module(py);
+            let (result, log) = run_scripted(
+                py,
+                |_| {
+                    CallMachine::<Synthetic>::new(None, |host| {
+                        Box::pin(async move { host.services.call(|reply| ("read", reply)).await })
+                    })
+                },
+                op,
+                HookScript::Plain,
+                true,
+            );
+            match op {
+                OpScript::AwaitAnswer => {
+                    assert_eq!(result.unwrap().extract::<String>(py).unwrap(), "awaited")
+                }
+                OpScript::AwaitFailure => {
+                    assert!(
+                        result
+                            .unwrap_err()
+                            .is_instance_of::<pyo3::exceptions::PyLookupError>(py)
+                    );
+                    assert_eq!(
+                        log.iter()
+                            .filter(|entry| entry.starts_with("failed:"))
+                            .count(),
+                        1
+                    );
+                    assert!(!log.iter().any(|entry| entry.starts_with("succeeded:")));
+                }
+                _ => unreachable!(),
+            }
+        });
     }
 
     #[rstest::rstest]
@@ -1104,6 +1207,7 @@ mod tests {
                     log: Log(log.0.clone()),
                     op: OpScript::Answer,
                     classifier_fails: false,
+                    pending_reply: None,
                 },
                 hooks,
                 PyDict::new(py).unbind(),
@@ -1241,6 +1345,7 @@ mod tests {
                     log: Log::default(),
                     op: OpScript::Answer,
                     classifier_fails: false,
+                    pending_reply: None,
                 },
                 HookScript::ReplaceResponse,
                 std::convert::identity,
@@ -1300,6 +1405,7 @@ mod tests {
                     log: Log::default(),
                     op: OpScript::Answer,
                     classifier_fails: false,
+                    pending_reply: None,
                 },
                 script,
                 std::convert::identity,
@@ -1805,6 +1911,7 @@ mod tests {
                     log: Log::default(),
                     op: OpScript::Answer,
                     classifier_fails: true,
+                    pending_reply: None,
                 },
                 HookScript::Plain,
                 false,
@@ -1920,6 +2027,7 @@ mod tests {
                     log: Log(log.0.clone()),
                     op: OpScript::Answer,
                     classifier_fails: false,
+                    pending_reply: None,
                 },
                 crate::HookChain::new()
                     .with(SyntheticHooks {
@@ -2002,6 +2110,7 @@ mod tests {
                     log: Log(log.0.clone()),
                     op: OpScript::Answer,
                     classifier_fails: false,
+                    pending_reply: None,
                 },
                 SyntheticHooks {
                     log: Log(log.0.clone()),
@@ -2038,6 +2147,7 @@ mod tests {
                     log: Log::default(),
                     op: OpScript::Answer,
                     classifier_fails: false,
+                    pending_reply: None,
                 },
                 HookScript::Plain,
                 |hooks| {
@@ -2080,6 +2190,7 @@ mod tests {
                     log: Log::default(),
                     op: OpScript::Answer,
                     classifier_fails: false,
+                    pending_reply: None,
                 },
                 HookScript::Plain,
                 |hooks| {

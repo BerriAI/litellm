@@ -5,6 +5,7 @@ mod config;
 mod embedder;
 mod facade;
 mod future;
+pub(crate) mod hosted;
 mod identity;
 mod native;
 mod request;

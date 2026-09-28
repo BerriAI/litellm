@@ -274,7 +274,7 @@ fn duration(seconds: f64) -> PyResult<Duration> {
         .ok_or_else(|| PyValueError::new_err("cache durations must be finite and positive"))
 }
 
-fn selected_cache<'py>(
+pub(super) fn selected_cache<'py>(
     py: Python<'py>,
     kwargs: &Bound<'py, PyDict>,
     call_type: &str,
@@ -294,7 +294,9 @@ fn selected_cache<'py>(
     Ok(Some(configured))
 }
 
-fn native_handle<'py>(configured: &Bound<'py, PyAny>) -> PyResult<Option<Bound<'py, PyAny>>> {
+pub(super) fn native_handle<'py>(
+    configured: &Bound<'py, PyAny>,
+) -> PyResult<Option<Bound<'py, PyAny>>> {
     Ok(configured
         .getattr_opt("cache")?
         .map(|backend| backend.getattr_opt("native_handle"))
