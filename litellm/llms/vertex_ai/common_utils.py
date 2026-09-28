@@ -1018,6 +1018,8 @@ def _convert_schema_types(schema, depth=0):
             # Constraint keywords that apply to primitive types and should move
             # into the anyOf branch with the type. Without this they are left on
             # the parent next to anyOf and dropped by _filter_anyof_fields.
+            # multipleOf is not copied on purpose: filter_schema_fields drops it
+            # from the branch anyway, so carrying it would only imply it survives.
             scalar_constraint_fields: Final = {
                 "enum",
                 "pattern",
@@ -1025,7 +1027,6 @@ def _convert_schema_types(schema, depth=0):
                 "maxLength",
                 "minimum",
                 "maximum",
-                "multipleOf",
                 "format",
             }
 
@@ -1044,8 +1045,18 @@ def _convert_schema_types(schema, depth=0):
                 # keywords so they survive _filter_anyof_fields.
                 branch_fields = type_specific_fields if t in ("object", "array") else scalar_constraint_fields
                 for field in branch_fields:
-                    if field in schema:
-                        item_schema[field] = deepcopy(schema[field])
+                    if field not in schema:
+                        continue
+                    if field == "enum":
+                        # enums only land on the string branch, string values
+                        # only: a mixed enum like ["a", 1] must not put 1 on
+                        # the string branch. _fix_enum_types drops the rest.
+                        if t == "string" and isinstance(schema["enum"], list):
+                            string_values = [v for v in schema["enum"] if isinstance(v, str)]
+                            if string_values:
+                                item_schema["enum"] = string_values
+                        continue
+                    item_schema[field] = deepcopy(schema[field])
                 any_of.append(item_schema)
 
             # Remove the fields we moved into anyOf branches from the parent

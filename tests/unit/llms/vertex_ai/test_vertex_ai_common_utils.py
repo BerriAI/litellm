@@ -1794,3 +1794,34 @@ def test_type_array_keeps_scalar_constraints_on_anyof_branches():
         },
         "required": ["status"],
     }
+
+
+def test_type_array_mixed_enum_only_string_values_on_string_branch():
+    """A mixed-type enum must not leak non-string values onto the string branch."""
+    from litellm.llms.vertex_ai.common_utils import _build_vertex_schema
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "mixed": {"type": ["string", "integer"], "enum": ["a", 1]},
+            "numbers": {"type": ["string", "integer"], "enum": [1, 2]},
+        },
+    }
+
+    assert _build_vertex_schema(schema) == {
+        "type": "object",
+        "properties": {
+            "mixed": {
+                "anyOf": [
+                    {"type": "string", "enum": ["a"]},
+                    {"type": "integer"},
+                ]
+            },
+            "numbers": {
+                "anyOf": [
+                    {"type": "string"},
+                    {"type": "integer"},
+                ]
+            },
+        },
+    }
