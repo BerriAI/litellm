@@ -90,3 +90,34 @@ def test_forwarded_oauth_bearer_gets_its_own_deployment_identity_without_storing
     assert is_clientside_credential(request, custom_llm_provider="bedrock") is False
     assert dynamic_params == {"model": "anthropic/claude-opus-5-5", FORWARDED_OAUTH_CREDENTIAL_KEY: _FINGERPRINT}
     assert _TOKEN not in repr(dynamic_params)
+
+
+def test_bearer_and_redirected_api_base_still_drop_the_admins_endpoint_credentials() -> None:
+    request = {
+        "api_base": "https://caller.example",
+        "provider_specific_header": _scoped("anthropic", {"authorization": f"Bearer {_TOKEN}"}),
+    }
+
+    dynamic_params = get_dynamic_litellm_params(
+        litellm_params={
+            "model": "anthropic/claude-opus-5-5",
+            "api_base": "https://admin.example",
+            "extra_headers": {"x": "admin"},
+        },
+        request_kwargs=request,
+        custom_llm_provider="anthropic",
+    )
+
+    assert dynamic_params == {
+        "model": "anthropic/claude-opus-5-5",
+        "api_base": "https://caller.example",
+        FORWARDED_OAUTH_CREDENTIAL_KEY: _FINGERPRINT,
+    }
+
+
+def test_no_forwarded_bearer_leaves_litellm_params_unchanged() -> None:
+    dynamic_params = get_dynamic_litellm_params(
+        litellm_params={"model": "anthropic/claude-opus-5-5"}, request_kwargs={}, custom_llm_provider="anthropic"
+    )
+
+    assert dynamic_params == {"model": "anthropic/claude-opus-5-5"}
