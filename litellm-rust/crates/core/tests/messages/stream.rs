@@ -1,4 +1,7 @@
-use std::sync::{Mutex, mpsc};
+use std::{
+    ops::ControlFlow,
+    sync::{Mutex, mpsc},
+};
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt};
@@ -6,7 +9,6 @@ use litellm_core::messages::{
     MessagesResponse,
     route::{Messages, MessagesStreamHead},
 };
-use litellm_host::protocol::Demand;
 use litellm_tracing::{Logger, Metadata, Record, Sink};
 use rstest::rstest;
 use tokio::{
@@ -60,12 +62,12 @@ impl RecordingStreamHost {
         }
     }
 
-    fn record(&self, op: Seen) -> Demand {
+    fn record(&self, op: Seen) -> ControlFlow<()> {
         let mut seen = self.seen.lock().unwrap();
         seen.push(op);
         match seen.len() < self.detach_after {
-            true => Demand::More,
-            false => Demand::Detached,
+            true => ControlFlow::Continue(()),
+            false => ControlFlow::Break(()),
         }
     }
 }
@@ -74,47 +76,49 @@ impl RecordingStreamHost {
     pub fn request(&self) -> Result<MessagesCall, Error> {
         self.call.request()
     }
-    pub fn runtime(&self) -> litellm_host::in_process::Host<'_, (), Self, Self> {
-        litellm_host::in_process::Host {
+    pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, Self> {
+        litellm_host_native::in_process::Host {
             services: &(),
-            hooks: self,
+            interceptors: self,
             stream: self,
-            observer: Some(self),
+            observers: None,
         }
     }
 }
 
-impl litellm_host::in_process::StreamConsumer<Messages> for RecordingStreamHost {
-    async fn open_stream(&self, head: MessagesStreamHead) -> Result<Demand, Error> {
+impl litellm_host_native::in_process::StreamConsumer<Messages> for RecordingStreamHost {
+    async fn open_stream(&self, head: MessagesStreamHead) -> Result<ControlFlow<()>, Error> {
         Ok(self.record(Seen::Open(head.headers)))
     }
-    async fn send_chunk(&self, chunk: Bytes) -> Result<Demand, Error> {
+    async fn send_chunk(&self, chunk: Bytes) -> Result<ControlFlow<()>, Error> {
         Ok(self.record(Seen::Deliver(chunk)))
     }
 }
 impl litellm_host::lifecycle::CallObserver for RecordingStreamHost {
-    fn observe(&self, _: litellm_host::event::CallEvent) {}
+    fn observe(&self, _: litellm_host::lifecycle::CallEvent) {}
 }
-impl litellm_host::hooks::RouteHooks<<Messages as litellm_host::protocol::Protocol>::Error>
+impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protocol::Protocol>::Error>
     for RecordingStreamHost
 {
     async fn before_provider_request(
         &self,
-        wire: litellm_host::event::WireRequest,
-        _: litellm_host::event::RequestContext,
+        wire: litellm_host::interceptors::WireRequest,
+        _: litellm_host::interceptors::RequestContext,
     ) -> Result<
-        litellm_host::event::WireRequest,
+        litellm_host::interceptors::WireRequest,
         <Messages as litellm_host::protocol::Protocol>::Error,
     > {
         Ok(wire)
     }
-    async fn on_event(
+    async fn after_provider_response(
         &self,
-        event: litellm_host::event::MachineEvent,
+        raw: litellm_host::interceptors::RawResponse,
     ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
         litellm_host::lifecycle::CallObserver::observe(
             self,
-            litellm_host::event::CallEvent::Machine(event),
+            litellm_host::lifecycle::CallEvent::Execution(
+                litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
+            ),
         );
         Ok(())
     }
@@ -136,7 +140,7 @@ fn sse_response() -> ResponseTemplate {
 }
 
 async fn stream_through(host: &RecordingStreamHost) -> Result<MessagesOutput, Error> {
-    litellm_host::in_process::run_hosted(
+    litellm_host_native::in_process::run_hosted(
         machine(Arc::new(RecordingSecrets::empty()))(host.request()?),
         host.runtime(),
     )
@@ -344,6 +348,7 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
                 ..streaming(call, upstream.uri())
             },
             &(),
+            None,
         )
         .await
         .unwrap();
@@ -364,7 +369,7 @@ async fn the_sdk_returns_stream_headers_and_every_sse_byte(
 async fn the_sdk_returns_http_errors_before_opening_a_stream(call: MessagesCall) {
     let upstream = upstream([ResponseTemplate::new(429).set_body_string("slow down")]).await;
     let error = messages_route(no_secrets())
-        .execute(streaming(call, upstream.uri()), &())
+        .execute(streaming(call, upstream.uri()), &(), None)
         .await
         .err()
         .expect("upstream failure is returned by messages()");
@@ -395,6 +400,7 @@ async fn dropping_the_sdk_stream_closes_the_unfinished_upstream(
                 ..streaming(call, base)
             },
             &(),
+            None,
         ),
     )
     .await
@@ -431,6 +437,7 @@ async fn the_sdk_yields_a_body_error_once_after_delivered_chunks(call: MessagesC
                 ..streaming(call, base)
             },
             &(),
+            None,
         )
         .await
         .unwrap();

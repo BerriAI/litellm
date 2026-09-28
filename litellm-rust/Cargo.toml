@@ -22,6 +22,7 @@ litellm-gateway-ui = { path = "crates/gateway-ui" }
 litellm-coroutine = { path = "crates/coroutine" }
 litellm-host = { path = "crates/host" }
 litellm-host-http = { path = "crates/host-http" }
+litellm-host-native = { path = "crates/host-native" }
 litellm-callbacks-legacy-python = { path = "crates/callbacks-legacy-python" }
 litellm-framing = { path = "crates/framer" }
 litellm-auth = { path = "crates/auth" }

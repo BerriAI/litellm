@@ -1,10 +1,18 @@
-use std::sync::{Arc, Mutex};
+use litellm_host::interceptors::RawResponse;
+use litellm_host::lifecycle::ExecutionEvent;
+use std::sync::{
+    Arc, Mutex,
+    atomic::{AtomicUsize, Ordering},
+};
 
 use litellm_core::ocr::{
     route::{Ocr, OcrCall, OcrOp},
     types::OcrDocumentInput,
 };
-use litellm_host::event::{CallEvent, MachineEvent, RequestContext, WireRequest};
+use litellm_host::{
+    interceptors::{RequestContext, WireRequest},
+    lifecycle::CallEvent,
+};
 use rstest::rstest;
 
 use super::*;
@@ -12,7 +20,7 @@ use super::*;
 pub(crate) fn event_name(event: &CallEvent) -> &'static str {
     match event {
         CallEvent::Started { .. } => "started",
-        CallEvent::Machine(MachineEvent::ResponseReceived { .. }) => "response",
+        CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { .. }) => "response",
         CallEvent::Succeeded { .. } => "success",
         CallEvent::Failed { .. } => "failure",
         CallEvent::Cancelled { .. } => "cancelled",
@@ -22,15 +30,12 @@ pub(crate) fn event_name(event: &CallEvent) -> &'static str {
 fn recording_host(
     request: LiteLLMOcrRequest,
     events: Arc<Mutex<Vec<&'static str>>>,
+    interceptions: Arc<AtomicUsize>,
     block: bool,
 ) -> LocalOcrHost {
-    let before_send_events = events.clone();
     LocalOcrHost::new(request)
         .with_before_send(move |wire, _| {
-            before_send_events
-                .lock()
-                .unwrap()
-                .push("before_provider_request");
+            interceptions.fetch_add(1, Ordering::SeqCst);
             match block {
                 true => Err(Error::InvalidRequest("blocked".into())),
                 false => Ok(wire),
@@ -41,22 +46,22 @@ fn recording_host(
 
 #[rstest::rstest]
 #[tokio::test]
-async fn hooks_run_in_order_and_one_success_is_emitted() {
+async fn interception_runs_once_and_observers_receive_ordered_success_events() {
     let upstream = upstream([pages_response()]).await;
     let events = Arc::new(Mutex::new(Vec::new()));
+    let interceptions = Arc::new(AtomicUsize::new(0));
 
     perform_with(recording_host(
         ocr_request("mistral/model", &upstream.uri(), json!({})),
         events.clone(),
+        interceptions.clone(),
         false,
     ))
     .await
     .unwrap();
 
-    assert_eq!(
-        *events.lock().unwrap(),
-        ["started", "before_provider_request", "response", "success"]
-    );
+    assert_eq!(interceptions.load(Ordering::SeqCst), 1);
+    assert_eq!(*events.lock().unwrap(), ["started", "response", "success"]);
     assert_eq!(received(&upstream).await.len(), 1);
 }
 
@@ -65,10 +70,12 @@ async fn hooks_run_in_order_and_one_success_is_emitted() {
 async fn a_blocking_before_send_prevents_the_call_and_emits_one_failure() {
     let upstream = upstream([pages_response()]).await;
     let events = Arc::new(Mutex::new(Vec::new()));
+    let interceptions = Arc::new(AtomicUsize::new(0));
 
     let error = perform_with(recording_host(
         ocr_request("mistral/model", &upstream.uri(), json!({})),
         events.clone(),
+        interceptions.clone(),
         true,
     ))
     .await
@@ -78,10 +85,8 @@ async fn a_blocking_before_send_prevents_the_call_and_emits_one_failure() {
         matches!(&error, Error::InvalidRequest(message) if message == "blocked"),
         "{error:?}"
     );
-    assert_eq!(
-        *events.lock().unwrap(),
-        ["started", "before_provider_request", "failure"]
-    );
+    assert_eq!(interceptions.load(Ordering::SeqCst), 1);
+    assert_eq!(*events.lock().unwrap(), ["started", "failure"]);
     assert!(received(&upstream).await.is_empty());
 }
 
@@ -90,19 +95,19 @@ async fn a_blocking_before_send_prevents_the_call_and_emits_one_failure() {
 async fn an_upstream_failure_emits_one_terminal_failure() {
     let upstream = upstream([status_response(500, json!({"error": "failed"}))]).await;
     let events = Arc::new(Mutex::new(Vec::new()));
+    let interceptions = Arc::new(AtomicUsize::new(0));
 
     let result = perform_with(recording_host(
         ocr_request("mistral/model", &upstream.uri(), json!({})),
         events.clone(),
+        interceptions.clone(),
         false,
     ))
     .await;
 
     assert!(result.is_err());
-    assert_eq!(
-        *events.lock().unwrap(),
-        ["started", "before_provider_request", "failure"]
-    );
+    assert_eq!(interceptions.load(Ordering::SeqCst), 1);
+    assert_eq!(*events.lock().unwrap(), ["started", "failure"]);
     assert_eq!(received(&upstream).await.len(), 1);
 }
 
@@ -114,7 +119,7 @@ async fn an_invalid_provider_response_is_observed_before_normalization_fails() {
     let recorder = observed.clone();
     let host = LocalOcrHost::new(ocr_request("mistral/model", &upstream.uri(), json!({})))
         .with_observer(move |event| {
-            if let CallEvent::Machine(MachineEvent::ResponseReceived { raw }) = event {
+            if let CallEvent::Execution(ExecutionEvent::ProviderResponseReceived { raw }) = event {
                 recorder.lock().unwrap().push(raw.body.clone());
             }
         });
@@ -208,16 +213,16 @@ impl CallerTokenHost {
             caller_token: true,
         })
     }
-    pub fn runtime(&self) -> litellm_host::in_process::Host<'_, Self, Self, ()> {
-        litellm_host::in_process::Host {
+    pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, Self, Self, ()> {
+        litellm_host_native::in_process::Host {
             services: self,
-            hooks: self,
+            interceptors: self,
             stream: &(),
-            observer: Some(self),
+            observers: None,
         }
     }
 }
-impl litellm_host::services::HostCallHandler<Ocr> for CallerTokenHost {
+impl litellm_host_native::services::HostCallHandler<Ocr> for CallerTokenHost {
     async fn handle_host_call(&self, op: OcrOp) -> Result<(), Error> {
         match op {
             OcrOp::AcquireAzureAdToken(reply) => {
@@ -232,9 +237,9 @@ impl litellm_host::services::HostCallHandler<Ocr> for CallerTokenHost {
 }
 
 impl litellm_host::lifecycle::CallObserver for CallerTokenHost {
-    fn observe(&self, _: litellm_host::event::CallEvent) {}
+    fn observe(&self, _: litellm_host::lifecycle::CallEvent) {}
 }
-impl litellm_host::hooks::RouteHooks<<Ocr as litellm_host::protocol::Protocol>::Error>
+impl litellm_host::interceptors::Interceptors<<Ocr as litellm_host::protocol::Protocol>::Error>
     for CallerTokenHost
 {
     async fn before_provider_request(
@@ -263,13 +268,15 @@ impl litellm_host::hooks::RouteHooks<<Ocr as litellm_host::protocol::Protocol>::
             .collect();
         Ok(WireRequest { headers, ..wire })
     }
-    async fn on_event(
+    async fn after_provider_response(
         &self,
-        event: litellm_host::event::MachineEvent,
+        raw: litellm_host::interceptors::RawResponse,
     ) -> Result<(), <Ocr as litellm_host::protocol::Protocol>::Error> {
         litellm_host::lifecycle::CallObserver::observe(
             self,
-            litellm_host::event::CallEvent::Machine(event),
+            litellm_host::lifecycle::CallEvent::Execution(
+                litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
+            ),
         );
         Ok(())
     }
@@ -288,8 +295,8 @@ async fn the_callers_azure_token_is_acquired_before_before_send_which_can_still_
         trace: Mutex::new(Vec::new()),
     };
 
-    litellm_host::in_process::run_hosted(
-        ocr_route().machine(host.request().unwrap()),
+    litellm_host_native::in_process::run_hosted(
+        ocr_route().machine(host.request().unwrap(), None),
         host.runtime(),
     )
     .await
@@ -312,15 +319,11 @@ async fn the_callers_azure_token_is_acquired_before_before_send_which_can_still_
 #[rstest]
 #[tokio::test]
 async fn direct_execution_uses_hooks_without_a_machine() {
-    use litellm_host::{hooks::RouteHooks, lifecycle::CallObserver};
+    use litellm_host::interceptors::Interceptors;
 
-    struct Hooks(Arc<super::support::CallEvents>);
+    struct Hooks;
 
-    impl RouteHooks<Error> for Hooks {
-        fn observer(&self) -> Option<Arc<dyn CallObserver>> {
-            Some(self.0.clone())
-        }
-
+    impl Interceptors<Error> for Hooks {
         async fn before_provider_request(
             &self,
             wire: WireRequest,
@@ -336,8 +339,7 @@ async fn direct_execution_uses_hooks_without_a_machine() {
             })
         }
 
-        async fn on_event(&self, event: MachineEvent) -> Result<(), Error> {
-            self.0.observe(CallEvent::Machine(event));
+        async fn after_provider_response(&self, _: RawResponse) -> Result<(), Error> {
             Ok(())
         }
     }
@@ -348,10 +350,11 @@ async fn direct_execution_uses_hooks_without_a_machine() {
     .await;
     let events = Arc::new(super::support::CallEvents::default());
     let route = ocr_route();
-    let hooks = Hooks(events.clone());
+    let interceptors = Hooks;
     let builder = route.execute(
         ocr_request("mistral/model", &upstream.uri(), json!({})),
-        &hooks,
+        &interceptors,
+        Some(events.0.sender.clone()),
     );
     assert!(events.0.lock().unwrap().is_empty());
     assert!(received(&upstream).await.is_empty());
@@ -365,7 +368,7 @@ async fn direct_execution_uses_hooks_without_a_machine() {
         &events.0.lock().unwrap()[..],
         [
             CallEvent::Started { .. },
-            CallEvent::Machine(_),
+            CallEvent::Execution(_),
             CallEvent::Succeeded { .. }
         ]
     ));

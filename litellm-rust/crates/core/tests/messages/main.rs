@@ -99,7 +99,7 @@ fn headers<'a>(pairs: impl IntoIterator<Item = (&'a str, &'a str)>) -> Option<Ma
 }
 
 fn machine(secrets: Arc<dyn SecretSource>) -> impl FnOnce(MessagesCall) -> MessagesMachine {
-    move |request| messages_route(secrets).machine(request)
+    move |request| messages_route(secrets).machine(request, None)
 }
 
 async fn run_with(
@@ -107,7 +107,8 @@ async fn run_with(
     call: MessagesCall,
 ) -> Result<MessagesOutput, Error> {
     let host = LocalMessagesHost::new(call);
-    litellm_host::in_process::run_hosted(machine(secrets)(host.request()?), host.runtime()).await
+    litellm_host_native::in_process::run_hosted(machine(secrets)(host.request()?), host.runtime())
+        .await
 }
 
 /// Runs the route with a secret source that knows nothing, so no environment leaks in.
@@ -144,39 +145,41 @@ impl LocalMessagesHost {
             .take()
             .ok_or_else(|| Error::InvalidRequest("messages request was already projected".into()))
     }
-    pub fn runtime(&self) -> litellm_host::in_process::Host<'_, (), Self, ()> {
-        litellm_host::in_process::Host {
+    pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, ()> {
+        litellm_host_native::in_process::Host {
             services: &(),
-            hooks: self,
+            interceptors: self,
             stream: &(),
-            observer: Some(self),
+            observers: None,
         }
     }
 }
 
 impl litellm_host::lifecycle::CallObserver for LocalMessagesHost {
-    fn observe(&self, _: litellm_host::event::CallEvent) {}
+    fn observe(&self, _: litellm_host::lifecycle::CallEvent) {}
 }
-impl litellm_host::hooks::RouteHooks<<Messages as litellm_host::protocol::Protocol>::Error>
+impl litellm_host::interceptors::Interceptors<<Messages as litellm_host::protocol::Protocol>::Error>
     for LocalMessagesHost
 {
     async fn before_provider_request(
         &self,
-        wire: litellm_host::event::WireRequest,
-        _: litellm_host::event::RequestContext,
+        wire: litellm_host::interceptors::WireRequest,
+        _: litellm_host::interceptors::RequestContext,
     ) -> Result<
-        litellm_host::event::WireRequest,
+        litellm_host::interceptors::WireRequest,
         <Messages as litellm_host::protocol::Protocol>::Error,
     > {
         Ok(wire)
     }
-    async fn on_event(
+    async fn after_provider_response(
         &self,
-        event: litellm_host::event::MachineEvent,
+        raw: litellm_host::interceptors::RawResponse,
     ) -> Result<(), <Messages as litellm_host::protocol::Protocol>::Error> {
         litellm_host::lifecycle::CallObserver::observe(
             self,
-            litellm_host::event::CallEvent::Machine(event),
+            litellm_host::lifecycle::CallEvent::Execution(
+                litellm_host::lifecycle::ExecutionEvent::ProviderResponseReceived { raw },
+            ),
         );
         Ok(())
     }

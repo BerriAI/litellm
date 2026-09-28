@@ -1,6 +1,8 @@
+use std::ops::ControlFlow;
+
 pub use litellm_coroutine::{Abandoned, Answer, Reply, reply};
 
-use crate::event::{MachineEvent, RequestContext, WireRequest};
+use crate::interceptors::{RawResponse, RequestContext, WireRequest};
 
 pub trait Protocol: Send + Sync + 'static {
     type Request: Send + 'static;
@@ -11,28 +13,25 @@ pub trait Protocol: Send + Sync + 'static {
     type StreamHead: Send + 'static;
 }
 
-pub enum Suspension<P: Protocol> {
+pub enum HostRequest<P: Protocol> {
     HostCall(P::HostCall),
-    Hook(HookRequest),
+    Intercept(InterceptRequest),
     Stream(StreamDelivery<P>),
 }
 
-pub enum HookRequest {
+pub enum InterceptRequest {
     BeforeProviderRequest {
         wire: Box<WireRequest>,
         context: Box<RequestContext>,
         reply: Reply<WireRequest>,
     },
-    Event(MachineEvent, Reply<()>),
+    AfterProviderResponse {
+        raw: RawResponse,
+        reply: Reply<()>,
+    },
 }
 
 pub enum StreamDelivery<P: Protocol> {
-    Open(P::StreamHead, Reply<Demand>),
-    Chunk(P::Chunk, Reply<Demand>),
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Demand {
-    More,
-    Detached,
+    Open(P::StreamHead, Reply<ControlFlow<()>>),
+    Chunk(P::Chunk, Reply<ControlFlow<()>>),
 }

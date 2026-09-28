@@ -1,3 +1,4 @@
+use litellm_host::observation::ObservationSender;
 use std::convert::Infallible;
 
 use bytes::Bytes;
@@ -30,9 +31,17 @@ impl Protocol for Messages {
 pub type MessagesMachine = HostedMachine<Messages>;
 
 impl super::MessagesRoute {
-    pub fn machine(self, request: super::MessagesCall) -> MessagesMachine {
-        hosted_call(request, move |call, _, hooks| async move {
-            self.run(call, &hooks).await
-        })
+    pub fn machine(
+        self,
+        request: super::MessagesCall,
+        observers: Option<ObservationSender>,
+    ) -> MessagesMachine {
+        hosted_call(
+            request,
+            observers,
+            move |call, _, interceptors, observers| async move {
+                self.run(call, &interceptors, observers.as_ref()).await
+            },
+        )
     }
 }

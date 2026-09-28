@@ -55,6 +55,7 @@ async fn configured_project_and_location_apply_when_the_call_sets_neither() {
         .execute(
             ocr_request("vertex_ai/mistral-ocr-maas", &upstream.uri(), json!({})),
             &(),
+            None,
         )
         .await
         .unwrap();

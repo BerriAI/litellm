@@ -267,6 +267,11 @@ mod tests {
         py.eval(&CString::new(source).unwrap(), None, None).unwrap()
     }
 
+    fn with_python(f: impl for<'py> FnOnce(Python<'py>)) {
+        Python::initialize();
+        Python::attach(f);
+    }
+
     #[rstest]
     #[case("None", false, false)]
     #[case("False", false, false)]
@@ -284,8 +289,7 @@ mod tests {
         #[case] truth: bool,
         #[case] exact: bool,
     ) {
-        Python::initialize();
-        Python::attach(|py| {
+        with_python(|py| {
             let value = evaluate(py, source);
             let field = Field::new("test", "flag", value.clone());
             assert_eq!(field.truthy().unwrap(), truth);
@@ -323,8 +327,7 @@ mod tests {
         #[case] fallback: Result<Option<&str>, ()>,
         #[case] tuning: Result<Option<&str>, ()>,
     ) {
-        Python::initialize();
-        Python::attach(|py| {
+        with_python(|py| {
             let field = Field::new("test", "string", evaluate(py, source));
             let owned =
                 |expected: Result<Option<&str>, ()>| expected.map(|value| value.map(str::to_owned));
@@ -351,8 +354,7 @@ mod tests {
         #[case] source: &str,
         #[case] expected: Option<bool>,
     ) {
-        Python::initialize();
-        Python::attach(|py| {
+        with_python(|py| {
             assert_eq!(
                 Field::new("test", "flag", evaluate(py, source))
                     .str_bool()
@@ -364,8 +366,7 @@ mod tests {
 
     #[test]
     fn protocol_errors_preserve_exception_identity_traceback_cause_and_context() {
-        Python::initialize();
-        Python::attach(|py| {
+        with_python(|py| {
             let locals = PyDict::new(py);
             py.run(
                 c"
@@ -442,8 +443,7 @@ descriptor = Descriptor()
 
     #[test]
     fn identity_and_string_contents_do_not_invoke_unrelated_protocols() {
-        Python::initialize();
-        Python::attach(|py| {
+        with_python(|py| {
             let locals = PyDict::new(py);
             py.run(
                 c"
@@ -476,8 +476,7 @@ text = Text(' False ')
 
     #[test]
     fn missing_snapshot_fields_and_descriptor_attribute_errors_are_distinct() {
-        Python::initialize();
-        Python::attach(|py| {
+        with_python(|py| {
             let locals = PyDict::new(py);
             py.run(
                 c"
@@ -521,8 +520,7 @@ intercepted = Intercepted()
 
     #[test]
     fn configuration_errors_name_fields_without_exposing_values() {
-        Python::initialize();
-        Python::attach(|py| {
+        with_python(|py| {
             for source in [
                 "{'secret': 'do-not-print'}",
                 "['host.test', {'secret': 'do-not-print'}]",

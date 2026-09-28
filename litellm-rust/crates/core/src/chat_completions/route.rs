@@ -1,3 +1,4 @@
+use litellm_host::observation::ObservationSender;
 use std::convert::Infallible;
 
 use litellm_host::{
@@ -23,10 +24,15 @@ impl Protocol for ChatCompletions {
 }
 
 impl ChatCompletionsRoute {
-    pub fn machine(self, call: ChatCompletionsCall) -> HostedMachine<ChatCompletions> {
+    pub fn machine(
+        self,
+        call: ChatCompletionsCall,
+        observers: Option<ObservationSender>,
+    ) -> HostedMachine<ChatCompletions> {
         hosted_call(
             call,
-            move |call: ChatCompletionsCall, _, hooks| async move {
+            observers,
+            move |call: ChatCompletionsCall, _, interceptors, observers| async move {
                 let request = ChatCompletionsRequest {
                     model: &call.model,
                     messages: call.messages,
@@ -37,7 +43,9 @@ impl ChatCompletionsRoute {
                     extra_headers: call.extra_headers,
                     timeout: call.timeout,
                 };
-                self.run(request, &hooks).await.map(CallOutput::Complete)
+                self.run(request, &interceptors, observers.as_ref())
+                    .await
+                    .map(CallOutput::Complete)
             },
         )
     }
