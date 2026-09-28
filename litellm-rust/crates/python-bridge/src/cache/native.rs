@@ -14,7 +14,7 @@ use litellm_cache_response::{
 };
 use litellm_cache_s3::{S3Cache, S3CacheConfig};
 use litellm_cache_valkey_semantic::{ValkeySemanticCache, ValkeySemanticConfig};
-use pyo3::{PyTraverseError, PyVisit, prelude::*};
+use pyo3::prelude::*;
 use serde_json::Value;
 
 use super::{
@@ -283,10 +283,6 @@ impl NativeResponseCache {
                 embedding_model: cache.backend().embedder().model().to_owned(),
             },
         }
-    }
-
-    pub fn kind(&self) -> &'static str {
-        self.identity().kind()
     }
 
     pub fn with_redis_flush_size(self, flush_size: Option<usize>) -> Self {
@@ -654,15 +650,6 @@ impl NativeResponseCache {
             Self::ValkeySemantic { .. } | Self::RedisSemantic { .. } | Self::QdrantSemantic(_) => {
                 Err(Error::UnsupportedOperation)
             }
-        }
-    }
-
-    pub(super) fn traverse(&self, visit: &PyVisit<'_>) -> Result<(), PyTraverseError> {
-        match self {
-            Self::ValkeySemantic { embedder, .. } | Self::RedisSemantic { embedder, .. } => {
-                embedder.traverse(visit)
-            }
-            Self::Exact(_) | Self::QdrantSemantic(_) => Ok(()),
         }
     }
 }

@@ -5,11 +5,9 @@ mod config;
 mod embedder;
 mod facade;
 mod future;
-mod handle;
 mod identity;
 mod native;
 mod request;
-mod resolver;
 mod semantic;
 
 use litellm_cache::Error;
@@ -18,7 +16,7 @@ use pyo3::{
     prelude::*,
 };
 
-pub(crate) use self::{binding::ResolvedCache, handle::CacheTestHandle, resolver::CacheResolver};
+pub(crate) use self::binding::ResolvedCache;
 
 fn cache_error(error: Error) -> PyErr {
     match error {
@@ -27,3 +25,5 @@ fn cache_error(error: Error) -> PyErr {
         _ => PyRuntimeError::new_err(error.to_string()),
     }
 }
+
+pub(crate) mod v2;

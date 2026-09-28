@@ -90,10 +90,6 @@ impl ResolvedCache {
         let py = cache.py();
         let binding = if cache.is_none() {
             CacheBinding::Disabled
-        } else if let Ok(handle) = cache.extract::<PyRef<'_, super::handle::CacheTestHandle>>() {
-            CacheBinding::Native(handle.service()?)
-        } else if let Some(service) = super::facade::resolve(py, cache)? {
-            CacheBinding::Native(service)
         } else if let Some(runtime) = cache
             .getattr_opt("_native_cache")?
             .filter(|value| !value.is_none())

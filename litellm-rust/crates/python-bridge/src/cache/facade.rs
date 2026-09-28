@@ -10,7 +10,6 @@ use serde_json::Value;
 
 use super::{
     config::{CacheConfigProjection, NativeCacheConfig},
-    handle::CacheTestHandle,
     identity::BackendIdentity,
     native::NativeResponseCache,
 };
@@ -496,29 +495,4 @@ impl FacadeGuard {
         }
         self.connection.traverse(&visit)
     }
-}
-
-pub(super) fn resolve(
-    py: Python<'_>,
-    facade: &Bound<'_, PyAny>,
-) -> PyResult<Option<NativeResponseCache>> {
-    let Ok(dict) = facade
-        .getattr("__dict__")
-        .and_then(|dict| dict.cast_into::<PyDict>().map_err(Into::into))
-    else {
-        return Ok(None);
-    };
-    let Some(handle) = dict.get_item("_native_cache_handle")? else {
-        return Ok(None);
-    };
-    let Ok(handle) = handle.extract::<PyRef<'_, CacheTestHandle>>() else {
-        return Ok(None);
-    };
-    let Some(guard) = &handle.guard else {
-        return Ok(None);
-    };
-    if !guard.matches(py, facade).unwrap_or(false) {
-        return Ok(None);
-    }
-    handle.service().map(Some)
 }
