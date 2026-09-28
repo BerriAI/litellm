@@ -48,6 +48,7 @@ from litellm.proxy._types import SpendLogsMetadata, SpendLogsPayload, SpendLogsR
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.proxy.spend_tracking.spend_log_error_logger import spend_log_error
 from litellm.proxy.utils import PrismaClient, hash_token
+from litellm.types.llms.bedrock import AWS_CREDENTIAL_VALUE_PARAM_KEYS
 from litellm.types.router import DeploymentTypedDict, LiteLLM_Params
 from litellm.types.utils import (
     PROMPT_CARRYING_GUARDRAIL_FIELDS,
@@ -1094,8 +1095,9 @@ def _sanitize_request_body_for_spend_logs_payload(
     Recursively sanitize request body to prevent logging large base64 strings or other large values.
     Truncates strings longer than MAX_STRING_LENGTH_PROMPT_IN_DB characters and handles nested dictionaries.
 
-    Also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields
-    which contains raw HTTP headers including Authorization tokens).
+    At every nesting level, also strips keys listed in _SENSITIVE_REQUEST_BODY_KEYS (e.g. secret_fields,
+    which holds raw HTTP headers including Authorization tokens) and masks string values of AWS
+    credential keys with REDACTED_BY_LITELM_STRING.
     """
     from litellm.constants import (
         LITELLM_TRUNCATED_PAYLOAD_FIELD,
@@ -1152,7 +1154,13 @@ def _sanitize_request_body_for_spend_logs_payload(
             return value
         return value
 
-    return {k: _sanitize_value(v) for k, v in request_body.items() if k not in _SENSITIVE_REQUEST_BODY_KEYS}
+    return {
+        k: REDACTED_BY_LITELM_STRING
+        if k in AWS_CREDENTIAL_VALUE_PARAM_KEYS and isinstance(v, str)
+        else _sanitize_value(v)
+        for k, v in request_body.items()
+        if k not in _SENSITIVE_REQUEST_BODY_KEYS
+    }
 
 
 # Quoted-key form: ``"input"`` / ``'messages'`` / ``"prompt"`` followed by

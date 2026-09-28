@@ -2692,6 +2692,42 @@ def test_sanitize_request_body_strips_secret_fields():
 
 
 @patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
+def test_proxy_server_request_payload_strips_nested_aws_credentials(mock_should_store: MagicMock) -> None:
+    mock_should_store.return_value = True
+    credentials: Final = {
+        "aws_access_key_id": "AKIA-canary",
+        "aws_secret_access_key": "secret-canary",
+        "aws_session_token": "token-canary",
+        "aws_web_identity_token": "wit-canary",
+    }
+    tool_parameters: Final = {"type": "object", "properties": {"aws_secret_access_key": {"type": "string"}}}
+    litellm_params: Final = {
+        "proxy_server_request": {
+            "body": {
+                "model": "bedrock-claude",
+                "messages": [{"role": "user", "content": "hello"}],
+                "fallbacks": [{"model": "bedrock-b", "aws_region_name": "us-west-2", **credentials}],
+                "extra_body": {"aws_role_name": "arn:aws:iam::123456789012:role/r", **credentials},
+                "tools": [{"type": "function", "function": {"name": "f", "parameters": tool_parameters}}],
+                **credentials,
+            }
+        }
+    }
+
+    parsed: Final = json.loads(
+        _get_proxy_server_request_for_spend_logs_payload(metadata={}, litellm_params=litellm_params, kwargs={})
+    )
+
+    assert "canary" not in json.dumps(parsed)
+    masked: Final = dict.fromkeys(credentials, REDACTED_BY_LITELM_STRING)
+    assert parsed["fallbacks"] == [{"model": "bedrock-b", "aws_region_name": "us-west-2", **masked}]
+    assert parsed["extra_body"] == {"aws_role_name": "arn:aws:iam::123456789012:role/r", **masked}
+    assert {name: parsed[name] for name in credentials} == masked
+    assert parsed["tools"][0]["function"]["parameters"] == tool_parameters
+    assert parsed["messages"] == [{"role": "user", "content": "hello"}]
+
+
+@patch("litellm.proxy.spend_tracking.spend_tracking_utils.should_store_prompts_and_responses_in_spend_logs")
 def test_proxy_server_request_payload_excludes_secret_fields(mock_should_store):
     """
     End-to-end test: when the proxy_server_request body contains

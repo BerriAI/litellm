@@ -896,6 +896,37 @@ def test_body_snapshot_excludes_team_callback_credentials() -> None:
 
 
 @pytest.mark.asyncio
+async def test_add_litellm_data_to_request_body_snapshot_excludes_aws_credentials() -> None:
+    from litellm.proxy.litellm_pre_call_utils import add_litellm_data_to_request
+    from litellm.types.llms.bedrock import AWS_CREDENTIAL_VALUE_PARAM_KEYS
+
+    aws_credentials: Final = {name: f"canary-{name}" for name in AWS_CREDENTIAL_VALUE_PARAM_KEYS}
+    data: Final = {
+        "model": "bedrock-claude",
+        "messages": [{"role": "user", "content": "hello"}],
+        "aws_region_name": "us-east-1",
+        "aws_role_name": "arn:aws:iam::123456789012:role/bedrock",
+        **aws_credentials,
+    }
+
+    updated: Final = await add_litellm_data_to_request(
+        data=data,
+        request=_make_request_mock("/v1/chat/completions", {"Content-Type": "application/json"}),
+        user_api_key_dict=UserAPIKeyAuth(api_key="hashed-key", user_id="test-user"),
+        proxy_config=MagicMock(),
+        general_settings={},
+        version="test-version",
+    )
+
+    snapshot_body: Final = updated["proxy_server_request"]["body"]
+    assert "canary-" not in json.dumps(snapshot_body, default=str)
+    assert snapshot_body["aws_region_name"] == "us-east-1"
+    assert snapshot_body["aws_role_name"] == "arn:aws:iam::123456789012:role/bedrock"
+    assert snapshot_body["messages"] == [{"role": "user", "content": "hello"}]
+    assert {name: updated[name] for name in AWS_CREDENTIAL_VALUE_PARAM_KEYS} == aws_credentials
+
+
+@pytest.mark.asyncio
 @pytest.mark.parametrize("pre_call_ran", [False, True])
 async def test_post_guardrail_snapshot_preserves_logging_only_masking_in_spend_logs(
     monkeypatch: pytest.MonkeyPatch, pre_call_ran: bool
