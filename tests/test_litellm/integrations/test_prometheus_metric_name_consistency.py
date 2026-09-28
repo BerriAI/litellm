@@ -25,6 +25,9 @@ from litellm.caching.redis_cache import _breaker_metrics
 from litellm.integrations.prometheus import PrometheusLogger
 from litellm.integrations.prometheus_services import PrometheusServicesLogger
 from litellm.proxy.db.db_transaction_queue.spend_log_cleanup_metrics import SpendLogCleanupMetrics
+from litellm.proxy.middleware.active_websocket_sessions_middleware import (
+    create_prometheus_active_websocket_sessions_gauge,
+)
 from litellm.proxy.middleware.admission_control_middleware import create_prometheus_admission_metrics
 from litellm.proxy.middleware.in_flight_requests_middleware import InFlightRequestsMiddleware
 
@@ -62,6 +65,8 @@ def _lazy_owner_collectors() -> tuple[Collector, ...]:
     assert SpendLogCleanupMetrics.runs is not None
     in_flight: Final = InFlightRequestsMiddleware._get_gauge()
     assert in_flight is not None
+    websocket_sessions: Final = create_prometheus_active_websocket_sessions_gauge(excluded_metrics=())
+    assert isinstance(websocket_sessions, Collector)
     breaker: Final = _breaker_metrics()
     assert breaker._state_gauge is not None
     assert breaker._transitions is not None
@@ -73,6 +78,7 @@ def _lazy_owner_collectors() -> tuple[Collector, ...]:
         SpendLogCleanupMetrics.batch_failures,
         SpendLogCleanupMetrics.runs,
         in_flight,
+        websocket_sessions,
         breaker._state_gauge,
         breaker._transitions,
         breaker._failures,
@@ -131,6 +137,7 @@ def test_isolated_metric_families_restore_the_registry_and_keep_lazy_owners_live
         assert "litellm_unrelated_sentinel" not in families
         assert "litellm_admission_admitted_requests" in families
         assert "litellm_in_flight_requests" in families
+        assert "litellm_active_websocket_sessions" in families
         assert not any(gauge in REGISTRY._collector_to_names for gauge in gauges_registered_by_an_earlier_test)
     after: Final = _registered_collectors()
     assert all(after[collector] == names for collector, names in before.items())

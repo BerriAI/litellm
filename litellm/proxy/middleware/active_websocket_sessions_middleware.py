@@ -1,11 +1,13 @@
 import os
-from collections.abc import Callable
+from collections.abc import Callable, Collection
+from functools import cache
 from typing import Final, Protocol
 
 from starlette.routing import WebSocketRoute
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 UNMATCHED_ROUTE: Final = "unmatched"
+ACTIVE_WEBSOCKET_SESSIONS_METRIC: Final = "litellm_active_websocket_sessions"
 
 
 class _GaugeChild(Protocol):
@@ -68,13 +70,19 @@ class ActiveWebSocketSessionsMiddleware:
         return self._gauge
 
 
-def create_prometheus_active_websocket_sessions_gauge() -> RouteGauge | None:
+def create_prometheus_active_websocket_sessions_gauge(excluded_metrics: Collection[str]) -> RouteGauge | None:
+    if ACTIVE_WEBSOCKET_SESSIONS_METRIC in excluded_metrics:
+        return None
+    return _process_wide_gauge()
+
+
+@cache
+def _process_wide_gauge() -> RouteGauge | None:
     try:
         from prometheus_client import Gauge
     except ImportError:
         return None
-    name: Final = "litellm_active_websocket_sessions"
     description: Final = "Number of accepted WebSocket sessions currently open on this worker"
     if "PROMETHEUS_MULTIPROC_DIR" in os.environ:
-        return Gauge(name, description, labelnames=("route",), multiprocess_mode="livesum")
-    return Gauge(name, description, labelnames=("route",))
+        return Gauge(ACTIVE_WEBSOCKET_SESSIONS_METRIC, description, labelnames=("route",), multiprocess_mode="livesum")
+    return Gauge(ACTIVE_WEBSOCKET_SESSIONS_METRIC, description, labelnames=("route",))

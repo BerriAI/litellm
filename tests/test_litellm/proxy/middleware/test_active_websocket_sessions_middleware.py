@@ -1,17 +1,23 @@
 import asyncio
 from collections import defaultdict
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Final
+from typing import Final, get_args
 
 import pytest
 from fastapi import FastAPI
+from prometheus_client import REGISTRY
 from starlette.responses import PlainTextResponse
 from starlette.testclient import TestClient
 from starlette.websockets import WebSocket, WebSocketDisconnect
 
 from litellm.proxy.middleware.active_websocket_sessions_middleware import (
+    ACTIVE_WEBSOCKET_SESSIONS_METRIC,
     ActiveWebSocketSessionsMiddleware,
+    RouteGauge,
+    create_prometheus_active_websocket_sessions_gauge,
 )
+from litellm.types.integrations.prometheus import DEFINED_PROMETHEUS_METRICS
 
 
 @dataclass(slots=True)
@@ -147,3 +153,41 @@ def test_gauge_factory_runs_once() -> None:
 
     asyncio.run(run_twice())
     assert len(calls) == 1
+
+
+def _echo_app(gauge_factory: Callable[[], RouteGauge | None]) -> FastAPI:
+    app: Final = FastAPI()
+
+    async def echo(websocket: WebSocket) -> None:
+        await websocket.accept()
+        async for text in websocket.iter_text():
+            await websocket.send_text(text)
+
+    app.add_api_websocket_route("/v1/realtime", echo)
+    app.add_middleware(ActiveWebSocketSessionsMiddleware, gauge_factory=gauge_factory)
+    return app
+
+
+def _registered_open_sessions(route: str) -> float | None:
+    return REGISTRY.get_sample_value(ACTIVE_WEBSOCKET_SESSIONS_METRIC, {"route": route})
+
+
+def test_two_proxy_apps_in_one_process_share_the_prometheus_gauge() -> None:
+    def real_gauge() -> RouteGauge | None:
+        return create_prometheus_active_websocket_sessions_gauge(excluded_metrics=())
+
+    first: Final = TestClient(_echo_app(real_gauge))
+    second: Final = TestClient(_echo_app(real_gauge))
+    with first.websocket_connect("/v1/realtime") as a, second.websocket_connect("/v1/realtime") as b:
+        a.send_text("a")
+        b.send_text("b")
+        assert (a.receive_text(), b.receive_text()) == ("a", "b")
+        assert _registered_open_sessions("/v1/realtime") == 2
+    assert _registered_open_sessions("/v1/realtime") == 0
+
+
+def test_excluded_metric_is_accepted_by_config_validation_and_never_created() -> None:
+    assert ACTIVE_WEBSOCKET_SESSIONS_METRIC in get_args(DEFINED_PROMETHEUS_METRICS)
+    assert (
+        create_prometheus_active_websocket_sessions_gauge(excluded_metrics=(ACTIVE_WEBSOCKET_SESSIONS_METRIC,)) is None
+    )

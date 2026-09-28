@@ -2399,7 +2399,7 @@ app.add_middleware(BudgetReservationReleaseMiddleware, release=release_unbound_b
 app.add_middleware(InFlightRequestsMiddleware)
 app.add_middleware(
     ActiveWebSocketSessionsMiddleware,
-    gauge_factory=create_prometheus_active_websocket_sessions_gauge,
+    gauge_factory=lambda: create_prometheus_active_websocket_sessions_gauge(litellm.prometheus_exclude_metrics or ()),
 )
 app.add_middleware(SecurityHeadersMiddleware)
 
