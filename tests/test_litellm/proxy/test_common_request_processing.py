@@ -495,7 +495,7 @@ class TestProxyBaseLLMRequestProcessing:
             )
 
         assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
-        assert exc_info.value.code == "429"
+        assert exc_info.value.code == "422"
         tag_budget_check.assert_awaited_once()
         _, call_kwargs = tag_budget_check.call_args
         assert call_kwargs["tags"] == ("guardrail-tag",)
@@ -702,7 +702,7 @@ class TestProxyBaseLLMRequestProcessing:
             )
 
         assert exc_info.value.type == ProxyErrorTypes.budget_exceeded
-        assert exc_info.value.code == "429"
+        assert exc_info.value.code == "422"
         assert "guardrail-tag" in exc_info.value.message
 
     @pytest.mark.asyncio

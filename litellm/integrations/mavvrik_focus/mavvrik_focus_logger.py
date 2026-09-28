@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
-from typing import TYPE_CHECKING, Any, Final
+from typing import TYPE_CHECKING, Any, Final, Protocol
 
 import litellm
 from litellm._logging import verbose_proxy_logger
@@ -33,6 +33,17 @@ if TYPE_CHECKING:
     from apscheduler.schedulers.asyncio import AsyncIOScheduler
 else:
     AsyncIOScheduler = Any
+
+
+class _PodLockManager(Protocol):
+    """The subset of PodLockManager this logger drives to serialize the export across pods."""
+
+    @property
+    def redis_cache(self) -> object: ...
+
+    async def acquire_lock(self, cronjob_id: str) -> bool | None: ...
+
+    async def release_lock(self, cronjob_id: str) -> None: ...
 
 
 def _parse_metrics_marker(
@@ -226,9 +237,9 @@ class MavvrikFocusLogger(FocusLogger):
         """Scheduler entry point — uses Mavvrik-specific pod-lock key."""
         from litellm.proxy.proxy_server import proxy_logging_obj  # noqa: PLC0415
 
-        pod_lock_manager = None
+        pod_lock_manager: _PodLockManager | None = None
         if proxy_logging_obj is not None:
-            writer: Final = getattr(proxy_logging_obj, "db_spend_update_writer", None)
+            writer: Final[object] = getattr(proxy_logging_obj, "db_spend_update_writer", None)
             if writer is not None:
                 pod_lock_manager = getattr(writer, "pod_lock_manager", None)
 

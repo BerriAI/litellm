@@ -1154,7 +1154,7 @@ class MCPRequestHandler:
 
         Failures surface with the status the standard pipeline would give them, mirroring
         ``UserAPIKeyAuthExceptionHandler``: a disallowed route is the route gate's own 403, an
-        over-budget identity is a 429, a sub-check that raised its own ``HTTPException``/
+        over-budget identity is a 422, a sub-check that raised its own ``HTTPException``/
         ``ProxyException`` keeps that status, a transient database outage is a retryable 503, and
         only a genuinely unresolvable failure (a blocked team/project raises a bare ``Exception``,
         same as the standard pipeline's fallback) becomes the fail-closed 401. Collapsing every

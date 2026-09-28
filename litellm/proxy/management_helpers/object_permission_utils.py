@@ -8,7 +8,7 @@ from collections.abc import Mapping, Sequence
 from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, Final, Optional
+from typing import TYPE_CHECKING, Final, Optional
 
 from fastapi import HTTPException, status
 from pydantic import TypeAdapter
@@ -230,7 +230,7 @@ def _dedupe_preserving_order(values: list[str]) -> list[str]:
     return result
 
 
-def _mcp_server_identifier_matches(server: Any, identifier: str) -> bool:
+def _mcp_server_identifier_matches(server: object, identifier: str) -> bool:
     return identifier in {
         getattr(server, "server_id", None),
         getattr(server, "alias", None),

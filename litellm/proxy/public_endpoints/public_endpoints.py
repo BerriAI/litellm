@@ -199,9 +199,13 @@ def _build_endpoints(raw: _ProvidersFile) -> list[_EndpointEntry]:
     return result
 
 
+_PROVIDERS_FILE_ADAPTER: Final = TypeAdapter(_ProvidersFile)
+_PROVIDER_CREATE_FIELDS_ADAPTER: Final = TypeAdapter(list[ProviderCreateInfo])
+
+
 def _load_endpoints() -> list[_EndpointEntry]:
-    raw: Final[_ProvidersFile] = json.loads(
-        files("litellm").joinpath("provider_endpoints_support_backup.json").read_text(encoding="utf-8")
+    raw: Final = _PROVIDERS_FILE_ADAPTER.validate_python(
+        json.loads(files("litellm").joinpath("provider_endpoints_support_backup.json").read_text(encoding="utf-8"))
     )
     return _build_endpoints(raw)
 
@@ -398,7 +402,7 @@ async def get_provider_fields() -> list[ProviderCreateInfo]:
     )
 
     with open(provider_create_fields_path, "r") as f:
-        provider_create_fields: Final = json.load(f)
+        provider_create_fields: Final = _PROVIDER_CREATE_FIELDS_ADAPTER.validate_python(json.load(f))
 
     return provider_create_fields
 

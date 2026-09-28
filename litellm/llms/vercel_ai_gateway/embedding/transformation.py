@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any, Final
 
 import httpx
 
+from litellm.llms.base_llm.chat.transformation import BaseLLMException
 from litellm.llms.base_llm.embedding.transformation import BaseEmbeddingConfig
 from litellm.secret_managers.main import get_secret_str
 from litellm.types.llms.openai import AllEmbeddingInputValues
@@ -160,7 +161,7 @@ class VercelAIGatewayEmbeddingConfig(BaseEmbeddingConfig):
                 optional_params[param] = value
         return optional_params
 
-    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> Any:
+    def get_error_class(self, error_message: str, status_code: int, headers: Any) -> BaseLLMException:
         """
         Get the error class for Vercel AI Gateway errors.
         """

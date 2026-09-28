@@ -75,6 +75,7 @@ class ResponsesRequest(BaseModel):
     stream: bool = False
     tools: list[ResponsesFunctionTool] | None = None
     guardrails: list[str] | None = None
+    safety_identifier: str | None = None
     cache: dict[str, bool] | None = {"no-cache": True}
 
 
@@ -316,6 +317,7 @@ class EndpointsClient:
         *,
         stream: bool = False,
         guardrails: list[str] | None = None,
+        safety_identifier: str | None = None,
     ) -> StreamingResponse:
         return self._send(
             "/v1/responses",
@@ -326,6 +328,7 @@ class EndpointsClient:
                 instructions="You are a helpful assistant",
                 stream=stream,
                 guardrails=guardrails,
+                safety_identifier=safety_identifier,
             ),
             stream=stream,
         )
