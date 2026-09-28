@@ -48,22 +48,58 @@ def test_sonnet_5_registered_for_bedrock_converse():
     assert "anthropic.claude-sonnet-5" in BEDROCK_CONVERSE_MODELS
 
 
-def test_sonnet_5_5_present_in_bundled_backup():
+SONNET_5_5_VARIANTS = (
+    "claude-sonnet-5-5",
+    "us.anthropic.claude-sonnet-5-5",
+    "vertex_ai/claude-sonnet-5-5",
+    "vertex_ai/claude-sonnet-5-5@default",
+    "azure_ai/claude-sonnet-5-5",
+    "openrouter/anthropic/claude-sonnet-5.5",
+)
+
+
+@pytest.mark.parametrize("model_name", SONNET_5_5_VARIANTS)
+def test_sonnet_5_5_present_in_bundled_backup(model_name):
     backup = GetModelCostMap.load_local_model_cost_map()
     root = _load_root_cost_map()
-    assert "claude-sonnet-5-5" in backup
-    assert "claude-sonnet-5-5" in root
-    assert backup["claude-sonnet-5-5"] == root["claude-sonnet-5-5"]
+    assert model_name in backup
+    assert model_name in root
+    assert backup[model_name] == root[model_name]
 
 
-@pytest.mark.parametrize("model", ["claude-sonnet-5-5", "anthropic/claude-sonnet-5-5"])
-def test_sonnet_5_5_thinking_profile(local_model_cost_map, model):
+@pytest.mark.parametrize(
+    ("model", "provider"),
+    [
+        ("claude-sonnet-5-5", "anthropic"),
+        ("anthropic/claude-sonnet-5-5", "anthropic"),
+        ("vertex_ai/claude-sonnet-5-5", "vertex_ai"),
+        ("azure_ai/claude-sonnet-5-5", "azure_ai"),
+    ],
+)
+def test_sonnet_5_5_thinking_profile(local_model_cost_map, model, provider):
     """Sonnet 5.5 has thinking always on with the adaptive thinking surface, and
     no forced tool use, same as Opus 5.5."""
     from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-    assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
-    assert AnthropicModelInfo._is_always_on_thinking_model(model, "anthropic") is True
+    assert AnthropicModelInfo._is_adaptive_thinking_model(model, provider) is True
+    assert AnthropicModelInfo._is_always_on_thinking_model(model, provider) is True
     assert AnthropicModelInfo.forced_tool_use_unsupported(model.removeprefix("anthropic/")) is True
+
+
+REMOVED_SONNET_5_5_KEYS = (
+    "aihubmix/claude-sonnet-5-5",
+    "deepinfra/anthropic/claude-sonnet-5-5",
+    "databricks/databricks-claude-sonnet-5-5",
+    "openrouter/anthropic/claude-sonnet-5-5",
+    "openrouter/anthropic/claude-sonnet-5-5:batch",
+)
+
+
+@pytest.mark.parametrize("model_name", REMOVED_SONNET_5_5_KEYS)
+def test_sonnet_5_5_removed_provider_keys_absent(model_name):
+    """None of these vendors lists Sonnet 5.5, so the keys cloned from Sonnet 5
+    must not ship."""
+    root = _load_root_cost_map()
+    assert model_name not in root
 
 
