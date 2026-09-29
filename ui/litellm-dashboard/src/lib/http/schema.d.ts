@@ -9196,25 +9196,8 @@ export interface paths {
             path?: never;
             cookie?: never;
         };
-        /** model_insights */
-        get: {
-            parameters: {
-                query?: never;
-                header?: never;
-                path?: never;
-                cookie?: never;
-            };
-            requestBody?: never;
-            responses: {
-                /** @description OK */
-                200: {
-                    headers: {
-                        [name: string]: unknown;
-                    };
-                    content?: never;
-                };
-            };
-        };
+        /** Get Model Insights */
+        get: operations["get_model_insights_model_insights_get"];
         put?: never;
         post?: never;
         delete?: never;
@@ -35980,6 +35963,97 @@ export interface components {
             /** Id */
             id: string;
         };
+        /** ModelInsightDailyMetric */
+        ModelInsightDailyMetric: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Date */
+            date: string;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Model */
+            model: string;
+            /** Model Group */
+            model_group: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+            /** Successful Requests */
+            successful_requests: number;
+        };
+        /** ModelInsightMetric */
+        ModelInsightMetric: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Model */
+            model: string;
+            /** Model Group */
+            model_group: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+            /** Successful Requests */
+            successful_requests: number;
+        };
+        /** ModelInsightTask */
+        ModelInsightTask: {
+            /** Category */
+            category: string;
+            /** Label */
+            label: string;
+            /** Task Type */
+            task_type: string;
+        };
+        /** ModelInsightTaskMetric */
+        ModelInsightTaskMetric: {
+            /** Completion Tokens */
+            completion_tokens: number;
+            /** Failed Requests */
+            failed_requests: number;
+            /** Model */
+            model: string;
+            /** Model Group */
+            model_group: string;
+            /** Prompt Tokens */
+            prompt_tokens: number;
+            /** Provider */
+            provider: string;
+            /** Requests */
+            requests: number;
+            /** Spend */
+            spend: number;
+            /** Successful Requests */
+            successful_requests: number;
+            /** Task Type */
+            task_type: string;
+        };
+        /** ModelInsightsResponse */
+        ModelInsightsResponse: {
+            /** By Task */
+            by_task: components["schemas"]["ModelInsightTaskMetric"][];
+            /** Daily */
+            daily: components["schemas"]["ModelInsightDailyMetric"][];
+            /** End Date */
+            end_date: string;
+            /** Start Date */
+            start_date: string;
+            /** Tasks */
+            tasks: components["schemas"]["ModelInsightTask"][];
+            /** Top Models */
+            top_models: components["schemas"]["ModelInsightMetric"][];
+        };
         /** ModelParams */
         ModelParams: {
             /** Litellm Params */
@@ -59310,6 +59384,42 @@ export interface operations {
                 };
                 content: {
                     "application/json": unknown;
+                };
+            };
+            /** @description Validation Error */
+            422: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["HTTPValidationError"];
+                };
+            };
+        };
+    };
+    get_model_insights_model_insights_get: {
+        parameters: {
+            query?: {
+                /** @description YYYY-MM-DD, defaults to 365 days ago */
+                start_date?: string | null;
+                /** @description YYYY-MM-DD, defaults to today */
+                end_date?: string | null;
+                /** @description Metric the top models are ranked by */
+                metric?: "requests" | "spend" | "tokens";
+            };
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description Successful Response */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["ModelInsightsResponse"];
                 };
             };
             /** @description Validation Error */
