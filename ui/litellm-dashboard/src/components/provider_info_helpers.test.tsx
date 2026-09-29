@@ -1,4 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { readFileSync } from "fs";
+import { resolve } from "path";
 import {
   Providers,
   getPlaceholder,
@@ -6,7 +8,19 @@ import {
   getProviderModels,
   providerLogoMap,
   provider_map,
+  resolveLitellmProviderSlug,
 } from "./provider_info_helpers";
+
+// The real catalog the Add Model dropdown is populated from, so a provider
+// added there flows into these expectations instead of going unnoticed.
+const PROVIDER_CREATE_FIELDS: { provider: string; litellm_provider: string }[] = JSON.parse(
+  readFileSync(resolve(__dirname, "../../../../litellm/proxy/public_endpoints/provider_create_fields.json"), "utf8"),
+);
+
+// The bundled cost map a default install serves the Add Model model list from.
+const BUNDLED_MODEL_MAP: Record<string, { litellm_provider?: string }> = JSON.parse(
+  readFileSync(resolve(__dirname, "../../../../model_prices_and_context_window.json"), "utf8"),
+);
 
 describe("provider_info_helpers", () => {
   describe("getProviderLogoAndName", () => {
@@ -318,6 +332,47 @@ describe("provider_info_helpers", () => {
     });
   });
 
+  describe("resolveLitellmProviderSlug", () => {
+    it("should resolve every provider the backend serves to the slug that backend declares", () => {
+      // The dropdown passes the backend's `provider` field straight through, so
+      // any provider whose key is spelled differently on the two sides (or is
+      // missing from provider_map entirely) silently resolves to the wrong slug
+      // and empties the model dropdown.
+      const misresolved = PROVIDER_CREATE_FIELDS.filter(
+        (entry) => resolveLitellmProviderSlug(entry.provider) !== entry.litellm_provider,
+      ).map(
+        (entry) =>
+          `${entry.provider} -> ${resolveLitellmProviderSlug(entry.provider)} (want ${entry.litellm_provider})`,
+      );
+      expect(misresolved).toEqual([]);
+    });
+
+    it("should resolve providers the backend spells in caps and provider_map spells in camel case", () => {
+      expect(resolveLitellmProviderSlug("MINIMAX")).toBe("minimax");
+      expect(resolveLitellmProviderSlug("CURSOR")).toBe("cursor");
+      expect(resolveLitellmProviderSlug("RUNWAYML")).toBe("runwayml");
+    });
+
+    it("should resolve providers absent from provider_map to their lowercased value", () => {
+      expect(resolveLitellmProviderSlug("MILVUS")).toBe("milvus");
+      expect(resolveLitellmProviderSlug("LANGFUSE")).toBe("langfuse");
+      expect(resolveLitellmProviderSlug("LITELLM_PROXY")).toBe("litellm_proxy");
+    });
+
+    it("should keep SAGEMAKER on the plain slug rather than the chat variant SageMaker maps to", () => {
+      // "SAGEMAKER" and "SageMaker" are two distinct backend providers with two
+      // distinct slugs. Resolving case-insensitively against provider_map would
+      // collapse them and send sagemaker_chat for both.
+      expect(resolveLitellmProviderSlug("SAGEMAKER")).toBe("sagemaker");
+      expect(resolveLitellmProviderSlug("SageMaker")).toBe("sagemaker_chat");
+    });
+
+    it("should prefer an exact provider_map key over the lowercase fallback", () => {
+      expect(resolveLitellmProviderSlug("Vertex_AI")).toBe("vertex_ai");
+      expect(resolveLitellmProviderSlug("Google_AI_Studio")).toBe("gemini");
+    });
+  });
+
   describe("getProviderModels", () => {
     it("should return empty array when provider is not provided", () => {
       const modelMap = {};
@@ -515,6 +570,45 @@ describe("provider_info_helpers", () => {
       };
       const result = getProviderModels(Providers.Bedrock, modelMap);
       expect(result).toEqual([]);
+    });
+
+    it("should populate models for a provider whose backend key is spelled differently from its provider_map key", () => {
+      // Selecting "Cursor" in the dropdown passes the backend key "CURSOR",
+      // which is not a provider_map key. Before the slug fallback this resolved
+      // to undefined, matched nothing, and degraded the model field into a
+      // free-text input with no candidates.
+      const modelMap = {
+        "cursor/composer-1": { litellm_provider: "cursor" },
+        "gpt-4": { litellm_provider: "openai" },
+      };
+      const result = getProviderModels("CURSOR" as Providers, modelMap);
+      expect(result).toEqual(["cursor/composer-1"]);
+    });
+
+    it("should populate models for SAGEMAKER, whose key is absent from provider_map", () => {
+      // "SAGEMAKER" (slug "sagemaker") and "SageMaker" (slug "sagemaker_chat")
+      // are two distinct backend providers. Only the latter is a provider_map
+      // key, so before the slug fallback the former matched nothing at all.
+      const modelMap = {
+        "sagemaker-base": { litellm_provider: "sagemaker" },
+        "gpt-4": { litellm_provider: "openai" },
+      };
+      expect(getProviderModels("SAGEMAKER" as Providers, modelMap)).toEqual(["sagemaker-base"]);
+    });
+
+    it("should populate MiniMax's bundled models from the real cost map", () => {
+      // Selecting MiniMax passes the backend key "MINIMAX", not the provider_map
+      // key "MiniMax", so the model field showed no candidates for any MiniMax
+      // model. Reading the bundled map means this checks what a default install
+      // actually offers rather than a hand-written fixture.
+      const minimaxModels = Object.keys(BUNDLED_MODEL_MAP).filter(
+        (key) => BUNDLED_MODEL_MAP[key]?.litellm_provider === "minimax",
+      );
+      expect(minimaxModels.length).toBeGreaterThan(0);
+
+      const result = getProviderModels("MINIMAX" as Providers, BUNDLED_MODEL_MAP);
+
+      expect([...result].sort()).toEqual([...minimaxModels].sort());
     });
 
     it("should handle multiple providers correctly", () => {

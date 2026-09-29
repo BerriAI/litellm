@@ -306,6 +306,17 @@ export const provider_map: Record<string, string> = {
 
 const standaloneSubproviderSlugs = new Set<string>(["bedrock_mantle"]);
 
+// The Add Model dropdown hands us the `provider` field from
+// /public/providers/fields, which is not always a provider_map key: the backend
+// spells eleven of them differently ("MINIMAX" vs "MiniMax", "CURSOR" vs
+// "Cursor") or has no key at all ("MILVUS", "LANGFUSE"). For every provider the
+// backend currently serves, the lowercased value is the litellm slug, so use it
+// when the key misses. Resolving case-insensitively against provider_map
+// instead would be wrong: "SAGEMAKER" would hit the "SageMaker" key and yield
+// "sagemaker_chat" rather than the "sagemaker" the backend asked for.
+export const resolveLitellmProviderSlug = (provider: string): string =>
+  provider_map[provider] ?? provider.toLowerCase();
+
 export const providerLogoMap: Partial<Record<Providers, string>> = {
   [Providers.A2A_Agent]: a2aAgentLogo.src,
   [Providers.AI21]: ai21Logo.src,
@@ -467,7 +478,7 @@ export const getPlaceholder = (selectedProvider: string): string => {
 
 export const getProviderModels = (provider: string, modelMap: any): Array<string> => {
   let providerKey = provider;
-  let custom_llm_provider = provider_map[providerKey];
+  let custom_llm_provider = providerKey ? resolveLitellmProviderSlug(providerKey) : undefined;
 
   let providerModels: Array<string> = [];
 
