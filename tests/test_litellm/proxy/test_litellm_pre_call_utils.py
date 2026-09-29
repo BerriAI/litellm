@@ -8434,8 +8434,6 @@ async def test_missing_session_id_generate_reuses_traceparent_trace_id():
     ids=["with_traceparent", "no_traceparent"],
 )
 async def test_missing_session_id_generate_reuses_promoted_caller_trace_id(path: str, headers: dict[str, str]):
-    """On litellm_metadata routes the caller's metadata.trace_id still counts as caller set even though
-    it has not been promoted yet, so the generated session id derives from it instead of a fresh uuid."""
     request = _request_for(path)
     request.headers = headers
 
@@ -8447,10 +8445,15 @@ async def test_missing_session_id_generate_reuses_promoted_caller_trace_id(path:
         general_settings={"missing_session_id": "generate"},
     )
 
-    assert updated["litellm_session_id"] == "caller-trace"
-    assert updated["litellm_metadata"]["session_id"] == "caller-trace"
-    assert updated["litellm_metadata"][SESSION_ID_GENERATED_METADATA_KEY] is True
-    assert _spend_log_session_id(updated, "litellm_metadata") == "caller-trace"
+    caller_trace_msg: Final = "generate must derive the session from the caller's un-promoted metadata.trace_id"
+    assert updated["litellm_session_id"] == "caller-trace", caller_trace_msg
+    assert updated["litellm_metadata"]["session_id"] == "caller-trace", caller_trace_msg
+    assert updated["litellm_metadata"][SESSION_ID_GENERATED_METADATA_KEY] is True, (
+        "the derived session id must still be marked generated"
+    )
+    assert _spend_log_session_id(updated, "litellm_metadata") == "caller-trace", (
+        "spend log and callback session ids must agree on the caller trace id"
+    )
 
 
 @pytest.mark.asyncio
