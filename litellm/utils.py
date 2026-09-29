@@ -79,6 +79,7 @@ from litellm.constants import (
     PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
     TOOL_CHOICE_OBJECT_TOKEN_COUNT,
 )
+from litellm.litellm_core_utils.bedrock_mantle_cost_map import expand_bedrock_mantle_views
 from litellm.litellm_core_utils.core_helpers import (
     bind_budget_reservation_to_callbacks,
     normalize_drop_params,
@@ -8357,7 +8358,7 @@ def validate_openai_optional_params(stop: str | list[str] | None = None, **kwarg
 def _get_bundled_model_cost_map() -> dict[str, Any]:
     try:
         model_cost_path: Final = resources.files("litellm").joinpath("model_prices_and_context_window_backup.json")
-        return json.loads(model_cost_path.read_text())
+        return expand_bedrock_mantle_views(json.loads(model_cost_path.read_text()))
     except Exception:
         return {}
 

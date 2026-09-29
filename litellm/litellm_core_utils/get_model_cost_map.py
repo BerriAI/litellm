@@ -34,6 +34,7 @@ from litellm.constants import (
     MODEL_COST_MAP_MAX_SHRINK_RATIO,
     MODEL_COST_MAP_MIN_MODEL_COUNT,
 )
+from litellm.litellm_core_utils.bedrock_mantle_cost_map import expand_bedrock_mantle_views
 from litellm.litellm_core_utils.fallback_generalizations import (
     set_fallback_generalizations,
 )
@@ -534,7 +535,7 @@ def _expand_model_aliases(model_cost: dict) -> dict:
 
 
 def _finalize_model_cost_map(model_cost: dict) -> dict:
-    """Extract fallback generalizations out of the raw map, then expand aliases.
+    """Extract fallback generalizations out of the raw map, then expand Bedrock Mantle views and aliases.
 
     The ``fallback_generalizations`` block is installed into the generalizations
     module and removed from the map so it is never treated as a model entry.
@@ -542,7 +543,7 @@ def _finalize_model_cost_map(model_cost: dict) -> dict:
     raw: Final = model_cost.pop(FALLBACK_GENERALIZATIONS_KEY, None)
     rules: Final = raw.get("rules") if isinstance(raw, dict) else None
     set_fallback_generalizations(rules)
-    return _expand_model_aliases(model_cost)
+    return _expand_model_aliases(expand_bedrock_mantle_views(model_cost))
 
 
 def _finalize_loaded_model_cost_map(loaded: ModelCostMapReloaded) -> ModelCostMapReloaded:

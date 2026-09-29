@@ -12,6 +12,7 @@ import jsonschema
 import pytest
 
 import litellm
+from litellm.litellm_core_utils.bedrock_mantle_cost_map import expand_bedrock_mantle_views
 from litellm.llms.openai.chat.gpt_5_transformation import is_gpt_reasoning_series_name
 from litellm.llms.openai_like.json_loader import JSONProviderRegistry
 from litellm.router_utils.reasoning_effort_capability import resolve_supported_reasoning_efforts
@@ -43,6 +44,11 @@ def committed_schema() -> dict:
 @pytest.fixture(scope="module")
 def prices() -> dict:
     return json.loads(PRICES_PATH.read_text())
+
+
+@pytest.fixture(scope="module")
+def served_prices(prices: dict) -> Mapping[str, Mapping[str, object]]:
+    return expand_bedrock_mantle_views(prices)
 
 
 def test_committed_schema_matches_generator_output(prices: dict, committed_schema: dict):
@@ -359,22 +365,24 @@ BEDROCK_OPENAI_GPT_LADDERS: Final = MappingProxyType(
 @pytest.mark.parametrize(
     ("name", "ladder"), tuple(BEDROCK_OPENAI_GPT_LADDERS.items()), ids=tuple(BEDROCK_OPENAI_GPT_LADDERS)
 )
-def test_bedrock_openai_gpt_rows_advertise_the_ladder_bedrock_accepts(prices: dict, name: str, ladder: tuple[str, ...]):
+def test_bedrock_openai_gpt_rows_advertise_the_ladder_bedrock_accepts(
+    served_prices: Mapping[str, Mapping[str, object]], name: str, ladder: tuple[str, ...]
+):
     """Each ladder is the set of levels Bedrock answered 200 to for that row through the proxy on
     2026-09-11 (PR #40740): the Mantle rows go out over its Responses endpoint and the Converse rows
     over inference profiles. Bedrock differs from the direct OpenAI rows in two places, gpt-5.6 and
     gpt-6-astra take max there, and gpt-6-astra refuses none; minimal is refused on every row.
     xhigh and max are opt-in for the resolver, so a row missing either flag silently drops that
     level from every group it belongs to."""
-    assert resolve_supported_reasoning_efforts(prices[name], deployment_is_mapped=True) == ladder
+    assert resolve_supported_reasoning_efforts(served_prices[name], deployment_is_mapped=True) == ladder
 
 
-def test_every_bedrock_openai_gpt_row_advertises_xhigh(prices: dict):
+def test_every_bedrock_openai_gpt_row_advertises_xhigh(served_prices: Mapping[str, Mapping[str, object]]):
     """The GovCloud and gpt-5.6-cyber rows cannot be called from our account, so they carry the
     family's xhigh flag rather than a measured ladder."""
     missing: Final = [
         name
-        for name, entry in prices.items()
+        for name, entry in served_prices.items()
         if isinstance(entry, dict)
         and entry.get("litellm_provider") in BEDROCK_PROVIDERS
         and any(marker in name for marker in BEDROCK_OPENAI_GPT_MARKERS)
@@ -533,3 +541,17 @@ def test_unregistered_provider_guard_flags_only_labels_nobody_registered():
         "unknown_root-new_family_models",
         "vertex_ai-new_family_models",
     ]
+
+
+@pytest.mark.parametrize("path", (PRICES_PATH, BACKUP_PRICES_PATH), ids=("main", "backup"))
+def test_bedrock_mantle_blocks_sit_on_runtime_rows_and_never_restate_their_prices(path: Path):
+    prices: Final = json.loads(path.read_text())
+    hosts: Final = {key: entry for key, entry in prices.items() if "bedrock_mantle" in entry}
+    assert hosts
+    for key, host in hosts.items():
+        assert host["litellm_provider"] in ("bedrock", "bedrock_converse"), key
+        for mantle_id, surface in host["bedrock_mantle"].items():
+            assert f"bedrock_mantle/{mantle_id}" not in prices, f"{mantle_id} is both a block on {key} and a row"
+            assert "litellm_provider" not in surface, mantle_id
+            restated = sorted(field for field in surface if field in host and ("cost" in field or "pricing" in field))
+            assert restated == [], f"{mantle_id} on {key} restates {restated}; Mantle bills from the runtime row"

@@ -1054,6 +1054,7 @@ def test_aaamodel_prices_and_context_window_json_is_valid():
                 "supports_image_size": {"type": "boolean"},
                 "supports_native_structured_output": {"type": "boolean"},
                 "use_openai_responses_path": {"type": "boolean"},
+                "bedrock_mantle": {"type": "object", "additionalProperties": {"type": "object"}},
                 "off_peak_pricing": {
                     "type": "object",
                     "properties": {
