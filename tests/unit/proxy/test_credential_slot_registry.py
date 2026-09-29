@@ -15,6 +15,7 @@ whose test plants a canary in one of these params.
 import re
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
+from pathlib import Path
 from types import MappingProxyType
 from typing import Final
 
@@ -27,11 +28,12 @@ CANARY_SLOTS: Final[Mapping[str, str]] = MappingProxyType(
         "B1": "deployment api_key in config.yaml",
         "B4": "deployment aws_secret_access_key added through /model/new",
         "B4v": "deployment vertex_credentials added through /model/new",
-        "D1": "client-side api_key in the request body",
     }
 )
 
 THIS_FILE: Final = "tests/unit/proxy/test_credential_slot_registry.py"
+
+HARNESS_FILE: Final = Path(__file__).resolve().parents[2] / "integration" / "security" / "_canary.py"
 
 CREDENTIAL_NAME: Final = re.compile(r"(?:^|_)(?:key|secret|token|password|credential)")
 """Matches a name segment that starts with a credential word. Anchoring on a segment start keeps
@@ -124,7 +126,7 @@ DEPLOYMENT_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingPr
 
 REQUEST_BODY_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingProxyType(
     {
-        "api_key": Secret("D1"),
+        "api_key": Unplanted(),
         "aws_access_key_id": Unplanted(),
         "aws_secret_access_key": Unplanted(),
         "aws_session_token": Unplanted(),
@@ -205,3 +207,10 @@ def test_every_credential_named_param_a_client_may_send_is_classified():
         REQUEST_BODY_PARAM_CLASSIFICATION,
         "REQUEST_BODY_PARAM_CLASSIFICATION",
     )
+
+
+def test_every_canary_slot_exists_in_the_harness():
+    harness_slots: Final = frozenset(re.findall(r'^\s+"(\w+)": Slot\(', HARNESS_FILE.read_text(), re.MULTILINE))
+    assert harness_slots, f"found no Slot(...) entries in {HARNESS_FILE}"
+    missing: Final = sorted(CANARY_SLOTS.keys() - harness_slots)
+    assert not missing, f"CANARY_SLOTS in {THIS_FILE} names slots {HARNESS_FILE.name} does not define: {missing}"
