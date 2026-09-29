@@ -28,6 +28,15 @@ const forecast = {
 };
 
 describe("RoutingDecisionCard", () => {
+  it.each([
+    ["bespoke_nimble/nimble-latest", "Nimble classifier"],
+    ["typesafe/jev-latest", "JEV classifier"],
+  ])("labels a decision from %s", (classifier_model, label) => {
+    render(<RoutingDecisionCard decision={{ cause: "jev_classifier", classifier_model, tier: "SIMPLE" }} />);
+    expect(screen.getByText(label)).toBeInTheDocument();
+    expect(screen.getByText(classifier_model)).toBeInTheDocument();
+  });
+
   it("renders nothing when the request carried no routing decision", () => {
     const { container } = render(<RoutingDecisionCard decision={undefined} />);
     expect(container).toBeEmptyDOMElement();

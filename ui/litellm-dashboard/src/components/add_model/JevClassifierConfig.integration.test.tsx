@@ -96,14 +96,87 @@ function Form() {
 
 describe("JEV classifier editor", () => {
   afterEach(() => vi.mocked(useAuthorized).mockReset());
+  it("creates Nimble connection settings and retains the provider after save and reload", () => {
+    renderWithProviders(<Form />);
+    fireEvent.click(screen.getByRole("radio", { name: "Decision Model" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Nimble (open source)" }));
+    expect(screen.getByLabelText("Nimble Model")).toHaveValue("nimble-latest");
+    fireEvent.change(screen.getByLabelText("API Base"), { target: { value: "https://nimble.example.com" } });
+    fireEvent.change(screen.getByLabelText("API Key"), { target: { value: "new-nimble-key" } });
+    fireEvent.change(screen.getByLabelText("Nimble Timeout (ms)"), { target: { value: "20000" } });
+    fireEvent.click(screen.getByRole("button", { name: "Probe current config" }));
+    expect(testAutoRouterRouting).toHaveBeenLastCalledWith(
+      "token",
+      expect.objectContaining({
+        complexity_router_config: expect.objectContaining({
+          classifier_type: "jev",
+          jev_classifier_config: {
+            provider: "bespoke_nimble",
+            model: "nimble-latest",
+            timeout_ms: 20000,
+            api_base: "https://nimble.example.com",
+            api_key: "new-nimble-key",
+          },
+        }),
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Save and reload" }));
+    expect(screen.getByRole("radio", { name: "Nimble (open source)" })).toBeChecked();
+    expect(screen.getByLabelText("Nimble Timeout (ms)")).toHaveValue(20000);
+    expect(screen.getByLabelText("API Key")).toHaveValue("");
+    fireEvent.click(screen.getByText("Connection settings"));
+    fireEvent.click(screen.getByRole("button", { name: "Clear saved API key" }));
+    fireEvent.click(screen.getByRole("button", { name: "Probe current config" }));
+    expect(testAutoRouterRouting).toHaveBeenLastCalledWith(
+      "token",
+      expect.objectContaining({
+        complexity_router_config: expect.objectContaining({
+          jev_classifier_config: {
+            provider: "bespoke_nimble",
+            model: "nimble-latest",
+            timeout_ms: 20000,
+            api_key: null,
+          },
+        }),
+      }),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Use gateway connection" }));
+    fireEvent.click(screen.getByRole("button", { name: "Probe current config" }));
+    expect(testAutoRouterRouting).toHaveBeenLastCalledWith(
+      "token",
+      expect.objectContaining({
+        complexity_router_config: expect.objectContaining({
+          jev_classifier_config: {
+            provider: "bespoke_nimble",
+            model: "nimble-latest",
+            timeout_ms: 20000,
+            api_key: null,
+            api_base: null,
+          },
+        }),
+      }),
+    );
+  });
+
+  it.each(["Internal User", "Admin Viewer", "org_admin"])("hides connection overrides for %s", (userRole) => {
+    vi.mocked(useAuthorized).mockReturnValue({ ...useAuthorized(), userRole });
+    renderWithProviders(<Form />);
+    fireEvent.click(screen.getByRole("radio", { name: "Decision Model" }));
+    fireEvent.click(screen.getByRole("radio", { name: "Nimble (open source)" }));
+    expect(screen.getByLabelText("Nimble Model")).toHaveValue("nimble-latest");
+    expect(screen.queryByText("Connection settings")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("API Key")).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("API Base")).not.toBeInTheDocument();
+  });
+
   it("uses built-in JEV without a license and preserves custom tiers and context through reload", () => {
     renderWithProviders(<Form />);
     expect(screen.getByLabelText("Judge model")).toBeInTheDocument();
     expect(screen.getByText("Reasoning Effort")).toBeInTheDocument();
     expect(screen.getByText("Classifier Prompt")).toBeInTheDocument();
     expect(screen.getByRole("switch", { name: "Use images for classification" })).toBeInTheDocument();
-    fireEvent.click(screen.getByRole("radio", { name: /Jev Classifier/ }));
-    expect(screen.getByRole("radio", { name: /^Jev Classifier/ })).toBeChecked();
+    fireEvent.click(screen.getByRole("radio", { name: "Decision Model" }));
+    expect(screen.getByRole("radio", { name: "Decision Model" })).toBeChecked();
     expect(screen.getByLabelText("Jev Model")).toHaveValue("jev-latest");
     expect(screen.getByLabelText("Jev Instructions")).toBeEnabled();
     expect(screen.queryByLabelText("Judge model")).not.toBeInTheDocument();
@@ -117,7 +190,7 @@ describe("JEV classifier editor", () => {
     fireEvent.click(screen.getByRole("switch", { name: "Classifier circuit breaker" }));
     fireEvent.click(screen.getByRole("button", { name: "Customize tiers" }));
     fireEvent.click(screen.getByRole("button", { name: "Save and reload" }));
-    expect(screen.getByRole("radio", { name: /Jev Classifier/ })).toBeChecked();
+    expect(screen.getByRole("radio", { name: "Decision Model" })).toBeChecked();
     expect(screen.getByLabelText("Jev Model")).toHaveValue("jev-test");
     expect(screen.getByLabelText("Jev Timeout (ms)")).toHaveValue(4200);
     expect(screen.getByLabelText("Context Window Size")).toHaveValue("6");
