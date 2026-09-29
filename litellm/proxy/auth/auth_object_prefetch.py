@@ -13,6 +13,7 @@ from typing import Final, Literal, Protocol, TypeAlias
 from pydantic import BaseModel, TypeAdapter, ValidationError
 
 from litellm._logging import verbose_proxy_logger
+from litellm.caching.redis_batch import active_request_redis_batch
 from litellm.caching.redis_cache import RedisCache
 from litellm.constants import DEFAULT_IN_MEMORY_TTL
 from litellm.models.organization import LiteLLM_OrganizationTable
@@ -218,11 +219,23 @@ def _set_in_memory(memory: _InMemoryCache, cache_key: str, value: object, ttl: f
         memory.set_cache(key=cache_key, value=value, ttl=ttl)
 
 
+async def _read_redis_rows(keys: list[str], redis_cache: RedisCache) -> Mapping[str, object]:
+    """On the request pipeline when one is open; a failed pipeline reads as a miss, like ``async_batch_get_cache``."""
+    batch: Final = active_request_redis_batch(redis_cache)
+    if batch is None:
+        return await redis_cache.async_batch_get_cache(key_list=keys)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]  # untyped cache API
+    try:
+        return await batch.mget(keys)
+    except Exception as e:  # noqa: BLE001  # the DB fill below takes over, as it does after a failed MGET today
+        verbose_proxy_logger.debug("auth prefetch Redis read failed, filling from the database: %s", e)
+        return MappingProxyType({})
+
+
 async def _fill_from_redis(entries: Sequence[_CacheEntry], redis_cache: RedisCache, memory: _InMemoryCache) -> None:
     if not entries:
         return
     found: Final = _RowValues.validate_python(
-        await redis_cache.async_batch_get_cache(key_list=sorted(entry.cache_key for entry in entries))  # pyright: ignore[reportUnknownMemberType, reportUnknownArgumentType]  # untyped cache API
+        await _read_redis_rows(sorted(entry.cache_key for entry in entries), redis_cache)
     )
     for entry, value in ((entry, found.get(entry.cache_key)) for entry in entries):
         if value is not None:
@@ -267,8 +280,14 @@ async def _write_back(entries: Sequence[tuple[_CacheEntry, BaseModel]], cache: U
     memory: Final[_InMemoryCache] = cache.in_memory_cache
     for cache_key, payload, ttl in payloads:
         _set_in_memory(memory, cache_key, payload, cache.default_in_memory_ttl if ttl is None else ttl)
-    if cache.redis_cache is not None:
+    if cache.redis_cache is None:
+        return
+    batch: Final = active_request_redis_batch(cache.redis_cache)
+    if batch is None:
         await cache.redis_cache.async_set_cache_pipeline_with_ttls(payloads)
+        return
+    for cache_key, payload, ttl in payloads:  # rides the request's next round trip; the scope drains leftovers
+        batch.set(cache_key, payload, ttl)
 
 
 async def _fill_from_db(
