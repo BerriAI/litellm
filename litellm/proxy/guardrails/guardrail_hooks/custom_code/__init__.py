@@ -46,6 +46,7 @@ def initialize_guardrail(litellm_params: "LitellmParams", guardrail: "Guardrail"
     custom_code_guardrail: Final = CustomCodeGuardrail(
         guardrail_name=guardrail_name,
         custom_code=custom_code,
+        execution_timeout=litellm_params.timeout,
         event_hook=litellm_params.mode,
         default_on=litellm_params.default_on,
     )

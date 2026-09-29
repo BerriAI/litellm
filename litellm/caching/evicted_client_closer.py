@@ -136,6 +136,8 @@ def _has_connection_in_flight(client: object) -> bool:
     window as the only guard, exactly as it was before this check existed.
     """
     try:
+        if getattr(getattr(client, "connection_pool", None), "_in_use_connections", None):
+            return True
         transport: Final = _transport_of(client)
         pooled_busy: Final = _pool_has_busy_connection(transport)
         if pooled_busy is not None:
