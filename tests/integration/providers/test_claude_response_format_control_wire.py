@@ -8,6 +8,7 @@ from integration._support.wire import Reply, Request, Wire, wire_server
 from pydantic import JsonValue, TypeAdapter
 
 _JSON_OBJECT: Final = TypeAdapter(dict[str, JsonValue])
+_JSON_TOOLS: Final = TypeAdapter(list[dict[str, JsonValue]])
 _SONNET_5_5: Final = "claude-sonnet-5-5"
 _ANTHROPIC_API_KEY: Final = "synthetic-anthropic-key"
 _AZURE_API_KEY: Final = "synthetic-azure-key"
@@ -55,7 +56,7 @@ def _chat(gateway: Gateway, model: str) -> httpx.Response:
 
 
 def _bodies(wire: Wire) -> tuple[dict[str, JsonValue], ...]:
-    return [_JSON_OBJECT.validate_json(request.body) for request in wire.drain()]
+    return tuple(_JSON_OBJECT.validate_json(request.body) for request in wire.drain())
 
 
 def test_anthropic_sonnet_5_5_response_format_sends_native_output_format(gateway: Gateway) -> None:
@@ -106,6 +107,7 @@ def test_bedrock_invoke_sonnet_5_5_response_format_sends_unforced_json_tool(gate
         assert response.status_code == 200, response.text
         upstream: Final = _bodies(wire)
         assert len(upstream) == 1
-        assert [tool["name"] for tool in upstream[0]["tools"]] == ["json_tool_call"]
+        tools: Final = _JSON_TOOLS.validate_python(upstream[0]["tools"])
+        assert [tool["name"] for tool in tools] == ["json_tool_call"]
         assert "tool_choice" not in upstream[0]
         assert "output_format" not in upstream[0]
