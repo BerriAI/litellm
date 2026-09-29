@@ -4,7 +4,7 @@ from collections.abc import Set as AbstractSet
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from types import MappingProxyType
-from typing import Final, TypeVar
+from typing import Final, Literal, TypeVar
 
 from pydantic import BaseModel, TypeAdapter
 from typing_extensions import ReadOnly, TypedDict
@@ -39,26 +39,37 @@ WHERE encode(sha256(convert_to(token, 'UTF8')), 'hex') = ANY($1::text[])
 ORDER BY token, deleted_at DESC
 """
 
-_SPEND_LOG_ALIAS_SQL: Final = """
-SELECT api_key AS digest,
-    MIN(key_alias) AS first_alias,
-    MAX(key_alias) AS last_alias,
-    MIN(team_id) AS first_team,
-    MAX(team_id) AS last_team,
-    MIN(user_id) AS first_owner,
-    MAX(user_id) AS last_owner
-FROM (
-    SELECT api_key,
-        NULLIF(metadata->>'user_api_key_alias', '') AS key_alias,
-        COALESCE(NULLIF(team_id, ''), NULLIF(metadata->>'user_api_key_team_id', '')) AS team_id,
-        COALESCE(NULLIF("user", ''), NULLIF(metadata->>'user_api_key_user_id', '')) AS user_id
-    FROM "LiteLLM_SpendLogs"
-    WHERE api_key = ANY($1::text[])
-      AND "startTime" >= $2::timestamp
-      AND "startTime" < $3::timestamp
-) named
-WHERE COALESCE(key_alias, user_id, team_id) IS NOT NULL
-GROUP BY api_key
+
+def _named_spend_log_edge_row_sql(direction: Literal["ASC", "DESC"]) -> str:
+    return f"""
+    SELECT key_alias, team_id, user_id
+    FROM (
+        SELECT "startTime",
+            NULLIF(metadata->>'user_api_key_alias', '') AS key_alias,
+            COALESCE(NULLIF(team_id, ''), NULLIF(metadata->>'user_api_key_team_id', '')) AS team_id,
+            COALESCE(NULLIF("user", ''), NULLIF(metadata->>'user_api_key_user_id', '')) AS user_id
+        FROM "LiteLLM_SpendLogs"
+        WHERE api_key = keys.digest
+          AND "startTime" >= $2::timestamp
+          AND "startTime" < $3::timestamp
+    ) named
+    WHERE COALESCE(key_alias, user_id, team_id) IS NOT NULL
+    ORDER BY "startTime" {direction}
+    LIMIT 1
+    """
+
+
+_SPEND_LOG_ALIAS_SQL: Final = f"""
+SELECT keys.digest,
+    first_row.key_alias AS first_alias,
+    last_row.key_alias AS last_alias,
+    first_row.team_id AS first_team,
+    last_row.team_id AS last_team,
+    first_row.user_id AS first_owner,
+    last_row.user_id AS last_owner
+FROM unnest($1::text[]) AS keys(digest)
+CROSS JOIN LATERAL ({_named_spend_log_edge_row_sql("ASC")}) first_row
+CROSS JOIN LATERAL ({_named_spend_log_edge_row_sql("DESC")}) last_row
 """
 
 _SPEND_LOG_STATEMENT_TIMEOUT_SQL: Final = f"SET LOCAL statement_timeout = {SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS}"
@@ -84,7 +95,9 @@ class _TokenDigestRow(BaseModel):
 
 
 def _unanimous(first: str | None, last: str | None) -> str | None:
-    return first if first == last else None
+    if first is None:
+        return last
+    return first if last is None or first == last else None
 
 
 class _SpendLogDigestRow(BaseModel):
