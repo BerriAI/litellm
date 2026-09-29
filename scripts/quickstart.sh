@@ -165,6 +165,14 @@ pick_folder() {
     exclude="$(cd "$(dirname "$exclude")" && pwd)/exclude"
     printf '/%s.env\n' "$(git rev-parse --show-prefix)" >>"$exclude"
     echo "Added .env to this repository's local git exclude list ($exclude), so your keys stay out of commits."
+  elif ! git rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+    # An existing folder outside git: ignore only .env, so it stays out of
+    # commits if the folder becomes a repository later.
+    if ! grep -qxF '.env' .gitignore 2>/dev/null; then
+      # Start on a new line if the file does not end with one.
+      if [ -s .gitignore ] && [ -n "$(tail -c 1 .gitignore)" ]; then printf '\n' >>.gitignore; fi
+      printf '.env\n' >>.gitignore
+    fi
   fi
 }
 
@@ -267,8 +275,9 @@ EOF
   fi
 
   # Compose prefers values already set in the shell over .env, so drop any
-  # inherited ones: .env stays the only source for keys and the project name.
-  unset LITELLM_MASTER_KEY LITELLM_SALT_KEY POSTGRES_PASSWORD COMPOSE_PROJECT_NAME
+  # inherited ones: .env stays the only source for keys, the bind address,
+  # and the project name.
+  unset LITELLM_MASTER_KEY LITELLM_SALT_KEY POSTGRES_PASSWORD COMPOSE_PROJECT_NAME LITELLM_BIND
 
   echo "Starting LiteLLM and Postgres (the first run downloads the images)..."
   docker compose -f docker-compose.quickstart.yml up -d
