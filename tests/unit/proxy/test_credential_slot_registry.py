@@ -28,6 +28,7 @@ CANARY_SLOTS: Final[Mapping[str, str]] = MappingProxyType(
         "B1": "deployment api_key in config.yaml",
         "B4": "deployment aws_secret_access_key added through /model/new",
         "B4v": "deployment vertex_credentials added through /model/new",
+        "D1": "client-side api_key in the request body",
     }
 )
 
@@ -126,7 +127,7 @@ DEPLOYMENT_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingPr
 
 REQUEST_BODY_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingProxyType(
     {
-        "api_key": Unplanted(),
+        "api_key": Secret("D1"),
         "aws_access_key_id": Unplanted(),
         "aws_secret_access_key": Unplanted(),
         "aws_session_token": Unplanted(),
