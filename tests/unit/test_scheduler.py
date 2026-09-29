@@ -60,3 +60,43 @@ async def test_wait_for_turn_removes_entry_when_cancelled_mid_enqueue():
         await waiting
 
     assert await scheduler.get_queue("sched-model") == []
+
+
+class _HeldRemovalScheduler(Scheduler):
+    def __init__(self) -> None:
+        super().__init__()
+        self.removing: Final = asyncio.Event()
+        self.finish_removal: Final = asyncio.Event()
+
+    async def remove_request(self, request_id: str, model_name: str) -> None:
+        self.removing.set()
+        await self.finish_removal.wait()
+        await super().remove_request(request_id=request_id, model_name=model_name)
+
+
+@pytest.mark.asyncio
+async def test_wait_for_turn_finishes_removal_when_cancelled_again_during_cleanup():
+    scheduler: Final = _HeldRemovalScheduler()
+    await scheduler.add_request(FlowItem(priority=0, request_id="head", model_name="sched-model"))
+    polling: Final = asyncio.Event()
+
+    async def no_healthy_deployments() -> Sequence[object]:
+        polling.set()
+        return ()
+
+    waiting: Final = asyncio.create_task(
+        scheduler.wait_for_turn(
+            request=FlowItem(priority=1, request_id="cancelled", model_name="sched-model"),
+            timeout=5,
+            get_healthy_deployments=no_healthy_deployments,
+        )
+    )
+    await polling.wait()
+    waiting.cancel()
+    await scheduler.removing.wait()
+    waiting.cancel()
+    scheduler.finish_removal.set()
+    with pytest.raises(asyncio.CancelledError):
+        await waiting
+
+    assert await scheduler.get_queue("sched-model") == [(0, "head")]

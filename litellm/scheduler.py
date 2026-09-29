@@ -100,7 +100,7 @@ class Scheduler:
                     return
                 await asyncio.sleep(self.polling_interval)
         finally:
-            await self.remove_request(request_id=request.request_id, model_name=request.model_name)
+            await asyncio.shield(self.remove_request(request_id=request.request_id, model_name=request.model_name))
         raise Timeout(message="Request timed out while polling queue", model=request.model_name, llm_provider="openai")
 
     async def remove_request(self, request_id: str, model_name: str) -> None:
