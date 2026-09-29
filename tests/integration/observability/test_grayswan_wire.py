@@ -119,16 +119,17 @@ def _chat_provider(message: dict[str, JsonValue]):
 
 
 def _monitor_bodies(vendor: Wire, expected: int = 1) -> tuple[dict[str, JsonValue], ...]:
-    scans: Final = eventually(
-        lambda: tuple(
+    collected: list[dict[str, JsonValue]] = []  # mutable-ok: accumulator across polling attempts
+
+    def drain_new() -> tuple[dict[str, JsonValue], ...]:
+        collected.extend(
             _JSON_OBJECT.validate_json(request.body)
             for request in vendor.drain()
             if request.target == "/cygnal/monitor"
-        ),
-        lambda bodies: len(bodies) >= expected,
-        seconds=30,
-    )
-    return scans
+        )
+        return tuple(collected)
+
+    return eventually(drain_new, lambda bodies: len(bodies) >= expected, seconds=30)
 
 
 def test_post_call_sends_request_conversation_and_tools(gateway: Gateway, tmp_path: Path) -> None:

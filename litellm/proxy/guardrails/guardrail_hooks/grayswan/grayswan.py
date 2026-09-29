@@ -617,7 +617,7 @@ class GraySwanGuardrail(CustomGuardrail):
         """
         from litellm.llms import load_guardrail_translation_mappings
 
-        call_type: Final = getattr(logging_obj, "call_type", None) or getattr(
+        call_type: Final = (logging_obj.call_type if logging_obj is not None else None) or getattr(
             request_data.get("litellm_logging_obj"), "call_type", None
         )
         if not isinstance(call_type, str):
