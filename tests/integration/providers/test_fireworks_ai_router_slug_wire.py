@@ -238,6 +238,7 @@ def test_fireworks_router_forwards_tool_choice_and_reasoning_and_bills_the_serve
     def respond(request: Request) -> Reply:
         body: Final = _provider_body(request, "/chat/completions")
         assert body["model"] == f"accounts/fireworks/routers/{router}", body
+        assert body["tools"] == [_WEATHER_TOOL], body
         assert body["tool_choice"] == "any", body
         assert body["reasoning_effort"] == "low", body
         return Reply(body=_chat_completion(identity, served_resource, 23, 41))
