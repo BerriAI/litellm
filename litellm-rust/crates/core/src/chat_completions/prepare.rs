@@ -2,8 +2,8 @@ use litellm_auth::SecretValue;
 use litellm_core_utils::settings::Lookup;
 use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{auth::ValidatedEnvironment, chat::transformation::BaseConfig};
+use litellm_llms_types::chat_completions::ChatMessage;
 use litellm_secrets::source::Secrets;
-use litellm_types::llms::openai::ChatMessage;
 use serde_json::Value;
 
 use super::{

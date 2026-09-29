@@ -1,5 +1,4 @@
-use litellm_host::lifecycle::ExecutionEvent;
-use litellm_host::observation::ObservationSender;
+use litellm_host::{lifecycle::ExecutionEvent, observation::ObservationSender};
 use std::time::Duration;
 
 use litellm_auth::AuthServices;
@@ -9,7 +8,7 @@ use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
     chat::transformation::ProviderChatResponseData,
 };
-use litellm_types::utils::ChatCompletionsResponse;
+use litellm_llms_types::chat_completions::ChatCompletionsResponse;
 use serde_json::Value;
 
 use super::Error;

@@ -9,8 +9,8 @@ use litellm_http::request::with_default_headers;
 use litellm_llms::base_llm::{
     auth::ValidatedEnvironment, messages::context::MessagesTransformContext,
 };
+use litellm_llms_types::messages::MessagesRequest;
 use litellm_secrets::source::SecretSource;
-use litellm_types::llms::anthropic_messages::anthropic_request::AnthropicMessagesRequest;
 
 use super::{
     Error, MessagesCall,
@@ -27,7 +27,7 @@ struct ResolvedProvider {
 pub(super) struct ProviderMessagesRequest {
     pub(super) provider: MessagesProvider,
     pub(super) url: String,
-    pub(super) body: AnthropicMessagesRequest,
+    pub(super) body: MessagesRequest,
     pub(super) environment: ValidatedEnvironment,
     pub(super) timeout: Option<Duration>,
     /// The caller's own credential, reported to the host beside the wire request.
@@ -79,7 +79,7 @@ fn prepare_provider_request(
     let env_lookup = |key: &str| secrets.get(key);
 
     let sanitized = config.shape_request(
-        AnthropicMessagesRequest { model, ..body },
+        MessagesRequest { model, ..body },
         shaping.reasoning_auto_summary,
     )?;
     let trimmed = without_additional_drop_params(sanitized, &shaping.additional_drop_params)?;
@@ -124,9 +124,9 @@ fn prepare_provider_request(
 }
 
 fn without_additional_drop_params(
-    request: AnthropicMessagesRequest,
+    request: MessagesRequest,
     paths: &[String],
-) -> Result<AnthropicMessagesRequest, Error> {
+) -> Result<MessagesRequest, Error> {
     if paths.is_empty() {
         return Ok(request);
     }
@@ -134,7 +134,7 @@ fn without_additional_drop_params(
     let trimmed = paths
         .iter()
         .fold(params, |params, path| delete_nested_value(params, path));
-    Ok(AnthropicMessagesRequest {
+    Ok(MessagesRequest {
         params: serde_json::from_value(trimmed).map_err(invalid_request)?,
         ..request
     })
@@ -143,7 +143,7 @@ fn without_additional_drop_params(
 #[cfg(test)]
 mod tests {
     use litellm_llms::base_llm::auth::resolve_auth;
-    use litellm_types::utils::ProviderSpecificHeaders;
+    use litellm_llms_types::headers::ProviderSpecificHeaders;
     use rstest::{fixture, rstest};
     use serde_json::{Map, Value, json};
 
@@ -155,7 +155,7 @@ mod tests {
         MessagesShaping::default()
     }
 
-    fn body(value: Value) -> AnthropicMessagesRequest {
+    fn body(value: Value) -> MessagesRequest {
         serde_json::from_value(value).unwrap()
     }
 

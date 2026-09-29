@@ -1,6 +1,4 @@
-use litellm_types::llms::anthropic_messages::{
-    anthropic_request::AnthropicMessagesRequest, anthropic_response::AnthropicMessagesResponse,
-};
+use litellm_llms_types::messages::{MessagesRequest, MessagesResponse};
 
 use super::context::MessagesTransformContext;
 
@@ -9,12 +7,12 @@ use crate::{Error, base_llm::messages::streaming::StreamDecoder};
 
 pub const MESSAGES_PATH_SUFFIX: &str = "/v1/messages";
 
-pub trait BaseAnthropicMessagesConfig: Sync {
+pub trait BaseMessagesConfig: Sync {
     fn shape_request(
         &self,
-        request: AnthropicMessagesRequest,
+        request: MessagesRequest,
         _reasoning_auto_summary: bool,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<MessagesRequest, Error> {
         Ok(request)
     }
 
@@ -36,17 +34,17 @@ pub trait BaseAnthropicMessagesConfig: Sync {
 
     fn transform_anthropic_messages_request(
         &self,
-        request: AnthropicMessagesRequest,
+        request: MessagesRequest,
         _context: &MessagesTransformContext,
-    ) -> Result<AnthropicMessagesRequest, Error> {
+    ) -> Result<MessagesRequest, Error> {
         Ok(request)
     }
 
     fn transform_anthropic_messages_response(
         &self,
         _model: &str,
-        response: AnthropicMessagesResponse,
-    ) -> Result<AnthropicMessagesResponse, Error> {
+        response: MessagesResponse,
+    ) -> Result<MessagesResponse, Error> {
         Ok(response)
     }
 
@@ -74,7 +72,7 @@ pub trait BaseAnthropicMessagesConfig: Sync {
         &[("content-type", "application/json")]
     }
 
-    fn request_headers(&self, headers: Headers, _request: &AnthropicMessagesRequest) -> Headers {
+    fn request_headers(&self, headers: Headers, _request: &MessagesRequest) -> Headers {
         headers
     }
 }
@@ -87,7 +85,7 @@ mod tests {
 
     struct DefaultsConfig;
 
-    impl BaseAnthropicMessagesConfig for DefaultsConfig {
+    impl BaseMessagesConfig for DefaultsConfig {
         fn secret_names(&self) -> &'static [&'static str] {
             &[]
         }
@@ -117,7 +115,7 @@ mod tests {
 
     #[test]
     fn default_request_headers_are_the_given_headers() {
-        let request: AnthropicMessagesRequest = serde_json::from_value(serde_json::json!({
+        let request: MessagesRequest = serde_json::from_value(serde_json::json!({
             "model": "claude",
             "max_tokens": 16,
             "speed": "fast",
@@ -134,7 +132,7 @@ mod tests {
     #[case::disabled(false)]
     #[case::enabled(true)]
     fn default_shaping_preserves_provider_policy_inputs(#[case] reasoning_auto_summary: bool) {
-        let request: AnthropicMessagesRequest = serde_json::from_value(serde_json::json!({
+        let request: MessagesRequest = serde_json::from_value(serde_json::json!({
             "model": "test-model",
             "metadata": {"user_id": 7, "extra": "keep"},
             "thinking": {"type": "enabled", "budget_tokens": 64},

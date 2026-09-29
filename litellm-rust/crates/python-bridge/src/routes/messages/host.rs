@@ -8,7 +8,7 @@ use litellm_core::messages::{
 };
 use litellm_host_python::{InvokeError, PythonBinding, from_py, lookup, to_py};
 use litellm_http::transport::Error as TransportError;
-use litellm_types::utils::ProviderSpecificHeaders;
+use litellm_llms_types::headers::ProviderSpecificHeaders;
 use pyo3::{
     exceptions::{PyException, PyValueError},
     gc::{PyTraverseError, PyVisit},
@@ -247,9 +247,7 @@ impl PythonBinding for MessagesPythonHost {
     fn encode_response(
         &mut self,
         py: Python<'_>,
-        response: Box<
-            litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse,
-        >,
+        response: Box<litellm_llms_types::messages::MessagesResponse>,
     ) -> PyResult<Py<PyAny>> {
         py.import(ROUTE_HOST_MODULE)?
             .getattr("response")?

@@ -39,7 +39,7 @@ litellm-secrets-azure = { path = "crates/secrets-azure" }
 litellm-secrets-cyberark = { path = "crates/secrets-cyberark" }
 litellm-http = { path = "crates/http" }
 litellm-llms = { path = "crates/llms" }
-litellm-types = { path = "crates/types" }
+litellm-llms-types = { path = "crates/llms-types" }
 litellm-core-utils = { path = "crates/core-utils" }
 litellm-db = { path = "crates/db" }
 litellm-db-testing = { path = "crates/db-testing" }

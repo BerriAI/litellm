@@ -6,15 +6,13 @@ use crate::{
         document::{inline_remote_document, validate_inline_document},
         error::Error,
         handler::OcrClient,
-        transformation::{
-            BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrRequestContext, OcrResponseFormat,
-            PreparedOcrRequest,
-        },
+        transformation::{BaseOcrConfig, OcrRequestContext, PreparedOcrRequest},
     },
     cohere::ocr::transformation::{
         CohereOptions, CohereParseConfig, CohereRequest, validate_document,
     },
 };
+use litellm_llms_types::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 pub const AZURE_COHERE_PARSE_PATH: [&str; 4] = ["providers", "cohere", "v2", "parse"];
 

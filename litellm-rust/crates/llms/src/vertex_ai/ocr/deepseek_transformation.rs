@@ -8,10 +8,13 @@ use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage,
-        OcrRequestContext, OcrResponseFormat, OcrUsageInfo, PreparedOcrRequest,
-        decode_and_normalize_response, decode_response_value,
+        BaseOcrConfig, OcrRequestContext, PreparedOcrRequest, decode_and_normalize_response,
+        decode_response_value,
     },
+};
+use litellm_llms_types::ocr::{
+    LiteLLMOcrResponse, OcrDocument, OcrPage, OcrPageDimensions, OcrPageImage, OcrResponseFormat,
+    OcrUsageInfo,
 };
 
 const DEFAULT_API_BASE: &str = "https://aiplatform.googleapis.com";
@@ -85,7 +88,7 @@ enum DeepSeekContent {
 #[derive(Deserialize)]
 struct DeepSeekPage {
     #[serde(default)]
-    #[serde_as(deserialize_as = "litellm_core_utils::serde_compat::LaxI64")]
+    #[serde_as(deserialize_as = "litellm_llms_types::serde_compat::LaxI64")]
     index: i64,
     #[serde(default)]
     markdown: String,
@@ -424,7 +427,8 @@ mod tests {
         DeepSeekOcrParams, DeepSeekOcrResponse, VertexAIDeepSeekOCRConfig, normalize_response,
         provider_model,
     };
-    use crate::base_llm::ocr::transformation::{BaseOcrConfig, OcrDocument};
+    use crate::base_llm::ocr::transformation::BaseOcrConfig;
+    use litellm_llms_types::ocr::OcrDocument;
 
     fn document() -> OcrDocument {
         serde_json::from_value(json!({"type":"image_url","image_url":"gs://bucket/a.png"})).unwrap()

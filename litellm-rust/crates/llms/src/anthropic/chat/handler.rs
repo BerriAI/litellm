@@ -1,11 +1,13 @@
 use std::collections::HashMap;
 
-use litellm_types::messages::streaming::{
-    MessagesContentBlock, MessagesContentBlockDelta, MessagesStreamEvent, MessagesStreamUsage,
-};
-use litellm_types::{
-    llms::openai::{ChatCompletionThinkingBlock, ChatCompletionToolCallChunk},
-    utils::{ChatCompletionChunk, ChatCompletionsUsage},
+use litellm_llms_types::{
+    chat_completions::{
+        ChatCompletionChunk, ChatCompletionThinkingBlock, ChatCompletionToolCallChunk,
+        ChatCompletionsUsage,
+    },
+    messages::streaming::{
+        MessagesContentBlock, MessagesContentBlockDelta, MessagesStreamEvent, MessagesStreamUsage,
+    },
 };
 use serde_json::Value;
 
