@@ -437,23 +437,46 @@ def _as_callback_tuple(
     return (initialized,)
 
 
-def _configure_callback_scoping(
+def _logging_only_scope_error(
     custom_guardrail_callback: CustomGuardrail, guardrail_name: str, litellm_params: LitellmParams
-) -> None:
+) -> str | None:
     logging_only_scope: Final = litellm_params.logging_only_scope
-    custom_guardrail_callback.logging_only_scope = logging_only_scope
     if logging_only_scope is not None and GuardrailEventHooks.logging_only.value not in _configured_event_hooks(
         litellm_params.mode
     ):
-        raise ValueError(
+        return (
             f"Guardrail {guardrail_name}: logging_only_scope is set, but mode does not include logging_only, "
             "so it would never apply. Add logging_only to mode or remove logging_only_scope."
         )
     if logging_only_scope in ("input", "output") and not custom_guardrail_callback.supports_logging_only_scope():
-        raise ValueError(
+        return (
             f"Guardrail {guardrail_name}: logging_only_scope={logging_only_scope!r} is not supported by this "
             "guardrail, whose logging_only hook scans on its own. Remove logging_only_scope."
         )
+    return None
+
+
+def _configure_callback_scoping(
+    custom_guardrail_callback: CustomGuardrail,
+    guardrail_name: str,
+    litellm_params: LitellmParams,
+    *,
+    reject_invalid_logging_only_scope: bool = False,
+) -> None:
+    logging_only_scope: Final = litellm_params.logging_only_scope
+    logging_only_scope_error: Final = _logging_only_scope_error(
+        custom_guardrail_callback, guardrail_name, litellm_params
+    )
+    if logging_only_scope_error is not None:
+        if reject_invalid_logging_only_scope:
+            raise ValueError(logging_only_scope_error)
+        verbose_proxy_logger.error(
+            "%s Ignoring logging_only_scope; the guardrail keeps its configured mode.",
+            logging_only_scope_error,
+        )
+        custom_guardrail_callback.logging_only_scope = None
+    else:
+        custom_guardrail_callback.logging_only_scope = logging_only_scope
     for scoping_param in (
         "skip_system_message_in_guardrail",
         "skip_tool_message_in_guardrail",
@@ -512,6 +535,8 @@ class InMemoryGuardrailHandler:
         config_file_path: str | None = None,
         llm_router: Optional["Router"] = None,
         source: Literal["db", "config"] = "config",
+        *,
+        reject_invalid_logging_only_scope: bool = False,
     ) -> Guardrail | None:
         """
         Initialize a guardrail from a dictionary and add it to the litellm callback manager
@@ -560,7 +585,12 @@ class InMemoryGuardrailHandler:
         )
         try:
             for custom_guardrail_callback in created_callbacks:
-                _configure_callback_scoping(custom_guardrail_callback, guardrail["guardrail_name"], litellm_params)
+                _configure_callback_scoping(
+                    custom_guardrail_callback,
+                    guardrail["guardrail_name"],
+                    litellm_params,
+                    reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
+                )
         except Exception:
             for custom_guardrail_callback in created_callbacks:
                 litellm.logging_callback_manager.remove_callback_from_all_lists(custom_guardrail_callback)
@@ -672,6 +702,8 @@ class InMemoryGuardrailHandler:
         guardrail_id: str,
         guardrail: Guardrail,
         source: Literal["db", "config"] = "db",
+        *,
+        reject_invalid_logging_only_scope: bool = False,
     ) -> None:
         """
         Update a guardrail in memory: a changed name or litellm_params rebuilds the
@@ -680,7 +712,11 @@ class InMemoryGuardrailHandler:
         """
         updated_guardrail: Final = cast(Guardrail, {**guardrail, "guardrail_id": guardrail_id})
         if self._has_guardrail_params_changed(guardrail_id, updated_guardrail):
-            self.reinitialize_guardrail(guardrail=updated_guardrail, source=source)
+            self.reinitialize_guardrail(
+                guardrail=updated_guardrail,
+                source=source,
+                reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
+            )
             return
         self.IN_MEMORY_GUARDRAILS[guardrail_id] = updated_guardrail
         self._sources[guardrail_id] = source
@@ -833,6 +869,8 @@ class InMemoryGuardrailHandler:
         guardrail: Guardrail,
         config_file_path: str | None = None,
         source: Literal["db", "config"] = "config",
+        *,
+        reject_invalid_logging_only_scope: bool = False,
     ) -> Guardrail | None:
         """
         Force re-initialization of a guardrail even if it exists in memory.
@@ -862,7 +900,12 @@ class InMemoryGuardrailHandler:
         # instance instead of leaving the guardrail silently removed: a guardrail
         # that was enforcing must never fail open because an update was bad.
         try:
-            return self.initialize_guardrail(guardrail=guardrail, config_file_path=config_file_path, source=source)
+            return self.initialize_guardrail(
+                guardrail=guardrail,
+                config_file_path=config_file_path,
+                source=source,
+                reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
+            )
         except Exception as init_error:
             if previous_guardrail is not None:
                 verbose_proxy_logger.exception(
@@ -877,7 +920,13 @@ class InMemoryGuardrailHandler:
                     verbose_proxy_logger.exception("Restoring previous guardrail %s also failed", guardrail_id)
             raise ValueError(f"Guardrail initialization failed: {init_error}") from init_error
 
-    def sync_guardrail_from_db(self, guardrail: Guardrail, config_file_path: str | None = None) -> Guardrail | None:
+    def sync_guardrail_from_db(
+        self,
+        guardrail: Guardrail,
+        config_file_path: str | None = None,
+        *,
+        reject_invalid_logging_only_scope: bool = False,
+    ) -> Guardrail | None:
         """
         Sync a guardrail from DB - initializes if new, re-initializes if changed.
         This is the method to call during DB polling.
@@ -896,6 +945,7 @@ class InMemoryGuardrailHandler:
                 guardrail=guardrail,
                 config_file_path=config_file_path,
                 source="db",
+                reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
             )
 
         # Params unchanged but the entry is still DB-backed; make sure the

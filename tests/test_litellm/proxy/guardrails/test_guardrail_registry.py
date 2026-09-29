@@ -966,6 +966,8 @@ class TestLoggingOnlyScopeValidation:
         mode: str | list[str] | Mode,
         scope: LoggingOnlyScope | None,
         callback_type: type[CustomGuardrail] = _LoggingOnlyScopeSupportedGuardrail,
+        reject_invalid_logging_only_scope: bool = False,
+        assert_registered: bool = False,
     ) -> CustomGuardrail:
         import litellm
         from litellm.proxy.guardrails import guardrail_registry as registry_module
@@ -980,6 +982,7 @@ class TestLoggingOnlyScopeValidation:
             callback: Final = callback_type(
                 guardrail_name=guardrail["guardrail_name"],
                 event_hook=litellm_params.mode,
+                default_on=True,
                 supported_event_hooks=supported_event_hooks,
             )
             litellm.logging_callback_manager.add_litellm_callback(callback)
@@ -999,11 +1002,14 @@ class TestLoggingOnlyScopeValidation:
                         "mode": mode,
                         "logging_only_scope": scope,
                     },
-                }
+                },
+                reject_invalid_logging_only_scope=reject_invalid_logging_only_scope,
             )
             assert result is not None
             callback: Final = handler.guardrail_id_to_custom_guardrail[result["guardrail_id"]]
             assert callback is not None
+            if assert_registered:
+                assert callback in lists[0]
             return callback
         except ValueError:
             callback: Final = created_callbacks[0]
@@ -1014,9 +1020,15 @@ class TestLoggingOnlyScopeValidation:
                 callback_list[:] = snapshot
             registry_module.guardrail_initializer_registry.pop(guardrail_type, None)
 
-    def test_scope_requires_logging_only_mode(self) -> None:
+    def test_scope_without_logging_only_mode_is_ignored_at_load(self) -> None:
+        callback: Final = self._initialize(mode="pre_call", scope="input", assert_registered=True)
+
+        assert callback.logging_only_scope is None
+        assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+
+    def test_scope_without_logging_only_mode_is_rejected_for_api_writes(self) -> None:
         with pytest.raises(ValueError, match="logging_only_scope is set") as exc_info:
-            self._initialize(mode="pre_call", scope="input")
+            self._initialize(mode="pre_call", scope="input", reject_invalid_logging_only_scope=True)
 
         assert str(exc_info.value) == (
             "Guardrail logging-only-scope-guardrail: logging_only_scope is set, but mode does not include "
@@ -1036,12 +1048,23 @@ class TestLoggingOnlyScopeValidation:
 
         assert callback.logging_only_scope == "input"
 
-    def test_directional_scope_rejected_when_guardrail_owns_logging_hook(self) -> None:
+    def test_directional_scope_is_ignored_at_load_when_guardrail_owns_logging_hook(self) -> None:
+        callback: Final = self._initialize(
+            mode="logging_only",
+            scope="input",
+            callback_type=_LoggingOnlyScopeUnsupportedGuardrail,
+            assert_registered=True,
+        )
+
+        assert callback.logging_only_scope is None
+
+    def test_directional_scope_rejected_for_api_writes_when_guardrail_owns_logging_hook(self) -> None:
         with pytest.raises(ValueError, match="logging_only_scope='input' is not supported") as exc_info:
             self._initialize(
                 mode="logging_only",
                 scope="input",
                 callback_type=_LoggingOnlyScopeUnsupportedGuardrail,
+                reject_invalid_logging_only_scope=True,
             )
 
         assert str(exc_info.value) == (

@@ -403,7 +403,11 @@ async def create_guardrail(
         guardrail_id: Final = result.get("guardrail_id", "Unknown")
 
         try:
-            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(guardrail=cast(Guardrail, result), source="db")
+            IN_MEMORY_GUARDRAIL_HANDLER.initialize_guardrail(
+                guardrail=cast(Guardrail, result),
+                source="db",
+                reject_invalid_logging_only_scope=True,
+            )
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully initialized guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
@@ -526,7 +530,10 @@ async def update_guardrail(
         guardrail_name: Final = result.get("guardrail_name", "Unknown")
 
         try:
-            IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(guardrail=cast(Guardrail, result))
+            IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
+                guardrail=cast(Guardrail, result),
+                reject_invalid_logging_only_scope=True,
+            )
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id
             )
@@ -1246,6 +1253,7 @@ async def patch_guardrail(
         try:
             IN_MEMORY_GUARDRAIL_HANDLER.sync_guardrail_from_db(
                 guardrail=guardrail,
+                reject_invalid_logging_only_scope=True,
             )
             verbose_proxy_logger.info(
                 "Immediate sync: Successfully updated guardrail '%s' (ID: %s)", guardrail_name, guardrail_id

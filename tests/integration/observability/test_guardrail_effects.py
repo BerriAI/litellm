@@ -1393,12 +1393,11 @@ def test_logging_only_scope_observes_only_the_configured_direction_without_block
             assert detail["requestsEvaluated"] == len(scanned_directions), detail
 
 
-def test_logging_only_scope_without_logging_only_mode_is_skipped_at_load_and_never_blocks(
+def test_logging_only_scope_without_logging_only_mode_is_ignored_at_load_and_keeps_blocking(
     gateway: Gateway, tmp_path: Path
 ) -> None:
     identity: Final = "guardrail" + uuid.uuid4().hex
-    prompt: Final = "synthetic invalid-scope prompt " + identity
-    reply: Final = "synthetic invalid-scope reply " + identity
+    prompt: Final = "synthetic invalid-scope prompt pineapple " + identity
 
     def guardrail(request: Request) -> Reply:
         assert request.target == "/beta/litellm_basic_guardrail_api"
@@ -1415,7 +1414,11 @@ def test_logging_only_scope_without_logging_only_mode_is_skipped_at_load_and_nev
                     "created": 1,
                     "model": "gpt-4o-mini",
                     "choices": [
-                        {"index": 0, "message": {"role": "assistant", "content": reply}, "finish_reason": "stop"}
+                        {
+                            "index": 0,
+                            "message": {"role": "assistant", "content": "unchanged provider reply"},
+                            "finish_reason": "stop",
+                        }
                     ],
                     "usage": {"prompt_tokens": 9, "completion_tokens": 5, "total_tokens": 14},
                 }
@@ -1432,6 +1435,7 @@ def test_logging_only_scope_without_logging_only_mode_is_skipped_at_load_and_nev
                     "mode": "pre_call",
                     "logging_only_scope": "input",
                     "default_on": True,
+                    "blocked_words": [{"keyword": "pineapple", "action": "BLOCK"}],
                     "api_base": policy.url,
                     "api_key": "synthetic-guardrail-key",
                 },
@@ -1444,9 +1448,9 @@ def test_logging_only_scope_without_logging_only_mode_is_skipped_at_load_and_nev
             response: Final = candidate.request(
                 "POST", "/v1/chat/completions", {"model": model, "messages": [{"role": "user", "content": prompt}]}
             )
-            assert response.status_code == 200, response.text
-            assert response.json()["choices"][0]["message"]["content"] == reply, response.text
-            assert len(policy.drain()) == 0
-            assert len(upstream.drain()) == 1
+            assert response.status_code == 400, response.text
+            assert "synthetic policy denial" in response.text, response.text
+            assert len(policy.drain()) == 1
+            assert len(upstream.drain()) == 0
             guardrails: Final = candidate.get("/v2/guardrails/list")["guardrails"]
-            assert all(object_value(row)["guardrail_name"] != identity for row in guardrails), guardrails
+            assert any(object_value(row)["guardrail_name"] == identity for row in guardrails), guardrails

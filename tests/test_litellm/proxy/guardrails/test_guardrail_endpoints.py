@@ -1123,7 +1123,10 @@ async def test_update_guardrail_endpoint(
             prisma_client=mocker.ANY,
         )
 
-        mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(guardrail=mocker.ANY)
+        mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(
+            guardrail=mocker.ANY,
+            reject_invalid_logging_only_scope=True,
+        )
 
         if scenario == "success_sync_fails_unexpected_error":
             assert mock_logger is not None
@@ -1252,7 +1255,10 @@ async def test_patch_guardrail_endpoint(
 
         mock_guardrail_registry.update_guardrail_in_db.assert_called_once()
 
-        mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(guardrail=mocker.ANY)
+        mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(
+            guardrail=mocker.ANY,
+            reject_invalid_logging_only_scope=True,
+        )
 
         if scenario == "success_sync_fails_unexpected_error":
             assert mock_logger is not None
@@ -1274,6 +1280,34 @@ async def test_patch_guardrail_rejects_mcp_only_on_violation_with_422(mocker, mo
     assert exc_info.value.status_code == 422
     assert "only supported by guardrail='mcp_security'" in str(exc_info.value.detail)
     mock_guardrail_registry.update_guardrail_in_db.assert_not_called()
+
+
+@pytest.mark.asyncio
+async def test_patch_guardrail_rejects_invalid_logging_only_scope_with_422(mocker, mock_guardrail_registry):
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY",
+        mock_guardrail_registry,
+    )
+    mock_in_memory_handler = mocker.Mock(spec=InMemoryGuardrailHandler)
+    mock_in_memory_handler.sync_guardrail_from_db.side_effect = ValueError(
+        "Guardrail test-db-guardrail: logging_only_scope is set, but mode does not include logging_only"
+    )
+    mocker.patch(
+        "litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER",
+        mock_in_memory_handler,
+    )
+    request = PatchGuardrailRequest(litellm_params=BaseLitellmParams(mode="pre_call", logging_only_scope="input"))
+
+    with pytest.raises(HTTPException) as exc_info:
+        await patch_guardrail("test-guardrail-id", request, user_api_key_dict=MOCK_ADMIN_USER)
+
+    assert exc_info.value.status_code == 422
+    assert "update rejected" in str(exc_info.value.detail)
+    mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(
+        guardrail=mocker.ANY,
+        reject_invalid_logging_only_scope=True,
+    )
 
 
 @pytest.mark.parametrize(
