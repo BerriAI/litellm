@@ -1598,4 +1598,53 @@ def test_zero_cost_check_prices_the_model_the_key_and_team_aliases_dispatch_to(
 ) -> None:
     router: Final = _alias_router(_aliases_to("free-model"))
     token: Final = UserAPIKeyAuth(aliases=key_aliases or {}, team_model_aliases=team_model_aliases)
-    assert is_dispatched_model_cost_zero(model=model, llm_router=router, valid_token=token) is expected
+    assert (
+        is_dispatched_model_cost_zero(
+            model=model,
+            llm_router=router,
+            valid_token=token,
+            router_settings_aliases=None,
+            router_settings_rewrite_pending=False,
+        )
+        is expected
+    )
+
+
+@pytest.mark.parametrize(
+    "key_aliases, router_settings_aliases, model_alias_map, rewrite_pending, model, expected",
+    [
+        ({"my-free": "free-model"}, {"free-model": "paid-model"}, {}, True, "my-free", False),
+        ({"my-free": "free-model"}, {}, {"free-model": "paid-model"}, True, "my-free", False),
+        ({}, {"free-model": "paid-model"}, {}, True, "free-model", False),
+        ({}, {"router-free": "free-model"}, {}, True, "router-free", True),
+        ({}, {"router-free": {"model": "visible", "hidden": True}}, {}, True, "router-free", True),
+        ({"global-free": "free-model"}, {}, {"my-free": "global-free"}, True, "my-free", True),
+        ({"global-free": "paid-model"}, {}, {"my-free": "global-free"}, True, "my-free", False),
+        ({}, {}, {"my-free": "visible"}, True, "my-free", True),
+        ({"free-model": "paid-model"}, {"router-free": "free-model"}, {}, True, "router-free", False),
+        ({}, {"router-free": "free-model", "free-model": "paid-model"}, {}, True, "router-free", False),
+        ({}, {"router-free": "free-model", "free-model": "paid-model"}, {}, False, "router-free", True),
+    ],
+)
+def test_zero_cost_check_prices_the_model_after_every_alias_hop_dispatch_applies(
+    monkeypatch: pytest.MonkeyPatch,
+    key_aliases: dict[str, str],
+    router_settings_aliases: dict[str, str | dict[str, str | bool]],
+    model_alias_map: dict[str, str],
+    rewrite_pending: bool,
+    model: str,
+    expected: bool,
+) -> None:
+    monkeypatch.setattr(litellm, "model_alias_map", model_alias_map)
+    router: Final = _alias_router(_aliases_to("free-model"))
+    token: Final = UserAPIKeyAuth(aliases=key_aliases)
+    assert (
+        is_dispatched_model_cost_zero(
+            model=model,
+            llm_router=router,
+            valid_token=token,
+            router_settings_aliases=router_settings_aliases,
+            router_settings_rewrite_pending=rewrite_pending,
+        )
+        is expected
+    )

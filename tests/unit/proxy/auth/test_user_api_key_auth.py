@@ -1796,14 +1796,28 @@ def test_mapped_key_jwt_falls_through_to_the_shared_user_budget_attach():
     )
 
 
+@pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "key_aliases, expected",
+    "model, key_aliases, key_router_settings, router_settings_rewritten, expected",
     [
-        ({}, True),
-        ({"free-alias": "paid-model"}, False),
+        ("free-alias", {}, None, None, True),
+        ("free-alias", {"free-alias": "paid-model"}, None, None, False),
+        ("my-alias", {"my-alias": "free-alias"}, None, None, True),
+        ("my-alias", {"my-alias": "free-alias"}, {"model_group_alias": {"free-alias": "paid-model"}}, None, False),
+        ("rs-alias", {"free-model": "paid-model"}, {"model_group_alias": {"rs-alias": "free-model"}}, False, False),
+        ("rs-alias", {"free-model": "paid-model"}, {"model_group_alias": {"rs-alias": "free-model"}}, True, True),
     ],
 )
-def test_budget_skip_judges_the_model_a_key_alias_dispatches_to(key_aliases: dict[str, str], expected: bool) -> None:
+async def test_budget_skip_judges_the_model_the_key_aliases_dispatch_to(
+    model: str,
+    key_aliases: dict[str, str],
+    key_router_settings: dict[str, dict[str, str]] | None,
+    router_settings_rewritten: bool | None,
+    expected: bool,
+) -> None:
+    from starlette.requests import Request
+
+    from litellm.constants import MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY
     from litellm.proxy.auth.user_api_key_auth import _should_skip_budget_checks
     from litellm.router import Router
 
@@ -1830,11 +1844,24 @@ def test_budget_skip_judges_the_model_a_key_alias_dispatches_to(key_aliases: dic
         ],
         model_group_alias={"free-alias": "free-model"},
     )
-    skipped = _should_skip_budget_checks(
-        request_data={"model": "free-alias"},
+    skipped = await _should_skip_budget_checks(
+        request_data={"model": model},
         route="/chat/completions",
-        request=None,
+        request=(
+            None
+            if router_settings_rewritten is None
+            else Request(
+                {
+                    "type": "http",
+                    "method": "POST",
+                    "path": "/chat/completions",
+                    "headers": [],
+                    "query_string": b"",
+                    MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY: router_settings_rewritten,
+                }
+            )
+        ),
         llm_router=router,
-        valid_token=UserAPIKeyAuth(aliases=key_aliases),
+        valid_token=UserAPIKeyAuth(aliases=key_aliases, router_settings=key_router_settings),
     )
     assert skipped is expected

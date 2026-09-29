@@ -1795,8 +1795,8 @@ async def _user_api_key_auth_builder(
                     )
                     skip_budget_checks = False
                     if model is not None and llm_router is not None:
-                        skip_budget_checks = is_dispatched_model_cost_zero(
-                            model=model, llm_router=llm_router, valid_token=valid_token
+                        skip_budget_checks = await _is_dispatched_model_cost_zero(
+                            model=model, llm_router=llm_router, valid_token=valid_token, request=request
                         )
                         if skip_budget_checks:
                             verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
@@ -2237,8 +2237,8 @@ async def _user_api_key_auth_builder(
             )
             skip_budget_checks = False
             if model is not None and llm_router is not None:
-                skip_budget_checks = is_dispatched_model_cost_zero(
-                    model=model, llm_router=llm_router, valid_token=valid_token
+                skip_budget_checks = await _is_dispatched_model_cost_zero(
+                    model=model, llm_router=llm_router, valid_token=valid_token, request=request
                 )
                 if skip_budget_checks:
                     verbose_proxy_logger.info("Skipping all budget checks for zero-cost model: %s", model)
@@ -2960,7 +2960,7 @@ async def _run_centralized_common_checks(
             keep_token_limits=user_custom_auth is not None,
         )
 
-    skip_budget_checks: Final = _should_skip_budget_checks(
+    skip_budget_checks: Final = await _should_skip_budget_checks(
         request_data=request_data,
         route=route,
         request=request,
@@ -3131,7 +3131,7 @@ async def _reserve_budget_after_common_checks(
         request.state.budget_reservation = reservation  # rebind-ok: read by the release middleware
 
 
-def _should_skip_budget_checks(
+async def _should_skip_budget_checks(
     request_data: dict,
     route: str,
     request: Request | None,
@@ -3146,8 +3146,28 @@ def _should_skip_budget_checks(
         team_id=valid_token.team_id,
     )
     if model is not None and llm_router is not None:
-        return is_dispatched_model_cost_zero(model=model, llm_router=llm_router, valid_token=valid_token)
+        return await _is_dispatched_model_cost_zero(
+            model=model, llm_router=llm_router, valid_token=valid_token, request=request
+        )
     return False
+
+
+async def _is_dispatched_model_cost_zero(
+    model: str | list[str], llm_router: litellm.Router, valid_token: UserAPIKeyAuth, request: Request | None
+) -> bool:
+    from litellm.proxy.proxy_server import prisma_client, proxy_config, proxy_logging_obj
+
+    settings: Final = await proxy_config.get_hierarchical_router_settings(
+        user_api_key_dict=valid_token, prisma_client=prisma_client, proxy_logging_obj=proxy_logging_obj
+    )
+    return is_dispatched_model_cost_zero(
+        model=model,
+        llm_router=llm_router,
+        valid_token=valid_token,
+        router_settings_aliases=settings.get("model_group_alias") if isinstance(settings, Mapping) else None,
+        router_settings_rewrite_pending=request is not None
+        and request.scope.get(MODEL_GROUP_ALIAS_RESOLVED_SCOPE_KEY) is not True,
+    )
 
 
 def _resolve_request_principal(request: Request, valid_token: UserAPIKeyAuth) -> Principal:
@@ -3715,7 +3735,9 @@ async def _run_post_custom_auth_checks(
     # every budget check for these; this path did not, so the same request could
     # be refused under custom auth and served under the other two.
     skip_budget_checks: Final = (
-        is_dispatched_model_cost_zero(model=current_model, llm_router=llm_router, valid_token=valid_token)
+        await _is_dispatched_model_cost_zero(
+            model=current_model, llm_router=llm_router, valid_token=valid_token, request=request
+        )
         if current_model is not None and llm_router is not None
         else False
     )

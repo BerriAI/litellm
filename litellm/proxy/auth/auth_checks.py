@@ -89,7 +89,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     _safe_get_request_headers,
     _safe_get_request_query_params,
 )
-from litellm.proxy.common_utils.model_listing_utils import alias_map
+from litellm.proxy.common_utils.model_listing_utils import alias_map, alias_target, caller_alias_maps
 from litellm.proxy.common_utils.timezone_utils import get_budget_reset_time
 from litellm.proxy.common_utils.user_api_key_cache import (
     END_USER_RESTRICTED_REGISTRY_OVERFLOW_SENTINEL,
@@ -564,15 +564,33 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
     return True
 
 
-def _dispatched_model_name(model_name: str, valid_token: UserAPIKeyAuth) -> str:
-    after_team_alias: Final = alias_map(valid_token.team_model_aliases).get(model_name, model_name)
-    return alias_map(valid_token.aliases).get(after_team_alias, after_team_alias)
+def _dispatched_model_name(
+    model_name: str, valid_token: UserAPIKeyAuth, router_settings_aliases: object, router_settings_rewrite_pending: bool
+) -> str:
+    requested: Final = (
+        resolve_model_group_alias(router_settings_aliases, model_name) or model_name
+        if router_settings_rewrite_pending
+        else model_name
+    )
+    caller_aliases: Final = caller_alias_maps(
+        valid_token.aliases, valid_token.team_model_aliases, valid_token.team_id, None
+    )
+    aliased: Final = alias_target(requested, caller_aliases) or requested
+    return resolve_model_group_alias(router_settings_aliases, aliased) or aliased
 
 
 def is_dispatched_model_cost_zero(
-    model: str | list[str] | None, llm_router: Router | None, valid_token: UserAPIKeyAuth
+    model: str | list[str] | None,
+    llm_router: Router | None,
+    valid_token: UserAPIKeyAuth,
+    router_settings_aliases: object,
+    router_settings_rewrite_pending: bool,
 ) -> bool:
-    dispatched_model: Final = _dispatched_model_name(model, valid_token) if isinstance(model, str) else model
+    dispatched_model: Final = (
+        _dispatched_model_name(model, valid_token, router_settings_aliases, router_settings_rewrite_pending)
+        if isinstance(model, str)
+        else model
+    )
     return _is_model_cost_zero(model=dispatched_model, llm_router=llm_router)
 
 
