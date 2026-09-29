@@ -24,6 +24,8 @@ _FORM_CONTENT_TYPES: Final[frozenset[str]] = frozenset({"application/x-www-form-
 
 _ANNOTATION_QUALIFIERS: Final[frozenset[object]] = frozenset({Annotated, NotRequired, ReadOnly, Required})
 
+_NON_OBJECT_BODY_SCOPE_KEY: Final[str] = "litellm_non_object_json_body"
+
 
 def _normalize_media_type(content_type: str) -> str:
     """Return the bare media type per RFC 7231: strip params, trim, lowercase."""
@@ -215,11 +217,15 @@ async def _read_request_body(request: Request | None) -> dict:
                             code=status.HTTP_400_BAD_REQUEST,
                         )
 
-        # Cache the parsed result. Raw passthrough forwarding re-reads ``request.body()``,
-        # so dropping a non-object body here never changes what reaches the provider.
-        object_body: Final[dict] = parsed_body if isinstance(parsed_body, dict) else {}
-        _safe_set_request_parsed_body(request=request, parsed_body=object_body)
-        return object_body
+        if isinstance(parsed_body, dict):
+            _safe_set_request_parsed_body(request=request, parsed_body=parsed_body)
+            return parsed_body
+
+        # Anything that forwards the parsed body upstream would now send an empty object in
+        # place of the caller's payload, so mark the request for ``non_object_raw_body``.
+        _mark_non_object_body(request=request)
+        _safe_set_request_parsed_body(request=request, parsed_body={})
+        return {}
 
     except (json.JSONDecodeError, orjson.JSONDecodeError, ProxyException) as e:
         # Re-raise ProxyException as-is
@@ -237,6 +243,32 @@ def is_opaque_audio_pass_through_request(route: str, content_type: str) -> bool:
     return route.startswith(f"{AZURE_SPEECH_PASS_THROUGH_ROUTE_PREFIX}/") and (
         media_type.startswith("audio/") or media_type == "multipart/form-data"
     )
+
+
+def _mark_non_object_body(request: Request | None) -> None:
+    try:
+        if request is not None:
+            request.scope[_NON_OBJECT_BODY_SCOPE_KEY] = True
+    except Exception as e:
+        verbose_proxy_logger.debug("Unexpected error marking non-object request body - %s", e)
+
+
+async def non_object_raw_body(request: Request | None) -> bytes | None:
+    """The bytes of a body that is valid JSON but not an object, else ``None``.
+
+    ``_read_request_body`` reads such a body as ``{}`` so every caller that treats it as a
+    mapping is safe, which means forwarding the parsed body would send an empty object in
+    place of the caller's payload. Passthrough sends these bytes instead.
+    """
+    if request is None:
+        return None
+    scope: Final[object] = getattr(request, "scope", None)
+    if not isinstance(scope, Mapping) or scope.get(_NON_OBJECT_BODY_SCOPE_KEY) is not True:
+        return None
+    try:
+        return await request.body()
+    except RuntimeError:
+        return None
 
 
 async def read_raw_json_body(request: Request | None) -> bytes | None:

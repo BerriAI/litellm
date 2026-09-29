@@ -7674,3 +7674,68 @@ async def test_object_passthrough_body_still_yields_its_envelope_fields():
     assert query_params_data == {"alt": "sse"}
     assert custom_body_data == {"model": "x"}
     assert stream is True
+
+
+async def _capture_upstream_request(body: bytes) -> httpx.Request:
+    """Drive ``pass_through_request`` for ``body`` and return the request it built for the
+    provider, by letting a real httpx client encode it and failing the send."""
+    captured: list[httpx.Request] = []  # mutable-ok: the send double records what it was given
+
+    async def _send(req, **kwargs):
+        captured.append(req)
+        raise httpx.HTTPError("stop after capture")
+
+    real_client = httpx.AsyncClient()
+    real_client.send = _send
+
+    with (
+        patch("litellm.proxy.proxy_server.proxy_logging_obj") as mock_proxy_logging,
+        patch(
+            "litellm.proxy.pass_through_endpoints.pass_through_endpoints.get_async_httpx_client"
+        ) as mock_get_client,
+    ):
+        mock_proxy_logging.pre_call_hook = AsyncMock(side_effect=lambda **kwargs: kwargs["data"])
+        mock_get_client.return_value = SimpleNamespace(client=real_client)
+
+        # The failure handler runs on a MagicMock proxy_logging_obj and dies with TypeError,
+        # the same way test_pass_through_request_uses_resolved_timeout relies on.
+        with pytest.raises(TypeError):
+            await pass_through_request(
+                request=_json_request(body),
+                target="http://upstream.test/v1/messages",
+                custom_headers={},
+                user_api_key_dict=UserAPIKeyAuth(api_key="sk-test"),
+            )
+
+    assert captured, "pass_through_request never built an upstream request"
+    return captured[0]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b'[{"role": "user", "content": "hi"}]', id="array"),
+        pytest.param(b"[1, 2, 3]", id="array-of-numbers"),
+        pytest.param(b"123", id="number"),
+        pytest.param(b'"claude-sonnet-4-5"', id="string"),
+        pytest.param(b"true", id="boolean"),
+        pytest.param(b"null", id="null"),
+    ],
+)
+async def test_non_object_body_is_forwarded_to_the_provider_verbatim(body: bytes):
+    """A passthrough body is the caller's own provider payload. The parsed view of a non-object
+    body is ``{}``, and the forwarding path sends the parsed body as JSON, so without the raw
+    bytes the provider silently received ``{}`` in place of what the caller sent."""
+    upstream = await _capture_upstream_request(body)
+
+    assert upstream.content == body
+
+
+@pytest.mark.asyncio
+async def test_object_body_is_still_forwarded_from_the_parsed_view():
+    """Hooks mutate the parsed body and those mutations must still reach the provider, so an
+    object body must not take the raw-bytes path."""
+    upstream = await _capture_upstream_request(b'{"model": "claude-sonnet-4-5"}')
+
+    assert json.loads(upstream.content)["model"] == "claude-sonnet-4-5"

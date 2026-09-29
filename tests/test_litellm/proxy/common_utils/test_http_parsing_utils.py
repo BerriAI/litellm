@@ -26,6 +26,7 @@ from litellm.proxy.common_utils.http_parsing_utils import (
     get_tags_from_request_body,
     numeric_form_fields,
     populate_request_with_path_params,
+    non_object_raw_body,
     read_raw_json_body,
 )
 
@@ -539,14 +540,51 @@ async def test_non_object_body_is_not_cached_for_later_readers():
 
 
 @pytest.mark.asyncio
-async def test_non_object_body_still_reaches_the_provider_verbatim():
-    """Passthrough forwards the raw bytes, not the parsed body, so coercing the parsed view
-    must not change what a provider actually receives."""
-    body = b'[{"role": "user", "content": "hi"}]'
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b'[{"role": "user", "content": "hi"}]', id="array"),
+        pytest.param(b"123", id="number"),
+        pytest.param(b'"gpt-4o"', id="string"),
+        pytest.param(b"true", id="boolean"),
+        pytest.param(b"null", id="null"),
+    ],
+)
+async def test_non_object_body_is_recoverable_verbatim_for_forwarding(body: bytes):
+    """Passthrough forwards ``_parsed_body`` as JSON unless it is handed exact bytes, so the
+    coerced ``{}`` would reach the provider in place of the caller's payload. The original
+    bytes must stay recoverable."""
     request = _starlette_request(body, "application/json")
 
     assert await _read_request_body(request) == {}
+    assert await non_object_raw_body(request) == body
     assert await read_raw_json_body(request) == body
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "body",
+    [
+        pytest.param(b'{"model": "gpt-4o"}', id="object"),
+        pytest.param(b"{}", id="empty-object"),
+        pytest.param(b"", id="empty-body"),
+    ],
+)
+async def test_object_body_is_not_offered_for_raw_forwarding(body: bytes):
+    """Only a coerced body may bypass ``json=_parsed_body``: an object body must keep going
+    through the parsed path, so hooks that mutate it are still what gets sent."""
+    request = _starlette_request(body, "application/json")
+
+    assert isinstance(await _read_request_body(request), dict)
+    assert await non_object_raw_body(request) is None
+
+
+@pytest.mark.asyncio
+async def test_no_raw_forwarding_before_the_body_has_been_read():
+    """Nothing may be marked for raw forwarding until a read has established the body is
+    actually a non-object."""
+    assert await non_object_raw_body(_starlette_request(b"[]", "application/json")) is None
+    assert await non_object_raw_body(None) is None
 
 
 @pytest.mark.asyncio

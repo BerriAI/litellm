@@ -86,6 +86,7 @@ from litellm.proxy.common_utils.error_body_call_id import JSON_OBJECT, error_bod
 from litellm.proxy.common_utils.http_parsing_utils import (
     _read_request_body,
     _safe_get_request_headers,
+    non_object_raw_body,
 )
 from litellm.proxy.common_utils.openai_error_payload import (
     LITELLM_CALL_ID_HEADER,
@@ -1120,6 +1121,10 @@ async def pass_through_request(
             _parsed_body = {}
         else:
             _parsed_body = await _read_request_body(request)
+            if state_raw_body is None:
+                # A non-object JSON body reads as ``{}``, so forwarding the parsed body would
+                # send an empty object in place of the caller's own provider payload.
+                state_raw_body = await non_object_raw_body(request)
         verbose_proxy_logger.debug(
             "Pass through endpoint sending request to \nURL %s\nheaders: %s\nbody: %s\n",
             url,
