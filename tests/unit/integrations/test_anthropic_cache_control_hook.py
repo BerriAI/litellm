@@ -16,6 +16,10 @@ from litellm.integrations.anthropic_cache_control_hook import (
     AnthropicCacheControlHook,
     supports_openai_prompt_cache_breakpoint,
 )
+from litellm.litellm_core_utils.prompt_templates.factory import (
+    _convert_to_bedrock_tool_call_invoke,
+    convert_to_anthropic_tool_invoke,
+)
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.types.llms.openai import AllMessageValues, ChatCompletionAssistantToolCall
 from litellm.types.utils import ChatCompletionMessageToolCall, Message
@@ -1102,7 +1106,7 @@ def test_cache_control_hook_counts_tool_call_cache_controls():
     assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 3
 
 
-def test_cache_control_hook_counts_only_tool_call_marks_forwarded_to_anthropic():
+def test_cache_control_hook_counts_tool_call_marks_except_answered_server_tool_calls():
     message: Final[AllMessageValues] = {
         "role": "assistant",
         "content": None,
@@ -1156,7 +1160,37 @@ def test_cache_control_hook_counts_only_tool_call_marks_forwarded_to_anthropic()
         },
     }
 
-    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 1
+    assert AnthropicCacheControlHook.count_request_cache_breakpoints([message]) == 2
+
+
+@pytest.mark.parametrize("tool_call_type", ["function", "custom", None])
+@pytest.mark.parametrize(
+    "mark",
+    [{"type": "ephemeral"}, {}, "ephemeral", "", 7, ["ephemeral"], "x" * 5000, None],
+    ids=["dict", "empty_dict", "string", "empty_string", "int", "list", "5kb_string", "none"],
+)
+def test_tool_call_census_matches_the_breakpoints_providers_send(mark: object, tool_call_type: str | None):
+    tool_call: Final[dict[str, object]] = {
+        "id": "call_0",
+        "function": {"name": "lookup", "arguments": "{}"},
+        "cache_control": mark,
+        **({"type": tool_call_type} if tool_call_type is not None else {}),
+    }
+    message: Final = cast(AllMessageValues, {"role": "assistant", "content": None, "tool_calls": [tool_call]})
+    bedrock_cache_points: Final = sum(
+        1
+        for block in _convert_to_bedrock_tool_call_invoke([tool_call], model="anthropic.claude-sonnet-4-5-20250929-v1:0")
+        if "cachePoint" in block
+    )
+    anthropic_marks: Final = sum(
+        1 for block in convert_to_anthropic_tool_invoke([tool_call]) if block.get("cache_control") is not None
+    )
+
+    census: Final = AnthropicCacheControlHook.count_request_cache_breakpoints([message])
+
+    assert census == bedrock_cache_points
+    assert census >= anthropic_marks
+    assert census == (0 if mark is None else 1)
 
 
 def test_cache_control_hook_caps_customer_tool_call_marks_before_injection():
@@ -2126,6 +2160,40 @@ class TestEnableAnthropicPromptCaching:
         )
         assert result_sys == "sys"
         assert result_msgs == messages
+
+    @pytest.mark.parametrize(
+        "tool_call_controls",
+        [
+            pytest.param(({"type": "ephemeral"},) * 3, id="three_5m_marks_would_exceed_the_cap"),
+            pytest.param(({"type": "ephemeral", "ttl": "1h"},), id="1h_mark_would_follow_a_5m_default"),
+        ],
+    )
+    def test_seed_stands_down_when_only_assistant_tool_calls_carry_cache_control(self, tool_call_controls):
+        tool_calls: Final = [
+            {
+                "id": f"call_{index}",
+                "type": "function",
+                "function": {"name": "lookup", "arguments": "{}"},
+                "cache_control": control,
+            }
+            for index, control in enumerate(tool_call_controls)
+        ]
+        messages: Final = [
+            {"role": "system", "content": "a long system prompt"},
+            {"role": "user", "content": "weather in three cities"},
+            {"role": "assistant", "content": "Checking.", "tool_calls": tool_calls},
+            *({"role": "tool", "tool_call_id": call["id"], "content": "sunny"} for call in tool_calls),
+            {"role": "user", "content": "summarize"},
+        ]
+        params: Final[dict] = {}
+        AnthropicCacheControlHook.maybe_seed_default_injection_points(
+            non_default_params=params,
+            messages=cast(List[AllMessageValues], messages),
+            model="claude-sonnet-4-5",
+            custom_llm_provider="anthropic",
+            enable_prompt_caching=True,
+        )
+        assert "cache_control_injection_points" not in params
 
     def test_default_ttl_is_anthropics_five_minute_cache(self, monkeypatch):
         monkeypatch.setattr(litellm, "enable_anthropic_prompt_caching", True)

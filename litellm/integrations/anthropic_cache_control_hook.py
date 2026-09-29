@@ -149,10 +149,8 @@ def _has_server_tool_result(tool_call_id: str, results: Iterable[object] | None)
     return any(isinstance(result, dict) and result.get("tool_use_id") == tool_call_id for result in results or ())
 
 
-def _tool_call_cache_control_is_forwarded(tool_call: object, message: object) -> bool:
-    if _attribute_or_key(tool_call, "type") != "function" or not isinstance(
-        _attribute_or_key(tool_call, "cache_control"), dict
-    ):
+def _tool_call_carries_cache_breakpoint(tool_call: object, message: object) -> bool:
+    if _attribute_or_key(tool_call, "cache_control") is None:
         return False
 
     tool_call_id: Final = _attribute_or_key(tool_call, "id")
@@ -524,7 +522,7 @@ class AnthropicCacheControlHook(CustomPromptManagement):
         content_count: Final = sum(1 for block in content if _carries_cache_breakpoint(block)) if content else 0
         tool_calls: Final = _as_object_list(_attribute_or_key(message, "tool_calls"))
         tool_call_count: Final = (
-            sum(1 for tool_call in tool_calls if _tool_call_cache_control_is_forwarded(tool_call, message))
+            sum(1 for tool_call in tool_calls if _tool_call_carries_cache_breakpoint(tool_call, message))
             if tool_calls
             else 0
         )

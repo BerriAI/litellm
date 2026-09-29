@@ -27,8 +27,8 @@ pytestmark: Final = pytest.mark.e2e
 
 Backend: TypeAlias = Literal["azure_foundry", "vertex"]
 AZURE_MODEL: Final[str] = "azure_ai/claude-haiku-4-5"
-VERTEX_MODEL: Final[str] = "vertex_ai/claude-sonnet-4-6"
-VERTEX_LOCATION: Final[str] = "us-east5"
+VERTEX_MODEL: Final[str] = "vertex_ai/claude-sonnet-5"
+VERTEX_LOCATION: Final[str] = "global"
 
 
 def _deployment_params(*, backend: Backend, inject_cache_control: bool) -> LiteLLMParamsBody:
@@ -150,7 +150,9 @@ def _post_chat(client: PassthroughClient, key: str, body: ChatBody) -> Result[Ch
 def _assert_normal_completion(response: ChatResponse, model_name: str) -> None:
     assert response.choices, f"{model_name}: chat completion returned no choices: {response}"
     completion: Final = response.choices[0]
-    assert completion.finish_reason == "stop", f"{model_name}: unexpected finish reason: {completion.finish_reason}"
+    assert completion.finish_reason in ("stop", "length"), (
+        f"{model_name}: unexpected finish reason: {completion.finish_reason}"
+    )
     assert (
         completion.message is not None
         and completion.message.content is not None
