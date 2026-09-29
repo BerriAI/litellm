@@ -2058,3 +2058,109 @@ async def test_queue_request_stream_is_untouched_while_keepalives_are_unconfigur
 
     assert not any(chunk.startswith(b": ping") for chunk in chunks)
     assert chunks[-1] == b"data: [DONE]\n\n"
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_hides_exception_attributes(monkeypatch):
+    _patch_logging_flags(monkeypatch)
+
+    async def _noop_failure(*args, **kwargs):
+        return None
+
+    class LeakyError(Exception):
+        message = "private-message-canary"
+        type = "private-type-canary"
+        param = "private-param-canary"
+        status_code = "private-status-canary"
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _noop_failure)
+    frames = [frame async for frame in async_data_generator(_async_iter_raises(LeakyError("private-text-canary")), _user_auth(), {})]
+    error = json.loads(next(frame[6:] for frame in frames if isinstance(frame, str) and frame.startswith('data: {"error":')))["error"]
+    assert error == {"message": "An error occurred while streaming the response.", "type": "server_error", "param": None, "code": "500"}
+    assert "private-" not in str(frames)
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_hides_exception_diagnostics_in_sse(monkeypatch, caplog):
+    _patch_logging_flags(monkeypatch)
+    canary = "private-db.internal /srv/litellm/secret.yaml upstream-body-canary"
+
+    async def _noop_failure(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _noop_failure)
+    response = _async_iter_raises(RuntimeError(canary))
+    with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        frames = [frame async for frame in async_data_generator(response, _user_auth(), {})]
+    errors = [
+        json.loads(frame[6:])["error"]
+        for frame in frames
+        if isinstance(frame, str) and frame.startswith('data: {"error":')
+    ]
+    assert len(errors) == 1
+    assert errors[0]["message"] == "An error occurred while streaming the response."
+    assert errors[0]["type"] == "server_error"
+    assert canary not in "".join(str(frame) for frame in frames)
+    assert canary in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_async_data_generator_format_error_is_one_safe_frame(monkeypatch):
+    _patch_logging_flags(monkeypatch)
+    canary = "format-private-upstream-body-canary"
+
+    async def _noop_failure(*args, **kwargs):
+        return None
+
+    def broken_formatter(chunk):
+        raise RuntimeError(canary)
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _noop_failure)
+    monkeypatch.setattr(ps, "_format_streaming_sse_chunk", broken_formatter)
+    frames = [frame async for frame in async_data_generator(_async_iter(["hello"]), _user_auth(), {})]
+    assert len(frames) == 1
+    assert json.loads(frames[0][6:])["error"]["message"] == "An error occurred while streaming the response."
+    assert canary not in str(frames)
+
+
+@pytest.mark.asyncio
+async def test_async_assistants_data_generator_hides_serialization_error(monkeypatch, caplog):
+    canary = "assistants-private-upstream-body-canary"
+
+    async def _noop_failure(*args, **kwargs):
+        return None
+
+    class BrokenChunk:
+        def model_dump_json(self, exclude_none):
+            raise RuntimeError(canary)
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _noop_failure)
+    with caplog.at_level("ERROR", logger="LiteLLM Proxy"):
+        frames = [
+            frame
+            async for frame in async_assistants_data_generator(_FakeAssistantsStream([BrokenChunk()]), _user_auth(), {})
+        ]
+    assert len(frames) == 1
+    assert json.loads(frames[0][6:])["error"]["message"] == "An error occurred while streaming the response."
+    assert canary not in str(frames)
+    assert canary in caplog.text
+
+
+@pytest.mark.asyncio
+async def test_streaming_callback_error_preserves_intentional_public_message(monkeypatch):
+    _patch_logging_flags(monkeypatch)
+
+    async def _noop_failure(*args, **kwargs):
+        return None
+
+    monkeypatch.setattr(ps.proxy_logging_obj, "post_call_failure_hook", _noop_failure)
+    frames = [
+        frame
+        async for frame in async_data_generator(
+            _async_iter_raises(ps.StreamingCallbackError("Blocked by policy")), _user_auth(), {}
+        )
+    ]
+    error = json.loads(
+        next(frame[6:] for frame in frames if isinstance(frame, str) and frame.startswith('data: {"error":'))
+    )["error"]
+    assert error["message"] == "Blocked by policy"

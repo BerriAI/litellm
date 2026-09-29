@@ -9041,6 +9041,19 @@ def data_generator(response):
             yield f"data: {json.dumps(chunk)}\n\n"
 
 
+def _streaming_public_error(exception: Exception) -> ProxyException:
+    """Keep arbitrary upstream exception text and attributes out of SSE errors.
+
+    StreamingCallbackError is raised deliberately by a blocking guardrail and
+    carries a message meant for the caller. Other exceptions are diagnostic.
+    """
+    if isinstance(exception, StreamingCallbackError):
+        return ProxyException(message=str(exception), type="streaming_callback_error", param=None, code=500)
+    return ProxyException(
+        message="An error occurred while streaming the response.", type="server_error", param=None, code=500
+    )
+
+
 async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKeyAuth, request_data: dict):
     verbose_proxy_logger.debug("inside generator")
     try:
@@ -9056,10 +9069,7 @@ async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKe
             # chunk = chunk.model_dump_json(exclude_none=True)
             async for c in chunk:
                 c = c.model_dump_json(exclude_none=True)
-                try:
-                    yield f"data: {c}\n\n"
-                except Exception as e:
-                    yield f"data: {e}\n\n"
+                yield f"data: {c}\n\n"
 
         # Streaming is done, yield the [DONE] chunk
         done_message: Final = "[DONE]"
@@ -9079,18 +9089,7 @@ async def async_assistants_data_generator(response, user_api_key_dict: UserAPIKe
         )
         if isinstance(e, HTTPException):
             raise e
-        else:
-            # Only include the error message, not the traceback.
-            # The traceback is already logged above via verbose_proxy_logger.exception().
-            # Including it in the SSE response leaks internal details to clients.
-            error_msg: Final = str(e)
-
-        proxy_exception: Final = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
-        )
+        proxy_exception: Final = _streaming_public_error(e)
         error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
         yield f"data: {error_returned}\n\n"
 
@@ -9737,15 +9736,12 @@ async def async_data_generator(
                 break
 
             if not raw_passthrough:
-                try:
-                    if error_state is not None:
-                        yield error_state.mark_emitted(_format_streaming_sse_chunk(chunk=chunk))
-                    else:
-                        yield _format_streaming_sse_chunk(chunk=chunk)
-                except Exception as e:
-                    if error_state is not None:
-                        raise
-                    yield f"data: {e}\n\n"
+                # A formatter failure reaches the outer handler, which logs it
+                # and emits a single safe error frame.
+                if error_state is not None:
+                    yield error_state.mark_emitted(_format_streaming_sse_chunk(chunk=chunk))
+                else:
+                    yield _format_streaming_sse_chunk(chunk=chunk)
 
             if pending_fallback_event:
                 yield _format_fallback_metadata_sse_event(
@@ -9803,20 +9799,7 @@ async def async_data_generator(
             return
         if isinstance(e, HTTPException):
             raise e
-        elif isinstance(e, StreamingCallbackError):
-            error_msg = str(e)
-        else:
-            # Only include the error message, not the traceback.
-            # The traceback is already logged above via verbose_proxy_logger.exception().
-            # Including it in the SSE response leaks internal details to clients.
-            error_msg = str(e)
-
-        proxy_exception: Final = ProxyException(
-            message=getattr(e, "message", error_msg),
-            type=getattr(e, "type", "None"),
-            param=getattr(e, "param", "None"),
-            code=getattr(e, "status_code", 500),
-        )
+        proxy_exception: Final = _streaming_public_error(e)
         error_returned: Final = json.dumps({"error": proxy_exception.to_dict()})
         stream_completed = True
         yield f"data: {error_returned}\n\n"

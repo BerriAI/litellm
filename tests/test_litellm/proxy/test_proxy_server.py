@@ -7580,7 +7580,11 @@ async def test_async_data_generator_errors_when_raw_sse_frame_exceeds_buffer_lim
 
     yielded_text = [chunk.decode("utf-8") if isinstance(chunk, bytes) else chunk for chunk in yielded_data]
     assert len(yielded_text) == 1
-    assert "maximum buffered size" in yielded_text[0]
+    assert json.loads(yielded_text[0].removeprefix("data: "))["error"] == {
+        "message": "An error occurred while streaming the response.",
+        "type": "server_error", "param": None, "code": "500",
+    }
+    assert "maximum buffered size" not in yielded_text[0]
     assert "[DONE]" not in yielded_text[0]
     mock_proxy_logging_obj.post_call_failure_hook.assert_awaited_once()
 
