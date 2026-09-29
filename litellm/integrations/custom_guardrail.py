@@ -990,6 +990,21 @@ class CustomGuardrail(CustomLogger):
             "standard_logging_object": {**standard_logging_object, "guardrail_information": [*existing, *entries]},
         }, result
 
+    def _copy_scratch_request_fields(
+        self,
+        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+    ) -> tuple[object, object]:
+        optional_params: Final = kwargs.get("optional_params") or {}
+        try:
+            return (
+                copy.deepcopy(kwargs.get("messages") or kwargs.get("input")),
+                copy.deepcopy(optional_params.get("tools")),
+            )
+        except Exception:
+            if self.logging_only_scope == "output":
+                return None, None
+            raise
+
     async def _scan_logged_call(
         self,
         kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
@@ -998,13 +1013,12 @@ class CustomGuardrail(CustomLogger):
         output_translation: "BaseTranslation",
         scratch_metadata: dict,  # mutable-ok: apply_guardrail records its verdict into request metadata
     ) -> None:
-        optional_params: Final = kwargs.get("optional_params") or {}
-        scratch_input: Final = copy.deepcopy(kwargs.get("messages") or kwargs.get("input"))
+        scratch_input, scratch_tools = self._copy_scratch_request_fields(kwargs)
         scratch_request: Final = {
             "model": kwargs.get("model"),
             "messages": scratch_input,
             "input": scratch_input,
-            "tools": copy.deepcopy(optional_params.get("tools")),
+            "tools": scratch_tools,
             "litellm_call_id": kwargs.get("litellm_call_id"),
             "metadata": scratch_metadata,
         }

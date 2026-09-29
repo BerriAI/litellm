@@ -2631,6 +2631,23 @@ class TestLoggingOnlyApplyGuardrail:
         assert out_response is response
 
     @pytest.mark.asyncio
+    async def test_output_scope_scans_response_when_request_copy_fails(self):
+        import threading
+
+        guardrail: Final = _ApplyOnlyObserver()
+        guardrail.logging_only_scope = "output"
+        call: Final = _logged_call([{"role": "user", "content": "hello there", "lock": threading.Lock()}])
+        kwargs: Final = call[0]
+        response: Final = call[1]
+
+        out_kwargs, _ = await guardrail.async_logging_hook(kwargs, response, CallTypes.acompletion.value)
+
+        assert guardrail.calls == [("response", ["general kenobi"])]
+        entries: Final = out_kwargs["standard_logging_object"]["guardrail_information"]
+        assert [entry["guardrail_name"] for entry in entries] == ["apply-only-observer"]
+        assert [entry["guardrail_status"] for entry in entries] == ["success"]
+
+    @pytest.mark.asyncio
     async def test_block_verdict_is_recorded_without_raising(self):
         guardrail = _ApplyOnlyObserver(block=True)
         kwargs, response = _logged_call([{"role": "user", "content": "flagged content"}])
