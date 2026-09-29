@@ -1293,3 +1293,25 @@ async def test_rotate_guardrail_params_retries_a_row_edited_during_rotation(monk
     assert decrypt_guardrail_litellm_params(_stored_params(prisma_client.db.litellm_guardrailstable.update_many)) == {
         "api_key": "edited-key"
     }
+
+
+@pytest.mark.asyncio
+async def test_rotate_guardrail_params_gives_up_on_a_row_that_keeps_changing(monkeypatch):
+    from litellm.constants import GUARDRAIL_ROTATION_ATTEMPTS
+    from litellm.proxy.guardrails.guardrail_registry import encrypt_guardrail_litellm_params
+
+    monkeypatch.delenv("LITELLM_SALT_KEY", raising=False)
+    monkeypatch.setattr("litellm.proxy.proxy_server.master_key", "sk-old-master")
+    row = _Row(guardrail_id="g-1", updated_at="t1", litellm_params=encrypt_guardrail_litellm_params({"api_key": "k"}))
+    prisma_client = MagicMock()
+    prisma_client.db.litellm_guardrailstable.find_many = AsyncMock(return_value=[row])
+    prisma_client.db.litellm_guardrailstable.find_unique = AsyncMock(return_value=row)
+    prisma_client.db.litellm_guardrailstable.update_many = AsyncMock(return_value=0)
+
+    rows_updated = await GuardrailRegistry.rotate_guardrail_params_master_key(
+        prisma_client=prisma_client, new_master_key="sk-new-master"
+    )
+
+    assert rows_updated == 0
+    assert prisma_client.db.litellm_guardrailstable.update_many.await_count == GUARDRAIL_ROTATION_ATTEMPTS
+    assert prisma_client.db.litellm_guardrailstable.find_unique.await_count == GUARDRAIL_ROTATION_ATTEMPTS - 1

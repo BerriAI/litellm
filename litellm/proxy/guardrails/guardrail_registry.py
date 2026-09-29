@@ -141,27 +141,33 @@ def guardrail_from_db_row(row: Iterable[tuple[str, object]]) -> Guardrail:
 
 
 async def _rotate_guardrail_row(
-    prisma_client: PrismaClient, row: "prisma_models.LiteLLM_GuardrailsTable", encryption_key: str
+    prisma_client: PrismaClient,
+    row: "prisma_models.LiteLLM_GuardrailsTable | None",
+    encryption_key: str,
+    attempts_left: int = GUARDRAIL_ROTATION_ATTEMPTS,
 ) -> int:
-    current: prisma_models.LiteLLM_GuardrailsTable | None = row
-    for _ in range(GUARDRAIL_ROTATION_ATTEMPTS):
-        if current is None or not isinstance(current.litellm_params, Mapping):
-            return 0
-        rotated_params: dict[str, object] = encrypt_guardrail_litellm_params(
-            decrypt_guardrail_litellm_params(current.litellm_params), new_encryption_key=encryption_key
-        )
-        if rotated_params == current.litellm_params:
-            return 0
-        if await _guardrail_table(prisma_client).update_many(
-            where={"guardrail_id": current.guardrail_id, "updated_at": current.updated_at},
-            data={"litellm_params": safe_dumps(rotated_params)},
-        ):
-            return 1
-        current = await _guardrail_table(prisma_client).find_unique(where={"guardrail_id": row.guardrail_id})
-    verbose_proxy_logger.warning(
-        "Guardrail %s kept changing during master key rotation; its secrets were not re-encrypted", row.guardrail_id
+    """Re-encrypt one row's params under encryption_key with a compare-and-set on updated_at.
+    A row edited since it was read is re-read and retried, up to attempts_left writes. Returns 1 when rewritten."""
+    if row is None or not isinstance(row.litellm_params, Mapping):
+        return 0
+    rotated_params: Final = encrypt_guardrail_litellm_params(
+        decrypt_guardrail_litellm_params(row.litellm_params), new_encryption_key=encryption_key
     )
-    return 0
+    if rotated_params == row.litellm_params:
+        return 0
+    if await _guardrail_table(prisma_client).update_many(
+        where={"guardrail_id": row.guardrail_id, "updated_at": row.updated_at},
+        data={"litellm_params": safe_dumps(rotated_params)},
+    ):
+        return 1
+    if attempts_left <= 1:
+        verbose_proxy_logger.warning(
+            "Guardrail %s kept changing during master key rotation; its secrets were not re-encrypted",
+            row.guardrail_id,
+        )
+        return 0
+    latest_row: Final = await _guardrail_table(prisma_client).find_unique(where={"guardrail_id": row.guardrail_id})
+    return await _rotate_guardrail_row(prisma_client, latest_row, encryption_key, attempts_left - 1)
 
 
 guardrail_initializer_registry: Final = {
