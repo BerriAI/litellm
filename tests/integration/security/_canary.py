@@ -105,6 +105,10 @@ SLOTS: Final = MappingProxyType(
         "H1": Slot("H1", "Pass-through endpoint credential header resolved from os.environ"),
         "H2": Slot("H2", "Vector store api_key declared in the proxy config.yaml vector_store_registry"),
         "H2S": Slot("H2S", "Search tool api_key declared in the proxy config.yaml search_tools"),
+        "D1": Slot("D1", "Client-side api_key in the request body"),
+        "D2": Slot("D2", "Client x-api-key header forwarded as the provider key"),
+        "D3": Slot("D3", "Client x- header forwarded to the provider"),
+        "D4": Slot("D4", "Anthropic OAuth token in the client Authorization header", prefix="sk-ant-oat01-"),
     }
 )
 
