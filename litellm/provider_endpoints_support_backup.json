@@ -815,6 +815,23 @@
         "interactions": true
       }
     },
+    "demonroute": {
+      "display_name": "DemonRoute (`demonroute`)",
+      "url": "https://docs.litellm.ai/docs/providers/demonroute",
+      "endpoints": {
+        "chat_completions": true,
+        "messages": false,
+        "responses": false,
+        "embeddings": false,
+        "image_generations": false,
+        "audio_transcriptions": false,
+        "audio_speech": false,
+        "moderations": false,
+        "batches": false,
+        "rerank": false,
+        "a2a": false
+      }
+    },
     "edenai": {
       "display_name": "Eden AI (`edenai`)",
       "url": "https://docs.litellm.ai/docs/providers/edenai",
