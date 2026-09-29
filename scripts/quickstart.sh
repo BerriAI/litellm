@@ -157,8 +157,14 @@ pick_folder() {
     printf '*\n' >.gitignore
   elif command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/null 2>&1 &&
     ! git check-ignore -q .env 2>/dev/null; then
-    # Never write ignore rules into a folder that already existed, such as a repository root.
-    echo "Note: $DIR/.env will hold your keys and is not ignored by git. Add .env to your .gitignore."
+    # In a folder that already existed, such as a repository root, leave the
+    # tracked .gitignore alone and add only .env to this clone's local exclude
+    # list, so the generated keys cannot be committed.
+    exclude="$(git rev-parse --git-path info/exclude)"
+    mkdir -p "$(dirname "$exclude")"
+    exclude="$(cd "$(dirname "$exclude")" && pwd)/exclude"
+    printf '/%s.env\n' "$(git rev-parse --show-prefix)" >>"$exclude"
+    echo "Added .env to this repository's local git exclude list ($exclude), so your keys stay out of commits."
   fi
 }
 
