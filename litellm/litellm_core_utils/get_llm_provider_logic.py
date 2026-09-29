@@ -2,7 +2,11 @@ from typing import Final, cast
 from urllib.parse import urlparse
 
 import litellm
-from litellm.constants import REPLICATE_MODEL_NAME_WITH_ID_LENGTH
+from litellm.constants import (
+    NADIR_DEFAULT_API_BASE,
+    PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO,
+    REPLICATE_MODEL_NAME_WITH_ID_LENGTH,
+)
 from litellm.litellm_core_utils.fallback_generalizations import (
     match_routing_generalization,
 )
@@ -127,6 +131,30 @@ def handle_anthropic_text_model_custom_llm_provider(
     return model, custom_llm_provider
 
 
+def declared_authenticating_provider(model: str | None, custom_llm_provider: str | None = None) -> str | None:
+    """The authenticating provider this pair already names, or None.
+
+    get_llm_provider runs the OAuth device flow for github_copilot and chatgpt, because their
+    provider info includes the key it unlocks. For a metadata question that flow is pure hazard,
+    and for a declared pair the resolver's answer is the declaration itself, so metadata callers
+    adopt the declaration instead of resolving.
+    """
+    declared: Final = custom_llm_provider or (model.split("/", 1)[0] if model and "/" in model else None)
+    return declared if declared in PROVIDERS_THAT_AUTHENTICATE_ON_PROVIDER_INFO else None
+
+
+def inferred_provider(model: str | None) -> str | None:
+    if not model:
+        return None
+    declared: Final = declared_authenticating_provider(model)
+    if declared is not None:
+        return declared
+    try:
+        return get_llm_provider(model=model)[1]
+    except Exception:  # noqa: BLE001  # get_llm_provider raises for an unknown name, which then has no provider
+        return None
+
+
 def get_llm_provider(
     model: str,
     custom_llm_provider: str | None = None,
@@ -148,7 +176,7 @@ def get_llm_provider(
         if model is None:
             raise ValueError("model parameter is required but was None. Please provide a valid model name.")
 
-        if litellm.LiteLLMProxyChatConfig._should_use_litellm_proxy_by_default(
+        if litellm.LiteLLMProxyChatConfig.should_use_litellm_proxy_by_default(
             litellm_params=cast(LiteLLM_Params | None, litellm_params)
         ):
             return litellm.LiteLLMProxyChatConfig.litellm_proxy_get_custom_llm_provider_info(
@@ -226,6 +254,8 @@ def get_llm_provider(
             if dynamic_api_key is not None and not isinstance(dynamic_api_key, str):
                 raise Exception(f"dynamic_api_key needs to be a string. Got type={type(dynamic_api_key).__name__}")
             return model, custom_llm_provider, dynamic_api_key, api_base
+        if "/" in model and is_registered_custom_provider(provider_prefix):
+            return model.split("/", 1)[1], provider_prefix, dynamic_api_key, api_base
         # check if api base is a known openai compatible endpoint
         if api_base:
             for endpoint in litellm.openai_compatible_endpoints:
@@ -251,6 +281,11 @@ def get_llm_provider(
                     elif endpoint == "https://api.cerebras.ai/v1":
                         custom_llm_provider = "cerebras"
                         dynamic_api_key = get_secret_str("CEREBRAS_API_KEY")
+                    elif endpoint == NADIR_DEFAULT_API_BASE:
+                        custom_llm_provider = "nadir"  # rebind-ok: mirrors sibling endpoint branches
+                        dynamic_api_key = (
+                            get_secret_str("NADIR_API_KEY") if api_base.lower().startswith("https://") else None
+                        )
                     elif endpoint == "https://inference.baseten.co/v1":
                         custom_llm_provider = "baseten"
                         dynamic_api_key = get_secret_str("BASETEN_API_KEY")
@@ -272,6 +307,14 @@ def get_llm_provider(
                     elif endpoint == "api.deepseek.com/v1":
                         custom_llm_provider = "deepseek"
                         dynamic_api_key = get_secret_str("DEEPSEEK_API_KEY")
+                    elif endpoint == "api.together.ai/v1" or endpoint == "api.together.xyz/v1":
+                        custom_llm_provider = "together_ai"
+                        dynamic_api_key = api_key or (
+                            get_secret_str("TOGETHER_API_KEY")
+                            or get_secret_str("TOGETHER_AI_API_KEY")
+                            or get_secret_str("TOGETHERAI_API_KEY")
+                            or get_secret_str("TOGETHER_AI_TOKEN")
+                        )
                     elif endpoint == "ollama.com":
                         custom_llm_provider = "ollama"
                         dynamic_api_key = get_secret_str("OLLAMA_API_KEY")
@@ -340,6 +383,9 @@ def get_llm_provider(
                     elif endpoint == "https://ai-gateway.vercel.sh/v1":
                         custom_llm_provider = "vercel_ai_gateway"
                         dynamic_api_key = get_secret_str("VERCEL_AI_GATEWAY_API_KEY")
+                    elif endpoint == "https://api.edenai.run/v3":
+                        custom_llm_provider = "edenai"  # rebind-ok: api_base detection resolves the provider in place
+                        dynamic_api_key = get_secret_str("EDENAI_API_KEY")
                     elif endpoint == "https://api.inference.wandb.ai/v1":
                         custom_llm_provider = "wandb"
                         dynamic_api_key = get_secret_str("WANDB_API_KEY")
@@ -349,6 +395,12 @@ def get_llm_provider(
                     elif endpoint == "https://api.meta.ai/v1":
                         custom_llm_provider = "meta"
                         dynamic_api_key = get_secret_str("META_API_KEY")
+                    elif endpoint == "https://gigachat.devices.sberbank.ru/api/v1":
+                        custom_llm_provider = "gigachat"
+                        dynamic_api_key = get_secret_str("GIGACHAT_API_KEY")
+                    elif (json_provider := JSONProviderRegistry.get_by_base_url(endpoint)) is not None:
+                        custom_llm_provider = json_provider.slug
+                        dynamic_api_key = api_key if api_key is not None else get_secret_str(json_provider.api_key_env)
 
                     if api_base is not None and not isinstance(api_base, str):
                         raise Exception(f"api base needs to be a string. api_base={api_base}")
@@ -510,6 +562,18 @@ def get_llm_provider(
             )
 
 
+def is_registered_custom_provider(custom_llm_provider: str | None) -> bool:
+    return any(item["provider"] == custom_llm_provider for item in litellm.custom_provider_map)
+
+
+def _dashscope_family_chat_config(custom_llm_provider: str) -> "litellm.DashScopeChatConfig":
+    if custom_llm_provider == "qwencloud":
+        return litellm.QwenCloudChatConfig()
+    if custom_llm_provider == "qwen_ai_platform":
+        return litellm.QwenAIPlatformChatConfig()
+    return litellm.DashScopeChatConfig()
+
+
 def _get_openai_compatible_provider_info(
     model: str,
     api_base: str | None,
@@ -567,12 +631,15 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.GroqChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "bedrock_mantle":
+        from litellm.llms.bedrock_mantle.common_utils import split_mantle_region_prefix
+
         (
             api_base,
             dynamic_api_key,
         ) = litellm.BedrockMantleChatConfig()._get_openai_compatible_provider_info(
             api_base, api_key, litellm_params=litellm_params, model=model
         )
+        model = split_mantle_region_prefix(model)[1]  # rebind-ok: the prefix is routing only, not a Mantle model id
     elif custom_llm_provider == "nvidia_nim":
         # nvidia_nim is openai compatible, we just need to set this to custom_openai and have the api_base be https://api.endpoints.anyscale.com/v1
         api_base = api_base or get_secret("NVIDIA_NIM_API_BASE") or "https://integrate.api.nvidia.com/v1"
@@ -591,6 +658,13 @@ def _get_openai_compatible_provider_info(
     elif custom_llm_provider == "cerebras":
         api_base = api_base or get_secret("CEREBRAS_API_BASE") or "https://api.cerebras.ai/v1"
         dynamic_api_key = api_key or get_secret_str("CEREBRAS_API_KEY")
+    elif custom_llm_provider == "nadir":
+        default_nadir_base: Final = get_secret_str("NADIR_API_BASE") or NADIR_DEFAULT_API_BASE
+        caller_base: Final = api_base
+        api_base = api_base or default_nadir_base  # rebind-ok: mirrors sibling provider branches
+        trusted_base: Final = caller_base is None or caller_base.rstrip("/") == default_nadir_base.rstrip("/")
+        env_key: Final = get_secret_str("NADIR_API_KEY") if trusted_base else None
+        dynamic_api_key = api_key or env_key  # rebind-ok: mirrors sibling provider branches
     elif custom_llm_provider == "baseten":
         # Use BasetenConfig to determine the appropriate API base URL
         if api_base is None:
@@ -704,7 +778,7 @@ def _get_openai_compatible_provider_info(
             dynamic_api_key,
         ) = litellm.ZAIChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "together_ai":
-        api_base = api_base or get_secret_str("TOGETHER_AI_API_BASE") or "https://api.together.xyz/v1"
+        api_base = api_base or get_secret_str("TOGETHER_AI_API_BASE") or "https://api.together.ai/v1"
         dynamic_api_key = api_key or (
             get_secret_str("TOGETHER_API_KEY")
             or get_secret_str("TOGETHER_AI_API_KEY")
@@ -759,11 +833,11 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.HerokuChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
-    elif custom_llm_provider == "dashscope":
+    elif custom_llm_provider in ("dashscope", "qwencloud", "qwen_ai_platform"):
         (
             api_base,
             dynamic_api_key,
-        ) = litellm.DashScopeChatConfig()._get_openai_compatible_provider_info(api_base, api_key)
+        ) = _dashscope_family_chat_config(custom_llm_provider)._get_openai_compatible_provider_info(api_base, api_key)
     elif custom_llm_provider == "modelscope":
         (
             api_base,
@@ -810,6 +884,11 @@ def _get_openai_compatible_provider_info(
             api_base,
             dynamic_api_key,
         ) = litellm.VercelAIGatewayConfig()._get_openai_compatible_provider_info(api_base, api_key)
+    elif custom_llm_provider == "edenai":
+        api_base = litellm.EdenAIChatConfig.get_api_base(api_base)  # rebind-ok: chain resolves in place
+        dynamic_api_key = litellm.EdenAIChatConfig.get_api_key(api_key)  # rebind-ok: chain resolves in place
+    elif custom_llm_provider == "fal_ai":
+        dynamic_api_key = litellm.FalAIChatConfig.get_api_key(api_key)  # rebind-ok: chain resolves in place
     elif custom_llm_provider == "aiml":
         (
             api_base,
@@ -844,6 +923,9 @@ def _get_openai_compatible_provider_info(
         # Manus is OpenAI compatible for responses API
         api_base = api_base or get_secret_str("MANUS_API_BASE") or "https://api.manus.im"
         dynamic_api_key = api_key or get_secret_str("MANUS_API_KEY")
+    elif custom_llm_provider == "gigachat":
+        api_base = api_base or get_secret_str("GIGACHAT_API_BASE") or "https://gigachat.devices.sberbank.ru/api/v1"
+        dynamic_api_key = api_key or get_secret_str("GIGACHAT_API_KEY")
 
     if api_base is not None and not isinstance(api_base, str):
         raise Exception(f"api base needs to be a string. api_base={api_base}")

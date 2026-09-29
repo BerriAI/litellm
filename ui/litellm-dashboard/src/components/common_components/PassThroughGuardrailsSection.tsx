@@ -1,10 +1,10 @@
 import React from "react";
-import { Alert } from "antd";
-import { CircleHelp } from "lucide-react";
+import { CircleHelp, Info } from "lucide-react";
+import { Alert, AlertDescription, AlertTitle } from "@/components/shared/Alert";
 
 import GuardrailSelector from "../guardrails/GuardrailSelector";
 import { TagsInput } from "@/app/(dashboard)/guardrails/_components/content_filter/TagsInput";
-import { Field, FieldLabel } from "@/components/shared/form/field";
+import { Field, FieldLabel } from "@/components/ui/field";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
 import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
@@ -67,21 +67,20 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
           endpoints.
         </p>
 
-        <Alert
-          message={
-            <span>
-              Field-Level Targeting{" "}
-              <a
-                href="https://docs.litellm.ai/docs/proxy/pass_through_guardrails#field-level-targeting"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-blue-600 underline hover:text-blue-800"
-              >
-                (Learn More)
-              </a>
-            </span>
-          }
-          description={
+        <Alert variant="info" className="mb-4">
+          <Info />
+          <AlertTitle>
+            Field-Level Targeting{" "}
+            <a
+              href="https://docs.litellm.ai/docs/proxy/pass_through_guardrails#field-level-targeting"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-info underline hover:text-info/80"
+            >
+              (Learn More)
+            </a>
+          </AlertTitle>
+          <AlertDescription>
             <div className="space-y-2">
               <div>
                 Optionally specify which fields to check. If left empty, the entire request/response is sent to the
@@ -100,11 +99,8 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                 </div>
               </div>
             </div>
-          }
-          type="info"
-          showIcon
-          className="mb-4"
-        />
+          </AlertDescription>
+        </Alert>
 
         <Field>
           <FieldLabel htmlFor="pass-through-guardrails">
@@ -174,6 +170,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                       value={value[guardrailName]?.request_fields ?? []}
                       onValueChange={(fields) => handleFieldChange(guardrailName, "request_fields", fields)}
                       tokenSeparators={[","]}
+                      disabled={disabled}
                     />
                   </Field>
                   <Field>
@@ -212,6 +209,7 @@ const PassThroughGuardrailsSection: React.FC<PassThroughGuardrailsSectionProps> 
                       value={value[guardrailName]?.response_fields ?? []}
                       onValueChange={(fields) => handleFieldChange(guardrailName, "response_fields", fields)}
                       tokenSeparators={[","]}
+                      disabled={disabled}
                     />
                   </Field>
                 </div>

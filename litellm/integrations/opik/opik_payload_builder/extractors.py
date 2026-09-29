@@ -1,6 +1,7 @@
 """Data extraction functions for Opik payload building."""
 
 import json
+from collections.abc import Mapping
 from typing import Any, Final
 
 from litellm import _logging
@@ -35,8 +36,8 @@ def normalize_provider_name(provider: str | None) -> str | None:
 
 
 def extract_opik_metadata(
-    litellm_metadata: dict[str, Any],
-    standard_logging_metadata: dict[str, Any],
+    litellm_metadata: Mapping[str, Any],
+    standard_logging_metadata: Mapping[str, Any],
 ) -> dict[str, Any]:
     """
     Merge Opik metadata from three sources in increasing priority order:
@@ -97,7 +98,7 @@ def extract_span_identifiers(
 
 
 def extract_tags(
-    opik_metadata: dict[str, Any],
+    opik_metadata: Mapping[str, Any],
     custom_llm_provider: str | None,
 ) -> list[str]:
     """
@@ -122,7 +123,7 @@ def apply_proxy_header_overrides(
     project_name: str,
     tags: list[str],
     thread_id: str | None,
-    proxy_headers: dict[str, Any],
+    proxy_headers: Mapping[str, str],
 ) -> tuple[str, list[str], str | None]:
     """
     Apply overrides from proxy request headers (opik_* prefix).
@@ -148,7 +149,7 @@ def apply_proxy_header_overrides(
             thread_id = value
         elif param_key == "tags":
             try:
-                parsed_tags = json.loads(value)
+                parsed_tags: object = json.loads(value)
                 if isinstance(parsed_tags, list):
                     tags.extend(parsed_tags)
             except (json.JSONDecodeError, TypeError):
@@ -158,11 +159,11 @@ def apply_proxy_header_overrides(
 
 
 def extract_and_build_metadata(
-    opik_metadata: dict[str, Any],
-    standard_logging_metadata: dict[str, Any],
-    standard_logging_object: dict[str, Any],
-    litellm_kwargs: dict[str, Any],
-) -> dict[str, Any]:
+    opik_metadata: Mapping[str, object],
+    standard_logging_metadata: Mapping[str, object],
+    standard_logging_object: Mapping[str, object],
+    litellm_kwargs: Mapping[str, object],
+) -> dict[str, object]:
     """
     Build the complete metadata dictionary from all available sources.
 

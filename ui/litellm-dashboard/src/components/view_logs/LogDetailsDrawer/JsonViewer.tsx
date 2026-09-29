@@ -1,4 +1,5 @@
-import { JsonView, defaultStyles } from "react-json-view-lite";
+import { useTheme } from "next-themes";
+import { JsonView, darkStyles, defaultStyles } from "react-json-view-lite";
 import "react-json-view-lite/dist/index.css";
 import { JSON_MAX_HEIGHT, SPACING_LARGE } from "./constants";
 
@@ -12,6 +13,8 @@ interface JsonViewerProps {
  * Uses an interactive tree component for easy navigation.
  */
 export function JsonViewer({ data }: JsonViewerProps) {
+  const { resolvedTheme } = useTheme();
+
   if (!data) return <span className="text-muted-foreground">No data</span>;
 
   return (
@@ -24,8 +27,8 @@ export function JsonViewer({ data }: JsonViewerProps) {
         borderRadius: 4,
       }}
     >
-      <div className="**:[[role='tree']]:bg-background! **:[[role='tree']]:text-foreground">
-        <JsonView data={data} style={defaultStyles} clickToExpandNode={true} />
+      <div className="**:[[role='tree']]:bg-transparent!">
+        <JsonView data={data} style={resolvedTheme === "dark" ? darkStyles : defaultStyles} clickToExpandNode={true} />
       </div>
     </div>
   );

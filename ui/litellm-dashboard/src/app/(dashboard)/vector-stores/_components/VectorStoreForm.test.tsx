@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { CredentialItem, vectorStoreCreateCall } from "@/components/networking";
@@ -49,7 +49,7 @@ describe("VectorStoreForm", () => {
     const user = userEvent.setup();
     renderForm();
 
-    await user.type(screen.getByLabelText(/Vector Store ID/), "vs-created");
+    fireEvent.change(screen.getByLabelText(/Vector Store ID/), { target: { value: "vs-created" } });
     await user.click(screen.getByRole("button", { name: "Create" }));
 
     await vi.waitFor(() => expect(vectorStoreCreateCall).toHaveBeenCalledTimes(1));
@@ -61,13 +61,23 @@ describe("VectorStoreForm", () => {
     const onCancel = vi.fn();
     renderForm(onCancel);
 
-    await user.type(screen.getByLabelText(/Vector Store ID/), "vs-abandoned");
+    fireEvent.change(screen.getByLabelText(/Vector Store ID/), { target: { value: "vs-abandoned" } });
     await user.click(screen.getByRole("button", { name: "Cancel" }));
 
     expect(onCancel).toHaveBeenCalledTimes(1);
     expect(vectorStoreCreateCall).not.toHaveBeenCalled();
   });
 });
+
+const MONGODB_SIDECAR_URL = "http://127.0.0.1:8080";
+
+const MONGODB_REQUIRED_FORM_VALUES = {
+  api_base: MONGODB_SIDECAR_URL,
+  api_key: "sidecar-test-key",
+  mongodb_database: "sample_mflix",
+  mongodb_collection: "embedded_movies",
+  embedding_model: "text-embedding-ada-002",
+};
 
 describe("buildVectorStoreLitellmParams", () => {
   it("renames embedding_model to litellm_embedding_model for valkey", () => {
@@ -108,6 +118,52 @@ describe("buildVectorStoreLitellmParams", () => {
       api_base: "https://my-milvus-endpoint.com/",
       litellm_embedding_model: "text-embedding-3-small",
     });
+  });
+
+  it("renames embedding_model to litellm_embedding_model for mongodb", () => {
+    const formValues = {
+      ...MONGODB_REQUIRED_FORM_VALUES,
+      mongodb_embedding_field: "plot_embedding",
+      mongodb_text_field: "plot",
+      mongodb_num_candidates: "200",
+    };
+    const expected = {
+      api_base: MONGODB_SIDECAR_URL,
+      api_key: "sidecar-test-key",
+      mongodb_database: "sample_mflix",
+      mongodb_collection: "embedded_movies",
+      mongodb_embedding_field: "plot_embedding",
+      mongodb_text_field: "plot",
+      mongodb_num_candidates: "200",
+      litellm_embedding_model: "text-embedding-ada-002",
+    };
+
+    expect(buildVectorStoreLitellmParams("mongodb", formValues)).toEqual(expected);
+  });
+
+  it("sends only mongodb fields when an earlier provider left values in the form", () => {
+    const formValues = {
+      ...MONGODB_REQUIRED_FORM_VALUES,
+      mongodb_connection_string: "mongodb://obsolete-credentials",
+      valkey_host: "left-over-from-valkey.example.com",
+      valkey_port: "6379",
+      aws_region_name: "us-west-2",
+    };
+
+    const params = buildVectorStoreLitellmParams("mongodb", formValues);
+
+    expect(params).not.toHaveProperty("valkey_host");
+    expect(params).not.toHaveProperty("valkey_port");
+    expect(params).not.toHaveProperty("aws_region_name");
+    expect(params.api_base).toBe(MONGODB_SIDECAR_URL);
+    expect(params).not.toHaveProperty("mongodb_connection_string");
+  });
+
+  it("omits a blank mongodb_num_candidates so litellm picks its own candidate count", () => {
+    const params = buildVectorStoreLitellmParams("mongodb", MONGODB_REQUIRED_FORM_VALUES);
+
+    expect(params.mongodb_num_candidates).toBeUndefined();
+    expect(JSON.parse(JSON.stringify(params))).not.toHaveProperty("mongodb_num_candidates");
   });
 
   it("keeps embedding_model as-is for providers outside the rename set", () => {

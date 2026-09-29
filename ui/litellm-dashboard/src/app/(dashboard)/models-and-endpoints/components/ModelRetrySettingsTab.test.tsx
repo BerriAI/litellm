@@ -43,6 +43,26 @@ describe("ModelRetrySettingsTab", () => {
     expect(screen.getByText(/RateLimitError \(429\)/)).toBeInTheDocument();
     expect(screen.getByText(/ContentPolicyViolationError \(400\)/)).toBeInTheDocument();
     expect(screen.getByText(/InternalServerError \(500\)/)).toBeInTheDocument();
+    expect(screen.getByText(/NotFoundError \(404\)/)).toBeInTheDocument();
+  });
+
+  it("should write the NotFoundError row to NotFoundErrorRetries ahead of the catch-all row", () => {
+    const setGlobalRetryPolicy = vi.fn();
+    render(
+      <ModelRetrySettingsTab
+        {...buildProps({
+          selectedModelGroup: "global",
+          globalRetryPolicy: { DefaultRetries: 3 },
+          setGlobalRetryPolicy,
+        })}
+      />,
+    );
+
+    const notFoundInput = screen.getByRole("spinbutton", { name: /NotFoundError \(404\) retry count$/ });
+    fireEvent.change(notFoundInput, { target: { value: "2" } });
+
+    const updater = setGlobalRetryPolicy.mock.calls.at(-1)![0];
+    expect(updater({ DefaultRetries: 3 })).toMatchObject({ DefaultRetries: 3, NotFoundErrorRetries: 2 });
   });
 
   it("should use defaultRetry when globalRetryPolicy is null (global scope)", () => {
@@ -263,7 +283,7 @@ describe("ModelRetrySettingsTab", () => {
 
     const inputs = screen.getAllByRole("spinbutton");
     await user.clear(inputs[0]);
-    await user.type(inputs[0], "4");
+    fireEvent.change(inputs[0], { target: { value: "4" } });
 
     // setGlobalRetryPolicy is called with a function updater
     expect(setGlobalRetryPolicy).toHaveBeenCalled();
@@ -291,7 +311,7 @@ describe("ModelRetrySettingsTab", () => {
 
     const inputs = screen.getAllByRole("spinbutton");
     await user.clear(inputs[0]);
-    await user.type(inputs[0], "2");
+    fireEvent.change(inputs[0], { target: { value: "2" } });
 
     expect(setModelGroupRetryPolicy).toHaveBeenCalled();
     const updater = setModelGroupRetryPolicy.mock.calls.at(-1)![0];

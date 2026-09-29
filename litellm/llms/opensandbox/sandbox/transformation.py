@@ -1,7 +1,7 @@
 import asyncio
 import json
 import time
-from typing import Final, cast
+from typing import Final
 
 import httpx
 
@@ -86,13 +86,10 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
             secure_access=secure_access,
         )
 
-        response: Final = cast(
-            httpx.Response,
-            await self._http(client).post(
-                url=f"{base}/sandboxes",
-                headers=self._lifecycle_headers(key),
-                json=body,
-            ),
+        response: Final = await self._http(client).post(
+            url=f"{base}/sandboxes",
+            headers=self._lifecycle_headers(key),
+            json=body,
         )
         data: Final = response.json()
         sandbox_id: Final = str(data["id"])
@@ -182,12 +179,9 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         base: Final = str(handle._hidden_params.get("api_base") or self._api_base(api_base))
         key: Final = self._api_key(api_key=api_key, handle=handle)
         try:
-            response: Final = cast(
-                httpx.Response,
-                await self._http(client).delete(
-                    url=f"{base}/sandboxes/{handle.id}",
-                    headers=self._lifecycle_headers(key),
-                ),
+            response: Final = await self._http(client).delete(
+                url=f"{base}/sandboxes/{handle.id}",
+                headers=self._lifecycle_headers(key),
             )
         except httpx.HTTPStatusError as e:
             if e.response.status_code == 404:
@@ -245,12 +239,9 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
     ) -> None:
         deadline: Final = time.monotonic() + ready_timeout
         while True:
-            response = cast(
-                httpx.Response,
-                await self._http(client).get(
-                    url=f"{api_base}/sandboxes/{sandbox_id}",
-                    headers=headers,
-                ),
+            response = await self._http(client).get(
+                url=f"{api_base}/sandboxes/{sandbox_id}",
+                headers=headers,
             )
             data = response.json()
             state = self._sandbox_state(data)
@@ -306,13 +297,10 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         use_server_proxy: bool,
         client: AsyncHTTPHandler | None,
     ) -> tuple[str, dict[str, str]]:
-        response: Final = cast(
-            httpx.Response,
-            await self._http(client).get(
-                url=f"{api_base}/sandboxes/{sandbox_id}/endpoints/{OPEN_SANDBOX_EXECD_PORT}",
-                headers=headers,
-                params={"use_server_proxy": use_server_proxy},
-            ),
+        response: Final = await self._http(client).get(
+            url=f"{api_base}/sandboxes/{sandbox_id}/endpoints/{OPEN_SANDBOX_EXECD_PORT}",
+            headers=headers,
+            params={"use_server_proxy": use_server_proxy},
         )
         data: Final = response.json()
         endpoint: Final = data.get("endpoint")
@@ -329,15 +317,12 @@ class OpenSandboxSandboxConfig(BaseSandboxConfig):
         client: AsyncHTTPHandler | None,
     ) -> list[str]:
         timeout: Final = httpx.Timeout(connect=30.0, read=None, write=30.0, pool=None)
-        response: Final = cast(
-            httpx.Response,
-            await self._http(client).post(
-                url=url,
-                headers=headers,
-                timeout=timeout,
-                json=body,
-                stream=True,
-            ),
+        response: Final = await self._http(client).post(
+            url=url,
+            headers=headers,
+            timeout=timeout,
+            json=body,
+            stream=True,
         )
         return await self._read_capped_lines(response)
 

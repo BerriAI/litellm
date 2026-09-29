@@ -15,7 +15,7 @@ const generateId = () => `entry-${Date.now()}-${Math.random().toString(36).subst
 
 const createDefaultEntry = (): ModelEntry => ({
   id: generateId(),
-  model: "",
+  model: null,
   input_tokens: 1000,
   output_tokens: 500,
   num_requests_per_day: undefined,
@@ -28,7 +28,7 @@ const PricingCalculator: React.FC<PricingCalculatorProps> = ({ accessToken, mode
   const { debouncedFetchForEntry, removeEntry, getMultiModelResult } = useMultiCostEstimate(accessToken);
 
   const handleEntryChange = useCallback(
-    (id: string, field: keyof ModelEntry, value: string | number | undefined) => {
+    (id: string, field: keyof ModelEntry, value: string | number | null | undefined) => {
       setEntries((prev) => {
         const updated = prev.map((entry) => (entry.id === id ? { ...entry, [field]: value } : entry));
         const changedEntry = updated.find((e) => e.id === id);

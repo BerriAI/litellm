@@ -145,7 +145,7 @@ function UserBannerSettingsForm({ persisted, isLoading, isPending, saveBanner }:
               </div>
             )}
 
-            <div>
+            <div className="flex justify-end">
               <Button onClick={handleSave} disabled={isPending || messageMissing}>
                 {isPending ? "Saving..." : "Save banner"}
               </Button>

@@ -93,8 +93,6 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
             raise ValueError(
                 f"api_base is required for Azure AI Studio. Please set the api_base parameter. Passed `api_base={api_base}`"
             )
-        original_url: Final = httpx.URL(api_base)
-
         # Resolve api_version: litellm_params > litellm.api_version > AZURE_API_VERSION env > default.
         # Mirrors the fallback chain used by the Azure chat path in common_utils.py,
         # so callers that set a global / env api_version don't get an unversioned URL.
@@ -104,6 +102,16 @@ class AzureImageEditConfig(OpenAIImageEditConfig):
             or get_secret_str("AZURE_API_VERSION")
             or litellm.AZURE_DEFAULT_API_VERSION
         )
+
+        v1_url: Final = BaseAzureLLM.get_azure_v1_image_url(
+            api_base=api_base,
+            api_version=api_version,
+            route="/openai/images/edits",
+        )
+        if v1_url is not None:
+            return v1_url
+
+        original_url: Final = httpx.URL(api_base)
 
         # Create a new dictionary with existing params
         query_params: Final = dict(original_url.params)

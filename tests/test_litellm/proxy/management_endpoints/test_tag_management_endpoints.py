@@ -1,18 +1,14 @@
 import inspect
 import json
-import os
-import sys
 from collections.abc import Sequence
-from typing import Optional
+from types import MappingProxyType, SimpleNamespace
+from typing import Mapping, Optional
 
 import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from prisma.actions import LiteLLM_VerificationTokenActions
 
-sys.path.insert(
-    0, os.path.abspath("../../../..")
-)  # Adds the parent directory to the system path
 
 from contextlib import contextmanager
 from unittest.mock import AsyncMock, Mock, patch
@@ -23,6 +19,20 @@ from litellm.proxy.proxy_server import app
 from litellm.types.tag_management import TagDeleteRequest, TagInfoRequest, TagNewRequest
 
 client = TestClient(app)
+
+
+class _BudgetState:
+    def __init__(self, values: Mapping[str, object]) -> None:
+        self._values: Mapping[str, object] = MappingProxyType(dict(values))
+
+    def store(self, values: Mapping[str, object]) -> None:
+        self._values = MappingProxyType({**self._values, **values})
+
+    def get(self, field: str) -> object:
+        return self._values[field]
+
+    def row(self) -> SimpleNamespace:
+        return SimpleNamespace(**self._values)
 
 
 class FakeVerificationTokenTable:
@@ -219,6 +229,174 @@ async def test_update_tag():
     finally:
         # Clean up dependency overrides
         app.dependency_overrides.clear()
+
+
+@pytest.mark.asyncio
+async def test_new_tag_persists_a_budget():
+    from datetime import datetime
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import new_tag
+
+    budget_state = _BudgetState({"budget_id": "budget-1", "max_budget": None})
+    created_tag = SimpleNamespace(
+        tag_name="budget-tag",
+        description=None,
+        models=[],
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+        created_by="admin",
+    )
+    mock_db = Mock()
+    mock_prisma = SimpleNamespace(db=mock_db, jsonify_object=lambda data: dict(data))
+    mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=None)
+    mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+
+    async def create_budget(data, **_):
+        budget_state.store(data)
+        return budget_state.row()
+
+    async def create_tag(data, **_):
+        created_tag.budget_id = data["budget_id"]
+        return created_tag
+
+    mock_db.litellm_budgettable.create = create_budget
+    mock_db.litellm_tagtable.create = create_tag
+    with (
+        patch(  # test-quality-ok: endpoint resolves the fake database through proxy_server
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch(  # test-quality-ok: endpoint reads the audit actor from proxy_server
+            "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+        ),
+        patch(  # test-quality-ok: endpoint requires a router before the budget write
+            "litellm.proxy.proxy_server.llm_router", object()
+        ),
+        patch(  # test-quality-ok: cache invalidation is outside this budget contract
+            "litellm.proxy.management_endpoints.tag_management_endpoints._evict_tag_cache_keys", new=AsyncMock()
+        ),
+    ):
+        await new_tag(
+            tag=TagNewRequest(name="budget-tag", max_budget=25.0),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert budget_state.get("max_budget") == 25.0
+    assert created_tag.budget_id == "budget-1"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "field",
+    ["max_budget", "soft_budget", "model_max_budget", "tpm_limit", "rpm_limit"],
+)
+async def test_update_tag_explicit_null_preserves_general_budget_fields(field):
+    from datetime import datetime
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
+    from litellm.types.tag_management import TagUpdateRequest
+
+    budget_state = _BudgetState(
+        {
+            "budget_id": "budget-1",
+            "max_budget": 100.0,
+            "soft_budget": 80.0,
+            "model_max_budget": {"model-a": {"max_budget": 50.0}},
+            "tpm_limit": 1000,
+            "rpm_limit": 100,
+            "budget_duration": "30d",
+        }
+    )
+    existing_tag = SimpleNamespace(budget_id="budget-1")
+    updated_tag = SimpleNamespace(
+        tag_name="budget-tag",
+        description=None,
+        models=[],
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+        created_by="admin",
+    )
+    mock_db = Mock()
+    mock_prisma = SimpleNamespace(db=mock_db)
+    mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
+    mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
+
+    async def update_budget(where, data, **_):
+        budget_state.store(data)
+        return budget_state.row()
+
+    mock_db.litellm_budgettable.update = update_budget
+    with (
+        patch(  # test-quality-ok: endpoint resolves the fake database through proxy_server
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch(  # test-quality-ok: endpoint reads the audit actor from proxy_server
+            "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+        ),
+        patch(  # test-quality-ok: cache invalidation is outside this budget contract
+            "litellm.proxy.management_endpoints.tag_management_endpoints._evict_tag_cache_keys", new=AsyncMock()
+        ),
+    ):
+        await update_tag(
+            tag=TagUpdateRequest(name="budget-tag", **{field: None}),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    expected_values = {
+        "max_budget": 100.0,
+        "soft_budget": 80.0,
+        "model_max_budget": {"model-a": {"max_budget": 50.0}},
+        "tpm_limit": 1000,
+        "rpm_limit": 100,
+    }
+    assert budget_state.get(field) == expected_values[field]
+
+
+@pytest.mark.asyncio
+async def test_update_tag_explicit_null_clears_budget_duration():
+    from datetime import datetime
+
+    from litellm.proxy.management_endpoints.tag_management_endpoints import update_tag
+    from litellm.types.tag_management import TagUpdateRequest
+
+    budget_state = _BudgetState({"budget_id": "budget-1", "budget_duration": "30d"})
+    existing_tag = SimpleNamespace(budget_id="budget-1")
+    updated_tag = SimpleNamespace(
+        tag_name="budget-tag",
+        description=None,
+        models=[],
+        created_at=datetime(2024, 1, 1),
+        updated_at=datetime(2024, 1, 1),
+        created_by="admin",
+    )
+    mock_db = Mock()
+    mock_prisma = SimpleNamespace(db=mock_db)
+    mock_db.litellm_tagtable.find_unique = AsyncMock(return_value=existing_tag)
+    mock_db.litellm_proxymodeltable.find_many = AsyncMock(return_value=[])
+    mock_db.litellm_tagtable.update = AsyncMock(return_value=updated_tag)
+
+    async def update_budget(where, data, **_):
+        budget_state.store(data)
+        return budget_state.row()
+
+    mock_db.litellm_budgettable.update = update_budget
+    with (
+        patch(  # test-quality-ok: endpoint resolves the fake database through proxy_server
+            "litellm.proxy.proxy_server.prisma_client", mock_prisma
+        ),
+        patch(  # test-quality-ok: endpoint reads the audit actor from proxy_server
+            "litellm.proxy.proxy_server.litellm_proxy_admin_name", "admin"
+        ),
+        patch(  # test-quality-ok: cache invalidation is outside this budget contract
+            "litellm.proxy.management_endpoints.tag_management_endpoints._evict_tag_cache_keys", new=AsyncMock()
+        ),
+    ):
+        await update_tag(
+            tag=TagUpdateRequest(name="budget-tag", budget_duration=None),
+            user_api_key_dict=UserAPIKeyAuth(user_id="admin", user_role=LitellmUserRoles.PROXY_ADMIN),
+        )
+
+    assert budget_state.get("budget_duration") is None
 
 
 @pytest.mark.asyncio

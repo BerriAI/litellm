@@ -1,21 +1,21 @@
 """`/management/v1/spend_logs` facets."""
 
 from datetime import datetime, timezone
-from typing import Annotated, Any, Final, Literal
+from typing import Annotated, Final, Literal
 
 from fastapi import APIRouter, Depends, Query, Request
 
 from litellm._logging import verbose_proxy_logger
 from litellm.proxy._types import CommonProxyErrors, UserAPIKeyAuth
 from litellm.proxy.auth.user_api_key_auth import user_api_key_auth
-from litellm.proxy.management_endpoints.management_v1.common import (
-    MANAGEMENT_V1_PREFIX,
+from litellm.proxy.list_api.common import (
     PROBLEM_TYPE_BASE,
     ManagementProblem,
     build_page_links,
     escape_like,
     reject_unknown_query_params,
 )
+from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.proxy.utils import PrismaClient
 from litellm.types.proxy.management_endpoints.management_v1 import (
     FacetListResponse,
@@ -39,7 +39,7 @@ async def _spend_log_scope_clause(
     user_api_key_dict: UserAPIKeyAuth,
     prisma_client: PrismaClient,
     next_param_index: int,
-) -> tuple[str | None, tuple[Any, ...]]:
+) -> tuple[str | None, tuple[str | list[str], ...]]:
     """SQL predicate restricting the facet to spend logs this caller may read.
 
     Returns ``(None, ())`` for a proxy admin. Mirrors the scoping ``/spend/logs/ui``
@@ -101,8 +101,8 @@ async def _list_spend_log_facet(
             )
 
         column_sql: Final = "end_user" if column == "end_user" else '"user"'
-        window_params: Final[tuple[Any, ...]] = (_as_utc(start_time), _as_utc(end_time))
-        search_params: Final[tuple[Any, ...]] = (f"%{escape_like(q)}%",) if q else ()
+        window_params: Final[tuple[datetime, datetime]] = (_as_utc(start_time), _as_utc(end_time))
+        search_params: Final[tuple[str, ...]] = (f"%{escape_like(q)}%",) if q else ()
         search_clause: Final = (f"{column_sql} ILIKE ${len(window_params) + 1} ESCAPE '\\'",) if q else ()
 
         scope_clause, scope_params = await _spend_log_scope_clause(

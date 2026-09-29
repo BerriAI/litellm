@@ -10,6 +10,7 @@ API Reference:
 """
 
 import json
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Final, Optional, Union, cast
 
 import httpx
@@ -30,6 +31,7 @@ from litellm.types.utils import Choices, Message, ModelResponse, Usage
 
 if TYPE_CHECKING:
     from litellm.litellm_core_utils.litellm_logging import Logging as _LiteLLMLoggingObj
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
     from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
     from litellm.utils import CustomStreamWrapper
 
@@ -203,7 +205,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         session_id: Final = self._get_session_id(optional_params)
 
         # Build the input
-        input_data: Final[dict[str, Any]] = {
+        input_data: Final[dict[str, str]] = {
             "message": prompt,
             "user_id": user_id,
         }
@@ -283,7 +285,7 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -364,6 +366,8 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         client: Union[HTTPHandler, "AsyncHTTPHandler"] | None = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> "CustomStreamWrapper":
         """Get a CustomStreamWrapper for synchronous streaming."""
         from litellm.llms.custom_httpx.http_handler import (
@@ -422,6 +426,8 @@ class VertexAgentEngineConfig(BaseConfig, VertexBase):
         client: Optional["AsyncHTTPHandler"] = None,
         json_mode: bool | None = None,
         signed_json_body: bytes | None = None,
+        *,
+        litellm_params: Mapping[str, object],
     ) -> "CustomStreamWrapper":
         """Get a CustomStreamWrapper for asynchronous streaming."""
         from litellm.llms.custom_httpx.http_handler import (

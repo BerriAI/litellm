@@ -76,8 +76,8 @@ export default function DeleteResourceModal({
             <span>{message}</span>
           </div>
           {requiredConfirmation && (
-            <div className="mb-6 mt-4 pt-4 border-t border-gray-200 dark:border-gray-700">
-              <p className="block text-base font-medium text-gray-700 dark:text-gray-300 mb-2">
+            <div className="mb-6 mt-4 pt-4 border-t border-border">
+              <p className="block text-base font-medium text-foreground mb-2">
                 Type <span className="font-semibold text-destructive">{requiredConfirmation}</span> to confirm deletion:
               </p>
               <InputGroup className="rounded-md">

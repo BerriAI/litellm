@@ -7,15 +7,15 @@
 # 4. Added proper cleanup in fixtures
 # 5. Added worker-specific isolation for parallel execution
 
+import base64
 import importlib
 import os
-import sys
 from pathlib import Path
+from types import SimpleNamespace
+import httpx
 import pytest
+from pytest_socket import _remove_restrictions
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 import asyncio
 
 import litellm
@@ -29,6 +29,7 @@ from litellm.llms.custom_httpx.async_client_cleanup import (
     close_litellm_async_clients,
 )
 from litellm.proxy.db import tool_registry_writer as tool_registry_writer_module
+from tests.unit.litellm_core_utils.fake_secret_vault import FakeSecretVault
 
 
 def _reset_module_level_aws_auth_caches():
@@ -98,6 +99,61 @@ def isolate_host_aws_config(monkeypatch, isolated_aws_credentials_dir):
     monkeypatch.delenv("AWS_BEARER_TOKEN_BEDROCK", raising=False)
     monkeypatch.delenv("AWS_REGION_NAME", raising=False)
     monkeypatch.delenv("AWS_DEFAULT_REGION", raising=False)
+
+
+@pytest.fixture(scope="function", autouse=True)
+def isolate_host_proxy_base_url(monkeypatch):
+    """Prevent a host PROXY_BASE_URL from outranking request-derived URLs during unit tests."""
+    monkeypatch.delenv("PROXY_BASE_URL", raising=False)
+
+
+@pytest.fixture(scope="function", autouse=True)
+def isolate_host_os_keychain(monkeypatch):
+    """Keep any code path that resolves a CLI credential out of the developer's real OS keychain.
+
+    Tests that exercise keychain behaviour inject their own vault instead.
+    """
+    monkeypatch.setenv("LITELLM_CLI_DISABLE_KEYRING", "1")
+
+
+@pytest.fixture
+def secret_vault_factory():
+    """Build FakeSecretVault instances; see its docstring for the failure modes it can model."""
+    return FakeSecretVault
+
+
+@pytest.fixture
+def local_model_cost_map(monkeypatch):
+    """Force the bundled in-repo cost map so capability and pricing assertions do not
+    depend on the network-fetched ``main`` copy, which lags this branch until merge.
+
+    ``get_model_info`` is lru_cached, so swapping ``model_cost`` is not enough on its
+    own; clear on the way in and out so entries warmed against either map never leak
+    across tests."""
+    original_model_cost = litellm.model_cost
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    litellm.model_cost = litellm.get_model_cost_map(url="")
+    litellm.get_model_info.cache_clear()
+    try:
+        yield
+    finally:
+        litellm.model_cost = original_model_cost
+        litellm.get_model_info.cache_clear()
+
+
+@pytest.fixture
+def local_beta_headers_config(monkeypatch):
+    """Pin the bundled ``anthropic_beta_headers_config.json`` so beta header assertions
+    do not depend on the network-fetched copy or on what earlier tests left cached."""
+    from litellm.anthropic_beta_headers_manager import reload_beta_headers_config
+
+    monkeypatch.setenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", "True")
+    reload_beta_headers_config()
+    try:
+        yield
+    finally:
+        monkeypatch.delenv("LITELLM_LOCAL_ANTHROPIC_BETA_HEADERS", raising=False)
+        reload_beta_headers_config()
 
 
 def _run_coroutine_if_needed(result):
@@ -272,6 +328,9 @@ def isolate_litellm_state():
         litellm.in_memory_llm_clients_cache.flush_cache()
     image_handling_module.in_memory_cache.flush_cache()
     _reset_module_level_aws_auth_caches()
+    # litellm.get_model_info() memoizes ModelInfo built from litellm.model_cost, so a
+    # test that rebinds the cost map leaves later tests pricing against the old map.
+    litellm_utils_module._invalidate_model_cost_lowercase_map()
 
     # Clear all callback lists to prevent cross-test contamination
     if hasattr(litellm, "callbacks"):
@@ -315,6 +374,7 @@ def isolate_litellm_state():
 
     litellm_utils_module._runtime_registered_model_cost.clear()
     litellm_utils_module._runtime_registered_model_cost.update(original_runtime_registered_model_cost)
+    litellm_utils_module._invalidate_model_cost_lowercase_map()
 
     for _router in tuple(litellm_router_module._live_routers):
         litellm_router_module._live_routers.discard(_router)
@@ -355,7 +415,6 @@ def setup_and_teardown():
     Use this sparingly - most state should be handled by isolate_litellm_state.
     Only reload modules here if absolutely necessary.
     """
-    sys.path.insert(0, os.path.abspath("../.."))
 
     import litellm
 
@@ -383,6 +442,14 @@ def setup_and_teardown():
 
     # Teardown - no need to manually manage event loops with pytest-asyncio auto mode
     print(f"[conftest] Module teardown complete (worker: {worker_id or 'master'})")
+
+
+def pytest_collectstart():
+    _remove_restrictions()
+
+
+def pytest_runtest_setup():
+    _remove_restrictions()
 
 
 def pytest_collection_modifyitems(config, items):
@@ -489,3 +556,43 @@ def pytest_sessionfinish(session, exitstatus):
     _close_handler_if_needed(getattr(litellm, "aclient", None))
     _close_handler_if_needed(getattr(litellm, "client", None))
     _run_coroutine_if_needed(close_litellm_async_clients())
+
+
+ONE_PIXEL_PNG = base64.b64decode(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg=="
+)
+
+
+@pytest.fixture
+def async_only_image_fetch(monkeypatch):
+    from litellm.litellm_core_utils.prompt_templates import factory, image_handling
+    from litellm.llms.gemini.chat import transformation as gemini_chat_transformation
+
+    fetch = SimpleNamespace(
+        fetched=[],
+        base64_png=base64.b64encode(ONE_PIXEL_PNG).decode(),
+        data_url="data:image/png;base64," + base64.b64encode(ONE_PIXEL_PNG).decode(),
+    )
+
+    def forbid_sync_fetch(client, url, **kwargs):
+        raise litellm.ImageFetchError(f"sync image fetch ran on the event loop: {url}")
+
+    async def serve_png(client, url, **kwargs):
+        fetch.fetched.append(url)
+        return httpx.Response(
+            200,
+            content=ONE_PIXEL_PNG,
+            headers={"content-type": "image/png"},
+            request=httpx.Request("GET", url),
+        )
+
+    def forbid_sync_convert(url, *args, **kwargs):
+        if url.startswith(("http://", "https://")):
+            raise litellm.ImageFetchError(f"sync convert_url_to_base64 ran on the request path: {url}")
+        return url
+
+    monkeypatch.setattr(image_handling, "safe_get", forbid_sync_fetch)
+    monkeypatch.setattr(image_handling, "async_safe_get", serve_png)
+    for module in (image_handling, factory, gemini_chat_transformation):
+        monkeypatch.setattr(module, "convert_url_to_base64", forbid_sync_convert)
+    return fetch

@@ -69,13 +69,12 @@ describe("HeuristicScoringConfig", () => {
     expect(onChange).not.toHaveBeenCalled();
   });
 
-  // min and max are inert attributes on a text input, so without the explicit clamp these would persist
-  // a weight of 999, or an infinite boundary, into the router config.
-  it.each([
-    ["Code presence", "999", 1],
-    ["Code presence", "-2", 0],
-    ["Long above", "100000", 100000],
-  ])("clamps %s = %s to %s", async (label, raw, expected) => {
+  it.each(["999", "-2"])("rejects an invalid weight %s instead of silently clamping", async (raw) => {
+    expect(await commit("Code presence", raw)).toBeUndefined();
+    expect(screen.getByRole("alert")).toHaveTextContent("Use a weight from 0 to 1");
+  });
+
+  it.each([["Long above", "100000", 100000]])("clamps %s = %s to %s", async (label, raw, expected) => {
     const next = await commit(label, raw);
     expect(
       { ...next?.dimension_weights, ...next?.token_thresholds }[label === "Long above" ? "complex" : "codePresence"],
@@ -95,6 +94,57 @@ describe("HeuristicScoringConfig", () => {
     expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ token_thresholds: undefined }));
   });
 
+  it("shows the boundary an untouched override floor tracks, rather than a fixed number", async () => {
+    await render(BASE);
+
+    const field = screen.getByLabelText("Minimum score");
+    expect(field).toHaveValue("");
+    expect(field).toHaveAttribute("placeholder", SHIPPED_SCORER_DEFAULTS.tier_boundaries.simple_medium.toFixed(2));
+  });
+
+  it("tracks the operator's own Simple to Medium override, not the shipped boundary", async () => {
+    await render({ ...BASE, tier_boundaries: { simple_medium: 0.42, medium_complex: 0.5, complex_reasoning: 0.7 } });
+
+    expect(screen.getByLabelText("Minimum score")).toHaveAttribute("placeholder", "0.42");
+  });
+
+  // 0 restores an unconditional override, so it has to reach the config as 0 rather than as "untouched".
+  it("commits an explicit 0 override floor", async () => {
+    const onChange = await render(BASE);
+    fireEvent.change(screen.getByLabelText("Minimum score"), { target: { value: "0" } });
+
+    expect(onChange.mock.calls.at(-1)?.[0]).toMatchObject({ reasoning_override_min_score: 0 });
+  });
+
+  it("renders a stored 0 as 0 rather than as an untouched field", async () => {
+    await render({ ...BASE, reasoning_override_min_score: 0 });
+
+    expect(screen.getByLabelText("Minimum score")).toHaveValue("0");
+  });
+
+  it("counts a set override floor among the overrides", () => {
+    renderWithProviders(
+      <HeuristicScoringConfig value={{ ...BASE, reasoning_override_min_score: 0 }} onChange={vi.fn()} />,
+    );
+
+    expect(screen.getByTestId("advanced-scoring-override-count")).toHaveTextContent("1 override");
+  });
+
+  it("clamps the override floor to the score range", async () => {
+    const onChange = await render(BASE);
+    fireEvent.change(screen.getByLabelText("Minimum score"), { target: { value: "9" } });
+
+    expect(onChange.mock.calls.at(-1)?.[0]).toMatchObject({ reasoning_override_min_score: 1 });
+  });
+
+  it("resets the override floor back to tracking the boundary", async () => {
+    const onChange = await render({ ...BASE, reasoning_override_min_score: 0 });
+
+    await userEvent.click(screen.getAllByRole("button", { name: "Reset to defaults" }).at(-1)!);
+
+    expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ reasoning_override_min_score: undefined }));
+  });
+
   it("flags decreasing boundaries as an error without blocking the save", async () => {
     const bad = { ...BASE, tier_boundaries: { simple_medium: 0.5, medium_complex: 0.2, complex_reasoning: 0.6 } };
     await render(bad);
@@ -104,7 +154,11 @@ describe("HeuristicScoringConfig", () => {
 });
 
 describe("ClassificationMethodConfig scorer gating", () => {
-  const props = { onChange: vi.fn(), modelOptions: [{ value: "gpt-4o-mini", label: "gpt-4o-mini" }] };
+  const props = {
+    onChange: vi.fn(),
+    modelOptions: [{ value: "gpt-4o-mini", label: "gpt-4o-mini" }],
+    effortOptionsByModel: {},
+  };
   const withClassifier = (type: ClassifierType, fallback?: ClassifierFallback): ComplexityRouterConfigValue => ({
     ...BASE,
     classifier_type: type,
@@ -114,6 +168,7 @@ describe("ClassificationMethodConfig scorer gating", () => {
 
   it.each([
     ["heuristic decides the tier", "heuristic" as ClassifierType, undefined, true],
+    ["heuristic v2 decides without the weighted scorer", "heuristic_v2" as ClassifierType, undefined, false],
     ["an LLM classifier falls back to the heuristic", "llm" as ClassifierType, "heuristic" as ClassifierFallback, true],
     [
       "an LLM classifier falls back to the default model",
@@ -134,6 +189,18 @@ describe("ClassificationMethodConfig scorer gating", () => {
     expect(screen.getByText(/Score < 0.22/)).toBeInTheDocument();
     expect(screen.getByText(/Score 0.44 - 0.66/)).toBeInTheDocument();
     expect(screen.queryByText(/0.15/)).not.toBeInTheDocument();
+  });
+
+  it("states the configured override floor in the reasoning-marker aside, not the boundary", () => {
+    renderWithProviders(<ClassificationMethodConfig {...props} value={{ ...BASE, reasoning_override_min_score: 0 }} />);
+
+    expect(screen.getByText(/2\+ reasoning markers with a score of at least 0\.00/)).toBeInTheDocument();
+  });
+
+  it("falls back to the Simple to Medium boundary when no override floor is set", () => {
+    renderWithProviders(<ClassificationMethodConfig {...props} value={BASE} />);
+
+    expect(screen.getByText(/2\+ reasoning markers with a score of at least 0\.15/)).toBeInTheDocument();
   });
 
   it("renders a row for every scored dimension", async () => {
@@ -196,6 +263,7 @@ describe("HeuristicScoringConfig degraded states", () => {
     await userEvent.click(screen.getByText("Advanced scoring"));
 
     expect(screen.getByLabelText("Code presence")).toHaveValue("0.5");
+    expect(screen.getByLabelText("Code presence")).toBeDisabled();
     expect(screen.queryByTestId("dimension-weight-total")).not.toBeInTheDocument();
   });
 });

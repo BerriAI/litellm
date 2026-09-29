@@ -2,11 +2,13 @@ import React from "react";
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
-import { FieldGroup } from "@/components/shared/form/field";
+import { FieldGroup } from "@/components/ui/field";
 import { AgentCreateInfo, AgentCredentialFieldMetadata } from "@/components/networking";
 import { PasswordInput } from "@/components/shared/PasswordInput";
-import { AGENT_FORM_CONFIG } from "./agent_config";
+import { AGENT_FORM_CONFIG, applyKillSwitchToPayload } from "./agent_config";
 import CostConfigFields, { COST_FIELD_NAMES } from "./cost_config_fields";
+import KillSwitchFormFields from "./KillSwitchFormFields";
+import { KILL_SWITCH_PANEL_KEY, type KillSwitchConfig } from "./kill_switch_config";
 import {
   AgentFormField,
   AgentFormPanel,
@@ -21,61 +23,85 @@ interface DynamicAgentFormFieldsProps {
   panels: CollapsiblePanelsState;
 }
 
-export const unmountedDynamicFieldNames = (mountedPanels: readonly string[]): readonly string[] =>
-  mountedPanels.includes(AGENT_FORM_CONFIG.cost.key) ? [] : COST_FIELD_NAMES;
+export const unmountedDynamicFieldNames = (mountedPanels: readonly string[]): readonly string[] => [
+  ...(mountedPanels.includes(AGENT_FORM_CONFIG.cost.key) ? [] : COST_FIELD_NAMES),
+  ...(mountedPanels.includes(KILL_SWITCH_PANEL_KEY) ? [] : ["kill_switch"]),
+];
 
-const CredentialField = ({ field }: { field: AgentCredentialFieldMetadata }) => (
-  <AgentFormField
-    name={field.key}
-    label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
-    defaultValue={field.default_value ?? undefined}
-    rules={field.required ? { required: `Please enter ${field.label}` } : undefined}
-  >
-    {({ value, onChange, ref, ...control }) => {
-      const text = typeof value === "string" ? value : "";
-      if (field.field_type === "password") {
-        return (
-          <PasswordInput
-            {...control}
-            value={typeof value === "string" ? value : ""}
-            onChange={onChange}
-            ref={ref}
-            placeholder={field.placeholder || ""}
-          />
-        );
-      }
-      if (field.field_type === "textarea") {
-        return (
-          <Textarea
-            {...control}
-            ref={ref}
-            rows={3}
-            placeholder={field.placeholder || ""}
-            value={text}
-            onChange={onChange}
-          />
-        );
-      }
-      if (field.field_type === "select" && field.options) {
-        return (
-          <Select value={text || null} onValueChange={onChange}>
-            <SelectTrigger {...control} className="w-full">
-              <SelectValue placeholder={field.placeholder || ""} />
-            </SelectTrigger>
-            <SelectContent>
-              {field.options.map((option) => (
-                <SelectItem key={option} value={option} title={option}>
-                  {option}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        );
-      }
-      return <Input {...control} ref={ref} placeholder={field.placeholder || ""} value={text} onChange={onChange} />;
-    }}
-  </AgentFormField>
-);
+// A field's validation_pattern is server-supplied metadata; if it's ever not a valid regex, skip
+// validation rather than throwing during render and taking the whole form down with it.
+const buildValidationPatternRule = (
+  field: AgentCredentialFieldMetadata,
+): { value: RegExp; message: string } | undefined => {
+  if (!field.validation_pattern) return undefined;
+  try {
+    return {
+      value: new RegExp(field.validation_pattern),
+      message: field.validation_message || `${field.label} looks incomplete or malformed`,
+    };
+  } catch {
+    return undefined;
+  }
+};
+
+const CredentialField = ({ field }: { field: AgentCredentialFieldMetadata }) => {
+  const patternRule = buildValidationPatternRule(field);
+  return (
+    <AgentFormField
+      name={field.key}
+      label={field.tooltip ? labelWithHint(field.label, field.tooltip) : field.label}
+      defaultValue={field.default_value ?? undefined}
+      rules={{
+        ...(field.required ? { required: `Please enter ${field.label}` } : {}),
+        ...(patternRule ? { pattern: patternRule } : {}),
+      }}
+    >
+      {({ value, onChange, ref, ...control }) => {
+        const text = typeof value === "string" ? value : "";
+        if (field.field_type === "password") {
+          return (
+            <PasswordInput
+              {...control}
+              value={typeof value === "string" ? value : ""}
+              onChange={onChange}
+              ref={ref}
+              placeholder={field.placeholder || ""}
+            />
+          );
+        }
+        if (field.field_type === "textarea") {
+          return (
+            <Textarea
+              {...control}
+              ref={ref}
+              rows={3}
+              placeholder={field.placeholder || ""}
+              value={text}
+              onChange={onChange}
+            />
+          );
+        }
+        if (field.field_type === "select" && field.options) {
+          return (
+            <Select value={text || null} onValueChange={onChange}>
+              <SelectTrigger {...control} className="w-full">
+                <SelectValue placeholder={field.placeholder || ""} />
+              </SelectTrigger>
+              <SelectContent>
+                {field.options.map((option) => (
+                  <SelectItem key={option} value={option} title={option}>
+                    {option}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          );
+        }
+        return <Input {...control} ref={ref} placeholder={field.placeholder || ""} value={text} onChange={onChange} />;
+      }}
+    </AgentFormField>
+  );
+};
 
 const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({ agentTypeInfo, panels }) => (
   <>
@@ -121,11 +147,18 @@ const DynamicAgentFormFields: React.FC<DynamicAgentFormFieldsProps> = ({ agentTy
       <AgentFormPanel panelKey={AGENT_FORM_CONFIG.cost.key} title={AGENT_FORM_CONFIG.cost.title} panels={panels}>
         <CostConfigFields />
       </AgentFormPanel>
+      <AgentFormPanel panelKey={KILL_SWITCH_PANEL_KEY} title="Kill Switch" panels={panels}>
+        <KillSwitchFormFields />
+      </AgentFormPanel>
     </div>
   </>
 );
 
-export const buildDynamicAgentData = (values: AgentFormValues, agentTypeInfo: AgentCreateInfo): AgentRequestPayload => {
+export const buildDynamicAgentData = (
+  values: AgentFormValues,
+  agentTypeInfo: AgentCreateInfo,
+  existingAgent?: { kill_switch?: KillSwitchConfig | null },
+): AgentRequestPayload => {
   const litellmParams: Record<string, unknown> = {
     ...(agentTypeInfo.litellm_params_template || {}),
   };
@@ -184,6 +217,8 @@ export const buildDynamicAgentData = (values: AgentFormValues, agentTypeInfo: Ag
   if (values.rpm_limit != null) agentData.rpm_limit = values.rpm_limit;
   if (values.session_tpm_limit != null) agentData.session_tpm_limit = values.session_tpm_limit;
   if (values.session_rpm_limit != null) agentData.session_rpm_limit = values.session_rpm_limit;
+
+  applyKillSwitchToPayload(agentData, values.kill_switch, existingAgent);
 
   return agentData;
 };

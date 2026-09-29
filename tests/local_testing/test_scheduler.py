@@ -6,9 +6,6 @@ import traceback, asyncio
 import pytest
 from typing import List
 
-sys.path.insert(
-    0, os.path.abspath("../..")
-)  # Adds the parent directory to the system path
 from litellm import Router
 from litellm.scheduler import FlowItem, Scheduler, SchedulerCacheKeys
 from litellm import ModelResponse

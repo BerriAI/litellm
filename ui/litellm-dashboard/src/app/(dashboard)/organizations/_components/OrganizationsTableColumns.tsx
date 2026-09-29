@@ -28,8 +28,8 @@ function OrganizationLimitsCell({ organization }: { organization: Organization }
   const { tpm_limit, rpm_limit } = getOrganizationBudget(organization);
   return (
     <div className="flex flex-col text-xs text-muted-foreground">
-      <span>TPM: {tpm_limit ? tpm_limit : "Unlimited"}</span>
-      <span>RPM: {rpm_limit ? rpm_limit : "Unlimited"}</span>
+      <span>TPM: {tpm_limit ?? "Unlimited"}</span>
+      <span>RPM: {rpm_limit ?? "Unlimited"}</span>
     </div>
   );
 }

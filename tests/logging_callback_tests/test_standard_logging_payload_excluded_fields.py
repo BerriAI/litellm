@@ -13,15 +13,12 @@ Example config:
       standard_logging_payload_excluded_fields: ["response", "messages"]
 """
 
-import os
-import sys
 from copy import deepcopy
 from typing import Dict, List, Optional
 from unittest.mock import MagicMock, patch
 
 import pytest
 
-sys.path.insert(0, os.path.abspath("../.."))
 
 import litellm
 from litellm.integrations.custom_logger import CustomLogger

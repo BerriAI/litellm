@@ -1,0 +1,209 @@
+"""
+Regression tests for the parsed-URL hostname match used to identify a
+caller-supplied ``api_base`` as a known openai-compatible provider.
+
+The previous shape (``if endpoint in api_base:``) used unanchored
+substring search, which let a caller pass
+``https://attacker.com/api.groq.com/openai/v1`` and have the proxy
+return ``GROQ_API_KEY`` as the dynamic credential — exfiltrating the
+server's real provider key to an attacker-controlled host on the
+outbound request.
+"""
+
+from unittest.mock import patch
+
+import pytest
+
+
+from litellm.litellm_core_utils.get_llm_provider_logic import (
+    _endpoint_matches_api_base,
+    get_llm_provider,
+)
+
+
+class TestEndpointMatchesApiBase:
+    """Direct unit tests on the parsed-URL matcher."""
+
+    @pytest.mark.parametrize(
+        "endpoint, api_base",
+        [
+            # Bare hostname endpoint, exact host match.
+            ("api.perplexity.ai", "https://api.perplexity.ai/v1"),
+            # Endpoint includes a path; api_base path starts with it.
+            ("api.groq.com/openai/v1", "https://api.groq.com/openai/v1"),
+            # Endpoint with full URL scheme.
+            ("https://api.cerebras.ai/v1", "https://api.cerebras.ai/v1/chat"),
+            # Trailing-slash on registered endpoint must not break match.
+            ("https://llm.chutes.ai/v1/", "https://llm.chutes.ai/v1/chat"),
+            # Case-insensitive on hostname.
+            ("api.groq.com/openai/v1", "https://API.GROQ.COM/openai/v1"),
+        ],
+    )
+    def test_legitimate_provider_urls_match(self, endpoint, api_base):
+        assert _endpoint_matches_api_base(endpoint, api_base) is True
+
+    @pytest.mark.parametrize(
+        "endpoint, api_base",
+        [
+            # Attacker host, registered endpoint smuggled into path.
+            (
+                "api.groq.com/openai/v1",
+                "https://attacker.com/api.groq.com/openai/v1",
+            ),
+            # Attacker host, registered endpoint smuggled into a path segment.
+            (
+                "api.groq.com/openai/v1",
+                "https://attacker.com/foo/api.groq.com/openai/v1",
+            ),
+            # Lookalike host that contains the registered host as a suffix label.
+            (
+                "api.groq.com/openai/v1",
+                "https://api.groq.com.attacker.com/openai/v1",
+            ),
+            # Lookalike host with the registered host as a prefix.
+            (
+                "api.groq.com/openai/v1",
+                "https://api.groq.com.evil.example/openai/v1",
+            ),
+            # Right host, wrong path — endpoint requires ``/openai/v1`` prefix.
+            ("api.groq.com/openai/v1", "https://api.groq.com/v1"),
+            # Path-segment lookalike: ``/openai/v10`` must not match ``/openai/v1``.
+            ("api.groq.com/openai/v1", "https://api.groq.com/openai/v10"),
+            # Userinfo / @-injection trick — the ``hostname`` after ``@`` is
+            # what httpx connects to.
+            (
+                "api.groq.com/openai/v1",
+                "https://api.groq.com@attacker.com/openai/v1",
+            ),
+        ],
+    )
+    def test_attacker_smuggling_does_not_match(self, endpoint, api_base):
+        assert _endpoint_matches_api_base(endpoint, api_base) is False
+
+
+class TestGetLlmProviderRejectsAttackerSmuggledApiBase:
+    """
+    End-to-end: ``get_llm_provider`` must NOT return the server's stored
+    secret (e.g. ``GROQ_API_KEY``) for an api_base whose hostname is
+    attacker-controlled, even when the registered endpoint string appears
+    elsewhere in the URL.
+    """
+
+    def test_attacker_host_does_not_yield_groq_secret(self):
+        # The function may either fall through (different provider) or
+        # raise BadRequestError because the model can't be identified.
+        # The invariant under test is that ``GROQ_API_KEY`` is never
+        # looked up against an attacker-controlled hostname.
+        import litellm
+
+        with patch(
+            "litellm.litellm_core_utils.get_llm_provider_logic.get_secret_str",
+            return_value="server-real-groq-key",
+        ) as mocked_secret:
+            try:
+                _, _, dynamic_api_key, _ = get_llm_provider(
+                    model="some-model",
+                    api_base="https://attacker.com/api.groq.com/openai/v1",
+                )
+                # If it returned, the dynamic key must not be the secret.
+                assert dynamic_api_key != "server-real-groq-key"
+            except litellm.exceptions.BadRequestError:
+                # Acceptable outcome: provider unidentifiable, no secret
+                # was returned.
+                pass
+
+        # Regardless of return / raise, the secret must never have been
+        # read against this attacker-controlled api_base.
+        groq_lookups = [
+            call
+            for call in mocked_secret.call_args_list
+            if call.args and call.args[0] == "GROQ_API_KEY"
+        ]
+        assert groq_lookups == []
+
+    def test_legitimate_groq_api_base_still_resolves(self):
+        with patch(
+            "litellm.litellm_core_utils.get_llm_provider_logic.get_secret_str",
+            return_value="server-real-groq-key",
+        ):
+            _, provider, dynamic_api_key, _ = get_llm_provider(
+                model="some-model",
+                api_base="https://api.groq.com/openai/v1",
+            )
+
+        assert provider == "groq"
+        assert dynamic_api_key == "server-real-groq-key"
+
+
+class TestTogetherApiBaseResolvesProvider:
+    """
+    Regression for the Together host migration: both the current
+    ``api.together.ai`` host and the legacy ``api.together.xyz`` host must
+    resolve to ``together_ai`` when passed as ``api_base``. Before the fix
+    the endpoint list carried the legacy host but the provider-mapping
+    chain had no branch for it, so the match fell through with a None
+    provider and the deployment failed with "LLM Provider NOT provided".
+    """
+
+    @pytest.mark.parametrize(
+        "api_base",
+        [
+            "https://api.together.ai/v1",
+            "https://api.together.xyz/v1",
+        ],
+    )
+    def test_together_api_base_resolves_to_together_ai(self, api_base, monkeypatch):
+        monkeypatch.setenv("TOGETHER_API_KEY", "together-key-from-env")
+
+        model, provider, dynamic_api_key, returned_api_base = get_llm_provider(
+            model="some-model",
+            api_base=api_base,
+        )
+
+        assert provider == "together_ai"
+        assert dynamic_api_key == "together-key-from-env"
+        assert returned_api_base == api_base
+        assert model == "some-model"
+
+    def test_explicit_api_key_beats_together_env_key(self, monkeypatch):
+        monkeypatch.setenv("TOGETHER_API_KEY", "together-key-from-env")
+
+        _, provider, dynamic_api_key, _ = get_llm_provider(
+            model="some-model",
+            api_base="https://api.together.ai/v1",
+            api_key="explicit-caller-key",
+        )
+
+        assert provider == "together_ai"
+        assert dynamic_api_key == "explicit-caller-key"
+
+    def test_together_default_api_base_is_together_ai(self, monkeypatch):
+        monkeypatch.delenv("TOGETHER_AI_API_BASE", raising=False)
+
+        _, provider, _, api_base = get_llm_provider(model="together_ai/some-model")
+
+        assert provider == "together_ai"
+        assert api_base == "https://api.together.ai/v1"
+
+
+class TestGigachatApiBaseResolvesProvider:
+    """
+    Regression for the GigaChat api_base branch: the provider-mapping chain
+    carried an ``endpoint == "https://gigachat.devices.sberbank.ru/api/v1"``
+    elif, but the URL was never added to ``openai_compatible_endpoints``, so
+    the endpoint loop never fired the branch and a caller-supplied GigaChat
+    api_base raised BadRequestError instead of resolving to ``gigachat``.
+    """
+
+    def test_gigachat_api_base_resolves_to_gigachat(self, monkeypatch):
+        monkeypatch.setenv("GIGACHAT_API_KEY", "gigachat-key-from-env")
+
+        model, provider, dynamic_api_key, returned_api_base = get_llm_provider(
+            model="GigaChat-2",
+            api_base="https://gigachat.devices.sberbank.ru/api/v1",
+        )
+
+        assert provider == "gigachat"
+        assert dynamic_api_key == "gigachat-key-from-env"
+        assert returned_api_base == "https://gigachat.devices.sberbank.ru/api/v1"
+        assert model == "GigaChat-2"

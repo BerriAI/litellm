@@ -6,7 +6,6 @@ import io
 import json
 import os
 import random
-import sys
 import time
 from litellm._uuid import uuid
 from datetime import datetime, timedelta
@@ -18,9 +17,6 @@ from litellm.types.integrations.slack_alerting import AlertType
 
 # import logging
 # logging.basicConfig(level=logging.DEBUG)
-sys.path.insert(0, os.path.abspath("../.."))
-import asyncio
-import os
 import unittest.mock
 from unittest.mock import AsyncMock, MagicMock, patch
 
@@ -132,8 +128,6 @@ def test_init():
     print("passed testing slack alerting init")
 
 
-from datetime import datetime, timedelta
-from unittest.mock import AsyncMock, patch
 
 
 @pytest.fixture
@@ -342,7 +336,6 @@ async def test_daily_reports_redis_cache_scheduler():
     # we need this to be 0 so it actualy sends the report
     slack_alerting.alerting_args.daily_report_frequency = 0
 
-    from litellm.router import AlertingConfig
 
     router = litellm.Router(
         model_list=[
@@ -382,7 +375,6 @@ async def test_daily_reports_redis_cache_scheduler():
 @pytest.mark.asyncio
 @pytest.mark.skip(reason="Local test. Test if slack alerts are sent.")
 async def test_send_llm_exception_to_slack():
-    from litellm.router import AlertingConfig
 
     # on async success
     router = litellm.Router(
@@ -590,7 +582,7 @@ async def test_webhook_alerting(alerting_type):
             None,
             None,
         ),
-        ("gemini-2.0-flash", None, "vertex_ai", "hardy-device-38811", "us-central1"),
+        ("gemini-3.8-flash", None, "vertex_ai", "hardy-device-38811", "us-central1"),
     ],
 )
 @pytest.mark.parametrize("error_code", [500, 408, 400])
@@ -696,7 +688,7 @@ async def test_outage_alerting_called(
             None,
             None,
         ),
-        ("gemini-2.0-flash", None, "vertex_ai", "hardy-device-38811", "us-central1"),
+        ("gemini-3.8-flash", None, "vertex_ai", "hardy-device-38811", "us-central1"),
     ],
 )
 @pytest.mark.parametrize("error_code", [500, 408, 400])
@@ -783,7 +775,7 @@ async def test_region_outage_alerting_called(
             await slack_alerting.region_outage_alerts(
                 exception=error_to_raise, deployment_id=deployment_id  # type: ignore
             )
-        if model == "gemini-2.0-flash" and (error_code == 500 or error_code == 408):
+        if model == "gemini-3.8-flash" and (error_code == 500 or error_code == 408):
             mock_send_alert.assert_called_once()
         else:
             mock_send_alert.assert_not_called()

@@ -1,6 +1,6 @@
 import React from "react";
 import { describe, expect, it, vi } from "vitest";
-import { screen, waitFor } from "@testing-library/react";
+import { fireEvent, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 import { renderWithProviders } from "../../../tests/test-utils";
@@ -93,7 +93,7 @@ describe("ToolPoliciesTable search", () => {
     const user = userEvent.setup();
     renderTable();
 
-    await user.type(screen.getByTestId("datatable-search"), "weather");
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "weather" } });
 
     await waitFor(() => expect(rowIds()).toEqual(["tool-1"]));
   });
@@ -102,7 +102,7 @@ describe("ToolPoliciesTable search", () => {
     const user = userEvent.setup();
     renderTable();
 
-    await user.type(screen.getByTestId("datatable-search"), "hash-bbb");
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "hash-bbb" } });
 
     await waitFor(() => expect(rowIds()).toEqual(["tool-2"]));
   });
@@ -111,7 +111,7 @@ describe("ToolPoliciesTable search", () => {
     const user = userEvent.setup();
     renderTable();
 
-    await user.type(screen.getByTestId("datatable-search"), "curl");
+    fireEvent.change(screen.getByTestId("datatable-search"), { target: { value: "curl" } });
 
     await waitFor(() => expect(rowIds()).toEqual([]));
     expect(screen.getByText("No matching tools")).toBeInTheDocument();

@@ -4,7 +4,7 @@ Translates from OpenAI's `/v1/chat/completions` endpoint to Triton's `/generate`
 
 import json
 from collections.abc import AsyncIterator, Iterator
-from typing import Any, Final, Literal
+from typing import TYPE_CHECKING, Final, Literal
 
 from httpx import Headers, Response
 
@@ -27,6 +27,9 @@ from litellm.types.utils import (
 )
 
 from ..common_utils import TritonError
+
+if TYPE_CHECKING:
+    from litellm.litellm_core_utils.tokenizer import Encoding as Tokenizer
 
 
 class TritonConfig(BaseConfig):
@@ -92,7 +95,7 @@ class TritonConfig(BaseConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -169,7 +172,7 @@ class TritonConfig(BaseConfig):
         streaming_response: Iterator[str] | AsyncIterator[str] | ModelResponse,
         sync_stream: bool,
         json_mode: bool | None = False,
-    ) -> Any:
+    ) -> "TritonResponseIterator":
         return TritonResponseIterator(
             streaming_response=streaming_response,
             sync_stream=sync_stream,
@@ -192,14 +195,14 @@ class TritonGenerateConfig(TritonConfig):
     ) -> dict:
         inference_params: Final = optional_params.copy()
         stream: Final = inference_params.pop("stream", False)
-        data_for_triton: Final[dict[str, Any]] = {
+        data_for_triton: Final[dict[str, object]] = {
             "text_input": prompt_factory(model=model, messages=messages),
             "parameters": {
                 "max_tokens": int(optional_params.get("max_tokens", DEFAULT_MAX_TOKENS_FOR_TRITON)),
+                **inference_params,
             },
             "stream": bool(stream),
         }
-        data_for_triton["parameters"].update(inference_params)
         return data_for_triton
 
     def transform_response(
@@ -212,7 +215,7 @@ class TritonGenerateConfig(TritonConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:
@@ -277,7 +280,7 @@ class TritonInferConfig(TritonConfig):
         messages: list[AllMessageValues],
         optional_params: dict,
         litellm_params: dict,
-        encoding: Any,
+        encoding: "Tokenizer | None",
         api_key: str | None = None,
         json_mode: bool | None = None,
     ) -> ModelResponse:

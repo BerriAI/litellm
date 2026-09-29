@@ -56,14 +56,16 @@ export function ChatComposer({
       {showSuggestions && suggestions.length > 0 && (
         <div className="flex w-full flex-col gap-1.5" data-testid="chat-suggested-actions">
           {suggestions.map((suggestion) => (
-            <button
+            <Button
               key={suggestion}
               type="button"
-              className="w-full truncate rounded-lg border border-border/50 bg-card/30 px-3 py-1.5 text-left text-[12px] leading-snug text-muted-foreground transition-colors hover:bg-card/60 hover:text-foreground"
+              variant="outline"
+              size="sm"
+              className="w-full justify-start overflow-hidden text-xs text-muted-foreground"
               onClick={() => onSuggestionSelect?.(suggestion)}
             >
-              {suggestion}
-            </button>
+              <span className="truncate">{suggestion}</span>
+            </Button>
           ))}
         </div>
       )}
@@ -94,7 +96,16 @@ export function ChatComposer({
             />
           )}
 
-          <InputGroupAddon align="block-end" className="justify-between gap-2 px-3 pb-3 pt-1">
+          <InputGroupAddon
+            align="block-end"
+            className="justify-between gap-2 px-3 pb-3 pt-1"
+            onClick={(event) => {
+              if ((event.target as HTMLElement).closest("button")) {
+                return;
+              }
+              event.currentTarget.parentElement?.querySelector<HTMLElement>("[data-slot=input-group-control]")?.focus();
+            }}
+          >
             <div className="flex min-w-0 items-center gap-1">{tools}</div>
 
             {isLoading && onCancel ? (
@@ -150,7 +161,7 @@ export function CodeInterpreterToggle({ enabled, onToggle }: CodeInterpreterTogg
             className={cn(
               "size-8 rounded-lg border border-border/40",
               enabled
-                ? "border-blue-200 bg-blue-50 text-blue-600 hover:bg-blue-100"
+                ? "border-info/20 bg-info/10 text-info hover:bg-info/15"
                 : "text-muted-foreground hover:text-foreground",
             )}
             aria-label={enabled ? "Code Interpreter enabled (click to disable)" : "Enable Code Interpreter"}

@@ -178,7 +178,7 @@ class TestEnkryptAIGuardrailHooks:
         with patch.object(
             enkryptai_guardrail.async_handler, "post", return_value=mock_response
         ):
-            with pytest.raises(ValueError) as exc_info:
+            with pytest.raises(ValueError, match='violation\\(s\\) detected') as exc_info:
                 await enkryptai_guardrail.async_pre_call_hook(
                     user_api_key_dict=mock_user_api_key_dict,
                     cache=MagicMock(),

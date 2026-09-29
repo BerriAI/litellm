@@ -3,17 +3,16 @@ import json
 import os
 import sys
 from pathlib import Path
+from typing import Final
 from unittest.mock import Mock, patch
 
 import pytest
 from click.testing import CliRunner
 
-sys.path.insert(0, os.path.abspath("../../.."))  # Adds the parent directory to the system path
-
-
 import litellm.proxy.client.cli
 from litellm._version import version as litellm_version
-from litellm.proxy.client.cli import cli
+from litellm.proxy.client.cli import cli, litellm_proxy_cli
+from litellm.proxy.client.cli.main import LITELLM_PROXY_DEPRECATION_NOTICE
 
 
 @pytest.fixture
@@ -238,3 +237,32 @@ def test_version_flag_never_sends_api_key_to_unnamed_server(cli_runner, isolated
     assert all(url.startswith("https://flag-proxy.example.com") for url in requested_urls)
     sent_keys = [call.kwargs["headers"].get("Authorization") for call in mock_request.call_args_list]
     assert sent_keys == ["Bearer sk-intended-for-flag-proxy"] * len(requested_urls)
+
+
+def test_litellm_proxy_entrypoint_prints_deprecation_notice_on_stderr_and_still_runs(monkeypatch, capsys, requests_mock):
+    requests_mock.get("http://localhost:4000/health/readiness", json={"litellm_version": "1.2.3"})
+    monkeypatch.setattr(sys, "argv", ["litellm-proxy", "--version"])
+    monkeypatch.setenv("LITELLM_PROXY_URL", "http://localhost:4000")
+    with pytest.raises(SystemExit) as exit_info:
+        litellm_proxy_cli()
+
+    captured: Final = capsys.readouterr()
+    assert exit_info.value.code == 0
+    assert captured.err.strip() == LITELLM_PROXY_DEPRECATION_NOTICE
+    assert f"LiteLLM Proxy CLI Version: {litellm_version}" in captured.out
+    assert "LiteLLM Proxy Server Version: 1.2.3" in captured.out
+    assert "deprecated" not in captured.out
+
+
+def test_lite_entrypoint_prints_nothing_on_stderr(monkeypatch, capsys, requests_mock):
+    requests_mock.get("http://localhost:4000/health/readiness", json={"litellm_version": "1.2.3"})
+    monkeypatch.setattr(sys, "argv", ["lite", "--version"])
+    monkeypatch.setenv("LITELLM_PROXY_URL", "http://localhost:4000")
+    with pytest.raises(SystemExit) as exit_info:
+        cli()
+
+    captured: Final = capsys.readouterr()
+    assert exit_info.value.code == 0
+    assert "LiteLLM Proxy Server Version: 1.2.3" in captured.out
+    assert f"LiteLLM Proxy CLI Version: {litellm_version}" in captured.out
+    assert captured.err == ""

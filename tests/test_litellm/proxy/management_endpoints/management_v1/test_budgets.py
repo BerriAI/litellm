@@ -10,22 +10,22 @@ from fastapi.testclient import TestClient
 
 from litellm.proxy._types import LiteLLMRoutes, LitellmUserRoles
 from litellm.proxy.auth.user_api_key_auth import UserAPIKeyAuth, user_api_key_auth
+from litellm.proxy.list_api.common import (
+    PROBLEM_TYPE_BASE,
+    ManagementProblem,
+    problem_response,
+)
+from litellm.proxy.list_api.list_framework import (
+    Compare,
+    ScopeWhere,
+    build_query_plan,
+)
 from litellm.proxy.management_endpoints.management_v1 import router
 from litellm.proxy.management_endpoints.management_v1.budgets import (
     BUDGETS_LIST_SPEC,
     BudgetListItem,
 )
-from litellm.proxy.management_endpoints.management_v1.common import (
-    MANAGEMENT_V1_PREFIX,
-    PROBLEM_TYPE_BASE,
-    ManagementProblem,
-    problem_response,
-)
-from litellm.proxy.management_endpoints.management_v1.list_framework import (
-    Compare,
-    ScopeWhere,
-    build_query_plan,
-)
+from litellm.proxy.management_endpoints.management_v1.common import MANAGEMENT_V1_PREFIX
 from litellm.types.proxy.management_endpoints.management_v1 import ProblemDetail
 
 app = FastAPI()
@@ -52,7 +52,7 @@ app.include_router(router)
 client = TestClient(app)
 
 BUDGETS_PATH = f"{MANAGEMENT_V1_PREFIX}/budgets"
-SORTABLE = ["budget_id", "created_at", "max_budget", "rpm_limit", "tpm_limit"]
+SORTABLE = ["budget_id", "created_at", "max_budget", "rpm_limit", "tpd_limit", "tpm_limit"]
 
 
 def _row(budget_id: str, **overrides: Any) -> dict[str, Any]:
@@ -62,6 +62,7 @@ def _row(budget_id: str, **overrides: Any) -> dict[str, Any]:
         "soft_budget": None,
         "tpm_limit": None,
         "rpm_limit": None,
+        "tpd_limit": None,
         "budget_duration": "30d",
         "budget_reset_at": None,
         "created_at": "2026-07-20T12:00:00+00:00",
@@ -123,7 +124,7 @@ def test_returns_flat_rows_in_the_control_plane_envelope(query_raw, as_proxy_adm
 
 
 def test_serves_the_columns_the_budgets_page_renders(query_raw, as_proxy_admin):
-    _serve(query_raw, [_row("b-1", soft_budget=5.0, budget_reset_at="2026-08-01T00:00:00+00:00")])
+    _serve(query_raw, [_row("b-1", soft_budget=5.0, tpd_limit=250000, budget_reset_at="2026-08-01T00:00:00+00:00")])
 
     row = _get().json()["data"][0]
 
@@ -133,12 +134,14 @@ def test_serves_the_columns_the_budgets_page_renders(query_raw, as_proxy_admin):
         "soft_budget",
         "tpm_limit",
         "rpm_limit",
+        "tpd_limit",
         "budget_duration",
         "budget_reset_at",
         "created_at",
         "updated_at",
     }
     assert row["soft_budget"] == 5.0
+    assert row["tpd_limit"] == 250000
     assert row["budget_reset_at"].startswith("2026-08-01T00:00:00")
 
 
