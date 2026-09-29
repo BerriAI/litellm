@@ -245,10 +245,7 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
         },
     ]
 
-    async def query_raw(sql: str, *params: object) -> list[dict[str, object]]:
-        return [] if "MIN(user_id) AS first_owner" in sql else mock_rows
-
-    mock_prisma.db.query_raw = AsyncMock(side_effect=query_raw)
+    mock_prisma.db.query_raw = AsyncMock(return_value=mock_rows)
     mock_prisma.db.litellm_verificationtoken = MagicMock()
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
 
@@ -293,7 +290,9 @@ async def test_get_daily_activity_aggregated_with_endpoint_breakdown():
     assert chat_endpoint.api_key_breakdown["key-1"].metrics.spend == 15.0
     assert "key-2" in embeddings_endpoint.api_key_breakdown
     assert embeddings_endpoint.api_key_breakdown["key-2"].metrics.spend == 3.0
-    assert mock_prisma.db.query_raw.await_count == 2
+
+    # Verify query_raw was called (not find_many)
+    mock_prisma.db.query_raw.assert_called_once()
 
 
 @pytest.mark.asyncio
@@ -420,7 +419,6 @@ async def test_get_api_key_metadata_deleted_table_error_handled_gracefully():
 
     # Deleted table raises an error (e.g., table doesn't exist in older schema)
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(side_effect=Exception("Table not found"))
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -508,6 +506,7 @@ async def test_get_api_key_metadata_permanent_miss_never_pages_tokens_or_reads_s
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
+    recovery_query_raw = _recovery_transaction(mock_prisma)
 
     result = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -515,10 +514,10 @@ async def test_get_api_key_metadata_permanent_miss_never_pages_tokens_or_reads_s
     )
 
     assert double_hashed not in result
-    issued_sql = [call.args[0] for call in mock_prisma.db.query_raw.call_args_list]
-    assert len(issued_sql) == 3
-    assert sum('"LiteLLM_DailyUserSpend"' in sql for sql in issued_sql) == 1
-    assert not any("LiteLLM_SpendLogs" in sql for sql in issued_sql)
+    assert mock_prisma.db.query_raw.await_count == 2
+    ((owner_sql, owner_keys),) = [call.args for call in recovery_query_raw.call_args_list]
+    assert _DAILY_USER_SPEND in owner_sql
+    assert owner_keys == [double_hashed]
     token_lookups = (
         mock_prisma.db.litellm_verificationtoken.find_many.call_args_list
         + mock_prisma.db.litellm_deletedverificationtoken.find_many.call_args_list
@@ -526,12 +525,27 @@ async def test_get_api_key_metadata_permanent_miss_never_pages_tokens_or_reads_s
     assert all("take" not in call.kwargs and "skip" not in call.kwargs for call in token_lookups)
 
 
-def _spend_log_transaction(mock_prisma: MagicMock, rows: list[dict[str, str | None]]) -> AsyncMock:
+_DAILY_USER_SPEND: Final = '"LiteLLM_DailyUserSpend"'
+_SPEND_LOGS: Final = '"LiteLLM_SpendLogs"'
+
+
+def _recovery_transaction(
+    mock_prisma: MagicMock,
+    spend_log_rows: Sequence[dict[str, str | None]] = (),
+    daily_spend_owner_rows: Sequence[dict[str, str | None]] = (),
+) -> AsyncMock:
+    async def query_raw(sql: str, *_: object) -> Sequence[dict[str, str | None]]:
+        return daily_spend_owner_rows if _DAILY_USER_SPEND in sql else spend_log_rows
+
     transaction = MagicMock()
     transaction.execute_raw = AsyncMock(return_value=0)
-    transaction.query_raw = AsyncMock(return_value=rows)
+    transaction.query_raw = AsyncMock(side_effect=query_raw)
     mock_prisma.db.tx.return_value.__aenter__.return_value = transaction
     return transaction.query_raw
+
+
+def _calls_reading(query_raw: AsyncMock, table: str) -> tuple[tuple[object, ...], ...]:
+    return tuple(call.args for call in query_raw.call_args_list if table in call.args[0])
 
 
 def _spend_log_row(digest: str, key_alias: str, user_id: str) -> dict[str, str | None]:
@@ -557,15 +571,17 @@ async def test_get_api_key_metadata_permanent_miss_with_a_window_reads_spend_log
     mock_prisma.db.litellm_deletedverificationtoken.find_many = AsyncMock(return_value=[])
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(return_value=[])
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
-    spend_log_query_raw = _spend_log_transaction(mock_prisma, [])
+    recovery_query_raw = _recovery_transaction(mock_prisma)
 
     result = await get_api_key_metadata(prisma_client=mock_prisma, api_keys={double_hashed}, spend_logs_window=window)
 
     assert double_hashed not in result
-    assert mock_prisma.db.query_raw.await_count == 3
-    ((_, digests, start, end),) = [call.args for call in spend_log_query_raw.call_args_list]
+    assert mock_prisma.db.query_raw.await_count == 2
+    ((_, digests, start, end),) = _calls_reading(recovery_query_raw, _SPEND_LOGS)
     assert digests == [double_hashed]
     assert (start, end) == window
+    ((_, owner_keys),) = _calls_reading(recovery_query_raw, _DAILY_USER_SPEND)
+    assert owner_keys == [double_hashed]
 
 
 @pytest.mark.asyncio
@@ -587,7 +603,7 @@ async def test_get_daily_activity_recovers_a_session_key_alias_from_spend_logs_a
     )
 
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
-    spend_log_query_raw = _spend_log_transaction(
+    spend_log_query_raw = _recovery_transaction(
         mock_prisma, [_spend_log_row(session_digest, "cli-session-alias", "session-user")]
     )
 
@@ -728,7 +744,6 @@ async def test_tag_daily_activity_metadata_totals_not_zero():
     """
     mock_prisma = MagicMock()
     mock_prisma.db = MagicMock()
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
 
     # Create mock tag spend records (request_id is NULL for aggregated rows)
     mock_record_1 = MagicMock()
@@ -1034,7 +1049,6 @@ async def test_get_daily_activity_applies_resolve_entity_metadata_to_breakdown()
     mock_prisma.db.litellm_dailyuserspend = mock_table
     mock_prisma.db.litellm_verificationtoken = MagicMock()
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
 
     seen_user_ids = {}
 
@@ -1091,7 +1105,6 @@ async def test_model_groups_breakdown_keys_by_public_name_with_model_fallback():
     mock_prisma.db.litellm_dailyuserspend = mock_table
     mock_prisma.db.litellm_verificationtoken = MagicMock()
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
-    mock_prisma.db.query_raw = AsyncMock(return_value=[])
 
     result = await get_daily_activity(
         prisma_client=mock_prisma,
@@ -2315,7 +2328,6 @@ class TestPtuCostAttributionDisabled:
 
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
-        mock_prisma.db.query_raw = AsyncMock(return_value=[])
         mock_table = MagicMock()
         mock_table.count = AsyncMock(return_value=2)
         mock_table.find_many = AsyncMock(
@@ -2354,7 +2366,6 @@ class TestPtuCostAttributionDisabled:
 
         mock_prisma = MagicMock()
         mock_prisma.db = MagicMock()
-        mock_prisma.db.query_raw = AsyncMock(return_value=[])
         mock_table = MagicMock()
         mock_table.count = AsyncMock(return_value=2)
         mock_table.find_many = AsyncMock(
@@ -2539,12 +2550,7 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
         },
     ]
 
-    async def query_raw(sql: str, *params: object) -> list[dict[str, object]]:
-        if '"LiteLLM_DailyUserSpend"' in sql:
-            return []
-        return entity_rows if "AS entity_id" in sql else main_rows
-
-    mock_prisma.db.query_raw = AsyncMock(side_effect=query_raw)
+    mock_prisma.db.query_raw = AsyncMock(side_effect=[main_rows, entity_rows])
     mock_prisma.db.litellm_verificationtoken = MagicMock()
     mock_prisma.db.litellm_verificationtoken.find_many = AsyncMock(return_value=[])
 
@@ -2561,13 +2567,9 @@ async def test_get_daily_activity_aggregated_with_entity_breakdown():
         include_entity_breakdown=True,
     )
 
-    aggregation_sql: Final = tuple(
-        call.args[0]
-        for call in mock_prisma.db.query_raw.call_args_list
-        if '"LiteLLM_DailyUserSpend"' not in call.args[0]
-    )
-    assert len(aggregation_sql) == 2
-    main_sql, entity_sql = aggregation_sql
+    assert mock_prisma.db.query_raw.call_count == 2
+    main_sql = mock_prisma.db.query_raw.call_args_list[0][0][0]
+    entity_sql = mock_prisma.db.query_raw.call_args_list[1][0][0]
     assert "entity_id" not in main_sql
     assert '"team_id" AS entity_id' in entity_sql
     assert '(date, "team_id"),' in entity_sql
@@ -2604,7 +2606,7 @@ async def test_get_api_key_metadata_resolves_session_key_via_spend_log_window():
     )
 
     mock_prisma.db.query_raw = AsyncMock(return_value=[])
-    spend_log_query_raw = _spend_log_transaction(
+    spend_log_query_raw = _recovery_transaction(
         mock_prisma, [_spend_log_row(session_digest, "cli-session-user-42", "user-42")]
     )
 
@@ -2663,10 +2665,10 @@ async def test_get_api_key_metadata_recovers_legacy_hashed_jwt_owner_from_daily_
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(
         return_value=[SimpleNamespace(user_id=user_id, user_email="legacy-owner@example.com", teams=[])]
     )
-    mock_prisma.db.query_raw = AsyncMock(
-        return_value=[{"api_key": api_key, "first_owner": user_id, "last_owner": user_id}]
+    recovery_query_raw: Final = _recovery_transaction(
+        mock_prisma,
+        daily_spend_owner_rows=[{"api_key": api_key, "first_owner": user_id, "last_owner": user_id}],
     )
-    spend_log_query_raw = _spend_log_transaction(mock_prisma, [])
 
     result: Final = await get_api_key_metadata(
         prisma_client=mock_prisma,
@@ -2676,7 +2678,8 @@ async def test_get_api_key_metadata_recovers_legacy_hashed_jwt_owner_from_daily_
 
     assert result.get(api_key, {}).get("user_id") == user_id
     assert result.get(api_key, {}).get("user_email") == "legacy-owner@example.com"
-    spend_log_query_raw.assert_awaited_once()
+    assert len(_calls_reading(recovery_query_raw, _SPEND_LOGS)) == 1
+    assert len(_calls_reading(recovery_query_raw, _DAILY_USER_SPEND)) == 1
 
 
 @pytest.mark.asyncio
@@ -2694,8 +2697,9 @@ async def test_get_api_key_metadata_preserves_deleted_key_metadata_when_recoveri
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(
         return_value=[SimpleNamespace(user_id=user_id, user_email="legacy-owner@example.com", teams=[])]
     )
-    mock_prisma.db.query_raw = AsyncMock(
-        return_value=[{"api_key": api_key, "first_owner": user_id, "last_owner": user_id}]
+    recovery_query_raw: Final = _recovery_transaction(
+        mock_prisma,
+        daily_spend_owner_rows=[{"api_key": api_key, "first_owner": user_id, "last_owner": user_id}],
     )
 
     result: Final = await get_api_key_metadata(prisma_client=mock_prisma, api_keys={api_key})
@@ -2705,7 +2709,7 @@ async def test_get_api_key_metadata_preserves_deleted_key_metadata_when_recoveri
     assert recovered_metadata.get("team_id") == "team-legacy"
     assert recovered_metadata.get("user_id") == user_id
     assert recovered_metadata.get("user_email") == "legacy-owner@example.com"
-    mock_prisma.db.query_raw.assert_awaited_once()
+    recovery_query_raw.assert_awaited_once()
 
 
 @pytest.mark.asyncio
@@ -2722,8 +2726,9 @@ async def test_get_api_key_metadata_does_not_recover_daily_spend_owner_for_activ
     mock_prisma.db.litellm_usertable.find_many = AsyncMock(
         return_value=[SimpleNamespace(user_id="active-owner", user_email="active-owner@example.com", teams=[])]
     )
-    mock_prisma.db.query_raw = AsyncMock(
-        return_value=[{"api_key": api_key, "first_owner": "other-owner", "last_owner": "other-owner"}]
+    recovery_query_raw: Final = _recovery_transaction(
+        mock_prisma,
+        daily_spend_owner_rows=[{"api_key": api_key, "first_owner": "other-owner", "last_owner": "other-owner"}],
     )
 
     result: Final = await get_api_key_metadata(prisma_client=mock_prisma, api_keys={api_key})
@@ -2734,4 +2739,4 @@ async def test_get_api_key_metadata_does_not_recover_daily_spend_owner_for_activ
     assert active_metadata.get("user_id") == "active-owner"
     assert active_metadata.get("user_email") == "active-owner@example.com"
     assert active_metadata.get("key_exists") is True
-    mock_prisma.db.query_raw.assert_not_awaited()
+    recovery_query_raw.assert_not_awaited()

@@ -144,6 +144,16 @@ async def _db_or_empty(
         return None
 
 
+async def _rows_within_the_statement_timeout(
+    prisma_client: PrismaClient,
+    sql: str,
+    *params: object,
+) -> Sequence[Mapping[str, object]]:
+    async with prisma_client.db.tx(timeout=_SPEND_LOG_TRANSACTION_TIMEOUT) as transaction:
+        await transaction.execute_raw(_SPEND_LOG_STATEMENT_TIMEOUT_SQL)
+        return await transaction.query_raw(sql, *params)
+
+
 async def _reverse_hash_key_metadata(
     prisma_client: PrismaClient,
     sql: str,
@@ -174,7 +184,7 @@ async def recover_key_owner_from_daily_spend(
     if not keys:
         return _EMPTY_KEY_OWNERS
     rows: Final = await _db_or_empty(
-        lambda: prisma_client.db.query_raw(_DAILY_USER_SPEND_OWNER_SQL, sorted(keys)),
+        lambda: _rows_within_the_statement_timeout(prisma_client, _DAILY_USER_SPEND_OWNER_SQL, sorted(keys)),
         "Failed daily-spend key owner recovery for %d keys: %s",
         len(keys),
     )
@@ -347,24 +357,14 @@ def _cached_spend_log_metadata(
     )
 
 
-async def _spend_log_rows_within_the_statement_timeout(
-    prisma_client: PrismaClient,
-    digests: AbstractSet[str],
-    window: tuple[datetime, datetime],
-) -> Sequence[Mapping[str, object]]:
-    start, end = window
-    async with prisma_client.db.tx(timeout=_SPEND_LOG_TRANSACTION_TIMEOUT) as transaction:
-        await transaction.execute_raw(_SPEND_LOG_STATEMENT_TIMEOUT_SQL)
-        return await transaction.query_raw(_SPEND_LOG_ALIAS_SQL, sorted(digests), start, end)
-
-
 async def _query_spend_log_metadata(
     prisma_client: PrismaClient,
     digests: AbstractSet[str],
     window: tuple[datetime, datetime],
 ) -> Mapping[str, KeyMetadataDict] | None:
+    start, end = window
     rows: Final = await _db_or_empty(
-        lambda: _spend_log_rows_within_the_statement_timeout(prisma_client, digests, window),
+        lambda: _rows_within_the_statement_timeout(prisma_client, _SPEND_LOG_ALIAS_SQL, sorted(digests), start, end),
         "Failed spend-log alias recovery for %d missing keys: %s",
         len(digests),
     )
