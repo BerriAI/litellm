@@ -28,6 +28,8 @@ CANARY_SLOTS: Final[Mapping[str, str]] = MappingProxyType(
         "B1": "deployment api_key in config.yaml",
         "B4": "deployment aws_secret_access_key added through /model/new",
         "B4v": "deployment vertex_credentials added through /model/new",
+        "C1": "team callback langfuse_secret / langfuse_secret_key",
+        "C3": "team callback dd_api_key for the Datadog sink",
         "D1": "client-side api_key in the request body",
     }
 )
@@ -68,8 +70,8 @@ Classification = Secret | Unplanted | NotSecret
 CALLBACK_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingProxyType(
     {
         "langfuse_public_key": NotSecret("public half of the Langfuse key pair, an identifier"),
-        "langfuse_secret": Unplanted(),
-        "langfuse_secret_key": Unplanted(),
+        "langfuse_secret": Secret("C1"),
+        "langfuse_secret_key": Secret("C1"),
         "langfuse_host": NotSecret("sink endpoint URL"),
         "langfuse_environment": NotSecret("environment label"),
         "langfuse_span_scope": NotSecret("span scope setting"),
@@ -91,7 +93,7 @@ CALLBACK_PARAM_CLASSIFICATION: Final[Mapping[str, Classification]] = MappingProx
         "posthog_api_url": NotSecret("sink endpoint URL"),
         "wandb_api_key": Unplanted(),
         "weave_project_id": NotSecret("project identifier"),
-        "dd_api_key": Unplanted(),
+        "dd_api_key": Secret("C3"),
         "dd_site": NotSecret("sink site name"),
         "dd_agent_host": NotSecret("agent host name"),
         "dd_agent_port": NotSecret("agent port"),
