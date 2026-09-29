@@ -25495,12 +25495,12 @@ export interface components {
             template_id?: string | null;
             /**
              * Timeout
-             * @description Per-request timeout for the guardrail provider API call (seconds). Accepts int, float, or numeric string; coerced to float on load. Each guardrail handler chooses its own default when unset.
+             * @description Maximum seconds one guardrail check may take, covering every call it makes. On expiry the check fails with a 408 timeout, or is skipped when unreachable_fallback='fail_open'. Some handlers also apply it to their provider HTTP call. Accepts int, float, or numeric string; coerced to float on load. Unset means no limit.
              */
             timeout?: number | null;
             /**
              * Unreachable Fallback
-             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed.
+             * @description Behavior when a guardrail endpoint is unreachable due to network errors. Implemented by guardrail='generic_guardrail_api', 'agent_365', 'akto', 'vigil_guard', 'repelloai', 'headroom', 'compresr', and 'typesafe'. 'fail_closed' raises an error (default). 'fail_open' logs a critical error and allows the request to proceed. Every guardrail also honors it when its check exceeds timeout.
              * @default fail_closed
              * @enum {string}
              */
@@ -34707,7 +34707,7 @@ export interface components {
             tenant_id?: string | null;
             /**
              * Timeout
-             * @description Per-request timeout for the guardrail provider API call (seconds). Accepts int, float, or numeric string; coerced to float on load. Each guardrail handler chooses its own default when unset.
+             * @description Maximum seconds one guardrail check may take, covering every call it makes. On expiry the check fails with a 408 timeout, or is skipped when unreachable_fallback='fail_open'. Some handlers also apply it to their provider HTTP call. Accepts int, float, or numeric string; coerced to float on load. Unset means no limit.
              */
             timeout?: number | null;
             /**
