@@ -5,6 +5,9 @@ Regression test for KeyError: 'call_type' when async_log_success_event
 is called without call_type in kwargs (e.g. from batch polling callbacks).
 """
 
+import asyncio
+import asyncio.events
+
 import pytest
 from datetime import datetime
 from unittest.mock import AsyncMock, patch
@@ -277,3 +280,50 @@ async def test_service_failure_span_not_duplicated_for_string_and_instance(
         s for s in exporter.get_finished_spans() if s.name == "postgres get_user_object"
     ]
     assert len(db_spans) == 1
+
+
+_SYNC_HOOK_CALLS = [
+    pytest.param("service_success_hook", {}, id="success"),
+    pytest.param("service_failure_hook", {"error": RuntimeError("boom")}, id="failure"),
+]
+
+
+@pytest.fixture
+def started_loops(monkeypatch) -> list[asyncio.AbstractEventLoop]:
+    """Event loops started during the test."""
+    started: list[asyncio.AbstractEventLoop] = []
+    original = asyncio.events._set_running_loop
+
+    def recording_set_running_loop(loop):
+        if loop is not None:
+            started.append(loop)
+        original(loop)
+
+    monkeypatch.setattr(asyncio.events, "_set_running_loop", recording_set_running_loop)
+    return started
+
+
+@pytest.mark.parametrize("hook_name, extra_kwargs", _SYNC_HOOK_CALLS)
+def test_sync_service_hook_starts_no_event_loop_without_callbacks(monkeypatch, started_loops, hook_name, extra_kwargs):
+    """With no service callback, nothing receives the event, so no loop should start."""
+    monkeypatch.setattr(litellm, "service_callback", [])
+
+    getattr(ServiceLogging(), hook_name)(service=ServiceTypes.REDIS, duration=0.1, call_type="test", **extra_kwargs)
+
+    assert started_loops == []
+
+
+@pytest.mark.parametrize("hook_name, extra_kwargs", _SYNC_HOOK_CALLS)
+def test_sync_service_hook_still_delivers_to_configured_callbacks(
+    monkeypatch, started_loops, hook_name, extra_kwargs
+):
+    """With a service callback, the event is still delivered."""
+    monkeypatch.setattr(litellm, "service_callback", ["datadog"])
+    service_logger = ServiceLogging()
+    async_hook_name = f"async_{hook_name}"
+
+    with patch.object(service_logger, async_hook_name, new_callable=AsyncMock) as mock_hook:
+        getattr(service_logger, hook_name)(service=ServiceTypes.REDIS, duration=0.1, call_type="test", **extra_kwargs)
+
+    mock_hook.assert_awaited_once()
+    assert started_loops
