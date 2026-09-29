@@ -18569,7 +18569,6 @@ async def test_rotate_master_key_rotates_sso_identity_assertions(
 
 @pytest.mark.asyncio
 async def test_rotate_master_key_rotates_search_tools(monkeypatch):
-    """Master-key rotation re-encrypts the search tools table (step 4e)."""
     from types import SimpleNamespace
     from unittest.mock import AsyncMock, MagicMock
 
