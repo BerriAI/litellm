@@ -25,6 +25,8 @@ const row = (over: Partial<DailyMetric>): DailyMetric => ({
 });
 
 describe("buildWeeklySeries", () => {
+  const range = { start: "2026-01-01", end: "2026-01-15" };
+
   it("sums days into 7-day buckets per model", () => {
     const rows = [
       row({ date: "2026-01-01", requests: 1 }),
@@ -32,14 +34,20 @@ describe("buildWeeklySeries", () => {
       row({ date: "2026-01-08", requests: 4 }),
       row({ date: "2026-01-02", model_group: "b", requests: 8 }),
     ];
-    expect(buildWeeklySeries(rows, ["a", "b"], "requests")).toEqual([
+    expect(buildWeeklySeries(rows, ["a", "b"], "requests", range)).toEqual([
       { date: "2026-01-01", a: 3, b: 8 },
       { date: "2026-01-08", a: 4, b: 0 },
+      { date: "2026-01-15", a: 0, b: 0 },
     ]);
   });
 
-  it("returns nothing for no data", () => {
-    expect(buildWeeklySeries([], ["a"], "tokens")).toEqual([]);
+  it("keeps weeks with no usage as zero instead of dropping them", () => {
+    const rows = [row({ date: "2026-01-01", requests: 1 }), row({ date: "2026-01-15", requests: 2 })];
+    expect(buildWeeklySeries(rows, ["a"], "requests", range).map((week) => [week.date, week.a])).toEqual([
+      ["2026-01-01", 1],
+      ["2026-01-08", 0],
+      ["2026-01-15", 2],
+    ]);
   });
 });
 
@@ -52,17 +60,35 @@ describe("modelOrder", () => {
 });
 
 describe("rankModels", () => {
-  it("computes share and the change in share between the first and second half", () => {
+  const range = { start: "2026-01-01", end: "2026-01-10" };
+  const totals = [row({ model_group: "a", requests: 40 }), row({ model_group: "b", requests: 40 })];
+
+  it("computes share and the change in share between the first and second half of the range", () => {
     const daily = [
       row({ date: "2026-01-01", model_group: "a", requests: 30 }),
       row({ date: "2026-01-01", model_group: "b", requests: 10 }),
-      row({ date: "2026-01-02", model_group: "a", requests: 10 }),
-      row({ date: "2026-01-02", model_group: "b", requests: 30 }),
+      row({ date: "2026-01-10", model_group: "a", requests: 10 }),
+      row({ date: "2026-01-10", model_group: "b", requests: 30 }),
     ];
-    const totals = [{ ...row({ model_group: "a", requests: 40 }) }, { ...row({ model_group: "b", requests: 40 }) }];
-    const ranked = rankModels(totals, daily, "requests");
+    const ranked = rankModels(totals, daily, "requests", range);
     expect(ranked.find((m) => m.model_group === "a")).toMatchObject({ share: 50, delta: -50 });
     expect(ranked.find((m) => m.model_group === "b")).toMatchObject({ share: 50, delta: 50 });
+  });
+
+  it("splits at the middle of the range, not the middle of the days that had usage", () => {
+    const daily = [
+      row({ date: "2026-01-01", model_group: "a", requests: 10 }),
+      row({ date: "2026-01-02", model_group: "b", requests: 10 }),
+      row({ date: "2026-01-03", model_group: "b", requests: 10 }),
+    ];
+    const ranked = rankModels(totals, daily, "requests", range);
+    expect(ranked.find((m) => m.model_group === "a")?.delta).toBe(0);
+  });
+
+  it("shows no change when one half of the range has no usage to compare against", () => {
+    const daily = [row({ date: "2026-01-10", model_group: "a", requests: 10 })];
+    const ranked = rankModels(totals, daily, "requests", range);
+    expect(ranked.map((m) => m.delta)).toEqual([0, 0]);
   });
 });
 
