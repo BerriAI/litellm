@@ -53,6 +53,10 @@ from litellm.llms.base_llm.guardrail_translation.base_translation import (
 )
 from litellm.llms.base_llm.guardrail_translation.utils import (
     blocked_responses_stream_usage,
+    effective_skip_system_message_for_guardrail,
+    merge_guardrailed_scoped_messages,
+    role_out_of_guardrail_scope,
+    scoped_structured_message_indices,
     stream_item_field,
     stream_item_fingerprint,
     stream_item_items,
@@ -379,9 +383,14 @@ class _ExtractedInputs(NamedTuple):
     instructions: str | None
 
 
-def scannable_instructions(data: Mapping[str, object]) -> str | None:
+def scannable_instructions(data: Mapping[str, object], *, skip_system: bool = False) -> str | None:
     instructions: Final = data.get("instructions")
-    return instructions if isinstance(instructions, str) and instructions else None
+    return instructions if isinstance(instructions, str) and instructions and not skip_system else None
+
+
+def _input_item_role(item: object) -> str:
+    role: Final = item.get("role") if isinstance(item, Mapping) else None
+    return role.lower() if isinstance(role, str) else ""
 
 
 def _patched_request_fields(
@@ -500,7 +509,14 @@ class OpenAIResponsesHandler(BaseTranslation):
         input_data: Final[str | ResponseInputParam | None] = data.get("input")
         if not isinstance(input_data, (str, list)):
             return data
+        skip_system: Final = effective_skip_system_message_for_guardrail(guardrail_to_apply)
         structured_messages: Final = self.get_structured_messages(data)
+        scoped_indices: Final = scoped_structured_message_indices(
+            structured_messages or [], scan_only_tool_results=False, skip_system=skip_system, skip_tool=False
+        )
+        scoped_structured_messages: Final = (
+            [structured_messages[index] for index in scoped_indices] if structured_messages else None
+        )
         raw_tools: Final = data.get("tools")
         original_tools: Final[tuple[Mapping[str, object], ...]] = (
             tuple(raw_tools) if isinstance(raw_tools, list) else ()
@@ -508,11 +524,13 @@ class OpenAIResponsesHandler(BaseTranslation):
         flattened_tool_groups: Final = tuple(
             form.chat_tools for form in LiteLLMCompletionResponsesConfig.responses_tools_to_chat_forms(original_tools)
         )
-        extracted: Final = self._extract_guardrail_inputs(data, input_data, flattened_tool_groups)
+        extracted: Final = self._extract_guardrail_inputs(
+            data, input_data, flattened_tool_groups, skip_system=skip_system
+        )
         if not extracted.inputs.get("texts"):
             return data
-        if structured_messages:
-            extracted.inputs["structured_messages"] = structured_messages
+        if scoped_structured_messages:
+            extracted.inputs["structured_messages"] = scoped_structured_messages
         guardrailed_inputs: Final = await guardrail_to_apply.apply_guardrail(
             inputs=extracted.inputs,
             request_data=data,
@@ -522,7 +540,14 @@ class OpenAIResponsesHandler(BaseTranslation):
         self._apply_guardrailed_tools_to_data(
             data, original_tools, flattened_tool_groups, guardrailed_inputs.get("tools")
         )
-        written_back: Final = self._written_back_request_fields(data, structured_messages, guardrailed_inputs)
+        written_back: Final = self._written_back_request_fields(
+            data,
+            structured_messages or (),
+            scoped_indices,
+            scoped_structured_messages,
+            guardrail_to_apply,
+            guardrailed_inputs,
+        )
         if written_back is not None:
             data["input"] = list(written_back.input)  # mutable-ok: JSON body
             if written_back.instructions is None:
@@ -567,8 +592,10 @@ class OpenAIResponsesHandler(BaseTranslation):
         data: Mapping[str, object],
         input_data: "str | ResponseInputParam",
         flattened_tool_groups: Sequence[Sequence[Mapping[str, object]]],
+        *,
+        skip_system: bool = False,
     ) -> _ExtractedInputs:
-        instructions: Final = scannable_instructions(data)
+        instructions: Final = scannable_instructions(data, skip_system=skip_system)
         texts_to_check: Final[list[str]] = [] if instructions is None else [instructions]
         images_to_check: Final[list[str]] = []
         task_mappings: Final[list[tuple[int, int | None]]] = []
@@ -585,6 +612,10 @@ class OpenAIResponsesHandler(BaseTranslation):
             texts_to_check.append(input_data)
         else:
             for msg_idx, message in enumerate(input_data):
+                if role_out_of_guardrail_scope(
+                    _input_item_role(message), skip_system_message=skip_system, skip_tool_message=False
+                ):
+                    continue
                 self._extract_input_text_and_images(
                     message=message,
                     msg_idx=msg_idx,
@@ -605,17 +636,28 @@ class OpenAIResponsesHandler(BaseTranslation):
     @staticmethod
     def _written_back_request_fields(
         data: Mapping[str, object],
-        structured_messages: Sequence[AllMessageValues] | None,
+        structured_messages: Sequence[AllMessageValues],
+        scoped_indices: Sequence[int],
+        scoped_structured_messages: Sequence[AllMessageValues] | None,
+        guardrail_to_apply: "CustomGuardrail",
         guardrailed_inputs: GenericGuardrailAPIInputs,
     ) -> _RequestFields | None:
         guardrailed: Final = guardrailed_inputs.get("structured_messages")
-        if guardrailed is None or guardrailed is structured_messages:
+        if guardrailed is None or guardrailed is scoped_structured_messages:
             return None
+        covers_full_request: Final = (
+            len(scoped_indices) == len(structured_messages)
+            or guardrail_to_apply.structured_messages_cover_full_request()
+        )
+        merged: Final = (
+            guardrailed
+            if covers_full_request
+            else merge_guardrailed_scoped_messages(
+                full_messages=structured_messages, scoped_indices=scoped_indices, guardrailed_scoped=guardrailed
+            )
+        )
         return _patch_or_convert_request_fields(
-            data.get("input"),
-            data.get("instructions"),
-            structured_messages or (),
-            guardrailed,
+            data.get("input"), data.get("instructions"), structured_messages, merged
         )
 
     def extract_request_tool_names(self, data: dict) -> list[str]:

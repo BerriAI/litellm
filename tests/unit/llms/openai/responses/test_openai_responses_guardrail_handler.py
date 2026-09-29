@@ -386,6 +386,93 @@ class TestOpenAIResponsesHandlerInputProcessing:
         assert result["input"] == original["input"]
 
 
+def _skipping_system(guardrail: CustomGuardrail) -> CustomGuardrail:
+    guardrail.skip_system_message_in_guardrail = True
+    return guardrail
+
+
+class TestSkipSystemMessageScopesInstructions:
+    """skip_system_message_in_guardrail keeps the Responses system prompt out of the scan the same
+    way it keeps chat `system` messages and Anthropic top-level `system` out: instructions and
+    system-role input items leave both texts and structured_messages, and rewrites leave them verbatim."""
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("data_input", ["Hello", [{"role": "user", "content": "Hello"}]])
+    async def test_instructions_are_neither_scanned_nor_rewritten(self, data_input):
+        handler = OpenAIResponsesHandler()
+        guardrail = _skipping_system(RecordingMaskingGuardrail(guardrail_name="test"))
+        data = {"model": "gpt-4", "instructions": "Be terse", "input": data_input}
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.seen_texts == [["Hello"]]
+        assert guardrail.seen_message_contents == [["Hello"]]
+        assert result["instructions"] == "Be terse"
+        rewritten = result["input"][0]["content"] if isinstance(data_input, list) else result["input"]
+        assert rewritten == "Hello [GUARDRAILED]"
+
+    @pytest.mark.asyncio
+    async def test_system_input_items_leave_scope_and_user_items_still_align_with_structured_messages(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = _skipping_system(RecordingMaskingGuardrail(guardrail_name="test"))
+        data = {
+            "model": "gpt-4",
+            "instructions": "Be terse",
+            "input": [
+                {"role": "system", "content": "House rules"},
+                {"role": "developer", "content": "Dev note"},
+                {"role": "user", "content": [{"type": "input_text", "text": "World"}]},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.seen_texts == [["Dev note", "World"]]
+        assert guardrail.seen_message_contents == [["Dev note", [{"type": "text", "text": "World"}]]]
+        assert result["instructions"] == "Be terse"
+        assert result["input"] == [
+            {"role": "system", "content": "House rules"},
+            {"role": "developer", "content": "Dev note [GUARDRAILED]"},
+            {"role": "user", "content": [{"type": "input_text", "text": "World [GUARDRAILED]"}]},
+        ]
+
+    @pytest.mark.asyncio
+    async def test_only_system_content_means_nothing_is_scanned(self):
+        handler = OpenAIResponsesHandler()
+        guardrail = _skipping_system(RecordingMaskingGuardrail(guardrail_name="test"))
+        data = {"model": "gpt-4", "instructions": "Be terse", "input": [{"role": "system", "content": "Rules"}]}
+        original = copy.deepcopy(data)
+
+        result = await handler.process_input_messages(data, guardrail)
+
+        assert guardrail.seen_texts == []
+        assert result == original
+
+    @pytest.mark.asyncio
+    async def test_structured_rewrite_of_the_scoped_rows_keeps_the_skipped_system_prompt(self):
+        handler = OpenAIResponsesHandler()
+        data = {
+            "model": "gpt-5.6",
+            "instructions": "Answer from the memo only.",
+            "input": [
+                {"role": "system", "content": "House rules"},
+                {"role": "user", "content": "memo " * 400},
+                {"role": "assistant", "content": "Understood."},
+                {"role": "user", "content": "What is the codename?"},
+            ],
+        }
+
+        result = await handler.process_input_messages(data, _skipping_system(StructuredRewriteGuardrail()))
+
+        assert result["instructions"] == "Answer from the memo only."
+        assert [(item["role"], _texts(item)) for item in result["input"]] == [
+            ("system", ["House rules"]),
+            ("user", [COMPRESSED_MARKER]),
+            ("assistant", ["Understood."]),
+            ("user", ["What is the codename?"]),
+        ]
+
+
 class TestOpenAIResponsesHandlerOutputProcessing:
     """Test output processing functionality"""
 
