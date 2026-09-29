@@ -31,6 +31,7 @@ from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from types import MappingProxyType
 from typing import Final
 
 import pytest
@@ -53,11 +54,13 @@ from provider_edge import (
     EdgeBackend,
     EdgeReply,
     EdgeStream,
+    LiveEdge,
     ProviderEdge,
     ProviderRequestObservation,
     RecordEdge,
     ReplayEdge,
     ReplaySource,
+    StreamCut,
     edge_request,
     handle_edge_request,
     observed_provider_edge,
@@ -81,9 +84,14 @@ def json_object(body: bytes) -> dict[str, object]:
 class _FakeProvider(ThreadingHTTPServer):
     daemon_threads = True
 
-    def __init__(self, bind: tuple[str, int]) -> None:
+    def __init__(self, bind: tuple[str, int], *, echo_request: bool = True) -> None:
         super().__init__(bind, _FakeProviderHandler)
         self.hits: list[str] = []
+        self.echo_request = echo_request
+        self.requests: tuple[tuple[Mapping[str, str], bytes], ...] = ()
+
+    def capture_request(self, headers: Mapping[str, str], body: bytes) -> None:
+        self.requests = (*self.requests, (MappingProxyType(dict(headers)), body))
 
 
 class _FakeProviderHandler(BaseHTTPRequestHandler):
@@ -101,8 +109,11 @@ class _FakeProviderHandler(BaseHTTPRequestHandler):
         length = int(self.headers.get("content-length") or "0")
         body = self.rfile.read(length) if length else b""
         provider.hits.append(f"{self.command} {self.path}")
-        payload = json.dumps(
+        provider.capture_request(dict(self.headers.items()), body)
+        payload: Final = json.dumps(
             {"echo": body.decode("utf-8"), "path": self.path, "hit": len(provider.hits)}
+            if provider.echo_request
+            else {"ok": True}
         ).encode()
         self.send_response(200)
         self.send_header("content-type", "application/json")
@@ -117,8 +128,8 @@ class _FakeProviderHandler(BaseHTTPRequestHandler):
 
 
 @contextmanager
-def fake_provider() -> Generator[_FakeProvider]:
-    server = _FakeProvider(("127.0.0.1", 0))
+def fake_provider(*, echo_request: bool = True) -> Generator[_FakeProvider]:
+    server = _FakeProvider(("127.0.0.1", 0), echo_request=echo_request)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
@@ -991,6 +1002,36 @@ def stream_chunks(response: RecordedStreamedResponse) -> list[bytes]:
     return [base64.b64decode(chunk) for chunk in response.chunks_b64]
 
 
+SECOND_DATA_LINE: Final = b'data: {"type":"content_block_delta","delta":{"text":" two"}}'
+SPLIT_MARKER_CHUNKS: tuple[bytes, ...] = (
+    b'data: {"type":"content_block_delta","delta":{"text":"one"}}\n\nda',
+    b"ta" + SECOND_DATA_LINE[4:] + b"\n\nda",
+    b'ta: {"type":"message_delta","usage":{"output_tokens":7}}\n\nda',
+    b"ta: [DONE]\n\n",
+)
+
+
+class TestStreamCut:
+    def test_a_mid_frame_cut_tears_a_data_line_whose_marker_is_split_across_chunks(self) -> None:
+        """Every ``data:`` marker after the first content delta straddles a transfer
+        chunk boundary, so a tearer that inspects each chunk on its own never finds
+        one and lets the stream finish cleanly instead of cutting it."""
+        backend: Final = LiveEdge(cut=StreamCut(after_content=True, mid_chunk=True))
+        with chunked_provider(chunks=SPLIT_MARKER_CHUNKS) as provider:
+            with running_edge(backend, {"openai": provider_url(provider)}) as edge:
+                head, chunks, ending = raw_stream_post(edge.port, STREAM_PATH, STREAM_BODY)
+
+        assert head.startswith("HTTP/1.1 200 OK")
+        assert ending == "truncated"
+        relayed: Final = b"".join(chunks)
+        whole: Final = b"".join(SPLIT_MARKER_CHUNKS)
+        assert whole.startswith(relayed) and relayed != whole
+        assert relayed.startswith(SPLIT_MARKER_CHUNKS[0])
+        torn_line: Final = relayed.rsplit(b"\n", 1)[-1]
+        assert torn_line and SECOND_DATA_LINE.startswith(torn_line) and torn_line != SECOND_DATA_LINE
+        assert b"[DONE]" not in relayed
+
+
 class TestStreamingFidelity:
     """LIT-5742: a streamed response records and replays as the chunk sequence the
     provider actually sent, not as one coalesced body. The unit of fidelity is the
@@ -1245,7 +1286,8 @@ class TestHandleEdgeRequestPure:
 
 
 class TestApiBaseSeam:
-    def test_live_mode_returns_none(self, tmp_path: Path) -> None:
+    def test_live_mode_returns_none(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        monkeypatch.delenv("E2E_PROVIDER_CACHE", raising=False)
         for mode_raw in ("live", ""):
             assert (
                 provider_edge_api_base(
@@ -1254,6 +1296,7 @@ class TestApiBaseSeam:
                     bundle_dir=tmp_path / "bundle",
                     bind_host="127.0.0.1",
                     advertise_host="127.0.0.1",
+                    test_key="tests/e2e/synthetic_suite.py::test_case",
                 )
                 is None
             )
@@ -1266,25 +1309,45 @@ class TestApiBaseSeam:
                 bundle_dir=tmp_path / "bundle",
                 bind_host="127.0.0.1",
                 advertise_host="127.0.0.1",
+                test_key="tests/e2e/synthetic_suite.py::test_case",
             )
 
     def test_unknown_mount_raises_naming_the_known_mounts(self, tmp_path: Path) -> None:
-        with pytest.raises(ValueError, match="unknown provider mount 'bedrock'"):
+        with pytest.raises(ValueError, match="unknown provider mount 'cohere'"):
             provider_edge_api_base(
-                "bedrock",
+                "cohere",
                 mode_raw="record",
                 bundle_dir=tmp_path / "bundle",
                 bind_host="127.0.0.1",
                 advertise_host="127.0.0.1",
+                test_key="tests/e2e/synthetic_suite.py::test_case",
             )
+
+    @pytest.mark.parametrize("mode_raw", ["record", "replay"])
+    def test_bedrock_never_wires_a_bundle_because_the_edge_cannot_sign_into_one(
+        self, tmp_path: Path, mode_raw: str,
+    ) -> None:
+        """Record and replay serve from a bundle without re-signing, so a Bedrock
+        deployment pointed at that edge would send the proxy's signature over a
+        rewritten Host. It keeps its direct route in both modes."""
+        assert provider_edge_api_base(
+            "bedrock/us-east-1",
+            mode_raw=mode_raw,
+            bundle_dir=tmp_path / "bundle",
+            bind_host="127.0.0.1",
+            advertise_host="127.0.0.1",
+            test_key="tests/e2e/synthetic_suite.py::test_case",
+        ) is None
 
     def test_record_mode_boots_one_shared_edge_and_prepares_the_bundle(self, tmp_path: Path) -> None:
         root = tmp_path / "bundle"
         first = provider_edge_api_base(
-            "openai", mode_raw="record", bundle_dir=root, bind_host="127.0.0.1", advertise_host="127.0.0.1"
+            "openai", mode_raw="record", bundle_dir=root, bind_host="127.0.0.1", advertise_host="127.0.0.1",
+            test_key="tests/e2e/synthetic_suite.py::test_case",
         )
         second = provider_edge_api_base(
-            "anthropic", mode_raw="record", bundle_dir=root, bind_host="127.0.0.1", advertise_host="127.0.0.1"
+            "anthropic", mode_raw="record", bundle_dir=root, bind_host="127.0.0.1", advertise_host="127.0.0.1",
+            test_key="tests/e2e/synthetic_suite.py::test_case",
         )
         assert first is not None and second is not None
         assert first.endswith("/openai")

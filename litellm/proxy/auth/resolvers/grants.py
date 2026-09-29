@@ -28,11 +28,11 @@ from litellm.proxy._types import (
 )
 from litellm.proxy.auth.auth_checks import (
     TeamNotFoundError,
-    UserNotFoundError,
     get_team_membership,
     get_team_object,
     get_user_object,
 )
+from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 
 if TYPE_CHECKING:
     from litellm.proxy._types import Span

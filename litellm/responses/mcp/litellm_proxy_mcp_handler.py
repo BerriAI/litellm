@@ -16,7 +16,7 @@ from litellm.proxy._experimental.mcp_server.utils import (
     split_server_prefix_from_name,
     strip_known_server_prefix,
 )
-from litellm.responses.main import aresponses
+from litellm.responses.main import aresponses  # noqa: TID251  # inner call must skip the MCP gateway that invoked it
 from litellm.responses.streaming_iterator import BaseResponsesAPIStreamingIterator
 from litellm.types.llms.openai import (
     ResponseInputParam,
@@ -236,6 +236,7 @@ class LiteLLM_Proxy_MCP_Handler:
         mcp_auth_header: str | None = None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
         request_tags: list[str] | None = None,
+        raw_headers: dict[str, str] | None = None,
     ) -> tuple[list[MCPTool], list[str]]:
         """
         Get available tools from the MCP server manager.
@@ -326,6 +327,7 @@ class LiteLLM_Proxy_MCP_Handler:
             list_tools_log_source="responses",
             litellm_trace_id=litellm_trace_id,
             request_tags=request_tags,
+            raw_headers=raw_headers,
         )
         tools: Final = listing.tools
 
@@ -452,6 +454,7 @@ class LiteLLM_Proxy_MCP_Handler:
         mcp_auth_header: str | None = None,
         mcp_server_auth_headers: dict[str, dict[str, str]] | None = None,
         request_tags: list[str] | None = None,
+        raw_headers: dict[str, str] | None = None,
     ) -> tuple[list[MCPTool], dict[str, str]]:
         """
         Process MCP tools through filtering and deduplication pipeline without OpenAI transformation.
@@ -482,6 +485,7 @@ class LiteLLM_Proxy_MCP_Handler:
             mcp_auth_header=mcp_auth_header,
             mcp_server_auth_headers=mcp_server_auth_headers,
             request_tags=request_tags,
+            raw_headers=raw_headers,
         )
 
         # Step 2: Filter tools based on allowed_tools parameter
@@ -691,6 +695,7 @@ class LiteLLM_Proxy_MCP_Handler:
         litellm_call_id: str | None = None,
         litellm_trace_id: str | None = None,
         request_tags: list[str] | None = None,
+        guardrail_context: Mapping[str, object] | None = None,
     ) -> list[MCPToolResult]:
         """Execute tool calls and return results."""
         from fastapi import HTTPException
@@ -854,6 +859,7 @@ class LiteLLM_Proxy_MCP_Handler:
                     raw_headers=raw_headers,
                     proxy_logging_obj=proxy_logging_obj,
                     litellm_logging_obj=litellm_logging_obj,
+                    guardrail_context=guardrail_context,
                 )
 
                 if proxy_logging_obj:
@@ -870,7 +876,7 @@ class LiteLLM_Proxy_MCP_Handler:
                 if litellm_logging_obj:
                     try:
                         litellm_logging_obj.post_call(original_response=result)
-                        await litellm_logging_obj.async_post_mcp_tool_call_hook(
+                        result = await litellm_logging_obj.async_post_mcp_tool_call_hook(
                             kwargs=litellm_logging_obj.model_call_details,
                             response_obj=result,
                             start_time=start_time,
@@ -1266,14 +1272,14 @@ class LiteLLM_Proxy_MCP_Handler:
         return tool_execution_events
 
     @staticmethod
-    def _prepare_initial_call_params(call_params: dict[str, Any], should_auto_execute: bool) -> dict[str, Any]:
+    def _prepare_initial_call_params(call_params: Mapping[str, object], should_auto_execute: bool) -> dict[str, Any]:
         """
         Prepare call parameters for the initial LLM call.
 
         For auto-execute scenarios, we need to disable streaming for the initial call
         so we can process the tool calls before streaming the final response.
         """
-        initial_params: Final = call_params.copy()
+        initial_params: Final = dict(call_params)
 
         if should_auto_execute:
             # Disable streaming for initial call when auto-executing tools
@@ -1282,14 +1288,16 @@ class LiteLLM_Proxy_MCP_Handler:
         return initial_params
 
     @staticmethod
-    def _prepare_follow_up_call_params(call_params: dict[str, Any], original_stream_setting: bool) -> dict[str, Any]:
+    def _prepare_follow_up_call_params(
+        call_params: Mapping[str, object], original_stream_setting: bool
+    ) -> dict[str, Any]:
         """
         Prepare call parameters for the follow-up LLM call after tool execution.
 
         Restores the original streaming setting and removes tool_choice since
         we're now providing tool results, not requesting tool calls.
         """
-        follow_up_params: Final = call_params.copy()
+        follow_up_params: Final = dict(call_params)
 
         # Restore original streaming setting for follow-up call
         follow_up_params["stream"] = original_stream_setting

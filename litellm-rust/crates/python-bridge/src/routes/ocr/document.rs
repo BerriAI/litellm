@@ -1,97 +1,38 @@
-use std::io::Read;
 use std::path::PathBuf;
 
-use pyo3::exceptions::{PyFileNotFoundError, PyTypeError, PyValueError};
-use pyo3::prelude::*;
-use pyo3::pybacked::PyBackedBytes;
-#[cfg(test)]
-use pyo3::types::PyDict;
-use pyo3::types::{PyBytes, PyString};
+use litellm_core::ocr::types::OcrDocumentInput;
+use litellm_host_python::{PythonFileReader, py_bytes};
+use pyo3::{
+    exceptions::PyValueError,
+    prelude::*,
+    sync::PyOnceLock,
+    types::{PyBytes, PyString, PyType},
+};
 
-use litellm_core::constants::OCR_INLINE_MAX_BYTES;
-use litellm_core::ocr::{OcrDocument, encode_file_document, mime_type_for_name, upload_mime_type};
-use litellm_python_interop::to_py_preserving_errors;
-
-enum FileBytes {
-    Python(PyBackedBytes),
-    Native(Vec<u8>),
+/// A `type='file'` document as projected: paths and bytes are typed inputs already; a
+/// file-like object is a reader the projection consumes once every other field is read.
+pub(super) enum FileDocumentInput {
+    Ready(OcrDocumentInput),
+    Deferred {
+        reader: PythonFileReader,
+        mime_type: Option<String>,
+    },
 }
 
-impl AsRef<[u8]> for FileBytes {
-    fn as_ref(&self) -> &[u8] {
+impl FileDocumentInput {
+    pub(super) fn resolve(self, py: Python<'_>) -> PyResult<OcrDocumentInput> {
         match self {
-            Self::Python(bytes) => bytes,
-            Self::Native(bytes) => bytes,
+            Self::Ready(input) => Ok(input),
+            Self::Deferred { reader, mime_type } => {
+                let content = reader.read(py)?;
+                Ok(OcrDocumentInput::Bytes {
+                    bytes: content.bytes,
+                    file_name: content.file_name,
+                    mime_type,
+                })
+            }
         }
     }
-}
-
-fn read_file_input(
-    py: Python<'_>,
-    file: &Bound<'_, PyAny>,
-) -> PyResult<(FileBytes, Option<String>)> {
-    if file.is_instance_of::<PyString>() {
-        return Err(PyValueError::new_err(
-            "OCR file input does not accept bare str values. Pass bytes, a pathlib.Path, or a file-like object.",
-        ));
-    }
-    if file.is_instance(&py.import("os")?.getattr("PathLike")?)? {
-        let path: PathBuf = file.extract()?;
-        let name = path
-            .file_name()
-            .map(|value| value.to_string_lossy().into_owned());
-        let bytes = py
-            .detach(|| {
-                let mut bytes = Vec::new();
-                std::fs::File::open(&path)?
-                    .take(OCR_INLINE_MAX_BYTES as u64 + 1)
-                    .read_to_end(&mut bytes)?;
-                Ok::<_, std::io::Error>(bytes)
-            })
-            .map_err(|error| {
-                if error.kind() == std::io::ErrorKind::NotFound {
-                    PyFileNotFoundError::new_err(format!("File not found: {}", path.display()))
-                } else {
-                    error.into()
-                }
-            })?;
-        return Ok((FileBytes::Native(bytes), name));
-    }
-    if file.is_instance_of::<PyBytes>() {
-        return Ok((FileBytes::Python(file.extract()?), None));
-    }
-    let reader = file
-        .getattr_opt("read")?
-        .filter(|value| value.is_callable());
-    let Some(reader) = reader else {
-        return Err(PyValueError::new_err(format!(
-            "Unsupported file input type: {}. Expected pathlib.Path, bytes, or a file-like object.",
-            file.get_type(),
-        )));
-    };
-    let name = file
-        .getattr_opt("name")?
-        .filter(|value| !value.is_none())
-        .map(|value| value.extract::<String>())
-        .transpose()?;
-    let value = reader.call0()?;
-    let bytes = if value.is_instance_of::<PyString>() {
-        FileBytes::Native(value.extract::<String>()?.into_bytes())
-    } else if value.is_instance_of::<PyBytes>() {
-        FileBytes::Python(value.extract()?)
-    } else {
-        return Err(PyTypeError::new_err(format!(
-            "OCR file read must return bytes or str, got {}",
-            value.get_type(),
-        )));
-    };
-    Ok((bytes, name))
-}
-
-pub(super) struct FileDocumentInput {
-    bytes: FileBytes,
-    name: Option<String>,
-    mime_type: Option<String>,
 }
 
 impl FromPyObject<'_, '_> for FileDocumentInput {
@@ -104,79 +45,68 @@ impl FromPyObject<'_, '_> for FileDocumentInput {
             Err(error) if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) => None,
             Err(error) => return Err(error),
         };
+        let missing = || {
+            PyValueError::new_err(
+                "document with type='file' must include a 'file' field containing a pathlib.Path, file-like object, or bytes",
+            )
+        };
         let file = document.get_item("file").map_err(|error| {
             if error.is_instance_of::<pyo3::exceptions::PyKeyError>(py) {
-                PyValueError::new_err("document with type='file' must include a 'file' field containing a pathlib.Path, file-like object, or bytes")
+                missing()
             } else {
                 error
             }
         })?;
         if file.is_none() {
+            return Err(missing());
+        }
+        if file.is_instance_of::<PyString>() {
             return Err(PyValueError::new_err(
-                "document with type='file' must include a 'file' field containing a pathlib.Path, file-like object, or bytes",
+                "OCR file input does not accept bare str values. Pass bytes, a pathlib.Path, or a file-like object.",
             ));
         }
-        let (bytes, name) = read_file_input(py, &file)?;
-        Ok(Self {
-            bytes,
-            name,
-            mime_type,
-        })
+        static PATH_LIKE: PyOnceLock<Py<PyType>> = PyOnceLock::new();
+        if file.is_instance(PATH_LIKE.import(py, "os", "PathLike")?)? {
+            return Ok(Self::Ready(OcrDocumentInput::Path {
+                path: file.extract::<PathBuf>()?,
+                mime_type,
+            }));
+        }
+        if file.is_instance_of::<PyBytes>() {
+            return Ok(Self::Ready(OcrDocumentInput::Bytes {
+                bytes: py_bytes(&file)?,
+                file_name: None,
+                mime_type,
+            }));
+        }
+        match PythonFileReader::from_file_like(&file)? {
+            Some(reader) => Ok(Self::Deferred { reader, mime_type }),
+            None => Err(PyValueError::new_err(format!(
+                "Unsupported file input type: {}. Expected pathlib.Path, bytes, or a file-like object.",
+                file.get_type(),
+            ))),
+        }
     }
-}
-
-pub(super) fn file_document(py: Python<'_>, document: FileDocumentInput) -> PyResult<OcrDocument> {
-    py.detach(|| {
-        encode_file_document(
-            document.bytes.as_ref(),
-            document.name.as_deref(),
-            document.mime_type.as_deref(),
-        )
-    })
-    .map_err(|error| PyValueError::new_err(error.to_string()))
-}
-
-#[pyfunction]
-fn _ocr_file_document(py: Python<'_>, document: Bound<'_, PyAny>) -> PyResult<Py<PyAny>> {
-    to_py_preserving_errors(py, &file_document(py, document.extract()?)?)
-}
-
-#[pyfunction]
-fn _ocr_mime_type(file_name: &str) -> String {
-    mime_type_for_name(file_name).into()
-}
-
-#[pyfunction]
-#[pyo3(signature = (file_content, file_name=None, content_type=None))]
-fn _ocr_upload_document(
-    py: Python<'_>,
-    file_content: &Bound<'_, PyBytes>,
-    file_name: Option<&str>,
-    content_type: Option<&str>,
-) -> PyResult<Py<PyAny>> {
-    let bytes: PyBackedBytes = file_content.extract()?;
-    let document = py
-        .detach(|| {
-            encode_file_document(
-                &bytes,
-                None,
-                Some(upload_mime_type(file_name, content_type)),
-            )
-        })
-        .map_err(|error| PyValueError::new_err(error.to_string()))?;
-    to_py_preserving_errors(py, &document)
-}
-
-pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    module.add("_OCR_MAX_FILE_BYTES", OCR_INLINE_MAX_BYTES)?;
-    module.add_function(wrap_pyfunction!(_ocr_upload_document, module)?)?;
-    module.add_function(wrap_pyfunction!(_ocr_file_document, module)?)?;
-    module.add_function(wrap_pyfunction!(_ocr_mime_type, module)?)
 }
 
 #[cfg(test)]
 mod tests {
+    use pyo3::{exceptions::PyTypeError, types::PyDict};
+
     use super::*;
+
+    fn eval<'py>(py: Python<'py>, source: &std::ffi::CStr) -> Bound<'py, PyDict> {
+        let locals = PyDict::new(py);
+        py.run(source, Some(&locals), Some(&locals)).unwrap();
+        locals
+    }
+
+    fn ready(input: FileDocumentInput) -> OcrDocumentInput {
+        match input {
+            FileDocumentInput::Ready(input) => input,
+            FileDocumentInput::Deferred { .. } => panic!("expected a ready document"),
+        }
+    }
 
     #[test]
     fn extraction_validates_required_file_and_optional_mime_type() {
@@ -196,68 +126,90 @@ mod tests {
                 let error = document.extract::<FileDocumentInput>().err().unwrap();
                 assert!(error.is_instance_of::<PyTypeError>(py));
             }
-            let document = py.eval(c"{'file': b'abc'}", None, None).unwrap();
-            let input: FileDocumentInput = document.extract().unwrap();
-            assert_eq!(input.bytes.as_ref(), b"abc");
-            assert_eq!(input.name, None);
-            assert_eq!(input.mime_type, None);
+            let error = py
+                .eval(c"{'file': 'scan.pdf'}", None, None)
+                .unwrap()
+                .extract::<FileDocumentInput>()
+                .err()
+                .unwrap();
+            assert!(error.is_instance_of::<PyValueError>(py));
+            assert!(error.to_string().contains("bare str"));
+            let error = py
+                .eval(c"{'file': object()}", None, None)
+                .unwrap()
+                .extract::<FileDocumentInput>()
+                .err()
+                .unwrap();
+            assert!(error.is_instance_of::<PyValueError>(py));
+            assert!(error.to_string().contains("Unsupported file input type"));
+            let document = py
+                .eval(c"{'file': b'abc', 'mime_type': 'image/png'}", None, None)
+                .unwrap();
+            assert_eq!(
+                ready(document.extract().unwrap()),
+                OcrDocumentInput::Bytes {
+                    bytes: b"abc".as_slice().into(),
+                    file_name: None,
+                    mime_type: Some("image/png".into()),
+                }
+            );
         });
     }
 
     #[test]
-    fn extraction_validates_mime_type_before_consuming_file() {
+    fn paths_and_readers_are_projected_without_io() {
         Python::initialize();
         Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                c"class Reader:
+            let locals = eval(
+                py,
+                c"from pathlib import Path
+class Reader:
+    name = 'scan.png'
     def __init__(self):
         self.reads = 0
     def read(self):
         self.reads += 1
         return b'abc'
 reader = Reader()
-document = {'file': reader, 'mime_type': 7}",
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
+document = {'file': reader, 'mime_type': 7}
+reader_document = {'file': reader, 'mime_type': 'application/pdf'}
+path_document = {'file': Path('/nonexistent/ocr-projection-test.pdf'), 'mime_type': 'image/png'}",
+            );
             let document = locals.get_item("document").unwrap().unwrap();
             let error = document.extract::<FileDocumentInput>().err().unwrap();
             assert!(error.is_instance_of::<PyTypeError>(py));
-            let reads: usize = locals
-                .get_item("reader")
-                .unwrap()
-                .unwrap()
-                .getattr("reads")
-                .unwrap()
-                .extract()
-                .unwrap();
-            assert_eq!(reads, 0);
-        });
-    }
 
-    #[test]
-    fn extraction_preserves_reader_key_error_identity() {
-        Python::initialize();
-        Python::attach(|py| {
-            let locals = PyDict::new(py);
-            py.run(
-                c"failure = KeyError('reader failed')
-class Reader:
-    def read(self):
-        raise failure
-document = {'file': Reader()}",
-                Some(&locals),
-                Some(&locals),
-            )
-            .unwrap();
-            let document = locals.get_item("document").unwrap().unwrap();
-            let error = document.extract::<FileDocumentInput>().err().unwrap();
-            assert!(
-                error
-                    .value(py)
-                    .is(locals.get_item("failure").unwrap().unwrap())
+            let document = locals.get_item("reader_document").unwrap().unwrap();
+            let input: FileDocumentInput = document.extract().unwrap();
+            let reads = || {
+                locals
+                    .get_item("reader")
+                    .unwrap()
+                    .unwrap()
+                    .getattr("reads")
+                    .unwrap()
+                    .extract::<usize>()
+                    .unwrap()
+            };
+            assert_eq!(reads(), 0);
+            let resolved = input.resolve(py).unwrap();
+            assert_eq!(reads(), 1);
+            assert_eq!(
+                resolved,
+                OcrDocumentInput::Bytes {
+                    bytes: b"abc".as_slice().into(),
+                    file_name: Some("scan.png".into()),
+                    mime_type: Some("application/pdf".into()),
+                }
+            );
+
+            let document = locals.get_item("path_document").unwrap().unwrap();
+            assert_eq!(
+                ready(document.extract().unwrap()),
+                OcrDocumentInput::Path {
+                    path: PathBuf::from("/nonexistent/ocr-projection-test.pdf"),
+                    mime_type: Some("image/png".into()),
+                }
             );
         });
     }

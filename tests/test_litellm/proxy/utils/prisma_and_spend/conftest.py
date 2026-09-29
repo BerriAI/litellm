@@ -130,6 +130,7 @@ def mock_prisma_client() -> MagicMock:
     client.spend_log_transactions = []
     client._spend_log_transactions_lock = asyncio.Lock()
     client.spend_logs_queue_monitor_task = None
+    client.spend_log_write_lock = asyncio.Lock()
     client.tool_usage_transactions = []
     client._tool_usage_transactions_lock = asyncio.Lock()
     client.jsonify_object = lambda data: dict(data)
@@ -311,6 +312,54 @@ def make_spend_log_row() -> Callable[..., Dict[str, Any]]:
         return row
 
     return _make
+
+
+class FakeRedisList:
+    def __init__(self) -> None:
+        self.items: dict[str, list[str]] = {}
+        self.down = False
+
+    def _check_up(self) -> None:
+        if self.down:
+            raise ConnectionError("redis unreachable")
+
+    async def async_rpush_and_trim(self, key: str, values: list[str], max_len: int) -> int:
+        self._check_up()
+        stored = self.items.setdefault(key, [])
+        stored.extend(str(v) for v in values)
+        pushed_len = len(stored)
+        del stored[:-max_len]
+        return pushed_len
+
+    async def async_lpop(self, key: str, count: int | None = None, **kwargs: object) -> str | list[str] | None:
+        self._check_up()
+        stored = self.items.get(key, [])
+        if not stored:
+            return None
+        if count is None:
+            return stored.pop(0)
+        popped = stored[:count]
+        del stored[:count]
+        return popped
+
+
+@pytest.fixture
+def fake_redis() -> FakeRedisList:
+    return FakeRedisList()
+
+
+@pytest.fixture
+def proxy_logging_with_redis(fake_redis: FakeRedisList) -> MagicMock:
+    from litellm.proxy.db.db_transaction_queue.redis_update_buffer import RedisUpdateBuffer
+
+    proxy_logging = MagicMock()
+    proxy_logging.failure_handler = AsyncMock()
+    proxy_logging.db_spend_update_writer = MagicMock()
+    proxy_logging.db_spend_update_writer.db_update_spend_transaction_handler = AsyncMock()
+    buffer = RedisUpdateBuffer(redis_cache=fake_redis)
+    buffer._should_commit_spend_updates_to_redis = MagicMock(return_value=True)
+    proxy_logging.db_spend_update_writer.redis_update_buffer = buffer
+    return proxy_logging
 
 
 @dataclass

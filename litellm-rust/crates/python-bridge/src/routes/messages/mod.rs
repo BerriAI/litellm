@@ -1,12 +1,86 @@
-mod value;
+mod host;
 
-use pyo3::prelude::*;
+use host::MessagesPythonHost;
+use litellm_types::Operation;
+use pyo3::{
+    prelude::*,
+    types::{PyDict, PyTuple},
+};
 
-pub(super) fn register(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    value::register(module)
+fn run_messages(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+    asynchronous: bool,
+) -> PyResult<Py<PyAny>> {
+    let (arguments, hooks) = crate::routes::call_hooks(
+        py,
+        Operation::Messages,
+        &request,
+        &args,
+        &kwargs,
+        asynchronous,
+    )?;
+    crate::routes::run_public_call(
+        py,
+        arguments,
+        move |py, arguments, request| {
+            let builder = litellm_core::messages::MessagesRoute::builder()
+                .with_http(
+                    crate::http::provider_client(py, arguments, asynchronous)?
+                        .map_err(crate::http::client_error)?,
+                )
+                .with_auth(crate::http::resources().auth.clone())
+                .with_secrets(crate::secrets::source(py)?);
+            let route = builder.build();
+            Ok(litellm_host::call::hosted_call(
+                request,
+                None,
+                move |(call, selection): (_, crate::cache::Selection),
+                      services,
+                      interceptors,
+                      observers| async move {
+                    let (cache, options) = selection.attach(services);
+                    let route = match cache {
+                        Some(cache) => route.with_cache(cache),
+                        None => route,
+                    };
+                    route
+                        .execute(
+                            call,
+                            &interceptors,
+                            litellm_core::CallOptions {
+                                cache: Some(options),
+                                observers,
+                            },
+                        )
+                        .await
+                },
+            ))
+        },
+        MessagesPythonHost::new(request.unbind(), asynchronous),
+        hooks,
+        asynchronous,
+    )
 }
 
-#[cfg(feature = "trace-parity")]
-pub(super) fn register_trace(module: &Bound<'_, PyModule>) -> PyResult<()> {
-    value::register_trace(module)
+#[pyfunction]
+pub(crate) fn messages(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    run_messages(py, request, args, kwargs, false)
+}
+
+#[pyfunction]
+pub(crate) fn amessages(
+    py: Python<'_>,
+    request: Bound<'_, PyAny>,
+    args: Bound<'_, PyTuple>,
+    kwargs: Bound<'_, PyDict>,
+) -> PyResult<Py<PyAny>> {
+    run_messages(py, request, args, kwargs, true)
 }

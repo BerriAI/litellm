@@ -60,6 +60,8 @@ def _config_attachment_to_db_response(index: int, attachment: PolicyAttachment) 
         keys=attachment.keys or [],
         models=attachment.models or [],
         tags=attachment.tags or [],
+        priority=attachment.priority,
+        default=attachment.default,
         definition_location="config",
     )
 

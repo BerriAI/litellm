@@ -9,6 +9,7 @@ Router cooldown handlers
 import asyncio
 import math
 from collections.abc import Mapping
+from datetime import datetime
 from types import MappingProxyType
 from typing import TYPE_CHECKING, Any, Final
 
@@ -19,9 +20,11 @@ from litellm.constants import (
     DEFAULT_COOLDOWN_TIME_SECONDS,
     DEFAULT_FAILURE_THRESHOLD_MINIMUM_REQUESTS,
     DEFAULT_FAILURE_THRESHOLD_PERCENT,
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
     SINGLE_DEPLOYMENT_TRAFFIC_FAILURE_THRESHOLD,
 )
 from litellm.router_utils.cooldown_callbacks import router_cooldown_event_callback
+from litellm.types.utils import BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
 
 from .router_callbacks.track_deployment_metrics import (
     get_deployment_failures_for_current_minute,
@@ -59,6 +62,15 @@ def mark_advisor_orchestration_failure(exception: BaseException) -> None:
 def is_advisor_orchestration_failure(exception: BaseException | None) -> bool:
     """Whether ``exception`` was tagged by ``mark_advisor_orchestration_failure``."""
     return bool(getattr(exception, _ADVISOR_ORCHESTRATION_FAILURE_ATTR, False))
+
+
+def is_background_response_cost_poll_not_found(exception: Exception, litellm_params: Mapping[str, object]) -> bool:
+    """Whether a background response cost poll failed with a provider 404."""
+    return getattr(exception, "status_code", None) == 404 and any(
+        isinstance(candidate, Mapping)
+        and candidate.get(INTERNAL_CALL_ORIGIN_METADATA_KEY) == BACKGROUND_RESPONSE_COST_POLL_CALL_ORIGIN
+        for candidate in (litellm_params.get("metadata"), litellm_params.get("litellm_metadata"))
+    )
 
 
 _EXCEPTION_POLICY_FIELDS: Final[tuple[tuple[type, str], ...]] = (
@@ -343,8 +355,9 @@ def _should_cooldown_deployment(
     model_group: Final = litellm_router_instance.get_model_group(id=deployment)
     is_single_deployment_model_group = False
     if model_group is not None and len(model_group) == 1:
-        is_single_deployment_model_group = not litellm_router_instance.routing_group_has_alternatives(
-            requested_model_group
+        is_single_deployment_model_group = not (
+            litellm_router_instance.routing_group_has_alternatives(requested_model_group)
+            or litellm_router_instance.team_model_has_alternatives(deployment)
         )
 
     ## CHECK DEPLOYMENT-LEVEL POLICY FIRST (overrides router-level)
@@ -636,3 +649,23 @@ def cast_exception_status_to_int(exception_status: str | int) -> int:
             )
             exception_status = 500
     return exception_status
+
+
+def is_caller_timeout_408(
+    model_call_details: Mapping[str, object], exception_status: str | int, ended: datetime | None = None
+) -> bool:
+    """A 408 that arrives before the caller-set timeout could have fired came from the provider.
+
+    ``ended`` overrides ``model_call_details["end_time"]`` for callers that run before the
+    failure logger has stamped the current API call's end time."""
+    if cast_exception_status_to_int(exception_status) != 408:
+        return False
+    litellm_params: Final = model_call_details.get("litellm_params")
+    if not isinstance(litellm_params, Mapping) or not litellm_params.get("client_side_timeout"):
+        return False
+    timeout: Final = litellm_params.get("timeout")
+    started: Final = model_call_details.get("api_call_start_time") or model_call_details.get("start_time")
+    finished: Final = ended if ended is not None else model_call_details.get("end_time")
+    if not isinstance(timeout, (int, float)) or not isinstance(started, datetime) or not isinstance(finished, datetime):
+        return False
+    return (finished - started).total_seconds() >= timeout
