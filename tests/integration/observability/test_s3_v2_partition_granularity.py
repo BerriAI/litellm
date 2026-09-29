@@ -468,6 +468,64 @@ def test_s3_v2_hour_cold_storage_key_names_the_uploaded_object_and_reads_back(ga
     assert prompts[1] not in json.dumps(missing.json()["response"]), missing.text
 
 
+def test_s3_v2_hour_cold_storage_rebuilds_previous_response_id_history_from_the_hour_object(
+    gateway: Gateway, tmp_path: Path
+) -> None:
+    marker: Final = "s3hsess" + uuid.uuid4().hex[:8]
+    upstream: Final = CountingUpstream()
+    histories: Final[list[str]] = []  # mutable-ok: appended per upstream request by the scripted provider thread
+    reads: Final[list[str]] = []  # mutable-ok: appended per sink GET by the recording sink thread
+    sink: Final = RecordingS3Sink(delay_seconds=0.05)
+
+    def provider_reply(request: Request) -> Reply:
+        histories.append(request.body.decode())
+        return upstream.respond(request)
+
+    def bucket_reply(request: Request) -> Reply:
+        if request.method == "GET":
+            reads.append(unquote(request.target))
+        return sink.respond(request)
+
+    with (
+        wire_server(provider_reply) as provider,
+        wire_server(bucket_reply) as bucket,
+        _s3_proxy(gateway, tmp_path, bucket.url, HOUR, {"cold_storage_custom_logger": "s3_v2"}) as owned,
+        owned.gateway.scenario() as scenario,
+    ):
+        _, anthropic_model, key = _models(scenario, provider.url)
+        first: Final = owned.gateway.request(
+            "POST", "/v1/responses", {"model": anthropic_model, "input": f"{marker}-first"}, key=key
+        )
+        assert first.status_code == 200, first.text
+        rows: Final = eventually(
+            lambda: read_rows(
+                'SELECT request_id, metadata FROM "LiteLLM_SpendLogs" WHERE model_group=%s', (anthropic_model,)
+            ),
+            lambda values: len(values) == 1,
+            seconds=60,
+        )
+        metadata: Final = rows[0]["metadata"]
+        cold_key: Final = str(
+            object_value(json.loads(metadata) if isinstance(metadata, str) else metadata)["cold_storage_object_key"]
+        )
+        eventually(sink.objects, lambda objects: f"/{BUCKET}/{quote(cold_key, safe='/')}" in objects, seconds=30)
+        second: Final = owned.gateway.request(
+            "POST",
+            "/v1/responses",
+            {"model": anthropic_model, "input": f"{marker}-second", "previous_response_id": first.json()["id"]},
+            key=key,
+        )
+        objects: Final = sink.objects()
+    assert second.status_code == 200, second.text
+    assert second.json()["id"] != first.json()["id"], second.text
+    assert re.fullmatch(rf"{re.escape(PREFIX)}/\d{{4}}-\d{{2}}-\d{{2}}/\d{{2}}/time-[^/]+\.json", cold_key), cold_key
+    assert _outside_layout(objects, "hour") == ()
+    assert f"/{BUCKET}/{cold_key}" in reads, reads
+    assert len(histories) == 2, histories
+    assert f"{marker}-first" in histories[0] and f"{marker}-second" not in histories[0], histories[0]
+    assert f"{marker}-first" in histories[1] and f"{marker}-second" in histories[1], histories[1]
+
+
 def test_s3_v2_audit_logs_follow_the_audit_params_granularity_not_the_request_logs(
     gateway: Gateway, tmp_path: Path
 ) -> None:
