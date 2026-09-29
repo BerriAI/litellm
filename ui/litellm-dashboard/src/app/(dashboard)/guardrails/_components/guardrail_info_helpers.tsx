@@ -116,6 +116,14 @@ export const toModeArray = (raw: unknown): string[] => {
 
 export type LoggingOnlyScope = "input" | "output" | "both";
 export type LoggingOnlyScopeChoice = "default" | LoggingOnlyScope;
+export type LoggingOnlyScopeOption = { label: string; value: LoggingOnlyScopeChoice };
+
+const LOGGING_ONLY_SCOPE_OPTIONS: LoggingOnlyScopeOption[] = [
+  { label: "Default (request and response)", value: "default" },
+  { label: "Input only (request)", value: "input" },
+  { label: "Output only (response)", value: "output" },
+  { label: "Both (request and response)", value: "both" },
+];
 
 export const loggingOnlyScopeToChoice = (v: string | null | undefined): LoggingOnlyScopeChoice =>
   v === "input" || v === "output" || v === "both" ? v : "default";
@@ -148,6 +156,24 @@ export const modeIncludesLoggingOnly = (raw: unknown): boolean => {
       ? Object.values(tags).some((mode) => toModeArray(mode).includes("logging_only"))
       : false;
   return toModeArray(fallback).includes("logging_only") || taggedModes;
+};
+
+export const getLoggingOnlyScopeOptions = (directionalScopeSupported: boolean): LoggingOnlyScopeOption[] =>
+  directionalScopeSupported
+    ? LOGGING_ONLY_SCOPE_OPTIONS
+    : LOGGING_ONLY_SCOPE_OPTIONS.filter((option) => option.value === "default" || option.value === "both");
+
+export const supportsDirectionalLoggingOnlyScope = (
+  settings: { providers_without_directional_logging_only_scope?: string[] } | null,
+  selectedProvider: string | null,
+): boolean => {
+  const providerKey = selectedProvider
+    ? (guardrail_provider_map[selectedProvider] ??
+        Object.values(guardrail_provider_map).find(
+          (value) => value.toLowerCase() === selectedProvider.toLowerCase(),
+        ))?.toLowerCase()
+    : null;
+  return !providerKey || !settings?.providers_without_directional_logging_only_scope?.includes(providerKey);
 };
 
 export const formatGuardrailMode = (raw: unknown): string => {

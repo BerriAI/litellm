@@ -18,8 +18,10 @@ import {
   loggingOnlyScopeToChoice,
   choiceToLoggingOnlyScope,
   getLoggingOnlyScopeUpdate,
+  getLoggingOnlyScopeOptions,
   formatLoggingOnlyScope,
   modeIncludesLoggingOnly,
+  supportsDirectionalLoggingOnlyScope,
 } from "./guardrail_info_helpers";
 
 describe("guardrail_info_helpers", () => {
@@ -32,6 +34,7 @@ describe("guardrail_info_helpers", () => {
       "PresidioPII",
       "Bedrock",
       "Lakera",
+      "Xecguard",
       "LitellmContentFilter",
       "ToolPermission",
       "BlockCodeExecution",
@@ -287,6 +290,45 @@ describe("guardrail_info_helpers", () => {
         }),
       ).toBe(true);
       expect(modeIncludesLoggingOnly("pre_call")).toBe(false);
+    });
+
+    it("filters directional options for unsupported providers and keeps all options otherwise", () => {
+      expect(getLoggingOnlyScopeOptions(false).map((option) => option.value)).toEqual(["default", "both"]);
+      expect(getLoggingOnlyScopeOptions(true).map((option) => option.value)).toEqual([
+        "default",
+        "input",
+        "output",
+        "both",
+      ]);
+
+      expect(
+        supportsDirectionalLoggingOnlyScope(
+          { providers_without_directional_logging_only_scope: ["xecguard"] },
+          "Xecguard",
+        ),
+      ).toBe(false);
+      expect(
+        supportsDirectionalLoggingOnlyScope(
+          { providers_without_directional_logging_only_scope: ["xecguard"] },
+          "xecguard",
+        ),
+      ).toBe(false);
+      expect(
+        supportsDirectionalLoggingOnlyScope(
+          { providers_without_directional_logging_only_scope: ["xecguard"] },
+          "Bedrock",
+        ),
+      ).toBe(true);
+      expect(
+        supportsDirectionalLoggingOnlyScope(
+          { providers_without_directional_logging_only_scope: ["xecguard"] },
+          "unknown-provider",
+        ),
+      ).toBe(true);
+      expect(supportsDirectionalLoggingOnlyScope(null, "Xecguard")).toBe(true);
+      expect(getLoggingOnlyScopeOptions(supportsDirectionalLoggingOnlyScope(null, "Xecguard"))).toEqual(
+        getLoggingOnlyScopeOptions(true),
+      );
     });
   });
 

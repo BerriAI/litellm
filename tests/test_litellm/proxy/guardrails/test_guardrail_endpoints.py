@@ -1,5 +1,6 @@
 import json
 import time
+from collections.abc import Callable
 from datetime import datetime
 from typing import Dict, List, Optional
 from unittest.mock import AsyncMock
@@ -9,6 +10,7 @@ import pytest
 
 from fastapi import HTTPException
 
+from litellm.integrations.custom_guardrail import CustomGuardrail
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
@@ -42,10 +44,12 @@ from litellm.proxy.guardrails.guardrail_registry import (
 from litellm.types.guardrails import (
     ApplyGuardrailRequest,
     BaseLitellmParams,
+    GuardrailEventHooks,
     Guardrail,
     GuardrailInfoResponse,
     LitellmParams,
 )
+from litellm.types.utils import GenericGuardrailAPIInputs
 
 # Mock data for testing
 MOCK_DB_GUARDRAIL = {
@@ -85,6 +89,44 @@ MOCK_PATCH_REQUEST = PatchGuardrailRequest(
 )
 
 
+class _PatchScopeSupportedGuardrail(CustomGuardrail):
+    async def apply_guardrail(
+        self,
+        inputs: GenericGuardrailAPIInputs,
+        request_data: dict[str, object],
+        input_type: str,
+        logging_obj: object | None = None,
+    ) -> GenericGuardrailAPIInputs:
+        return inputs
+
+
+class _PatchScopeUnsupportedGuardrail(_PatchScopeSupportedGuardrail):
+    async def async_logging_hook(
+        self,
+        kwargs: dict[str, object],
+        result: object,
+        call_type: str,
+    ) -> tuple[dict[str, object], object]:
+        return kwargs, result
+
+
+def _patch_scope_initializer(
+    callback_type: type[CustomGuardrail],
+) -> Callable[[LitellmParams, Guardrail], CustomGuardrail]:
+    def _initializer(litellm_params: LitellmParams, guardrail: Guardrail) -> CustomGuardrail:
+        import litellm
+
+        callback = callback_type(
+            guardrail_name=guardrail["guardrail_name"],
+            event_hook=litellm_params.mode,
+            default_on=litellm_params.default_on,
+        )
+        litellm.logging_callback_manager.add_litellm_callback(callback)
+        return callback
+
+    return _initializer
+
+
 @pytest.fixture
 def mock_prisma_client(mocker):
     """Mock Prisma client for testing"""
@@ -122,6 +164,37 @@ def mock_guardrail_registry(mocker):
     mock_registry.get_guardrail_by_id_from_db = AsyncMock(return_value=MOCK_DB_GUARDRAIL)
     mock_registry.update_guardrail_in_db = AsyncMock(return_value=MOCK_DB_GUARDRAIL)
     return mock_registry
+
+
+def _setup_patch_scope_guardrail(
+    mocker,
+    monkeypatch,
+    mock_guardrail_registry,
+    callback_type: type[CustomGuardrail],
+    guardrail_type: str,
+    litellm_params: dict[str, object],
+) -> tuple[InMemoryGuardrailHandler, Guardrail]:
+    from litellm.proxy.guardrails import guardrail_registry as registry_module
+
+    guardrail: Guardrail = {
+        "guardrail_id": "patch-scope-test",
+        "guardrail_name": "Patch scope test",
+        "litellm_params": {"guardrail": guardrail_type, **litellm_params},
+        "guardrail_info": {},
+    }
+    mock_guardrail_registry.get_guardrail_by_id_from_db.return_value = guardrail
+    mock_guardrail_registry.update_guardrail_in_db.return_value = guardrail
+    monkeypatch.setitem(
+        registry_module.guardrail_initializer_registry,
+        guardrail_type,
+        _patch_scope_initializer(callback_type),
+    )
+    handler = InMemoryGuardrailHandler()
+    handler.initialize_guardrail(guardrail=guardrail, source="db")
+    mocker.patch("litellm.proxy.proxy_server.prisma_client", mocker.Mock())
+    mocker.patch("litellm.proxy.guardrails.guardrail_endpoints.GUARDRAIL_REGISTRY", mock_guardrail_registry)
+    mocker.patch("litellm.proxy.guardrails.guardrail_registry.IN_MEMORY_GUARDRAIL_HANDLER", handler)
+    return handler, guardrail
 
 
 @pytest.mark.asyncio
@@ -1257,7 +1330,7 @@ async def test_patch_guardrail_endpoint(
 
         mock_in_memory_handler.sync_guardrail_from_db.assert_called_once_with(
             guardrail=mocker.ANY,
-            reject_invalid_logging_only_scope=True,
+            reject_invalid_logging_only_scope=False,
         )
 
         if scenario == "success_sync_fails_unexpected_error":
@@ -1308,6 +1381,103 @@ async def test_patch_guardrail_rejects_invalid_logging_only_scope_with_422(mocke
         guardrail=mocker.ANY,
         reject_invalid_logging_only_scope=True,
     )
+
+
+@pytest.mark.asyncio
+async def test_patch_guardrail_clears_scope_when_logging_only_mode_is_removed(
+    mocker, monkeypatch, mock_guardrail_registry
+):
+    handler, stored_guardrail = _setup_patch_scope_guardrail(
+        mocker,
+        monkeypatch,
+        mock_guardrail_registry,
+        _PatchScopeSupportedGuardrail,
+        "patch_scope_supported_test",
+        {
+            "mode": ["pre_call", "logging_only"],
+            "logging_only_scope": "output",
+            "default_on": True,
+        },
+    )
+    request = PatchGuardrailRequest(litellm_params=BaseLitellmParams(mode=["pre_call"]))
+
+    try:
+        result = await patch_guardrail(
+            stored_guardrail["guardrail_id"],
+            request,
+            user_api_key_dict=MOCK_ADMIN_USER,
+        )
+
+        assert result["guardrail_id"] == stored_guardrail["guardrail_id"]
+        persisted_guardrail = mock_guardrail_registry.update_guardrail_in_db.call_args.kwargs["guardrail"]
+        assert persisted_guardrail["litellm_params"].logging_only_scope is None
+        callback = handler.guardrail_id_to_custom_guardrail[stored_guardrail["guardrail_id"]]
+        assert callback.logging_only_scope is None
+        assert callback.should_run_guardrail(data={}, event_type=GuardrailEventHooks.pre_call) is True
+    finally:
+        handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
+
+
+@pytest.mark.asyncio
+async def test_patch_guardrail_tolerates_stored_unsupported_scope_on_unrelated_update(
+    mocker, monkeypatch, mock_guardrail_registry, caplog
+):
+    handler, stored_guardrail = _setup_patch_scope_guardrail(
+        mocker,
+        monkeypatch,
+        mock_guardrail_registry,
+        _PatchScopeUnsupportedGuardrail,
+        "patch_scope_unsupported_test",
+        {"mode": "logging_only", "logging_only_scope": "output", "default_on": True},
+    )
+    caplog.clear()
+    request = PatchGuardrailRequest(litellm_params=BaseLitellmParams(default_on=False))
+
+    try:
+        result = await patch_guardrail(
+            stored_guardrail["guardrail_id"],
+            request,
+            user_api_key_dict=MOCK_ADMIN_USER,
+        )
+
+        assert result["guardrail_id"] == stored_guardrail["guardrail_id"]
+        callback = handler.guardrail_id_to_custom_guardrail[stored_guardrail["guardrail_id"]]
+        assert callback.logging_only_scope is None
+        assert any("Ignoring logging_only_scope" in record.getMessage() for record in caplog.records)
+    finally:
+        handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
+
+
+@pytest.mark.asyncio
+async def test_patch_guardrail_rejects_explicit_unsupported_scope_and_rolls_back(
+    mocker, monkeypatch, mock_guardrail_registry
+):
+    handler, stored_guardrail = _setup_patch_scope_guardrail(
+        mocker,
+        monkeypatch,
+        mock_guardrail_registry,
+        _PatchScopeUnsupportedGuardrail,
+        "patch_scope_unsupported_test",
+        {"mode": "logging_only", "logging_only_scope": "output", "default_on": True},
+    )
+    request = PatchGuardrailRequest(litellm_params=BaseLitellmParams(logging_only_scope="output"))
+
+    try:
+        with pytest.raises(HTTPException) as exc_info:
+            await patch_guardrail(
+                stored_guardrail["guardrail_id"],
+                request,
+                user_api_key_dict=MOCK_ADMIN_USER,
+            )
+
+        assert exc_info.value.status_code == 422
+        assert mock_guardrail_registry.update_guardrail_in_db.call_count == 2
+        restored_guardrail = mock_guardrail_registry.update_guardrail_in_db.call_args_list[-1].kwargs["guardrail"]
+        assert restored_guardrail["litellm_params"].logging_only_scope == "output"
+        callback = handler.guardrail_id_to_custom_guardrail[stored_guardrail["guardrail_id"]]
+        assert callback.logging_only_scope is None
+    finally:
+        handler.delete_in_memory_guardrail(stored_guardrail["guardrail_id"])
 
 
 @pytest.mark.parametrize(
@@ -2495,6 +2665,13 @@ async def test_ui_settings_map_matches_runtime_supported_event_hooks():
     from litellm.proxy.guardrails.guardrail_registry import guardrail_class_registry
 
     result = await get_guardrail_ui_settings()
+    expected_without_directional_scope = {
+        provider
+        for provider, guardrail_class in guardrail_class_registry.items()
+        if not guardrail_class.supports_logging_only_scope()
+    }
+    assert set(result.providers_without_directional_logging_only_scope) == expected_without_directional_scope
+    assert "xecguard" in result.providers_without_directional_logging_only_scope
 
     for provider, guardrail_class in guardrail_class_registry.items():
         declared = guardrail_class.get_supported_event_hooks()

@@ -37,6 +37,7 @@ const uiSettings = {
   supported_entities: [],
   supported_actions: [],
   supported_modes: ["pre_call", "post_call"],
+  providers_without_directional_logging_only_scope: [],
   pii_entity_categories: [],
 };
 
@@ -129,6 +130,29 @@ describe("AddGuardrailForm create payload characterization", () => {
 
     await waitFor(() => expect(networking.createGuardrailCall).toHaveBeenCalledTimes(1));
     expect(payload()?.litellm_params.logging_only_scope).toBe("output");
+  });
+
+  it("hides directional scope choices for providers that do not support them", async () => {
+    vi.mocked(networking.getGuardrailUISettings).mockResolvedValue({
+      ...uiSettings,
+      supported_modes: ["pre_call", "logging_only"],
+      providers_without_directional_logging_only_scope: ["xecguard"],
+    });
+    vi.mocked(networking.getGuardrailProviderSpecificParams).mockResolvedValue({
+      ...providerParams,
+      xecguard: { ui_friendly_name: "XecGuard" },
+    });
+    const user = userEvent.setup({ delay: null });
+    renderForm();
+
+    await pickProvider(user, "XecGuard");
+    await user.click(screen.getByLabelText("Mode"));
+    await user.click((await screen.findAllByText("logging_only")).at(-1) as HTMLElement);
+    await user.click(await screen.findByLabelText("Logging only scope"));
+
+    expect(screen.queryByRole("option", { name: "Input only (request)" })).not.toBeInTheDocument();
+    expect(screen.queryByRole("option", { name: "Output only (response)" })).not.toBeInTheDocument();
+    expect(screen.getByRole("option", { name: "Both (request and response)" })).toBeInTheDocument();
   });
 
   it("hides logging-only scope and omits it from a pre-call payload", async () => {

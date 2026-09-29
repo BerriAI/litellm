@@ -6,7 +6,11 @@ import { useController, type Control, type ControllerRenderProps, type RegisterO
 import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { modeIncludesLoggingOnly, type LoggingOnlyScopeChoice } from "./guardrail_info_helpers";
+import {
+  getLoggingOnlyScopeOptions,
+  modeIncludesLoggingOnly,
+  type LoggingOnlyScopeChoice,
+} from "./guardrail_info_helpers";
 
 export interface GuardrailCriterion {
   name: string;
@@ -126,23 +130,20 @@ export const SkipMessageSelect: React.FC<{ control: GuardrailFieldControlProps }
   );
 };
 
-const LOGGING_ONLY_SCOPE_ITEMS: Array<{ label: string; value: LoggingOnlyScopeChoice }> = [
-  { label: "Default (request and response)", value: "default" },
-  { label: "Input only (request)", value: "input" },
-  { label: "Output only (response)", value: "output" },
-  { label: "Both (request and response)", value: "both" },
-];
-
-export const LoggingOnlyScopeSelect: React.FC<{ control: GuardrailFieldControlProps }> = ({ control }) => {
+export const LoggingOnlyScopeSelect: React.FC<{
+  control: GuardrailFieldControlProps;
+  directionalScopeSupported: boolean;
+}> = ({ control, directionalScopeSupported }) => {
   const { id, value, onChange, "aria-invalid": ariaInvalid, "aria-describedby": ariaDescribedBy } = control;
+  const items = getLoggingOnlyScopeOptions(directionalScopeSupported);
 
   return (
-    <Select items={LOGGING_ONLY_SCOPE_ITEMS} value={asText(value) || "default"} onValueChange={onChange}>
+    <Select items={items} value={asText(value) || "default"} onValueChange={onChange}>
       <SelectTrigger id={id} aria-invalid={ariaInvalid} aria-describedby={ariaDescribedBy} className="w-full">
         <SelectValue placeholder="Select an option" />
       </SelectTrigger>
       <SelectContent>
-        {LOGGING_ONLY_SCOPE_ITEMS.map((item) => (
+        {items.map((item) => (
           <SelectItem key={item.value} value={item.value}>
             {item.label}
           </SelectItem>
@@ -152,10 +153,11 @@ export const LoggingOnlyScopeSelect: React.FC<{ control: GuardrailFieldControlPr
   );
 };
 
-export const LoggingOnlyScopeField: React.FC<{ control: GuardrailFormControl; mode: unknown }> = ({
-  control,
-  mode,
-}) => {
+export const LoggingOnlyScopeField: React.FC<{
+  control: GuardrailFormControl;
+  mode: unknown;
+  directionalScopeSupported: boolean;
+}> = ({ control, mode, directionalScopeSupported }) => {
   if (!modeIncludesLoggingOnly(mode)) return null;
 
   return (
@@ -167,7 +169,9 @@ export const LoggingOnlyScopeField: React.FC<{ control: GuardrailFormControl; mo
         "Which direction a logging_only scan observes. Observe-only scans never block; pre_call and post_call on this guardrail still block.",
       )}
     >
-      {(fieldControl) => <LoggingOnlyScopeSelect control={fieldControl} />}
+      {(fieldControl) => (
+        <LoggingOnlyScopeSelect control={fieldControl} directionalScopeSupported={directionalScopeSupported} />
+      )}
     </GuardrailField>
   );
 };

@@ -23,6 +23,7 @@ import {
   shouldRenderContentFilterConfigSettings,
   shouldRenderLLMJudgeFields,
   shouldRenderPIIConfigSettings,
+  supportsDirectionalLoggingOnlyScope,
   toModeArray,
   type LoggingOnlyScope,
   type LoggingOnlyScopeChoice,
@@ -95,6 +96,7 @@ interface GuardrailSettings {
   supported_actions: string[];
   supported_modes: string[];
   supported_modes_by_provider?: Record<string, string[]>;
+  providers_without_directional_logging_only_scope?: string[];
   pii_entity_categories: Array<{
     category: string;
     entities: string[];
@@ -688,6 +690,7 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
     const providerLabels: Record<string, string> = getGuardrailProviders();
     const providerKeys = Object.keys(providerLabels);
     const supportedModes = getSupportedModesForProvider(guardrailSettings, selectedProvider) ?? DEFAULT_MODES;
+    const directionalScopeSupported = supportsDirectionalLoggingOnlyScope(guardrailSettings, selectedProvider);
     return (
       <FieldGroup>
         <GuardrailField
@@ -812,7 +815,11 @@ const AddGuardrailForm: React.FC<AddGuardrailFormProps> = ({ visible, onClose, a
           {(fieldControl) => <SkipMessageSelect control={fieldControl} />}
         </GuardrailField>
 
-        <LoggingOnlyScopeField control={form.control} mode={watchedMode} />
+        <LoggingOnlyScopeField
+          control={form.control}
+          mode={watchedMode}
+          directionalScopeSupported={directionalScopeSupported}
+        />
 
         {/* Use the GuardrailProviderFields component to render provider-specific fields */}
         {showProviderFields && (

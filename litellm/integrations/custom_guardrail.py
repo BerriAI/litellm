@@ -806,10 +806,11 @@ class CustomGuardrail(CustomLogger):
     def uses_apply_guardrail_interface(self) -> bool:
         return type(self).apply_guardrail is not CustomGuardrail.apply_guardrail
 
-    def supports_logging_only_scope(self) -> bool:
+    @classmethod
+    def supports_logging_only_scope(cls) -> bool:
         return (
-            self.uses_apply_guardrail_interface()
-            and type(self).async_logging_hook is CustomGuardrail.async_logging_hook
+            cls.apply_guardrail is not CustomGuardrail.apply_guardrail
+            and cls.async_logging_hook is CustomGuardrail.async_logging_hook
         )
 
     def _deployment_hook_target(self) -> "CustomLogger":
@@ -992,13 +993,13 @@ class CustomGuardrail(CustomLogger):
 
     def _copy_scratch_request_fields(
         self,
-        kwargs: dict,  # mutable-ok: CustomLogger.async_logging_hook contract
+        kwargs: Mapping[str, object],
     ) -> tuple[object, object]:
-        optional_params: Final = kwargs.get("optional_params") or {}
+        optional_params: Final = kwargs.get("optional_params")
         try:
             return (
                 copy.deepcopy(kwargs.get("messages") or kwargs.get("input")),
-                copy.deepcopy(optional_params.get("tools")),
+                copy.deepcopy(optional_params.get("tools") if isinstance(optional_params, Mapping) else None),
             )
         except Exception:
             if self.logging_only_scope == "output":

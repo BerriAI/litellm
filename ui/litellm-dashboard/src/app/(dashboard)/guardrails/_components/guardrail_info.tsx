@@ -41,6 +41,7 @@ import {
   loggingOnlyScopeToChoice,
   skipSystemMessageToChoice,
   skipToolMessageToChoice,
+  supportsDirectionalLoggingOnlyScope,
   type SkipSystemMessageChoice,
   type SkipToolMessageChoice,
 } from "./guardrail_info_helpers";
@@ -84,6 +85,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
       entities: string[];
     }>;
     supported_modes: string[];
+    providers_without_directional_logging_only_scope?: string[];
     content_filter_settings?: {
       prebuilt_patterns: Array<{
         name: string;
@@ -112,6 +114,8 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
   const [toolPermissionConfig, setToolPermissionConfig] = useState<ToolPermissionConfig>(emptyToolPermissionConfig);
   const [toolPermissionDirty, setToolPermissionDirty] = useState(false);
   const [customCodeModalVisible, setCustomCodeModalVisible] = useState(false);
+  const guardrailProvider = guardrailData?.litellm_params?.guardrail ?? null;
+  const directionalScopeSupported = supportsDirectionalLoggingOnlyScope(guardrailSettings, guardrailProvider);
 
   // Content Filter data ref (managed by ContentFilterManager)
   const contentFilterDataRef = React.useRef<{
@@ -742,6 +746,7 @@ const GuardrailInfoView: React.FC<GuardrailInfoProps> = ({ guardrailId, onClose,
                         <LoggingOnlyScopeField
                           control={form.control}
                           mode={guardrailData.litellm_params?.mode}
+                          directionalScopeSupported={directionalScopeSupported}
                         />
                         {guardrailData.litellm_params?.guardrail === "presidio" && (
                           <>

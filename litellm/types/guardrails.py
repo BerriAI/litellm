@@ -1314,6 +1314,7 @@ class GuardrailUIAddGuardrailSettings(BaseModel):
     supported_actions: list[str]
     supported_modes: list[str]
     supported_modes_by_provider: dict[str, list[str]]
+    providers_without_directional_logging_only_scope: list[str]
     pii_entity_categories: list[PiiEntityCategoryMap]
     content_filter_settings: dict[str, object] | None = None
 

@@ -25,6 +25,7 @@ const uiSettings = {
   supported_actions: [],
   pii_entity_categories: [],
   supported_modes: ["pre_call", "post_call"],
+  providers_without_directional_logging_only_scope: [],
 };
 
 const bedrockParams = {

@@ -711,7 +711,7 @@ class InMemoryGuardrailHandler:
         previous instance and raises), anything else only refreshes the stored row
         """
         updated_guardrail: Final = cast(Guardrail, {**guardrail, "guardrail_id": guardrail_id})
-        if self._has_guardrail_params_changed(guardrail_id, updated_guardrail):
+        if reject_invalid_logging_only_scope or self._has_guardrail_params_changed(guardrail_id, updated_guardrail):
             self.reinitialize_guardrail(
                 guardrail=updated_guardrail,
                 source=source,
@@ -936,7 +936,7 @@ class InMemoryGuardrailHandler:
             verbose_proxy_logger.error("Cannot sync guardrail without guardrail_id")
             return None
 
-        if self._has_guardrail_params_changed(guardrail_id, guardrail):
+        if reject_invalid_logging_only_scope or self._has_guardrail_params_changed(guardrail_id, guardrail):
             guardrail_name: Final = guardrail.get("guardrail_name", "Unknown")
             verbose_proxy_logger.info(
                 "Guardrail '%s' (ID: %s) params changed, re-initializing...", guardrail_name, guardrail_id
