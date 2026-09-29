@@ -38348,7 +38348,6 @@
     },
     "mistral/voxtral-small-2507": {
         "cache_read_input_token_cost": 1e-08,
-        "input_cost_per_second": 6.666666666666667e-05,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 32768,
@@ -38364,7 +38363,6 @@
     },
     "mistral/voxtral-small-latest": {
         "cache_read_input_token_cost": 1e-08,
-        "input_cost_per_second": 6.666666666666667e-05,
         "input_cost_per_token": 1e-07,
         "litellm_provider": "mistral",
         "max_input_tokens": 32768,

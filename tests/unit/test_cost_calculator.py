@@ -3067,6 +3067,36 @@ def test_cost_per_token_per_second_pricing(monkeypatch, custom_llm_provider: str
     assert (prompt_cost, completion_cost_value) == pytest.approx((0.02 * 1.5, 0.0))
 
 
+def test_azure_chat_uses_token_rates_when_output_cost_per_second_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
+    monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
+
+    model: Final = "test-azure-chat-token-and-output-second-pricing"
+    litellm.register_model(
+        model_cost={
+            model: {
+                "input_cost_per_token": 1e-6,
+                "output_cost_per_token": 2e-6,
+                "output_cost_per_second": 0.4,
+                "litellm_provider": "azure",
+                "mode": "chat",
+            }
+        }
+    )
+
+    cost: Final = cost_per_token(
+        model=model,
+        custom_llm_provider="azure",
+        prompt_tokens=10,
+        completion_tokens=20,
+        response_time_ms=1500.0,
+    )
+
+    assert cost == pytest.approx((10 * 1e-6, 20 * 2e-6))
+
+
 def test_cost_per_token_ignores_cost_per_second_when_token_pricing_is_set(monkeypatch):
     monkeypatch.setenv("LITELLM_LOCAL_MODEL_COST_MAP", "True")
     monkeypatch.setattr(litellm, "model_cost", litellm.get_model_cost_map(url=""))
