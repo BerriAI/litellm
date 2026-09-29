@@ -424,6 +424,29 @@ RouteType = Literal[
 ]
 
 
+# Settings that the Router accepts as per-request kwargs. These override the
+# global router settings for this specific request.
+_PER_REQUEST_ROUTER_SETTINGS: Final = [
+    "fallbacks",
+    "context_window_fallbacks",
+    "content_policy_fallbacks",
+    "num_retries",
+    "timeout",
+    "model_group_retry_policy",
+    "routing_strategy",
+    "enable_tag_filtering",
+]
+
+
+def _apply_router_settings_override(data: dict, override_settings: Any) -> None:
+    """Merge key/team router settings into ``data`` (request values win)."""
+    if not isinstance(override_settings, dict):
+        return
+    for key in _PER_REQUEST_ROUTER_SETTINGS:
+        if key in override_settings and key not in data:
+            data[key] = override_settings[key]
+
+
 async def route_request(
     data: dict,
     llm_router: LitellmRouter | None,
@@ -477,6 +500,12 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
 
     data.pop("enable_tag_filtering", None)
 
+    # Always remove ``router_settings_override`` from the body so it can't leak
+    # to the provider, and apply its settings on every routing branch.
+    has_router_settings_override: Final = "router_settings_override" in data
+    if has_router_settings_override:
+        _apply_router_settings_override(data, data.pop("router_settings_override"))
+
     team_id: Final = get_team_id_from_data(data)
     router_model_names: Final = llm_router.model_names if llm_router is not None else []
     is_proxy_admin_without_team: Final = team_id is None and _is_proxy_admin_request(data)
@@ -509,31 +538,8 @@ async def _route_request_single_attempt(  # noqa: ANN202  # returns unawaited pr
     elif "user_config" in data:
         return _route_user_config_request(data, route_type)
 
-    elif "router_settings_override" in data:
-        # Apply per-request router settings overrides from key/team config
-        # Instead of creating a new Router (expensive), merge settings into kwargs
-        # The Router already supports per-request overrides for these settings
-        override_settings: Final = data.pop("router_settings_override")
-
-        # Settings that the Router accepts as per-request kwargs
-        # These override the global router settings for this specific request
-        per_request_settings: Final = [
-            "fallbacks",
-            "context_window_fallbacks",
-            "content_policy_fallbacks",
-            "num_retries",
-            "timeout",
-            "model_group_retry_policy",
-            "routing_strategy",
-            "enable_tag_filtering",
-        ]
-
-        # Merge override settings into data (only if not already set in request)
-        for key in per_request_settings:
-            if key in override_settings and key not in data:
-                data[key] = override_settings[key]
-
-        # Use main router with overridden kwargs
+    elif has_router_settings_override:
+        # Settings were already merged into ``data`` above; use the main router
         if llm_router is not None:
             return getattr(llm_router, f"{route_type}")(**data)
         else:
