@@ -1,12 +1,14 @@
+import asyncio
 import contextvars
 import copy
 import hashlib
 import os
 import secrets
-from collections.abc import Mapping, Sequence
+from collections.abc import Awaitable, Mapping, Sequence
+from dataclasses import dataclass
 from datetime import datetime
 from types import MappingProxyType
-from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, get_args
+from typing import TYPE_CHECKING, Any, ClassVar, Final, Literal, Optional, TypeVar, get_args
 
 from litellm._logging import verbose_logger
 from litellm.caching import DualCache
@@ -51,6 +53,7 @@ from litellm.exceptions import (
     GuardrailRaisedException,
     ModifyResponseException,
     SensitiveDataRouteException,
+    Timeout,
 )
 
 # Per-process secret tagging each recorded marker. The deployment hook only
@@ -165,6 +168,45 @@ def get_session_id_from_request_data(request_data: dict[str, Any]) -> str | None
         return str(session_id)
 
     return None
+
+
+_T = TypeVar("_T")
+
+
+@dataclass(frozen=True)
+class GuardrailHookTimedOut:
+    guardrail_name: str | None
+    timeout: float
+    fail_open: bool
+
+    @property
+    def message(self) -> str:
+        return f"Guardrail '{self.guardrail_name}' did not finish within {self.timeout}s"
+
+
+async def await_within_hook_timeout(callback: object, coro: Awaitable[_T]) -> _T | GuardrailHookTimedOut:
+    """Await a guardrail check, bounded by the callback's configured ``hook_timeout``."""
+    if not isinstance(callback, CustomGuardrail) or callback.hook_timeout is None:
+        return await coro
+    timeout: Final = callback.hook_timeout
+    try:
+        return await asyncio.wait_for(coro, timeout)
+    except asyncio.TimeoutError:
+        return GuardrailHookTimedOut(
+            guardrail_name=callback.guardrail_name,
+            timeout=timeout,
+            fail_open=callback.hook_timeout_fallback == "fail_open",
+        )
+
+
+def resolve_hook_timeout(outcome: _T | GuardrailHookTimedOut, fail_open_result: _T) -> _T:
+    """Map a timed-out check to ``fail_open_result`` or a 408 ``Timeout``, per ``unreachable_fallback``."""
+    if not isinstance(outcome, GuardrailHookTimedOut):
+        return outcome
+    if outcome.fail_open:
+        verbose_logger.critical("%s; unreachable_fallback=fail_open, skipping it", outcome.message)
+        return fail_open_result
+    raise Timeout(message=outcome.message, model="", llm_provider="guardrail")
 
 
 class CustomGuardrail(CustomLogger):

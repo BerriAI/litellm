@@ -4,6 +4,7 @@ Tests for the pipeline executor.
 Uses mock guardrails to validate pipeline execution without external services.
 """
 
+import asyncio
 import copy
 import logging
 import pickle
@@ -1740,3 +1741,48 @@ def test_undeliverable_stream_rewrite_keeps_its_reason_through_a_copy(clone):
     assert copied.reason == "the translation refused it"
     assert str(copied) == str(original)
     assert str(copied).endswith("cannot be written back to the stream: the translation refused it")
+
+
+class HangingPipelineGuardrail(CustomGuardrail):
+    """Pre-call guardrail that sleeps far past any configured hook_timeout."""
+
+    def __init__(self, guardrail_name: str, hook_timeout: float, fallback: Literal["fail_closed", "fail_open"]):
+        super().__init__(guardrail_name=guardrail_name, event_hook="pre_call", default_on=True)
+        self.hook_timeout = hook_timeout
+        self.hook_timeout_fallback = fallback
+
+    def should_run_guardrail(self, data, event_type) -> bool:
+        return True
+
+    async def async_pre_call_hook(self, user_api_key_dict, cache, data, call_type):
+        await asyncio.sleep(30)
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    ("fallback", "expected_outcome", "expected_action"),
+    [("fail_closed", "error", "block"), ("fail_open", "pass", "allow")],
+)
+async def test_pipeline_step_is_bounded_by_hook_timeout(monkeypatch, fallback, expected_outcome, expected_action):
+    guard = HangingPipelineGuardrail(guardrail_name="slow-vendor", hook_timeout=0.1, fallback=fallback)
+    monkeypatch.setattr(litellm, "callbacks", [guard])
+
+    result = await asyncio.wait_for(
+        PipelineExecutor.execute_steps(
+            steps=[PipelineStep(guardrail="slow-vendor", on_fail="block", on_pass="allow")],
+            mode="pre_call",
+            data={"messages": [{"role": "user", "content": "hi"}]},
+            user_api_key_dict=MagicMock(),
+            call_type="completion",
+            policy_name="timeout-policy",
+        ),
+        timeout=5,
+    )
+
+    step = result.step_results[0]
+    assert (step.outcome, step.action_taken, result.terminal_action) == (
+        expected_outcome,
+        expected_action,
+        expected_action,
+    )
+    assert isinstance(result.original_exception, litellm.Timeout) is (fallback == "fail_closed")

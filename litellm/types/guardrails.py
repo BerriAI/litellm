@@ -1083,10 +1083,12 @@ class BaseLitellmParams(ContentFilterConfigModel):  # works for new and patch up
     timeout: float | None = Field(
         default=None,
         description=(
-            "Maximum seconds one guardrail check may take, covering every call it makes. "
+            "Maximum seconds one non-streaming guardrail check may take, covering every call it makes. "
             "On expiry the check fails with a 408 timeout, or is skipped when unreachable_fallback='fail_open'. "
+            "Streaming response hooks are not bounded by it. "
             "Some handlers also apply it to their provider HTTP call. "
-            "Accepts int, float, or numeric string; coerced to float on load. Unset means no limit."
+            "Accepts int, float, or numeric string; coerced to float on load. "
+            "Unset means no proxy-side limit; provider HTTP client defaults still apply."
         ),
     )
 

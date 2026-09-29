@@ -18,6 +18,8 @@ from litellm.constants import LOGS_GUARDRAIL_INFORMATION_MARKER
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
     ModifyResponseException,
+    await_within_hook_timeout,
+    resolve_hook_timeout,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.core_helpers import (
@@ -528,11 +530,17 @@ class PipelineExecutor:
 
         try:
             if mode == "pre_call":
-                response = await target.async_pre_call_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    cache=None,
-                    data=hook_input,
-                    call_type=call_type,
+                response = resolve_hook_timeout(
+                    await await_within_hook_timeout(
+                        callback,
+                        target.async_pre_call_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            cache=None,
+                            data=hook_input,
+                            call_type=call_type,
+                        ),
+                    ),
+                    fail_open_result=None,
                 )
                 if isinstance(callback, CustomGuardrail):
                     callback.mark_pre_call_hook_ran(data)
@@ -557,10 +565,16 @@ class PipelineExecutor:
                 )
                 response = None
             elif mode == "post_call":
-                response = await target.async_post_call_success_hook(
-                    user_api_key_dict=user_api_key_dict,
-                    data=data,
-                    response=data.get("response"),
+                response = resolve_hook_timeout(
+                    await await_within_hook_timeout(
+                        callback,
+                        target.async_post_call_success_hook(
+                            user_api_key_dict=user_api_key_dict,
+                            data=data,
+                            response=data.get("response"),
+                        ),
+                    ),
+                    fail_open_result=None,
                 )
             else:
                 return ("error", None, f"Unsupported pipeline mode: {mode}", None)

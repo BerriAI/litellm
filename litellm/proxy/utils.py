@@ -130,7 +130,10 @@ from litellm.exceptions import (
 )
 from litellm.integrations.custom_guardrail import (
     CustomGuardrail,
+    GuardrailHookTimedOut,
     ModifyResponseException,
+    await_within_hook_timeout,
+    resolve_hook_timeout,
 )
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.integrations.prometheus import PrometheusLogger
@@ -277,17 +280,7 @@ _T: Final = TypeVar("_T")
 
 
 async def _await_within_guardrail_timeout(callback: object, coro: Awaitable[_T], fail_open_result: _T) -> _T:
-    if not isinstance(callback, CustomGuardrail) or callback.hook_timeout is None:
-        return await coro
-    timeout: Final = callback.hook_timeout
-    try:
-        return await asyncio.wait_for(coro, timeout)
-    except asyncio.TimeoutError:
-        message: Final = f"Guardrail '{callback.guardrail_name}' did not finish within {timeout}s"
-        if callback.hook_timeout_fallback == "fail_open":
-            verbose_proxy_logger.critical("%s; unreachable_fallback=fail_open, skipping it", message)
-            return fail_open_result
-        raise litellm.Timeout(message=message, model="", llm_provider="guardrail") from None
+    return resolve_hook_timeout(await await_within_hook_timeout(callback, coro), fail_open_result)
 
 
 class _ViewCountRow(TypedDict):
@@ -2745,7 +2738,11 @@ class ProxyLogging:
         status = "success"
         error_type: str | None = None
         try:
-            return await _await_within_guardrail_timeout(callback, coro, fail_open_result)
+            outcome: Final = await await_within_hook_timeout(callback, coro)
+            if isinstance(outcome, GuardrailHookTimedOut) and outcome.fail_open:
+                status = "skipped"
+                error_type = litellm.Timeout.__name__
+            return resolve_hook_timeout(outcome, fail_open_result)
         except SensitiveDataRouteException:
             status = "intervened"
             raise

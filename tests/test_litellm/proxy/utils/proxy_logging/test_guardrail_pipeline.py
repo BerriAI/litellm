@@ -819,8 +819,9 @@ async def test_run_guardrail_with_metrics_returns_fail_open_result_on_timeout(mo
         fail_open_result={"original": "response"},
     )
 
+    recorded = prom._record_guardrail_metrics.call_args.kwargs
     assert out == {"original": "response"}
-    assert prom._record_guardrail_metrics.call_args.kwargs["status"] == "success"
+    assert (recorded["status"], recorded["error_type"]) == ("skipped", "Timeout")
 
 
 # ---------------------------------------------------------------------------
