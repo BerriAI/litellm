@@ -23,9 +23,7 @@ import {
   modelOrder,
   rankModels,
   RankedModel,
-  TaskCategory,
   TaskTile,
-  CATEGORY_ORDER,
 } from "./modelInsightsData";
 
 const PALETTE = [
@@ -40,7 +38,8 @@ const PALETTE = [
   "#6366f1",
   "#f97316",
 ];
-const CATEGORY_COLORS: Record<TaskCategory, string> = {
+const FALLBACK_COLOR = "#64748b";
+const CATEGORY_COLORS: Record<string, string> = {
   General: "#ee8650",
   Agent: "#7666e4",
   Code: "#5fb074",
@@ -90,7 +89,7 @@ type TileProps = TaskTile & { x: number; y: number; width: number; height: numbe
 
 const TaskTileContent = ({ x, y, width, height, category, label, leader }: TileProps) => {
   if (width <= 0 || height <= 0) return null;
-  const color = CATEGORY_COLORS[category];
+  const color = CATEGORY_COLORS[category] ?? FALLBACK_COLOR;
   const fits = width > 90 && height > 44;
   return (
     <g>
@@ -144,13 +143,16 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
     () => (data ? rankModels(data.top_models, data.daily, metric, range) : []),
     [data, metric, range],
   );
-  const tiles = React.useMemo(() => (data ? buildTaskTiles(data.by_task, taskMetric) : []), [data, taskMetric]);
+  const tiles = React.useMemo(
+    () => (data ? buildTaskTiles(data.by_task, data.tasks, taskMetric) : []),
+    [data, taskMetric],
+  );
   const categoryShares = React.useMemo(
     () =>
-      CATEGORY_ORDER.map((category) => ({
+      [...new Set(tiles.map((tile) => tile.category))].map((category) => ({
         category,
         share: tiles.filter((tile) => tile.category === category).reduce((sum, tile) => sum + tile.share, 0),
-      })).filter(({ share }) => share > 0),
+      })),
     [tiles],
   );
 
@@ -295,7 +297,10 @@ export default function ModelInsightsView({ accessToken }: { accessToken: string
           <ul className="flex flex-wrap gap-x-6 gap-y-2">
             {categoryShares.map(({ category, share }) => (
               <li key={category} className="flex items-center gap-2 text-sm">
-                <span className="size-3 rounded-full" style={{ backgroundColor: CATEGORY_COLORS[category] }} />
+                <span
+                  className="size-3 rounded-full"
+                  style={{ backgroundColor: CATEGORY_COLORS[category] ?? FALLBACK_COLOR }}
+                />
                 <span className="text-muted-foreground">{category}</span>
                 <span className="font-medium tabular-nums">{share.toFixed(1)}%</span>
               </li>
