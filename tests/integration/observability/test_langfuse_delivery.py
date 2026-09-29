@@ -67,7 +67,20 @@ def _completion(text: str) -> Reply:
 
 
 def _projects() -> Reply:
-    return Reply(body=json.dumps({"data": [{"id": "integration-project", "name": "integration"}]}).encode())
+    return Reply(
+        body=json.dumps(
+            {
+                "data": [
+                    {
+                        "id": "integration-project",
+                        "name": "integration",
+                        "organization": {"id": "integration-org", "name": "integration"},
+                        "metadata": {},
+                    }
+                ]
+            }
+        ).encode()
+    )
 
 
 def _text_prompt(name: str) -> Reply:
@@ -828,7 +841,6 @@ def _assert_call(
     expected_trace: str | None,
     expected_session: str | None,
 ) -> None:
-    call_id: Final = response.headers["x-litellm-call-id"]
     assert targets == [expected_target], targets
     _assert_span_spend(response, received, destination, expected_trace, expected_session)
 
@@ -1467,11 +1479,13 @@ def test_audit_malformed_w3c_headers_are_ignored(audit_rig: _AuditRig) -> None:
         assert len(span.trace_id.hex()) == 32 and "zz" not in span.trace_id.hex(), span.trace_id.hex()
         row: Final = _await_spend_row(response.headers["x-litellm-call-id"])
         span_session: Final = _attribute(span.attributes, "session.id")
-        print(f"S7 record: span session.id={span_session!r} spend session={row['session_id']!r}")
         assert span_session in (None, row["session_id"]), (
             f"span session {span_session!r} diverges from spend session {row['session_id']!r}"
         )
         assert row["session_id"], row
+
+
+
 
 
 def test_audit_unauthenticated_call_leaves_no_spend_row(audit_rig: _AuditRig) -> None:
@@ -1732,10 +1746,10 @@ def test_audit_sink_outage_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_p
     outage: Final = threading.Event()
 
     def langfuse(request: Request) -> Reply:
-        if request.method == "GET" and request.target.startswith(PROJECTS_PATH):
-            return _projects()
         if outage.is_set():
             return Reply(status=503)
+        if request.method == "GET" and request.target.startswith(PROJECTS_PATH):
+            return _projects()
         return Reply(body=b"", content_type="application/x-protobuf")
 
     with (
@@ -1774,7 +1788,13 @@ def test_audit_sink_outage_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_p
         outage.set()
         with ThreadPoolExecutor(max_workers=30) as pool:
             first_wave: Final = tuple(pool.map(fire, jobs[:10]))
+        unhealthy: Final = candidate.request("GET", "/health/services?service=langfuse")
+        assert unhealthy.status_code != 200 or "unhealthy" in unhealthy.text, (
+            f"langfuse must report unhealthy while the sink 503s: {unhealthy.status_code} {unhealthy.text}"
+        )
         outage.clear()
+        healthy: Final = candidate.request("GET", "/health/services?service=langfuse")
+        assert healthy.status_code == 200, healthy.text
         with ThreadPoolExecutor(max_workers=30) as pool:
             answered: Final = first_wave + tuple(pool.map(fire, jobs[10:]))
         for _, _, response in answered:
@@ -1795,15 +1815,19 @@ def test_audit_sink_outage_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_p
                 )
             ),
             lambda spans: len(spans) >= len(answered),
-            seconds=45,
-            return_last_on_timeout=True,
+            seconds=60,
         )
-        delivered_calls: Final = frozenset(
-            str(_attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id"))
-            for span in delivered
+        spans_per_call: Final = {
+            call_id: sum(
+                1
+                for span in delivered
+                if _attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id") == call_id
+            )
+            for call_id in call_ids
+        }
+        assert sorted(spans_per_call.values()) == [1] * len(answered), (
+            f"each call id must arrive on exactly one span: {spans_per_call}"
         )
-        lost: Final = frozenset(call_ids) - delivered_calls
-        print(f"sink outage lost {len(lost)} of {len(answered)} spans")
         for span in delivered:
             span_call: Final = str(
                 _attribute(span.attributes, "langfuse.observation.metadata.litellm_call_id")
@@ -1813,16 +1837,15 @@ def test_audit_sink_outage_mid_burst_loses_no_spend_rows(gateway: Gateway, tmp_p
             )
         spend_rows: Final = eventually(
             lambda: read_rows(
-                'SELECT session_id FROM "LiteLLM_SpendLogs" WHERE litellm_call_id = ANY(%s)',
+                'SELECT session_id, litellm_call_id FROM "LiteLLM_SpendLogs" WHERE litellm_call_id = ANY(%s)',
                 (call_ids,),
             ),
             lambda values: len(values) == len(answered),
             seconds=150,
-            return_last_on_timeout=True,
         )
-        print(f"C1 record: {len(spend_rows)} of {len(answered)} spend rows written")
         for row in spend_rows:
-            assert row["session_id"] in frozenset(expected_by_call.values()), row
+            row_call: Final = string_value(row["litellm_call_id"])
+            assert row["session_id"] == expected_by_call[row_call], f"call {row_call}: spend {row}"
 
 
 def test_audit_surviving_worker_keeps_serving_after_kill(gateway: Gateway, tmp_path: Path) -> None:
@@ -1888,9 +1911,7 @@ def test_audit_surviving_worker_keeps_serving_after_kill(gateway: Gateway, tmp_p
             ),
             lambda values: len(values) == len(answered),
             seconds=150,
-            return_last_on_timeout=True,
         )
-        print(f"C2 record: {len(spend_rows)} of {len(answered)} spend rows written")
-        assert spend_rows, "no spend rows survived the worker kill"
         for row in spend_rows:
-            assert row["session_id"] == expected_by_call[string_value(row["litellm_call_id"])], row
+            row_call: Final = string_value(row["litellm_call_id"])
+            assert row["session_id"] == expected_by_call[row_call], f"call {row_call}: spend {row}"
