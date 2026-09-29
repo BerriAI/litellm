@@ -23,7 +23,7 @@ struct RequestInput {
 }
 
 #[derive(Clone)]
-pub(super) struct NativeRequest {
+pub(in crate::cache) struct NativeRequest {
     pub(super) key: CacheKeyInput,
     pub(super) controls: CacheControls,
     pub(super) ttl: Option<Duration>,
@@ -129,7 +129,7 @@ fn semantic_key(request: &NativeRequest, scope: &str) -> CacheKeyInput {
     key
 }
 
-pub(super) fn request(value: &Bound<'_, PyAny>) -> PyResult<NativeRequest> {
+pub(in crate::cache) fn request(value: &Bound<'_, PyAny>) -> PyResult<NativeRequest> {
     let input: RequestInput = from_py(value)?;
     request_input(input)
 }
@@ -152,7 +152,7 @@ fn request_input(input: RequestInput) -> PyResult<NativeRequest> {
     })
 }
 
-pub(super) fn requests(value: &Bound<'_, PyAny>) -> PyResult<Vec<NativeRequest>> {
+pub(in crate::cache) fn requests(value: &Bound<'_, PyAny>) -> PyResult<Vec<NativeRequest>> {
     from_py::<Vec<RequestInput>>(value)?
         .into_iter()
         .map(request_input)
@@ -164,7 +164,7 @@ pub(super) fn duration(seconds: f64) -> PyResult<Duration> {
         .map_err(|_| PyValueError::new_err("cache durations must be finite and nonnegative"))
 }
 
-pub(super) fn now() -> Duration {
+pub(in crate::cache) fn now() -> Duration {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap_or_default()
