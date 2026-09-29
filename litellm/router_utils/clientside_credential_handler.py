@@ -5,15 +5,25 @@ Supported clientside credentials:
 - api_key
 - api_base
 - base_url
+- a forwarded Anthropic OAuth bearer, scoped to the anthropic provider in provider_specific_header
 
 If given, generate a unique model_id for the deployment.
 
 Ensures cooldowns are applied correctly.
 """
 
+import hashlib
+from collections.abc import Mapping
 from typing import Final
 
+from pydantic import TypeAdapter, ValidationError
+from typing_extensions import TypedDict
+
+from litellm.types.llms.anthropic import ANTHROPIC_OAUTH_TOKEN_PREFIX
+from litellm.types.utils import LlmProviders
+
 clientside_credential_keys: Final = ["api_key", "api_base", "base_url"]
+FORWARDED_OAUTH_CREDENTIAL_KEY: Final = "forwarded_oauth_credential_sha256"
 
 
 def _admin_config_fields_to_clear_on_base_override() -> list[str]:
@@ -66,14 +76,58 @@ def _admin_config_fields_to_clear_on_base_override() -> list[str]:
 _ADMIN_CONFIG_FIELDS_TO_CLEAR_ON_BASE_OVERRIDE: Final = _admin_config_fields_to_clear_on_base_override()
 
 
-def is_clientside_credential(request_kwargs: dict) -> bool:
+class _ScopedHeaders(TypedDict):
+    custom_llm_provider: str
+    extra_headers: dict[str, str]
+
+
+_PROVIDER_SPECIFIC_HEADER_ADAPTER: Final[TypeAdapter[_ScopedHeaders | tuple[_ScopedHeaders, ...]]] = TypeAdapter(
+    _ScopedHeaders | tuple[_ScopedHeaders, ...]
+)
+
+
+def forwarded_oauth_credential_fingerprint(
+    request_kwargs: Mapping[str, object], custom_llm_provider: str | None
+) -> str | None:
+    """
+    SHA-256 of the Anthropic OAuth bearer a caller forwarded for this deployment's provider, if any.
+
+    The proxy forwards a Claude subscription token through provider_specific_header rather than api_key,
+    so it would otherwise share the static deployment's cooldown identity with every other caller.
+    """
+    if custom_llm_provider != LlmProviders.ANTHROPIC.value:
+        return None
+    try:
+        parsed: Final = _PROVIDER_SPECIFIC_HEADER_ADAPTER.validate_python(
+            request_kwargs.get("provider_specific_header")
+        )
+    except ValidationError:
+        return None
+    scoped: Final = parsed if isinstance(parsed, tuple) else (parsed,)
+    bearers: Final = tuple(
+        value.removeprefix("Bearer ")
+        for entry in scoped
+        if custom_llm_provider in (p.strip() for p in entry["custom_llm_provider"].split(","))
+        for name, value in entry["extra_headers"].items()
+        if name.lower() == "authorization"
+    )
+    if len(bearers) != 1 or not bearers[0].startswith(ANTHROPIC_OAUTH_TOKEN_PREFIX):
+        return None
+    return hashlib.sha256(bearers[0].encode()).hexdigest()
+
+
+def is_clientside_credential(request_kwargs: Mapping[str, object], custom_llm_provider: str | None = None) -> bool:
     """
     Check if the credential is a clientside credential.
     """
-    return any(key in request_kwargs for key in clientside_credential_keys)
+    return any(key in request_kwargs for key in clientside_credential_keys) or (
+        forwarded_oauth_credential_fingerprint(request_kwargs, custom_llm_provider) is not None
+    )
 
 
-def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> dict:
+def get_dynamic_litellm_params(
+    litellm_params: dict[str, object], request_kwargs: Mapping[str, object], custom_llm_provider: str | None = None
+) -> dict[str, object]:
     """
     Generate a unique model_id for the deployment.
 
@@ -86,6 +140,10 @@ def get_dynamic_litellm_params(litellm_params: dict, request_kwargs: dict) -> di
     for key in clientside_credential_keys:
         if key in request_kwargs:
             litellm_params[key] = request_kwargs[key]
+
+    oauth_fingerprint: Final = forwarded_oauth_credential_fingerprint(request_kwargs, custom_llm_provider)
+    if oauth_fingerprint is not None:
+        litellm_params[FORWARDED_OAUTH_CREDENTIAL_KEY] = oauth_fingerprint
 
     # If the caller redirected api_base/base_url to a client-controlled value,
     # don't forward the admin's organization / extra_body / region / token /

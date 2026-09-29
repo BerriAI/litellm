@@ -1270,6 +1270,46 @@ class TestPassthroughAuthToken:
                     api_base=None,
                 )
 
+    def test_messages_missing_credential_error_is_tagged_as_the_callers_fault(self) -> None:
+        from unittest.mock import patch as mock_patch
+
+        import litellm
+        from litellm.llms.anthropic.pass_through.messages.transformation import AnthropicMessagesConfig
+        from litellm.router_utils.caller_credential_failure import is_missing_caller_credential
+
+        config = AnthropicMessagesConfig()
+        with mock_patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(litellm.AuthenticationError) as raised:
+                config.validate_anthropic_messages_environment(
+                    headers={},
+                    model="claude-opus-5-5",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    optional_params={},
+                    litellm_params={},
+                )
+
+        assert is_missing_caller_credential(raised.value) is True, raised.value
+
+    def test_chat_missing_credential_error_is_tagged_as_the_callers_fault(self) -> None:
+        from unittest.mock import patch as mock_patch
+
+        import litellm
+        from litellm.llms.anthropic.chat.transformation import AnthropicConfig
+        from litellm.router_utils.caller_credential_failure import is_missing_caller_credential
+
+        config = AnthropicConfig()
+        with mock_patch.dict("os.environ", {}, clear=True):
+            with pytest.raises(litellm.AuthenticationError) as raised:
+                config.validate_environment(
+                    headers={},
+                    model="claude-opus-5-5",
+                    messages=[{"role": "user", "content": "Hello"}],
+                    optional_params={},
+                    litellm_params={},
+                )
+
+        assert is_missing_caller_credential(raised.value) is True, raised.value
+
     @pytest.mark.parametrize("header_name", ["x-api-key", "X-Api-Key", "X-API-KEY"])
     def test_passthrough_client_x_api_key_header_is_kept(self, header_name):
         """A client-forwarded x-api-key header, whatever its casing, should satisfy validation without env credentials."""
@@ -1983,7 +2023,6 @@ class TestClaudeOpus48AdaptiveThinking:
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
         assert AnthropicModelInfo._is_adaptive_thinking_model(model, "anthropic") is True
-
 
     @pytest.mark.parametrize(
         "model",

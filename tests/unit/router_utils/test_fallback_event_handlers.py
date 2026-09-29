@@ -8,6 +8,7 @@ import pytest
 
 import litellm
 from litellm.litellm_core_utils import get_llm_provider_logic
+from litellm.router_utils.caller_credential_failure import mark_missing_caller_credential
 from litellm.router_utils.cooldown_handlers import mark_advisor_orchestration_failure
 from litellm.router_utils.fallback_event_handlers import (
     AttemptedFallbackTargets,
@@ -720,9 +721,7 @@ async def test_run_async_fallback_keeps_a_request_override_distinct_from_the_bar
     with pytest.raises(RuntimeError, match="fallback model also failed"):
         await run_async_fallback(
             litellm_router=router,
-            fallback_model_group=[
-                {"model": "already-attempted", "messages": [{"role": "user", "content": "shorter"}]}
-            ],
+            fallback_model_group=[{"model": "already-attempted", "messages": [{"role": "user", "content": "shorter"}]}],
             original_model_group="primary-model",
             original_exception=RuntimeError("original failed"),
             max_fallbacks=3,
@@ -870,6 +869,35 @@ class TestTriggerCooldownForFailedDeployment:
             _trigger_cooldown_for_failed_deployment(litellm_router=mock_router, kwargs={}, exception=exc)
 
             mock_set_cooldown.assert_not_called()
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("tagged", "expected_cooldowns"),
+        [pytest.param(True, [], id="missing caller credential"), pytest.param(False, ["shared"], id="untagged 401")],
+    )
+    async def test_missing_caller_credential_does_not_cool_down_the_fallback_deployment(
+        self, tagged: bool, expected_cooldowns: list[str]
+    ) -> None:
+        router: Final = litellm.Router(
+            model_list=[
+                {
+                    "model_name": "claude",
+                    "litellm_params": {"model": "anthropic/claude-opus-5-5"},
+                    "model_info": {"id": "shared"},
+                }
+            ]
+        )
+        exc: Final = litellm.AuthenticationError("Missing Anthropic API Key", "anthropic", "claude-opus-5-5")
+        exc.failed_deployment_id = "shared"
+        if tagged:
+            mark_missing_caller_credential(exc)
+
+        _trigger_cooldown_for_failed_deployment(litellm_router=router, kwargs={}, exception=exc)
+
+        cooled_down: Final = [
+            model_id for model_id, _ in router.cooldown_cache.get_active_cooldowns(["shared"], parent_otel_span=None)
+        ]
+        assert cooled_down == expected_cooldowns
 
     def test_uses_deployment_litellm_params_cooldown_time_override(self):
         mock_router = MagicMock()
@@ -1302,9 +1330,7 @@ class TestOrderedFallbackLookupGroups:
             "smart-router",
             "requested-model",
         )
-        assert fallback_lookup_groups({"metadata": {"model_group": []}}, "requested-model") == (
-            "requested-model",
-        )
+        assert fallback_lookup_groups({"metadata": {"model_group": []}}, "requested-model") == ("requested-model",)
 
     def test_fallback_hop_resumes_the_original_groups_chain_last(self):
         from litellm.router_utils.fallback_event_handlers import fallback_lookup_groups
