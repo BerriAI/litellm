@@ -294,6 +294,18 @@ _ViewSetupOutcome: TypeAlias = Literal["ready", "timed_out"]
 _ViewSetupAttempt: TypeAlias = Literal["ready", "table_missing"] | Exception
 
 
+class _BudgetAlertEmailLogger(Protocol):
+    async def budget_alerts(self, type: str, user_info: CallInfo) -> object: ...
+
+
+class _ConfigRowFields(Protocol):
+    @property
+    def param_name(self) -> str: ...
+
+    @property
+    def param_value(self) -> object: ...
+
+
 class _EndUserBatchTable(Protocol):
     def upsert(self, *, where: Mapping[str, object], data: Mapping[str, object]) -> None: ...
 
@@ -1217,7 +1229,7 @@ class ProxyLogging:
             alerting=self.alerting,
             internal_usage_cache=self.internal_usage_cache.dual_cache,
         )
-        self.email_logging_instance: Any | None = None
+        self.email_logging_instance: _BudgetAlertEmailLogger | None = None
         if BaseEmailLogger is not None:
             email_logger_class: Final = _get_email_logger_class()
             if email_logger_class is not None:
@@ -4263,7 +4275,7 @@ def _config_cache_key(param_name: str) -> str:
     return f"litellm_config:param:{param_name}"
 
 
-def _pack_config_row(row: Any) -> dict[str, object]:
+def _pack_config_row(row: _ConfigRowFields) -> dict[str, object]:
     return {"param_name": row.param_name, "param_value": row.param_value}
 
 
@@ -4718,6 +4730,22 @@ class PrismaClient:
         except Exception:
             raise
         return
+
+    @overload
+    async def get_generic_data(
+        self,
+        key: str,
+        value: object,
+        table_name: Literal["config"],
+    ) -> "prisma_models.LiteLLM_Config | None": ...
+
+    @overload
+    async def get_generic_data(
+        self,
+        key: str,
+        value: object,
+        table_name: Literal["users", "keys", "spend"],
+    ) -> object: ...
 
     @log_db_metrics
     @backoff.on_exception(
