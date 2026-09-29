@@ -1,11 +1,9 @@
 use litellm_llms_types::{
-    formats::{
-        chat_completions::ReasoningEffort,
-        messages::{
-            EffortLevel, MessagesOptionalParams, MessagesRequest, OutputConfig, ThinkingConfig,
-            ThinkingDisplay,
-        },
+    formats::messages::{
+        EffortLevel, MessagesOptionalParams, MessagesRequest, OutputConfig, ThinkingConfig,
+        ThinkingDisplay,
     },
+    reasoning::ReasoningEffort,
     recognized::Recognized,
 };
 use litellm_python_compat::{json::from_json, repr::repr, truthy::truthy};

@@ -1,9 +1,7 @@
-mod reasoning;
 mod request;
 mod response;
 mod streaming;
 
-pub use reasoning::ReasoningEffort;
 pub use request::{
     ChatCompletionsRequest, ChatContentPart, ChatMediaUrl, ChatMessage, ChatMessageContent,
     ChatVideoUrl,
