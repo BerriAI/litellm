@@ -6,7 +6,7 @@ use litellm_llms::{
     },
     openai_like::chat::transformation::OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG,
 };
-use litellm_types::{llms::openai::ChatMessage, utils::ChatCompletionsResponse};
+use litellm_llms_types::formats::chat_completions::{ChatCompletionsResponse, ChatMessage};
 use rstest::rstest;
 use serde_json::{Map, Value, json};
 
@@ -139,7 +139,7 @@ fn a_missing_api_base_is_an_error() {
     assert!(matches!(
         OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
             .get_complete_url(None, "my-model", &params(json!({})), &no_env),
-        Err(Error::InvalidRequest(message)) if message.starts_with("Missing API Base")
+        Err(Error::InvalidRequest(message)) if message.to_string().starts_with("Missing API Base")
     ));
 }
 
