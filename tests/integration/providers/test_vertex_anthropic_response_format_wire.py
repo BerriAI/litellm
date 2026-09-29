@@ -10,7 +10,7 @@ from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
 from integration._support.client import Gateway, Scenario, eventually
 from integration._support.database import read_rows
-from integration._support.wire import Reply, Request, wire_server
+from integration._support.wire import Reply, Request, Wire, wire_server
 from openai import AsyncOpenAI, OpenAI
 from pydantic import JsonValue, TypeAdapter
 
@@ -338,7 +338,7 @@ def _forced_tool_choice_reply(model: str, request: Request, path: str) -> Reply:
     return Reply(body=json.dumps(_anthropic_tool_use_message(model)).encode())
 
 
-def _upstream_bodies(wire) -> tuple[dict[str, JsonValue], ...]:
+def _upstream_bodies(wire: Wire) -> tuple[dict[str, JsonValue], ...]:
     return tuple(_JSON_OBJECT.validate_json(request.body) for request in wire.drain())
 
 
@@ -721,7 +721,7 @@ def test_vertex_sonnet_5_5_response_format_surfaces_peer_500(gateway: Gateway) -
         )
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = _model(gateway, scenario, wire.url, _SONNET_5_5)
+        model: Final = _model(gateway, scenario, wire.url, _SONNET_5_5, num_retries=0)
         response: Final = _chat(gateway, model, response_format=_RESPONSE_FORMAT)
         assert response.status_code >= 400, response.text
         assert "scripted vertex 500" in response.text, response.text
@@ -893,7 +893,7 @@ def test_vertex_sonnet_5_5_response_format_outage_burst_recovers(gateway: Gatewa
         return response.status_code, _output_text(payload), "call:" + str(response.headers["x-litellm-call-id"])
 
     with wire_server(respond) as wire, gateway.scenario() as scenario:
-        model: Final = _model(gateway, scenario, wire.url, _SONNET_5_5)
+        model: Final = _model(gateway, scenario, wire.url, _SONNET_5_5, num_retries=0)
         calls: Final = (
             [(send_chat, (model, False)) for _ in range(8)]
             + [(send_chat, (model, True)) for _ in range(8)]
