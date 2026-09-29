@@ -277,7 +277,7 @@ class GraySwanGuardrail(CustomGuardrail):
         role: Final = "assistant" if input_type == "response" else "user"
         merged_tail: Final = (
             _MonitorMessage(role="assistant", content=texts[-1], tool_calls=response_tool_calls)
-            if texts and response_tool_calls
+            if len(texts) == 1 and response_tool_calls
             else None
         )
         messages: Final = (
@@ -286,7 +286,7 @@ class GraySwanGuardrail(CustomGuardrail):
             *((merged_tail,) if merged_tail else ()),
             *(
                 (_MonitorMessage(role="assistant", tool_calls=response_tool_calls),)
-                if response_tool_calls and not texts
+                if response_tool_calls and not merged_tail
                 else ()
             ),
         )
