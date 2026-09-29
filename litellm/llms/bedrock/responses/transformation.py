@@ -71,9 +71,14 @@ BEDROCK_RUNTIME_SUPPORTED_RESPONSE_TOOL_TYPES: Final = frozenset(
     {"function", "mcp", "custom", "apply_patch", "namespace", "tool_search", "computer"}
 )
 BEDROCK_RUNTIME_UNSUPPORTED_RESPONSE_PARAMS: Final = frozenset({"background"})
+BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX: Final = "chat_completions/"
 REMOTE_IMAGE_URL_SCHEMES: Final = ("http://", "https://")
 IMAGE_BLOCK_KEYS: Final = ("content", "output")
 IMAGE_BLOCK_TYPES: Final = frozenset({"input_image", "computer_screenshot"})
+
+
+def _without_chat_completions_route(model: str) -> str:
+    return model.removeprefix(BEDROCK_CHAT_COMPLETIONS_ROUTE_PREFIX)
 
 
 def resolve_bedrock_bearer_token(api_key: str | None) -> str | None:
@@ -168,9 +173,13 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
         The capability decision lives here rather than in the shared dispatch so that
         onboarding a model, or changing how the signal is read, stays inside the
         Bedrock adapter. ``None`` leaves the caller's existing behaviour untouched --
-        chat-only Bedrock models keep the Chat Completions bridge.
+        chat-only Bedrock models keep the Chat Completions bridge. The ``chat_completions/``
+        opt-in only moves Chat Completions calls off Converse, so a Responses call on such a
+        deployment still takes this surface instead of being bridged.
         """
-        if not bedrock_supports_openai_responses(model, litellm.model_cost):
+        if not model or not bedrock_supports_openai_responses(
+            _without_chat_completions_route(model), litellm.model_cost
+        ):
             return None
         return cls()
 
@@ -330,7 +339,7 @@ class BedrockOpenAIResponsesConfig(BaseAWSLLM, OpenAIResponsesAPIConfig):
                 rewritten_types,
             )
         return super().transform_responses_api_request(
-            model=model,
+            model=_without_chat_completions_route(model),
             input=normalized_input,
             response_api_optional_request_params=response_api_optional_request_params,
             litellm_params=litellm_params,

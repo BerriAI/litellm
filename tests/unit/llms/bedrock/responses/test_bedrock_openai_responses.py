@@ -162,6 +162,27 @@ class TestForModelGate:
         ):
             assert BedrockOpenAIResponsesConfig.for_model(None) is None
 
+    def test_chat_completions_route_keeps_the_native_responses_surface(self):
+        with patch.object(  # test-quality-ok: the gate reads the global cost map by design; no injection point exists
+            litellm, "model_cost", {MODEL: {"supported_endpoints": ["/v1/responses"]}}
+        ):
+            cfg = BedrockOpenAIResponsesConfig.for_model(f"chat_completions/{MODEL}")
+        assert isinstance(cfg, BedrockOpenAIResponsesConfig)
+        body = cfg.transform_responses_api_request(
+            model=f"chat_completions/{MODEL}",
+            input="hi",
+            response_api_optional_request_params={},
+            litellm_params=GenericLiteLLMParams(),
+            headers={},
+        )
+        assert body["model"] == MODEL
+
+    def test_converse_route_keeps_the_chat_completions_bridge(self):
+        with patch.object(  # test-quality-ok: the gate reads the global cost map by design; no injection point exists
+            litellm, "model_cost", {MODEL: {"supported_endpoints": ["/v1/responses"]}}
+        ):
+            assert BedrockOpenAIResponsesConfig.for_model(f"converse/{MODEL}") is None
+
 
 class TestProviderResolution:
     """model_cost is patched explicitly: it is populated at import time from a GitHub
