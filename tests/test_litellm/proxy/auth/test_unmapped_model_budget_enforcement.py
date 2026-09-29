@@ -285,9 +285,12 @@ class TestUnmappedModelBudgetEnforcement:
             "An aliased PTU group must not be read as free"
         )
 
-    def test_hidden_model_group_alias_enforces_budget(self):
-        """A hidden alias keeps budget enforced: get_model_group_info() returns None for it,
-        so the cost is unknown before the configuration gate is reached."""
+    def test_hidden_model_group_alias_to_free_model_bypasses_budget(self):
+        """A hidden alias to an explicitly free group bypasses budget, like the group itself.
+
+        ``get_model_group_info`` returns None for hidden aliases, so the alias must be
+        resolved to its target group before the cost lookup.
+        """
         router = Router(
             model_list=[
                 {
@@ -304,7 +307,22 @@ class TestUnmappedModelBudgetEnforcement:
             model_group_alias={"hidden-alias": {"model": "free-model", "hidden": True}},
         )
 
-        assert _is_model_cost_zero(model="hidden-alias", llm_router=router) is False
+        assert _is_model_cost_zero(model="hidden-alias", llm_router=router) is True
+
+    def test_hidden_model_group_alias_to_paid_model_enforces_budget(self):
+        """A hidden alias to a priced group keeps budget enforced."""
+        router = Router(
+            model_list=[
+                {
+                    "model_name": "paid-model",
+                    "litellm_params": {"model": "gpt-3.5-turbo", "api_key": "sk-fake"},
+                    "model_info": {"id": "paid-model-id"},
+                },
+            ],
+            model_group_alias={"hidden-paid-alias": {"model": "paid-model", "hidden": True}},
+        )
+
+        assert _is_model_cost_zero(model="hidden-paid-alias", llm_router=router) is False
 
     def test_dangling_model_group_alias_enforces_budget(self):
         """An alias pointing at a group that does not exist keeps budget enforced."""

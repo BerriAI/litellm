@@ -138,6 +138,7 @@ from litellm.repositories.table_repositories import (
 from litellm.repositories.team_repository import TeamRepository
 from litellm.repositories.user_repository import UserRepository
 from litellm.router import Router
+from litellm.router_utils.common_utils import resolve_model_group_alias
 from litellm.types.proxy.auth.auth_checks import UserNotFoundError
 from litellm.types.proxy.model_access_group_budget import ModelAccessGroupBudget
 from litellm.utils import get_utc_datetime
@@ -479,7 +480,8 @@ def _is_model_cost_zero(model: str | list[str] | None, llm_router: Router | None
                 continue
         try:
             # Use router's get_model_group_info method directly for better reliability
-            model_group_info = llm_router.get_model_group_info(model_group=model_name)
+            target_group = resolve_model_group_alias(llm_router.model_group_alias, model_name) or model_name
+            model_group_info = llm_router.get_model_group_info(model_group=target_group)
 
             if model_group_info is None:
                 # Model not found or no pricing info available
