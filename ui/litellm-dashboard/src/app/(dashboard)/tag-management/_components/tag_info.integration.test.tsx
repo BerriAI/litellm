@@ -3,9 +3,11 @@ import userEvent from "@testing-library/user-event";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 import { tagInfoCall, tagUpdateCall } from "@/components/networking";
+import type { Team } from "@/components/key_team_helpers/key_list";
 import type { Tag } from "@/components/tag_management/types";
 
 import TagInfoView from "./tag_info";
+import { chooseSelectOption } from "../../../../../tests/test-utils";
 
 vi.mock("@/components/networking", () => ({
   tagInfoCall: vi.fn(),
@@ -34,9 +36,9 @@ const tag: Tag = {
   litellm_budget_table: { max_budget: 10, budget_duration: "7d", tpm_limit: 1000, rpm_limit: 60 },
 };
 
-const renderEditor = async () => {
+const renderEditor = async (teams: Team[] = []) => {
   const user = userEvent.setup();
-  render(<TagInfoView tagId="prod-tag" onClose={vi.fn()} accessToken="sk-test" is_admin editTag />);
+  render(<TagInfoView tagId="prod-tag" onClose={vi.fn()} accessToken="sk-test" is_admin editTag teams={teams} />);
   const nameInput = await screen.findByLabelText("Tag Name");
   return { user, nameInput };
 };
@@ -100,10 +102,15 @@ describe("TagInfoView save payload", () => {
     expect(mockTagUpdateCall).toHaveBeenCalledWith("sk-test", expected);
   });
 
-  it("should save a tag whose stored description is null", async () => {
-    mockTagInfoCall.mockResolvedValue({ "prod-tag": { ...tag, description: null } });
-    const { user } = await renderEditor();
+  it("should save an owner change on a tag whose stored description is null", async () => {
+    mockTagInfoCall.mockResolvedValue({ "prod-tag": { ...tag, description: null, team_id: "team-a" } });
+    const teams = [
+      { team_id: "team-a", team_alias: "Team A" },
+      { team_id: "team-b", team_alias: "Team B" },
+    ] as Team[];
+    const { user } = await renderEditor(teams);
 
+    await chooseSelectOption(user, screen.getByRole("combobox", { name: "Owning Team" }), /Team B/);
     await user.click(screen.getByRole("button", { name: "Save Changes" }));
 
     const expected = {
@@ -113,7 +120,7 @@ describe("TagInfoView save payload", () => {
       max_budget: undefined,
       tpm_limit: undefined,
       rpm_limit: undefined,
-      team_id: null,
+      team_id: "team-b",
       budget_duration: undefined,
     };
 
