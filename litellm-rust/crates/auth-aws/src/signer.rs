@@ -95,7 +95,7 @@ mod tests {
 
     fn authorization(body: &Value, service: &'static str) -> String {
         OutboundRequest::signed_json(
-            "https://textract.us-east-1.amazonaws.com/".into(),
+            "https://textract.us-east-1.amazonaws.com/".parse().unwrap(),
             vec![("X-Amz-Target".into(), "Textract.DetectDocumentText".into())],
             body,
             None,
@@ -107,10 +107,10 @@ mod tests {
         .to_string()
     }
 
-    #[test]
+    #[rstest::rstest]
     fn the_signature_verifies_against_the_bytes_that_are_sent() {
         let sent = OutboundRequest::signed_json(
-            "https://textract.us-east-1.amazonaws.com/".into(),
+            "https://textract.us-east-1.amazonaws.com/".parse().unwrap(),
             vec![("X-Amz-Target".into(), "Textract.DetectDocumentText".into())],
             &json!({"Document": {"Bytes": "aGk="}}),
             None,
@@ -155,10 +155,10 @@ mod tests {
         assert!(original.contains("/us-east-1/textract/aws4_request"));
     }
 
-    #[test]
+    #[rstest::rstest]
     fn a_forwarded_computed_header_is_refused_instead_of_sent_twice() {
         let error = OutboundRequest::signed_json(
-            "https://textract.us-east-1.amazonaws.com/".into(),
+            "https://textract.us-east-1.amazonaws.com/".parse().unwrap(),
             vec![("authorization".into(), "Bearer caller".into())],
             &json!({}),
             None,

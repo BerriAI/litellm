@@ -43,7 +43,7 @@ pub(super) async fn prepare(
     };
     let body = config.transform_responses_api_request(model, call.input, call.optional_params)?;
     Ok(ProviderResponsesRequest {
-        url: config.get_complete_url(call.api_base.as_deref(), &lookup),
+        url: config.get_complete_url(call.api_base.as_deref(), &lookup)?,
         config,
         environment,
         body,

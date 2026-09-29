@@ -286,12 +286,35 @@ fn operation_headers(
         .collect()
 }
 
-pub(super) fn endpoint(request: &PreparedOcrRequest, environment: &TextractEnvironment) -> String {
-    request
-        .connection
-        .api_base
-        .clone()
-        .unwrap_or_else(|| format!("https://textract.{}.amazonaws.com/", environment.region))
+pub(super) fn endpoint(
+    request: &PreparedOcrRequest,
+    environment: &TextractEnvironment,
+) -> Result<url::Url, Error> {
+    if let Some(base) = &request.connection.api_base {
+        return Ok(litellm_core_utils::url_utils::ApiUrl::parse(base)?
+            .complete_path(&[])?
+            .into_url());
+    }
+    if environment.region.is_empty()
+        || !environment
+            .region
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+    {
+        return Err(Error::RequestField {
+            path: "aws_region_name".into(),
+        });
+    }
+    let mut endpoint = url::Url::parse("https://textract.amazonaws.com").expect("static URL");
+    endpoint
+        .set_host(Some(&format!(
+            "textract.{}.amazonaws.com",
+            environment.region
+        )))
+        .map_err(|_| Error::RequestField {
+            path: "aws_region_name".into(),
+        })?;
+    Ok(endpoint)
 }
 
 pub(super) fn document_bytes(document: &OcrDocument) -> Result<TextractDocument, Error> {

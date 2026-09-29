@@ -77,7 +77,7 @@ impl BaseConfig for OpenAILikeChatConfig {
         _model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         let custom_endpoint = optional_params
             .get("custom_endpoint")
             .and_then(Value::as_bool)

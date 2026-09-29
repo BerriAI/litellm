@@ -8,7 +8,7 @@ use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
     constants::{
         AWS_BEARER_TOKEN_BEDROCK, AWS_BEDROCK_RUNTIME_ENDPOINT, AWS_DEFAULT_REGION, AWS_REGION,
-        AWS_REGION_NAME, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE,
+        AWS_REGION_NAME, BEDROCK_SERVICE,
     },
     resolve_bedrock_region,
 };
@@ -71,7 +71,7 @@ fn invoke_url(
     model: &str,
     env_lookup: &dyn Fn(&str) -> Option<String>,
     path: &str,
-) -> String {
+) -> Result<url::Url, Error> {
     let (model_id, model_region) =
         bedrock_model_id_and_region(model.strip_prefix(INVOKE_MODEL_PREFIX).unwrap_or(model));
     let region = resolve_bedrock_region(model_region.as_deref(), &Map::new(), env_lookup);
@@ -79,9 +79,8 @@ fn invoke_url(
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
-        .or_else(|| env_lookup(AWS_BEDROCK_RUNTIME_ENDPOINT))
-        .unwrap_or_else(|| BEDROCK_RUNTIME_ENDPOINT_TEMPLATE.replace("{region}", &region));
-    format!("{}/model/{model_id}/{path}", endpoint.trim_end_matches('/'))
+        .or_else(|| env_lookup(AWS_BEDROCK_RUNTIME_ENDPOINT));
+    crate::bedrock::operation_url(endpoint.as_deref(), &region, &model_id, path)
 }
 
 impl BaseAnthropicMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
@@ -98,8 +97,8 @@ impl BaseAnthropicMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         api_base: Option<&str>,
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(invoke_url(api_base, model, env_lookup, INVOKE_PATH))
+    ) -> Result<url::Url, Error> {
+        invoke_url(api_base, model, env_lookup, INVOKE_PATH)
     }
 
     fn complete_stream_url(
@@ -107,8 +106,8 @@ impl BaseAnthropicMessagesConfig for AmazonAnthropicClaudeMessagesConfig {
         api_base: Option<&str>,
         model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
-        Ok(invoke_url(api_base, model, env_lookup, INVOKE_STREAM_PATH))
+    ) -> Result<url::Url, Error> {
+        invoke_url(api_base, model, env_lookup, INVOKE_STREAM_PATH)
     }
 
     fn transform_anthropic_messages_request(
@@ -498,7 +497,7 @@ mod tests {
         assert_eq!(sse, expected);
     }
 
-    #[test]
+    #[rstest::rstest]
     fn config_uses_the_streaming_url_only_for_streams() {
         let env = |_: &str| -> Option<String> { None };
         let config = AmazonAnthropicClaudeMessagesConfig;
@@ -506,10 +505,12 @@ mod tests {
         assert_eq!(
             config
                 .get_complete_url(None, "anthropic.claude-3", &env)
-                .unwrap(),
+                .unwrap()
+                .to_string(),
             config
                 .complete_stream_url(None, "anthropic.claude-3", &env)
                 .unwrap()
+                .as_str()
                 .replace(INVOKE_STREAM_PATH, INVOKE_PATH)
         );
     }
@@ -557,5 +558,30 @@ mod tests {
             }
             (other, _) => panic!("unexpected auth {other:?}"),
         }
+    }
+    #[rstest]
+    #[case::invoke("invoke")]
+    #[case::stream("invoke-with-response-stream")]
+    fn invoke_urls_preserve_prefixes_and_encode_ids(#[case] operation: &str) {
+        let model = "arn:aws:bedrock:us-east-1:123:inference-profile/a%?#";
+        let url = invoke_url(
+            Some("https://example.test/prefix?tenant=a#f"),
+            model,
+            &|_| None,
+            operation,
+        )
+        .unwrap();
+        assert_eq!(
+            url.path(),
+            format!(
+                "/prefix/model/arn:aws:bedrock:us-east-1:123:inference-profile%2Fa%25%3F%23/{operation}"
+            )
+        );
+        assert_eq!(url.query(), Some("tenant=a"));
+        assert_eq!(url.fragment(), Some("f"));
+        assert_eq!(
+            invoke_url(Some(url.as_str()), "ignored", &|_| None, operation).unwrap(),
+            url
+        );
     }
 }

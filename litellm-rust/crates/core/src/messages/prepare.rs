@@ -26,7 +26,7 @@ struct ResolvedProvider {
 
 pub(super) struct ProviderMessagesRequest {
     pub(super) provider: MessagesProvider,
-    pub(super) url: String,
+    pub(super) url: url::Url,
     pub(super) body: AnthropicMessagesRequest,
     pub(super) environment: ValidatedEnvironment,
     pub(super) timeout: Option<Duration>,

@@ -16,7 +16,6 @@ reqwest.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 veil.workspace = true
-percent-encoding = "2.3"
 
 [dev-dependencies]
 litellm-http = { workspace = true, features = ["test-support"] }

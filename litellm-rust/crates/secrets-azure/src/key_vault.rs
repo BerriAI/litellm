@@ -4,18 +4,12 @@ use litellm_auth_azure::{AzureAuthInputs, AzureAuthService, ConfigValue};
 use litellm_auth_types::{InputSource, Sourced};
 use litellm_core_utils::settings::Lookup;
 use litellm_secrets_types::{AzureOperationContext, BaseSecretManager, Secret, SecretValue};
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC};
 use serde::Deserialize;
 
 use crate::Error;
 
 const AZURE_KEY_VAULT_URI: &str = "AZURE_KEY_VAULT_URI";
 const API_VERSION: &str = "7.4";
-const PATH_SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'.')
-    .remove(b'_')
-    .remove(b'~');
 
 #[derive(Clone)]
 pub struct AzureKeyVault {
@@ -91,10 +85,12 @@ impl AzureKeyVault {
             .get_azure_ad_token(&self.inputs, &|key| self.environment.get(key))
             .await?
             .ok_or(Error::MissingCredentials)?;
-        let encoded_name = percent_encoding::utf8_percent_encode(name, PATH_SEGMENT);
-        let url = self
-            .vault
-            .join(&format!("secrets/{encoded_name}?api-version={API_VERSION}"))
+        let url = litellm_core_utils::url_utils::ApiUrl::from_url(self.vault.clone())
+            .and_then(|url| url.append_path(&["secrets", name]))
+            .map(|url| {
+                url.append_query_pairs([("api-version", API_VERSION)])
+                    .into_url()
+            })
             .map_err(|_| Error::VaultUri)?;
         let response = self
             .client

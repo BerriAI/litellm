@@ -154,16 +154,23 @@ impl GoogleSecretManager {
     }
 
     async fn read_uncached(&self, name: &str) -> Result<Option<SecretValue>, Error> {
-        let url = self
-            .endpoint
-            .join(&format!(
-                "/v1/projects/{}/secrets/{}/versions/latest:access",
-                percent_encoding::utf8_percent_encode(
+        let mut endpoint = self.endpoint.clone();
+        endpoint.set_path("/");
+        endpoint.set_query(None);
+        endpoint.set_fragment(None);
+        let url = litellm_core_utils::url_utils::ApiUrl::from_url(endpoint)
+            .and_then(|url| {
+                url.append_path(&[
+                    "v1",
+                    "projects",
                     &self.project,
-                    percent_encoding::NON_ALPHANUMERIC
-                ),
-                percent_encoding::utf8_percent_encode(name, percent_encoding::NON_ALPHANUMERIC)
-            ))
+                    "secrets",
+                    name,
+                    "versions",
+                    "latest:access",
+                ])
+            })
+            .map(|url| url.into_url())
             .map_err(|_| Error::Endpoint)?;
         let response = self
             .client

@@ -138,3 +138,9 @@ impl PartialEq for ErrorSource {
 }
 
 impl Eq for ErrorSource {}
+
+impl From<litellm_core_utils::ApiUrlError> for Error {
+    fn from(error: litellm_core_utils::ApiUrlError) -> Self {
+        Self::InvalidRequest(ErrorDetail::invalid("API URL", error))
+    }
+}

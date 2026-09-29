@@ -102,7 +102,7 @@ impl BaseOcrConfig for MistralOcrConfig {
         request: &PreparedOcrRequest,
         _optional_params: &Self::OcrParams,
         _environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         self.build_ocr_url(request.connection.api_base.as_deref())
     }
 
@@ -161,14 +161,14 @@ impl MistralOcrConfig {
         )
     }
 
-    fn build_ocr_url(&self, api_base: Option<&str>) -> Result<String, Error> {
+    fn build_ocr_url(&self, api_base: Option<&str>) -> Result<url::Url, Error> {
         let base = api_base
             .map(str::trim)
             .filter(|base| !base.is_empty())
             .unwrap_or(MISTRAL_OCR_API_BASE);
         ApiUrl::parse(base)
             .and_then(|url| url.complete_path(&["v1", "ocr"]))
-            .map(|url| url.into_string())
+            .map(|url| url.into_url())
             .map_err(|_| Error::RequestField {
                 path: "api_base".into(),
             })
@@ -599,7 +599,13 @@ mod tests {
         #[case] api_base: Option<&str>,
         #[case] expected: &str,
     ) {
-        assert_eq!(MistralOcrConfig.build_ocr_url(api_base).unwrap(), expected);
+        assert_eq!(
+            MistralOcrConfig
+                .build_ocr_url(api_base)
+                .unwrap()
+                .to_string(),
+            expected
+        );
     }
 
     #[rstest]

@@ -420,13 +420,14 @@ fn errors_on_a_response_missing_required_fields(#[case] body: Value) {
     );
 }
 
-#[test]
+#[rstest::rstest]
 fn resolves_the_messages_url_and_x_api_key_auth() {
     let config = &ANTHROPIC_CHAT_COMPLETIONS_CONFIG;
     assert_eq!(
         config
             .get_complete_url(None, "claude-sonnet-4-5", &Map::new(), &|_| None)
-            .expect("url builds"),
+            .expect("url builds")
+            .as_str(),
         "https://api.anthropic.com/v1/messages"
     );
     let validated = config
@@ -451,5 +452,18 @@ fn resolves_the_messages_url_and_x_api_key_auth() {
             ("anthropic-version", "2023-06-01"),
             ("content-type", "application/json"),
         ]
+    );
+}
+
+#[rstest]
+#[case::base("https://example.test/prefix/v1?tenant=a#f")]
+#[case::complete("https://example.test/prefix/v1/messages?tenant=a#f")]
+fn messages_completion_preserves_components(#[case] base: &str) {
+    let url = ANTHROPIC_CHAT_COMPLETIONS_CONFIG
+        .get_complete_url(Some(base), "model", &Map::new(), &|_| None)
+        .unwrap();
+    assert_eq!(
+        url.as_str(),
+        "https://example.test/prefix/v1/messages?tenant=a#f"
     );
 }

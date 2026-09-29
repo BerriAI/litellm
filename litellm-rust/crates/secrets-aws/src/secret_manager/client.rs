@@ -27,7 +27,8 @@ impl AwsSecretsManagerV2 {
             environment: environment.clone(),
             endpoint_url: environment
                 .get(AWS_BEDROCK_RUNTIME_ENDPOINT)
-                .map(|url| url.replace("bedrock-runtime", "secretsmanager")),
+                .map(|url| secrets_endpoint(&url))
+                .transpose()?,
         };
         let client = context_client_factory.client(&AwsOperationContext::default())?;
         Ok(Some(Self::with_context_client_factory(
@@ -107,12 +108,51 @@ impl ContextClientFactory {
         let endpoint_url = context
             .bedrock_runtime_endpoint
             .as_ref()
-            .map(|url| url.replace("bedrock-runtime", "secretsmanager"))
+            .map(|url| secrets_endpoint(url))
+            .transpose()?
             .or_else(|| self.endpoint_url.clone());
         let config = match endpoint_url {
             Some(endpoint_url) => builder.endpoint_url(endpoint_url).build(),
             None => builder.build(),
         };
         Ok(Client::from_conf(config))
+    }
+}
+
+fn secrets_endpoint(value: &str) -> Result<String, Error> {
+    let mut url = litellm_core_utils::url_utils::ApiUrl::parse(value)?.into_url();
+    if !matches!(url.scheme(), "http" | "https") {
+        return Err(litellm_core_utils::ApiUrlError::Scheme(url.scheme().into()).into());
+    }
+    let host = url
+        .host_str()
+        .ok_or(litellm_core_utils::ApiUrlError::CannotBeBase)?;
+    let hostname = host.replace("bedrock-runtime", "secretsmanager");
+    url.set_host(Some(&hostname))
+        .map_err(litellm_core_utils::ApiUrlError::from)?;
+    Ok(url.into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[rstest::rstest]
+    #[case::aws(
+        "https://user:pass@bedrock-runtime.us-east-1.amazonaws.com/prefix/bedrock-runtime?service=bedrock-runtime#f",
+        "https://user:pass@secretsmanager.us-east-1.amazonaws.com/prefix/bedrock-runtime?service=bedrock-runtime#f"
+    )]
+    #[case::custom(
+        "https://example.test/bedrock-runtime?service=bedrock-runtime",
+        "https://example.test/bedrock-runtime?service=bedrock-runtime"
+    )]
+    #[case::substring("https://my-bedrock-runtime.test/", "https://my-secretsmanager.test/")]
+    fn replacement_changes_only_the_host(#[case] input: &str, #[case] expected: &str) {
+        assert_eq!(secrets_endpoint(input).unwrap(), expected);
+    }
+    #[rstest::rstest]
+    #[case::relative("relative/path")]
+    #[case::scheme("ftp://bedrock-runtime.example.test")]
+    fn invalid_endpoints_are_rejected(#[case] value: &str) {
+        assert!(secrets_endpoint(value).is_err());
     }
 }

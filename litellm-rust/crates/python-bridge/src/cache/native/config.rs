@@ -183,16 +183,23 @@ impl RedisConnectionConfig {
                 "rediss"
             }
         };
-        let host = if self.host.contains(':') {
-            format!("[{}]", self.host)
-        } else {
-            self.host.clone()
-        };
-        let mut url = url::Url::parse(&format!(
-            "{scheme}://{host}:{}/{}",
-            self.port, self.database
-        ))
-        .map_err(|_| UnsupportedCacheConfig::RedisConnection)?;
+        let mut url = url::Url::parse("redis://localhost").expect("static URL");
+        url.set_scheme(scheme)
+            .map_err(|()| UnsupportedCacheConfig::RedisConnection)?;
+        match self.host.parse::<std::net::IpAddr>() {
+            Ok(host) => url
+                .set_ip_host(host)
+                .map_err(|()| UnsupportedCacheConfig::RedisConnection)?,
+            Err(_) => url
+                .set_host(Some(&self.host))
+                .map_err(|_| UnsupportedCacheConfig::RedisConnection)?,
+        }
+        url.set_port(Some(self.port))
+            .map_err(|()| UnsupportedCacheConfig::RedisConnection)?;
+        url.path_segments_mut()
+            .map_err(|()| UnsupportedCacheConfig::RedisConnection)?
+            .clear()
+            .push(&self.database.to_string());
         if let Some(username) = &self.username {
             url.set_username(username)
                 .map_err(|()| UnsupportedCacheConfig::RedisConnection)?;
@@ -202,7 +209,7 @@ impl RedisConnectionConfig {
                 .map_err(|()| UnsupportedCacheConfig::RedisConnection)?;
         }
         if self.protocol == RedisProtocol::Resp3 {
-            url.set_query(Some("protocol=resp3"));
+            url.query_pairs_mut().append_pair("protocol", "resp3");
         }
         Ok(url.into())
     }
@@ -453,24 +460,10 @@ fn project_qdrant_semantic(
     backend: &Bound<'_, PyAny>,
 ) -> PyResult<Result<QdrantSemanticCacheConfig, UnsupportedCacheConfig>> {
     let rest_url = backend.getattr("qdrant_api_base")?.extract::<String>()?;
-    let parsed = match url::Url::parse(&rest_url) {
-        Ok(value) => value,
-        Err(_) => return Ok(Err(UnsupportedCacheConfig::QdrantEndpoint)),
+    let grpc_url = match qdrant_grpc_url(&rest_url) {
+        Ok(url) => url,
+        Err(error) => return Ok(Err(error)),
     };
-    if !matches!(parsed.scheme(), "http" | "https")
-        || (!parsed.path().is_empty() && parsed.path() != "/")
-        || parsed.query().is_some()
-        || parsed.host_str().is_none()
-        || parsed.port() != Some(6333)
-    {
-        return Ok(Err(UnsupportedCacheConfig::QdrantEndpoint));
-    }
-    let mut grpc_url = parsed;
-    if grpc_url.set_port(Some(6334)).is_err() {
-        return Ok(Err(UnsupportedCacheConfig::QdrantEndpoint));
-    }
-    grpc_url.set_path("");
-    grpc_url.set_query(None);
 
     if optional_attribute(backend, "embedding_max_input_tokens")?
         .is_some_and(|value| !value.is_none())
@@ -520,7 +513,7 @@ fn project_qdrant_semantic(
         .map(duration)
         .transpose()?;
     Ok(Ok(QdrantSemanticCacheConfig {
-        grpc_url: grpc_url.to_string().trim_end_matches('/').to_owned(),
+        grpc_url: grpc_url.into(),
         api_key: optional_string(backend.getattr("qdrant_api_key")?)?,
         collection_name: backend.getattr("collection_name")?.extract()?,
         similarity_threshold: backend.getattr("similarity_threshold")?.extract()?,
@@ -753,7 +746,11 @@ fn project_s3(
     if signature.as_deref() != Some("s3v4") {
         return Ok(Err(UnsupportedCacheConfig::S3Option));
     }
-    let insecure = endpoint_url.starts_with("http://");
+    let parsed_endpoint = match url::Url::parse(&endpoint_url) {
+        Ok(url) if matches!(url.scheme(), "http" | "https") && url.host().is_some() => url,
+        _ => return Ok(Err(UnsupportedCacheConfig::S3Option)),
+    };
+    let insecure = parsed_endpoint.scheme() == "http";
     let verify = optional_attribute_chain(&client, &["_endpoint", "http_session", "_verify"])?;
     let verified = verify
         .and_then(|value| value.cast::<PyBool>().ok().map(|value| value.is_true()))
@@ -785,8 +782,15 @@ fn project_s3(
             ..Default::default()
         }
     };
-    let default_endpoint = endpoint_url == format!("https://s3.{region}.amazonaws.com")
-        || (region == "us-east-1" && endpoint_url == "https://s3.amazonaws.com");
+    let default_endpoint = parsed_endpoint.scheme() == "https"
+        && (parsed_endpoint.host_str() == Some(format!("s3.{region}.amazonaws.com").as_str())
+            || (region == "us-east-1" && parsed_endpoint.host_str() == Some("s3.amazonaws.com")))
+        && parsed_endpoint.port().is_none()
+        && parsed_endpoint.path() == "/"
+        && parsed_endpoint.username().is_empty()
+        && parsed_endpoint.password().is_none()
+        && parsed_endpoint.query().is_none()
+        && parsed_endpoint.fragment().is_none();
     Ok(Ok(S3CacheConfig {
         bucket: backend.getattr("bucket_name")?.extract::<String>()?,
         key_prefix: backend.getattr("key_prefix")?.extract::<String>()?,
@@ -1156,6 +1160,22 @@ fn optional_dict_duration(values: &Bound<'_, PyDict>, key: &str) -> PyResult<Opt
     optional_f64(values, key)?.map(duration).transpose()
 }
 
+pub(super) fn qdrant_grpc_url(value: &str) -> Result<url::Url, UnsupportedCacheConfig> {
+    let mut url = url::Url::parse(value).map_err(|_| UnsupportedCacheConfig::QdrantEndpoint)?;
+    if !matches!(url.scheme(), "http" | "https")
+        || url.path() != "/"
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url.host().is_none()
+        || url.port() != Some(6333)
+    {
+        return Err(UnsupportedCacheConfig::QdrantEndpoint);
+    }
+    url.set_port(Some(6334))
+        .map_err(|()| UnsupportedCacheConfig::QdrantEndpoint)?;
+    Ok(url)
+}
+
 #[cfg(test)]
 mod tests {
     use std::{ffi::CString, time::Duration};
@@ -1169,6 +1189,7 @@ mod tests {
         CacheBackendConfig, CacheConfigProjection, CachePolicy, CertificateRequirement,
         GcsCacheConfig, NativeCacheConfig, REDIS_PY_DEFAULT_MAX_CONNECTIONS, RedisConnectionConfig,
         RedisProtocol, RedisSemanticCacheConfig, RedisTlsConfig, UnsupportedCacheConfig,
+        qdrant_grpc_url,
     };
     use crate::cache::native::{backend::NativeResponseCache, embedder::PythonEmbedder};
 
@@ -1711,5 +1732,26 @@ mod tests {
                 );
             }
         }
+    }
+    #[rstest]
+    #[case::ipv4("http://127.0.0.1:6333", "http://127.0.0.1:6334/")]
+    #[case::ipv6("https://[::1]:6333/", "https://[::1]:6334/")]
+    fn qdrant_changes_only_the_rest_port(#[case] value: &str, #[case] expected: &str) {
+        assert_eq!(
+            qdrant_grpc_url(value)
+                .unwrap_or_else(|_| panic!("valid Qdrant endpoint"))
+                .as_str(),
+            expected
+        );
+    }
+
+    #[rstest]
+    #[case::port("http://example.test:1234")]
+    #[case::path("http://example.test:6333/prefix")]
+    #[case::query("http://example.test:6333?tenant=a")]
+    #[case::fragment("http://example.test:6333#f")]
+    #[case::scheme("ftp://example.test:6333")]
+    fn invalid_qdrant_endpoints_are_rejected(#[case] value: &str) {
+        assert!(qdrant_grpc_url(value).is_err());
     }
 }

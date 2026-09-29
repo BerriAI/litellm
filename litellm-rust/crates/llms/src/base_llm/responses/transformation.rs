@@ -23,7 +23,7 @@ pub trait BaseResponsesApiConfig: Sync {
         &self,
         api_base: Option<&str>,
         lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> String;
+    ) -> Result<url::Url, Error>;
 
     fn transform_responses_api_request(
         &self,
@@ -53,7 +53,11 @@ pub trait ResponsesWebSocketProviderConfig: Sync {
         false
     }
 
-    fn complete_websocket_url(&self, api_base: Option<&str>, model: &str) -> String;
+    fn complete_websocket_url(
+        &self,
+        api_base: Option<&str>,
+        model: &str,
+    ) -> Result<url::Url, Error>;
 
     fn transform_ws_request(
         &self,

@@ -1,6 +1,5 @@
 use litellm_auth_aws::{
-    AwsCredentialSource, bedrock_model_id_and_region,
-    constants::{BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE},
+    AwsCredentialSource, bedrock_model_id_and_region, constants::BEDROCK_SERVICE,
     resolve_bedrock_region,
 };
 use litellm_core_utils::core_helpers::json_type_name;
@@ -155,7 +154,7 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
         let region = resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup);
         let endpoint = optional_params
@@ -163,13 +162,8 @@ impl BaseAudioTranscriptionConfig for BedrockAudioTranscriptionConfig {
             .and_then(Value::as_str)
             .or(api_base)
             .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| BEDROCK_RUNTIME_ENDPOINT_TEMPLATE.replace("{region}", &region));
-        Ok(format!(
-            "{}/model/{model_id}/converse",
-            endpoint.trim_end_matches('/')
-        ))
+            .filter(|value| !value.is_empty());
+        crate::bedrock::operation_url(endpoint, &region, &model_id, "converse")
     }
 
     fn default_headers(&self) -> &'static [(&'static str, &'static str)] {
@@ -273,7 +267,7 @@ mod tests {
         assert!(result.is_err());
     }
 
-    #[test]
+    #[rstest::rstest]
     fn region_and_url_precedence_match_python() {
         let params = Map::from_iter([("aws_region_name".to_string(), json!("eu-west-1"))]);
         let url = BEDROCK_AUDIO_TRANSCRIPTION_CONFIG
@@ -285,7 +279,7 @@ mod tests {
             )
             .expect("url");
         assert_eq!(
-            url,
+            url.as_str(),
             "https://bedrock-runtime.eu-west-1.amazonaws.com/model/mistral.voxtral-mini-3b-2507/converse"
         );
     }

@@ -252,7 +252,7 @@ impl NativeResponseCache {
             .build()
             .map_err(|_| Error::Unavailable)?;
         let qdrant_config = config.to_qdrant_config();
-        let embedder = OpenAiEmbedder::new(client, config.embedding);
+        let embedder = OpenAiEmbedder::new(client, config.embedding)?;
         let cache = QdrantSemanticCache::connect(
             qdrant,
             embedder,

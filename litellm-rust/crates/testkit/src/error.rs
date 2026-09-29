@@ -7,6 +7,8 @@ use crate::Wire;
 
 #[derive(Debug, Error)]
 pub enum Error {
+    #[error(transparent)]
+    Url(#[from] litellm_core_utils::ApiUrlError),
     #[error("unsupported target {0}")]
     UnsupportedTarget(String),
     #[error("{0} is not a plain x.y.z release version")]

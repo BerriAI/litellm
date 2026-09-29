@@ -6,17 +6,10 @@ use litellm_cache::{
     FlushCache,
 };
 use litellm_http::Client;
-use percent_encoding::{AsciiSet, NON_ALPHANUMERIC, percent_encode};
 
 use crate::{GcpTokenSource, TokenSource};
 
 pub const DEFAULT_ENDPOINT: &str = "https://storage.googleapis.com";
-
-const OBJECT_NAME_ENCODE_SET: &AsciiSet = &NON_ALPHANUMERIC
-    .remove(b'-')
-    .remove(b'_')
-    .remove(b'.')
-    .remove(b'~');
 
 pub fn key_prefix(gcs_path: Option<&str>) -> String {
     match gcs_path {
@@ -90,22 +83,28 @@ impl<S: CacheCodec> GcsCache<S> {
         format!("{}{}", self.key_prefix, key)
     }
 
-    fn encoded_object_name(&self, key: &str) -> String {
-        percent_encode(self.object_name(key).as_bytes(), OBJECT_NAME_ENCODE_SET).to_string()
-    }
-
-    fn endpoint(&self, path: &str) -> String {
-        format!("{}{}", self.config.endpoint.trim_end_matches('/'), path)
+    fn endpoint(&self, path: &[&str], query: &[(&str, &str)]) -> Result<reqwest::Url, Error> {
+        litellm_core_utils::url_utils::ApiUrl::parse(&self.config.endpoint)
+            .and_then(|url| url.append_path(path))
+            .map(|url| url.append_query_pairs(query.iter().copied()).into_url())
+            .map_err(|_| Error::Unavailable)
     }
 
     async fn async_set(&self, key: &str, value: S::Value) -> Result<(), Error> {
         let token = self.token.bearer_token().await?;
         let payload = self.codec.encode(&value)?;
-        let url = self.endpoint(&format!(
-            "/upload/storage/v1/b/{}/o?uploadType=media&name={}",
-            self.config.bucket_name,
-            self.encoded_object_name(key)
-        ));
+        let object_name = self.object_name(key);
+        let url = self.endpoint(
+            &[
+                "upload",
+                "storage",
+                "v1",
+                "b",
+                &self.config.bucket_name,
+                "o",
+            ],
+            &[("uploadType", "media"), ("name", &object_name)],
+        )?;
         let response = self
             .client
             .post(url)
@@ -123,11 +122,18 @@ impl<S: CacheCodec> GcsCache<S> {
 
     async fn async_get(&self, key: &str) -> Result<Option<S::Value>, Error> {
         let token = self.token.bearer_token().await?;
-        let url = self.endpoint(&format!(
-            "/storage/v1/b/{}/o/{}?alt=media",
-            self.config.bucket_name,
-            self.encoded_object_name(key)
-        ));
+        let object_name = self.object_name(key);
+        let url = self.endpoint(
+            &[
+                "storage",
+                "v1",
+                "b",
+                &self.config.bucket_name,
+                "o",
+                &object_name,
+            ],
+            &[("alt", "media")],
+        )?;
         let response = self
             .client
             .get(url)

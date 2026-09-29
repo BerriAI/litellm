@@ -2,6 +2,8 @@ use std::{io, path::PathBuf};
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
+    #[error("invalid Postgres connection URL")]
+    Url(#[from] url::ParseError),
     #[error("reading {path}")]
     Read {
         path: PathBuf,

@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+percent-encoding.workspace = true
 fancy-regex.workspace = true
 litellm-tracing.workspace = true
 litellm-types.workspace = true

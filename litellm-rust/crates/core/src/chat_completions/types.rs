@@ -65,7 +65,7 @@ pub struct ProviderChatCompletionsRequest {
     pub model: String,
     pub custom_llm_provider: String,
     pub config: &'static dyn BaseConfig,
-    pub url: String,
+    pub url: url::Url,
     pub body: Value,
     /// The route's parameters before the provider transformation, reported to the host
     /// beside the wire request.

@@ -1,3 +1,6 @@
+mod error;
+pub use error::ApiUrlError;
+
 pub mod call_arguments;
 pub mod core_helpers;
 pub mod dot_notation_indexing;

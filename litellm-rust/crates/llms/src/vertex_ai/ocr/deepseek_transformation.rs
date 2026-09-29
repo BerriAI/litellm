@@ -132,7 +132,7 @@ impl BaseOcrConfig for VertexAIDeepSeekOCRConfig {
         request: &PreparedOcrRequest,
         _params: &Self::OcrParams,
         environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         let config = vertex_config(request)?;
         let location =
             vertex::get_vertex_ai_location(&config, &|name: &str| request.connection.secret(name))
@@ -389,7 +389,7 @@ impl VertexAIDeepSeekOCRConfig {
         api_base: Option<&str>,
         project: &str,
         location: &str,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         let base = api_base
             .map(str::trim)
             .filter(|base| !base.is_empty())
@@ -408,7 +408,7 @@ impl VertexAIDeepSeekOCRConfig {
                     "completions",
                 ])
             })
-            .map(|url| url.into_string())
+            .map(|url| url.into_url())
             .map_err(|_| Error::RequestField {
                 path: "api_base".into(),
             })
@@ -458,7 +458,7 @@ mod tests {
         );
     }
 
-    #[test]
+    #[rstest::rstest]
     fn config_owns_model_namespace_and_endpoint() {
         assert_eq!(
             provider_model("deepseek-ocr-maas").unwrap(),
@@ -471,7 +471,8 @@ mod tests {
         assert_eq!(
             VertexAIDeepSeekOCRConfig
                 .get_complete_url(None, "proj-1", "europe-west4")
-                .unwrap(),
+                .unwrap()
+                .to_string(),
             "https://aiplatform.googleapis.com/v1/projects/proj-1/locations/europe-west4/endpoints/openapi/chat/completions"
         );
     }

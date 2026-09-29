@@ -3477,6 +3477,7 @@ dependencies = [
  "litellm-auth-types",
  "litellm-cache",
  "litellm-cache-testing",
+ "litellm-core-utils",
  "litellm-http",
  "percent-encoding",
  "reqwest 0.12.28",
@@ -3504,6 +3505,7 @@ dependencies = [
  "futures-util",
  "litellm-cache",
  "litellm-cache-testing",
+ "litellm-core-utils",
  "litellm-http",
  "qdrant-client",
  "reqwest 0.12.28",
@@ -3690,6 +3692,7 @@ dependencies = [
  "fancy-regex 0.19.2",
  "litellm-tracing",
  "litellm-types",
+ "percent-encoding",
  "rstest",
  "serde",
  "serde_json",
@@ -3736,6 +3739,7 @@ dependencies = [
  "testcontainers-modules",
  "thiserror 2.0.19",
  "tokio",
+ "url",
 ]
 
 [[package]]
@@ -3977,8 +3981,10 @@ dependencies = [
  "tokio",
  "tokio-tungstenite",
  "tracing",
+ "url",
  "veil",
  "webpki-roots",
+ "wiremock",
 ]
 
 [[package]]
@@ -4169,7 +4175,6 @@ dependencies = [
  "litellm-core-utils",
  "litellm-http",
  "litellm-secrets-types",
- "percent-encoding",
  "reqwest 0.12.28",
  "rstest",
  "serde",
@@ -4219,7 +4224,6 @@ dependencies = [
  "litellm-http",
  "litellm-secrets-types",
  "moka",
- "percent-encoding",
  "reqwest 0.12.28",
  "rstest",
  "serde",
@@ -4270,6 +4274,7 @@ version = "0.1.0"
 dependencies = [
  "flate2",
  "futures-util",
+ "litellm-core-utils",
  "reqwest 0.12.28",
  "rstest",
  "semver",

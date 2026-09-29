@@ -186,3 +186,9 @@ impl Error {
         )
     }
 }
+
+impl From<litellm_core_utils::ApiUrlError> for Error {
+    fn from(error: litellm_core_utils::ApiUrlError) -> Self {
+        Self::InvalidRequest(error.to_string())
+    }
+}

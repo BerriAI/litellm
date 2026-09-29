@@ -1,7 +1,7 @@
 use litellm_auth::{CredentialPlacement, SecretValue};
 use litellm_auth_aws::{
     AwsCredentialSource, bedrock_model_id_and_region,
-    constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_RUNTIME_ENDPOINT_TEMPLATE, BEDROCK_SERVICE},
+    constants::{AWS_BEARER_TOKEN_BEDROCK, BEDROCK_SERVICE},
     resolve_bedrock_region,
 };
 use litellm_core_utils::{
@@ -63,8 +63,6 @@ const CONFIG_PARAMS: &[&str] = &[
     "aws_external_id",
     AWS_BEDROCK_RUNTIME_ENDPOINT,
 ];
-
-const CONVERSE_PATH_SUFFIX: &str = "/converse";
 
 #[derive(Deserialize)]
 pub(crate) struct ConverseResponse {
@@ -188,25 +186,16 @@ impl BaseConfig for AmazonConverseConfig {
         model: &str,
         optional_params: &Map<String, Value>,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         let (model_id, model_region) = bedrock_model_id_and_region(model);
         let region = resolve_bedrock_region(model_region.as_deref(), optional_params, env_lookup);
         let endpoint = optional_params
-            .get(AWS_BEDROCK_RUNTIME_ENDPOINT)
+            .get("aws_bedrock_runtime_endpoint")
             .and_then(Value::as_str)
             .or(api_base)
             .map(str::trim)
-            .filter(|value| !value.is_empty())
-            .map(str::to_string)
-            .unwrap_or_else(|| BEDROCK_RUNTIME_ENDPOINT_TEMPLATE.replace("{region}", &region));
-        let endpoint = endpoint.trim_end_matches('/');
-        // A host that already built the full Converse URL (LiteLLM's Python
-        // path encodes the model id itself) passes it through untouched, the
-        // way the Anthropic config leaves a complete `/v1/messages` URL alone.
-        if endpoint.ends_with(CONVERSE_PATH_SUFFIX) {
-            return Ok(endpoint.to_string());
-        }
-        Ok(format!("{endpoint}/model/{model_id}{CONVERSE_PATH_SUFFIX}"))
+            .filter(|value| !value.is_empty());
+        crate::bedrock::operation_url(endpoint, &region, &model_id, "converse")
     }
 
     fn transform_request(

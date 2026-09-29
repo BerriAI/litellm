@@ -36,7 +36,10 @@ pub(crate) async fn github_release(
     asset_name: &str,
     packaging: Packaging,
 ) -> Result<Release, Error> {
-    let url = format!("{releases_url}/{tag}");
+    let url: String = litellm_core_utils::url_utils::ApiUrl::parse(releases_url)?
+        .append_path(&[tag])?
+        .into_url()
+        .into();
     let release: GithubRelease = parse(&url, &fetch.get(&url).await?)?;
     let asset = release
         .assets
@@ -62,4 +65,35 @@ pub(crate) fn parse<T: for<'de> Deserialize<'de>>(url: &str, body: &[u8]) -> Res
         url: url.to_owned(),
         source,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    struct Capture(std::sync::Mutex<Vec<String>>);
+    impl Fetch for Capture {
+        async fn get(&self, url: &str) -> Result<Vec<u8>, Error> {
+            self.0.lock().unwrap().push(url.into());
+            Ok(br#"{"assets":[{"name":"binary","digest":"sha256:abc","browser_download_url":"https://example.test/binary"}]}"#.to_vec())
+        }
+    }
+    #[rstest::rstest]
+    #[tokio::test]
+    async fn release_tags_are_segments_before_queries() {
+        let fetch = Capture(std::sync::Mutex::new(Vec::new()));
+        let release = github_release(
+            &fetch,
+            "https://example.test/prefix/releases/tags?tenant=a#f",
+            "release/a%?#",
+            "binary",
+            Packaging::Bare,
+        )
+        .await
+        .unwrap();
+        assert_eq!(release.sha256, "abc");
+        assert_eq!(
+            fetch.0.into_inner().unwrap(),
+            ["https://example.test/prefix/releases/tags/release%2Fa%25%3F%23?tenant=a#f"]
+        );
+    }
 }

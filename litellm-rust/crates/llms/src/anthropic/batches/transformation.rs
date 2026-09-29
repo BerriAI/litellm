@@ -6,8 +6,6 @@ use url::Url;
 
 use crate::{Error, anthropic::common_utils::resolve_anthropic_api_base};
 
-const BATCHES_PATH_SUFFIX: &str = "/v1/messages/batches";
-
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AnthropicBatchRequestCounts {
     #[serde(default)]
@@ -142,17 +140,9 @@ fn batches_base_url(
     env_lookup: &dyn Fn(&str) -> Option<String>,
 ) -> Result<Url, Error> {
     let api_base = resolve_anthropic_api_base(api_base, env_lookup);
-    let api_base = api_base.trim_end_matches('/');
-    let complete_url = if api_base.ends_with(BATCHES_PATH_SUFFIX) {
-        api_base.to_string()
-    } else if let Some(base) = api_base.strip_suffix("/v1/messages") {
-        format!("{base}{BATCHES_PATH_SUFFIX}")
-    } else {
-        format!("{api_base}{BATCHES_PATH_SUFFIX}")
-    };
-    Url::parse(&complete_url).map_err(|error| {
-        Error::InvalidRequest(crate::ErrorDetail::invalid("Anthropic API base", error))
-    })
+    Ok(litellm_core_utils::url_utils::ApiUrl::parse(&api_base)?
+        .complete_path(&["v1", "messages", "batches"])?
+        .into_url())
 }
 
 impl AnthropicBatchesConfig for AnthropicBatchesTransformation {

@@ -20,7 +20,6 @@ thiserror.workspace = true
 veil.workspace = true
 google-cloud-kms-v1 = "1.14.0"
 google-cloud-gax = { version = "1.14.0", default-features = false }
-percent-encoding = "2.3"
 serde.workspace = true
 reqwest.workspace = true
 

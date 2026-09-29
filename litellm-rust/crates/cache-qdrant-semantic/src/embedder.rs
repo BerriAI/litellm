@@ -6,7 +6,7 @@ use serde_json::Value;
 
 pub struct OpenAiEmbedder {
     client: Client,
-    api_base: String,
+    endpoint: reqwest::Url,
     api_key: String,
     model: String,
     timeout: Option<Duration>,
@@ -20,14 +20,18 @@ pub struct OpenAiEmbedderConfig {
 }
 
 impl OpenAiEmbedder {
-    pub fn new(client: Client, config: OpenAiEmbedderConfig) -> Self {
-        Self {
+    pub fn new(client: Client, config: OpenAiEmbedderConfig) -> Result<Self, Error> {
+        let endpoint = litellm_core_utils::url_utils::ApiUrl::parse(&config.api_base)
+            .and_then(|url| url.complete_path(&["embeddings"]))
+            .map(|url| url.into_url())
+            .map_err(|_| Error::Unavailable)?;
+        Ok(Self {
             client,
-            api_base: config.api_base.trim_end_matches('/').to_owned(),
+            endpoint,
             api_key: config.api_key,
             model: config.model,
             timeout: config.timeout,
-        }
+        })
     }
 
     pub fn model(&self) -> &str {
@@ -41,7 +45,7 @@ impl Embedder for OpenAiEmbedder {
     async fn async_embed(&self, input: &str, _metadata: Option<&Value>) -> Result<Vec<f32>, Error> {
         let request = self
             .client
-            .post(format!("{}/embeddings", self.api_base))
+            .post(self.endpoint.clone())
             .bearer_auth(&self.api_key)
             .json(&serde_json::json!({
                 "model": self.model,

@@ -62,7 +62,7 @@ impl Configure for Opencode {
                 "litellm": {
                     "npm": npm,
                     "name": "LiteLLM",
-                    "options": { "baseURL": v1(settings), "apiKey": settings.api_key },
+                    "options": { "baseURL": v1(settings)?, "apiKey": settings.api_key },
                     "models": { settings.model.clone(): { "name": settings.model } },
                 }
             },

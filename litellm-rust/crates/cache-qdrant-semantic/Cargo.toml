@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-core-utils.workspace = true
 litellm-http.workspace = true
 futures-util.workspace = true
 litellm-cache.workspace = true

@@ -406,3 +406,45 @@ async fn python_cached_absence_expires_and_allows_recovery() {
         Some("recovered")
     );
 }
+
+#[rstest]
+#[tokio::test]
+async fn secret_ids_are_segments_under_the_origin_root() {
+    let server = MockServer::start().await;
+    Mock::given(path(
+        "/v1/projects/project%2Fname/secrets/a%252Fb%3F%23/versions/latest:access",
+    ))
+    .respond_with(
+        ResponseTemplate::new(200)
+            .set_body_json(serde_json::json!({"payload":{"data":STANDARD.encode("value")}})),
+    )
+    .expect(1)
+    .mount(&server)
+    .await;
+    let manager = GoogleSecretManager::with_client(
+        litellm_http::Client::plain_for_test(),
+        format!("{}/ignored?tenant=a#f", server.uri())
+            .parse()
+            .unwrap(),
+        "project/name".into(),
+        Arc::new(|name: &str| (name == "VERTEX_AI_API_KEY").then(|| "token".into())),
+        None,
+        true,
+    )
+    .unwrap();
+    assert_eq!(
+        manager
+            .get_secret_from_google_secret_manager("a%2Fb?#")
+            .await
+            .unwrap()
+            .unwrap()
+            .as_str(),
+        Some("value")
+    );
+    assert!(
+        server.received_requests().await.unwrap()[0]
+            .url
+            .query()
+            .is_none()
+    );
+}

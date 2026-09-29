@@ -56,7 +56,7 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
         request: &PreparedOcrRequest,
         _params: &Self::OcrParams,
         _environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         let base = super::transformation::AzureAiOcrConfig::resolve_api_base(
             request.connection.api_base.as_deref(),
             &|name: &str| request.connection.secret(name),
@@ -121,20 +121,25 @@ impl BaseOcrConfig for AzureAICohereParseConfig {
 }
 
 impl AzureAICohereParseConfig {
-    fn get_complete_url(&self, base: &str) -> Result<String, Error> {
+    fn get_complete_url(&self, base: &str) -> Result<url::Url, Error> {
         let mut url = reqwest::Url::parse(base).map_err(|_| invalid_api_base())?;
         if !matches!(url.scheme(), "http" | "https") {
             return Err(invalid_api_base());
         }
-        let path = url.path().trim_end_matches('/').to_string();
-        if path.ends_with("/v2/parse") {
-            url.set_path(&path);
-            return Ok(url.into());
+        let segments: Vec<_> = url.path_segments().ok_or_else(invalid_api_base)?.collect();
+        let segments = segments.strip_suffix(&[""]).unwrap_or(&segments);
+        if segments.ends_with(&["v2", "parse"]) {
+            return Ok(url);
         }
-        url.set_path(path.strip_suffix("/models").unwrap_or(&path));
-        ApiUrl::parse(url.as_str())
+        if segments.last() == Some(&"models") {
+            url.path_segments_mut()
+                .map_err(|()| invalid_api_base())?
+                .pop_if_empty()
+                .pop();
+        }
+        ApiUrl::from_url(url)
             .and_then(|url| url.complete_path(&AZURE_COHERE_PARSE_PATH))
-            .map(|url| url.into_string())
+            .map(|url| url.into_url())
             .map_err(|_| invalid_api_base())
     }
 }
@@ -149,7 +154,7 @@ fn invalid_api_base() -> Error {
 mod tests {
     use super::*;
 
-    #[test]
+    #[rstest::rstest]
     fn completes_foundry_urls_without_duplicate_paths_and_preserves_queries() {
         for suffix in [
             "",
@@ -160,14 +165,16 @@ mod tests {
             assert_eq!(
                 AzureAICohereParseConfig
                     .get_complete_url(&format!("https://example.com{suffix}?tenant=a"))
-                    .unwrap(),
+                    .unwrap()
+                    .to_string(),
                 "https://example.com/providers/cohere/v2/parse?tenant=a"
             );
         }
         assert_eq!(
             AzureAICohereParseConfig
                 .get_complete_url("https://example.com/v2/parse?tenant=a")
-                .unwrap(),
+                .unwrap()
+                .to_string(),
             "https://example.com/v2/parse?tenant=a"
         );
         assert!(

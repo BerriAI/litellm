@@ -110,11 +110,14 @@ fn call_configuration_never_enters_the_body() {
 #[case::appends_the_chat_completions_suffix("https://vllm.example.com/v1", json!({}), "https://vllm.example.com/v1/chat/completions")]
 #[case::trims_a_trailing_slash("https://vllm.example.com/v1/", json!({}), "https://vllm.example.com/v1/chat/completions")]
 #[case::a_custom_endpoint_is_used_as_is("https://vllm.example.com/v1/chat/completions", json!({"custom_endpoint": true}), "https://vllm.example.com/v1/chat/completions")]
+#[case::query_fragment("https://example.test/prefix/v1?tenant=a#f", json!({}), "https://example.test/prefix/v1/chat/completions?tenant=a#f")]
+#[case::custom_query("https://example.test/custom?tenant=a#f", json!({"custom_endpoint": true}), "https://example.test/custom?tenant=a#f")]
 fn complete_url(#[case] api_base: &str, #[case] opts: Value, #[case] expected: &str) {
     assert_eq!(
         OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
             .get_complete_url(Some(api_base), "my-model", &params(opts), &no_env)
-            .expect("url resolves"),
+            .expect("url resolves")
+            .as_str(),
         expected
     );
 }
@@ -129,7 +132,8 @@ fn api_base_falls_back_to_the_environment() {
                 &params(json!({})),
                 &env_with("OPENAI_LIKE_API_BASE", "https://env.example.com/v1"),
             )
-            .expect("url resolves"),
+            .expect("url resolves")
+            .as_str(),
         "https://env.example.com/v1/chat/completions"
     );
 }

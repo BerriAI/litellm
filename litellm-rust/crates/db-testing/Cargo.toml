@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+url.workspace = true
 sqlx = { workspace = true, features = ["migrate"] }
 testcontainers-modules = { version = "0.15.0", features = ["postgres"] }
 thiserror.workspace = true

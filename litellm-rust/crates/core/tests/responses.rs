@@ -412,18 +412,26 @@ async fn preparation_failure_is_traced_but_unpolled_builders_are_not(
 }
 
 #[rstest]
+#[case::plain("", "/responses")]
+#[case::query_fragment("?tenant=a#f", "/responses?tenant=a")]
 #[tokio::test]
 async fn websocket_operations_trace_outcomes_without_capturing_frames_or_credentials(
     traces: TraceCapture,
+    #[case] suffix: &str,
+    #[case] expected_target: &str,
 ) {
     use futures_util::{SinkExt, StreamExt};
     use litellm_core::responses::websocket::ResponsesWebSocketConnection;
 
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let address = listener.local_addr().unwrap();
+    let expected_target = expected_target.to_owned();
     let server = tokio::spawn(async move {
         let (socket, _) = listener.accept().await.unwrap();
-        let mut socket = tokio_tungstenite::accept_async(socket).await.unwrap();
+        let mut socket =
+            tokio_tungstenite::accept_hdr_async(socket, HandshakeTarget(expected_target))
+                .await
+                .unwrap();
         let message = socket.next().await.unwrap().unwrap();
         socket.send(message).await.unwrap();
         let _ = socket.next().await;
@@ -432,7 +440,7 @@ async fn websocket_operations_trace_outcomes_without_capturing_frames_or_credent
         .logger()
         .instrument(async {
             let connection = ResponsesWebSocketConnection::connect_url(
-                &format!("ws://{address}/responses"),
+                &format!("ws://{address}/responses{suffix}"),
                 &std::collections::HashMap::from([(
                     "authorization".into(),
                     "private-key-sentinel".into(),
@@ -476,4 +484,107 @@ async fn websocket_operations_trace_outcomes_without_capturing_frames_or_credent
         "success"
     );
     assert!(!format!("{:?}", traces.records()).contains("private-"));
+}
+
+#[rstest]
+#[case::base("/prefix/v1?tenant=a#f")]
+#[case::complete("/prefix/v1/responses?tenant=a#f")]
+#[tokio::test]
+async fn completion_preserves_base_query(call: ResponsesCall, #[case] suffix: &str) {
+    let upstream = upstream([json_response(
+        json!({"id":"response-1", "model":"test-model", "output":[]}),
+    )])
+    .await;
+    responses_route(no_secrets())
+        .execute(
+            ResponsesCall {
+                api_base: Some(format!("{}{suffix}", upstream.uri())),
+                ..call
+            },
+            &(),
+            None,
+        )
+        .await
+        .unwrap();
+    let sent = only_request(&upstream).await;
+    assert_eq!(sent.url.path(), "/prefix/v1/responses");
+    assert_eq!(sent.url.query(), Some("tenant=a"));
+}
+
+struct RewriteUrl(String);
+impl litellm_host::interceptors::Interceptors<litellm_core::responses::Error> for RewriteUrl {
+    async fn before_provider_request(
+        &self,
+        wire: litellm_host::interceptors::WireRequest,
+        _: litellm_host::interceptors::RequestContext,
+    ) -> Result<litellm_host::interceptors::WireRequest, litellm_core::responses::Error> {
+        Ok(litellm_host::interceptors::WireRequest {
+            url: self.0.clone(),
+            ..wire
+        })
+    }
+    async fn after_provider_response(
+        &self,
+        _: litellm_host::interceptors::RawResponse,
+    ) -> Result<(), litellm_core::responses::Error> {
+        Ok(())
+    }
+}
+
+#[rstest]
+#[case::relative("relative/path")]
+#[case::unsupported("ftp://example.test")]
+#[tokio::test]
+async fn invalid_host_url_fails_before_sending(call: ResponsesCall, #[case] rewritten: &str) {
+    let upstream = upstream([]).await;
+    let result = responses_route(no_secrets())
+        .execute(
+            ResponsesCall {
+                api_base: Some(upstream.uri()),
+                ..call
+            },
+            &RewriteUrl(rewritten.into()),
+            None,
+        )
+        .await;
+    assert!(result.is_err());
+    assert!(upstream.received_requests().await.unwrap().is_empty());
+}
+
+#[rstest]
+#[tokio::test]
+async fn hook_url_is_the_sent_url(call: ResponsesCall) {
+    let upstream = upstream([json_response(
+        json!({"id":"response-1", "model":"test-model", "output":[]}),
+    )])
+    .await;
+    responses_route(no_secrets())
+        .execute(
+            ResponsesCall {
+                api_base: Some("https://unused.test".into()),
+                ..call
+            },
+            &RewriteUrl(format!("{}/rewritten?tenant=b#f", upstream.uri())),
+            None,
+        )
+        .await
+        .unwrap();
+    let sent = only_request(&upstream).await;
+    assert_eq!(sent.url.path(), "/rewritten");
+    assert_eq!(sent.url.query(), Some("tenant=b"));
+}
+
+struct HandshakeTarget(String);
+impl tokio_tungstenite::tungstenite::handshake::server::Callback for HandshakeTarget {
+    fn on_request(
+        self,
+        request: &tokio_tungstenite::tungstenite::handshake::server::Request,
+        response: tokio_tungstenite::tungstenite::handshake::server::Response,
+    ) -> Result<
+        tokio_tungstenite::tungstenite::handshake::server::Response,
+        tokio_tungstenite::tungstenite::handshake::server::ErrorResponse,
+    > {
+        assert_eq!(request.uri().to_string(), self.0);
+        Ok(response)
+    }
 }

@@ -9,7 +9,6 @@ impl CyberArkSecretManager {
         api_key: SecretValue,
         refresh_interval: Option<Duration>,
     ) -> Self {
-        let endpoint = normalize_endpoint(endpoint);
         let ttl = refresh_interval
             .filter(|interval| !interval.is_zero())
             .unwrap_or(DEFAULT_REFRESH_INTERVAL);
@@ -108,14 +107,15 @@ impl CyberArkSecretManager {
         ))
     }
 
-    pub(super) fn authentication_url(&self) -> Result<reqwest::Url, Error> {
-        self.endpoint
-            .join(&format!(
-                "authn/{}/{}/authenticate",
-                self.account,
-                utf8_percent_encode(&self.username, SECRET_NAME_SAFE)
-            ))
+    pub(super) fn endpoint_url(&self, segments: &[&str]) -> Result<reqwest::Url, Error> {
+        litellm_core_utils::url_utils::ApiUrl::from_url(self.endpoint.clone())
+            .and_then(|url| url.append_path(segments))
+            .map(|url| url.into_url())
             .map_err(|_| Error::Endpoint)
+    }
+
+    pub(super) fn authentication_url(&self) -> Result<reqwest::Url, Error> {
+        self.endpoint_url(&["authn", &self.account, &self.username, "authenticate"])
     }
 
     pub(super) async fn authenticate(
@@ -161,13 +161,6 @@ fn effective_verify(cyberark_verify: bool, host: &Verify) -> Verify {
         (true, Verify::Disabled) => Verify::BuiltInRoots,
         (true, host) => host.clone(),
     }
-}
-
-fn normalize_endpoint(mut endpoint: reqwest::Url) -> reqwest::Url {
-    if !endpoint.path().ends_with('/') {
-        endpoint.set_path(&format!("{}/", endpoint.path()));
-    }
-    endpoint
 }
 
 #[cfg(test)]

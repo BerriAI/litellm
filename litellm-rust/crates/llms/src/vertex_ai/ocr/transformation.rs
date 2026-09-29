@@ -61,7 +61,7 @@ impl BaseOcrConfig for VertexAiOcrConfig {
         request: &PreparedOcrRequest,
         _optional_params: &Self::OcrParams,
         environment: &Self::Environment,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         let config = vertex_config(request)?;
         let location =
             vertex::get_vertex_ai_location(&config, &|name: &str| request.connection.secret(name))
@@ -151,13 +151,19 @@ impl VertexAiOcrConfig {
         project: &str,
         location: &str,
         model: &str,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         validate_location(location)?;
-        let default_base = format!("https://{location}-aiplatform.googleapis.com");
+        let mut default_base =
+            url::Url::parse("https://aiplatform.googleapis.com").expect("static URL");
+        default_base
+            .set_host(Some(&format!("{location}-aiplatform.googleapis.com")))
+            .map_err(|_| Error::RequestField {
+                path: "location".into(),
+            })?;
         let base = api_base
             .map(str::trim)
             .filter(|base| !base.is_empty())
-            .unwrap_or(&default_base);
+            .unwrap_or(default_base.as_str());
         let prediction = format!("{model}:rawPredict");
         ApiUrl::parse(base)
             .and_then(|url| {
@@ -173,7 +179,7 @@ impl VertexAiOcrConfig {
                     &prediction,
                 ])
             })
-            .map(|url| url.into_string())
+            .map(|url| url.into_url())
             .map_err(|_| Error::RequestField {
                 path: "api_base".into(),
             })
@@ -206,12 +212,13 @@ mod tests {
 
     use super::VertexAiOcrConfig;
 
-    #[test]
+    #[rstest::rstest]
     fn endpoint_uses_location_project_and_model() {
         assert_eq!(
             VertexAiOcrConfig
                 .build_ocr_url(None, "proj-1", "europe-west4", "mistral-ocr-maas")
-                .unwrap(),
+                .unwrap()
+                .to_string(),
             "https://europe-west4-aiplatform.googleapis.com/v1/projects/proj-1/locations/europe-west4/publishers/mistralai/models/mistral-ocr-maas:rawPredict"
         );
     }

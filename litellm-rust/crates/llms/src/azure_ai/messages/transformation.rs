@@ -19,15 +19,13 @@ use crate::{
     base_llm::{
         auth::{AuthScheme, Headers, ValidatedEnvironment},
         messages::{
-            context::MessagesTransformContext,
-            normalization::fold_system_role_messages,
-            transformation::{BaseAnthropicMessagesConfig, MESSAGES_PATH_SUFFIX},
+            context::MessagesTransformContext, normalization::fold_system_role_messages,
+            transformation::BaseAnthropicMessagesConfig,
         },
     },
 };
 
 const API_KEY_PLACEMENT: CredentialPlacement = CredentialPlacement::Header("x-api-key");
-const ANTHROPIC_PATH_SEGMENT: &str = "/anthropic";
 
 pub struct AzureAnthropicMessagesConfig;
 
@@ -48,7 +46,7 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
         api_base: Option<&str>,
         _model: &str,
         env_lookup: &dyn Fn(&str) -> Option<String>,
-    ) -> Result<String, Error> {
+    ) -> Result<url::Url, Error> {
         complete_azure_anthropic_url(api_base, env_lookup)
     }
 
@@ -113,20 +111,26 @@ impl BaseAnthropicMessagesConfig for AzureAnthropicMessagesConfig {
 pub fn complete_azure_anthropic_url(
     api_base: Option<&str>,
     env_lookup: &dyn Fn(&str) -> Option<String>,
-) -> Result<String, Error> {
+) -> Result<url::Url, Error> {
     let api_base = resolve_azure_api_base(api_base, env_lookup)?;
 
-    let api_base = api_base.trim_end_matches('/');
-
-    if api_base.ends_with(MESSAGES_PATH_SUFFIX) {
-        return Ok(api_base.to_string());
+    let mut url = litellm_core_utils::url_utils::ApiUrl::parse(&api_base)?
+        .complete_path(&[])?
+        .into_url();
+    let segments: Vec<_> = url.path_segments().expect("validated URL").collect();
+    if segments.ends_with(&["v1", "messages"]) {
+        return Ok(url);
     }
-
-    let with_anthropic = match api_base.split_once(ANTHROPIC_PATH_SEGMENT) {
-        Some((prefix, _)) => format!("{prefix}{ANTHROPIC_PATH_SEGMENT}"),
-        None => format!("{api_base}{ANTHROPIC_PATH_SEGMENT}"),
-    };
-    Ok(format!("{with_anthropic}{MESSAGES_PATH_SUFFIX}"))
+    if let Some(index) = segments.iter().position(|segment| *segment == "anthropic") {
+        let remove = segments.len() - index - 1;
+        let mut path = url.path_segments_mut().expect("validated URL");
+        for _ in 0..remove {
+            path.pop();
+        }
+    }
+    Ok(litellm_core_utils::url_utils::ApiUrl::from_url(url)?
+        .complete_path(&["anthropic", "v1", "messages"])?
+        .into_url())
 }
 
 fn strip_scope_from_block(block: ContentBlock) -> ContentBlock {
@@ -179,18 +183,18 @@ mod tests {
         serde_json::to_value(request).expect("serializable request")
     }
 
-    #[test]
+    #[rstest::rstest]
     fn url_appends_anthropic_and_messages_suffix() {
         let url =
             complete_azure_anthropic_url(Some("https://resource.services.ai.azure.com"), &|_| None)
                 .expect("url builds");
         assert_eq!(
-            url,
+            url.as_str(),
             "https://resource.services.ai.azure.com/anthropic/v1/messages"
         );
     }
 
-    #[test]
+    #[rstest::rstest]
     fn url_keeps_existing_anthropic_segment() {
         let url = complete_azure_anthropic_url(
             Some("https://resource.services.ai.azure.com/anthropic"),
@@ -198,25 +202,27 @@ mod tests {
         )
         .expect("url builds");
         assert_eq!(
-            url,
+            url.as_str(),
             "https://resource.services.ai.azure.com/anthropic/v1/messages"
         );
     }
 
-    #[test]
+    #[rstest::rstest]
     fn url_leaves_complete_messages_endpoint_untouched() {
         for base in [
             "https://resource.services.ai.azure.com/anthropic/v1/messages",
             "https://resource.services.ai.azure.com/v1/messages",
         ] {
             assert_eq!(
-                complete_azure_anthropic_url(Some(base), &|_| None).expect("url builds"),
+                complete_azure_anthropic_url(Some(base), &|_| None)
+                    .expect("url builds")
+                    .as_str(),
                 base
             );
         }
     }
 
-    #[test]
+    #[rstest::rstest]
     fn url_trims_trailing_slash_and_truncates_after_anthropic() {
         let url = complete_azure_anthropic_url(
             Some("https://resource.services.ai.azure.com/anthropic/extra/"),
@@ -224,18 +230,20 @@ mod tests {
         )
         .expect("url builds");
         assert_eq!(
-            url,
+            url.as_str(),
             "https://resource.services.ai.azure.com/anthropic/v1/messages"
         );
     }
 
-    #[test]
+    #[rstest::rstest]
     fn url_falls_back_to_env_then_errors_when_absent() {
         let with_env = |key: &str| {
             (key == AZURE_API_BASE_ENV).then(|| "https://env.services.ai.azure.com".to_string())
         };
         assert_eq!(
-            complete_azure_anthropic_url(None, &with_env).expect("url builds"),
+            complete_azure_anthropic_url(None, &with_env)
+                .expect("url builds")
+                .as_str(),
             "https://env.services.ai.azure.com/anthropic/v1/messages"
         );
         let err = complete_azure_anthropic_url(Some("  "), &|_| None).expect_err("missing base");
@@ -596,7 +604,7 @@ mod tests {
         assert_eq!(value["content"][0]["text"], json!("hello"));
     }
 
-    #[test]
+    #[rstest::rstest]
     fn secret_names_cover_every_credential_and_base_lookup() {
         let requested = std::cell::RefCell::new(Vec::<String>::new());
         let record = |name: &str| -> Option<String> {
@@ -621,5 +629,30 @@ mod tests {
             })
             .collect();
         assert_eq!(undeclared, Vec::<&String>::new());
+    }
+    #[rstest]
+    #[case::query(
+        "https://example.test/prefix?route=/anthropic/extra#f",
+        "https://example.test/prefix/anthropic/v1/messages?route=/anthropic/extra#f"
+    )]
+    #[case::host(
+        "https://anthropic.example.test/prefix?tenant=a",
+        "https://anthropic.example.test/prefix/anthropic/v1/messages?tenant=a"
+    )]
+    #[case::substring(
+        "https://example.test/prefix/anthropic-extra?tenant=a",
+        "https://example.test/prefix/anthropic-extra/anthropic/v1/messages?tenant=a"
+    )]
+    #[case::complete(
+        "https://example.test/anthropic/v1/messages?tenant=a#f",
+        "https://example.test/anthropic/v1/messages?tenant=a#f"
+    )]
+    fn routing_uses_only_complete_path_segments(#[case] base: &str, #[case] expected: &str) {
+        assert_eq!(
+            complete_azure_anthropic_url(Some(base), &|_| None)
+                .unwrap()
+                .as_str(),
+            expected
+        );
     }
 }

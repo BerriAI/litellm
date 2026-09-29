@@ -104,16 +104,23 @@ fn config(base: String, timeout: Option<Duration>) -> OpenAiEmbedderConfig {
 }
 
 #[rstest]
+#[case::root("/", "/embeddings")]
+#[case::prefix_query("/prefix?tenant=a#f", "/prefix/embeddings?tenant=a")]
+#[case::complete("/prefix/embeddings?tenant=a#f", "/prefix/embeddings?tenant=a")]
 #[tokio::test]
-async fn posts_embeddings_request_and_parses_vector() {
+async fn posts_embeddings_request_and_parses_vector(
+    #[case] suffix: &str,
+    #[case] expected_target: &str,
+) {
     let server = TestHttpServer::response("200 OK", r#"{"data":[{"embedding":[0.1,0.2]}]}"#).await;
     let embedder = OpenAiEmbedder::new(
         litellm_http::Client::plain_for_test(),
         config(
-            format!("{}/", server.base_url()),
+            format!("{}{suffix}", server.base_url()),
             Some(Duration::from_secs(1)),
         ),
-    );
+    )
+    .unwrap();
     assert_eq!(embedder.model(), "test-model");
     assert_eq!(
         embedder
@@ -124,7 +131,7 @@ async fn posts_embeddings_request_and_parses_vector() {
     );
     let request = server.request.lock().unwrap().clone().unwrap();
     let request_text = String::from_utf8(request).unwrap();
-    assert!(request_text.starts_with("POST /embeddings HTTP/1.1\r\n"));
+    assert!(request_text.starts_with(&format!("POST {expected_target} HTTP/1.1\r\n")));
     assert!(request_text.contains("\r\nauthorization: Bearer test-key\r\n"));
     let body = request_text.split("\r\n\r\n").nth(1).unwrap();
     let body: Value = serde_json::from_str(body).unwrap();
@@ -163,7 +170,8 @@ async fn status_timeout_and_body_errors_are_unavailable(
     let embedder = OpenAiEmbedder::new(
         litellm_http::Client::plain_for_test(),
         config(server.base_url(), timeout),
-    );
+    )
+    .unwrap();
     assert_eq!(embedder.async_embed("hello", None).await, expected);
 }
 
@@ -172,7 +180,8 @@ fn sync_embedding_is_unsupported() {
     let embedder = OpenAiEmbedder::new(
         litellm_http::Client::plain_for_test(),
         config("http://127.0.0.1:9".to_owned(), None),
-    );
+    )
+    .unwrap();
     assert_eq!(
         embedder.embed("hello", None),
         Err(Error::UnsupportedOperation)
@@ -190,7 +199,7 @@ async fn uses_the_injected_client() {
     let client = HttpClientPool::new(Arc::new(PublicDnsResolver))
         .client(&config_with_agent, ClientVariant::Provider)
         .unwrap();
-    let embedder = OpenAiEmbedder::new(client, config(server.base_url(), None));
+    let embedder = OpenAiEmbedder::new(client, config(server.base_url(), None)).unwrap();
     assert_eq!(
         embedder.async_embed("hello", None).await.unwrap(),
         vec![0.1, 0.2]
