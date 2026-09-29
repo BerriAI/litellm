@@ -5974,41 +5974,14 @@ def _get_model_info_helper(
                litellm provider name. Checks "perplexity/perplexity/glm-5.2" if model="perplexity/glm-5.2" and
                custom_llm_provider="perplexity", where 1-5 all read the leading "perplexity/" as the litellm prefix
                and strip it. Tried last so no model that already resolves through 1-5 can change.
-
-            For bedrock_mantle, check 4 moves ahead of check 3: a region-prefixed deployment like
-            "bedrock_mantle/us-east-1/anthropic.claude-opus-5-5" must price its own
-            "bedrock_mantle/anthropic.claude-opus-5-5" row before falling back to the bare Bedrock row,
-            since Mantle bills in-region rates that differ from Bedrock's global cross-region price.
             """
 
             _model_info: dict[str, Any] | None = None
             key: str | None = None
 
-            exact_name_checks: Final = (
-                (
-                    combined_model_name,
-                    model,
-                    combined_stripped_model_name,
-                    split_model,
-                    stripped_model_name,
-                    provider_prefixed_model_name,
-                )
-                if custom_llm_provider == "bedrock_mantle"
-                else (
-                    combined_model_name,
-                    model,
-                    split_model,
-                    combined_stripped_model_name,
-                    stripped_model_name,
-                    provider_prefixed_model_name,
-                )
-            )
-            for candidate in exact_name_checks:
-                if _model_info is not None:
-                    break
-                _matched_key = _get_model_cost_key(candidate)
-                if _matched_key is None:
-                    continue
+            # Use case-insensitive lookup for all model name checks
+            _matched_key = _get_model_cost_key(combined_model_name)
+            if _matched_key is not None:
                 key = _matched_key
                 _model_info = _get_model_info_from_model_cost(key=cast(str, key))
                 if not _check_provider_match(
@@ -6016,6 +5989,56 @@ def _get_model_info_helper(
                     custom_llm_provider=model_cost_custom_llm_provider,
                 ):
                     _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(model)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
+                    ):
+                        _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(split_model)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
+                    ):
+                        _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(combined_stripped_model_name)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
+                    ):
+                        _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(stripped_model_name)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
+                    ):
+                        _model_info = None
+            if _model_info is None:
+                _matched_key = _get_model_cost_key(provider_prefixed_model_name)
+                if _matched_key is not None:
+                    key = _matched_key
+                    _model_info = _get_model_info_from_model_cost(key=cast(str, key))
+                    if not _check_provider_match(
+                        model_info=_model_info,
+                        custom_llm_provider=model_cost_custom_llm_provider,
+                    ):
+                        _model_info = None
 
             if _model_info is not None and key is not None and _model_info.get("mode", "chat") in _BACKFILL_MODES:
                 fill_missing: Final = match_fill_missing_generalizations(key, _model_info.get("litellm_provider", ""))

@@ -3696,10 +3696,7 @@ def test_completion_cost_mantle_native_messages_prices_claude_from_the_bedrock_r
         (
             "claude-opus-5-5",
             "bedrock_mantle/anthropic.claude-opus-5-5",
-            (
-                "bedrock_mantle/anthropic.claude-opus-5-5",
-                "bedrock_mantle/us-east-1/anthropic.claude-opus-5-5",
-            ),
+            ("bedrock_mantle/anthropic.claude-opus-5-5",),
         ),
         (
             "claude-sonnet-5-5",
