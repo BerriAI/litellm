@@ -5,11 +5,11 @@ use litellm_host::{
     call::{HostedCompletion, HostedMachine, hosted_call},
     protocol::Protocol,
 };
-use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
+use litellm_llms_types::formats::messages::MessagesResponse;
 
 use super::{Error, MessagesCall};
 
-pub type MessagesOutput = HostedCompletion<Box<AnthropicMessagesResponse>>;
+pub type MessagesOutput = HostedCompletion<Box<MessagesResponse>>;
 
 /// The upstream response as the caller sees it at stream hand-off, before any chunk.
 pub struct MessagesStreamHead {
@@ -19,7 +19,7 @@ pub struct MessagesStreamHead {
 pub struct Messages;
 
 impl Protocol for Messages {
-    type Response = Box<AnthropicMessagesResponse>;
+    type Response = Box<MessagesResponse>;
     type Error = Error;
     type Request = MessagesCall;
     type HostCall = Infallible;
@@ -30,9 +30,43 @@ impl Protocol for Messages {
 pub type MessagesMachine = HostedMachine<Messages>;
 
 impl super::MessagesRoute {
-    pub fn machine(self, request: super::MessagesCall) -> MessagesMachine {
-        hosted_call(request, move |call, _, hooks| async move {
-            self.run(call, &hooks).await
+    pub fn machine(
+        self,
+        request: super::MessagesCall,
+        options: impl Into<crate::CallOptions>,
+    ) -> MessagesMachine {
+        let crate::CallOptions {
+            cache: cache_options,
+            observers,
+        } = options.into();
+        hosted_call(
+            request,
+            observers,
+            move |call, _, interceptors, observers| async move {
+                self.run(call, cache_options, &interceptors, observers.as_ref())
+                    .await
+            },
+        )
+    }
+}
+
+impl crate::caching::Cachable for Messages {
+    const SURFACE: &'static str = "messages";
+}
+
+impl crate::caching::StreamCachable for Messages {
+    const TERMINAL_EVENT: &'static str = "message_stop";
+
+    fn replay(data: bytes::Bytes) -> Option<litellm_host::call::OutputOf<Self>> {
+        Some(litellm_host::call::CallOutput::Stream {
+            head: MessagesStreamHead {
+                headers: Vec::new(),
+            },
+            chunks: Box::pin(futures_util::stream::iter([Ok(data)])),
         })
+    }
+
+    fn bytes(chunk: &Self::Chunk) -> &[u8] {
+        chunk.as_ref()
     }
 }

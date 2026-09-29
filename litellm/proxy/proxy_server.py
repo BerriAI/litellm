@@ -26,6 +26,7 @@ from collections.abc import (
     MutableMapping,
     Sequence,
 )
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType, UnionType
@@ -277,7 +278,6 @@ from litellm.constants import (
     APSCHEDULER_MISFIRE_GRACE_TIME,
     APSCHEDULER_REPLACE_EXISTING,
     CLI_SSO_SESSION_TTL_SECONDS,
-    DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID,
     DAYS_IN_A_MONTH,
     DEFAULT_HEALTH_CHECK_INTERVAL,
     DEFAULT_MODEL_CREATED_AT_TIME,
@@ -759,9 +759,6 @@ from litellm.proxy.shutdown.scheduled_jobs import (
 from litellm.proxy.spend_tracking.budget_reservation import (
     get_budget_window_start,
     release_unbound_budget_reservation,
-)
-from litellm.proxy.spend_tracking.daily_global_spend_rollup import (
-    run_scheduled_daily_global_spend_reconcile,
 )
 from litellm.proxy.spend_tracking.spend_capture_rate import (
     run_scheduled_spend_capture_rate_check,
@@ -5104,6 +5101,61 @@ def _log_ignored_cost_map_copy(model_id: str, fields: tuple[str, ...]) -> None:
     )
 
 
+_DB_CONFIG_CALLBACK_EVENT_TYPES: Final[Mapping[str, tuple[Literal["success", "failure"], ...]]] = MappingProxyType(
+    {"success_callback": ("success",), "failure_callback": ("failure",), "callbacks": ("success", "failure")}
+)
+_CALLBACK_LIST_NAMES: Final = (
+    "callbacks",
+    "success_callback",
+    "failure_callback",
+    "_async_success_callback",
+    "_async_failure_callback",
+)
+
+
+def _callback_list_entries(list_name: str) -> tuple[tuple[str, object], ...]:
+    return tuple((list_name, entry) for entry in getattr(litellm, list_name))
+
+
+def _registered_callback_entries() -> tuple[tuple[str, object], ...]:
+    return tuple(chain.from_iterable(_callback_list_entries(list_name) for list_name in _CALLBACK_LIST_NAMES))
+
+
+def _entries_missing_from(
+    entries: tuple[tuple[str, object], ...], others: tuple[tuple[str, object], ...]
+) -> tuple[tuple[str, object], ...]:
+    other_ids: Final = frozenset((list_name, id(entry)) for list_name, entry in others)
+    return tuple((list_name, entry) for list_name, entry in entries if (list_name, id(entry)) not in other_ids)
+
+
+@dataclass(frozen=True, slots=True)
+class _DbCallbackRegistration:
+    added: tuple[tuple[str, object], ...] = ()
+    displaced: tuple[tuple[str, object], ...] = ()
+
+
+def _restore_displaced_callback(list_name: str, entry: object) -> None:
+    callback_list: Final = getattr(litellm, list_name)
+    if entry not in callback_list:
+        callback_list.append(entry)
+
+
+def _unregister_db_callback(registration: _DbCallbackRegistration) -> None:
+    for list_name, entry in registration.added:
+        litellm.logging_callback_manager.remove_callback_from_list_by_object(
+            getattr(litellm, list_name), entry, require_self=False
+        )
+    for list_name, entry in registration.displaced:
+        _restore_displaced_callback(list_name, entry)
+
+
+def _configured_db_callbacks(litellm_settings: Mapping[str, object], setting_key: str) -> tuple[tuple[str, str], ...]:
+    callbacks: Final = litellm_settings.get(setting_key)
+    if not isinstance(callbacks, list):
+        return ()
+    return tuple((setting_key, callback) for callback in callbacks if isinstance(callback, str))
+
+
 class ProxyConfig:
     """
     Abstraction class on top of config loading/updating logic. Gives us one place to control all config updating logic.
@@ -5136,6 +5188,7 @@ class ProxyConfig:
         self.litellm_settings: Final[SettingsStore] = SettingsStore("litellm_settings")
         self.environment_variables: Final[SettingsStore] = SettingsStore("environment_variables")
         self._warned_shadowed_keys: frozenset[tuple[Section, str]] = frozenset()
+        self._db_config_callback_entries: Mapping[tuple[str, str], _DbCallbackRegistration] = MappingProxyType({})
         self._settings_stores: Final[Mapping[Section, SettingsStore]] = MappingProxyType(
             {
                 "general_settings": self.settings,
@@ -7160,7 +7213,7 @@ class ProxyConfig:
         still_desired_ids: frozenset[str] | None = None
 
         # Load config separately so a timeout here doesn't block model loading
-        config_data: dict = {}
+        config_data: dict | None = None
         search_tools = None
         try:
             config_data = await proxy_config.get_config()
@@ -7219,8 +7272,8 @@ class ProxyConfig:
         if llm_router is not None:
             llm_model_list = llm_router.get_model_list()
 
-        # check if user set any callbacks in Config Table
-        self._add_callbacks_from_db_config(config_data)
+        if config_data is not None:
+            self._add_callbacks_from_db_config(config_data)
 
         # router settings
         await self._add_router_settings_from_db_config(llm_router=llm_router, prisma_client=prisma_client)
@@ -7253,37 +7306,34 @@ class ProxyConfig:
                 litellm.logging_callback_manager.add_litellm_callback(callback)
 
     def _add_callbacks_from_db_config(self, config_data: dict) -> None:
-        """
-        Adds callbacks from DB config to litellm
-        """
         litellm_settings: Final = config_data.get("litellm_settings", {}) or {}
-        success_callbacks: Final = litellm_settings.get("success_callback", None)
-        failure_callbacks: Final = litellm_settings.get("failure_callback", None)
-        callbacks: Final = litellm_settings.get("callbacks", None)
+        configured: Final = tuple(
+            chain.from_iterable(
+                _configured_db_callbacks(litellm_settings, setting_key)
+                for setting_key in _DB_CONFIG_CALLBACK_EVENT_TYPES
+            )
+        )
+        still_configured: Final = frozenset(configured)
+        for key, registration in self._db_config_callback_entries.items():
+            if key not in still_configured:
+                _unregister_db_callback(registration)
+        self._db_config_callback_entries = MappingProxyType(
+            {key: self._register_db_config_callback(*key) for key in dict.fromkeys(configured)}
+        )
 
-        if success_callbacks is not None and isinstance(success_callbacks, list):
-            for success_callback in success_callbacks:
-                self._add_callback_from_db_to_in_memory_litellm_callbacks(
-                    callback=success_callback,
-                    event_types=["success"],
-                    existing_callbacks=litellm.success_callback,
-                )
-
-        if failure_callbacks is not None and isinstance(failure_callbacks, list):
-            for failure_callback in failure_callbacks:
-                self._add_callback_from_db_to_in_memory_litellm_callbacks(
-                    callback=failure_callback,
-                    event_types=["failure"],
-                    existing_callbacks=litellm.failure_callback,
-                )
-
-        if callbacks is not None and isinstance(callbacks, list):
-            for callback in callbacks:
-                self._add_callback_from_db_to_in_memory_litellm_callbacks(
-                    callback=callback,
-                    event_types=["success", "failure"],
-                    existing_callbacks=litellm.callbacks,
-                )
+    def _register_db_config_callback(self, setting_key: str, callback: str) -> _DbCallbackRegistration:
+        previous: Final = self._db_config_callback_entries.get((setting_key, callback), _DbCallbackRegistration())
+        before: Final = _registered_callback_entries()
+        self._add_callback_from_db_to_in_memory_litellm_callbacks(
+            callback=callback,
+            event_types=list(_DB_CONFIG_CALLBACK_EVENT_TYPES[setting_key]),
+            existing_callbacks=getattr(litellm, setting_key),
+        )
+        after: Final = _registered_callback_entries()
+        return _DbCallbackRegistration(
+            added=previous.added + _entries_missing_from(after, before),
+            displaced=previous.displaced + _entries_missing_from(before, after),
+        )
 
     def _encrypt_env_variables(self, environment_variables: dict, new_encryption_key: str | None = None) -> dict:
         """
@@ -10517,12 +10567,6 @@ class ProxyStartupEvent:
 
         await cls._initialize_spend_tracking_background_jobs(scheduler=scheduler)
 
-        cls._initialize_daily_global_spend_reconcile_job(
-            scheduler=scheduler,
-            proxy_logging_obj=proxy_logging_obj,
-            prisma_client=prisma_client,
-        )
-
         cls._initialize_spend_capture_rate_check_job(
             scheduler=scheduler,
             proxy_logging_obj=proxy_logging_obj,
@@ -10879,39 +10923,6 @@ class ProxyStartupEvent:
                 "Expired UI session key cleanup disabled (set "
                 "LITELLM_EXPIRED_UI_SESSION_KEY_CLEANUP_ENABLED=true to enable)"
             )
-
-    @classmethod
-    def _initialize_daily_global_spend_reconcile_job(
-        cls,
-        scheduler: AsyncIOScheduler,
-        proxy_logging_obj: ProxyLogging,
-        prisma_client: PrismaClient,
-    ) -> None:
-        async def alert(message: str) -> None:
-            await proxy_logging_obj.alerting_handler(
-                message=message,
-                level="High",
-                alert_type=AlertType.failed_tracking_spend,
-            )
-
-        async def reconcile() -> None:
-            await run_scheduled_daily_global_spend_reconcile(
-                prisma_client,
-                pod_lock_manager=proxy_logging_obj.db_spend_update_writer.pod_lock_manager,
-                alert=alert,
-            )
-
-        scheduler.add_job(
-            reconcile,
-            "cron",
-            hour=0,
-            minute=30,
-            timezone="UTC",
-            id=DAILY_GLOBAL_SPEND_RECONCILE_JOB_ID,
-            replace_existing=True,
-            misfire_grace_time=APSCHEDULER_MISFIRE_GRACE_TIME,
-            next_run_time=datetime.now(timezone.utc) + timedelta(minutes=2),
-        )
 
     @classmethod
     def _initialize_spend_capture_rate_check_job(

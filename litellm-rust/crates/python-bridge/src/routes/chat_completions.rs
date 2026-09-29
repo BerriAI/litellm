@@ -4,7 +4,7 @@ use pyo3::types::{PyDict, PyTuple};
 
 use crate::logger::{run_async, run_sync};
 use litellm_core::chat_completions::{ChatCompletionsRoute, Error, types::ChatCompletionsRequest};
-use litellm_types::utils::ChatCompletionsResponse;
+use litellm_llms_types::formats::chat_completions::ChatCompletionsResponse;
 use pyo3::prelude::*;
 use serde_json::{Map, Value};
 
@@ -44,6 +44,7 @@ async fn execute(
                 timeout,
             },
             &(),
+            None,
         )
         .await
 }
@@ -136,32 +137,48 @@ fn run_public(
     asynchronous: bool,
 ) -> PyResult<Py<PyAny>> {
     use super::inference::InferenceHost;
-    use litellm_callbacks_legacy_python::{LegacySurface, PublicCall, run_legacy_call};
+    use litellm_callbacks_legacy_python::LoggingOperation;
     let host = InferenceHost::new(
         request.clone().unbind(),
         "litellm.rust_bridge.chat_completions.route_host",
     );
-    let route = ChatCompletionsRoute::new(
-        crate::http::provider_client(py, &kwargs, asynchronous)?
-            .map_err(crate::http::client_error)?,
-        crate::http::resources().auth.clone(),
-        crate::secrets::source(py)?,
-    );
-    run_legacy_call(
+    let cache_call_type = if asynchronous {
+        "acompletion"
+    } else {
+        "completion"
+    };
+    crate::cache::admit_native(py, &kwargs, cache_call_type)?;
+    let (arguments, hooks) = crate::routes::call_hooks(
         py,
-        LegacySurface {
-            call_type: if asynchronous {
-                "acompletion"
-            } else {
-                "completion"
-            },
-            input_description: "Chat completions",
-            stream: None,
+        LoggingOperation::Completion,
+        &request,
+        &args,
+        &kwargs,
+        asynchronous,
+    )?;
+    crate::routes::run_public_call(
+        py,
+        arguments,
+        move |py, arguments, request| {
+            let route = ChatCompletionsRoute::new(
+                crate::http::provider_client(py, arguments, asynchronous)?
+                    .map_err(crate::http::client_error)?,
+                crate::http::resources().auth.clone(),
+                crate::secrets::source(py)?,
+            );
+            let (cache, cache_options) =
+                crate::cache::configured_native(py, arguments, cache_call_type)?;
+            let route = match cache {
+                Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
+                    cache,
+                    litellm_cache_response::CacheScope::Shared,
+                )),
+                None => route,
+            };
+            Ok(route.machine(request, cache_options))
         },
-        PublicCall::capture(&request, &args, &kwargs)?,
-        move |request| crate::logger::LoggedMachine::new(route.machine(request)),
         host::ChatCompletionsPythonHost(host),
-        crate::preflight::sdk_preflight,
+        hooks,
         asynchronous,
     )
 }
