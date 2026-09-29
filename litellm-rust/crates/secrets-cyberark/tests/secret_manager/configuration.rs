@@ -77,7 +77,7 @@ async fn authentication_encodes_login(#[case] username: &str, #[case] expected_p
         .mount(&server)
         .await;
     let manager = CyberArkSecretManager::with_client(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         server.uri().parse().unwrap(),
         "acct".into(),
         username.into(),
@@ -211,25 +211,25 @@ fn new_validates_credentials_before_license_and_configuration() {
     let empty: Arc<dyn litellm_core_utils::settings::Lookup + Send + Sync> =
         Arc::new(|_: &str| None);
     assert!(matches!(
-        CyberArkSecretManager::new(empty, true),
+        from_environment(empty, true),
         Err(Error::MissingCredentials)
     ));
     assert!(matches!(
-        CyberArkSecretManager::new(
+        from_environment(
             Arc::new(|name: &str| (name == "CYBERARK_API_KEY").then(|| "k3y".into())),
             false
         ),
         Err(Error::EnterpriseRequired)
     ));
     assert!(matches!(
-        CyberArkSecretManager::new(
+        from_environment(
             Arc::new(|name: &str| (name == "CYBERARK_CLIENT_CERT").then(|| "cert".into())),
             true
         ),
         Err(Error::MissingCredentials)
     ));
     assert!(matches!(
-        CyberArkSecretManager::new(
+        from_environment(
             Arc::new(|name: &str| match name {
                 "CYBERARK_API_KEY" => Some("k3y".into()),
                 "CYBERARK_REFRESH_INTERVAL" => Some("abc".into()),
@@ -240,7 +240,7 @@ fn new_validates_credentials_before_license_and_configuration() {
         Err(Error::RefreshInterval)
     ));
     assert!(matches!(
-        CyberArkSecretManager::new(
+        from_environment(
             Arc::new(|name: &str| match name {
                 "CYBERARK_API_KEY" => Some("k3y".into()),
                 "CYBERARK_API_BASE" => Some("not a url".into()),
@@ -254,7 +254,7 @@ fn new_validates_credentials_before_license_and_configuration() {
 
 #[rstest]
 fn certificate_only_credentials_are_validated_as_a_client_identity() {
-    let result = CyberArkSecretManager::new(
+    let result = from_environment(
         Arc::new(|name: &str| match name {
             "CYBERARK_CLIENT_CERT" => Some("/missing/cert".into()),
             "CYBERARK_CLIENT_KEY" => Some("/missing/key".into()),
@@ -295,7 +295,7 @@ async fn configured_client_identity_preserves_auth_request_and_read_result(
     let endpoint = server.uri();
     let certificate = client_identity_directory.path().join("client.crt");
     let key = client_identity_directory.path().join("client.key");
-    let manager = CyberArkSecretManager::new(
+    let manager = from_environment(
         Arc::new(move |name: &str| match name {
             "CYBERARK_API_BASE" => Some(endpoint.clone()),
             "CYBERARK_API_KEY" => Some(api_key.into()),
@@ -337,7 +337,7 @@ fn invalid_client_identity_is_not_ignored(
     let certificate = client_identity_directory.path().join("client.crt");
     let key = client_identity_directory.path().join("client.key");
 
-    let result = CyberArkSecretManager::new(
+    let result = from_environment(
         Arc::new(move |name: &str| match name {
             "CYBERARK_API_KEY" => Some(api_key.into()),
             "CYBERARK_CLIENT_CERT" => Some(certificate.to_str().unwrap().into()),
@@ -354,7 +354,7 @@ fn invalid_client_identity_is_not_ignored(
 #[case::certificate_only("")]
 #[case::certificate_and_api_key("k3y")]
 fn client_identity_does_not_bypass_the_enterprise_requirement(#[case] api_key: &'static str) {
-    let result = CyberArkSecretManager::new(
+    let result = from_environment(
         Arc::new(move |name: &str| match name {
             "CYBERARK_API_KEY" => Some(api_key.into()),
             "CYBERARK_CLIENT_CERT" => Some("/missing/cert".into()),
@@ -381,7 +381,7 @@ async fn new_reads_environment_defaults_end_to_end() {
         .mount(&server)
         .await;
     let endpoint = server.uri();
-    let manager = CyberArkSecretManager::new(
+    let manager = from_environment(
         Arc::new(move |name: &str| match name {
             "CYBERARK_API_BASE" => Some(endpoint.clone()),
             "CYBERARK_API_KEY" => Some("k3y".into()),
@@ -404,7 +404,7 @@ async fn new_reads_environment_defaults_end_to_end() {
 #[rstest]
 fn new_reports_missing_client_certificate_files() {
     assert!(matches!(
-        CyberArkSecretManager::new(
+        from_environment(
             Arc::new(|name: &str| match name {
                 "CYBERARK_API_KEY" => Some("k3y".into()),
                 "CYBERARK_CLIENT_CERT" => Some("/missing/cert".into()),
@@ -433,7 +433,7 @@ async fn trailing_slash_endpoint_preserves_base_path() {
         .await;
     let endpoint = format!("{}/prefix/", server.uri()).parse().unwrap();
     let manager = CyberArkSecretManager::with_client(
-        reqwest::Client::new(),
+        litellm_http::Client::plain_for_test(),
         endpoint,
         "acct".into(),
         "admin".into(),

@@ -13,10 +13,10 @@ import litellm
 from litellm.caching.dual_cache import DualCache
 from litellm.types.caching import RedisPipelineIncrementOperation
 from litellm.constants import STREAM_SSE_KEEPALIVE_PING_BYTES
-from litellm.llms.anthropic.experimental_pass_through.messages.agentic_streaming_iterator import (
+from litellm.llms.anthropic.pass_through.messages.agentic_streaming_iterator import (
     AgenticAnthropicStreamingIterator,
 )
-from litellm.llms.anthropic.experimental_pass_through.messages.streaming_iterator import (
+from litellm.llms.anthropic.pass_through.messages.streaming_iterator import (
     AnthropicMessagesStreamingResponse,
 )
 from litellm.proxy._types import (

@@ -1,48 +1,161 @@
-//! The Anthropic Messages call, the Rust equivalent of Python's
-//! `litellm.messages()`.
-//!
-//! [`route`] is the call as a machine a host drives, streaming or not. [`messages`] runs
-//! it in process for a caller that already holds the request and wants the message.
-
-mod error;
-pub mod types;
-pub use error::Error;
-mod client;
+use litellm_host::observation::ObservationSender;
 mod common_utils;
 mod handler;
 mod prepare;
 pub mod route;
+mod types;
+
+use litellm_auth::AuthServices;
+use litellm_secrets::source::SecretSource;
 use std::sync::Arc;
 
-use litellm_secrets::source::EnvironmentSecrets;
-use litellm_types::llms::anthropic_messages::anthropic_response::AnthropicMessagesResponse;
-use route::{LocalMessagesHost, MessagesCall, MessagesOutput, messages_machine};
-use serde_json::Value;
+pub use crate::error::RouteError as Error;
+pub use types::{MessagesCall, MessagesCallResponse, MessagesShaping, messages_body};
 
-use crate::messages::types::MessagesRequest;
+#[derive(Clone)]
+pub struct MessagesRoute {
+    http: litellm_http::Client,
+    auth: Arc<AuthServices>,
+    secrets: Arc<dyn SecretSource>,
+    cache: Option<litellm_cache_response::ScopedCache>,
+}
 
-pub async fn messages(request: MessagesRequest<'_>) -> Result<AnthropicMessagesResponse, Error> {
-    let Value::Object(body) = request.body else {
-        return Err(Error::InvalidRequest(
-            "messages body must be an object".into(),
-        ));
-    };
-    let call = MessagesCall {
-        model: request.model.into(),
-        body,
-        api_key: request.api_key.map(Into::into),
-        api_base: request.api_base.map(Into::into),
-        custom_llm_provider: request.custom_llm_provider.map(Into::into),
-        extra_headers: request.extra_headers,
-        provider_specific_header: request.provider_specific_header,
-        timeout: request.timeout,
-        shaping: request.shaping,
-    };
-    let secrets = Arc::new(EnvironmentSecrets::python_compatible());
-    match litellm_host::run::run(messages_machine(secrets), &LocalMessagesHost::new(call)).await? {
-        MessagesOutput::Message(message) => Ok(*message),
-        MessagesOutput::Streamed => Err(Error::Unsupported(
-            "streamed responses need a streaming host",
-        )),
+#[must_use]
+#[derive(Clone, Default)]
+pub struct MessagesRouteBuilder<Http = (), Auth = (), Secrets = ()> {
+    http: Http,
+    auth: Auth,
+    secrets: Secrets,
+    cache: Option<litellm_cache_response::ScopedCache>,
+}
+
+impl<Http, Auth, Secrets> MessagesRouteBuilder<Http, Auth, Secrets> {
+    pub fn with_http(
+        self,
+        http: litellm_http::Client,
+    ) -> MessagesRouteBuilder<litellm_http::Client, Auth, Secrets> {
+        MessagesRouteBuilder {
+            http,
+            auth: self.auth,
+            secrets: self.secrets,
+            cache: self.cache,
+        }
+    }
+
+    pub fn with_auth(
+        self,
+        auth: Arc<AuthServices>,
+    ) -> MessagesRouteBuilder<Http, Arc<AuthServices>, Secrets> {
+        MessagesRouteBuilder {
+            http: self.http,
+            auth,
+            secrets: self.secrets,
+            cache: self.cache,
+        }
+    }
+
+    pub fn with_secrets(
+        self,
+        secrets: Arc<dyn SecretSource>,
+    ) -> MessagesRouteBuilder<Http, Auth, Arc<dyn SecretSource>> {
+        MessagesRouteBuilder {
+            http: self.http,
+            auth: self.auth,
+            secrets,
+            cache: self.cache,
+        }
+    }
+
+    pub fn with_cache(self, cache: litellm_cache_response::ScopedCache) -> Self {
+        Self {
+            cache: Some(cache),
+            ..self
+        }
+    }
+}
+
+impl MessagesRouteBuilder<litellm_http::Client, Arc<AuthServices>, Arc<dyn SecretSource>> {
+    pub fn build(self) -> MessagesRoute {
+        MessagesRoute {
+            http: self.http,
+            auth: self.auth,
+            secrets: self.secrets,
+            cache: self.cache,
+        }
+    }
+}
+
+impl MessagesRoute {
+    pub fn builder() -> MessagesRouteBuilder {
+        MessagesRouteBuilder::default()
+    }
+
+    #[must_use]
+    pub fn with_cache(self, cache: litellm_cache_response::ScopedCache) -> Self {
+        Self {
+            cache: Some(cache),
+            ..self
+        }
+    }
+
+    pub async fn execute(
+        &self,
+        call: MessagesCall,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        options: impl Into<crate::CallOptions>,
+    ) -> Result<MessagesCallResponse, Error> {
+        let crate::CallOptions {
+            cache: cache_options,
+            observers,
+        } = options.into();
+        litellm_host::lifecycle::observe_call(
+            observers.clone(),
+            self.run(call, cache_options, interceptors, observers.as_ref()),
+        )
+        .await
+    }
+
+    #[tracing::instrument(name = "litellm.route", skip_all, fields(
+        route = "messages",
+        model = %call.body.model,
+        provider,
+        resolved_model,
+        stream = call.body.params.stream == Some(true),
+        outcome
+    ))]
+    async fn run(
+        &self,
+        call: MessagesCall,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        observers: Option<&ObservationSender>,
+    ) -> Result<MessagesCallResponse, Error> {
+        crate::diagnostic::call(async {
+            self.run_provider(call, cache_options, interceptors, observers)
+                .await
+        })
+        .await
+    }
+
+    async fn run_provider(
+        &self,
+        call: MessagesCall,
+        cache_options: Option<litellm_cache_response::CacheOptions>,
+        interceptors: &impl litellm_host::interceptors::Interceptors<Error>,
+        observers: Option<&ObservationSender>,
+    ) -> Result<MessagesCallResponse, Error> {
+        let request = prepare::prepare(call, self.secrets.as_ref()).await?;
+        crate::diagnostic::provider(&request.body.model, request.provider.as_str());
+        let execute: futures_util::future::BoxFuture<'_, Result<MessagesCallResponse, Error>> =
+            Box::pin(handler::execute(
+                &self.http,
+                &self.auth,
+                request,
+                self.cache.clone(),
+                cache_options,
+                interceptors,
+                observers,
+            ));
+        execute.await
     }
 }

@@ -12,10 +12,10 @@ use crate::base_llm::ocr::{
     error::Error,
     handler::OcrClient,
     transformation::{
-        BaseOcrConfig, LiteLLMOcrResponse, OcrDocument, OcrRequestContext, OcrResponseFormat,
-        PreparedOcrRequest, decode_and_normalize_response,
+        BaseOcrConfig, OcrRequestContext, PreparedOcrRequest, decode_and_normalize_response,
     },
 };
+use litellm_llms_types::formats::ocr::{LiteLLMOcrResponse, OcrDocument, OcrResponseFormat};
 
 const DEFAULT_FEATURE_TYPES: [FeatureType; 2] = [FeatureType::Layout, FeatureType::Tables];
 
@@ -63,9 +63,14 @@ impl BaseOcrConfig for TextractAnalyzeDocumentConfig {
     async fn validate_environment(
         &self,
         request: &PreparedOcrRequest,
-        _client: &OcrClient,
+        client: &OcrClient,
     ) -> Result<TextractEnvironment, Error> {
-        environment(request, TextractOperation::AnalyzeDocument).await
+        environment(
+            &client.auth().aws,
+            request,
+            TextractOperation::AnalyzeDocument,
+        )
+        .await
     }
 
     fn get_complete_url(
