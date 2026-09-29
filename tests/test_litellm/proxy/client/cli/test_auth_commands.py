@@ -2563,6 +2563,26 @@ def test_windows_mutex_preserves_body_errors_and_closes_handle(
     windows_mutex_api["CloseHandle"].assert_called_once_with(123)
 
 
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX filesystem locking")
+def test_credential_lock_refuses_a_file_removed_while_waiting(isolated_home):
+    fstat = os.fstat
+    link_counts = iter((1, 0))
+
+    def removed_stat(fd):
+        original = fstat(fd)
+        if stat.S_ISREG(original.st_mode):
+            return os.stat_result((*original[:3], next(link_counts), *original[4:]))
+        return original
+
+    with patch("os.fstat", side_effect=removed_stat), patch("fcntl.flock", wraps=fcntl.flock) as flock:
+        with pytest.raises(OSError, match="removed while waiting"):
+            with credential_lock(isolated_home):
+                pytest.fail("removed lock entered the credential operation")
+
+    with pytest.raises(OSError, match="Bad file descriptor"):
+        os.fstat(flock.call_args.args[0])
+
+
 @pytest.mark.parametrize(
     ("handle", "wait_result", "error_type", "error_code"),
     [(None, 0, OSError, 5), (123, 0xFFFFFFFF, OSError, 5), (123, 0x102, Timeout, None)],
