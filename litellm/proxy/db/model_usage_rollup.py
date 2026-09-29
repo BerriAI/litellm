@@ -3,39 +3,30 @@ from typing import Final
 
 from pydantic import TypeAdapter, ValidationError
 
-from litellm.constants import INTERNAL_CALL_ORIGIN_METADATA_KEY, MODEL_INSIGHTS_TASK_TYPES
+from litellm.constants import (
+    INTERNAL_CALL_ORIGIN_METADATA_KEY,
+    MODEL_INSIGHTS_DEFAULT_TASK,
+    MODEL_INSIGHTS_TASK_TAG_PREFIX,
+    MODEL_INSIGHTS_TASK_TYPES,
+)
 from litellm.proxy._types import SpendLogsPayload
 from litellm.proxy.utils import PrismaClient
 from litellm.repositories.table_repositories import DailyModelUsageRepository
 
-_TASK_BY_CALL_TYPE: Final = {
-    "acompletion": "chat",
-    "completion": "chat",
-    "aembedding": "embeddings",
-    "embedding": "embeddings",
-    "aimage_generation": "images",
-    "image_generation": "images",
-    "aspeech": "audio",
-    "speech": "audio",
-    "atranscription": "audio",
-    "transcription": "audio",
-    "arerank": "rerank",
-    "rerank": "rerank",
-    "aresponses": "responses",
-    "responses": "responses",
-}
 _METADATA: Final = TypeAdapter(dict[str, object])
+_TAGS: Final = TypeAdapter(list[object])
 
 
-def model_usage_task_type(call_type: str) -> str:
-    task_type: Final = _TASK_BY_CALL_TYPE.get(call_type, "unknown")
-    return task_type if task_type in MODEL_INSIGHTS_TASK_TYPES else "unknown"
-
-
-def _date_from_start_time(start_time: datetime | str) -> str | None:
-    if isinstance(start_time, datetime):
-        return start_time.date().isoformat()
-    return start_time[:10] if len(start_time) >= 10 else None
+def model_usage_task_type(request_tags: str) -> str:
+    try:
+        tags: Final = _TAGS.validate_json(request_tags)
+    except ValidationError:
+        return MODEL_INSIGHTS_DEFAULT_TASK
+    for tag in tags:
+        task = tag.removeprefix(MODEL_INSIGHTS_TASK_TAG_PREFIX) if isinstance(tag, str) else None
+        if task in MODEL_INSIGHTS_TASK_TYPES:
+            return task
+    return MODEL_INSIGHTS_DEFAULT_TASK
 
 
 def _is_internal_call(metadata: str) -> bool:
@@ -46,6 +37,12 @@ def _is_internal_call(metadata: str) -> bool:
     return bool(decoded.get(INTERNAL_CALL_ORIGIN_METADATA_KEY))
 
 
+def _date_from_start_time(start_time: datetime | str) -> str | None:
+    if isinstance(start_time, datetime):
+        return start_time.date().isoformat()
+    return start_time[:10] if len(start_time) >= 10 else None
+
+
 async def increment_daily_model_usage(prisma_client: PrismaClient, payload: SpendLogsPayload) -> None:
     date: Final = _date_from_start_time(payload["startTime"])
     if date is None or _is_internal_call(payload["metadata"]):
@@ -54,7 +51,7 @@ async def increment_daily_model_usage(prisma_client: PrismaClient, payload: Spen
     model: Final = payload["model"] or "unknown"
     model_group: Final = payload["model_group"] or model
     provider: Final = payload["custom_llm_provider"] or "unknown"
-    task_type: Final = model_usage_task_type(payload["call_type"])
+    task_type: Final = model_usage_task_type(payload["request_tags"])
     successful: Final = 1 if payload["status"] == "success" else 0
     failed: Final = 1 - successful
     key: Final = {
