@@ -263,7 +263,7 @@ def get_stored_api_key(
     if expected_base_url is not None and token_data.get("base_url") != expected_base_url.rstrip("/"):
         return None
     if is_cli_token_fresh(token_data) or not token_data.get("refresh_token"):
-        return _key_from_record(token_data, vault)
+        return _key_from_record({**token_data, "refresh_token": None}, vault)
     try:
         with _credential_lock():
             return _get_stored_api_key(expected_base_url, vault)
