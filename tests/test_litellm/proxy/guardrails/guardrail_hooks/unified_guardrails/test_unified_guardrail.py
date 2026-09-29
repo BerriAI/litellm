@@ -1,11 +1,16 @@
 """Tests for unified guardrail."""
 
+import copy
+import json
 import logging
 from collections.abc import Callable
 from types import SimpleNamespace
 from typing import TYPE_CHECKING, Final, Literal
+from unittest.mock import MagicMock
 
+import httpx
 import pytest
+from fastapi import Request
 
 import litellm
 from litellm.caching import DualCache
@@ -23,6 +28,7 @@ from litellm.llms.base_llm.guardrail_translation.utils import (
     openai_messages_without_tool,
 )
 from litellm.llms.base_llm.ocr.transformation import OCRPage, OCRResponse
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.llms.mistral.ocr.guardrail_translation.handler import OCRHandler
 from litellm.llms.openai.chat.guardrail_translation.handler import (
     OpenAIChatCompletionsHandler,
@@ -34,12 +40,15 @@ from litellm.proxy._experimental.mcp_server.guardrail_translation.handler import
     MCPGuardrailTranslationHandler,
 )
 from litellm.proxy._types import LiteLLMRoutes, UserAPIKeyAuth
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail import (
     unified_guardrail as unified_module,
 )
 from litellm.proxy.guardrails.guardrail_hooks.unified_guardrail.unified_guardrail import (
     UnifiedLLMGuardrails,
 )
+from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
+from litellm.proxy.utils import ProxyLogging
 from litellm.types.guardrails import GuardrailEventHooks
 from litellm.types.llms.openai import ResponsesAPIResponse
 from litellm.types.utils import CallTypes, Delta, GenericGuardrailAPIInputs, ModelResponseStream, StreamingChoices
@@ -2429,13 +2438,6 @@ class TestGuardrailsSeeAuthenticatedIdentity:
 
     @staticmethod
     def _generic_guardrail(vendor_payloads: list[dict[str, object]]) -> CustomGuardrail:
-        import json
-
-        import httpx
-
-        from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-        from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
-
         def vendor(request: httpx.Request) -> httpx.Response:
             vendor_payloads.append(json.loads(request.content))
             return httpx.Response(200, json={"action": "NONE"})
@@ -2472,8 +2474,6 @@ class TestGuardrailsSeeAuthenticatedIdentity:
 
     @pytest.mark.asyncio
     async def test_mcp_tool_call_reaches_vendor_with_key_alias(self) -> None:
-        from litellm.proxy.utils import ProxyLogging
-
         vendor_payloads: list[dict[str, object]] = []
         key = UserAPIKeyAuth(api_key="sk-real-caller-key", key_alias="prod-app", team_id="team-prod")
         proxy_logging = ProxyLogging(user_api_key_cache=DualCache())
@@ -2530,14 +2530,6 @@ class TestGuardrailsSeeAuthenticatedIdentity:
     ) -> None:
         """After the chat-path metadata build, the guardrail hook leaves the proxy's bucket as it was (team metadata
         in user_api_key_auth_metadata included) and the vendor gets the logged key, never a raw CLI session token."""
-        import copy
-        import json
-        from unittest.mock import MagicMock
-
-        from fastapi import Request
-
-        from litellm.proxy.litellm_pre_call_utils import LiteLLMProxyRequestSetup, add_litellm_data_to_request
-
         _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
         request = MagicMock(spec=Request)
         request.url = MagicMock()
@@ -2584,8 +2576,6 @@ class TestGuardrailsSeeAuthenticatedIdentity:
     @pytest.mark.asyncio
     @pytest.mark.parametrize("bucket", ["metadata", "litellm_metadata", None])
     async def test_pass_through_cli_session_key_sends_stable_hash(self, monkeypatch, bucket: str | None) -> None:
-        import json
-
         _patch_translation_mappings(monkeypatch, discover_guardrail_translation_mappings())
         vendor_payloads: list[dict[str, object]] = []
         key = _cli_session_key("/anthropic/v1/messages")

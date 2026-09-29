@@ -26,6 +26,7 @@ from litellm._logging import verbose_proxy_logger
 from litellm.constants import DEFAULT_REQUEST_TIMEOUT_SECONDS
 from litellm.integrations.custom_logger import CustomLogger
 from litellm.litellm_core_utils.litellm_logging import Logging as LiteLLMLoggingObj
+from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
 from litellm.proxy._types import ProxyException, UserAPIKeyAuth
 from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
     DEFAULT_PASS_THROUGH_REQUEST_TIMEOUT_SECONDS,
@@ -48,6 +49,7 @@ from litellm.proxy.pass_through_endpoints.success_handler import (
 )
 from litellm.proxy.route_llm_request import ProxyModelNotFoundError
 from litellm.types import utils as types_utils
+from litellm.types.llms.custom_http import httpxSpecialProvider
 from litellm.types.passthrough_endpoints.pass_through_endpoints import (
     LITELLM_PASS_THROUGH_DEPLOYMENT_MODEL_INFO_STATE_KEY,
     LITELLM_PASS_THROUGH_RAW_BODY_STATE_KEY,
@@ -7631,9 +7633,6 @@ async def test_pass_through_request_strips_caller_identity_before_guardrail_hook
     control fields and inbound headers reached pre_call_hook guardrails as the caller's identity. The upstream body
     is unchanged because these keys never reach it.
     """
-    from litellm.llms.custom_httpx.http_handler import get_async_httpx_client
-    from litellm.types.llms.custom_http import httpxSpecialProvider
-
     upstream_bodies = []
 
     def transport_handler(upstream_request: httpx.Request) -> httpx.Response:

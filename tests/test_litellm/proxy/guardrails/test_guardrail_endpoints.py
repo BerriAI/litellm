@@ -4,11 +4,13 @@ from datetime import datetime
 from typing import Dict, List, Optional
 from unittest.mock import AsyncMock
 
+import httpx
 import pytest
 
 
 from fastapi import HTTPException
 
+from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
 from litellm.proxy._types import LitellmUserRoles, UserAPIKeyAuth
 from litellm.proxy.guardrails.guardrail_endpoints import (
     CreateGuardrailRequest,
@@ -33,6 +35,7 @@ from litellm.proxy.guardrails.guardrail_endpoints import (
 from litellm.proxy.guardrails.guardrail_endpoints import (
     test_custom_code_guardrail as run_custom_code_test_endpoint,
 )
+from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
 
 MOCK_ADMIN_USER = UserAPIKeyAuth(user_role=LitellmUserRoles.PROXY_ADMIN)
 from litellm.proxy.guardrails.guardrail_registry import (
@@ -1661,11 +1664,6 @@ async def test_apply_guardrail_forwards_real_request_headers_not_caller_supplied
 async def test_apply_guardrail_generic_guardrail_api_sends_authenticated_identity_to_vendor(mocker):
     """End to end through a real GenericGuardrailAPI: the vendor payload names the authenticated key even when
     the body forges user_api_key_alias and user_api_key_token, which the generic guardrail maps onto the hash."""
-    import httpx
-
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-    from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
-
     vendor_payloads = []
 
     def vendor(request: httpx.Request) -> httpx.Response:
@@ -1715,11 +1713,6 @@ async def test_apply_guardrail_request_route_comes_from_the_key(mocker):
 @pytest.mark.asyncio
 async def test_apply_guardrail_cli_session_key_sends_stable_hash_to_vendor(mocker):
     """A CLI session key's raw per-login token must never reach the vendor; it gets the stable logged key."""
-    import httpx
-
-    from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler
-    from litellm.proxy.guardrails.guardrail_hooks.generic_guardrail_api import GenericGuardrailAPI
-
     raw_session_token = "cli-session-Qm7xJ2kP9sLw4vT1nR8yAa"
     vendor_payloads = []
 
