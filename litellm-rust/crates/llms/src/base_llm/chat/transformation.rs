@@ -41,6 +41,8 @@ pub use crate::base_llm::auth::{Headers, ValidatedEnvironment};
 pub struct Unsupported(pub &'static str);
 
 pub trait BaseConfig: Sync {
+    fn secret_names(&self) -> Vec<&'static str>;
+
     /// Supported OpenAI parameter names paired with their provider names.
     fn supported_openai_param_mappings(&self) -> &'static [(&'static str, &'static str)];
 

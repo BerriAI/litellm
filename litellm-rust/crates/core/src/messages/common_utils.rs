@@ -2,19 +2,18 @@ use litellm_http::request::string_headers as shared_string_headers;
 pub(super) use litellm_http::request::truncate_error_body;
 use litellm_llms::{
     anthropic::messages::transformation::ANTHROPIC_MESSAGES_CONFIG,
-    azure_ai::anthropic::messages_transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
-    base_llm::anthropic_messages::transformation::BaseAnthropicMessagesConfig,
+    azure_ai::messages::transformation::AZURE_ANTHROPIC_MESSAGES_CONFIG,
+    base_llm::messages::transformation::BaseAnthropicMessagesConfig,
     bedrock::messages::invoke_transformations::anthropic_claude3_transformation::BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
 };
 use serde_json::{Map, Value};
-use strum::{EnumString, IntoStaticStr};
 
 use super::Error;
+use crate::provider::LlmProviders;
 
 const HEADER_CONTEXT: &str = "messages";
 
-#[derive(Clone, Copy, Debug, EnumString, IntoStaticStr, PartialEq, Eq)]
-#[strum(serialize_all = "snake_case")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum MessagesProvider {
     Anthropic,
     AzureAi,
@@ -23,7 +22,12 @@ pub(crate) enum MessagesProvider {
 
 impl MessagesProvider {
     pub(crate) fn as_str(self) -> &'static str {
-        self.into()
+        match self {
+            Self::Anthropic => LlmProviders::Anthropic,
+            Self::AzureAi => LlmProviders::AzureAi,
+            Self::Bedrock => LlmProviders::Bedrock,
+        }
+        .into()
     }
 
     pub(crate) fn config(self) -> &'static dyn BaseAnthropicMessagesConfig {
@@ -32,6 +36,21 @@ impl MessagesProvider {
             Self::AzureAi => &AZURE_ANTHROPIC_MESSAGES_CONFIG,
             Self::Bedrock => &BEDROCK_ANTHROPIC_MESSAGES_CONFIG,
         }
+    }
+}
+
+pub(crate) fn messages_provider(provider: LlmProviders) -> Option<MessagesProvider> {
+    match provider {
+        LlmProviders::Anthropic => Some(MessagesProvider::Anthropic),
+        LlmProviders::AzureAi => Some(MessagesProvider::AzureAi),
+        LlmProviders::Bedrock => Some(MessagesProvider::Bedrock),
+        LlmProviders::AwsTextract
+        | LlmProviders::Cohere
+        | LlmProviders::Mistral
+        | LlmProviders::Openai
+        | LlmProviders::OpenaiLike
+        | LlmProviders::Reducto
+        | LlmProviders::VertexAi => None,
     }
 }
 
@@ -47,8 +66,9 @@ mod tests {
 
     use rstest::rstest;
 
-    use super::{MessagesProvider, string_headers, truncate_error_body};
+    use super::{MessagesProvider, messages_provider, string_headers, truncate_error_body};
     use crate::messages::Error;
+    use crate::provider::LlmProviders;
 
     #[rstest]
     #[case::anthropic("anthropic", MessagesProvider::Anthropic)]
@@ -58,13 +78,16 @@ mod tests {
         #[case] name: &str,
         #[case] provider: MessagesProvider,
     ) {
-        assert_eq!(name.parse::<MessagesProvider>(), Ok(provider));
+        assert_eq!(
+            messages_provider(name.parse::<LlmProviders>().unwrap()),
+            Some(provider)
+        );
         assert_eq!(provider.as_str(), name);
     }
 
     #[test]
     fn provider_without_a_messages_config_is_rejected() {
-        assert!("openai".parse::<MessagesProvider>().is_err());
+        assert_eq!(messages_provider(LlmProviders::Openai), None);
     }
 
     #[test]

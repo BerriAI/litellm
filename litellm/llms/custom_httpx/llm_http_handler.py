@@ -1,10 +1,10 @@
 import asyncio
 import json
 import ssl
-from collections.abc import AsyncGenerator, AsyncIterator, Coroutine, Iterator, Mapping, Sequence
+from collections.abc import AsyncGenerator, AsyncIterator, Awaitable, Coroutine, Iterator, Mapping, Sequence
 from contextlib import asynccontextmanager
 from functools import lru_cache
-from types import MappingProxyType, ModuleType
+from types import MappingProxyType
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -188,10 +188,10 @@ from litellm.utils import (
 def _rust_responses_websocket_enabled(
     custom_llm_provider: str | None,
 ) -> bool:
-    from litellm.rust_bridge.catalog import Delivery, Route, RouteContext, decision
+    from litellm.rust_bridge.catalog import Route, RouteContext, decision
     from litellm.rust_bridge.configuration import Decision
 
-    context: Final = RouteContext(Route.RESPONSES, provider=custom_llm_provider, delivery=Delivery.WEBSOCKET)
+    context: Final = RouteContext(Route.RESPONSES, provider=custom_llm_provider)
     return decision(context) is not Decision.PYTHON
 
 
@@ -237,6 +237,26 @@ class _ResponsesClientWebSocket(Protocol):
     async def receive_text(self) -> str: ...
 
     async def close(self, code: int = ..., reason: str | None = ...) -> None: ...
+
+
+class _WebsocketsExceptions(Protocol):
+    @property
+    def WebSocketException(self) -> type[Exception]: ...
+
+
+class _WebsocketsModule(Protocol):
+    @property
+    def exceptions(self) -> _WebsocketsExceptions: ...
+
+    def connect(
+        self,
+        uri: str,
+        *,
+        additional_headers: Mapping[str, str],
+        max_size: int | None,
+        ssl: bool | str | ssl.SSLContext,
+        open_timeout: float,
+    ) -> Awaitable["ClientConnection"]: ...
 
 
 _ResponseT = TypeVar("_ResponseT")
@@ -5468,7 +5488,7 @@ class BaseLLMHTTPHandler:
         max_loops: int,
         fingerprints: list[str],
         fingerprint: str,
-    ) -> Any:
+    ) -> ModelResponse | CustomStreamWrapper:
         patch: Final = plan.request_patch or AgenticLoopRequestPatch()
         if patch.messages is None:
             raise ValueError("Agentic loop plan missing patched messages")
@@ -5978,7 +5998,7 @@ class BaseLLMHTTPHandler:
 
     @staticmethod
     async def _open_realtime_backend_ws(
-        websockets_module: ModuleType,
+        websockets_module: _WebsocketsModule,
         url: str,
         headers: dict,
         ssl_context: bool | str | ssl.SSLContext,
@@ -6037,7 +6057,7 @@ class BaseLLMHTTPHandler:
         headers: dict,
         api_base: str | None = None,
         api_key: str | None = None,
-        client: Any | None = None,
+        client: object | None = None,
         timeout: float | None = None,
         user_api_key_dict: object | None = None,
         litellm_metadata: dict[str, object] | None = None,

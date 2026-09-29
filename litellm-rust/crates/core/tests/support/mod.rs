@@ -3,11 +3,15 @@
 
 #![allow(dead_code)] // each test binary compiles this module on its own and uses a different subset
 
-use std::sync::{Arc, Mutex};
+use std::{
+    ops::ControlFlow,
+    sync::{Arc, Mutex},
+};
 
 use futures_util::future::BoxFuture;
 use litellm_http::{
-    HttpClientConfig, HttpClientPool, HttpSettings, Resolution, media::PublicDnsResolver,
+    ClientVariant, HttpClientConfig, HttpClientPool, HttpSettings, Resolution,
+    media::PublicDnsResolver,
 };
 use litellm_secrets::{SecretValue, source::SecretSource};
 use serde_json::Value;
@@ -22,6 +26,76 @@ pub fn http_pool() -> HttpClientPool {
 
 pub fn resources() -> litellm_core::resources::CoreResources {
     litellm_core::resources::CoreResources::new(Arc::new(http_pool()))
+}
+
+pub fn no_secrets() -> Arc<dyn SecretSource> {
+    Arc::new(RecordingSecrets::empty())
+}
+
+pub fn provider_http(
+    resources: &litellm_core::resources::CoreResources,
+    config: &HttpClientConfig,
+) -> litellm_http::Client {
+    resources
+        .pool
+        .client(config, ClientVariant::Provider)
+        .unwrap()
+}
+
+pub fn messages_route(secrets: Arc<dyn SecretSource>) -> litellm_core::messages::MessagesRoute {
+    let resources = resources();
+    litellm_core::messages::MessagesRoute::builder()
+        .with_http(provider_http(&resources, &http_config()))
+        .with_auth(resources.auth)
+        .with_secrets(secrets)
+        .build()
+}
+
+pub fn chat_completions_route() -> litellm_core::chat_completions::ChatCompletionsRoute {
+    let resources = resources();
+    litellm_core::chat_completions::ChatCompletionsRoute::new(
+        provider_http(&resources, &http_config()),
+        resources.auth,
+        no_secrets(),
+    )
+}
+
+pub fn responses_route(secrets: Arc<dyn SecretSource>) -> litellm_core::responses::ResponsesRoute {
+    let resources = resources();
+    litellm_core::responses::ResponsesRoute::new(
+        provider_http(&resources, &http_config()),
+        resources.auth,
+        secrets,
+    )
+}
+
+pub fn audio_transcription_route() -> litellm_core::audio_transcription::AudioTranscriptionRoute {
+    let resources = resources();
+    litellm_core::audio_transcription::AudioTranscriptionRoute::new(
+        provider_http(&resources, &http_config()),
+        resources.auth,
+        no_secrets(),
+    )
+}
+
+pub fn build_ocr_route(
+    resources: &litellm_core::resources::CoreResources,
+    config: &HttpClientConfig,
+    url_policy: litellm_http::media::UrlPolicy,
+    settings: litellm_llms::base_llm::ocr::settings::OcrSettings,
+    secrets: Arc<dyn SecretSource>,
+) -> litellm_core::ocr::OcrRoute {
+    litellm_core::ocr::OcrRoute::new(
+        litellm_llms::base_llm::ocr::handler::OcrClient::new(
+            &resources.pool,
+            config,
+            url_policy,
+            resources.auth.clone(),
+            settings,
+            secrets,
+        )
+        .unwrap(),
+    )
 }
 
 pub fn http_config() -> HttpClientConfig {
@@ -167,4 +241,173 @@ impl SecretSource for RecordingSecrets {
                 .map(|(_, value)| SecretValue::new(value.clone())))
         })
     }
+}
+
+pub struct RecordingCall<P: litellm_host::protocol::Protocol> {
+    pub request: Mutex<Option<P::Request>>,
+    pub events: Arc<CallEvents>,
+    pub chunks: Mutex<Vec<P::Chunk>>,
+    pub head: Mutex<Option<P::StreamHead>>,
+}
+
+#[derive(Default)]
+pub struct CallEvents(pub Observations);
+pub struct Observations {
+    pub sender: litellm_host::observation::ObservationSender,
+    receiver: Mutex<tokio::sync::mpsc::Receiver<litellm_host::lifecycle::CallEvent>>,
+    recorded: Mutex<Vec<litellm_host::lifecycle::CallEvent>>,
+}
+
+impl Default for Observations {
+    fn default() -> Self {
+        let (sender, receiver) = litellm_host::observation::observation_channel(
+            std::num::NonZeroUsize::new(128).unwrap(),
+        );
+        Self {
+            sender,
+            receiver: Mutex::new(receiver),
+            recorded: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl Observations {
+    pub fn lock(
+        &self,
+    ) -> std::sync::LockResult<std::sync::MutexGuard<'_, Vec<litellm_host::lifecycle::CallEvent>>>
+    {
+        let mut events = self.recorded.lock()?;
+        let mut receiver = self.receiver.lock().unwrap();
+        while let Ok(event) = receiver.try_recv() {
+            events.push(event);
+        }
+        Ok(events)
+    }
+}
+
+impl litellm_host::lifecycle::CallObserver for CallEvents {
+    fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
+        self.0.sender.emit(event);
+    }
+}
+
+impl<P: litellm_host::protocol::Protocol> RecordingCall<P> {
+    pub fn new(request: P::Request) -> Self {
+        Self {
+            request: Mutex::new(Some(request)),
+            events: Arc::new(CallEvents::default()),
+            chunks: Mutex::new(Vec::new()),
+            head: Mutex::new(None),
+        }
+    }
+}
+
+impl<P: litellm_host::protocol::Protocol> litellm_host::interceptors::Interceptors<P::Error>
+    for RecordingCall<P>
+{
+    async fn before_provider_request(
+        &self,
+        wire: litellm_host::interceptors::WireRequest,
+        _: litellm_host::interceptors::RequestContext,
+    ) -> Result<litellm_host::interceptors::WireRequest, P::Error> {
+        Ok(litellm_host::interceptors::WireRequest {
+            headers: wire
+                .headers
+                .into_iter()
+                .chain([("x-hook".into(), "called".into())])
+                .collect(),
+            ..wire
+        })
+    }
+
+    async fn after_provider_response(
+        &self,
+        _: litellm_host::interceptors::RawResponse,
+    ) -> Result<(), P::Error> {
+        Ok(())
+    }
+}
+
+impl<P> RecordingCall<P>
+where
+    P: litellm_host::protocol::Protocol<HostCall = std::convert::Infallible>,
+    P::Error: From<litellm_host::machine::MachineFault>,
+{
+    pub fn request(&self) -> Result<P::Request, P::Error> {
+        self.request
+            .lock()
+            .unwrap()
+            .take()
+            .ok_or_else(|| litellm_host::machine::MachineFault::Abandoned.into())
+    }
+    pub fn runtime(&self) -> litellm_host_native::in_process::Host<'_, (), Self, Self> {
+        litellm_host_native::in_process::Host {
+            services: &(),
+            interceptors: self,
+            stream: self,
+            observers: Some(&self.events.0.sender),
+        }
+    }
+}
+
+impl<P> litellm_host_native::in_process::StreamConsumer<P> for RecordingCall<P>
+where
+    P: litellm_host::protocol::Protocol<HostCall = std::convert::Infallible>,
+    P::Error: From<litellm_host::machine::MachineFault>,
+{
+    async fn open_stream(&self, head: P::StreamHead) -> Result<ControlFlow<()>, P::Error> {
+        *self.head.lock().unwrap() = Some(head);
+        Ok(ControlFlow::Continue(()))
+    }
+    async fn send_chunk(&self, chunk: P::Chunk) -> Result<ControlFlow<()>, P::Error> {
+        self.chunks.lock().unwrap().push(chunk);
+        Ok(ControlFlow::Continue(()))
+    }
+}
+impl<P> litellm_host::lifecycle::CallObserver for RecordingCall<P>
+where
+    P: litellm_host::protocol::Protocol<HostCall = std::convert::Infallible>,
+    P::Error: From<litellm_host::machine::MachineFault>,
+{
+    fn observe(&self, event: litellm_host::lifecycle::CallEvent) {
+        self.events.0.sender.emit(event);
+    }
+}
+
+#[derive(Clone, Default)]
+pub struct TraceCapture(Arc<Mutex<Vec<Value>>>);
+
+impl TraceCapture {
+    pub fn logger(&self) -> litellm_tracing::Logger {
+        litellm_tracing::Logger::new(self.clone())
+    }
+
+    pub fn records(&self) -> Vec<Value> {
+        self.0.lock().unwrap().clone()
+    }
+
+    pub fn summaries(&self, name: &str) -> Vec<Value> {
+        self.records()
+            .into_iter()
+            .filter(|record| record["span_name"] == name)
+            .collect()
+    }
+}
+
+impl litellm_tracing::Sink for TraceCapture {
+    fn enabled(&self, metadata: &litellm_tracing::Metadata<'_>) -> bool {
+        metadata.target().starts_with("litellm_core")
+    }
+
+    fn emit(&self, record: &litellm_tracing::Record) {
+        self.0
+            .lock()
+            .unwrap()
+            .push(Value::Object(record.fields.clone()));
+    }
+}
+
+#[rstest::fixture]
+pub fn traces() -> TraceCapture {
+    TraceCapture::default()
 }

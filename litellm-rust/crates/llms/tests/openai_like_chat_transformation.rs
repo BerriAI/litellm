@@ -139,7 +139,7 @@ fn a_missing_api_base_is_an_error() {
     assert!(matches!(
         OPENAI_LIKE_CHAT_COMPLETIONS_CONFIG
             .get_complete_url(None, "my-model", &params(json!({})), &no_env),
-        Err(Error::InvalidRequest(message)) if message.starts_with("Missing API Base")
+        Err(Error::InvalidRequest(message)) if message.to_string().starts_with("Missing API Base")
     ));
 }
 
