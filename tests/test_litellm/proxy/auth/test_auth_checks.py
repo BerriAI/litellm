@@ -8045,7 +8045,7 @@ async def test_check_team_member_budget_missing_membership_is_verified_with_unav
         patch.object(proxy_server, "prisma_client", prisma_client),
         patch.object(proxy_server, "spend_counter_cache", _unavailable_spend_counter_cache()),
     ):
-        await _check_team_member_budget(
+        result: Final = await _check_team_member_budget(
             team_object=LiteLLM_TeamTable(
                 team_id="test-team",
                 metadata={"team_member_budget_id": "default-budget-100"},
@@ -8059,6 +8059,7 @@ async def test_check_team_member_budget_missing_membership_is_verified_with_unav
             team_membership_loaded=True,
         )
 
+    assert result is None
     membership_find_unique.assert_awaited()
 
 

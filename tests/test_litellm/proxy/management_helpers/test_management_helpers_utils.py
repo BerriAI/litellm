@@ -884,7 +884,14 @@ async def test_team_update_reaches_inherited_members_but_not_overridden_ones():
             team_member_budget=1.0,
         )
 
-    async def spend_from_membership(counter_key: str, fallback_spend: float, max_budget: float | None = None) -> float:
+    async def spend_from_membership(
+        counter_key: str,
+        fallback_spend: float,
+        max_budget: float | None = None,
+        *,
+        fallback_authoritative: bool,
+    ) -> float:
+        assert not fallback_authoritative
         return fallback_spend
 
     async def check(user_id: str, spend: float) -> None:
