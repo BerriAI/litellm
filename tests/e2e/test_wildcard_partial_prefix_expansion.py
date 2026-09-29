@@ -75,6 +75,7 @@ def wildcard_proxy(tmp_path_factory: pytest.TempPathFactory) -> Generator[str]:
     proc = subprocess.Popen(
         [
             sys.executable,
+            "-P",
             str(REPO_ROOT / "litellm/proxy/proxy_cli.py"),
             "--config",
             str(config_path),
