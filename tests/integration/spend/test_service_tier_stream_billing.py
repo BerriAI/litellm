@@ -47,19 +47,25 @@ def _sse_frame(payload: dict[str, JsonValue]) -> bytes:
     return f"data: {json.dumps(payload, separators=(',', ':'))}\n\n".encode()
 
 
-def _chat_chunk(request_id: str, upstream_model: str, content: str) -> dict[str, JsonValue]:
+def _chat_chunk(request_id: str, upstream_model: str, content: str, served_tier: str) -> dict[str, JsonValue]:
     return {
         "id": request_id,
         "object": "chat.completion.chunk",
         "created": 1,
         "model": upstream_model,
-        "service_tier": "priority",
+        "service_tier": served_tier,
         "choices": [{"index": 0, "delta": {"role": "assistant", "content": content}, "finish_reason": None}],
     }
 
 
 def _respond_for(
-    request_id: str, prompt: str, *, expected_target: str = "/v1/chat/completions", pause: float = 0.4
+    request_id: str,
+    prompt: str,
+    *,
+    expected_target: str = "/v1/chat/completions",
+    pause: float = 0.4,
+    served_tier: str = "priority",
+    expected_requested_tier: str | None = None,
 ) -> Callable[[Request], Reply]:
     def respond(request: Request) -> Reply:
         if request.target == "/v1/models":
@@ -69,13 +75,15 @@ def _respond_for(
         assert request.target.startswith(expected_target), request.target
         body: Final = json.loads(request.body)
         assert body["messages"] == [{"role": "user", "content": prompt}], body
+        if expected_requested_tier is not None:
+            assert body.get("service_tier") == expected_requested_tier, body
         upstream_model: Final = str(body["model"])
         terminal: Final[dict[str, JsonValue]] = {
             "id": request_id,
             "object": "chat.completion.chunk",
             "created": 1,
             "model": upstream_model,
-            "service_tier": "priority",
+            "service_tier": served_tier,
             "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
             "usage": {
                 "prompt_tokens": PROMPT_TOKENS,
@@ -86,9 +94,9 @@ def _respond_for(
         return Reply(
             content_type="text/event-stream",
             chunks=(
-                _sse_frame(_chat_chunk(request_id, upstream_model, "first")),
-                _sse_frame(_chat_chunk(request_id, upstream_model, "second")),
-                _sse_frame(_chat_chunk(request_id, upstream_model, "third")),
+                _sse_frame(_chat_chunk(request_id, upstream_model, "first", served_tier)),
+                _sse_frame(_chat_chunk(request_id, upstream_model, "second", served_tier)),
+                _sse_frame(_chat_chunk(request_id, upstream_model, "third", served_tier)),
                 _sse_frame(terminal),
                 b"data: [DONE]\n\n",
             ),
@@ -572,4 +580,81 @@ def test_gemini_chat_stream_bills_the_flex_tier(gateway: Gateway) -> None:
         assert float(str(row["spend"])) == pytest.approx(EXPECTED_FLEX_SPEND), row
         breakdown: Final = _cost_breakdown(row)
         assert breakdown["service_tier"] == "flex", breakdown
+        assert len(wire.drain()) == 1
+
+
+@pytest.mark.timeout(120)
+def test_requested_priority_downgraded_to_default_bills_base_rates(gateway: Gateway) -> None:
+    prompt: Final = f"tier control {uuid4().hex[:8]}"
+    request_id: Final = f"chatcmpl-{uuid4().hex[:8]}"
+    with (
+        wire_server(
+            _respond_for(request_id, prompt, served_tier="default", expected_requested_tier="priority")
+        ) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _tiered_model(scenario, wire, litellm_model="openai/gpt-4o-mini")
+        key: Final = scenario.key(models=[model])
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": True,
+                "service_tier": "priority",
+            },
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+        chunks: Final = _events(list(response.iter_lines()))
+
+        assert len(chunks) == 4, chunks
+        tiers: Final = {chunk.get("service_tier") for chunk in chunks}
+        assert tiers == {"default"}, f"every relayed chunk must carry the served tier: {tiers}"
+
+        row: Final = _single_spend_row(key)
+        assert row["status"] == "success", row
+        assert row["request_id"] == request_id, row
+        assert row["prompt_tokens"] == PROMPT_TOKENS, row
+        assert row["completion_tokens"] == COMPLETION_TOKENS, row
+        assert float(str(row["spend"])) == pytest.approx(
+            PROMPT_TOKENS * INPUT_RATE + COMPLETION_TOKENS * OUTPUT_RATE
+        ), row
+        breakdown: Final = _cost_breakdown(row)
+        assert breakdown.get("service_tier") != "priority", breakdown
+        assert len(wire.drain()) == 1
+
+
+@pytest.mark.timeout(120)
+def test_requested_priority_with_auto_echo_bills_priority(gateway: Gateway) -> None:
+    prompt: Final = f"tier control {uuid4().hex[:8]}"
+    request_id: Final = f"chatcmpl-{uuid4().hex[:8]}"
+    with (
+        wire_server(_respond_for(request_id, prompt, served_tier="auto")) as wire,
+        gateway.scenario() as scenario,
+    ):
+        model: Final = _tiered_model(scenario, wire, litellm_model="openai/gpt-4o-mini")
+        key: Final = scenario.key(models=[model])
+        response: Final = gateway.request(
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": model,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": True,
+                "service_tier": "priority",
+            },
+            key=key,
+        )
+        assert response.status_code == 200, response.text
+        chunks: Final = _events(list(response.iter_lines()))
+        assert len(chunks) == 4, chunks
+
+        row: Final = _single_spend_row(key)
+        assert row["status"] == "success", row
+        assert row["request_id"] == request_id, row
+        assert float(str(row["spend"])) == pytest.approx(EXPECTED_FULL_SPEND), row
+        breakdown: Final = _cost_breakdown(row)
+        assert breakdown["service_tier"] == "priority", breakdown
         assert len(wire.drain()) == 1

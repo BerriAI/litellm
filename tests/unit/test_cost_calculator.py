@@ -1948,7 +1948,7 @@ def test_completion_cost_extracts_service_tier_from_usage(_local_model_cost_map)
 
 
 def test_completion_cost_service_tier_priority(_local_model_cost_map):
-    """Test that service_tier extraction follows priority: optional_params > completion_response > usage."""
+    """Test that the served tier wins over the requested tier: response > usage > request."""
     from litellm import completion_cost
 
     # Test with gpt-5-nano which has flex pricing
@@ -1965,7 +1965,7 @@ def test_completion_cost_service_tier_priority(_local_model_cost_map):
     )
     setattr(response, "service_tier", "priority")
 
-    # Test that optional_params takes priority over response and usage
+    # A request-level tier loses to the tier the response actually served
     cost_from_params = completion_cost(
         completion_response=response,
         model=model,
@@ -1973,20 +1973,18 @@ def test_completion_cost_service_tier_priority(_local_model_cost_map):
         optional_params={"service_tier": "flex"},
     )
 
-    # Test that response takes priority over usage when optional_params is not provided
-    completion_cost(
+    # Response takes priority over usage
+    cost_served_priority = completion_cost(
         completion_response=response,
         model=model,
         custom_llm_provider="openai",
     )
 
-    # Test that usage is used when neither optional_params nor response have service_tier
-    # Create a new response without service_tier attribute
+    # Create a new response without service_tier attribute so it falls back to usage
     response_no_tier = ModelResponse(
         usage=usage,
         model=model,
     )
-    # Don't set service_tier on response, so it will fall back to usage
 
     cost_from_usage = completion_cost(
         completion_response=response_no_tier,
@@ -1994,12 +1992,13 @@ def test_completion_cost_service_tier_priority(_local_model_cost_map):
         custom_llm_provider="openai",
     )
 
-    # All should use flex pricing (from different sources)
     assert cost_from_params > 0, "Cost from params should be greater than 0"
     assert cost_from_usage > 0, "Cost from usage should be greater than 0"
 
-    # Costs should be similar (all using flex)
-    assert abs(cost_from_params - cost_from_usage) < 1e-6, "Costs from params and usage should be similar (both flex)"
+    # Requested flex is ignored once the response reports served priority
+    assert cost_from_params == pytest.approx(cost_served_priority), (
+        "request-level service_tier must defer to the served tier on the response"
+    )
 
 
 def test_completion_cost_service_tier_for_bedrock(_local_model_cost_map):
@@ -5368,3 +5367,100 @@ def test_completion_cost_is_zero_when_explicit_rates_are_zero(monkeypatch: pytes
     )
 
     assert cost == 0.0
+
+
+@pytest.mark.parametrize(
+    ("requested", "served", "expected"),
+    [
+        (None, "priority", "priority"),
+        ("priority", "flex", "flex"),
+        ("priority", "default", None),
+        ("priority", "standard", None),
+        ("priority", "auto", "priority"),
+        ("priority", "scale", "priority"),
+        ("priority", None, "priority"),
+        ("auto", None, None),
+        (None, "Priority", "priority"),
+        ("flex", "on_demand", "flex"),
+    ],
+)
+def test_resolve_billable_service_tier(requested: object, served: object, expected: str | None) -> None:
+    from litellm.cost_calculator import _resolve_billable_service_tier
+
+    assert _resolve_billable_service_tier(requested=requested, served=served) == expected
+
+
+def _served_tier_cost_model(monkeypatch: pytest.MonkeyPatch) -> str:
+    model: Final = "served-tier-cost-model"
+    monkeypatch.setitem(
+        litellm.model_cost,
+        model,
+        {
+            "input_cost_per_token": 0.001,
+            "output_cost_per_token": 0.002,
+            "input_cost_per_token_priority": 0.01,
+            "output_cost_per_token_priority": 0.02,
+            "litellm_provider": "openai",
+            "mode": "chat",
+        },
+    )
+    return model
+
+
+def test_completion_cost_bills_base_when_served_default_overrides_requested_priority(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model: Final = _served_tier_cost_model(monkeypatch)
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    setattr(response, "service_tier", "default")
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        optional_params={"service_tier": "priority"},
+    )
+
+    assert cost == pytest.approx(100 * 0.001 + 50 * 0.002)
+
+
+def test_completion_cost_bills_priority_when_served_tier_overrides_missing_request(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model: Final = _served_tier_cost_model(monkeypatch)
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    setattr(response, "service_tier", "priority")
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+    )
+
+    assert cost == pytest.approx(100 * 0.01 + 50 * 0.02)
+
+
+def test_completion_cost_bills_base_when_gemini_serves_on_demand(
+    _local_model_cost_map: None, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    model: Final = _served_tier_cost_model(monkeypatch)
+    response: Final = ModelResponse(
+        model=model,
+        usage=Usage(prompt_tokens=100, completion_tokens=50, total_tokens=150),
+    )
+    response._hidden_params["provider_specific_fields"] = {"traffic_type": "ON_DEMAND"}
+
+    cost: Final = completion_cost(
+        completion_response=response,
+        model=model,
+        custom_llm_provider="openai",
+        optional_params={"service_tier": "priority"},
+    )
+
+    assert cost == pytest.approx(100 * 0.001 + 50 * 0.002)
