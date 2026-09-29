@@ -591,9 +591,7 @@ def _is_cost_explicitly_configured(model: str, llm_router: "Router") -> bool:
 
     The group is resolved through ``Router.get_model_list()``, the same resolution
     ``get_model_group_info()`` applies when the caller reads the cost a few lines earlier, so the
-    two lookups cannot disagree: names defined in ``Router.model_group_alias`` are not
-    ``model_name`` entries in ``Router.model_list``, and scanning that list by exact name reported
-    every aliased group as unconfigured. It also reaches a deployment that prices itself through
+    two lookups cannot disagree, including for names defined in ``Router.model_group_alias``. It also reaches a deployment that prices itself through
     its ``model_info`` block, whose entry lands in the cost map under the deployment id.
     """
     for deployment in llm_router.get_model_list(model_name=model) or ():
