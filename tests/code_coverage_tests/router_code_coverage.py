@@ -81,6 +81,9 @@ ignored_function_names = [
     "_merge_tools_from_deployment",  # Tested indirectly via _update_kwargs_with_deployment (test files lack "router" in name)
     "_invalidate_access_groups_cache",  # Tested indirectly via set_model_list, upsert_model etc. (test files lack "router" in name)
     "has_buffered_provider_output",  # Property, so its reads in test_router.py are never an ast.Call
+    "chunks",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
+    "messages",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
+    "model",  # Property on FallbackAwareAnthropicMessagesStream, so its reads in tests are never an ast.Call
     "_request_header",  # Tested through Claude Code session routing in test_router.py
     "_claude_code_session_router_cache_key",  # Tested through Claude Code session routing in test_router.py
     "_delete_claude_code_session_router_binding",  # Tested through Redis cleanup failure in test_router.py

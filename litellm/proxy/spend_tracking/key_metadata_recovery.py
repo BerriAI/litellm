@@ -94,6 +94,13 @@ LEFT JOIN LATERAL ({_OLDEST_PROBE_STOPPED_AT_SQL}) oldest_probe ON true
 LEFT JOIN LATERAL ({_named_spend_log_edge_row_sql("DESC", "oldest_probe.stopped_at")}) last_row ON true
 """
 
+_DAILY_USER_SPEND_OWNER_SQL: Final = """
+SELECT api_key, MIN(user_id) AS first_owner, MAX(user_id) AS last_owner
+FROM "LiteLLM_DailyUserSpend"
+WHERE api_key = ANY($1::text[]) AND user_id IS NOT NULL AND user_id <> ''
+GROUP BY api_key
+"""
+
 _SPEND_LOG_STATEMENT_TIMEOUT_SQL: Final = f"SET LOCAL statement_timeout = {SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS}"
 _SPEND_LOG_NO_BITMAP_SCAN_SQL: Final = "SET LOCAL enable_bitmapscan = off"
 _SPEND_LOG_TRANSACTION_TIMEOUT: Final = timedelta(milliseconds=2 * SPEND_LOG_KEY_METADATA_QUERY_TIMEOUT_MS)
@@ -140,8 +147,15 @@ class _SpendLogDigestRow(BaseModel):
         )
 
 
+class _DailyUserSpendOwnerRow(BaseModel):
+    api_key: str
+    first_owner: str | None = None
+    last_owner: str | None = None
+
+
 _TOKEN_DIGEST_ROWS: Final = TypeAdapter(tuple[_TokenDigestRow, ...])
 _SPEND_LOG_DIGEST_ROWS: Final = TypeAdapter(tuple[_SpendLogDigestRow, ...])
+_DAILY_USER_SPEND_OWNER_ROWS: Final = TypeAdapter(tuple[_DailyUserSpendOwnerRow, ...])
 _CACHED_KEY_METADATA: Final = TypeAdapter(KeyMetadataDict)
 _SPEND_LOG_METADATA_CACHE: Final = InMemoryCache(
     max_size_in_memory=SPEND_LOG_KEY_METADATA_CACHE_MAX_ITEMS,
@@ -149,6 +163,7 @@ _SPEND_LOG_METADATA_CACHE: Final = InMemoryCache(
 )
 _SPEND_LOG_QUERY_LOCK: Final = asyncio.Lock()
 _EMPTY_KEY_METADATA: Final[Mapping[str, KeyMetadataDict]] = MappingProxyType({})
+_EMPTY_KEY_OWNERS: Final[Mapping[str, str]] = MappingProxyType({})
 
 
 async def _db_or_empty(
@@ -163,6 +178,19 @@ async def _db_or_empty(
     except PrismaError as e:
         verbose_proxy_logger.warning(warning, count, e)
         return None
+
+
+async def _rows_within_the_statement_timeout(
+    prisma_client: PrismaClient,
+    sql: str,
+    *params: object,
+    planner_settings: tuple[str, ...] = (),
+) -> Sequence[Mapping[str, object]]:
+    async with prisma_client.db.tx(timeout=_SPEND_LOG_TRANSACTION_TIMEOUT) as transaction:
+        await transaction.execute_raw(_SPEND_LOG_STATEMENT_TIMEOUT_SQL)
+        for setting in planner_settings:
+            await transaction.execute_raw(setting)
+        return await transaction.query_raw(sql, *params)
 
 
 async def _reverse_hash_key_metadata(
@@ -184,6 +212,29 @@ async def _reverse_hash_key_metadata(
             row.digest: KeyMetadataDict(key_alias=row.key_alias, team_id=row.team_id, user_id=row.user_id)
             for row in _TOKEN_DIGEST_ROWS.validate_python(rows)
             if row.digest in wanted
+        }
+    )
+
+
+async def recover_key_owner_from_daily_spend(
+    prisma_client: PrismaClient,
+    keys: AbstractSet[str],
+) -> Mapping[str, str]:
+    if not keys:
+        return _EMPTY_KEY_OWNERS
+    rows: Final = await _db_or_empty(
+        lambda: _rows_within_the_statement_timeout(prisma_client, _DAILY_USER_SPEND_OWNER_SQL, sorted(keys)),
+        "Failed daily-spend key owner recovery for %d keys: %s",
+        len(keys),
+    )
+    if rows is None:
+        return _EMPTY_KEY_OWNERS
+    return MappingProxyType(
+        {
+            row.api_key: owner
+            for row in _DAILY_USER_SPEND_OWNER_ROWS.validate_python(rows)
+            for owner in (_unanimous(row.first_owner, row.last_owner),)
+            if row.api_key in keys and owner is not None
         }
     )
 
@@ -345,25 +396,21 @@ def _cached_spend_log_metadata(
     )
 
 
-async def _spend_log_rows_within_the_statement_timeout(
-    prisma_client: PrismaClient,
-    digests: AbstractSet[str],
-    window: tuple[datetime, datetime],
-) -> Sequence[Mapping[str, object]]:
-    start, end = window
-    async with prisma_client.db.tx(timeout=_SPEND_LOG_TRANSACTION_TIMEOUT) as transaction:
-        await transaction.execute_raw(_SPEND_LOG_STATEMENT_TIMEOUT_SQL)
-        await transaction.execute_raw(_SPEND_LOG_NO_BITMAP_SCAN_SQL)
-        return await transaction.query_raw(_SPEND_LOG_ALIAS_SQL, sorted(digests), start, end)
-
-
 async def _query_spend_log_metadata(
     prisma_client: PrismaClient,
     digests: AbstractSet[str],
     window: tuple[datetime, datetime],
 ) -> Mapping[str, KeyMetadataDict] | None:
+    start, end = window
     rows: Final = await _db_or_empty(
-        lambda: _spend_log_rows_within_the_statement_timeout(prisma_client, digests, window),
+        lambda: _rows_within_the_statement_timeout(
+            prisma_client,
+            _SPEND_LOG_ALIAS_SQL,
+            sorted(digests),
+            start,
+            end,
+            planner_settings=(_SPEND_LOG_NO_BITMAP_SCAN_SQL,),
+        ),
         "Failed spend-log alias recovery for %d missing keys: %s",
         len(digests),
     )

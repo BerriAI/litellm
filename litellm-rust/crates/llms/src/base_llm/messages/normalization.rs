@@ -1,6 +1,5 @@
-use litellm_types::llms::anthropic_messages::anthropic_request::{
-    AnthropicMessage, AnthropicMessagesOptionalParams, AnthropicMessagesRequest, ContentBlock,
-    MessageContent, SystemPrompt,
+use litellm_llms_types::formats::messages::{
+    ContentBlock, Message, MessageContent, MessagesOptionalParams, MessagesRequest, SystemPrompt,
 };
 
 const SYSTEM_ROLE: &str = "system";
@@ -20,12 +19,12 @@ fn system_into_blocks(system: Option<SystemPrompt>) -> Vec<ContentBlock> {
     }
 }
 
-pub fn fold_system_role_messages(request: AnthropicMessagesRequest) -> AnthropicMessagesRequest {
+pub fn fold_system_role_messages(request: MessagesRequest) -> MessagesRequest {
     if !request.messages.iter().any(|msg| msg.role == SYSTEM_ROLE) {
         return request;
     }
 
-    let (system_messages, chat_messages): (Vec<AnthropicMessage>, Vec<AnthropicMessage>) = request
+    let (system_messages, chat_messages): (Vec<Message>, Vec<Message>) = request
         .messages
         .into_iter()
         .partition(|msg| msg.role == SYSTEM_ROLE);
@@ -39,9 +38,9 @@ pub fn fold_system_role_messages(request: AnthropicMessagesRequest) -> Anthropic
         )
         .collect();
 
-    AnthropicMessagesRequest {
+    MessagesRequest {
         messages: chat_messages,
-        params: AnthropicMessagesOptionalParams {
+        params: MessagesOptionalParams {
             system: (!folded_system.is_empty()).then_some(SystemPrompt::Blocks(folded_system)),
             ..request.params
         },

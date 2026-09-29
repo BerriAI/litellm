@@ -84,6 +84,7 @@ from models import (
     OcrResponse,
     RerankBody,
     RerankResponse,
+    ResponsesStreamBody,
     RouterCurrentValues,
     RouterSettingsResponse,
     SearchToolCreateBody,
@@ -968,6 +969,9 @@ class ProxyClient:
 
     def messages_stream(self, key: str, body: AnthropicMessagesBody) -> StreamingResponse:
         return self.transport.stream("/v1/messages", headers=self.transport.bearer(key), json=body)
+
+    def responses_stream(self, key: str, body: ResponsesStreamBody) -> StreamingResponse:
+        return self.transport.stream("/v1/responses", headers=self.transport.bearer(key), json=body)
 
     def embed(self, key: str, body: EmbedBody) -> Result[EmbedResponse]:
         return self.transport.post(

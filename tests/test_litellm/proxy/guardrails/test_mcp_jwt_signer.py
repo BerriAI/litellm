@@ -359,7 +359,7 @@ async def test_hook_signs_list_mcp_tools():
         issuer="https://litellm.example.com", audience="mcp", ttl_seconds=300
     )
     user_dict = _make_user_api_key_dict(user_id="alice", team_id="backend")
-    data = {"mcp_tool_name": "should_be_cleared"}
+    data = {"mcp_tool_name": "should_be_cleared", "extra_headers": {}}
 
     result = await signer.async_pre_call_hook(
         user_api_key_dict=user_dict,
@@ -377,6 +377,29 @@ async def test_hook_signs_list_mcp_tools():
     assert "mcp:tools/list" in scopes
     # List-only JWTs must NOT carry mcp:tools/call — least-privilege
     assert "mcp:tools/call" not in scopes
+
+
+@pytest.mark.asyncio
+async def test_hook_leaves_the_tool_catalog_scan_untouched():
+    """A list_mcp_tools payload without an extra_headers bag is the tools/list description scan, not an
+    upstream request to sign: the tool name must survive for the content guardrails that run after the signer."""
+    signer = _make_signer(
+        issuer="https://litellm.example.com", audience="mcp", ttl_seconds=300
+    )
+    user_dict = _make_user_api_key_dict(user_id="alice", team_id="backend")
+    data = {"mcp_tool_name": "search", "mcp_tool_description": "Search the notes"}
+
+    result = await signer.async_pre_call_hook(
+        user_api_key_dict=user_dict,
+        cache=MagicMock(),
+        data=data,
+        call_type="list_mcp_tools",
+    )
+
+    assert isinstance(result, dict)
+    assert result["mcp_tool_name"] == "search"
+    assert result["mcp_tool_description"] == "Search the notes"
+    assert "extra_headers" not in result
 
 
 @pytest.mark.asyncio
