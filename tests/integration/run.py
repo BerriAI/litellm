@@ -19,6 +19,7 @@ GROUPS: Final = MappingProxyType(
         "mcp": ("mcp",),
         "sdk": ("sdk",),
         "cost": ("cost_calculation",),
+        "security": ("security",),
     }
 )
 

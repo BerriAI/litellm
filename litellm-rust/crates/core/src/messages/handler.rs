@@ -1,12 +1,11 @@
+use litellm_host::lifecycle::ExecutionEvent;
+use litellm_host::observation::ObservationSender;
 use std::time::Duration;
 
 use bytes::Bytes;
 use futures_util::{StreamExt, TryStreamExt, stream::BoxStream};
 use litellm_auth::AuthServices;
-use litellm_host::{
-    event::{MachineEvent, RawResponse, RequestContext, WireRequest},
-    hooks::RouteHooks,
-};
+use litellm_host::interceptors::{Interceptors, RawResponse, RequestContext, WireRequest};
 use litellm_http::transport::Error as TransportError;
 use litellm_llms::base_llm::{
     auth::{Authenticated, resolve_auth},
@@ -28,7 +27,10 @@ pub(super) async fn execute(
     http: &litellm_http::Client,
     auth: &AuthServices,
     request: ProviderMessagesRequest,
-    hooks: &impl RouteHooks<Error>,
+    cache: Option<litellm_cache_response::ScopedCache>,
+    cache_options: Option<litellm_cache_response::CacheOptions>,
+    interceptors: &impl Interceptors<Error>,
+    observers: Option<&ObservationSender>,
 ) -> Result<MessagesResponse, Error> {
     let ProviderMessagesRequest {
         provider,
@@ -47,7 +49,11 @@ pub(super) async fn execute(
         api_key,
     };
     let authenticated = resolve_auth(auth, environment, &|key| std::env::var(key).ok()).await?;
-    let wire = hooks
+    let identity = litellm_host::interceptors::ProviderIdentity {
+        model: context.model.clone(),
+        provider: context.custom_llm_provider.clone(),
+    };
+    let wire = interceptors
         .before_provider_request(
             WireRequest {
                 url,
@@ -57,40 +63,57 @@ pub(super) async fn execute(
             context,
         )
         .await?;
-    let provider_name = provider.as_str();
-    log_request_body(provider_name, stream, &wire.body);
-    let response = send(
-        http,
-        Authenticated {
-            headers: wire.headers,
-            signer: authenticated.signer,
+    let cache = cache.filter(|_| authenticated.signer.is_none());
+    let cache_request =
+        crate::caching::CacheRequest::from_wire(identity, cache.as_ref().map(|_| &wire));
+    crate::caching::execute_streaming::<super::route::Messages, _, _>(
+        cache_request,
+        cache.as_ref().map(|cache| cache.service.clone()),
+        cache.as_ref().map(|cache| cache.options(cache_options)),
+        interceptors,
+        observers,
+        || async move {
+            let provider_name = provider.as_str();
+            log_request_body(provider_name, stream, &wire.body);
+            let response = send(
+                http,
+                Authenticated {
+                    headers: wire.headers,
+                    signer: authenticated.signer,
+                },
+                &wire.url,
+                &wire.body,
+                timeout,
+            )
+            .await?;
+            if !response.status().is_success() {
+                return Err(provider_error(response).await);
+            }
+            let config = provider.config();
+            if stream {
+                return Ok(streaming_response(
+                    response,
+                    config.stream_decoder(),
+                    provider_name,
+                ));
+            }
+            let text = response.text().await.map_err(network)?;
+            log_response_body(&text);
+            let raw = RawResponse { body: text.clone() };
+            if let Some(observers) = observers {
+                observers.emit(litellm_host::lifecycle::CallEvent::Execution(
+                    ExecutionEvent::ProviderResponseReceived { raw: raw.clone() },
+                ));
+            }
+            interceptors
+                .after_provider_response(raw)
+                .await
+                .map_err(Error::post_call)?;
+            decode_response(config, &body.model, &text)
+                .map(|message| MessagesResponse::Complete(Box::new(message)))
         },
-        &wire.url,
-        &wire.body,
-        timeout,
     )
-    .await?;
-    if !response.status().is_success() {
-        return Err(provider_error(response).await);
-    }
-    let config = provider.config();
-    if stream {
-        return Ok(streaming_response(
-            response,
-            config.stream_decoder(),
-            provider_name,
-        ));
-    }
-    let text = response.text().await.map_err(network)?;
-    log_response_body(&text);
-    hooks
-        .on_event(MachineEvent::ResponseReceived {
-            raw: RawResponse { body: text.clone() },
-        })
-        .await
-        .map_err(Error::post_call)?;
-    decode_response(config, &body.model, &text)
-        .map(|message| MessagesResponse::Complete(Box::new(message)))
+    .await
 }
 
 fn serialize_failure(err: serde_json::Error) -> Error {

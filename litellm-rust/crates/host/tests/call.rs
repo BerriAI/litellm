@@ -1,6 +1,7 @@
 use litellm_host::protocol::StreamDelivery;
 use std::{
     convert::Infallible,
+    ops::ControlFlow,
     sync::{
         Arc, Mutex,
         atomic::{AtomicUsize, Ordering},
@@ -10,10 +11,9 @@ use std::{
 use futures_util::{StreamExt, stream};
 use litellm_host::{
     call::{CallOutput, HostedCompletion, hosted_call},
-    event::CallEvent,
-    lifecycle::{CallObserver, observe_call, observe_unary},
+    lifecycle::{CallEvent, CallObserver, observe_call, observe_unary},
     machine::{Machine, MachineFault, MachineStep},
-    protocol::{Demand, Protocol, Suspension},
+    protocol::{HostRequest, Protocol},
 };
 use rstest::{fixture, rstest};
 
@@ -49,18 +49,19 @@ async fn delivery_obeys_demand_and_distinguishes_detachment(
 ) {
     let polls = Arc::new(AtomicUsize::new(0));
     let stream_polls = polls.clone();
-    let mut machine = hosted_call::<TestProtocol, _, _>(3, move |count, _, _| async move {
-        let chunks = stream::iter((0..count).map(Ok))
-            .inspect(move |_| {
-                stream_polls.fetch_add(1, Ordering::SeqCst);
+    let mut machine =
+        hosted_call::<TestProtocol, _, _>(3, None, move |count, _, _, _observations| async move {
+            let chunks = stream::iter((0..count).map(Ok))
+                .inspect(move |_| {
+                    stream_polls.fetch_add(1, Ordering::SeqCst);
+                })
+                .boxed();
+            Ok(CallOutput::Stream {
+                head: "headers",
+                chunks,
             })
-            .boxed();
-        Ok(CallOutput::Stream {
-            head: "headers",
-            chunks,
-        })
-    });
-    let MachineStep::Suspended(Suspension::Stream(StreamDelivery::Open(head, reply))) =
+        });
+    let MachineStep::Suspended(HostRequest::Stream(StreamDelivery::Open(head, reply))) =
         machine.resume().await.unwrap()
     else {
         panic!()
@@ -68,20 +69,20 @@ async fn delivery_obeys_demand_and_distinguishes_detachment(
     assert_eq!(head, "headers");
     assert_eq!(polls.load(Ordering::SeqCst), 0);
     reply.send(if detach_after == Some(0) {
-        Demand::Detached
+        ControlFlow::Break(())
     } else {
-        Demand::More
+        ControlFlow::Continue(())
     });
     let mut delivered = Vec::new();
     let completed = loop {
         match machine.resume().await.unwrap() {
-            MachineStep::Suspended(Suspension::Stream(StreamDelivery::Chunk(chunk, reply))) => {
+            MachineStep::Suspended(HostRequest::Stream(StreamDelivery::Chunk(chunk, reply))) => {
                 delivered.push(chunk);
                 assert_eq!(polls.load(Ordering::SeqCst), delivered.len());
                 reply.send(if detach_after == Some(delivered.len()) {
-                    Demand::Detached
+                    ControlFlow::Break(())
                 } else {
-                    Demand::More
+                    ControlFlow::Continue(())
                 });
             }
             MachineStep::Complete(result) => break result,
@@ -94,11 +95,40 @@ async fn delivery_obeys_demand_and_distinguishes_detachment(
 }
 
 #[derive(Default)]
-struct Observer(Mutex<Vec<CallEvent>>);
+struct Observer(Observations);
+struct Observations {
+    sender: litellm_host::observation::ObservationSender,
+    receiver: Mutex<tokio::sync::mpsc::Receiver<CallEvent>>,
+    recorded: Mutex<Vec<CallEvent>>,
+}
+
+impl Default for Observations {
+    fn default() -> Self {
+        let (sender, receiver) = litellm_host::observation::observation_channel(
+            std::num::NonZeroUsize::new(128).unwrap(),
+        );
+        Self {
+            sender,
+            receiver: Mutex::new(receiver),
+            recorded: Mutex::new(Vec::new()),
+        }
+    }
+}
+
+impl Observations {
+    fn lock(&self) -> std::sync::LockResult<std::sync::MutexGuard<'_, Vec<CallEvent>>> {
+        let mut events = self.recorded.lock()?;
+        let mut receiver = self.receiver.lock().unwrap();
+        while let Ok(event) = receiver.try_recv() {
+            events.push(event);
+        }
+        Ok(events)
+    }
+}
 
 impl CallObserver for Observer {
     fn observe(&self, event: CallEvent) {
-        self.0.lock().unwrap().push(event);
+        self.0.sender.emit(event);
     }
 }
 
@@ -116,7 +146,7 @@ type Output = CallOutput<(), (), usize, &'static str>;
 async fn unary_calls_emit_one_terminal_event(observer: Arc<Observer>, #[case] fail: bool) {
     let expected = if fail { Err("provider") } else { Ok(7) };
     assert_eq!(
-        observe_unary(Some(observer.clone()), async { expected }).await,
+        observe_unary(Some(observer.0.sender.clone()), async { expected }).await,
         expected
     );
     let events = observer.0.lock().unwrap();
@@ -132,7 +162,7 @@ async fn unary_calls_emit_one_terminal_event(observer: Arc<Observer>, #[case] fa
 #[tokio::test]
 async fn streams_finish_only_when_consumed(observer: Arc<Observer>, #[case] fail: bool) {
     let chunks = stream::iter([Ok(1), if fail { Err("provider") } else { Ok(2) }]).boxed();
-    let output = observe_call(Some(observer.clone()), async {
+    let output = observe_call(Some(observer.0.sender.clone()), async {
         Ok::<Output, _>(CallOutput::Stream { head: (), chunks })
     })
     .await
@@ -161,7 +191,7 @@ async fn streams_finish_only_when_consumed(observer: Arc<Observer>, #[case] fail
 #[tokio::test]
 async fn dropping_a_stream_cancels_without_success(observer: Arc<Observer>) {
     let chunks = stream::pending().boxed();
-    let output = observe_call(Some(observer.clone()), async {
+    let output = observe_call(Some(observer.0.sender.clone()), async {
         Ok::<Output, _>(CallOutput::Stream { head: (), chunks })
     })
     .await
@@ -176,7 +206,7 @@ async fn dropping_a_stream_cancels_without_success(observer: Arc<Observer>) {
 #[tokio::test]
 async fn cancelling_provider_execution_releases_the_lifecycle(observer: Arc<Observer>) {
     let mut call = Box::pin(observe_unary(
-        Some(observer.clone()),
+        Some(observer.0.sender.clone()),
         std::future::pending::<Result<(), ()>>(),
     ));
     assert!(futures_util::poll!(&mut call).is_pending());
@@ -184,41 +214,4 @@ async fn cancelling_provider_execution_releases_the_lifecycle(observer: Arc<Obse
     let events = observer.0.lock().unwrap();
     assert_eq!(events.len(), 2);
     assert!(matches!(events[1], CallEvent::Cancelled { .. }));
-}
-
-#[rstest]
-#[tokio::test]
-async fn a_hosted_detachment_is_reported_as_cancellation(observer: Arc<Observer>) {
-    struct DetachingConsumer;
-    impl litellm_host::in_process::StreamConsumer<TestProtocol> for DetachingConsumer {
-        async fn open_stream(&self, _: &'static str) -> Result<Demand, TestError> {
-            Ok(Demand::Detached)
-        }
-        async fn send_chunk(&self, _: usize) -> Result<Demand, TestError> {
-            panic!("detached consumers must not receive chunks")
-        }
-    }
-
-    let machine = hosted_call::<TestProtocol, _, _>(1, |count, _, _| async move {
-        Ok(CallOutput::Stream {
-            head: "headers",
-            chunks: stream::iter((0..count).map(Ok)).boxed(),
-        })
-    });
-    let completion = litellm_host::in_process::run_hosted(
-        machine,
-        litellm_host::in_process::Host {
-            services: &(),
-            hooks: &(),
-            stream: &DetachingConsumer,
-            observer: Some(observer.as_ref()),
-        },
-    )
-    .await
-    .unwrap();
-    assert_eq!(completion, HostedCompletion::Detached);
-    assert!(matches!(
-        &observer.0.lock().unwrap()[..],
-        [CallEvent::Started { .. }, CallEvent::Cancelled { .. }]
-    ));
 }

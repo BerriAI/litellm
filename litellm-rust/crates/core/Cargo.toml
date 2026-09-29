@@ -6,6 +6,10 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+litellm-cache.workspace = true
+litellm-cache-response.workspace = true
+litellm-framing.workspace = true
+tokio-util = { version = "0.7", features = ["codec"] }
 litellm-secrets.workspace = true
 litellm-types.workspace = true
 litellm-core-utils.workspace = true
@@ -36,8 +40,10 @@ url.workspace = true
 veil.workspace = true
 
 [dev-dependencies]
+litellm-cache-memory.workspace = true
 litellm-http = { workspace = true, features = ["test-support"] }
 litellm-auth-gcp.workspace = true
+litellm-host-native.workspace = true
 litellm-llms = { workspace = true, features = ["test-support"] }
 rstest.workspace = true
 rstest_reuse.workspace = true
