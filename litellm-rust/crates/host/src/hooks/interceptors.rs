@@ -30,7 +30,29 @@ pub struct RawResponse {
     pub body: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ProviderIdentity {
+    pub model: String,
+    pub provider: String,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ResultSource {
+    Provider,
+    Cache { key: String },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ExecutionFacts {
+    pub provider: ProviderIdentity,
+    pub source: ResultSource,
+}
+
 pub trait ProviderInterceptors<E>: Send + Sync {
+    fn result_ready(&self, _facts: ExecutionFacts) -> impl Future<Output = Result<(), E>> + Send {
+        async { Ok(()) }
+    }
+
     fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -44,6 +66,10 @@ pub trait ProviderInterceptors<E>: Send + Sync {
 }
 
 impl<E, T: ProviderInterceptors<E> + ?Sized> ProviderInterceptors<E> for &T {
+    fn result_ready(&self, facts: ExecutionFacts) -> impl Future<Output = Result<(), E>> + Send {
+        (**self).result_ready(facts)
+    }
+
     fn before_provider_request(
         &self,
         wire: WireRequest,
@@ -57,6 +83,37 @@ impl<E, T: ProviderInterceptors<E> + ?Sized> ProviderInterceptors<E> for &T {
         raw: RawResponse,
     ) -> impl Future<Output = Result<(), E>> + Send {
         (**self).after_provider_response(raw)
+    }
+}
+
+/// Composes two interceptor sets: provider-stage hooks run on both in order,
+/// and the pair itself satisfies the provider contract for a driver that can
+/// only hold one interceptor.
+impl<E, A, B> ProviderInterceptors<E> for (A, B)
+where
+    A: ProviderInterceptors<E>,
+    B: ProviderInterceptors<E>,
+{
+    async fn result_ready(&self, facts: ExecutionFacts) -> Result<(), E> {
+        self.0.result_ready(facts.clone()).await?;
+        self.1.result_ready(facts).await
+    }
+
+    async fn before_provider_request(
+        &self,
+        wire: WireRequest,
+        context: RequestContext,
+    ) -> Result<WireRequest, E> {
+        let wire = self
+            .0
+            .before_provider_request(wire, context.clone())
+            .await?;
+        self.1.before_provider_request(wire, context).await
+    }
+
+    async fn after_provider_response(&self, raw: RawResponse) -> Result<(), E> {
+        self.0.after_provider_response(raw.clone()).await?;
+        self.1.after_provider_response(raw).await
     }
 }
 

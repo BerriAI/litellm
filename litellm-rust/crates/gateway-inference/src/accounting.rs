@@ -51,6 +51,7 @@ pub trait AccountingService: Send + Sync {
 pub enum Fact {
     Prepared(RequestContext),
     ProviderResponse(RawResponse),
+    Result(litellm_host::interceptors::ExecutionFacts),
     Response(ResponsesApiResponse),
     Chunk(Bytes),
 }
@@ -312,6 +313,14 @@ impl ProviderInterceptors<RouteError> for Call {
     }
     async fn after_provider_response(&self, raw: RawResponse) -> Result<(), RouteError> {
         self.fact(Fact::ProviderResponse(raw))
+            .await
+            .map_err(hook_route_error)
+    }
+    async fn result_ready(
+        &self,
+        facts: litellm_host::interceptors::ExecutionFacts,
+    ) -> Result<(), RouteError> {
+        self.fact(Fact::Result(facts))
             .await
             .map_err(hook_route_error)
     }

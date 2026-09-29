@@ -129,6 +129,7 @@ impl AccountingBackend for Store {
             Fact::ProviderResponse(raw) => serde_json::from_str::<Value>(&raw.body)
                 .ok()
                 .and_then(|value| value.get("usage").cloned()),
+            Fact::Result(_) => None,
             Fact::Response(response) => response.extra.get("usage").cloned(),
             Fact::Chunk(chunk) => std::str::from_utf8(&chunk)
                 .ok()

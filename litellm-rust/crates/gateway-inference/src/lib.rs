@@ -5,6 +5,7 @@
 
 pub mod accounting;
 mod audio_transcription;
+mod caching;
 mod chat_completions;
 mod error;
 pub mod messages;
@@ -29,6 +30,7 @@ pub use request::{JsonObject, RequestId};
 
 pub struct Gateway {
     responses_accounting: Option<accounting::ResponsesAccounting>,
+    cache: Option<Arc<dyn litellm_cache_response::ResponseCacheService>>,
     pub audio_transcription: AudioTranscriptionRoute,
     pub chat_completions: ChatCompletionsRoute,
     pub messages: MessagesRoute,
@@ -41,6 +43,13 @@ pub struct Gateway {
 }
 
 impl Gateway {
+    pub fn with_cache(self, cache: Arc<dyn litellm_cache_response::ResponseCacheService>) -> Self {
+        Self {
+            cache: Some(cache),
+            ..self
+        }
+    }
+
     pub fn new(
         resources: CoreResources,
         http: HttpClientConfig,
@@ -51,6 +60,7 @@ impl Gateway {
         let auth = resources.auth.clone();
         Ok(Self {
             responses_accounting: None,
+            cache: None,
             audio_transcription: AudioTranscriptionRoute::new(
                 provider.clone(),
                 auth.clone(),
@@ -61,7 +71,11 @@ impl Gateway {
                 auth.clone(),
                 secrets.clone(),
             ),
-            messages: MessagesRoute::new(provider.clone(), auth.clone(), secrets.clone()),
+            messages: MessagesRoute::builder()
+                .with_http(provider.clone())
+                .with_auth(auth.clone())
+                .with_secrets(secrets.clone())
+                .build(),
             responses: ResponsesRoute::new(provider, auth.clone(), secrets.clone()),
             ocr: OcrRoute::new(OcrClient::new(
                 &resources.pool,

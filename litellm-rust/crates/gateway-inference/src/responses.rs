@@ -15,6 +15,7 @@ pub(crate) async fn create(
 ) -> Result<Response, Error> {
     let deployment = request::resolve_deployment(&gateway, &body)?;
     request::authorize_model(&identity, deployment, &body).await?;
+    let (body, cache_options) = crate::caching::prepare(&identity, body)?;
     let accounting = match &gateway.responses_accounting {
         Some(service) => Some(
             service
@@ -32,6 +33,15 @@ pub(crate) async fn create(
         ),
         None => None,
     };
+    let route = gateway.responses.clone();
+    let route = match &gateway.cache {
+        Some(cache) => route.with_cache(litellm_cache_response::ScopedCache::new(
+            cache.clone(),
+            cache_options.scope.clone(),
+        )),
+        None => route,
+    };
+
     let call = ResponsesCall {
         model: deployment.model.clone(),
         input: body.get("input").cloned().unwrap_or_default(),
@@ -45,7 +55,7 @@ pub(crate) async fn create(
         extra_headers: None,
         timeout: deployment.timeout,
     };
-    let machine = gateway.responses.clone().machine(call, None);
+    let machine = route.machine(call, cache_options);
     let stream = Sse::<Responses, _, _>::new(Json, |error| {
         let error = Error::from(error);
         Bytes::from(format!(
@@ -53,10 +63,13 @@ pub(crate) async fn create(
             json!({"type": "error", "code": error.status().as_u16().to_string(), "message": error.to_string(), "param": null})
         ))
     });
-    match accounting {
+    let headers = crate::caching::CacheHeaders::default();
+    let response = match accounting {
         Some(hooks) => {
-            Ok(litellm_host_http::serve_with_hooks(machine, (), hooks, stream, None).await?)
+            litellm_host_http::serve_with_hooks(machine, (), (headers.clone(), hooks), stream, None)
+                .await?
         }
-        None => Ok(litellm_host_http::serve(machine, (), (), stream, None).await?),
-    }
+        None => litellm_host_http::serve(machine, (), headers.clone(), stream, None).await?,
+    };
+    Ok(headers.apply(response))
 }
