@@ -559,9 +559,10 @@ def test_ternary_chunks_one_hundred_thousand_and_one_seeded_rows(ternary_rig: Te
 
 
 def test_ternary_stops_after_chunk_two_fails_then_retries_with_a_fresh_id(ternary_rig: TernaryRig) -> None:
-    marker: Final = f"r09-{uuid4().hex[:8]}"
-    alias: Final = f"{marker}-alias"
-    seeded_count: Final = 100_001
+    identity: Final = f"r09-{uuid4().hex[:8]}"
+    marker: Final = f"{identity}-{'x' * 50_000}"
+    alias: Final = f"{identity}-alias"
+    seeded_count: Final = 350
     ternary_rig.sink.set_fail_chunk_once(1)
     with ternary_rig.owned.gateway.scenario() as scenario:
         key: Final = _request_key(scenario, alias, _models(scenario, ternary_rig.provider))
@@ -582,6 +583,7 @@ def test_ternary_stops_after_chunk_two_fails_then_retries_with_a_fresh_id(ternar
             )
             failed_indices: Final = tuple(int(record.headers["x-ternary-chunk-index"]) for record in failed_chunks)
             assert failed_indices == (0, 1)
+            assert tuple(record.status for record in failed_chunks) == (200, 500)
             assert all(int(record.headers["x-ternary-chunk-index"]) < 2 for record in failed_chunks)
             retried: Final = eventually(
                 lambda: _marker_upload_groups(ternary_rig.sink.records, alias, marker),
@@ -604,10 +606,19 @@ def test_ternary_stops_after_chunk_two_fails_then_retries_with_a_fresh_id(ternar
                     == frozenset(range(int(chunks[0].headers["x-ternary-chunk-total"])))
                 )
             )
+            final_groups: Final = _marker_upload_groups(ternary_rig.sink.records, alias, marker)
+            final_failed_chunks: Final = next(chunks for upload_id, chunks in final_groups if upload_id == failed_id)
+            assert tuple(int(record.headers["x-ternary-chunk-index"]) for record in final_failed_chunks) == (0, 1)
+            failed_total: Final = int(final_failed_chunks[0].headers["x-ternary-chunk-total"])
+            assert failed_total >= 3
+            assert frozenset(int(record.headers["x-ternary-chunk-total"]) for record in final_failed_chunks) == {
+                failed_total
+            }
             assert retry_id != failed_id
             retry_total: Final = int(retry_chunks[0].headers["x-ternary-chunk-total"])
             retry_indices: Final = tuple(int(record.headers["x-ternary-chunk-index"]) for record in retry_chunks)
             assert retry_indices == tuple(range(retry_total))
+            assert retry_total >= 3
             assert all(record.status == 200 for record in retry_chunks)
             assert frozenset(int(record.headers["x-ternary-chunk-total"]) for record in retry_chunks) == {retry_total}
             retry_models: Final = tuple(
