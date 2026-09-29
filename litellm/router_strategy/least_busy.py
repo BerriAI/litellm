@@ -57,6 +57,9 @@ class LeastBusyLoggingHandler(CustomLogger):
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
                     return
+                # Cache hits never ran log_pre_api_call (no increment); do not decrement (#39322).
+                if kwargs.get("cache_hit") is True:
+                    return
                 elif isinstance(id, int):
                     id = str(id)
 
@@ -66,7 +69,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(request_count_value - 1, 0)
                 self.router_cache.set_cache(key=request_count_api_key, value=request_count_dict)
 
                 ### TESTING ###
@@ -84,6 +87,9 @@ class LeastBusyLoggingHandler(CustomLogger):
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
                     return
+                # Cache hits never ran log_pre_api_call (no increment); do not decrement (#39322).
+                if kwargs.get("cache_hit") is True:
+                    return
                 elif isinstance(id, int):
                     id = str(id)
 
@@ -93,7 +99,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(request_count_value - 1, 0)
                 self.router_cache.set_cache(key=request_count_api_key, value=request_count_dict)
 
                 ### TESTING ###
@@ -112,6 +118,9 @@ class LeastBusyLoggingHandler(CustomLogger):
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
                     return
+                # Cache hits never ran log_pre_api_call (no increment); do not decrement (#39322).
+                if kwargs.get("cache_hit") is True:
+                    return
                 elif isinstance(id, int):
                     id = str(id)
 
@@ -121,7 +130,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(request_count_value - 1, 0)
                 await self.router_cache.async_set_cache(key=request_count_api_key, value=request_count_dict)
 
                 ### TESTING ###
@@ -139,6 +148,9 @@ class LeastBusyLoggingHandler(CustomLogger):
                 id = kwargs["litellm_params"].get("model_info", {}).get("id", None)
                 if model_group is None or id is None:
                     return
+                # Cache hits never ran log_pre_api_call (no increment); do not decrement (#39322).
+                if kwargs.get("cache_hit") is True:
+                    return
                 elif isinstance(id, int):
                     id = str(id)
 
@@ -148,7 +160,7 @@ class LeastBusyLoggingHandler(CustomLogger):
                 request_count_value: Optional[int] = request_count_dict.get(id, 0)
                 if request_count_value is None:
                     return
-                request_count_dict[id] = request_count_value - 1
+                request_count_dict[id] = max(request_count_value - 1, 0)
                 await self.router_cache.async_set_cache(key=request_count_api_key, value=request_count_dict)
 
                 ### TESTING ###
