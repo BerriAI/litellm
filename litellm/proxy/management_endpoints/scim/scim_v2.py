@@ -1944,11 +1944,13 @@ async def write_scim_group_deletion(tx: "Prisma", group_id: str, admin_group: st
     if team is None:
         return ()
     member_ids: Final = tuple(await _get_team_member_user_ids_from_team(team))
-    for member_id in member_ids:
-        user: Final = await UserRepository(database).find_by_id(member_id, id_field="user_id")
+    users: Final = tuple(
+        [await UserRepository(database).find_by_id(member_id, id_field="user_id") for member_id in member_ids]
+    )
+    for user in users:
         if user is not None and group_id in (user.teams or ()):
             await _table(UserRepository(database)).update(
-                where={"user_id": member_id}, data={"teams": [value for value in user.teams if value != group_id]}
+                where={"user_id": user.user_id}, data={"teams": [value for value in user.teams if value != group_id]}
             )
     await _table(TeamRepository(database)).delete(where={"team_id": group_id})
     await write_scim_member_roles(database, member_ids, admin_group)

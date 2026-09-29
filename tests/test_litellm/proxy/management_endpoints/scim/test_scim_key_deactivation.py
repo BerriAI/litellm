@@ -641,3 +641,24 @@ async def test_scim_delete_user_evicts_cached_user_row(failure: str | None) -> N
     else:
         assert cached is None
         broadcast.assert_awaited_once_with(cache_key=user_id)
+
+
+@pytest.mark.asyncio
+async def test_committed_scim_deletion_evicts_the_removed_team_and_user(monkeypatch):
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import LiteLLM_TeamTable
+    from litellm.proxy.common_utils.user_api_key_cache import UserApiKeyCache
+    from litellm.proxy.management_endpoints.scim.scim_v2 import SCIMUserDeletion, finish_scim_user_deletion
+    from litellm.proxy.management_endpoints.team_endpoints import TeamMemberRemoval
+
+    cache = UserApiKeyCache()
+    team = LiteLLM_TeamTable(team_id="deleted-membership-team")
+    user = LiteLLM_UserTable(user_id="deleted-member")
+    await cache.async_set_cache(key="team_id:" + team.team_id, value=team, model_type=LiteLLM_TeamTable)
+    await cache.async_set_cache(key=user.user_id, value=user, model_type=LiteLLM_UserTable)
+    monkeypatch.setattr(proxy_server, "user_api_key_cache", cache)
+    monkeypatch.setattr(proxy_server, "proxy_logging_obj", None)
+    removal = TeamMemberRemoval(team=team, before=(), after=(), keys=(), jwt_mapping_cache_keys=(), user_ids=frozenset((user.user_id,)))
+    await finish_scim_user_deletion(SCIMUserDeletion(user_id=user.user_id, tokens=(), removals=(removal,)))
+    assert await cache.async_get_cache(key="team_id:" + team.team_id, model_type=LiteLLM_TeamTable) is None
+    assert await cache.async_get_cache(key=user.user_id, model_type=LiteLLM_UserTable) is None
