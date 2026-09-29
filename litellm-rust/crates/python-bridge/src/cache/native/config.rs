@@ -11,7 +11,7 @@ use pyo3::{
     types::{PyAny, PyBool, PyDict, PyList, PyString},
 };
 
-use super::{identity::BackendIdentity, native::NativeResponseCache, request::duration};
+use super::{backend::NativeResponseCache, identity::BackendIdentity, request::duration};
 
 pub(super) struct CachePolicy {
     pub(super) redis_flush_size: Option<usize>,
@@ -233,12 +233,12 @@ pub(super) enum CacheBackendConfig {
     QdrantSemantic(Box<QdrantSemanticCacheConfig>),
 }
 
-pub(super) struct NativeCacheConfig {
+pub(in crate::cache) struct NativeCacheConfig {
     pub(super) policy: CachePolicy,
     pub(super) backend: CacheBackendConfig,
 }
 
-pub(super) enum UnsupportedCacheConfig {
+pub(in crate::cache) enum UnsupportedCacheConfig {
     Backend,
     RedisTopology,
     RedisCredentials,
@@ -263,7 +263,7 @@ pub(super) enum UnsupportedCacheConfig {
 }
 
 impl UnsupportedCacheConfig {
-    pub(super) fn message(&self) -> &'static str {
+    pub(in crate::cache) fn message(&self) -> &'static str {
         match self {
             Self::Backend => "native cache backend is not implemented",
             Self::RedisTopology => "native Redis topology is not implemented",
@@ -305,14 +305,14 @@ impl UnsupportedCacheConfig {
     }
 }
 
-pub(super) enum CacheConfigProjection {
+pub(in crate::cache) enum CacheConfigProjection {
     Native(Box<NativeCacheConfig>),
     Unsupported(UnsupportedCacheConfig),
 }
 
 impl NativeCacheConfig {
     #[inline(never)]
-    pub(super) fn project(facade: &Bound<'_, PyAny>) -> PyResult<CacheConfigProjection> {
+    pub(in crate::cache) fn project(facade: &Bound<'_, PyAny>) -> PyResult<CacheConfigProjection> {
         let backend_name = facade.getattr("type")?.extract::<String>()?;
         let policy = CachePolicy {
             redis_flush_size: facade
@@ -1170,7 +1170,7 @@ mod tests {
         GcsCacheConfig, NativeCacheConfig, REDIS_PY_DEFAULT_MAX_CONNECTIONS, RedisConnectionConfig,
         RedisProtocol, RedisSemanticCacheConfig, RedisTlsConfig, UnsupportedCacheConfig,
     };
-    use crate::cache::{embedder::PythonEmbedder, native::NativeResponseCache};
+    use crate::cache::native::{backend::NativeResponseCache, embedder::PythonEmbedder};
 
     fn cluster_facade<'py>(py: Python<'py>, startup_nodes: &str, hook: &str) -> Bound<'py, PyAny> {
         facade(

@@ -92,6 +92,13 @@ SLOTS: Final = MappingProxyType(
         "E1": Slot("E1", "Guardrail api_key declared in the proxy config.yaml guardrails"),
         "G1": Slot("G1", "generic_api sink bearer token from the GENERIC_LOGGER_HEADERS environment variable"),
         "G1b": Slot("G1b", "Langfuse sink secret key from the LANGFUSE_SECRET_KEY environment variable"),
+        "F1": Slot("F1", "MCP server static auth_value registered through /v1/mcp/server"),
+        "F2": Slot("F2", "Per-user MCP OAuth access token from the authorization-code flow"),
+        "F2E": Slot("F2E", "Per-user MCP env var value stored through /v1/mcp/server/{server_id}/user-env-vars"),
+        "F3": Slot("F3", "Client x-mcp-<server>-authorization request header"),
+        "H1": Slot("H1", "Pass-through endpoint credential header resolved from os.environ"),
+        "H2": Slot("H2", "Vector store api_key declared in the proxy config.yaml vector_store_registry"),
+        "H2S": Slot("H2S", "Search tool api_key declared in the proxy config.yaml search_tools"),
     }
 )
 
