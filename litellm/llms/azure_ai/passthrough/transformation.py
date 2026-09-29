@@ -91,6 +91,14 @@ FOUNDRY_RELAY_SHAPES: Final = (
 )
 
 
+def with_requested_image_size(response: ImageResponse, request_data: Mapping[str, object]) -> ImageResponse:
+    width: Final = request_data.get("width")
+    height: Final = request_data.get("height")
+    if response.size is not None or type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
+        return response
+    return response.model_copy(update={"size": f"{width}x{height}"})
+
+
 class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
     def __init__(self, passthrough_ocr: NativeOcrPassthroughResponse | None = None) -> None:
         super().__init__()
@@ -161,6 +169,8 @@ class AzureAIPassthroughConfig(AzureFoundryModelInfo, BasePassthroughConfig):
         if ocr_result is not None:
             return ocr_result
         foundry_result: Final = logged_relay_shape(FOUNDRY_RELAY_SHAPES, httpx_response, logging_obj, endpoint)
+        if isinstance(foundry_result, ImageResponse):
+            return with_requested_image_size(foundry_result, request_data)
         if foundry_result is not None:
             return foundry_result
         return StandardPassThroughResponseObject(response=relayed_body(httpx_response))

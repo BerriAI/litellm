@@ -369,6 +369,7 @@ def _relay_logging_result(
     body,
     api_base: str = FOUNDRY_BASE,
     status_code: int = 200,
+    request_data=None,
 ):
     relayed_url = f"{FOUNDRY_BASE}/{native_path}?api-version=2024-05-01-preview"
     logging_obj = _relay_logging_obj(model, api_base)
@@ -382,7 +383,7 @@ def _relay_logging_result(
         model=model,
         custom_llm_provider="azure_ai",
         httpx_response=response,
-        request_data={"model": model},
+        request_data=request_data or {"model": model},
         logging_obj=logging_obj,
         endpoint=f"{model}/{native_path}",
     )
@@ -540,6 +541,22 @@ def test_flux_2_relay_through_the_provider_route_is_costed_as_one_default_size_m
     assert isinstance(result, ImageResponse)
     assert logging_obj.call_type == "aimage_generation"
     assert logging_obj._response_cost_calculator(result=result) == pytest.approx(first_megapixel)
+
+
+def test_flux_2_relay_bills_the_requested_width_and_height_by_megapixel():
+    info = litellm.get_model_info("azure_ai/FLUX.2-pro")
+    first = info["output_cost_per_first_megapixel"]
+    additional = info["output_cost_per_additional_megapixel"]
+    result, logging_obj = _relay_logging_result(
+        AzureAIPassthroughConfig(),
+        "FLUX.2-pro",
+        "providers/blackforestlabs/v1/flux-2-pro",
+        IMAGE_BODY,
+        request_data={"prompt": "p", "width": 2048, "height": 2048},
+    )
+
+    assert isinstance(result, ImageResponse)
+    assert logging_obj._response_cost_calculator(result=result) == pytest.approx(first + 3 * additional)
 
 
 def test_rejected_rerank_relay_keeps_the_passthrough_object_and_call_type():

@@ -228,6 +228,7 @@ def test_flux2_flex_cost_prefers_deployment_input_cost_per_pixel() -> None:
     [
         ("512x512", None, None, 0.05 * 0.25),
         ("1024-x-1024", None, None, 0.05),
+        ("1040x1024", None, None, 0.05 + 0.02 * (1040 * 1024 / 1_048_576 - 1)),
         ("1920x1080", None, None, 0.05 + 0.02 * (1920 * 1080 / 1_048_576 - 1)),
         ("1024x1024", {"width": 2048, "height": 2048}, None, 0.05 + 0.02 * 3),
         (None, None, "1536x1024", 0.05 + 0.02 * 0.5),
