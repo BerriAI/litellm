@@ -1,5 +1,6 @@
 import asyncio
 from collections.abc import Awaitable, Mapping, Sequence
+from contextlib import suppress
 from datetime import date, datetime, timedelta, timezone
 from itertools import chain
 from types import MappingProxyType
@@ -258,10 +259,8 @@ class SyncManager:
         if task is None or task.done():
             return False
         task.cancel()
-        try:
+        with suppress(asyncio.CancelledError):
             await task
-        except asyncio.CancelledError:
-            pass
         self._update_status(running=False, phase="cancelled", stage="Sync cancelled")
         return True
 

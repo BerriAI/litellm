@@ -14,11 +14,12 @@ from litellm.types.roi_calculator import (
 )
 
 _EMAIL_PATTERN: Final = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
+_NOREPLY_GITHUB_SUFFIX: Final = re.compile(r"noreply\.github\.com\Z")
 
 
 def normalize_email(value: str | None) -> str:
     normalized: Final = (value or "").strip().casefold()
-    if _EMAIL_PATTERN.fullmatch(normalized) is None or normalized.endswith("noreply.github.com"):
+    if _EMAIL_PATTERN.fullmatch(normalized) is None or _NOREPLY_GITHUB_SUFFIX.search(normalized) is not None:
         return ""
     return normalized
 
