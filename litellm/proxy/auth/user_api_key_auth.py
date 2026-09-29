@@ -1373,6 +1373,17 @@ async def _read_request_body_deferring_parse_failure(
         parsed_body: Final = await _read_request_body(request=request)
     except ProxyException as parse_exception:
         return {}, parse_exception  # mutable-ok: request_data is a plain dict across the whole auth path
+    if not isinstance(parsed_body, dict):
+        # Provider pass-through endpoints may forward a JSON array or scalar.
+        # Auth only needs a mapping for its own checks; leave the raw body intact.
+        if request_dispatched_to_pass_through_endpoint(request) or request_dispatched_to_provider_pass_through(request):
+            return {}, None  # mutable-ok: request_data is a plain dict across the whole auth path
+        return {}, ProxyException(
+            message="JSON request body must be an object",
+            type="invalid_request_error",
+            param="request_body",
+            code=status.HTTP_400_BAD_REQUEST,
+        )
     return populate_request_with_path_params(request_data=parsed_body, request=request), None
 
 

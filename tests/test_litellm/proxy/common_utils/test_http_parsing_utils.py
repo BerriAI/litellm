@@ -48,15 +48,40 @@ def _starlette_request(body: bytes, content_type: str) -> Request:
 
 @pytest.mark.parametrize("body", [b"[]", b"123", b'"str"', b"true", b"null"])
 @pytest.mark.asyncio
-async def test_read_request_body_rejects_non_object_json(body: bytes):
+async def test_read_request_body_preserves_non_object_json_for_passthrough(body: bytes):
     request = _starlette_request(body, "application/json")
 
-    with pytest.raises(ProxyException) as error:
-        await _read_request_body(request)
-
-    assert error.value.code == "400"
-    assert "JSON request body must be an object" in error.value.message
+    assert await _read_request_body(request) == orjson.loads(body)
     assert _safe_get_request_parsed_body(request) is None
+
+
+@pytest.mark.parametrize("body", [b"[]", b"123", b'"str"', b"true", b"null"])
+@pytest.mark.asyncio
+async def test_auth_defers_non_object_json_rejection(body: bytes):
+    from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
+
+    request = _starlette_request(body, "application/json")
+    parsed_body, error = await _read_request_body_deferring_parse_failure(request)
+
+    assert parsed_body == {}
+    assert isinstance(error, ProxyException)
+    assert error.code == "400"
+    assert "JSON request body must be an object" in error.message
+
+
+@pytest.mark.asyncio
+async def test_auth_preserves_non_object_json_for_provider_passthrough():
+    from litellm.proxy.auth.user_api_key_auth import _read_request_body_deferring_parse_failure
+
+    request = _starlette_request(b'[{"prompt":"hi"}]', "application/json")
+    request.scope["path"] = "/vertex_ai/v1/projects/test:rawPredict"
+    request.scope["path_params"] = {"endpoint": "v1/projects/test:rawPredict"}
+
+    parsed_body, error = await _read_request_body_deferring_parse_failure(request)
+
+    assert parsed_body == {}
+    assert error is None
+    assert await request.body() == b'[{"prompt":"hi"}]'
 
 
 @pytest.mark.asyncio
