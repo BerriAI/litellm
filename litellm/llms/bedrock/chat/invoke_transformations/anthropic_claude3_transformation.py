@@ -3,7 +3,6 @@ from typing import TYPE_CHECKING, Any, Final
 import httpx
 
 from litellm.anthropic_beta_headers_manager import filter_and_transform_beta_headers
-from litellm.constants import RESPONSE_FORMAT_TOOL_NAME
 from litellm.litellm_core_utils.prompt_templates.factory import (
     convert_to_anthropic_image_obj,
 )
@@ -72,6 +71,11 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
     def get_supported_openai_params(self, model: str) -> list[str]:
         return AnthropicConfig.get_supported_openai_params(self, model)
 
+    def _uses_native_structured_output(self, model: str) -> bool:
+        from litellm.utils import supports_native_structured_output
+
+        return supports_native_structured_output(model=model, custom_llm_provider="bedrock")
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -79,18 +83,6 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        # Force tool-based structured outputs for Bedrock Invoke
-        # (similar to VertexAI fix in #19201) unless the model map advertises
-        # native structured output
-        from litellm.utils import supports_native_structured_output
-
-        original_model: Final = model
-        if "response_format" in non_default_params and not supports_native_structured_output(
-            model=model, custom_llm_provider="bedrock"
-        ):
-            # Use a model name that forces tool-based approach
-            model = "claude-3-sonnet-20240229"
-
         # Clamp ``reasoning_effort`` to the Bedrock effort ceiling before the
         # parent mapping converts it to ``output_config.effort`` and the
         # downstream effort gate runs. Mirrors the converse path's
@@ -98,7 +90,7 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
         # ``_clamp_adaptive_reasoning_effort_for_bedrock`` so adaptive Claude
         # requests degrade ``xhigh`` -> ``max`` rather than 400-ing on
         # models like Opus 4.6 that don't natively advertise xhigh.
-        self._clamp_adaptive_reasoning_effort_for_bedrock(model=original_model, params=non_default_params)
+        self._clamp_adaptive_reasoning_effort_for_bedrock(model=model, params=non_default_params)
 
         optional_params = AnthropicConfig.map_openai_params(
             self,
@@ -108,22 +100,9 @@ class AmazonAnthropicClaudeConfig(AmazonInvokeConfig, AnthropicConfig):
             drop_params,
         )
 
-        # Restore original model name
-        model = original_model
-
         AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-            model=original_model, optional_params=optional_params, custom_llm_provider="bedrock"
+            model=model, optional_params=optional_params, custom_llm_provider="bedrock"
         )
-
-        # The stub model hides the original model from the parent's forced-tool-use backstop
-        response_format_tool_choice: Final = optional_params.get("tool_choice")
-        if (
-            "response_format" in non_default_params
-            and isinstance(response_format_tool_choice, dict)
-            and response_format_tool_choice.get("name") == RESPONSE_FORMAT_TOOL_NAME
-            and AnthropicModelInfo.forced_tool_use_unsupported(original_model)
-        ):
-            optional_params.pop("tool_choice")
 
         return optional_params
 

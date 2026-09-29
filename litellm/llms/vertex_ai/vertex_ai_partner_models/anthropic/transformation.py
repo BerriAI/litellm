@@ -149,6 +149,16 @@ class VertexAIAnthropicConfig(AnthropicConfig):
 
         return data
 
+    def _uses_native_structured_output(self, model: str) -> bool:
+        from litellm.llms.anthropic.common_utils import AnthropicModelInfo
+
+        return (
+            AnthropicModelInfo._get_provider_resolved_capability(
+                model, "supports_native_structured_output", "vertex_ai"
+            )
+            is True
+        )
+
     def map_openai_params(
         self,
         non_default_params: dict,
@@ -156,21 +166,8 @@ class VertexAIAnthropicConfig(AnthropicConfig):
         model: str,
         drop_params: bool,
     ) -> dict:
-        """
-        Override parent method so VertexAI uses tool-based structured outputs
-        unless the vertex map entry advertises native structured output
-        (``output_format``, which Vertex AI Claude forwards for those models).
-        """
         from litellm.llms.anthropic.common_utils import AnthropicModelInfo
 
-        original_model: Final = model
-        native_structured_output: Final = AnthropicModelInfo._get_provider_resolved_capability(
-            model, "supports_native_structured_output", "vertex_ai"
-        )
-        if "response_format" in non_default_params and native_structured_output is not True:
-            model = "claude-3-sonnet-20240229"  # Use a model that will use tool-based approach
-
-        # Call parent method with potentially modified model name
         optional_params = super().map_openai_params(
             non_default_params=non_default_params,
             optional_params=optional_params,
@@ -178,11 +175,8 @@ class VertexAIAnthropicConfig(AnthropicConfig):
             drop_params=drop_params,
         )
 
-        # Restore original model name for any other processing
-        model = original_model
-
         AnthropicModelInfo.translate_legacy_thinking_for_adaptive_model(
-            model=original_model, optional_params=optional_params, custom_llm_provider="vertex_ai"
+            model=model, optional_params=optional_params, custom_llm_provider="vertex_ai"
         )
 
         return optional_params

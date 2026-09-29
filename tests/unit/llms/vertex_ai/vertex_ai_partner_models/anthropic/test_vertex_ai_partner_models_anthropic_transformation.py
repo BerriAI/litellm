@@ -875,3 +875,50 @@ def test_chat_flagged_model_replays_a_byte_identical_prefix_around_a_mid_convers
     _assert_prefix_stable(requests)
     assert [m["role"] for m in requests[1]["messages"]] == ["user", "assistant", "user", "system"]
     assert [m["role"] for m in requests[2]["messages"]] == ["user", "assistant", "user", "system", "assistant", "user"]
+
+
+def test_vertex_ai_sonnet_5_5_response_format_json_tool_is_not_forced(local_model_cost_map):
+    """LIT-8983: the vertex mapping used to stub ``model`` to a Claude 3 name before
+    the shared response_format branch, so the forced-tool-use gate ran on the fake
+    name and emitted ``tool_choice`` for Sonnet 5.5, which rejects it upstream."""
+    result = VertexAIAnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            }
+        },
+        optional_params={},
+        model="claude-sonnet-5-5",
+        drop_params=False,
+    )
+
+    assert [tool["name"] for tool in result["tools"]] == ["json_tool_call"]
+    assert "tool_choice" not in result
+    assert result["json_mode"] is True
+    assert "output_format" not in result
+
+
+def test_vertex_ai_sonnet_5_5_response_format_drops_temperature(local_model_cost_map):
+    """Same stub hid the real model from the sampling gate: temperature=0.2 must be
+    dropped for Sonnet 5.5 under ``drop_params`` even when response_format is present."""
+    result = VertexAIAnthropicConfig().map_openai_params(
+        non_default_params={
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {
+                    "name": "test_schema",
+                    "schema": {"type": "object", "properties": {"result": {"type": "string"}}},
+                },
+            },
+            "temperature": 0.2,
+        },
+        optional_params={},
+        model="claude-sonnet-5-5",
+        drop_params=True,
+    )
+
+    assert "temperature" not in result
