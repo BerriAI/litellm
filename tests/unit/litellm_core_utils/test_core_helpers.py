@@ -10,6 +10,7 @@ from litellm.litellm_core_utils.core_helpers import (
     RESPONSE_COST_HEADER,
     bind_budget_reservation_to_callbacks,
     budget_reservation_from_metadata,
+    coerce_token_price,
     drop_params_env_flag,
     drop_params_flag,
     get_or_create_metadata_bucket,
@@ -183,9 +184,7 @@ class TestMapFinishReasonAnthropic:
             ("content_filtered", "content_filter"),
         ],
     )
-    def test_anthropic_finish_reasons(
-        self, provider_reason: str, expected: str
-    ) -> None:
+    def test_anthropic_finish_reasons(self, provider_reason: str, expected: str) -> None:
         assert map_finish_reason(provider_reason) == expected
 
     def test_refusal(self):
@@ -256,9 +255,7 @@ class TestMapFinishReasonZhipu:
 
 
 class TestMapFinishReasonOpenAIPassthrough:
-    @pytest.mark.parametrize(
-        "reason", ["stop", "length", "tool_calls", "function_call", "content_filter"]
-    )
+    @pytest.mark.parametrize("reason", ["stop", "length", "tool_calls", "function_call", "content_filter"])
     def test_openai_values_pass_through(self, reason):
         assert map_finish_reason(reason) == reason
 
@@ -269,9 +266,7 @@ class TestMapFinishReasonGenericError:
         assert map_finish_reason("error") == "stop"
 
     def test_lowercase_error_does_not_warn(self, mocker):
-        warn = mocker.patch(
-            "litellm.litellm_core_utils.core_helpers.verbose_logger.warning"
-        )
+        warn = mocker.patch("litellm.litellm_core_utils.core_helpers.verbose_logger.warning")
         assert map_finish_reason("error") == "stop"
         warn.assert_not_called()
 
@@ -289,8 +284,7 @@ class TestFinishReasonMapOutputsAreValid:
         """Every value in _FINISH_REASON_MAP must be a valid OpenAI finish reason."""
         for provider_reason, openai_reason in _FINISH_REASON_MAP.items():
             assert openai_reason in VALID_OPENAI_FINISH_REASONS, (
-                f"Mapped value '{openai_reason}' (from '{provider_reason}') "
-                f"is not a valid OpenAI finish reason"
+                f"Mapped value '{openai_reason}' (from '{provider_reason}') is not a valid OpenAI finish reason"
             )
 
 
@@ -300,28 +294,18 @@ class TestRedactNestedMatchAndRegexKeys:
             "assessments": [
                 {
                     "sensitiveInformationPolicy": {
-                        "piiEntities": [
-                            {"type": "NAME", "match": "secret-name", "action": "BLOCKED"}
-                        ]
+                        "piiEntities": [{"type": "NAME", "match": "secret-name", "action": "BLOCKED"}]
                     },
-                    "wordPolicy": {
-                        "customWords": [{"match": "badword", "action": "BLOCKED"}]
-                    },
+                    "wordPolicy": {"customWords": [{"match": "badword", "action": "BLOCKED"}]},
                 }
             ],
             "regex": "should-redact-key-named-regex",
         }
         out = redact_nested_match_and_regex_keys(payload)
-        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0][
-            "match"
-        ] == "[REDACTED]"
-        assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == (
-            "[REDACTED]"
-        )
+        assert out["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0]["match"] == "[REDACTED]"
+        assert out["assessments"][0]["wordPolicy"]["customWords"][0]["match"] == ("[REDACTED]")
         assert out["regex"] == "[REDACTED]"
-        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][
-            0
-        ]["match"] == "secret-name"
+        assert payload["assessments"][0]["sensitiveInformationPolicy"]["piiEntities"][0]["match"] == "secret-name"
 
     def test_passes_through_none_and_str(self):
         assert redact_nested_match_and_regex_keys(None) is None
@@ -484,13 +468,17 @@ class TestIsExpectedClientError:
         assert is_expected_client_error(over_budget) is True
 
         litellm_limit = RateLimitError(
-            message="key over rpm", llm_provider="anthropic", model="claude-haiku-4-5",
+            message="key over rpm",
+            llm_provider="anthropic",
+            model="claude-haiku-4-5",
             category=RateLimitErrorCategory.LITELLM_RATE_LIMIT,
         )
         assert is_expected_client_error(litellm_limit) is True
 
         vendor_limit = RateLimitError(
-            message="rate limited upstream", llm_provider="anthropic", model="claude-haiku-4-5",
+            message="rate limited upstream",
+            llm_provider="anthropic",
+            model="claude-haiku-4-5",
             category=RateLimitErrorCategory.VENDOR_RATE_LIMIT,
         )
         assert is_expected_client_error(vendor_limit) is False
@@ -557,3 +545,53 @@ class TestProviderResponseHeadersInHiddenParams:
 
         assert get_provider_response_headers_from_hidden_params(sibling) is None
         assert "additional_headers" not in sibling._hidden_params
+
+
+class TestCoerceTokenPrice:
+    """Per-token prices reach the listing from the same uncoerced sources as token
+    limits, since a deployment's model_info is registered into litellm.model_cost
+    verbatim. A config value written as a string has to survive, while anything that
+    cannot be a price has to read as absent rather than as free."""
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            (0.000003, 0.000003),
+            (3, 3.0),
+            ("0.000003", 0.000003),
+            ("3", 3.0),
+            (0, 0.0),
+            ("0", 0.0),
+        ],
+    )
+    def test_a_usable_price_survives_as_a_float(self, value, expected):
+        assert coerce_token_price(value) == expected, f"{value!r} should coerce to {expected}"
+
+    def test_zero_is_a_price_not_an_absence(self):
+        """A deployment priced at zero is deliberately free, which is not the same as
+        a model nobody has priced."""
+        assert coerce_token_price(0) == 0.0, "an explicit zero must not read as absent"
+        assert coerce_token_price(0) is not None, "an explicit zero must not read as absent"
+
+    @pytest.mark.parametrize("value", [True, False])
+    def test_a_bool_is_rejected(self, value):
+        """True is an int in Python, so without this guard it would price a token at 1."""
+        assert coerce_token_price(value) is None, f"{value!r} is never a meaningful price"
+
+    @pytest.mark.parametrize("value", [None, [], {}, (), object(), b"3"])
+    def test_a_value_that_is_not_a_number_or_string_is_rejected(self, value):
+        assert coerce_token_price(value) is None, f"{value!r} cannot be a price"
+
+    @pytest.mark.parametrize("value", ["", "abc", "1.2.3", " "])
+    def test_a_string_that_is_not_a_number_is_rejected(self, value):
+        assert coerce_token_price(value) is None, f"{value!r} must not fail the listing"
+
+    @pytest.mark.parametrize("value", [-1, -0.5, "-0.000003"])
+    def test_a_negative_price_is_rejected(self, value):
+        """A caller pricing a request would read a negative rate as a discount."""
+        assert coerce_token_price(value) is None, f"{value!r} must not be reported as a price"
+
+    @pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf"), "nan", "inf"])
+    def test_a_non_finite_price_is_rejected(self, value):
+        """NaN and infinity serialize to invalid JSON."""
+        assert coerce_token_price(value) is None, f"{value!r} must not reach the response body"
